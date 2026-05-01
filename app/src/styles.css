@@ -200,6 +200,24 @@ body {
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+.sk-tab-close {
+	color: var(--fg-3);
+	font-size: 13px;
+	padding: 0 2px;
+	border-radius: 3px;
+	opacity: 0;
+	transition: opacity 0.12s;
+	cursor: pointer;
+}
+.sk-tab:hover .sk-tab-close,
+.sk-tab.active .sk-tab-close {
+	opacity: 0.7;
+}
+.sk-tab-close:hover {
+	opacity: 1 !important;
+	color: var(--fg-0);
+	background: var(--bg-3);
+}
 
 .tab-status {
 	width: 6px;

@@ -477,16 +477,28 @@ export const SessionTab = ({
 	s,
 	active,
 	onClick,
+	onClose,
 }: {
 	s: Session;
 	active: boolean;
 	onClick: () => void;
+	onClose: () => void;
 }) => (
 	<div className={`sk-tab ${active ? "active" : ""}`} onClick={onClick} title={s.task}>
 		<div className="row-1">
 			<StatusDot status={s.status} />
 			<span className="name">{s.name}</span>
 			{s.badge > 0 && <span className="tab-badge">{s.badge}</span>}
+			<span
+				className="sk-tab-close"
+				title="Close session"
+				onClick={(e) => {
+					e.stopPropagation();
+					onClose();
+				}}
+			>
+				×
+			</span>
 		</div>
 		<div className="row-2">
 			<span>{s.branch}</span>

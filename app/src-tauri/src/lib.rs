@@ -5,6 +5,7 @@
 //! an id; subsequent writes/resizes/kills are keyed by it. Output
 //! streams back over a per-spawn `tauri::ipc::Channel<String>`.
 
+mod db;
 mod pty;
 
 use std::path::Path;
@@ -12,6 +13,7 @@ use std::path::Path;
 use tauri::Manager;
 use tauri::ipc::Channel;
 
+use crate::db::{Database, Session};
 use crate::pty::PtyManager;
 
 /// Boots the Tauri runtime and blocks until the main window closes.
@@ -26,6 +28,17 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // Persist Skein state under the OS-conventional app data dir
+            // (e.g. %APPDATA%/com.timeloop-vault.skein on Windows). Create
+            // the directory eagerly so first-launch users don't see a
+            // misleading "DB open failed" before they've created anything.
+            let data_dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&data_dir)?;
+            let db_path = data_dir.join("skein.db");
+            let db = Database::open(&db_path).map_err(|e| {
+                Box::<dyn std::error::Error>::from(format!("opening {}: {e}", db_path.display()))
+            })?;
+            app.manage(db);
             app.manage(PtyManager::new());
             Ok(())
         })
@@ -37,6 +50,8 @@ pub fn run() {
             pty_kill,
             default_shell,
             default_cwd,
+            db_load_sessions,
+            db_save_sessions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -143,4 +158,21 @@ fn default_cwd() -> String {
                 .and_then(|p| p.to_str().map(str::to_owned))
         })
         .unwrap_or_else(|| ".".into())
+}
+
+/// Returns every session currently in the DB. The frontend uses this
+/// once at boot — and falls back to seeding `INITIAL_SESSIONS` if empty.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn db_load_sessions(db: tauri::State<'_, Database>) -> Result<Vec<Session>, String> {
+    db.load_all()
+}
+
+/// Replaces the DB's session list wholesale. Called whenever the
+/// frontend's sessions state changes — wipe-and-insert is fine at
+/// prototype scale and avoids the bookkeeping of granular upserts.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn db_save_sessions(sessions: Vec<Session>, db: tauri::State<'_, Database>) -> Result<(), String> {
+    db.save_all(&sessions)
 }

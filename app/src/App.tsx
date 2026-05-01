@@ -775,6 +775,42 @@ export default function App() {
 		void invoke<string>("default_cwd").then(setDefaultCwd);
 	}, []);
 
+	// Phase 3: hydrate sessions from sqlite on boot. Until that round-trips,
+	// `loaded` stays false and the auto-save effect below stays parked —
+	// otherwise INITIAL_SESSIONS would clobber the DB before we read it.
+	const [loaded, setLoaded] = useState(false);
+	useEffect(() => {
+		invoke<Session[]>("db_load_sessions")
+			.then((rows) => {
+				if (rows.length > 0) {
+					setSessions(rows);
+					const first = rows[0];
+					if (first) setActiveSessionId(first.id);
+				}
+				// If empty, leave INITIAL_SESSIONS in state — the save
+				// effect below will persist them on its first run, so
+				// next boot picks them up from the DB.
+				setLoaded(true);
+			})
+			.catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error("[skein] db_load_sessions failed:", msg);
+				// Still flip `loaded` so the UI isn't stuck — we just
+				// run without persistence for this session.
+				setLoaded(true);
+			});
+	}, []);
+
+	// Phase 3: any time `sessions` changes after the initial load, mirror
+	// the new state to sqlite. Wipe-and-insert is fine at prototype scale.
+	useEffect(() => {
+		if (!loaded) return;
+		void invoke("db_save_sessions", { sessions }).catch((err: unknown) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error("[skein] db_save_sessions failed:", msg);
+		});
+	}, [sessions, loaded]);
+
 	const session = useMemo(
 		() => sessions.find((s) => s.id === activeSessionId),
 		[sessions, activeSessionId],
@@ -785,6 +821,25 @@ export default function App() {
 	const switchSession = (id: string) => {
 		setActiveSessionId(id);
 		setToastDismissed(true);
+	};
+
+	const closeSession = (id: string) => {
+		// Confirm before delete — sessions can hold a lot of state and
+		// the prototype has no undo. window.confirm is fine for v0.
+		if (!window.confirm("Close this session? Any running harnesses will be killed.")) {
+			return;
+		}
+		setSessions((prev) => {
+			const remaining = prev.filter((s) => s.id !== id);
+			// If we just closed the active session, jump to the first
+			// remaining one (or no-op if the list is now empty — the
+			// empty state takes over on the next render).
+			if (id === activeSessionId) {
+				const first = remaining[0];
+				if (first) setActiveSessionId(first.id);
+			}
+			return remaining;
+		});
 	};
 
 	const switchHarnessInSession = (sessionId: string, harnessId: string) => {
@@ -982,6 +1037,7 @@ export default function App() {
 						s={s}
 						active={s.id === activeSessionId}
 						onClick={() => switchSession(s.id)}
+						onClose={() => closeSession(s.id)}
 					/>
 				))}
 				<div className="sk-tab-newbtn" onClick={() => setShowNewSession(true)} title="New session">
