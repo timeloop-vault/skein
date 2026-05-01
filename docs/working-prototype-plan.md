@@ -206,6 +206,31 @@ front door.
   real Claude → "+ harness" → real opencode → both edit the same file →
   live diff → close app → reopen → sessions intact.
 
+## Known limitations to revisit
+
+These showed up during the spike and don't block any phase, but are worth
+tracking explicitly so we don't paper over them.
+
+- **PTYs die on session-tab switch.** Phase 2 mounts all harnesses
+  *within* the active session concurrently, so switching harness tabs
+  preserves their PTY. But switching the top-level **session** tab
+  unmounts the whole previous workspace's harness column, killing every
+  PTY in it. Fix: lift the mount-all pattern up one level — every harness
+  in every session stays mounted globally, with `display: none` on
+  everything that isn't the active session. Costs more memory (N
+  sessions × M harnesses worth of xterm instances and PTY processes) but
+  it's the only way "leave a long task running and check back later"
+  works as advertised.
+- **No harness resume on restart.** Phase 3 persists Skein's view of a
+  harness (kind, name, cmd, cwd) but not the *agent's* session id. So
+  closing Skein and reopening spawns a fresh `claude` instead of
+  `claude --resume <id>`. Each harness has its own resume convention
+  (`claude --resume`, `opencode --session`, no equivalent for
+  `gh copilot`); we need a per-kind hook that maps "find/persist this
+  agent's session id" and uses it on respawn. Until then, restarting
+  Skein loses the agent conversation even though Skein itself remembers
+  the harness existed.
+
 ## Out of scope for v0
 
 These are real, but separate concerns. Listing them here so we don't

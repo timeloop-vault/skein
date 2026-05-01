@@ -6,6 +6,7 @@
 //! streams back over a per-spawn `tauri::ipc::Channel<String>`.
 
 mod db;
+mod git;
 mod pty;
 
 use std::path::Path;
@@ -52,6 +53,10 @@ pub fn run() {
             default_cwd,
             db_load_sessions,
             db_save_sessions,
+            git::git_is_repo,
+            git::git_branches,
+            git::git_propose_worktree_path,
+            git::git_add_worktree,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

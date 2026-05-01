@@ -5,15 +5,33 @@ set -e
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-echo "=== pre-commit: cargo fmt ==="
+echo "=== pre-commit: cargo fmt (workspace) ==="
+cargo fmt --check --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1 || {
+    echo "ERROR: cargo fmt check failed in workspace. Run 'cargo fmt' and re-stage."
+    exit 1
+}
+
+echo "=== pre-commit: cargo fmt (tauri app) ==="
 cargo fmt --check --manifest-path "$REPO_ROOT/app/src-tauri/Cargo.toml" 2>&1 || {
     echo "ERROR: cargo fmt check failed in app/src-tauri. Run 'cargo fmt' and re-stage."
+    exit 1
+}
+
+echo "=== pre-commit: cargo clippy (workspace) ==="
+cargo clippy --manifest-path "$REPO_ROOT/Cargo.toml" --workspace --tests -- -D warnings 2>&1 || {
+    echo "ERROR: clippy warnings in workspace. Fix them before committing."
     exit 1
 }
 
 echo "=== pre-commit: cargo clippy (tauri app) ==="
 cargo clippy --manifest-path "$REPO_ROOT/app/src-tauri/Cargo.toml" --tests -- -D warnings 2>&1 || {
     echo "ERROR: clippy warnings in tauri app. Fix them before committing."
+    exit 1
+}
+
+echo "=== pre-commit: cargo test (workspace) ==="
+cargo test --manifest-path "$REPO_ROOT/Cargo.toml" --workspace 2>&1 || {
+    echo "ERROR: workspace tests failed. Fix them before committing."
     exit 1
 }
 

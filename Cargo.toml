@@ -1,12 +1,20 @@
 [workspace]
 resolver = "2"
-members = []
+members = ["crates/skein-git"]
 exclude = ["app/src-tauri"]
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
+
+[workspace.dependencies]
+# git2 stays default-features=false so we don't pull OpenSSL/libssh2 on
+# Windows. Skein only operates on local repos for now — re-enable
+# `https`/`ssh` when we add remote operations.
+git2 = { version = "0.20", default-features = false }
+thiserror = "2"
+tempfile = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

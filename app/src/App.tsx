@@ -183,6 +183,15 @@ const PlanFullPane = ({ data }: { data: SessionData }) => {
 // every harness in the session spawns into it. Branch is still
 // cosmetic — wired for real in Phase 4.
 
+interface BranchInfoDto {
+	name: string;
+	isHead: boolean;
+}
+
+// What the dialog hands back. The cwd is already the *real* directory
+// the spawn should land in — for "New worktree" mode the dialog has
+// already called git_add_worktree and resolved the worktree path; for
+// "Current branch" mode it's just the picked repo path.
 interface CreateSessionArgs {
 	cwd: string;
 	task: string;
@@ -190,6 +199,12 @@ interface CreateSessionArgs {
 	branch: string;
 	branchMode: "worktree" | "current";
 }
+
+type RepoStatus =
+	| { kind: "empty" }
+	| { kind: "checking" }
+	| { kind: "valid"; branches: BranchInfoDto[]; head: string | null }
+	| { kind: "not-a-repo" };
 
 const NewSessionDialog = ({
 	defaultCwd,
@@ -204,6 +219,49 @@ const NewSessionDialog = ({
 	const [task, setTask] = useState("");
 	const [harness, setHarness] = useState<HarnessKind>("claude");
 	const [branchMode, setBranchMode] = useState<"worktree" | "current">("worktree");
+	const [baseBranch, setBaseBranch] = useState<string>("");
+	const [repoStatus, setRepoStatus] = useState<RepoStatus>({ kind: "empty" });
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	// Validate the picked folder + load branches. Debounced so typing in
+	// the path field doesn't fire one round-trip per keystroke.
+	useEffect(() => {
+		setError(null);
+		if (!cwd) {
+			setRepoStatus({ kind: "empty" });
+			return undefined;
+		}
+		setRepoStatus({ kind: "checking" });
+		const handle = window.setTimeout(() => {
+			let cancelled = false;
+			(async () => {
+				try {
+					const isRepo = await invoke<boolean>("git_is_repo", { path: cwd });
+					if (cancelled) return;
+					if (!isRepo) {
+						setRepoStatus({ kind: "not-a-repo" });
+						return;
+					}
+					const branches = await invoke<BranchInfoDto[]>("git_branches", { path: cwd });
+					if (cancelled) return;
+					const head = branches.find((b) => b.isHead)?.name ?? null;
+					setRepoStatus({ kind: "valid", branches, head });
+					// Default base branch to HEAD on first valid load.
+					setBaseBranch((prev) => prev || head || branches[0]?.name || "");
+				} catch (err: unknown) {
+					if (cancelled) return;
+					const msg = err instanceof Error ? err.message : String(err);
+					setError(`git: ${msg}`);
+					setRepoStatus({ kind: "not-a-repo" });
+				}
+			})();
+			return () => {
+				cancelled = true;
+			};
+		}, 200);
+		return () => window.clearTimeout(handle);
+	}, [cwd]);
 
 	const slug =
 		task
@@ -212,8 +270,11 @@ const NewSessionDialog = ({
 			.replace(/[^a-z0-9]+/g, "-")
 			.replace(/^-|-$/g, "")
 			.slice(0, 28) || "task";
-	const proposedBranch = branchMode === "worktree" ? `skein/${slug}` : "main";
-	const canCreate = task.trim().length > 0 && cwd.length > 0;
+	const proposedBranch = `skein/${slug}`;
+
+	const valid = repoStatus.kind === "valid";
+	const canCreate =
+		task.trim().length > 0 && valid && !busy && (branchMode === "current" || baseBranch.length > 0);
 
 	const browse = async () => {
 		const start = cwd || defaultCwd;
@@ -228,11 +289,61 @@ const NewSessionDialog = ({
 		}
 	};
 
-	const submit = () => {
-		if (canCreate) {
-			onCommit({ cwd, task: task.trim(), harness, branch: proposedBranch, branchMode });
+	const submit = async () => {
+		if (!canCreate) return;
+		setBusy(true);
+		setError(null);
+		try {
+			if (branchMode === "worktree") {
+				const worktreePath = await invoke<string>("git_propose_worktree_path", {
+					repoPath: cwd,
+					taskSlug: slug,
+				});
+				const wt = await invoke<{ name: string; path: string }>("git_add_worktree", {
+					repoPath: cwd,
+					branch: proposedBranch,
+					baseBranch,
+					worktreePath,
+				});
+				onCommit({
+					cwd: wt.path,
+					task: task.trim(),
+					harness,
+					branch: proposedBranch,
+					branchMode,
+				});
+			} else {
+				onCommit({
+					cwd,
+					task: task.trim(),
+					harness,
+					branch: repoStatus.kind === "valid" ? (repoStatus.head ?? "HEAD") : "HEAD",
+					branchMode,
+				});
+			}
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			setError(msg);
+			setBusy(false);
 		}
 	};
+
+	const statusBlurb = (() => {
+		switch (repoStatus.kind) {
+			case "empty":
+				return null;
+			case "checking":
+				return <span style={{ color: "var(--fg-3)" }}>checking…</span>;
+			case "valid":
+				return (
+					<span style={{ color: "var(--ok)" }}>
+						✓ git repo{repoStatus.head ? ` (HEAD: ${repoStatus.head})` : ""}
+					</span>
+				);
+			case "not-a-repo":
+				return <span style={{ color: "var(--err)" }}>⚠ not a git repository</span>;
+		}
+	})();
 
 	return (
 		<div className="sk-modal-bg" onClick={onCancel}>
@@ -255,7 +366,7 @@ const NewSessionDialog = ({
 							value={task}
 							onChange={(e) => setTask(e.target.value)}
 							onKeyDown={(e) => {
-								if (e.key === "Enter") submit();
+								if (e.key === "Enter") void submit();
 								if (e.key === "Escape") onCancel();
 							}}
 						/>
@@ -275,27 +386,62 @@ const NewSessionDialog = ({
 								Browse…
 							</button>
 						</div>
+						{statusBlurb && (
+							<div style={{ fontFamily: "var(--sk-mono)", fontSize: 10.5, marginTop: 2 }}>
+								{statusBlurb}
+							</div>
+						)}
 					</div>
 
-					<div className="sk-field">
-						<label>Branch (cosmetic — wired in Phase 4)</label>
-						<div className="sk-radio-row">
-							<div
-								className={`sk-radio-card ${branchMode === "worktree" ? "selected" : ""}`}
-								onClick={() => setBranchMode("worktree")}
-							>
-								<div className="top">New worktree</div>
-								<div className="desc">{proposedBranch}</div>
+					{valid && (
+						<div className="sk-field">
+							<label>Branch</label>
+							<div className="sk-radio-row">
+								<div
+									className={`sk-radio-card ${branchMode === "worktree" ? "selected" : ""}`}
+									onClick={() => setBranchMode("worktree")}
+								>
+									<div className="top">New worktree</div>
+									<div className="desc">{proposedBranch}</div>
+								</div>
+								<div
+									className={`sk-radio-card ${branchMode === "current" ? "selected" : ""}`}
+									onClick={() => setBranchMode("current")}
+								>
+									<div className="top">Current branch</div>
+									<div className="desc">{repoStatus.head ?? "HEAD"} · in place</div>
+								</div>
 							</div>
-							<div
-								className={`sk-radio-card ${branchMode === "current" ? "selected" : ""}`}
-								onClick={() => setBranchMode("current")}
-							>
-								<div className="top">Current branch</div>
-								<div className="desc">main · in place</div>
-							</div>
+							{branchMode === "worktree" && (
+								<div style={{ marginTop: 6 }}>
+									<label
+										style={{
+											fontFamily: "var(--sk-mono)",
+											fontSize: 10,
+											color: "var(--fg-2)",
+											textTransform: "uppercase",
+											letterSpacing: "0.08em",
+										}}
+									>
+										Based on
+									</label>
+									<select
+										className="sk-select"
+										style={{ marginTop: 4, width: "100%" }}
+										value={baseBranch}
+										onChange={(e) => setBaseBranch(e.target.value)}
+									>
+										{repoStatus.branches.map((b) => (
+											<option key={b.name} value={b.name}>
+												{b.name}
+												{b.isHead ? " (HEAD)" : ""}
+											</option>
+										))}
+									</select>
+								</div>
+							)}
 						</div>
-					</div>
+					)}
 
 					<div className="sk-field">
 						<label>Starting harness</label>
@@ -317,6 +463,22 @@ const NewSessionDialog = ({
 							})}
 						</div>
 					</div>
+
+					{error && (
+						<div
+							style={{
+								color: "var(--err)",
+								fontFamily: "var(--sk-mono)",
+								fontSize: 11,
+								padding: "8px 10px",
+								background: "color-mix(in srgb, var(--err) 8%, var(--bg-2))",
+								border: "1px solid color-mix(in srgb, var(--err) 35%, var(--line))",
+								borderRadius: 5,
+							}}
+						>
+							{error}
+						</div>
+					)}
 				</div>
 				<div className="sk-modal-foot">
 					<button className="sk-btn" onClick={onCancel}>
@@ -326,9 +488,9 @@ const NewSessionDialog = ({
 						className="sk-btn primary"
 						disabled={!canCreate}
 						style={{ opacity: canCreate ? 1 : 0.5, cursor: canCreate ? "pointer" : "not-allowed" }}
-						onClick={submit}
+						onClick={() => void submit()}
 					>
-						Create session
+						{busy ? "Creating…" : "Create session"}
 					</button>
 				</div>
 			</div>
