@@ -7,7 +7,10 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use skein_git::{BranchInfo, Repo, StatusEntry, StatusKind, WorktreeInfo, propose_worktree_path};
+use skein_git::{
+    BranchInfo, DiffHunk, DiffLine, DiffLineKind, FileDiff, Repo, StatusEntry, StatusKind,
+    WorktreeInfo, propose_worktree_path,
+};
 use tauri::ipc::Channel;
 
 use crate::watcher::WatcherManager;
@@ -98,18 +101,9 @@ pub struct StatusDto {
 
 impl From<StatusEntry> for StatusDto {
     fn from(s: StatusEntry) -> Self {
-        let kind = match s.kind {
-            StatusKind::Added => "added",
-            StatusKind::Modified => "modified",
-            StatusKind::Deleted => "deleted",
-            StatusKind::Renamed => "renamed",
-            StatusKind::Untracked => "untracked",
-            StatusKind::Conflicted => "conflicted",
-            StatusKind::Typechange => "typechange",
-        };
         Self {
             path: s.path,
-            kind,
+            kind: status_kind_str(s.kind),
             staged: s.staged,
         }
     }
@@ -153,4 +147,89 @@ pub fn git_watch_start(
 #[tauri::command]
 pub fn git_watch_stop(id: String, manager: tauri::State<'_, WatcherManager>) {
     manager.stop(&id);
+}
+
+#[derive(Debug, Serialize)]
+pub struct DiffLineDto {
+    /// "context" | "add" | "delete".
+    pub kind: &'static str,
+    pub content: String,
+    #[serde(rename = "oldLineno", skip_serializing_if = "Option::is_none")]
+    pub old_lineno: Option<u32>,
+    #[serde(rename = "newLineno", skip_serializing_if = "Option::is_none")]
+    pub new_lineno: Option<u32>,
+}
+
+impl From<DiffLine> for DiffLineDto {
+    fn from(l: DiffLine) -> Self {
+        let kind = match l.kind {
+            DiffLineKind::Context => "context",
+            DiffLineKind::Add => "add",
+            DiffLineKind::Delete => "delete",
+        };
+        Self {
+            kind,
+            content: l.content,
+            old_lineno: l.old_lineno,
+            new_lineno: l.new_lineno,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct DiffHunkDto {
+    pub header: String,
+    pub lines: Vec<DiffLineDto>,
+}
+
+impl From<DiffHunk> for DiffHunkDto {
+    fn from(h: DiffHunk) -> Self {
+        Self {
+            header: h.header,
+            lines: h.lines.into_iter().map(DiffLineDto::from).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileDiffDto {
+    pub path: String,
+    /// Same string set as `StatusDto::kind`.
+    pub kind: &'static str,
+    pub binary: bool,
+    pub hunks: Vec<DiffHunkDto>,
+}
+
+impl From<FileDiff> for FileDiffDto {
+    fn from(f: FileDiff) -> Self {
+        let kind = status_kind_str(f.kind);
+        Self {
+            path: f.path,
+            kind,
+            binary: f.binary,
+            hunks: f.hunks.into_iter().map(DiffHunkDto::from).collect(),
+        }
+    }
+}
+
+const fn status_kind_str(k: StatusKind) -> &'static str {
+    match k {
+        StatusKind::Added => "added",
+        StatusKind::Modified => "modified",
+        StatusKind::Deleted => "deleted",
+        StatusKind::Renamed => "renamed",
+        StatusKind::Untracked => "untracked",
+        StatusKind::Conflicted => "conflicted",
+        StatusKind::Typechange => "typechange",
+    }
+}
+
+/// Structured diff of every changed file in the worktree against HEAD.
+/// One entry per file; binary files have `binary: true` and empty hunks.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn git_diff(path: String) -> Result<Vec<FileDiffDto>, String> {
+    let repo = Repo::open(Path::new(&path)).map_err(|e| e.to_string())?;
+    let files = repo.diff_workdir().map_err(|e| e.to_string())?;
+    Ok(files.into_iter().map(FileDiffDto::from).collect())
 }

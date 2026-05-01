@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 
 use git2::{Repository, Signature};
-use skein_git::{BranchInfo, Repo, StatusKind, propose_worktree_path};
+use skein_git::{BranchInfo, DiffLineKind, Repo, StatusKind, propose_worktree_path};
 use tempfile::TempDir;
 
 /// Create a repo with one initial commit on `main` so `branches()` returns
@@ -209,4 +209,88 @@ fn status_results_are_sorted_by_path() {
     let repo = Repo::open(&path).unwrap();
     let paths: Vec<String> = repo.status().unwrap().into_iter().map(|s| s.path).collect();
     assert_eq!(paths, vec!["a.txt", "m.txt", "z.txt"]);
+}
+
+#[test]
+fn diff_clean_repo_is_empty() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    assert!(repo.diff_workdir().unwrap().is_empty());
+}
+
+#[test]
+fn diff_modified_file_has_add_and_delete_lines() {
+    let (_tmp, path) = init_repo();
+    // README starts as "hello\n"; rewrite it.
+    fs::write(path.join("README.md"), b"goodbye\nworld\n").unwrap();
+    let repo = Repo::open(&path).unwrap();
+    let diff = repo.diff_workdir().unwrap();
+    assert_eq!(diff.len(), 1);
+    let f = &diff[0];
+    assert_eq!(f.path, "README.md");
+    assert_eq!(f.kind, StatusKind::Modified);
+    assert!(!f.binary);
+    assert!(!f.hunks.is_empty());
+
+    // Collect the line kinds from the first hunk so we can assert
+    // both `-hello` and `+goodbye` appear.
+    let kinds_and_content: Vec<(DiffLineKind, &str)> = f.hunks[0]
+        .lines
+        .iter()
+        .map(|l| (l.kind.clone(), l.content.as_str()))
+        .collect();
+    assert!(
+        kinds_and_content.contains(&(DiffLineKind::Delete, "hello")),
+        "no delete line, got: {kinds_and_content:?}"
+    );
+    assert!(
+        kinds_and_content
+            .iter()
+            .any(|(k, c)| *k == DiffLineKind::Add && *c == "goodbye"),
+        "no add line for 'goodbye', got: {kinds_and_content:?}"
+    );
+}
+
+#[test]
+fn diff_untracked_file_appears_as_all_add() {
+    let (_tmp, path) = init_repo();
+    fs::write(path.join("new.txt"), b"line one\nline two\n").unwrap();
+    let repo = Repo::open(&path).unwrap();
+    let diff = repo.diff_workdir().unwrap();
+    let f = diff.iter().find(|f| f.path == "new.txt").expect("new.txt");
+    assert_eq!(f.kind, StatusKind::Untracked);
+    let add_count = f
+        .hunks
+        .iter()
+        .flat_map(|h| h.lines.iter())
+        .filter(|l| l.kind == DiffLineKind::Add)
+        .count();
+    let delete_count = f
+        .hunks
+        .iter()
+        .flat_map(|h| h.lines.iter())
+        .filter(|l| l.kind == DiffLineKind::Delete)
+        .count();
+    assert!(add_count >= 2, "expected ≥2 add lines, got {add_count}");
+    assert_eq!(delete_count, 0, "untracked file should have no deletes");
+}
+
+#[test]
+fn diff_deleted_file_appears_as_all_delete() {
+    let (_tmp, path) = init_repo();
+    fs::remove_file(path.join("README.md")).unwrap();
+    let repo = Repo::open(&path).unwrap();
+    let diff = repo.diff_workdir().unwrap();
+    let f = diff
+        .iter()
+        .find(|f| f.path == "README.md")
+        .expect("README.md");
+    assert_eq!(f.kind, StatusKind::Deleted);
+    let delete_count = f
+        .hunks
+        .iter()
+        .flat_map(|h| h.lines.iter())
+        .filter(|l| l.kind == DiffLineKind::Delete)
+        .count();
+    assert!(delete_count >= 1, "expected ≥1 delete line");
 }

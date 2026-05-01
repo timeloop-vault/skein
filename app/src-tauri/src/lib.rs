@@ -64,6 +64,7 @@ pub fn run() {
             git::git_status,
             git::git_watch_start,
             git::git_watch_stop,
+            git::git_diff,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

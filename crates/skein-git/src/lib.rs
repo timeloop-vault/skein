@@ -18,7 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
-use git2::{BranchType, Repository, Status, StatusOptions, WorktreeAddOptions};
+use git2::{BranchType, DiffOptions, Patch, Repository, Status, StatusOptions, WorktreeAddOptions};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -88,6 +88,44 @@ pub struct StatusEntry {
     /// workdir change shows up twice — once with `staged: true` and
     /// once with `staged: false`.
     pub staged: bool,
+}
+
+/// One line in a diff hunk. `old_lineno`/`new_lineno` mirror git's
+/// gutter — `None` on the side that doesn't apply (an added line has
+/// no old line number).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffLineKind {
+    Context,
+    Add,
+    Delete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffLine {
+    pub kind: DiffLineKind,
+    pub content: String,
+    pub old_lineno: Option<u32>,
+    pub new_lineno: Option<u32>,
+}
+
+/// A hunk inside a file diff. `header` is the verbatim
+/// `@@ -10,5 +10,7 @@ fn foo() {` line git emits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffHunk {
+    pub header: String,
+    pub lines: Vec<DiffLine>,
+}
+
+/// One file's diff against HEAD (with index changes folded in).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileDiff {
+    pub path: String,
+    pub kind: StatusKind,
+    pub hunks: Vec<DiffHunk>,
+    /// `true` if libgit2 marked this file as binary — in which case
+    /// `hunks` will be empty and the UI should render a "binary file
+    /// changed" placeholder rather than nothing.
+    pub binary: bool,
 }
 
 /// A repository handle. Opens lazily and is cheap to construct — there's
@@ -346,6 +384,117 @@ fn classify_workdir(s: Status) -> Option<StatusKind> {
         Some(StatusKind::Typechange)
     } else {
         None
+    }
+}
+
+impl Repo {
+    /// Compute a structured diff of the working tree against HEAD, with
+    /// index changes folded in. Untracked files appear as all-add diffs.
+    /// Binary files appear with `binary: true` and an empty `hunks`.
+    ///
+    /// Returns one entry per changed file, sorted by path. A repo on an
+    /// unborn branch (no commits yet) returns the worktree as all-adds.
+    pub fn diff_workdir(&self) -> Result<Vec<FileDiff>> {
+        let mut opts = DiffOptions::new();
+        opts.include_untracked(true);
+        opts.recurse_untracked_dirs(true);
+        opts.show_untracked_content(true);
+        opts.context_lines(3);
+
+        // `Repository::head()` errors on an unborn branch (fresh repo,
+        // no commits). In that case there's no tree to diff against,
+        // so we pass None — git2 treats it as the empty tree.
+        let head_tree = self.repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+        let diff = self
+            .repo
+            .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))?;
+
+        let mut files: Vec<FileDiff> = Vec::new();
+        let n_deltas = diff.deltas().len();
+        for i in 0..n_deltas {
+            // `Patch::from_diff` returns None for binary deltas — we
+            // still want to surface those, just without hunk content.
+            let delta = diff.get_delta(i).ok_or_else(|| {
+                GitError::Git(git2::Error::from_str("diff delta index out of range"))
+            })?;
+
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let kind = delta_to_status_kind(delta.status());
+
+            let patch_opt = Patch::from_diff(&diff, i)?;
+            let Some(file_patch) = patch_opt else {
+                files.push(FileDiff {
+                    path,
+                    kind,
+                    hunks: Vec::new(),
+                    binary: true,
+                });
+                continue;
+            };
+
+            let mut hunks = Vec::new();
+            for h_idx in 0..file_patch.num_hunks() {
+                let (hunk, line_count) = file_patch.hunk(h_idx)?;
+                let header = std::str::from_utf8(hunk.header())
+                    .unwrap_or("")
+                    .trim_end_matches('\n')
+                    .to_owned();
+                let mut lines = Vec::with_capacity(line_count);
+                for l_idx in 0..line_count {
+                    let line = file_patch.line_in_hunk(h_idx, l_idx)?;
+                    let line_kind = match line.origin() {
+                        '+' | '>' => DiffLineKind::Add,
+                        '-' | '<' => DiffLineKind::Delete,
+                        // Includes ' ', '=', '\\' (no newline at eof),
+                        // 'F', 'H', 'B' — the latter three shouldn't
+                        // appear inside a hunk but are harmless in the
+                        // Context bucket.
+                        _ => DiffLineKind::Context,
+                    };
+                    let content = std::str::from_utf8(line.content())
+                        .unwrap_or("")
+                        .trim_end_matches('\n')
+                        .to_owned();
+                    lines.push(DiffLine {
+                        kind: line_kind,
+                        content,
+                        old_lineno: line.old_lineno(),
+                        new_lineno: line.new_lineno(),
+                    });
+                }
+                hunks.push(DiffHunk { header, lines });
+            }
+            files.push(FileDiff {
+                path,
+                kind,
+                hunks,
+                binary: false,
+            });
+        }
+
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(files)
+    }
+}
+
+fn delta_to_status_kind(s: git2::Delta) -> StatusKind {
+    use git2::Delta;
+    match s {
+        Delta::Added => StatusKind::Added,
+        Delta::Deleted => StatusKind::Deleted,
+        Delta::Renamed => StatusKind::Renamed,
+        Delta::Untracked => StatusKind::Untracked,
+        Delta::Conflicted => StatusKind::Conflicted,
+        Delta::Typechange => StatusKind::Typechange,
+        // Modified plus the rare Copied/Ignored/Unmodified/Unreadable
+        // bucket — none of those should show up in our diff in practice
+        // but Modified is the harmless fallback.
+        _ => StatusKind::Modified,
     }
 }
 
