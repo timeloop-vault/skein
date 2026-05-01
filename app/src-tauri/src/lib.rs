@@ -8,6 +8,7 @@
 mod db;
 mod git;
 mod pty;
+mod watcher;
 
 use std::path::Path;
 
@@ -16,6 +17,7 @@ use tauri::ipc::Channel;
 
 use crate::db::{Database, Session};
 use crate::pty::PtyManager;
+use crate::watcher::WatcherManager;
 
 /// Boots the Tauri runtime and blocks until the main window closes.
 ///
@@ -42,6 +44,7 @@ pub fn run() {
             })?;
             app.manage(db);
             app.manage(PtyManager::new());
+            app.manage(WatcherManager::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -59,6 +62,8 @@ pub fn run() {
             git::git_propose_worktree_path,
             git::git_add_worktree,
             git::git_status,
+            git::git_watch_start,
+            git::git_watch_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

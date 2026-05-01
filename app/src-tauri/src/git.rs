@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use skein_git::{BranchInfo, Repo, StatusEntry, StatusKind, WorktreeInfo, propose_worktree_path};
+use tauri::ipc::Channel;
+
+use crate::watcher::WatcherManager;
 
 #[derive(Debug, Serialize)]
 pub struct BranchDto {
@@ -121,4 +124,33 @@ pub fn git_status(path: String) -> Result<Vec<StatusDto>, String> {
     let repo = Repo::open(Path::new(&path)).map_err(|e| e.to_string())?;
     let entries = repo.status().map_err(|e| e.to_string())?;
     Ok(entries.into_iter().map(StatusDto::from).collect())
+}
+
+/// Start a recursive filesystem watcher rooted at `path`. `on_change`
+/// is fired (with no payload) every time a debounced quiet-window
+/// passes after a real change — the frontend re-runs `git_status` in
+/// response. Returns an opaque id; pass it to `git_watch_stop` to end
+/// the watch.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn git_watch_start(
+    path: String,
+    on_change: Channel<()>,
+    manager: tauri::State<'_, WatcherManager>,
+) -> Result<String, String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    manager
+        .start(id.clone(), Path::new(&path), move || {
+            // The channel send only fails if the frontend dropped its
+            // half — nothing useful we can do at that point.
+            let _ = on_change.send(());
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn git_watch_stop(id: String, manager: tauri::State<'_, WatcherManager>) {
+    manager.stop(&id);
 }

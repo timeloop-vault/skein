@@ -1,11 +1,11 @@
 // LiveStatus — real "what's changed?" pane for sessions with a real cwd.
 //
-// Phase 5a: pulls a snapshot via `git_status` on mount and on demand.
-// Phase 5b will subscribe to a file-watcher event and refresh in
-// response — until then this is poll-only.
+// Phase 5b: on mount we both fetch the initial snapshot AND start a
+// debounced filesystem watcher. Each watcher tick fires a re-fetch, so
+// the list updates ~250ms after a harness writes to a file.
 
-import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useState } from "react";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type StatusKind =
 	| "added"
@@ -40,6 +40,14 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 	const [entries, setEntries] = useState<StatusDto[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
+	// "Just refreshed" badge for the header — flashes for 600ms after
+	// every watcher-driven refresh so the user can see the auto-update
+	// is real, not just an empty UI.
+	const [pulse, setPulse] = useState(false);
+	// Track whether the *current* refresh was triggered by a watcher
+	// event vs. the initial mount or manual click. Only watcher-driven
+	// refreshes pulse — manual ones don't need the visual feedback.
+	const fromWatcherRef = useRef(false);
 
 	const refresh = useCallback(async () => {
 		setLoading(true);
@@ -47,6 +55,11 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 		try {
 			const rows = await invoke<StatusDto[]>("git_status", { path: cwd });
 			setEntries(rows);
+			if (fromWatcherRef.current) {
+				setPulse(true);
+				window.setTimeout(() => setPulse(false), 600);
+				fromWatcherRef.current = false;
+			}
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
 			setError(msg);
@@ -58,6 +71,39 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 	useEffect(() => {
 		void refresh();
 	}, [refresh]);
+
+	// File watcher — fires `refresh` whenever the worktree changes
+	// (debounced 200ms on the Rust side).
+	useEffect(() => {
+		const channel = new Channel<null>();
+		channel.onmessage = () => {
+			fromWatcherRef.current = true;
+			void refresh();
+		};
+
+		let watchId: string | null = null;
+		let cancelled = false;
+
+		invoke<string>("git_watch_start", { path: cwd, onChange: channel })
+			.then((id) => {
+				if (cancelled) {
+					void invoke("git_watch_stop", { id });
+					return;
+				}
+				watchId = id;
+			})
+			.catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error("[skein] git_watch_start failed:", msg);
+			});
+
+		return () => {
+			cancelled = true;
+			if (watchId) {
+				void invoke("git_watch_stop", { id: watchId });
+			}
+		};
+	}, [cwd, refresh]);
 
 	return (
 		<div
@@ -83,6 +129,17 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 				}}
 			>
 				<span style={{ color: "var(--fg-0)" }}>Status</span>
+				<span
+					style={{
+						width: 6,
+						height: 6,
+						borderRadius: "50%",
+						background: pulse ? "var(--accent)" : "var(--ok)",
+						boxShadow: `0 0 ${pulse ? 8 : 4}px ${pulse ? "var(--accent)" : "var(--ok)"}`,
+						transition: "background 0.2s, box-shadow 0.2s",
+					}}
+					title={pulse ? "just refreshed" : "watching"}
+				/>
 				<span style={{ color: "var(--fg-3)" }}>·</span>
 				<span style={{ color: "var(--fg-3)", flex: 1, minWidth: 0 }} title={cwd}>
 					<span

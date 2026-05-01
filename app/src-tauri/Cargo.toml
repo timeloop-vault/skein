@@ -24,6 +24,7 @@ portable-pty = "0.8"
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.34", features = ["bundled"] }
+notify-debouncer-mini = "0.6"
 skein-git = { path = "../../crates/skein-git" }
 
 [lints.rust]
