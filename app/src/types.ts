@@ -17,6 +17,12 @@ export interface Harness {
 	status: Status;
 	model: string;
 	tokens: string;
+	// Phase 1: harnesses spawned via "+ harness" run inside a real PTY.
+	// Seeded demo harnesses (s1-s5) leave these undefined, so they keep
+	// rendering the frozen TUI mocks from the design.
+	live?: boolean;
+	cmd?: string[];
+	cwd?: string;
 }
 
 export interface Session {

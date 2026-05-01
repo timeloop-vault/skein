@@ -10,7 +10,9 @@
 //     you switch agents inside the same workspace, the diff/files/plan
 //     stay put.
 
+import { invoke } from "@tauri-apps/api/core";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { LiveTerminal } from "./LiveTerminal.tsx";
 import {
 	ActivityFeed,
 	ByohPanel,
@@ -62,6 +64,12 @@ const HarnessBody = ({
 	onRetry: () => void;
 	onReauth: () => void;
 }) => {
+	// Live harnesses (spawned via "+ harness") run inside a real PTY.
+	// Seeded demo harnesses (s1-s5) keep the frozen TUI mocks so the
+	// design tour still tells its story end-to-end.
+	if (harness.live && harness.cmd && harness.cwd !== undefined) {
+		return <LiveTerminal cmd={harness.cmd} cwd={harness.cwd} mountKey={harness.id} />;
+	}
 	if (harness.kind === "byoh" && harness.status === "waiting" && !resolved) {
 		return <ByohPanel harnessId={harness.id} onApprove={onApprove} />;
 	}
@@ -712,6 +720,24 @@ const RIGHT_TABS: { id: RightTab; label: string }[] = [
 
 const newId = (prefix: string): string => prefix + Math.random().toString(36).slice(2, 7);
 
+// Phase 1 mapping from harness kind → argv. Each binary must be on PATH
+// for the spawn to succeed; if it isn't, the LiveTerminal renders the
+// error inline and the user can pick another kind.
+const cmdForKind = (kind: HarnessKind, fallbackShell: string[]): string[] => {
+	switch (kind) {
+		case "claude":
+			return ["claude"];
+		case "opencode":
+			return ["opencode"];
+		case "copilot":
+			return ["gh", "copilot", "suggest"];
+		case "byoh":
+			// No real BYOH agent yet — drop into the user's shell so the
+			// spike still proves the wiring end-to-end.
+			return fallbackShell.length > 0 ? fallbackShell : ["pwsh.exe"];
+	}
+};
+
 export default function App() {
 	const [theme, setTheme] = useState<Theme>("dark");
 	const [density, setDensity] = useState<Density>("regular");
@@ -725,6 +751,15 @@ export default function App() {
 	const [showNewSession, setShowNewSession] = useState(false);
 	const [rightTab, setRightTab] = useState<RightTab>("stack");
 	const [tourIdx, setTourIdx] = useState<number | null>(null);
+
+	// Phase 1: pull platform defaults once at boot. New harnesses spawn
+	// into these until Phase 4 wires real worktrees / per-session cwd.
+	const [defaultShell, setDefaultShell] = useState<string[]>([]);
+	const [defaultCwd, setDefaultCwd] = useState<string>("");
+	useEffect(() => {
+		void invoke<string[]>("default_shell").then(setDefaultShell);
+		void invoke<string>("default_cwd").then(setDefaultCwd);
+	}, []);
 
 	const session = useMemo(
 		() => sessions.find((s) => s.id === activeSessionId),
@@ -763,6 +798,11 @@ export default function App() {
 		const targetSessionId = showPicker;
 		if (!targetSessionId) return;
 		const id = newId("h");
+		// Phase 1: pick a real argv per kind. If the binary isn't on
+		// PATH, the spawn errors and the user sees it inside the
+		// terminal — fine for a spike. byoh has no real CLI yet, so it
+		// drops to the user's default shell.
+		const cmd = cmdForKind(kind, defaultShell);
 		setSessions((prev) =>
 			prev.map((s) => {
 				if (s.id !== targetSessionId) return s;
@@ -770,9 +810,12 @@ export default function App() {
 					id,
 					kind,
 					name: `${HARNESS_KINDS[kind].label}-${s.harnesses.length + 1}`,
-					status: "idle",
+					status: "running",
 					model: kind === "copilot" ? "gpt-5" : "sonnet-4.5",
 					tokens: "0",
+					live: true,
+					cmd,
+					cwd: defaultCwd,
 				};
 				return { ...s, harnesses: [...s.harnesses, newH], activeHarnessId: id };
 			}),

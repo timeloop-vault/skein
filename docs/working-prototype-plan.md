@@ -46,7 +46,7 @@ is real.
 
 ---
 
-### Phase 1 — One real PTY in the harness pane *(the hard one)*
+### Phase 1 — One real PTY in the harness pane *(foundational)*
 
 **Goal:** click "Claude Code" in the quickstart, see the actual `claude`
 binary running inside the harness pane.
@@ -61,8 +61,10 @@ binary running inside the harness pane.
     - `pty_write({ harnessId, data: Vec<u8> })`
     - `pty_resize({ harnessId, rows, cols })`
     - `pty_kill({ harnessId })`
-  - Tauri event: `pty://output/{harnessId}` with `Vec<u8>` payload
-    (binary; see [Tauri events doc](https://v2.tauri.app/develop/calling-frontend/)).
+  - Output stream: per-spawn `tauri::ipc::Channel<String>` passed in as a
+    command argument. UTF-8-lossy on the Rust side; xterm.js ingests
+    strings directly via `term.write(string)`. Switch to a binary channel
+    later if profiling says it matters.
 - **Frontend (TS)**
   - Drop xterm.js into the `term-*` panels. Replace the hand-written
     "look like Claude Code" markup with one xterm instance per harness.
@@ -74,13 +76,19 @@ binary running inside the harness pane.
 - **Demo:** run `skein`, hit "Claude Code" quickstart, see the real
   `claude` CLI splash, type a question, get an answer.
 
-**Risks to investigate first:**
-- Windows ConPTY has historically been flaky with TUI apps that use
-  alt-screen. A 30-minute spike with `portable-pty` + a few real TUIs
-  (`claude`, `vim`, `htop`) is worth doing before committing the API.
-- `claude` and `opencode` may need specific env (`TERM`, `COLORTERM`)
-  to render correctly. Plan to forward the user's env by default and
-  add overrides per quickstart.
+**Details to nail (not blockers — well-trodden ground):**
+- **IPC throughput.** Tauri events JSON-encode payloads, which is fine for
+  small UI signals but painful for a TUI dumping a screenful of ANSI in
+  one frame. Use `tauri::ipc::Channel` per spawn rather than `emit` — it
+  delivers in order and handles backpressure, and we can swap to a binary
+  payload type later without changing the Rust API.
+- **Windows ConPTY redraws.** TUIs that toggle alt-screen (`claude`,
+  `vim`, anything fullscreen) have historically had occasional resize
+  bugs on ConPTY. `portable-pty` smooths most of them; verify with
+  `claude` early so we catch the rough edges before building on top.
+- **Env forwarding.** Set `TERM=xterm-256color` and `COLORTERM=truecolor`
+  by default, and forward the user's `PATH` / `HOME` / locale vars so
+  spawned binaries can find their auth files and config.
 
 ---
 
@@ -236,9 +244,8 @@ accidentally start them:
 
 ## Order of operations
 
-If we go in the order above, every phase ships something demoable. Phase 1
-is by far the highest-risk — if `portable-pty` + xterm.js + Tauri events
-don't compose cleanly on Windows, the rest of the plan needs to change
-(probably toward [`tauri-plugin-shell`](https://v2.tauri.app/plugin/shell/)
-or a different PTY crate). Spike Phase 1 hard before committing to the
-full plan.
+Go in the order above. Each phase ships something demoable. Phase 1 is
+first because everything else depends on it, not because the technology
+is unproven — VS Code, wezterm, Hyper, Warp, and Zed all run on the same
+recipe (xterm.js + a PTY backend). The work is in the integration details
+above, not in inventing anything new.
