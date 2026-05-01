@@ -35,6 +35,10 @@ export interface Session {
 	badge: number;
 	harnesses: Harness[];
 	activeHarnessId: string;
+	// Phase 2: every harness in the session spawns into this directory.
+	// Optional because the seeded demo sessions (s1-s5) point at fictional
+	// repos and don't get spawned into; new sessions always have one.
+	cwd?: string;
 }
 
 export interface TreeNode {

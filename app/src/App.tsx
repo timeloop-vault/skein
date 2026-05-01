@@ -11,6 +11,7 @@
 //     stay put.
 
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import {
@@ -31,14 +32,7 @@ import {
 	SessionTab,
 	StatusDot,
 } from "./components.tsx";
-import {
-	HARNESS_KINDS,
-	HARNESS_ORDER,
-	INITIAL_SESSIONS,
-	REPO_PRESETS,
-	type RepoPreset,
-	SESSION_DATA,
-} from "./data.tsx";
+import { HARNESS_KINDS, HARNESS_ORDER, INITIAL_SESSIONS, SESSION_DATA } from "./data.tsx";
 import type {
 	Density,
 	Harness,
@@ -184,28 +178,33 @@ const PlanFullPane = ({ data }: { data: SessionData }) => {
 };
 
 // ── New session dialog ─────────────────────────────────────────────
+// Phase 2: replaces the design's fictional REPO_PRESETS dropdown with
+// a real folder picker. The picked path becomes the session's cwd, and
+// every harness in the session spawns into it. Branch is still
+// cosmetic — wired for real in Phase 4.
+
+interface CreateSessionArgs {
+	cwd: string;
+	task: string;
+	harness: HarnessKind;
+	branch: string;
+	branchMode: "worktree" | "current";
+}
 
 const NewSessionDialog = ({
+	defaultCwd,
 	onCommit,
 	onCancel,
 }: {
-	onCommit: (args: {
-		repo: RepoPreset;
-		task: string;
-		harness: HarnessKind;
-		branch: string;
-		branchMode: "worktree" | "current";
-	}) => void;
+	defaultCwd: string;
+	onCommit: (args: CreateSessionArgs) => void;
 	onCancel: () => void;
 }) => {
-	const [repoId, setRepoId] = useState<string>(REPO_PRESETS[0]?.id ?? "skein");
+	const [cwd, setCwd] = useState<string>("");
 	const [task, setTask] = useState("");
 	const [harness, setHarness] = useState<HarnessKind>("claude");
 	const [branchMode, setBranchMode] = useState<"worktree" | "current">("worktree");
-	const repo = REPO_PRESETS.find((r) => r.id === repoId) ?? REPO_PRESETS[0];
-	if (!repo) {
-		throw new Error("Skein: REPO_PRESETS is empty");
-	}
+
 	const slug =
 		task
 			.trim()
@@ -213,12 +212,25 @@ const NewSessionDialog = ({
 			.replace(/[^a-z0-9]+/g, "-")
 			.replace(/^-|-$/g, "")
 			.slice(0, 28) || "task";
-	const proposedBranch = branchMode === "worktree" ? `skein/${slug}` : repo.lastBranch;
-	const canCreate = task.trim().length > 0;
+	const proposedBranch = branchMode === "worktree" ? `skein/${slug}` : "main";
+	const canCreate = task.trim().length > 0 && cwd.length > 0;
+
+	const browse = async () => {
+		const start = cwd || defaultCwd;
+		const picked = await openDialog({
+			directory: true,
+			multiple: false,
+			title: "Pick a folder for this session",
+			...(start ? { defaultPath: start } : {}),
+		});
+		if (typeof picked === "string") {
+			setCwd(picked);
+		}
+	};
 
 	const submit = () => {
 		if (canCreate) {
-			onCommit({ repo, task: task.trim(), harness, branch: proposedBranch, branchMode });
+			onCommit({ cwd, task: task.trim(), harness, branch: proposedBranch, branchMode });
 		}
 	};
 
@@ -227,7 +239,9 @@ const NewSessionDialog = ({
 			<div className="sk-modal" onClick={(e) => e.stopPropagation()}>
 				<div className="sk-modal-head">
 					<h2>New session</h2>
-					<div className="sub">A session is a repo + task. You can add more harnesses inside.</div>
+					<div className="sub">
+						A session is a folder + task. You can add more harnesses inside.
+					</div>
 				</div>
 				<div className="sk-modal-body">
 					<div className="sk-field">
@@ -248,23 +262,23 @@ const NewSessionDialog = ({
 					</div>
 
 					<div className="sk-field">
-						<label htmlFor="sk-repo">Repo</label>
-						<select
-							id="sk-repo"
-							className="sk-select"
-							value={repoId}
-							onChange={(e) => setRepoId(e.target.value)}
-						>
-							{REPO_PRESETS.map((r) => (
-								<option key={r.id} value={r.id}>
-									{r.label} · {r.path}
-								</option>
-							))}
-						</select>
+						<label>Folder</label>
+						<div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+							<input
+								className="sk-input"
+								style={{ flex: 1 }}
+								placeholder="Pick a folder…"
+								value={cwd}
+								onChange={(e) => setCwd(e.target.value)}
+							/>
+							<button className="sk-btn" onClick={browse} type="button">
+								Browse…
+							</button>
+						</div>
 					</div>
 
 					<div className="sk-field">
-						<label>Branch</label>
+						<label>Branch (cosmetic — wired in Phase 4)</label>
 						<div className="sk-radio-row">
 							<div
 								className={`sk-radio-card ${branchMode === "worktree" ? "selected" : ""}`}
@@ -278,7 +292,7 @@ const NewSessionDialog = ({
 								onClick={() => setBranchMode("current")}
 							>
 								<div className="top">Current branch</div>
-								<div className="desc">{repo.lastBranch} · in place</div>
+								<div className="desc">main · in place</div>
 							</div>
 						</div>
 					</div>
@@ -798,10 +812,9 @@ export default function App() {
 		const targetSessionId = showPicker;
 		if (!targetSessionId) return;
 		const id = newId("h");
-		// Phase 1: pick a real argv per kind. If the binary isn't on
-		// PATH, the spawn errors and the user sees it inside the
-		// terminal — fine for a spike. byoh has no real CLI yet, so it
-		// drops to the user's default shell.
+		// Phase 1: argv per kind. Phase 2: spawn into the session's cwd
+		// so two harnesses in the same session edit the same files.
+		// Seeded sessions don't have a real cwd — fall back to defaultCwd.
 		const cmd = cmdForKind(kind, defaultShell);
 		setSessions((prev) =>
 			prev.map((s) => {
@@ -815,7 +828,7 @@ export default function App() {
 					tokens: "0",
 					live: true,
 					cmd,
-					cwd: defaultCwd,
+					cwd: s.cwd ?? defaultCwd,
 				};
 				return { ...s, harnesses: [...s.harnesses, newH], activeHarnessId: id };
 			}),
@@ -892,28 +905,25 @@ export default function App() {
 
 	const urgent = sessions.find((s) => s.id !== activeSessionId && s.status === "waiting");
 
-	const createSession = ({
-		repo,
-		task,
-		harness,
-		branch,
-	}: {
-		repo: RepoPreset;
-		task: string;
-		harness: HarnessKind;
-		branch: string;
-		branchMode: "worktree" | "current";
-	}) => {
+	const createSession = ({ cwd, task, harness, branch }: CreateSessionArgs) => {
 		const sid = newId("s");
 		const hid = newId("h");
+		// "Repo" name from the trailing path component — `D:\code\skein` →
+		// `skein`. Cosmetic; the actual cwd is what spawns use.
+		const repoName =
+			cwd
+				.replace(/[\\/]+$/, "")
+				.split(/[\\/]/)
+				.pop() || cwd;
 		const newSession: Session = {
 			id: sid,
-			name: `${repo.id === "pim" ? "work" : "kit"} · ${repo.label}`,
+			name: `local · ${repoName}`,
 			branch,
-			repo: repo.id,
+			repo: repoName,
 			task,
 			status: "running",
 			badge: 0,
+			cwd,
 			harnesses: [
 				{
 					id: hid,
@@ -922,6 +932,9 @@ export default function App() {
 					status: "running",
 					model: harness === "copilot" ? "gpt-5" : "sonnet-4.5",
 					tokens: "0",
+					live: true,
+					cmd: cmdForKind(harness, defaultShell),
+					cwd,
 				},
 			],
 			activeHarnessId: hid,
@@ -938,16 +951,23 @@ export default function App() {
 				<Titlebar onTour={startTour} />
 				<EmptyState onNew={() => setShowNewSession(true)} />
 				{showNewSession && (
-					<NewSessionDialog onCommit={createSession} onCancel={() => setShowNewSession(false)} />
+					<NewSessionDialog
+						defaultCwd={defaultCwd}
+						onCommit={createSession}
+						onCancel={() => setShowNewSession(false)}
+					/>
 				)}
 			</div>
 		);
 	}
 
-	if (!session || !activeHarness || !data) {
+	if (!session || !activeHarness) {
 		// Shouldn't happen in practice: sessions is non-empty above.
 		return null;
 	}
+	// `data` is only populated for the seeded demo sessions (s1-s5).
+	// New sessions have a real cwd but no SESSION_DATA fixture yet —
+	// the right pane just stays empty until Phase 5 wires real diffs.
 
 	const tourStep = tourIdx !== null ? TOUR_STEPS[tourIdx] : undefined;
 
@@ -994,13 +1014,30 @@ export default function App() {
 					{showPicker === session.id ? (
 						<HarnessPicker onPick={pickHarness} />
 					) : (
-						<HarnessBody
-							harness={activeHarness}
-							resolved={permissionResolved[activeHarness.id] ?? false}
-							onApprove={() => approve(activeHarness.id)}
-							onRetry={() => recoverError(activeHarness.id)}
-							onReauth={() => recoverError(activeHarness.id)}
-						/>
+						// Mount every harness in the active session at once; hide
+						// inactive ones via display:none so xterm scrollback,
+						// cursor position, and PTY state survive tab switches.
+						// Mock (non-live) harnesses are re-rendered cheaply but
+						// we use the same pattern for consistency.
+						session.harnesses.map((h) => (
+							<div
+								key={h.id}
+								style={{
+									display: h.id === session.activeHarnessId ? "flex" : "none",
+									flexDirection: "column",
+									flex: 1,
+									minHeight: 0,
+								}}
+							>
+								<HarnessBody
+									harness={h}
+									resolved={permissionResolved[h.id] ?? false}
+									onApprove={() => approve(h.id)}
+									onRetry={() => recoverError(h.id)}
+									onReauth={() => recoverError(h.id)}
+								/>
+							</div>
+						))
 					)}
 				</div>
 
@@ -1020,10 +1057,37 @@ export default function App() {
 							<span>auto-follow</span>
 						</div>
 					</div>
-					{rightTab === "stack" && <ContextStack data={data} showActivity={showActivityFeed} />}
-					{rightTab === "files" && <FilesFullPane data={data} />}
-					{rightTab === "diff" && <DiffFullPane data={data} />}
-					{rightTab === "plan" && <PlanFullPane data={data} />}
+					{data && rightTab === "stack" && (
+						<ContextStack data={data} showActivity={showActivityFeed} />
+					)}
+					{data && rightTab === "files" && <FilesFullPane data={data} />}
+					{data && rightTab === "diff" && <DiffFullPane data={data} />}
+					{data && rightTab === "plan" && <PlanFullPane data={data} />}
+					{!data && (
+						<div
+							style={{
+								flex: 1,
+								display: "flex",
+								alignItems: "center",
+								justifyContent: "center",
+								color: "var(--fg-3)",
+								fontFamily: "var(--sk-mono)",
+								fontSize: 11,
+								padding: 24,
+								textAlign: "center",
+							}}
+						>
+							{session.cwd ? (
+								<>
+									Live worktree: <span style={{ color: "var(--fg-1)" }}>{session.cwd}</span>
+									<br />
+									(Phase 5 will surface the diff here.)
+								</>
+							) : (
+								"No data for this session yet."
+							)}
+						</div>
+					)}
 				</div>
 			</div>
 
@@ -1075,7 +1139,11 @@ export default function App() {
 			/>
 
 			{showNewSession && (
-				<NewSessionDialog onCommit={createSession} onCancel={() => setShowNewSession(false)} />
+				<NewSessionDialog
+					defaultCwd={defaultCwd}
+					onCommit={createSession}
+					onCancel={() => setShowNewSession(false)}
+				/>
 			)}
 
 			{tourIdx !== null && tourStep && (

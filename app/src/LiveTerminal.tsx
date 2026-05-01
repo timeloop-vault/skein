@@ -38,7 +38,7 @@ export const LiveTerminal = ({ cmd, cwd, mountKey }: LiveTerminalProps) => {
 
 		const term = new Terminal({
 			fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
-			fontSize: 12,
+			fontSize: 13,
 			theme: {
 				background: "#131418",
 				foreground: "#e8e6df",
@@ -53,6 +53,10 @@ export const LiveTerminal = ({ cmd, cwd, mountKey }: LiveTerminalProps) => {
 		term.loadAddon(fit);
 		term.open(host);
 		fit.fit();
+		// Take focus on mount so the user can immediately interact with
+		// any prompt the spawned CLI prints (e.g. Claude Code's "is it
+		// ok if I work in this folder?" arrow-key dialog).
+		term.focus();
 
 		const channel = new Channel<string>();
 		channel.onmessage = (chunk) => term.write(chunk);
