@@ -28,6 +28,7 @@ use crate::pty::PtyManager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             // Persist Skein state under the OS-conventional app data dir
             // (e.g. %APPDATA%/com.timeloop-vault.skein on Windows). Create

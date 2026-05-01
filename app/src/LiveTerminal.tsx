@@ -9,6 +9,7 @@
 // harness ends the process, no scrollback persistence, no reconnect.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -29,6 +30,9 @@ export const LiveTerminal = ({ cmd, cwd, mountKey }: LiveTerminalProps) => {
 	// doesn't spawn twice, and so a re-mount with the same harness can
 	// reuse the previous spawn id when we add reconnects later.
 	const spawnedRef = useRef<string | null>(null);
+	// Used by the clipboard key handler — needs the PTY id at keystroke
+	// time, which the spawn .then sets later.
+	const ptyIdRef = useRef<string | null>(null);
 
 	useEffect(() => {
 		const host = containerRef.current;
@@ -58,6 +62,29 @@ export const LiveTerminal = ({ cmd, cwd, mountKey }: LiveTerminalProps) => {
 		// ok if I work in this folder?" arrow-key dialog).
 		term.focus();
 
+		// Clipboard bindings. Ctrl+C / Ctrl+V keep their terminal meaning
+		// (SIGINT and literal 0x16); Ctrl+Shift+C / Ctrl+Shift+V do the
+		// editor-style copy/paste — same convention as VS Code's terminal,
+		// gnome-terminal, kitty, etc.
+		term.attachCustomKeyEventHandler((e) => {
+			if (e.type !== "keydown" || !e.ctrlKey || !e.shiftKey) return true;
+			if (e.code === "KeyC") {
+				const sel = term.getSelection();
+				if (sel) void writeText(sel);
+				// Suppress xterm's default handling either way — sending the
+				// raw Ctrl+Shift+C byte sequence to the PTY is rarely useful.
+				return false;
+			}
+			if (e.code === "KeyV") {
+				void readText().then((text) => {
+					const id = ptyIdRef.current;
+					if (text && id) void invoke("pty_write", { id, data: text });
+				});
+				return false;
+			}
+			return true;
+		});
+
 		const channel = new Channel<string>();
 		channel.onmessage = (chunk) => term.write(chunk);
 
@@ -81,6 +108,7 @@ export const LiveTerminal = ({ cmd, cwd, mountKey }: LiveTerminalProps) => {
 					return;
 				}
 				ptyId = id;
+				ptyIdRef.current = id;
 
 				dataDisposable = term.onData((data) => {
 					void invoke("pty_write", { id, data });
@@ -112,6 +140,7 @@ export const LiveTerminal = ({ cmd, cwd, mountKey }: LiveTerminalProps) => {
 			}
 			term.dispose();
 			spawnedRef.current = null;
+			ptyIdRef.current = null;
 		};
 		// cmd/cwd are stable for a given mountKey (we set them once when
 		// the harness is created and never mutate them), so listing them
