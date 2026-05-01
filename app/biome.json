@@ -1,0 +1,35 @@
+{
+	"$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+	"files": {
+		"ignore": ["dist/**", "src-tauri/target/**", "src-tauri/gen/**"]
+	},
+	"organizeImports": {
+		"enabled": true
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"suspicious": {
+				"noArrayIndexKey": "off"
+			},
+			"a11y": {
+				"useKeyWithClickEvents": "off",
+				"useButtonType": "off",
+				"useSemanticElements": "off",
+				"noLabelWithoutControl": "off"
+			}
+		}
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"lineWidth": 100
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double",
+			"semicolons": "always"
+		}
+	}
+}

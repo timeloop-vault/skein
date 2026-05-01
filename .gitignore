@@ -1,0 +1,28 @@
+# Build artifacts
+**/target/
+node_modules/
+dist/
+dist-ssr/
+.cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code — ignore everything except agents (shared with team)
+.claude/*
+!.claude/agents/
+
+# Environment
+.env
+.env.local
+
+# Tauri
+src-tauri/gen/
+

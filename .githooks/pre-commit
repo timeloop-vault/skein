@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Pre-commit hook: enforces Rust + TypeScript quality gates.
+# Fails fast on first error to keep feedback loop short.
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+echo "=== pre-commit: cargo fmt ==="
+cargo fmt --check --manifest-path "$REPO_ROOT/app/src-tauri/Cargo.toml" 2>&1 || {
+    echo "ERROR: cargo fmt check failed in app/src-tauri. Run 'cargo fmt' and re-stage."
+    exit 1
+}
+
+echo "=== pre-commit: cargo clippy (tauri app) ==="
+cargo clippy --manifest-path "$REPO_ROOT/app/src-tauri/Cargo.toml" --tests -- -D warnings 2>&1 || {
+    echo "ERROR: clippy warnings in tauri app. Fix them before committing."
+    exit 1
+}
+
+echo "=== pre-commit: tsc ==="
+cd "$REPO_ROOT/app"
+npx tsc --noEmit 2>&1 || {
+    echo "ERROR: TypeScript type errors. Fix them before committing."
+    exit 1
+}
+
+echo "=== pre-commit: biome ==="
+npx biome check . 2>&1 || {
+    echo "ERROR: Biome errors. Run 'npx biome check --write --unsafe .' in app/ and re-stage."
+    exit 1
+}
+
+cd "$REPO_ROOT"
+
+echo "=== pre-commit: all checks passed ==="

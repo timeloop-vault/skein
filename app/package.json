@@ -1,0 +1,31 @@
+{
+	"name": "skein-app",
+	"private": true,
+	"version": "0.0.0-dev",
+	"type": "module",
+	"engines": {
+		"node": ">=20"
+	},
+	"scripts": {
+		"dev": "vite",
+		"build": "tsc && vite build",
+		"preview": "vite preview",
+		"tauri": "tauri",
+		"lint": "biome check .",
+		"format": "biome format --write ."
+	},
+	"dependencies": {
+		"@tauri-apps/api": "^2",
+		"react": "^18.3.1",
+		"react-dom": "^18.3.1"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"@tauri-apps/cli": "^2",
+		"@types/react": "^18.3.12",
+		"@types/react-dom": "^18.3.1",
+		"@vitejs/plugin-react": "^4.3.4",
+		"typescript": "~5.6.2",
+		"vite": "^6.0.3"
+	}
+}
