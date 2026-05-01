@@ -13,6 +13,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { LiveStatus } from "./LiveStatus.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import {
 	ActivityFeed,
@@ -1281,7 +1282,8 @@ export default function App() {
 					{data && rightTab === "files" && <FilesFullPane data={data} />}
 					{data && rightTab === "diff" && <DiffFullPane data={data} />}
 					{data && rightTab === "plan" && <PlanFullPane data={data} />}
-					{!data && (
+					{!data && session.cwd && <LiveStatus cwd={session.cwd} />}
+					{!data && !session.cwd && (
 						<div
 							style={{
 								flex: 1,
@@ -1295,15 +1297,7 @@ export default function App() {
 								textAlign: "center",
 							}}
 						>
-							{session.cwd ? (
-								<>
-									Live worktree: <span style={{ color: "var(--fg-1)" }}>{session.cwd}</span>
-									<br />
-									(Phase 5 will surface the diff here.)
-								</>
-							) : (
-								"No data for this session yet."
-							)}
+							No data for this session yet.
 						</div>
 					)}
 				</div>

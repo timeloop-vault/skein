@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 
 use git2::{Repository, Signature};
-use skein_git::{BranchInfo, Repo, propose_worktree_path};
+use skein_git::{BranchInfo, Repo, StatusKind, propose_worktree_path};
 use tempfile::TempDir;
 
 /// Create a repo with one initial commit on `main` so `branches()` returns
@@ -136,4 +136,77 @@ fn open_rejects_missing_path() {
 fn propose_worktree_path_uses_sibling_dir() {
     let p = propose_worktree_path(Path::new("/tmp/code/skein"), "foo");
     assert_eq!(p, Path::new("/tmp/code/skein-wt/foo"));
+}
+
+#[test]
+fn status_clean_repo_is_empty() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    let status = repo.status().unwrap();
+    assert!(status.is_empty(), "expected empty status, got {status:?}");
+}
+
+#[test]
+fn status_reports_untracked_file() {
+    let (_tmp, path) = init_repo();
+    fs::write(path.join("new.txt"), b"hi\n").unwrap();
+    let repo = Repo::open(&path).unwrap();
+    let status = repo.status().unwrap();
+    assert_eq!(status.len(), 1);
+    assert_eq!(status[0].path, "new.txt");
+    assert_eq!(status[0].kind, StatusKind::Untracked);
+    assert!(!status[0].staged);
+}
+
+#[test]
+fn status_reports_modified_file() {
+    let (_tmp, path) = init_repo();
+    fs::write(path.join("README.md"), b"changed\n").unwrap();
+    let repo = Repo::open(&path).unwrap();
+    let status = repo.status().unwrap();
+    assert_eq!(status.len(), 1);
+    assert_eq!(status[0].path, "README.md");
+    assert_eq!(status[0].kind, StatusKind::Modified);
+    assert!(!status[0].staged);
+}
+
+#[test]
+fn status_distinguishes_staged_from_unstaged() {
+    let (_tmp, path) = init_repo();
+    // Stage one new file.
+    fs::write(path.join("staged.txt"), b"a\n").unwrap();
+    let g2 = Repository::open(&path).unwrap();
+    {
+        let mut idx = g2.index().unwrap();
+        idx.add_path(Path::new("staged.txt")).unwrap();
+        idx.write().unwrap();
+    }
+    // Modify a tracked file in the workdir but don't stage it.
+    fs::write(path.join("README.md"), b"changed\n").unwrap();
+
+    let repo = Repo::open(&path).unwrap();
+    let status = repo.status().unwrap();
+    let names: Vec<(&str, StatusKind, bool)> = status
+        .iter()
+        .map(|s| (s.path.as_str(), s.kind, s.staged))
+        .collect();
+    assert!(
+        names.contains(&("README.md", StatusKind::Modified, false)),
+        "got: {names:?}"
+    );
+    assert!(
+        names.contains(&("staged.txt", StatusKind::Added, true)),
+        "got: {names:?}"
+    );
+}
+
+#[test]
+fn status_results_are_sorted_by_path() {
+    let (_tmp, path) = init_repo();
+    fs::write(path.join("z.txt"), b"z\n").unwrap();
+    fs::write(path.join("a.txt"), b"a\n").unwrap();
+    fs::write(path.join("m.txt"), b"m\n").unwrap();
+    let repo = Repo::open(&path).unwrap();
+    let paths: Vec<String> = repo.status().unwrap().into_iter().map(|s| s.path).collect();
+    assert_eq!(paths, vec!["a.txt", "m.txt", "z.txt"]);
 }

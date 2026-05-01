@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use skein_git::{BranchInfo, Repo, WorktreeInfo, propose_worktree_path};
+use skein_git::{BranchInfo, Repo, StatusEntry, StatusKind, WorktreeInfo, propose_worktree_path};
 
 #[derive(Debug, Serialize)]
 pub struct BranchDto {
@@ -81,4 +81,44 @@ pub fn git_add_worktree(
         .add_worktree(&branch, &base_branch, &PathBuf::from(&worktree_path))
         .map_err(|e| e.to_string())?;
     Ok(info.into())
+}
+
+#[derive(Debug, Serialize)]
+pub struct StatusDto {
+    pub path: String,
+    /// Stringified `StatusKind`: "added" | "modified" | "deleted" |
+    /// "renamed" | "untracked" | "conflicted" | "typechange". Wire format
+    /// matches what the frontend expects in plain JSON.
+    pub kind: &'static str,
+    pub staged: bool,
+}
+
+impl From<StatusEntry> for StatusDto {
+    fn from(s: StatusEntry) -> Self {
+        let kind = match s.kind {
+            StatusKind::Added => "added",
+            StatusKind::Modified => "modified",
+            StatusKind::Deleted => "deleted",
+            StatusKind::Renamed => "renamed",
+            StatusKind::Untracked => "untracked",
+            StatusKind::Conflicted => "conflicted",
+            StatusKind::Typechange => "typechange",
+        };
+        Self {
+            path: s.path,
+            kind,
+            staged: s.staged,
+        }
+    }
+}
+
+/// Snapshot of the worktree's status — every changed file relative to
+/// HEAD, sorted by path. The frontend re-fetches on demand (Phase 5a)
+/// and via the file watcher (Phase 5b).
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn git_status(path: String) -> Result<Vec<StatusDto>, String> {
+    let repo = Repo::open(Path::new(&path)).map_err(|e| e.to_string())?;
+    let entries = repo.status().map_err(|e| e.to_string())?;
+    Ok(entries.into_iter().map(StatusDto::from).collect())
 }
