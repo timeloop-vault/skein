@@ -31,6 +31,75 @@ const HarnessBody = ({ harness, fontSize }: { harness: Harness; fontSize: number
 	return null;
 };
 
+// ── Harness column (per session) ───────────────────────────────────
+// Phase 3: every session's column stays mounted at once; the App-level
+// renderer toggles visibility with display:none. PTYs survive tab
+// switches because LiveTerminal's effect is keyed on mountKey only.
+
+interface HarnessColumnProps {
+	session: Session;
+	fontSize: number;
+	showPicker: boolean;
+	onPick: (kind: HarnessKind) => void;
+	onAddHarness: (sessionId: string) => void;
+	onSwitchHarness: (sessionId: string, harnessId: string) => void;
+	onCloseHarness: (sessionId: string, harnessId: string) => void;
+}
+
+const HarnessColumn = ({
+	session,
+	fontSize,
+	showPicker,
+	onPick,
+	onAddHarness,
+	onSwitchHarness,
+	onCloseHarness,
+}: HarnessColumnProps) => (
+	<div className="sk-harness-col">
+		<div className="sk-harness-tabs">
+			{session.harnesses.map((h) => (
+				<HarnessTab
+					key={h.id}
+					h={h}
+					active={h.id === session.activeHarnessId}
+					onClick={() => onSwitchHarness(session.id, h.id)}
+					onClose={() => onCloseHarness(session.id, h.id)}
+				/>
+			))}
+			<div className="sk-harness-add" onClick={() => onAddHarness(session.id)}>
+				+ harness
+			</div>
+			<div className="sk-harness-meta">
+				<span>
+					{session.repo} · {session.branch}
+				</span>
+			</div>
+		</div>
+
+		{showPicker ? (
+			<HarnessPicker onPick={onPick} />
+		) : (
+			// Mount every harness in this session at once; hide the
+			// inactive ones via display:none so xterm scrollback,
+			// cursor position, and PTY state survive harness-tab
+			// switches inside the session.
+			session.harnesses.map((h) => (
+				<div
+					key={h.id}
+					style={{
+						display: h.id === session.activeHarnessId ? "flex" : "none",
+						flexDirection: "column",
+						flex: 1,
+						minHeight: 0,
+					}}
+				>
+					<HarnessBody harness={h} fontSize={fontSize} />
+				</div>
+			))
+		)}
+	</div>
+);
+
 // xterm font size range. Outside this band the terminal looks either
 // unreadable (sub-12) or comically large (above 18) on a 1320x820 window.
 const FONT_MIN = 12;
@@ -706,51 +775,38 @@ export default function App() {
 				onResize={setHarnessColWidth}
 				minFirst={320}
 				minSecond={320}
-				first={
-					<div className="sk-harness-col">
-						<div className="sk-harness-tabs">
-							{session.harnesses.map((h) => (
-								<HarnessTab
-									key={h.id}
-									h={h}
-									active={h.id === session.activeHarnessId}
-									onClick={() => switchHarnessInSession(session.id, h.id)}
-									onClose={() => closeHarness(session.id, h.id)}
-								/>
-							))}
-							<div className="sk-harness-add" onClick={() => addHarness(session.id)}>
-								+ harness
-							</div>
-							<div className="sk-harness-meta">
-								<span>
-									{session.repo} · {session.branch}
-								</span>
-							</div>
-						</div>
-
-						{showPicker === session.id ? (
-							<HarnessPicker onPick={pickHarness} />
-						) : (
-							// Mount every harness in the active session at once; hide
-							// inactive ones via display:none so xterm scrollback,
-							// cursor position, and PTY state survive tab switches.
-							session.harnesses.map((h) => (
-								<div
-									key={h.id}
-									style={{
-										display: h.id === session.activeHarnessId ? "flex" : "none",
-										flexDirection: "column",
-										flex: 1,
-										minHeight: 0,
-									}}
-								>
-									<HarnessBody harness={h} fontSize={fontSize} />
-								</div>
-							))
-						)}
+				first={sessions.map((s) => (
+					<div
+						key={s.id}
+						style={{
+							display: s.id === activeSessionId ? "flex" : "none",
+							flexDirection: "column",
+							flex: 1,
+							minHeight: 0,
+						}}
+					>
+						<HarnessColumn
+							session={s}
+							fontSize={fontSize}
+							showPicker={showPicker === s.id}
+							onPick={pickHarness}
+							onAddHarness={addHarness}
+							onSwitchHarness={switchHarnessInSession}
+							onCloseHarness={closeHarness}
+						/>
 					</div>
-				}
-				second={<div className="sk-right">{session.cwd && <LiveStatus cwd={session.cwd} />}</div>}
+				))}
+				second={sessions.map((s) => (
+					<div
+						key={s.id}
+						className="sk-right"
+						style={{
+							display: s.id === activeSessionId ? "flex" : "none",
+						}}
+					>
+						{s.cwd && <LiveStatus cwd={s.cwd} />}
+					</div>
+				))}
 			/>
 
 			<div className="sk-statusbar">

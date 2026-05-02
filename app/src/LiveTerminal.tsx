@@ -5,8 +5,9 @@
 //   - terminal → PTY (term.onData → invoke "pty_write")
 //   - resize → PTY (ResizeObserver → fit → invoke "pty_resize")
 //
-// Unmount kills the child. Phase 1 keeps it that simple — closing a
-// harness ends the process, no scrollback persistence, no reconnect.
+// Unmount kills the child. Hidden panes (display:none) keep their PTY
+// alive — the resize/fit path is guarded against zero-size hosts so we
+// never tell xterm or the child that the terminal shrank to 1×1.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -61,7 +62,13 @@ export const LiveTerminal = ({ cmd, cwd, mountKey, fontSize }: LiveTerminalProps
 		const fit = new FitAddon();
 		term.loadAddon(fit);
 		term.open(host);
-		fit.fit();
+		// If we're mounting into a hidden pane (e.g. an inactive session
+		// at app boot), skip the initial fit. xterm's defaults (24×80) are
+		// what we'll spawn the PTY with; the ResizeObserver tick that
+		// fires when the pane becomes visible will refit and pty_resize.
+		if (host.clientWidth > 0 && host.clientHeight > 0) {
+			fit.fit();
+		}
 		termRef.current = term;
 		fitRef.current = fit;
 		// Take focus on mount so the user can immediately interact with
@@ -122,6 +129,14 @@ export const LiveTerminal = ({ cmd, cwd, mountKey, fontSize }: LiveTerminalProps
 				});
 
 				resizeObserver = new ResizeObserver(() => {
+					// Phase 3: when this harness's session goes display:none,
+					// the host shrinks to 0×0 and the observer fires. Fitting
+					// to that size would tell xterm + the child program the
+					// terminal is 1×1, permanently squishing whatever's
+					// already in the scrollback. Skip while hidden — the
+					// next observer tick (when we become visible again)
+					// fits to the proper size.
+					if (host.clientWidth === 0 || host.clientHeight === 0) return;
 					try {
 						fit.fit();
 					} catch {
@@ -163,8 +178,13 @@ export const LiveTerminal = ({ cmd, cwd, mountKey, fontSize }: LiveTerminalProps
 	useEffect(() => {
 		const term = termRef.current;
 		const fit = fitRef.current;
+		const host = containerRef.current;
 		if (!term || !fit) return;
 		term.options.fontSize = fontSize;
+		// Same hidden-host guard as the ResizeObserver: fitting a 0×0
+		// host would squish scrollback to 1 col. Updating fontSize alone
+		// is fine; the refit will happen on the next visibility tick.
+		if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
 		try {
 			fit.fit();
 		} catch {
