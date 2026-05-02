@@ -24,6 +24,10 @@ comfortable, and lands a CLAUDE.md.
 
 **Goal:** every line in the codebase corresponds to something running.
 
+> Detailed execution checklist: [`chapter-2-phase-1.md`](./chapter-2-phase-1.md)
+> — concrete file-by-file changes, ordered steps, identifier-level
+> deletes vs keeps.
+
 - Delete `INITIAL_SESSIONS`, `SESSION_DATA`, and orphaned types
   (`TreeNode`, `ActiveFile`, `PlanItem`, `ActivityEvent`,
   `SessionData`, fixture-shape `DiffLine`).
