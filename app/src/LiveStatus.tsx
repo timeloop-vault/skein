@@ -7,6 +7,8 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Splitter } from "./Splitter.tsx";
+import { usePersistedState } from "./prefs.ts";
 
 type StatusKind =
 	| "added"
@@ -143,6 +145,82 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 	}, [diffs, selectedPath]);
 
 	const selectedDiff = selectedPath ? (diffs.find((f) => f.path === selectedPath) ?? null) : null;
+	// Height of the file list when a diff is showing. Without a selection
+	// the list expands to fill the pane, so this only matters for the
+	// split view.
+	const [listHeight, setListHeight] = usePersistedState<number>("liveStatusListHeight", 220);
+
+	const fileListEl = (
+		<div
+			style={{
+				flex: 1,
+				overflowY: "auto",
+				padding: "6px 0",
+				fontFamily: "var(--sk-mono)",
+				fontSize: 11,
+				minHeight: 0,
+			}}
+		>
+			{entries === null && !error && (
+				<div style={{ padding: "10px 14px", color: "var(--fg-3)" }}>loading…</div>
+			)}
+			{entries !== null && entries.length === 0 && (
+				<div
+					style={{
+						display: "flex",
+						flexDirection: "column",
+						alignItems: "center",
+						justifyContent: "center",
+						gap: 6,
+						padding: "32px 14px",
+						color: "var(--fg-2)",
+						textAlign: "center",
+					}}
+				>
+					<span style={{ color: "var(--ok)", fontSize: 16, lineHeight: 1 }}>✓</span>
+					<span style={{ color: "var(--fg-1)" }}>worktree clean</span>
+					<span style={{ fontSize: 10, color: "var(--fg-3)" }}>no staged or unstaged changes</span>
+				</div>
+			)}
+			{entries?.map((e, i) => {
+				const meta = KIND_GLYPH[e.kind];
+				const selected = e.path === selectedPath;
+				const hasDiff = diffs.some((f) => f.path === e.path);
+				return (
+					<div
+						key={`${e.path}:${e.staged}:${i}`}
+						onClick={() => hasDiff && setSelectedPath(selected ? null : e.path)}
+						style={{
+							display: "flex",
+							gap: 10,
+							padding: "3px 14px",
+							color: e.staged ? "var(--fg-0)" : "var(--fg-1)",
+							cursor: hasDiff ? "pointer" : "default",
+							background: selected ? "var(--bg-3)" : "transparent",
+						}}
+						title={`${e.staged ? "staged " : ""}${meta.label}${
+							hasDiff ? "" : " (no diff available)"
+						}`}
+					>
+						<span
+							style={{
+								color: meta.color,
+								width: 14,
+								textAlign: "center",
+								fontWeight: 600,
+							}}
+						>
+							{meta.glyph}
+						</span>
+						<span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+							{e.path}
+						</span>
+						{e.staged && <span style={{ color: "var(--fg-3)", fontSize: 10 }}>staged</span>}
+					</div>
+				);
+			})}
+		</div>
+	);
 
 	return (
 		<div
@@ -216,67 +294,19 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 				</div>
 			)}
 
-			<div
-				style={{
-					// Cap the file list at ~38% of the pane height when a
-					// file is selected so the diff gets the lion's share.
-					// Without selection, the list expands to fill the pane.
-					flex: selectedDiff ? "0 0 38%" : 1,
-					overflowY: "auto",
-					padding: "6px 0",
-					fontFamily: "var(--sk-mono)",
-					fontSize: 11,
-					borderBottom: selectedDiff ? "1px solid var(--line)" : "none",
-				}}
-			>
-				{entries === null && !error && (
-					<div style={{ padding: "10px 14px", color: "var(--fg-3)" }}>loading…</div>
-				)}
-				{entries !== null && entries.length === 0 && (
-					<div style={{ padding: "10px 14px", color: "var(--fg-3)" }}>
-						worktree clean — nothing to show
-					</div>
-				)}
-				{entries?.map((e, i) => {
-					const meta = KIND_GLYPH[e.kind];
-					const selected = e.path === selectedPath;
-					const hasDiff = diffs.some((f) => f.path === e.path);
-					return (
-						<div
-							key={`${e.path}:${e.staged}:${i}`}
-							onClick={() => hasDiff && setSelectedPath(selected ? null : e.path)}
-							style={{
-								display: "flex",
-								gap: 10,
-								padding: "3px 14px",
-								color: e.staged ? "var(--fg-0)" : "var(--fg-1)",
-								cursor: hasDiff ? "pointer" : "default",
-								background: selected ? "var(--bg-3)" : "transparent",
-							}}
-							title={`${e.staged ? "staged " : ""}${meta.label}${
-								hasDiff ? "" : " (no diff available)"
-							}`}
-						>
-							<span
-								style={{
-									color: meta.color,
-									width: 14,
-									textAlign: "center",
-									fontWeight: 600,
-								}}
-							>
-								{meta.glyph}
-							</span>
-							<span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
-								{e.path}
-							</span>
-							{e.staged && <span style={{ color: "var(--fg-3)", fontSize: 10 }}>staged</span>}
-						</div>
-					);
-				})}
-			</div>
-
-			{selectedDiff && <DiffView file={selectedDiff} onClose={() => setSelectedPath(null)} />}
+			{selectedDiff ? (
+				<Splitter
+					direction="column"
+					size={listHeight}
+					onResize={setListHeight}
+					minFirst={80}
+					minSecond={120}
+					first={fileListEl}
+					second={<DiffView file={selectedDiff} onClose={() => setSelectedPath(null)} />}
+				/>
+			) : (
+				fileListEl
+			)}
 		</div>
 	);
 };

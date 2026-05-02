@@ -110,6 +110,35 @@ body {
 	color: var(--accent);
 }
 
+/* Settings group inside the titlebar */
+.sk-settings {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-family: var(--sk-mono);
+	font-size: 10px;
+	color: var(--fg-2);
+}
+.sk-settings .sk-btn {
+	padding: 2px 8px;
+	font-size: 10px;
+}
+.sk-settings-select {
+	padding: 2px 6px;
+	font-size: 10px;
+}
+.sk-font-group {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+}
+.sk-font-size {
+	min-width: 16px;
+	text-align: center;
+	color: var(--fg-1);
+}
+
 /* Session tab strip */
 .sk-tabstrip {
 	flex: 0 0 48px;
@@ -302,7 +331,6 @@ body {
 	flex-direction: column;
 	min-width: 0;
 	background: var(--bg-1);
-	border-right: 1px solid var(--line);
 }
 
 .sk-harness-tabs {
@@ -427,6 +455,24 @@ body {
 }
 .sk-btn.ghost:hover {
 	background: var(--bg-3);
+}
+
+/* Splitter divider — handles for resizable panes */
+.sk-splitter-x,
+.sk-splitter-y {
+	flex: 0 0 4px;
+	background: var(--line);
+	transition: background 0.12s;
+}
+.sk-splitter-x {
+	cursor: col-resize;
+}
+.sk-splitter-y {
+	cursor: row-resize;
+}
+.sk-splitter-x:hover,
+.sk-splitter-y:hover {
+	background: var(--accent);
 }
 
 /* Right pane */

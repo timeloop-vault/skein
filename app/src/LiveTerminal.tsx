@@ -22,9 +22,10 @@ interface LiveTerminalProps {
 	// double-invocation in dev doesn't spawn twice. Passing the
 	// harness id is the natural choice.
 	mountKey: string;
+	fontSize: number;
 }
 
-export const LiveTerminal = ({ cmd, cwd, mountKey }: LiveTerminalProps) => {
+export const LiveTerminal = ({ cmd, cwd, mountKey, fontSize }: LiveTerminalProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	// Track live-spawn state by mountKey so StrictMode's double effect
 	// doesn't spawn twice, and so a re-mount with the same harness can
@@ -33,6 +34,10 @@ export const LiveTerminal = ({ cmd, cwd, mountKey }: LiveTerminalProps) => {
 	// Used by the clipboard key handler — needs the PTY id at keystroke
 	// time, which the spawn .then sets later.
 	const ptyIdRef = useRef<string | null>(null);
+	// Refs to the xterm + fit addon so the font-size effect below can
+	// retune them without re-spawning the PTY.
+	const termRef = useRef<Terminal | null>(null);
+	const fitRef = useRef<FitAddon | null>(null);
 
 	useEffect(() => {
 		const host = containerRef.current;
@@ -42,7 +47,7 @@ export const LiveTerminal = ({ cmd, cwd, mountKey }: LiveTerminalProps) => {
 
 		const term = new Terminal({
 			fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
-			fontSize: 13,
+			fontSize,
 			theme: {
 				background: "#131418",
 				foreground: "#e8e6df",
@@ -57,6 +62,8 @@ export const LiveTerminal = ({ cmd, cwd, mountKey }: LiveTerminalProps) => {
 		term.loadAddon(fit);
 		term.open(host);
 		fit.fit();
+		termRef.current = term;
+		fitRef.current = fit;
 		// Take focus on mount so the user can immediately interact with
 		// any prompt the spawned CLI prints (e.g. Claude Code's "is it
 		// ok if I work in this folder?" arrow-key dialog).
@@ -139,14 +146,33 @@ export const LiveTerminal = ({ cmd, cwd, mountKey }: LiveTerminalProps) => {
 				void invoke("pty_kill", { id: ptyId });
 			}
 			term.dispose();
+			termRef.current = null;
+			fitRef.current = null;
 			spawnedRef.current = null;
 			ptyIdRef.current = null;
 		};
-		// cmd/cwd are stable for a given mountKey (we set them once when
-		// the harness is created and never mutate them), so listing them
-		// here is just to satisfy useExhaustiveDependencies — the effect
-		// only actually re-fires when mountKey changes.
-	}, [mountKey, cmd, cwd]);
+		// cmd/cwd/fontSize are stable for a given mountKey (cmd/cwd never
+		// mutate; fontSize is read once for the initial config and then
+		// re-applied by the effect below). Listed only to satisfy
+		// useExhaustiveDependencies — the effect re-fires only on mountKey.
+	}, [mountKey, cmd, cwd, fontSize]);
+
+	// Live font-size changes: retune the existing terminal without
+	// re-spawning the PTY. fit() recomputes rows/cols at the new cell
+	// size; we then tell the PTY to match so the child sees the resize.
+	useEffect(() => {
+		const term = termRef.current;
+		const fit = fitRef.current;
+		if (!term || !fit) return;
+		term.options.fontSize = fontSize;
+		try {
+			fit.fit();
+		} catch {
+			return;
+		}
+		const id = ptyIdRef.current;
+		if (id) void invoke("pty_resize", { id, rows: term.rows, cols: term.cols });
+	}, [fontSize]);
 
 	return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
 };

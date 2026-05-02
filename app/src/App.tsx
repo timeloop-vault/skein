@@ -14,18 +14,28 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useState } from "react";
 import { LiveStatus } from "./LiveStatus.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
+import { Splitter } from "./Splitter.tsx";
 import { HChip, HarnessPicker, HarnessTab, SessionTab, StatusDot } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
+import { usePersistedState } from "./prefs.ts";
 import type { Density, Harness, HarnessKind, Session, Theme } from "./types.ts";
 
 // ── Harness body ───────────────────────────────────────────────────
 
-const HarnessBody = ({ harness }: { harness: Harness }) => {
+const HarnessBody = ({ harness, fontSize }: { harness: Harness; fontSize: number }) => {
 	if (harness.cmd && harness.cwd !== undefined) {
-		return <LiveTerminal cmd={harness.cmd} cwd={harness.cwd} mountKey={harness.id} />;
+		return (
+			<LiveTerminal cmd={harness.cmd} cwd={harness.cwd} mountKey={harness.id} fontSize={fontSize} />
+		);
 	}
 	return null;
 };
+
+// xterm font size range. Outside this band the terminal looks either
+// unreadable (sub-12) or comically large (above 18) on a 1320x820 window.
+const FONT_MIN = 12;
+const FONT_MAX = 18;
+const FONT_DEFAULT = 13;
 
 // ── New session dialog ─────────────────────────────────────────────
 // The picked folder becomes the session's cwd; every harness in the
@@ -380,11 +390,58 @@ const EmptyState = ({ onNew }: { onNew: () => void }) => (
 
 // ── Titlebar ───────────────────────────────────────────────────────
 
-const Titlebar = () => (
+interface TitlebarProps {
+	theme: Theme;
+	density: Density;
+	fontSize: number;
+	onTheme: (v: Theme) => void;
+	onDensity: (v: Density) => void;
+	onFontSize: (v: number) => void;
+}
+
+const Titlebar = ({ theme, density, fontSize, onTheme, onDensity, onFontSize }: TitlebarProps) => (
 	<div className="sk-titlebar" data-tauri-drag-region>
 		<span className="sk-app-name">
 			<span className="dot">●</span> skein
 		</span>
+		{/* The settings group opts out of the drag region so its buttons
+		    receive clicks instead of starting a window drag. */}
+		<div className="sk-settings" data-tauri-drag-region="false">
+			<button
+				className="sk-btn ghost"
+				onClick={() => onTheme(theme === "dark" ? "light" : "dark")}
+				title="Toggle theme"
+			>
+				{theme}
+			</button>
+			<select
+				className="sk-select sk-settings-select"
+				value={density}
+				onChange={(e) => onDensity(e.target.value as Density)}
+				title="UI density"
+			>
+				<option value="compact">compact</option>
+				<option value="regular">regular</option>
+				<option value="comfy">comfy</option>
+			</select>
+			<div className="sk-font-group" title="Terminal font size">
+				<button
+					className="sk-btn ghost"
+					onClick={() => onFontSize(Math.max(FONT_MIN, fontSize - 1))}
+					disabled={fontSize <= FONT_MIN}
+				>
+					−
+				</button>
+				<span className="sk-font-size">{fontSize}</span>
+				<button
+					className="sk-btn ghost"
+					onClick={() => onFontSize(Math.min(FONT_MAX, fontSize + 1))}
+					disabled={fontSize >= FONT_MAX}
+				>
+					+
+				</button>
+			</div>
+		</div>
 	</div>
 );
 
@@ -411,8 +468,30 @@ const cmdForKind = (kind: HarnessKind, fallbackShell: string[]): string[] => {
 };
 
 export default function App() {
-	const [theme, setTheme] = useState<Theme>("dark");
-	const [density, setDensity] = useState<Density>("regular");
+	const [theme, setTheme] = usePersistedState<Theme>("theme", "dark");
+	const [density, setDensity] = usePersistedState<Density>("density", "regular");
+	const [fontSize, setFontSize] = usePersistedState<number>("fontSize", FONT_DEFAULT);
+	// Width of the harness column in px. Right pane absorbs the remainder
+	// via flex:1. Splitter clamps against window size at drag time.
+	const [harnessColWidth, setHarnessColWidth] = usePersistedState<number>("harnessColWidth", 640);
+
+	// Ctrl+= / Ctrl++ to bump font size, Ctrl+- to shrink. Window-level so
+	// it works no matter which pane has focus, including the terminal.
+	// preventDefault stops the WebView's built-in zoom.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (!e.ctrlKey || e.altKey || e.metaKey) return;
+			if (e.key === "+" || e.key === "=") {
+				e.preventDefault();
+				setFontSize((s) => Math.min(FONT_MAX, s + 1));
+			} else if (e.key === "-") {
+				e.preventDefault();
+				setFontSize((s) => Math.max(FONT_MIN, s - 1));
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [setFontSize]);
 
 	const [sessions, setSessions] = useState<Session[]>([]);
 	const [activeSessionId, setActiveSessionId] = useState<string>("");
@@ -570,11 +649,20 @@ export default function App() {
 		setShowNewSession(false);
 	};
 
+	const titlebarProps: TitlebarProps = {
+		theme,
+		density,
+		fontSize,
+		onTheme: setTheme,
+		onDensity: setDensity,
+		onFontSize: setFontSize,
+	};
+
 	// Empty state — no sessions at all.
 	if (sessions.length === 0) {
 		return (
 			<div className={`sk-app sk-${theme} density-${density}`}>
-				<Titlebar />
+				<Titlebar {...titlebarProps} />
 				<EmptyState onNew={() => setShowNewSession(true)} />
 				{showNewSession && (
 					<NewSessionDialog
@@ -583,7 +671,6 @@ export default function App() {
 						onCancel={() => setShowNewSession(false)}
 					/>
 				)}
-				<SettingsStrip theme={theme} density={density} onTheme={setTheme} onDensity={setDensity} />
 			</div>
 		);
 	}
@@ -595,7 +682,7 @@ export default function App() {
 
 	return (
 		<div className={`sk-app sk-${theme} density-${density}`}>
-			<Titlebar />
+			<Titlebar {...titlebarProps} />
 
 			<div className="sk-tabstrip">
 				{sessions.map((s) => (
@@ -612,72 +699,59 @@ export default function App() {
 				</div>
 			</div>
 
-			<div className="sk-workspace">
-				<div className="sk-harness-col">
-					<div className="sk-harness-tabs">
-						{session.harnesses.map((h) => (
-							<HarnessTab
-								key={h.id}
-								h={h}
-								active={h.id === session.activeHarnessId}
-								onClick={() => switchHarnessInSession(session.id, h.id)}
-								onClose={() => closeHarness(session.id, h.id)}
-							/>
-						))}
-						<div className="sk-harness-add" onClick={() => addHarness(session.id)}>
-							+ harness
-						</div>
-						<div className="sk-harness-meta">
-							<span>
-								{session.repo} · {session.branch}
-							</span>
-						</div>
-					</div>
-
-					{showPicker === session.id ? (
-						<HarnessPicker onPick={pickHarness} />
-					) : (
-						// Mount every harness in the active session at once; hide
-						// inactive ones via display:none so xterm scrollback,
-						// cursor position, and PTY state survive tab switches.
-						session.harnesses.map((h) => (
-							<div
-								key={h.id}
-								style={{
-									display: h.id === session.activeHarnessId ? "flex" : "none",
-									flexDirection: "column",
-									flex: 1,
-									minHeight: 0,
-								}}
-							>
-								<HarnessBody harness={h} />
+			<Splitter
+				className="sk-workspace"
+				direction="row"
+				size={harnessColWidth}
+				onResize={setHarnessColWidth}
+				minFirst={320}
+				minSecond={320}
+				first={
+					<div className="sk-harness-col">
+						<div className="sk-harness-tabs">
+							{session.harnesses.map((h) => (
+								<HarnessTab
+									key={h.id}
+									h={h}
+									active={h.id === session.activeHarnessId}
+									onClick={() => switchHarnessInSession(session.id, h.id)}
+									onClose={() => closeHarness(session.id, h.id)}
+								/>
+							))}
+							<div className="sk-harness-add" onClick={() => addHarness(session.id)}>
+								+ harness
 							</div>
-						))
-					)}
-				</div>
-
-				<div className="sk-right">
-					{session.cwd ? (
-						<LiveStatus cwd={session.cwd} />
-					) : (
-						<div
-							style={{
-								flex: 1,
-								display: "flex",
-								alignItems: "center",
-								justifyContent: "center",
-								color: "var(--fg-3)",
-								fontFamily: "var(--sk-mono)",
-								fontSize: 11,
-								padding: 24,
-								textAlign: "center",
-							}}
-						>
-							No worktree for this session.
+							<div className="sk-harness-meta">
+								<span>
+									{session.repo} · {session.branch}
+								</span>
+							</div>
 						</div>
-					)}
-				</div>
-			</div>
+
+						{showPicker === session.id ? (
+							<HarnessPicker onPick={pickHarness} />
+						) : (
+							// Mount every harness in the active session at once; hide
+							// inactive ones via display:none so xterm scrollback,
+							// cursor position, and PTY state survive tab switches.
+							session.harnesses.map((h) => (
+								<div
+									key={h.id}
+									style={{
+										display: h.id === session.activeHarnessId ? "flex" : "none",
+										flexDirection: "column",
+										flex: 1,
+										minHeight: 0,
+									}}
+								>
+									<HarnessBody harness={h} fontSize={fontSize} />
+								</div>
+							))
+						)}
+					</div>
+				}
+				second={<div className="sk-right">{session.cwd && <LiveStatus cwd={session.cwd} />}</div>}
+			/>
 
 			<div className="sk-statusbar">
 				<span className="seg">
@@ -695,9 +769,6 @@ export default function App() {
 				<span className="seg">utf-8 · LF</span>
 			</div>
 
-			{/* Lightweight in-window settings strip (replaces the design's Tweaks panel) */}
-			<SettingsStrip theme={theme} density={density} onTheme={setTheme} onDensity={setDensity} />
-
 			{showNewSession && (
 				<NewSessionDialog
 					defaultCwd={defaultCwd}
@@ -708,59 +779,6 @@ export default function App() {
 		</div>
 	);
 }
-
-// ── Small in-window settings strip ─────────────────────────────────
-// The design uses an external Tweaks panel; the prototype ships its
-// settings inline so a single bundle stays self-contained.
-
-const SettingsStrip = ({
-	theme,
-	density,
-	onTheme,
-	onDensity,
-}: {
-	theme: Theme;
-	density: Density;
-	onTheme: (v: Theme) => void;
-	onDensity: (v: Density) => void;
-}) => (
-	<div
-		style={{
-			position: "fixed",
-			right: 12,
-			top: 38,
-			display: "flex",
-			gap: 6,
-			alignItems: "center",
-			background: "var(--bg-2)",
-			border: "1px solid var(--line)",
-			borderRadius: 6,
-			padding: "4px 8px",
-			fontFamily: "var(--sk-mono)",
-			fontSize: 10,
-			color: "var(--fg-2)",
-			zIndex: 50,
-		}}
-	>
-		<button
-			className="sk-btn ghost"
-			onClick={() => onTheme(theme === "dark" ? "light" : "dark")}
-			title="Toggle theme"
-		>
-			{theme}
-		</button>
-		<select
-			className="sk-select"
-			style={{ padding: "3px 6px", fontSize: 10 }}
-			value={density}
-			onChange={(e) => onDensity(e.target.value as Density)}
-		>
-			<option value="compact">compact</option>
-			<option value="regular">regular</option>
-			<option value="comfy">comfy</option>
-		</select>
-	</div>
-);
 
 // Make the harness column status bar surface a dot for at-a-glance scan.
 // (Re-exported for completeness; not used elsewhere outside this file.)

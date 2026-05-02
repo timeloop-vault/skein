@@ -32,6 +32,19 @@ moves into an active phase, delete it here.
   per-language highlighting.
 - **BYOH permission UX** — only meaningful if we ever build our own
   agent loop. Each harness handles its own permission flow today.
+- **Chrome scaling / window controls** — chapter 2 phase 2 sized the
+  *terminal* font but left the rest of the chrome at fixed 10–11 px:
+  the titlebar wordmark, the settings group inside it, the session
+  tab subtext, the status bar. They're readable on a 1320×820 default
+  but small on a 4K monitor. Either a global UI-scale preference
+  (multiplier on `font-size`) or just bigger fixed sizes. Same patch
+  also needs to ship working min/max/close controls — `decorations:
+  false` in `tauri.conf.json` means the OS doesn't draw any, and
+  phase 1 removed the fake traffic-light decoration that was
+  pretending to be there. Either flip to `decorations: true` (loses
+  the in-titlebar settings group on Windows) or render real
+  Tauri-driven controls (`getCurrentWindow().minimize()` /
+  `toggleMaximize()` / `close()`).
 
 ## Infra
 
