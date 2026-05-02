@@ -559,6 +559,24 @@ const cmdForKind = (kind: HarnessKind, fallbackShell: string[]): string[] => {
 	}
 };
 
+// Phase 5a: rewrite a stored cmd into its "resume the previous
+// conversation" form, applied once at boot so a fresh PTY spawn
+// transparently re-attaches. Only matches the canonical kind-default
+// argv — anything customized (shell-swapped via phase 4's onCmdChange,
+// user-edited extra args) passes through unchanged.
+//
+// gh copilot has no resume mode; shells start fresh; opencode resumes
+// the most recent conversation in the cwd; Claude shows a picker.
+const resumeCmd = (kind: HarnessKind, cmd: string[]): string[] => {
+	if (kind === "claude" && cmd.length === 1 && cmd[0] === "claude") {
+		return ["claude", "--resume"];
+	}
+	if (kind === "opencode" && cmd.length === 1 && cmd[0] === "opencode") {
+		return ["opencode", "--continue"];
+	}
+	return cmd;
+};
+
 export default function App() {
 	const [theme, setTheme] = usePersistedState<Theme>("theme", "dark");
 	const [density, setDensity] = usePersistedState<Density>("density", "regular");
@@ -607,8 +625,17 @@ export default function App() {
 		invoke<Session[]>("db_load_sessions")
 			.then((rows) => {
 				if (rows.length > 0) {
-					setSessions(rows);
-					const first = rows[0];
+					// Phase 5a: rewrite each harness's cmd to its resume form
+					// before mounting, so the PTY spawn re-attaches to the
+					// prior conversation instead of starting fresh.
+					const withResume = rows.map((s) => ({
+						...s,
+						harnesses: s.harnesses.map((h) =>
+							h.cmd ? { ...h, cmd: resumeCmd(h.kind, h.cmd) } : h,
+						),
+					}));
+					setSessions(withResume);
+					const first = withResume[0];
 					if (first) setActiveSessionId(first.id);
 				}
 				setLoaded(true);
