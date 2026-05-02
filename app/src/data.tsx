@@ -30,12 +30,17 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		chip: "h-copilot",
 		desc: "GitHub entitlement.",
 	},
+	// `byoh` is the kind id we kept from the design's "bring your own
+	// harness" idea; today it spawns a plain shell (the user's pwsh/
+	// bash/whatever from `default_shell`). When we eventually build the
+	// in-app agent loop the design originally envisioned, that becomes
+	// a separate kind — for now `byoh` *is* the shell entry point.
 	byoh: {
 		id: "byoh",
-		label: "sk",
-		name: "Skein BYOH",
+		label: "sh",
+		name: "Shell",
 		chip: "h-byoh",
-		desc: "Built-in agent loop.",
+		desc: "Plain shell — run anything.",
 	},
 };
 

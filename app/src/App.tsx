@@ -897,9 +897,11 @@ const RIGHT_TABS: { id: RightTab; label: string }[] = [
 
 const newId = (prefix: string): string => prefix + Math.random().toString(36).slice(2, 7);
 
-// Phase 1 mapping from harness kind → argv. Each binary must be on PATH
-// for the spawn to succeed; if it isn't, the LiveTerminal renders the
-// error inline and the user can pick another kind.
+// Mapping from harness kind → argv. Each binary must be on PATH for the
+// spawn to succeed; if it isn't, the LiveTerminal renders the error
+// inline and the user can pick another kind. The `byoh` kind is our
+// "Shell" option — it drops into the user's default shell so they can
+// run whatever they want.
 const cmdForKind = (kind: HarnessKind, fallbackShell: string[]): string[] => {
 	switch (kind) {
 		case "claude":
@@ -909,8 +911,6 @@ const cmdForKind = (kind: HarnessKind, fallbackShell: string[]): string[] => {
 		case "copilot":
 			return ["gh", "copilot", "suggest"];
 		case "byoh":
-			// No real BYOH agent yet — drop into the user's shell so the
-			// spike still proves the wiring end-to-end.
 			return fallbackShell.length > 0 ? fallbackShell : ["pwsh.exe"];
 	}
 };
@@ -928,6 +928,11 @@ export default function App() {
 	const [showNewSession, setShowNewSession] = useState(false);
 	const [rightTab, setRightTab] = useState<RightTab>("stack");
 	const [tourIdx, setTourIdx] = useState<number | null>(null);
+	// Phase 6: snapshot of the user's real sessions taken when the tour
+	// starts, so we can restore them when it ends. `null` means the tour
+	// is not running. Also used to gate the auto-save effect below — we
+	// don't want the tour's seeded demo data to overwrite the user's DB.
+	const [preTourSessions, setPreTourSessions] = useState<Session[] | null>(null);
 
 	// Phase 1: pull platform defaults once at boot. New harnesses spawn
 	// into these until Phase 4 wires real worktrees / per-session cwd.
@@ -968,11 +973,15 @@ export default function App() {
 	// the new state to sqlite. Wipe-and-insert is fine at prototype scale.
 	useEffect(() => {
 		if (!loaded) return;
+		// Don't persist while the tour is running — its setSessions
+		// calls inject seeded demo data, and we don't want those to
+		// clobber the user's actual DB-backed sessions.
+		if (preTourSessions !== null) return;
 		void invoke("db_save_sessions", { sessions }).catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.error("[skein] db_save_sessions failed:", msg);
 		});
-	}, [sessions, loaded]);
+	}, [sessions, loaded, preTourSessions]);
 
 	const session = useMemo(
 		() => sessions.find((s) => s.id === activeSessionId),
@@ -1092,6 +1101,11 @@ export default function App() {
 	};
 
 	const startTour = () => {
+		// Snapshot the user's real sessions before we overwrite them
+		// with seeded demo data. The save effect above is gated on
+		// preTourSessions being non-null, so the seeds never reach the
+		// DB. When the tour ends we splice the snapshot back in.
+		setPreTourSessions(sessions);
 		setSessions(INITIAL_SESSIONS);
 		setActiveSessionId("s2");
 		setPermissionResolved({});
@@ -1101,18 +1115,34 @@ export default function App() {
 		setTourIdx(0);
 	};
 
+	const endTour = () => {
+		setTourIdx(null);
+		setShowNewSession(false);
+		// Restore the pre-tour snapshot if there was one. (If the user
+		// manages to end a tour we never started — shouldn't happen —
+		// we leave state alone rather than clearing it.)
+		if (preTourSessions !== null) {
+			setSessions(preTourSessions);
+			const first = preTourSessions[0];
+			setActiveSessionId(first ? first.id : "");
+			setPreTourSessions(null);
+		}
+	};
+
 	const nextStep = () => {
 		setTourIdx((i) => {
 			if (i === null) return null;
-			if (i >= TOUR_STEPS.length - 1) return null;
+			if (i >= TOUR_STEPS.length - 1) {
+				// Reached the end — exit the tour and restore real sessions.
+				// (We can't call endTour from inside the setter; defer it.)
+				queueMicrotask(endTour);
+				return null;
+			}
 			return i + 1;
 		});
 	};
 	const prevStep = () => setTourIdx((i) => (i === null || i <= 0 ? i : i - 1));
-	const skipTour = () => {
-		setTourIdx(null);
-		setShowNewSession(false);
-	};
+	const skipTour = () => endTour();
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: tourActions is reconstructed every render but its setters are stable; we deliberately fire only when tourIdx changes
 	useEffect(() => {
