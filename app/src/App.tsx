@@ -22,10 +22,24 @@ import type { Density, Harness, HarnessKind, Session, Theme } from "./types.ts";
 
 // ── Harness body ───────────────────────────────────────────────────
 
-const HarnessBody = ({ harness, fontSize }: { harness: Harness; fontSize: number }) => {
+interface HarnessBodyProps {
+	harness: Harness;
+	fontSize: number;
+	defaultShell: string[];
+	onCmdChange: (cmd: string[]) => void;
+}
+
+const HarnessBody = ({ harness, fontSize, defaultShell, onCmdChange }: HarnessBodyProps) => {
 	if (harness.cmd && harness.cwd !== undefined) {
 		return (
-			<LiveTerminal cmd={harness.cmd} cwd={harness.cwd} mountKey={harness.id} fontSize={fontSize} />
+			<LiveTerminal
+				cmd={harness.cmd}
+				cwd={harness.cwd}
+				mountKey={harness.id}
+				fontSize={fontSize}
+				defaultShell={defaultShell}
+				onCmdChange={onCmdChange}
+			/>
 		);
 	}
 	return null;
@@ -39,21 +53,25 @@ const HarnessBody = ({ harness, fontSize }: { harness: Harness; fontSize: number
 interface HarnessColumnProps {
 	session: Session;
 	fontSize: number;
+	defaultShell: string[];
 	showPicker: boolean;
 	onPick: (kind: HarnessKind) => void;
 	onAddHarness: (sessionId: string) => void;
 	onSwitchHarness: (sessionId: string, harnessId: string) => void;
 	onCloseHarness: (sessionId: string, harnessId: string) => void;
+	onHarnessCmdChange: (sessionId: string, harnessId: string, cmd: string[]) => void;
 }
 
 const HarnessColumn = ({
 	session,
 	fontSize,
+	defaultShell,
 	showPicker,
 	onPick,
 	onAddHarness,
 	onSwitchHarness,
 	onCloseHarness,
+	onHarnessCmdChange,
 }: HarnessColumnProps) => (
 	<div className="sk-harness-col">
 		<div className="sk-harness-tabs">
@@ -93,7 +111,12 @@ const HarnessColumn = ({
 						minHeight: 0,
 					}}
 				>
-					<HarnessBody harness={h} fontSize={fontSize} />
+					<HarnessBody
+						harness={h}
+						fontSize={fontSize}
+						defaultShell={defaultShell}
+						onCmdChange={(newCmd) => onHarnessCmdChange(session.id, h.id, newCmd)}
+					/>
 				</div>
 			))
 		)}
@@ -652,6 +675,19 @@ export default function App() {
 		);
 	};
 
+	// Phase 4: when a harness's child exits and the user picks the
+	// shell-fallback path, LiveTerminal calls this so the new cmd
+	// persists to the DB and a Skein restart re-spawns the shell.
+	const updateHarnessCmd = (sessionId: string, harnessId: string, cmd: string[]) => {
+		setSessions((prev) =>
+			prev.map((s) =>
+				s.id === sessionId
+					? { ...s, harnesses: s.harnesses.map((h) => (h.id === harnessId ? { ...h, cmd } : h)) }
+					: s,
+			),
+		);
+	};
+
 	const addHarness = (sessionId: string) => setShowPicker(sessionId);
 
 	const pickHarness = (kind: HarnessKind) => {
@@ -788,11 +824,13 @@ export default function App() {
 						<HarnessColumn
 							session={s}
 							fontSize={fontSize}
+							defaultShell={defaultShell}
 							showPicker={showPicker === s.id}
 							onPick={pickHarness}
 							onAddHarness={addHarness}
 							onSwitchHarness={switchHarnessInSession}
 							onCloseHarness={closeHarness}
+							onHarnessCmdChange={updateHarnessCmd}
 						/>
 					</div>
 				))}

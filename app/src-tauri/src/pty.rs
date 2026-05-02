@@ -1,18 +1,37 @@
-//! PTY layer — wraps `portable-pty` so the rest of the app sees a
-//! string-in / string-out handle keyed by an opaque id.
+//! PTY layer — wraps `portable-pty` so the rest of the app sees an
+//! event-stream handle keyed by an opaque id.
 //!
-//! Phase 1 keeps this deliberately small: spawn, write, resize, kill.
-//! No reconnects, no scrollback persistence, no env discovery. The
-//! reader runs on its own OS thread and pushes UTF-8-lossy chunks to
-//! a callback the caller wires into a `tauri::ipc::Channel`.
+//! Each spawn runs two OS threads:
+//!   - The reader thread streams `PtyEvent::Data` chunks until the
+//!     master pipe sees EOF.
+//!   - The waiter thread blocks on the OS process handle via
+//!     `child.wait()` and emits `PtyEvent::Exit` the moment the child
+//!     dies — naturally (Claude `/exit`) or via `kill`.
+//!
+//! Two threads is load-bearing on Windows: `ConPTY` keeps the reader
+//! pipe open after the child exits, so the read loop alone would never
+//! see EOF on a natural exit. Watching the process handle independently
+//! gets us the exit signal regardless.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::Arc;
 use std::thread;
 
 use parking_lot::Mutex;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use serde::Serialize;
+
+/// Events the PTY reader thread streams to the frontend. Tagged so the
+/// JS side can branch on `kind`: `data` chunks become terminal output,
+/// `exit` triggers the "Press Enter for shell, R to retry" UX.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PtyEvent {
+    Data { chunk: String },
+    Exit { code: Option<u32> },
+}
 
 /// Errors a PTY operation can produce. Stringly-typed because they all
 /// flow back to the frontend as `Result<_, String>` anyway.
@@ -56,9 +75,9 @@ impl PtyManager {
     }
 
     /// Spawn `cmd` (argv-style) inside `cwd` with the given terminal
-    /// dimensions. `on_output` is called from a dedicated reader thread
-    /// every time we get a chunk — the caller is expected to forward
-    /// it to the frontend.
+    /// dimensions. `on_event` is called from the reader and waiter
+    /// threads — once per output chunk and once on child exit. Must be
+    /// `Send + Sync` because both threads share access via an `Arc`.
     ///
     /// Returns the id you should pass to `write` / `resize` / `kill`.
     pub fn spawn<F>(
@@ -68,10 +87,10 @@ impl PtyManager {
         cwd: &Path,
         rows: u16,
         cols: u16,
-        on_output: F,
+        on_event: F,
     ) -> Result<(), PtyError>
     where
-        F: Fn(String) + Send + 'static,
+        F: Fn(PtyEvent) + Send + Sync + 'static,
     {
         let Some((program, args)) = cmd.split_first() else {
             return Err(PtyError("pty_spawn: empty cmd".into()));
@@ -109,12 +128,19 @@ impl PtyManager {
             .map_err(PtyError::from_err)?;
         let killer = child.clone_killer();
 
-        // Drop the slave handle so EOF works correctly when the child
-        // exits. We don't need it again — only the master matters.
+        // Drop the slave handle so EOF reaches the read end correctly
+        // when the child exits *and* the master is closed. (On Windows
+        // `ConPTY` the reader still won't see EOF on a natural exit until
+        // the master is dropped, which is why we have a separate waiter
+        // thread below.)
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader().map_err(PtyError::from_err)?;
         let writer = pair.master.take_writer().map_err(PtyError::from_err)?;
+
+        let on_event = Arc::new(on_event);
+        let on_event_reader = Arc::clone(&on_event);
+        let on_event_waiter = on_event;
 
         thread::spawn(move || {
             let mut buf = [0u8; 8192];
@@ -122,18 +148,23 @@ impl PtyManager {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        // UTF-8 lossy is good enough for Phase 1. Most
-                        // TUI traffic is valid UTF-8; the few invalid
+                        // UTF-8 lossy is good enough here. Most TUI
+                        // traffic is valid UTF-8; the few invalid
                         // sequences (e.g. mid-frame splits) become
                         // replacement chars in the renderer.
                         let chunk = String::from_utf8_lossy(&buf[..n]).into_owned();
-                        on_output(chunk);
+                        on_event_reader(PtyEvent::Data { chunk });
                     }
                 }
             }
-            // Reap to keep the OS happy — if the caller already killed
-            // it, this is a no-op.
-            let _ = child.wait();
+        });
+
+        thread::spawn(move || {
+            // Blocks on the OS process handle — returns the moment the
+            // child dies, regardless of pipe state. This is the *only*
+            // reliable way to detect a natural exit on Windows `ConPTY`.
+            let code = child.wait().ok().map(|s| s.exit_code());
+            on_event_waiter(PtyEvent::Exit { code });
         });
 
         let pty = Pty {

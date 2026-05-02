@@ -16,7 +16,7 @@ use tauri::Manager;
 use tauri::ipc::Channel;
 
 use crate::db::{Database, Session};
-use crate::pty::PtyManager;
+use crate::pty::{PtyEvent, PtyManager};
 use crate::watcher::WatcherManager;
 
 /// Boots the Tauri runtime and blocks until the main window closes.
@@ -90,7 +90,7 @@ fn pty_spawn(
     cwd: String,
     rows: u16,
     cols: u16,
-    on_output: Channel<String>,
+    on_event: Channel<PtyEvent>,
     manager: tauri::State<'_, PtyManager>,
 ) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
@@ -101,10 +101,10 @@ fn pty_spawn(
             Path::new(&cwd),
             rows,
             cols,
-            move |chunk| {
+            move |event| {
                 // Channel send only fails if the frontend dropped the
                 // channel; nothing useful we can do at that point.
-                let _ = on_output.send(chunk);
+                let _ = on_event.send(event);
             },
         )
         .map_err(|e| e.to_string())?;
@@ -145,13 +145,20 @@ fn pty_kill(id: String, manager: tauri::State<'_, PtyManager>) {
 /// argv for the user's default interactive shell on this platform. Used
 /// as the fallback when the new-harness picker doesn't have a more
 /// specific binary in mind.
+///
+/// On Windows we prefer `pwsh.exe` (PowerShell 7) when it's on PATH —
+/// it has better ANSI/UTF-8 handling — and fall back to `powershell.exe`
+/// (PowerShell 5.1, which ships with every modern Windows install).
 #[tauri::command]
 fn default_shell() -> Vec<String> {
     if cfg!(windows) {
-        // pwsh is available on most modern Windows installs (winget
-        // bundles it). If it's missing, the spawn errors and the user
-        // sees it in the terminal pane — they can pick another shell.
-        vec!["pwsh.exe".into()]
+        let pwsh_on_path = std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|dir| dir.join("pwsh.exe").is_file()));
+        if pwsh_on_path {
+            vec!["pwsh.exe".into()]
+        } else {
+            vec!["powershell.exe".into()]
+        }
     } else {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
         vec![shell]
