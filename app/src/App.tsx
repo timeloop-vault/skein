@@ -13,6 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
 import { LiveStatus } from "./LiveStatus.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { Splitter } from "./Splitter.tsx";
@@ -689,6 +690,7 @@ export default function App() {
 	const [activeSessionId, setActiveSessionId] = useState<string>("");
 	const [showPicker, setShowPicker] = useState<string | null>(null);
 	const [showNewSession, setShowNewSession] = useState(false);
+	const [showPalette, setShowPalette] = useState(false);
 
 	// Phase 1: pull platform defaults once at boot. New harnesses spawn
 	// into these until Phase 4 wires real worktrees / per-session cwd.
@@ -863,8 +865,7 @@ export default function App() {
 					if (active) closeSessionRef.current(active);
 					break;
 				case "KeyK":
-					// Phase 4: open command palette. For now, no-op —
-					// preventDefault still suppresses the browser default.
+					setShowPalette(true);
 					break;
 				case "Tab":
 					cycleSession(1);
@@ -957,6 +958,61 @@ export default function App() {
 		onUiScale: setUiScale,
 	};
 
+	// Phase 4: items the command palette offers. Built every render
+	// from current state — cheap at prototype scale (a few dozen rows).
+	// Plain array, not useMemo: the cost of one filter+map per Ctrl+K
+	// open is invisible, and useMemo here would mean tracking every
+	// callback as a dep.
+	const paletteItems: PaletteItem[] = [];
+	for (const s of sessions) {
+		paletteItems.push({
+			id: `session:${s.id}`,
+			label: `${s.name}`,
+			hint: `session · ${s.branch}`,
+			invoke: () => setActiveSessionId(s.id),
+		});
+	}
+	for (const s of sessions) {
+		for (const h of s.harnesses) {
+			paletteItems.push({
+				id: `harness:${h.id}`,
+				label: `${HARNESS_KINDS[h.kind].name} · ${h.name}`,
+				hint: `harness in ${s.name}`,
+				invoke: () => {
+					setActiveSessionId(s.id);
+					setSessions((prev) =>
+						prev.map((p) => (p.id === s.id ? { ...p, activeHarnessId: h.id } : p)),
+					);
+				},
+			});
+		}
+	}
+	paletteItems.push({
+		id: "cmd:new-session",
+		label: "New session",
+		hint: "Ctrl N",
+		invoke: () => setShowNewSession(true),
+	});
+	if (activeSessionId) {
+		paletteItems.push({
+			id: "cmd:add-harness",
+			label: "Add harness to active session",
+			hint: "Ctrl ⇧ H",
+			invoke: () => addHarness(activeSessionId),
+		});
+		paletteItems.push({
+			id: "cmd:close-session",
+			label: "Close active session",
+			hint: "Ctrl W",
+			invoke: () => closeSession(activeSessionId),
+		});
+	}
+	paletteItems.push({
+		id: "cmd:toggle-theme",
+		label: `Toggle theme (currently ${theme})`,
+		invoke: () => setTheme(theme === "dark" ? "light" : "dark"),
+	});
+
 	// CSS `zoom` on the root scales the entire chrome uniformly.
 	// xterm's container scales with it, but the terminal font is pinned
 	// by `fontSize` (xterm option), so the cell size in CSS pixels stays
@@ -977,6 +1033,9 @@ export default function App() {
 						onCommit={createSession}
 						onCancel={() => setShowNewSession(false)}
 					/>
+				)}
+				{showPalette && (
+					<CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />
 				)}
 			</div>
 		);
@@ -1072,6 +1131,7 @@ export default function App() {
 					onCancel={() => setShowNewSession(false)}
 				/>
 			)}
+			{showPalette && <CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />}
 		</div>
 	);
 }
