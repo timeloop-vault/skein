@@ -596,34 +596,53 @@ const newId = (prefix: string): string => prefix + Math.random().toString(36).sl
 // run whatever they want.
 // Phase 2b: opencode has no Claude-style --session-id pre-allocation.
 // Snapshot opencode's existing sessions for this cwd, spawn the
-// harness, then poll for the new id every 250 ms for up to 5 s. The
-// first id that wasn't in the snapshot is this harness's session.
+// harness, then poll the same query looking for an id that wasn't in
+// the snapshot AND isn't already claimed by some other Skein harness.
+// First match wins; that's this harness's session.
 //
-// Polling, not watching: we don't need lifetime cost, and the capture
-// window is bounded — if 5 s isn't enough (opencode hasn't created
-// the row yet, the binary is missing, etc.) we leave sessionId
-// undefined and resume falls back to phase-5a's --continue.
+// Why polling at all (not a file/db watcher): the capture window is
+// short relative to a session lifetime, and opencode writes the row
+// once. Watcher's lifetime cost > polling's burst.
 //
-// Errors from the Tauri command (db locked, permissions, etc.) are
-// silently retried — this is best-effort capture, not a critical path.
+// Why a long timeout (5 minutes): opencode appears to write the
+// session row only on the first user input, not at spawn — so a
+// short window misses it whenever the user takes a beat to start
+// typing. 5 min covers nearly every realistic case; on timeout we
+// quietly leave sessionId undefined and resume falls back to
+// phase-5a's --continue.
+//
+// `claimedIds` returns the set of session ids any *other* harness
+// has already captured. If two opencode harnesses spawn in the same
+// cwd within seconds, the snapshot diff alone can't tell them apart;
+// excluding already-claimed ids breaks the tie deterministically.
 const captureOpencodeSessionId = async (
 	cwd: string,
+	claimedIds: () => Set<string>,
 	onCapture: (sessionId: string) => void,
 ): Promise<void> => {
 	let snapshot: string[];
 	try {
 		snapshot = await invoke<string[]>("opencode_list_sessions", { cwd });
-	} catch {
+	} catch (err) {
+		console.warn("[skein] opencode capture: snapshot failed", err);
 		return;
 	}
 	const before = new Set(snapshot);
-	const deadline = Date.now() + 5000;
+	const startedAt = Date.now();
+	const deadline = startedAt + 5 * 60 * 1000;
+	console.info(`[skein] opencode capture started for ${cwd} (snapshot ${before.size} sessions)`);
 	while (Date.now() < deadline) {
-		await new Promise((resolve) => setTimeout(resolve, 250));
+		// Backoff: tight (250 ms) for the first 5 s in case opencode
+		// is fast, then 1 s for the next 25 s, then 5 s thereafter.
+		const elapsed = Date.now() - startedAt;
+		const waitMs = elapsed < 5_000 ? 250 : elapsed < 30_000 ? 1_000 : 5_000;
+		await new Promise((resolve) => setTimeout(resolve, waitMs));
 		try {
 			const current = await invoke<string[]>("opencode_list_sessions", { cwd });
-			const fresh = current.find((id) => !before.has(id));
+			const taken = claimedIds();
+			const fresh = current.find((id) => !before.has(id) && !taken.has(id));
 			if (fresh) {
+				console.info(`[skein] opencode capture: ${fresh} (${cwd})`);
 				onCapture(fresh);
 				return;
 			}
@@ -631,6 +650,7 @@ const captureOpencodeSessionId = async (
 			// Transient — try again on the next tick.
 		}
 	}
+	console.warn(`[skein] opencode capture timed out for ${cwd}`);
 };
 
 // Phase 2a: when sessionId is provided (always set by callers for
@@ -902,6 +922,16 @@ export default function App() {
 		};
 	}, []);
 
+	// All session ids any harness has already captured. captureOpencode
+	// excludes these so a fresh capture can't claim someone else's id
+	// when two opencode harnesses race in the same cwd.
+	const claimedSessionIds = (): Set<string> =>
+		new Set(
+			sessionsRef.current
+				.flatMap((s) => s.harnesses.map((h) => h.sessionId))
+				.filter((id): id is string => typeof id === "string"),
+		);
+
 	// Update one harness's sessionId after phase 2b's async capture
 	// finds the new opencode row. Wrapped here so both creation paths
 	// (pickHarness, createSession) share the same setSessions shape.
@@ -956,7 +986,7 @@ export default function App() {
 		// the binary — fine to fire-and-forget here, the React render
 		// cycle keeps us ahead of the spawn.
 		if (kind === "opencode") {
-			void captureOpencodeSessionId(cwd, (captured) => {
+			void captureOpencodeSessionId(cwd, claimedSessionIds, (captured) => {
 				setHarnessSessionId(targetSessionId, id, captured);
 			});
 		}
@@ -1005,7 +1035,7 @@ export default function App() {
 		// Phase 2b: same pattern as pickHarness — async capture for
 		// opencode's auto-assigned session id.
 		if (harness === "opencode") {
-			void captureOpencodeSessionId(cwd, (captured) => {
+			void captureOpencodeSessionId(cwd, claimedSessionIds, (captured) => {
 				setHarnessSessionId(sid, hid, captured);
 			});
 		}
