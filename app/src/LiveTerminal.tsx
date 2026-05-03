@@ -21,7 +21,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
-import { isAppShortcut } from "./shortcuts.ts";
+import { isAppShortcut, isMac } from "./shortcuts.ts";
 
 type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
 
@@ -114,10 +114,13 @@ export const LiveTerminal = ({
 		let lastCmd = cmd;
 		let phase: "running" | "exited" = "running";
 
-		// Clipboard bindings (Ctrl+Shift+C / V) plus the post-exit prompt
-		// keys. Ctrl+C / Ctrl+V keep their terminal meaning while running;
-		// Ctrl+Shift+C / Ctrl+Shift+V do editor-style copy/paste — same
-		// convention as VS Code's terminal, gnome-terminal, kitty, etc.
+		// Clipboard bindings plus the post-exit prompt keys.
+		// macOS:        ⌘C / ⌘V — Ctrl+C / Ctrl+V keep their terminal
+		//               meaning (SIGINT and the rare paste byte).
+		// Win/Linux:    Ctrl+Shift+C / Ctrl+Shift+V — Ctrl+C / Ctrl+V
+		//               keep their terminal meaning the same way; Shift
+		//               disambiguates editor-style copy/paste, matching
+		//               VS Code's terminal, gnome-terminal, kitty, etc.
 		term.attachCustomKeyEventHandler((e) => {
 			if (e.type !== "keydown") return true;
 
@@ -143,12 +146,15 @@ export const LiveTerminal = ({
 				return false;
 			}
 
-			if (!e.ctrlKey || !e.shiftKey) return true;
+			const clipboardCombo = isMac
+				? e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey
+				: e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
+			if (!clipboardCombo) return true;
 			if (e.code === "KeyC") {
 				const sel = term.getSelection();
 				if (sel) void writeText(sel);
 				// Suppress xterm's default handling either way — sending the
-				// raw Ctrl+Shift+C byte sequence to the PTY is rarely useful.
+				// raw modifier byte sequence to the PTY is rarely useful.
 				return false;
 			}
 			if (e.code === "KeyV") {

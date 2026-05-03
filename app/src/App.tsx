@@ -20,7 +20,7 @@ import { Splitter } from "./Splitter.tsx";
 import { HChip, HarnessPicker, HarnessTab, SessionTab, StatusDot } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import { usePersistedState } from "./prefs.ts";
-import { isAppShortcut } from "./shortcuts.ts";
+import { isAppShortcut, modLabel } from "./shortcuts.ts";
 import type { Density, Harness, HarnessKind, Session, Theme } from "./types.ts";
 
 // ── Harness body ───────────────────────────────────────────────────
@@ -479,19 +479,19 @@ const EmptyState = ({ onNew }: { onNew: () => void }) => (
 		</button>
 		<div className="hint-list">
 			<div className="row">
-				<span className="kbd">Ctrl N</span>
+				<span className="kbd">{modLabel} N</span>
 				<span>New session</span>
 			</div>
 			<div className="row">
-				<span className="kbd">Ctrl ⇧ H</span>
+				<span className="kbd">{modLabel} ⇧ H</span>
 				<span>Add harness to current session</span>
 			</div>
 			<div className="row">
-				<span className="kbd">Ctrl Tab</span>
+				<span className="kbd">{modLabel} Tab</span>
 				<span>Next session (⇧ for previous, 1-9 for nth)</span>
 			</div>
 			<div className="row">
-				<span className="kbd">Ctrl W</span>
+				<span className="kbd">{modLabel} W</span>
 				<span>Close active session</span>
 			</div>
 		</div>
@@ -805,11 +805,11 @@ export default function App() {
 
 	const addHarness = (sessionId: string) => setShowPicker(sessionId);
 
-	// Phase 3: window-level keyboard shortcuts. Uses isAppShortcut as
-	// the gate — that same predicate also makes LiveTerminal's xterm
-	// custom handler return false for these combos, so the byte never
-	// reaches the PTY. preventDefault stops the WebView's defaults
-	// (Ctrl+W close, Ctrl+= zoom, Ctrl+1..9 tab jump, etc).
+	// Window-level keyboard shortcuts. Uses isAppShortcut as the gate —
+	// that same predicate also makes LiveTerminal's xterm custom handler
+	// return false for these combos, so the byte never reaches the PTY.
+	// preventDefault stops the WebView's defaults (Mod+W close, Mod+=
+	// zoom, Mod+1..9 tab jump, etc). Mod = ⌘ on macOS, Ctrl elsewhere.
 	//
 	// Stash the per-render handler refs so the listener can stay
 	// bound across renders without re-listing every callback as a dep.
@@ -844,7 +844,7 @@ export default function App() {
 
 			const active = activeSessionIdRef.current;
 
-			// Ctrl+Shift combos
+			// Mod+Shift combos
 			if (e.shiftKey) {
 				if (e.code === "KeyH") {
 					if (active) addHarnessRef.current(active);
@@ -854,7 +854,7 @@ export default function App() {
 				return;
 			}
 
-			// Ctrl-only combos
+			// Mod-only combos
 			switch (e.code) {
 				case "Equal":
 					setFontSize((s) => Math.min(FONT_MAX, s + 1));
@@ -995,20 +995,20 @@ export default function App() {
 	paletteItems.push({
 		id: "cmd:new-session",
 		label: "New session",
-		hint: "Ctrl N",
+		hint: `${modLabel} N`,
 		invoke: () => setShowNewSession(true),
 	});
 	if (activeSessionId) {
 		paletteItems.push({
 			id: "cmd:add-harness",
 			label: "Add harness to active session",
-			hint: "Ctrl ⇧ H",
+			hint: `${modLabel} ⇧ H`,
 			invoke: () => addHarness(activeSessionId),
 		});
 		paletteItems.push({
 			id: "cmd:close-session",
 			label: "Close active session",
-			hint: "Ctrl W",
+			hint: `${modLabel} W`,
 			invoke: () => closeSession(activeSessionId),
 		});
 	}
