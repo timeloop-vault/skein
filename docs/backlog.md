@@ -23,6 +23,26 @@ moves into an active phase, delete it here.
   **conversation** for the agent-tool id, or **room** + **thread**.
   Naming is its own small chapter; do it before chapter 7's docs pass
   so the public-facing copy lands once.
+- **Persistent workspace history.** `closeSession` deletes the session
+  outright — it's gone from `skein.db` the next time
+  `db_save_sessions` fires, and there's no "reopen recent" surface.
+  We want closed workspaces to be recoverable: either soft-delete
+  (archive flag, hidden from the tab strip but listed in a "Recent"
+  picker) or a separate "workspaces" table the active session list
+  borrows from. Pairs naturally with the terminology cleanup since
+  this is the place the words `workspace` and `session` start to mean
+  different things.
+- **Folder picker shouldn't require a git repo.** `NewSessionDialog`
+  gates the commit button on `git_is_repo`; non-git folders fall to a
+  "not a repo" state and the dialog can't proceed. Real workflows
+  break out of this: a parent dir containing multiple gits (mono-style
+  workspace), a notes / scratch dir with no repo at all, an opencode
+  config dir. Make git optional — when the folder is a repo, keep the
+  branch / worktree picker; when it isn't, drop straight through to
+  "harness in this cwd, no worktree." Need to decide what to do for
+  multi-git parents (let the user pick which child? treat as plain
+  cwd? offer both?) — that's the design question, not "should we
+  support it."
 - **Command palette (⌘K)** — fuzzy switcher for sessions, harnesses,
   and files. Most demoable single feature we don't have. Worth a
   chapter on its own when keyboard-first usage starts hurting.
