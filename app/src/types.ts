@@ -40,6 +40,10 @@ export interface Room {
 	harnesses: Harness[];
 	activeHarnessId: string;
 	cwd?: string;
+	// Close timestamp (epoch ms). Absent = active (rendered as a tab).
+	// Present = archived (hidden from the tab strip but listed in the
+	// reopen modal). Chapter 6 phase 2.
+	archived?: number;
 }
 
 export type Theme = "dark" | "light";

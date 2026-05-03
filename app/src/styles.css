@@ -837,6 +837,51 @@ body {
 	background: var(--bg-0);
 }
 
+/* Reopen-room modal: list of archived rooms, each clickable. */
+.sk-archived-list {
+	gap: 6px;
+}
+.sk-archived-empty {
+	padding: 18px 0;
+	text-align: center;
+	font-family: var(--sk-mono);
+	font-size: 11px;
+	color: var(--fg-2);
+}
+.sk-archived-row {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 10px 12px;
+	background: var(--bg-2);
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	cursor: pointer;
+	text-align: left;
+	font: inherit;
+	color: inherit;
+	transition: border-color 0.12s, background 0.12s;
+}
+.sk-archived-row:hover {
+	border-color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
+}
+.sk-archived-row .top {
+	font-size: 12px;
+	color: var(--fg-0);
+	font-weight: 500;
+}
+.sk-archived-row .meta {
+	display: flex;
+	justify-content: space-between;
+	font-family: var(--sk-mono);
+	font-size: 10.5px;
+	color: var(--fg-2);
+}
+.sk-archived-row .age {
+	color: var(--fg-3);
+}
+
 /* Command palette — modal-styled but tighter and list-driven. */
 .sk-palette {
 	background: var(--bg-1);
@@ -969,6 +1014,22 @@ body {
 	border: 0;
 	border-radius: 6px;
 	cursor: pointer;
+}
+.sk-empty-reopen {
+	margin-top: 8px;
+	padding: 6px 12px;
+	background: transparent;
+	color: var(--fg-2);
+	font-family: var(--sk-mono);
+	font-size: 11px;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	cursor: pointer;
+}
+.sk-empty-reopen:hover {
+	color: var(--fg-0);
+	border-color: var(--line-strong);
+	background: var(--bg-2);
 }
 .sk-empty .start-btn:hover {
 	filter: brightness(1.08);

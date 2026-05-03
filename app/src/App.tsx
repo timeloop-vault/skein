@@ -17,6 +17,7 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
 import { LiveStatus } from "./LiveStatus.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
+import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
 import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { HChip, HarnessPicker, HarnessTab, RoomTab, StatusDot } from "./components.tsx";
@@ -464,7 +465,13 @@ const NewRoomDialog = ({
 
 // ── Empty state ────────────────────────────────────────────────────
 
-const EmptyState = ({ onNew }: { onNew: () => void }) => (
+interface EmptyStateProps {
+	onNew: () => void;
+	archivedCount: number;
+	onReopen: () => void;
+}
+
+const EmptyState = ({ onNew, archivedCount, onReopen }: EmptyStateProps) => (
 	<div className="sk-empty">
 		<div className="glyph">⊜</div>
 		<h1>No rooms yet</h1>
@@ -475,6 +482,11 @@ const EmptyState = ({ onNew }: { onNew: () => void }) => (
 		<button className="start-btn" onClick={onNew}>
 			Create your first room
 		</button>
+		{archivedCount > 0 && (
+			<button type="button" className="sk-empty-reopen" onClick={onReopen}>
+				Reopen recent ({archivedCount})…
+			</button>
+		)}
 		<div className="hint-list">
 			<div className="row">
 				<span className="kbd">{modLabel} N</span>
@@ -715,6 +727,20 @@ export default function App() {
 	const [showNewRoom, setShowNewRoom] = useState(false);
 	const [showPalette, setShowPalette] = useState(false);
 	const [showSettings, setShowSettings] = useState(false);
+	const [showReopen, setShowReopen] = useState(false);
+
+	// Chapter 6 phase 2: split rooms into active (rendered as tabs) and
+	// archived (hidden, listed in the reopen modal). Tab strip, command
+	// palette, the room useMemo below, and Mod+1..9 all key off active.
+	const activeRooms = useMemo(() => rooms.filter((r) => !r.archived), [rooms]);
+	const archivedRooms = useMemo(
+		() =>
+			rooms
+				.filter((r) => r.archived)
+				.slice()
+				.sort((a, b) => (b.archived ?? 0) - (a.archived ?? 0)),
+		[rooms],
+	);
 
 	// Phase 1: pull platform defaults once at boot. New harnesses spawn
 	// into these until Phase 4 wires real worktrees / per-room cwd.
@@ -777,12 +803,14 @@ export default function App() {
 					// Rewrite each harness's cmd to its resume form before
 					// mounting, so the PTY spawn re-attaches to the prior
 					// conversation instead of starting fresh.
-					const withResume = verified.map((s) => ({
-						...s,
-						harnesses: s.harnesses.map((h) => (h.cmd ? { ...h, cmd: resumeCmd(h) } : h)),
+					const withResume = verified.map((r) => ({
+						...r,
+						harnesses: r.harnesses.map((h) => (h.cmd ? { ...h, cmd: resumeCmd(h) } : h)),
 					}));
 					setRooms(withResume);
-					const first = withResume[0];
+					// Pick the first *active* room; archived ones aren't
+					// supposed to be the boot-time selection.
+					const first = withResume.find((r) => !r.archived);
 					if (first) setActiveRoomId(first.id);
 				}
 				setLoaded(true);
@@ -812,23 +840,35 @@ export default function App() {
 	};
 
 	const closeRoom = async (id: string) => {
-		// Confirm before delete — rooms can hold a lot of state and
-		// the prototype has no undo. Tauri's plugin-dialog gives us a
-		// native confirm; window.confirm is silently no-op'd in WebKit
-		// without a host-side handler we'd have to wire up ourselves.
+		// Confirm before close — rooms can hold a lot of state and the
+		// prototype has no undo (well, now there's the reopen modal —
+		// but the user shouldn't have to discover that). Tauri's
+		// plugin-dialog gives us a native confirm; window.confirm is
+		// silently no-op'd in WebKit without a host-side handler.
 		const ok = await confirm("Close this room? Any running harnesses will be killed.", {
 			title: "Skein",
 			kind: "warning",
 		});
 		if (!ok) return;
-		setRooms((prev) => {
-			const remaining = prev.filter((r) => r.id !== id);
-			if (id === activeRoomId) {
-				const first = remaining[0];
-				setActiveRoomId(first ? first.id : "");
-			}
-			return remaining;
-		});
+		// Chapter 6 phase 2: archive instead of delete. Tab strip filters
+		// archived out; reopen modal lists them.
+		setRooms((prev) => prev.map((r) => (r.id === id ? { ...r, archived: Date.now() } : r)));
+		if (id === activeRoomId) {
+			const nextActive = activeRooms.find((r) => r.id !== id);
+			setActiveRoomId(nextActive ? nextActive.id : "");
+		}
+	};
+
+	const reopenRoom = (id: string) => {
+		setRooms((prev) =>
+			prev.map((r) => {
+				if (r.id !== id) return r;
+				const { archived, ...rest } = r;
+				return rest;
+			}),
+		);
+		setActiveRoomId(id);
+		setShowReopen(false);
 	};
 
 	const switchHarnessInRoom = (roomId: string, harnessId: string) => {
@@ -879,15 +919,20 @@ export default function App() {
 	closeRoomRef.current = closeRoom;
 	const roomsRef = useRef(rooms);
 	roomsRef.current = rooms;
+	// Keyboard nav (Mod+Tab, Mod+1..9) keys off active rooms only —
+	// archived ones aren't rendered as tabs and shouldn't be reachable
+	// via the cycle / jump shortcuts.
+	const activeRoomsRef = useRef(activeRooms);
+	activeRoomsRef.current = activeRooms;
 	const activeRoomIdRef = useRef(activeRoomId);
 	activeRoomIdRef.current = activeRoomId;
 
 	useEffect(() => {
 		const cycleRoom = (delta: number) => {
-			const list = roomsRef.current;
+			const list = activeRoomsRef.current;
 			if (list.length === 0) return;
 			const active = activeRoomIdRef.current;
-			const idx = list.findIndex((s) => s.id === active);
+			const idx = list.findIndex((r) => r.id === active);
 			if (idx === -1) {
 				const first = list[0];
 				if (first) setActiveRoomId(first.id);
@@ -940,7 +985,7 @@ export default function App() {
 				default:
 					if (/^Digit[1-9]$/.test(e.code)) {
 						const n = Number.parseInt(e.code.slice(5), 10) - 1;
-						const target = roomsRef.current[n];
+						const target = activeRoomsRef.current[n];
 						if (target) setActiveRoomId(target.id);
 					}
 			}
@@ -1108,7 +1153,7 @@ export default function App() {
 	// open is invisible, and useMemo here would mean tracking every
 	// callback as a dep.
 	const paletteItems: PaletteItem[] = [];
-	for (const r of rooms) {
+	for (const r of activeRooms) {
 		paletteItems.push({
 			id: `room:${r.id}`,
 			label: `${r.name}`,
@@ -1116,7 +1161,7 @@ export default function App() {
 			invoke: () => setActiveRoomId(r.id),
 		});
 	}
-	for (const r of rooms) {
+	for (const r of activeRooms) {
 		for (const h of r.harnesses) {
 			paletteItems.push({
 				id: `harness:${h.id}`,
@@ -1137,6 +1182,13 @@ export default function App() {
 		hint: `${modLabel} N`,
 		invoke: () => setShowNewRoom(true),
 	});
+	if (archivedRooms.length > 0) {
+		paletteItems.push({
+			id: "cmd:reopen-room",
+			label: `Reopen room… (${archivedRooms.length})`,
+			invoke: () => setShowReopen(true),
+		});
+	}
 	if (activeRoomId) {
 		paletteItems.push({
 			id: "cmd:add-harness",
@@ -1165,8 +1217,9 @@ export default function App() {
 	// independent control over chrome density and terminal density.
 	const appStyle: CSSProperties = { zoom: uiScale };
 
-	// Empty state — no rooms at all.
-	if (rooms.length === 0) {
+	// Empty state — no *active* rooms. Archived rooms still in the list
+	// show via the reopen modal (linked from the empty state too).
+	if (activeRooms.length === 0) {
 		return (
 			<div
 				className={`sk-app sk-${theme} density-${density}`}
@@ -1174,7 +1227,11 @@ export default function App() {
 				style={appStyle}
 			>
 				<Titlebar {...titlebarProps} />
-				<EmptyState onNew={() => setShowNewRoom(true)} />
+				<EmptyState
+					onNew={() => setShowNewRoom(true)}
+					archivedCount={archivedRooms.length}
+					onReopen={() => setShowReopen(true)}
+				/>
 				{showNewRoom && (
 					<NewRoomDialog
 						defaultCwd={defaultCwd}
@@ -1186,6 +1243,13 @@ export default function App() {
 					<CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />
 				)}
 				{showSettings && <SettingsModal {...settingsProps} />}
+				{showReopen && (
+					<ReopenRoomModal
+						rooms={archivedRooms}
+						onReopen={reopenRoom}
+						onClose={() => setShowReopen(false)}
+					/>
+				)}
 			</div>
 		);
 	}
@@ -1204,7 +1268,7 @@ export default function App() {
 			<Titlebar {...titlebarProps} />
 
 			<div className="sk-tabstrip">
-				{rooms.map((r) => (
+				{activeRooms.map((r) => (
 					<RoomTab
 						key={r.id}
 						r={r}
@@ -1225,7 +1289,7 @@ export default function App() {
 				onResize={setHarnessColWidth}
 				minFirst={320}
 				minSecond={320}
-				first={rooms.map((r) => (
+				first={activeRooms.map((r) => (
 					<div
 						key={r.id}
 						style={{
@@ -1248,7 +1312,7 @@ export default function App() {
 						/>
 					</div>
 				))}
-				second={rooms.map((r) => (
+				second={activeRooms.map((r) => (
 					<div
 						key={r.id}
 						className="sk-right"
@@ -1289,6 +1353,13 @@ export default function App() {
 			)}
 			{showPalette && <CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />}
 			{showSettings && <SettingsModal {...settingsProps} />}
+			{showReopen && (
+				<ReopenRoomModal
+					rooms={archivedRooms}
+					onReopen={reopenRoom}
+					onClose={() => setShowReopen(false)}
+				/>
+			)}
 		</div>
 	);
 }

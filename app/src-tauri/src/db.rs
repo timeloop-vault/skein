@@ -60,6 +60,11 @@ pub struct Room {
     pub active_harness_id: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cwd: Option<String>,
+    /// Close timestamp (epoch ms). `None` = active; `Some` = archived
+    /// (chapter 6 phase 2). Skein round-trips this; the frontend reads
+    /// it for tab-strip filtering and the reopen modal.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub archived: Option<i64>,
 }
 
 pub struct Database {
