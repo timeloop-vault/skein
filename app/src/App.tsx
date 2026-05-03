@@ -10,12 +10,14 @@
 //     stay put.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
 import { LiveStatus } from "./LiveStatus.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
+import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { HChip, HarnessPicker, HarnessTab, SessionTab, StatusDot } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
@@ -140,8 +142,6 @@ const UI_SCALE_MIN = 0.85;
 const UI_SCALE_MAX = 1.4;
 const UI_SCALE_STEP = 0.05;
 const UI_SCALE_DEFAULT = 1.0;
-const clampUiScale = (n: number): number =>
-	Math.min(UI_SCALE_MAX, Math.max(UI_SCALE_MIN, Math.round(n * 100) / 100));
 
 // ── New session dialog ─────────────────────────────────────────────
 // The picked folder becomes the session's cwd; every harness in the
@@ -552,92 +552,34 @@ const WindowControls = () => {
 };
 
 interface TitlebarProps {
-	theme: Theme;
-	density: Density;
-	fontSize: number;
-	uiScale: number;
 	activeSessionLabel: string | null;
-	onTheme: (v: Theme) => void;
-	onDensity: (v: Density) => void;
-	onFontSize: (v: number) => void;
-	onUiScale: (v: number) => void;
+	onOpenSettings: () => void;
 }
 
-const Titlebar = ({
-	theme,
-	density,
-	fontSize,
-	uiScale,
-	activeSessionLabel,
-	onTheme,
-	onDensity,
-	onFontSize,
-	onUiScale,
-}: TitlebarProps) => (
+const Titlebar = ({ activeSessionLabel, onOpenSettings }: TitlebarProps) => (
 	<div className="sk-titlebar" data-tauri-drag-region>
 		<span className="sk-app-name">
 			<span className="dot">●</span> skein
 		</span>
 		{activeSessionLabel && <span className="sk-titlebar-session">{activeSessionLabel}</span>}
-		{/* The settings group opts out of the drag region so its buttons
-		    receive clicks instead of starting a window drag. */}
-		<div className="sk-settings" data-tauri-drag-region="false">
+		<div className="sk-titlebar-actions" data-tauri-drag-region="false">
 			<button
-				className="sk-btn ghost"
-				onClick={() => onTheme(theme === "dark" ? "light" : "dark")}
-				title="Toggle theme"
+				type="button"
+				className="sk-cog-btn"
+				onClick={onOpenSettings}
+				title={`Settings (${modLabel}+,)`}
+				aria-label="Settings"
 			>
-				{theme}
+				<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+					<path
+						d="M8 5.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zm5.6 2.5l1.4-.9-1.4-2.4-1.6.5a5.5 5.5 0 00-1.5-.9l-.3-1.7h-2.8l-.3 1.7c-.55.22-1.05.52-1.5.9l-1.6-.5-1.4 2.4 1.4.9c-.07.3-.1.6-.1.9s.03.6.1.9l-1.4.9 1.4 2.4 1.6-.5c.45.38.95.68 1.5.9l.3 1.7h2.8l.3-1.7c.55-.22 1.05-.52 1.5-.9l1.6.5 1.4-2.4-1.4-.9c.07-.3.1-.6.1-.9s-.03-.6-.1-.9z"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="1.1"
+						strokeLinejoin="round"
+					/>
+				</svg>
 			</button>
-			<select
-				className="sk-select sk-settings-select"
-				value={density}
-				onChange={(e) => onDensity(e.target.value as Density)}
-				title="UI density"
-			>
-				<option value="compact">compact</option>
-				<option value="regular">regular</option>
-				<option value="comfy">comfy</option>
-			</select>
-			<div className="sk-font-group" title="Terminal font size (pt)">
-				<span className="sk-font-label">term</span>
-				<button
-					className="sk-btn ghost"
-					onClick={() => onFontSize(Math.max(FONT_MIN, fontSize - 1))}
-					disabled={fontSize <= FONT_MIN}
-				>
-					−
-				</button>
-				<span className="sk-font-size">{fontSize}</span>
-				<button
-					className="sk-btn ghost"
-					onClick={() => onFontSize(Math.min(FONT_MAX, fontSize + 1))}
-					disabled={fontSize >= FONT_MAX}
-				>
-					+
-				</button>
-			</div>
-			<div
-				className="sk-font-group"
-				title="UI scale (chrome only — terminal stays at the pt above)"
-			>
-				<span className="sk-font-label">ui</span>
-				<button
-					className="sk-btn ghost"
-					onClick={() => onUiScale(clampUiScale(uiScale - UI_SCALE_STEP))}
-					disabled={uiScale <= UI_SCALE_MIN + 0.001}
-				>
-					−
-				</button>
-				<span className="sk-font-size">{Math.round(uiScale * 100)}%</span>
-				<button
-					className="sk-btn ghost"
-					onClick={() => onUiScale(clampUiScale(uiScale + UI_SCALE_STEP))}
-					disabled={uiScale >= UI_SCALE_MAX - 0.001}
-				>
-					+
-				</button>
-			</div>
 		</div>
 		{!isMac && <WindowControls />}
 	</div>
@@ -697,6 +639,7 @@ export default function App() {
 	const [showPicker, setShowPicker] = useState<string | null>(null);
 	const [showNewSession, setShowNewSession] = useState(false);
 	const [showPalette, setShowPalette] = useState(false);
+	const [showSettings, setShowSettings] = useState(false);
 
 	// Phase 1: pull platform defaults once at boot. New harnesses spawn
 	// into these until Phase 4 wires real worktrees / per-session cwd.
@@ -873,6 +816,9 @@ export default function App() {
 				case "KeyK":
 					setShowPalette(true);
 					break;
+				case "Comma":
+					setShowSettings(true);
+					break;
 				case "Tab":
 					cycleSession(1);
 					break;
@@ -888,6 +834,17 @@ export default function App() {
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	}, [setFontSize]);
+
+	// Phase 4: listen for the macOS app menu's Preferences… item.
+	// lib.rs's on_menu_event emits skein://open-settings when the user
+	// picks Skein → Preferences… from the menu bar; we open the same
+	// modal as the cog icon and Mod+,.
+	useEffect(() => {
+		const promise = listen("skein://open-settings", () => setShowSettings(true));
+		return () => {
+			void promise.then((un) => un());
+		};
+	}, []);
 
 	const pickHarness = (kind: HarnessKind) => {
 		const targetSessionId = showPicker;
@@ -954,15 +911,25 @@ export default function App() {
 	};
 
 	const titlebarProps: TitlebarProps = {
+		activeSessionLabel: session ? session.name : null,
+		onOpenSettings: () => setShowSettings(true),
+	};
+
+	const settingsProps = {
 		theme,
 		density,
 		fontSize,
 		uiScale,
-		activeSessionLabel: session ? session.name : null,
+		fontMin: FONT_MIN,
+		fontMax: FONT_MAX,
+		uiScaleMin: UI_SCALE_MIN,
+		uiScaleMax: UI_SCALE_MAX,
+		uiScaleStep: UI_SCALE_STEP,
 		onTheme: setTheme,
 		onDensity: setDensity,
 		onFontSize: setFontSize,
 		onUiScale: setUiScale,
+		onClose: () => setShowSettings(false),
 	};
 
 	// Phase 4: items the command palette offers. Built every render
@@ -1048,6 +1015,7 @@ export default function App() {
 				{showPalette && (
 					<CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />
 				)}
+				{showSettings && <SettingsModal {...settingsProps} />}
 			</div>
 		);
 	}
@@ -1150,6 +1118,7 @@ export default function App() {
 				/>
 			)}
 			{showPalette && <CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />}
+			{showSettings && <SettingsModal {...settingsProps} />}
 		</div>
 	);
 }

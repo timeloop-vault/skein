@@ -39,6 +39,7 @@ export const isAppShortcut = (e: KeyboardEvent): boolean => {
 	if (e.code === "KeyN") return true; // new session
 	if (e.code === "KeyW") return true; // close session
 	if (e.code === "KeyK") return true; // palette
+	if (e.code === "Comma") return true; // settings
 	if (e.code === "Tab") return true; // next session
 	if (/^Digit[1-9]$/.test(e.code)) return true; // jump to session N
 	// Font size — already wired in App.tsx; listed here so xterm doesn't
