@@ -1,0 +1,21 @@
+{
+	"$schema": "https://schema.tauri.app/config/2",
+	"app": {
+		"windows": [
+			{
+				"label": "main",
+				"title": "Skein",
+				"width": 1320,
+				"height": 820,
+				"minWidth": 900,
+				"minHeight": 600,
+				"decorations": true,
+				"titleBarStyle": "Overlay",
+				"hiddenTitle": true,
+				"resizable": true,
+				"center": true,
+				"visible": true
+			}
+		]
+	}
+}

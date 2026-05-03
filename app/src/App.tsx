@@ -20,7 +20,7 @@ import { Splitter } from "./Splitter.tsx";
 import { HChip, HarnessPicker, HarnessTab, SessionTab, StatusDot } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import { usePersistedState } from "./prefs.ts";
-import { isAppShortcut, modLabel } from "./shortcuts.ts";
+import { isAppShortcut, isMac, modLabel } from "./shortcuts.ts";
 import type { Density, Harness, HarnessKind, Session, Theme } from "./types.ts";
 
 // ── Harness body ───────────────────────────────────────────────────
@@ -500,9 +500,11 @@ const EmptyState = ({ onNew }: { onNew: () => void }) => (
 
 // ── Titlebar ───────────────────────────────────────────────────────
 
-// Tauri-driven minimize / toggle-maximize / close buttons.
-// `decorations: false` in tauri.conf.json means the OS doesn't draw any
-// — these are the only way to close the window from the UI.
+// Tauri-driven minimize / toggle-maximize / close buttons. On macOS
+// we don't render these — tauri.macos.conf.json sets titleBarStyle:
+// "Overlay" and the OS draws real traffic lights at the upper-left.
+// On Windows / Linux `decorations: false` means the OS draws nothing,
+// so these are the only way to close the window from the UI.
 const WindowControls = () => {
 	const win = getCurrentWindow();
 	return (
@@ -637,7 +639,7 @@ const Titlebar = ({
 				</button>
 			</div>
 		</div>
-		<WindowControls />
+		{!isMac && <WindowControls />}
 	</div>
 );
 
@@ -1029,7 +1031,11 @@ export default function App() {
 	// Empty state — no sessions at all.
 	if (sessions.length === 0) {
 		return (
-			<div className={`sk-app sk-${theme} density-${density}`} style={appStyle}>
+			<div
+				className={`sk-app sk-${theme} density-${density}`}
+				data-platform={isMac ? "mac" : "other"}
+				style={appStyle}
+			>
 				<Titlebar {...titlebarProps} />
 				<EmptyState onNew={() => setShowNewSession(true)} />
 				{showNewSession && (
@@ -1052,7 +1058,11 @@ export default function App() {
 	}
 
 	return (
-		<div className={`sk-app sk-${theme} density-${density}`} style={appStyle}>
+		<div
+			className={`sk-app sk-${theme} density-${density}`}
+			data-platform={isMac ? "mac" : "other"}
+			style={appStyle}
+		>
 			<Titlebar {...titlebarProps} />
 
 			<div className="sk-tabstrip">

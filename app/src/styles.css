@@ -100,6 +100,12 @@ body {
 	padding: 0 0 0 10px;
 	gap: 10px;
 }
+/* On macOS the OS draws traffic lights at the upper-left of our custom
+   titlebar (titleBarStyle: Overlay). 80 px clears the standard cluster
+   so the wordmark and session label don't overlap them. */
+.sk-app[data-platform="mac"] .sk-titlebar {
+	padding-left: 80px;
+}
 .sk-app-name {
 	font-family: var(--sk-mono);
 	font-size: 11px;
