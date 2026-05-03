@@ -98,7 +98,13 @@ fn add_worktree_creates_branch_and_directory() {
     // And the worktree shows up in `list_worktrees`.
     let worktrees = repo.list_worktrees().unwrap();
     assert_eq!(worktrees.len(), 1);
-    assert_eq!(worktrees[0].path, wt_path);
+    // libgit2 stores the canonical path; on macOS the tempdir lives under
+    // `/var/...` which is a symlink to `/private/var/...`, so the strings
+    // only match after canonicalising both sides.
+    assert_eq!(
+        worktrees[0].path.canonicalize().unwrap(),
+        wt_path.canonicalize().unwrap()
+    );
 }
 
 #[test]

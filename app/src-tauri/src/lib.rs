@@ -146,9 +146,9 @@ fn pty_kill(id: String, manager: tauri::State<'_, PtyManager>) {
 /// as the fallback when the new-harness picker doesn't have a more
 /// specific binary in mind.
 ///
-/// On Windows we prefer `pwsh.exe` (PowerShell 7) when it's on PATH —
+/// On Windows we prefer `pwsh.exe` (`PowerShell` 7) when it's on PATH —
 /// it has better ANSI/UTF-8 handling — and fall back to `powershell.exe`
-/// (PowerShell 5.1, which ships with every modern Windows install).
+/// (`PowerShell` 5.1, which ships with every modern Windows install).
 #[tauri::command]
 fn default_shell() -> Vec<String> {
     if cfg!(windows) {
