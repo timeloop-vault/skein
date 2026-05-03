@@ -17,6 +17,13 @@ export interface Harness {
 	live?: boolean;
 	cmd?: string[];
 	cwd?: string;
+	// Conversation id assigned by the underlying tool. For Claude this
+	// is pre-allocated by Skein at spawn time via `--session-id <uuid>`
+	// (chapter 5 phase 2a). For opencode it's captured after spawn from
+	// the session table (phase 2b). Undefined for fresh harnesses, for
+	// kinds without a resume concept (copilot, shell), and for legacy
+	// harnesses created before the field existed.
+	sessionId?: string;
 }
 
 export interface Session {

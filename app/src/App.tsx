@@ -594,10 +594,14 @@ const newId = (prefix: string): string => prefix + Math.random().toString(36).sl
 // inline and the user can pick another kind. The `byoh` kind is our
 // "Shell" option — it drops into the user's default shell so they can
 // run whatever they want.
-const cmdForKind = (kind: HarnessKind, fallbackShell: string[]): string[] => {
+// Phase 2a: when sessionId is provided (always set by callers for
+// Claude, never for other kinds), pre-allocate Claude's conversation
+// id via --session-id <uuid>. Storing the same id on the harness
+// record lets phase 3 resume directly with no picker.
+const cmdForKind = (kind: HarnessKind, fallbackShell: string[], sessionId?: string): string[] => {
 	switch (kind) {
 		case "claude":
-			return ["claude"];
+			return sessionId ? ["claude", "--session-id", sessionId] : ["claude"];
 		case "opencode":
 			return ["opencode"];
 		case "copilot":
@@ -607,17 +611,32 @@ const cmdForKind = (kind: HarnessKind, fallbackShell: string[]): string[] => {
 	}
 };
 
-// Phase 5a: rewrite a stored cmd into its "resume the previous
-// conversation" form, applied once at boot so a fresh PTY spawn
-// transparently re-attaches. Only matches the canonical kind-default
-// argv — anything customized (shell-swapped via phase 4's onCmdChange,
-// user-edited extra args) passes through unchanged.
+// Rewrite a stored cmd into its "resume the previous conversation"
+// form, applied once at boot so a fresh PTY spawn transparently
+// re-attaches. Only matches the canonical kind-default argv — anything
+// customized (shell-swapped via chapter 2's onCmdChange, user-edited
+// extra args) passes through unchanged.
 //
-// gh copilot has no resume mode; shells start fresh; opencode resumes
-// the most recent conversation in the cwd; Claude shows a picker.
+// gh copilot has no resume mode; shells start fresh.
+//
+// Claude has two stored forms:
+//   - ["claude", "--session-id", <uuid>]  (chapter 5 phase 2a — fresh
+//     harnesses pre-allocate the id, so we resume that exact session
+//     with no picker).
+//   - ["claude"]                           (chapter 2 phase 5a — legacy
+//     harnesses created before phase 2a, resume opens Claude's picker).
+//
+// opencode currently always resumes most-recent-in-cwd via --continue;
+// chapter 5 phase 3 will swap that for --session <id> once phase 2b
+// captures the id.
 const resumeCmd = (kind: HarnessKind, cmd: string[]): string[] => {
-	if (kind === "claude" && cmd.length === 1 && cmd[0] === "claude") {
-		return ["claude", "--resume"];
+	if (kind === "claude") {
+		if (cmd.length === 3 && cmd[0] === "claude" && cmd[1] === "--session-id" && cmd[2]) {
+			return ["claude", "--resume", cmd[2]];
+		}
+		if (cmd.length === 1 && cmd[0] === "claude") {
+			return ["claude", "--resume"];
+		}
 	}
 	if (kind === "opencode" && cmd.length === 1 && cmd[0] === "opencode") {
 		return ["opencode", "--continue"];
@@ -850,7 +869,10 @@ export default function App() {
 		const targetSessionId = showPicker;
 		if (!targetSessionId) return;
 		const id = newId("h");
-		const cmd = cmdForKind(kind, defaultShell);
+		// Phase 2a: pre-allocate Claude's conversation id so the harness
+		// resumes to *this* session on Skein restart — no picker.
+		const sessionId = kind === "claude" ? crypto.randomUUID() : undefined;
+		const cmd = cmdForKind(kind, defaultShell, sessionId);
 		setSessions((prev) =>
 			prev.map((s) => {
 				if (s.id !== targetSessionId) return s;
@@ -864,6 +886,7 @@ export default function App() {
 					live: true,
 					cmd,
 					cwd: s.cwd ?? defaultCwd,
+					...(sessionId ? { sessionId } : {}),
 				};
 				return { ...s, harnesses: [...s.harnesses, newH], activeHarnessId: id };
 			}),
@@ -874,6 +897,8 @@ export default function App() {
 	const createSession = ({ cwd, task, harness, branch }: CreateSessionArgs) => {
 		const sid = newId("s");
 		const hid = newId("h");
+		// Phase 2a: pre-allocate Claude's conversation id (see pickHarness).
+		const sessionId = harness === "claude" ? crypto.randomUUID() : undefined;
 		// "Repo" name from the trailing path component — `D:\code\skein` →
 		// `skein`. Cosmetic; the actual cwd is what spawns use.
 		const repoName =
@@ -899,8 +924,9 @@ export default function App() {
 					model: harness === "copilot" ? "gpt-5" : "sonnet-4.5",
 					tokens: "0",
 					live: true,
-					cmd: cmdForKind(harness, defaultShell),
+					cmd: cmdForKind(harness, defaultShell, sessionId),
 					cwd,
+					...(sessionId ? { sessionId } : {}),
 				},
 			],
 			activeHarnessId: hid,

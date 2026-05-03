@@ -34,6 +34,10 @@ pub struct Harness {
     pub cmd: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cwd: Option<String>,
+    /// Conversation id from the underlying tool. See chapter-5-plan.md
+    /// for how it gets populated; Skein only round-trips it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub session_id: Option<String>,
 }
 
 /// Mirrors the TS Session interface.
