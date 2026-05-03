@@ -96,7 +96,8 @@ body {
 	align-items: center;
 	background: var(--bg-0);
 	border-bottom: 1px solid var(--line);
-	padding: 0 10px;
+	/* No right padding: window controls hug the corner like Windows. */
+	padding: 0 0 0 10px;
 	gap: 10px;
 }
 .sk-app-name {
@@ -137,6 +138,41 @@ body {
 	min-width: 16px;
 	text-align: center;
 	color: var(--fg-1);
+}
+
+/* Window controls — minimize / toggle-maximize / close.
+   30 px tall to match the titlebar; 46 px wide is the Windows convention.
+   Close hovers red (#c42b1c is the standard Win11 close-button red). */
+.sk-window-controls {
+	display: flex;
+	height: 30px;
+}
+.sk-wc-btn {
+	width: 46px;
+	height: 30px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent;
+	border: 0;
+	color: var(--fg-1);
+	cursor: pointer;
+	padding: 0;
+}
+.sk-wc-btn:hover {
+	background: var(--bg-2);
+	color: var(--fg-0);
+}
+.sk-wc-close:hover {
+	background: #c42b1c;
+	color: #fff;
+}
+.sk-light .sk-wc-btn:hover {
+	background: var(--bg-3);
+}
+.sk-light .sk-wc-close:hover {
+	background: #c42b1c;
+	color: #fff;
 }
 
 /* Session tab strip */

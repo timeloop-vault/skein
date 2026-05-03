@@ -10,6 +10,7 @@
 //     stay put.
 
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useState } from "react";
 import { LiveStatus } from "./LiveStatus.tsx";
@@ -482,6 +483,55 @@ const EmptyState = ({ onNew }: { onNew: () => void }) => (
 
 // ── Titlebar ───────────────────────────────────────────────────────
 
+// Tauri-driven minimize / toggle-maximize / close buttons.
+// `decorations: false` in tauri.conf.json means the OS doesn't draw any
+// — these are the only way to close the window from the UI.
+const WindowControls = () => {
+	const win = getCurrentWindow();
+	return (
+		<div className="sk-window-controls" data-tauri-drag-region="false">
+			<button
+				className="sk-wc-btn"
+				onClick={() => void win.minimize()}
+				title="Minimize"
+				type="button"
+			>
+				<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+					<path d="M0 5h10" stroke="currentColor" strokeWidth="1" />
+				</svg>
+			</button>
+			<button
+				className="sk-wc-btn"
+				onClick={() => void win.toggleMaximize()}
+				title="Maximize"
+				type="button"
+			>
+				<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+					<rect
+						x="0.5"
+						y="0.5"
+						width="9"
+						height="9"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="1"
+					/>
+				</svg>
+			</button>
+			<button
+				className="sk-wc-btn sk-wc-close"
+				onClick={() => void win.close()}
+				title="Close"
+				type="button"
+			>
+				<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+					<path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" strokeWidth="1" />
+				</svg>
+			</button>
+		</div>
+	);
+};
+
 interface TitlebarProps {
 	theme: Theme;
 	density: Density;
@@ -534,6 +584,7 @@ const Titlebar = ({ theme, density, fontSize, onTheme, onDensity, onFontSize }: 
 				</button>
 			</div>
 		</div>
+		<WindowControls />
 	</div>
 );
 
