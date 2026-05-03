@@ -31,17 +31,17 @@ export const isAppShortcut = (e: KeyboardEvent): boolean => {
 	// Mod+Shift combos
 	if (e.shiftKey) {
 		if (e.code === "KeyH") return true; // add harness
-		if (e.code === "Tab") return true; // previous session
+		if (e.code === "Tab") return true; // previous room
 		return false;
 	}
 
 	// Mod-only combos
-	if (e.code === "KeyN") return true; // new session
-	if (e.code === "KeyW") return true; // close session
+	if (e.code === "KeyN") return true; // new room
+	if (e.code === "KeyW") return true; // close room
 	if (e.code === "KeyK") return true; // palette
 	if (e.code === "Comma") return true; // settings
-	if (e.code === "Tab") return true; // next session
-	if (/^Digit[1-9]$/.test(e.code)) return true; // jump to session N
+	if (e.code === "Tab") return true; // next room
+	if (/^Digit[1-9]$/.test(e.code)) return true; // jump to room N
 	// Font size — already wired in App.tsx; listed here so xterm doesn't
 	// also forward "=" / "+" / "-" to the PTY.
 	if (e.code === "Equal" || e.code === "Minus") return true;

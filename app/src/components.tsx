@@ -2,7 +2,7 @@
 
 import type { CSSProperties } from "react";
 import { HARNESS_KINDS } from "./data.tsx";
-import type { Harness, HarnessKind, Session, Status } from "./types.ts";
+import type { Harness, HarnessKind, Room, Status } from "./types.ts";
 
 export const HChip = ({ kind, size = 14 }: { kind: HarnessKind; size?: number }) => {
 	const k = HARNESS_KINDS[kind];
@@ -25,25 +25,25 @@ export const StatusDot = ({ status, size = 6 }: { status: Status; size?: number 
 
 // ── Tabs / chrome ──────────────────────────────────────────────────
 
-export const SessionTab = ({
-	s,
+export const RoomTab = ({
+	r,
 	active,
 	onClick,
 	onClose,
 }: {
-	s: Session;
+	r: Room;
 	active: boolean;
 	onClick: () => void;
 	onClose: () => void;
 }) => (
-	<div className={`sk-tab ${active ? "active" : ""}`} onClick={onClick} title={s.task}>
+	<div className={`sk-tab ${active ? "active" : ""}`} onClick={onClick} title={r.task}>
 		<div className="row-1">
-			<StatusDot status={s.status} />
-			<span className="name">{s.name}</span>
-			{s.badge > 0 && <span className="tab-badge">{s.badge}</span>}
+			<StatusDot status={r.status} />
+			<span className="name">{r.name}</span>
+			{r.badge > 0 && <span className="tab-badge">{r.badge}</span>}
 			<span
 				className="sk-tab-close"
-				title="Close session"
+				title="Close room"
 				onClick={(e) => {
 					e.stopPropagation();
 					onClose();
@@ -53,10 +53,10 @@ export const SessionTab = ({
 			</span>
 		</div>
 		<div className="row-2">
-			<span>{s.branch}</span>
+			<span>{r.branch}</span>
 			<span>·</span>
 			<span style={{ display: "flex", gap: 2 }}>
-				{s.harnesses.map((h) => (
+				{r.harnesses.map((h) => (
 					<HChip key={h.id} kind={h.kind} size={9} />
 				))}
 			</span>

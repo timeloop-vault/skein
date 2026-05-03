@@ -1,5 +1,5 @@
 // Command palette — Ctrl+K to switch to anything or run any common
-// command. Sessions, harnesses, and built-in actions live in one
+// command. Rooms, harnesses, and built-in actions live in one
 // flat list with substring filtering.
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -69,7 +69,7 @@ export const CommandPalette = ({ items, onClose }: CommandPaletteProps) => {
 				<input
 					ref={inputRef}
 					className="sk-palette-input"
-					placeholder="Switch to a session, run a command…"
+					placeholder="Switch to a room, run a command…"
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
 					onKeyDown={onKeyDown}

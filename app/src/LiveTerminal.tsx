@@ -94,7 +94,7 @@ export const LiveTerminal = ({
 		const fit = new FitAddon();
 		term.loadAddon(fit);
 		term.open(host);
-		// If we're mounting into a hidden pane (e.g. an inactive session
+		// If we're mounting into a hidden pane (e.g. an inactive room
 		// at app boot), skip the initial fit. xterm's defaults (24×80) are
 		// what we'll spawn the PTY with; the ResizeObserver tick that
 		// fires when the pane becomes visible will refit and pty_resize.
@@ -223,7 +223,7 @@ export const LiveTerminal = ({
 				});
 				if (!resizeObserver) {
 					resizeObserver = new ResizeObserver(() => {
-						// Phase 3 guard: when the session goes display:none,
+						// Phase 3 guard: when the room goes display:none,
 						// the host shrinks to 0×0 and the observer fires.
 						// Fitting to that size would tell xterm + the child
 						// that the terminal is 1×1, permanently squishing

@@ -1,6 +1,6 @@
 // localStorage-backed app preferences.
 //
-// These are app-wide, not per-session: theme, density, font size, split
+// These are app-wide, not per-room: theme, density, font size, split
 // sizes. We keep them out of sqlite because Rust never reads them and
 // the WebView's localStorage already lives in the app data dir.
 

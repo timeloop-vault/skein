@@ -1,12 +1,12 @@
 // Skein interactive prototype — single React tree.
 //
 // Mental model:
-//   - Tabs along the top are sessions (workspace = repo + branch + task).
-//   - Each session owns N harnesses (Claude Code, opencode, gh copilot,
-//     or a built-in shell). All harnesses in a session share the same
+//   - Tabs along the top are rooms (repo + branch + task + cwd).
+//   - Each room owns N harnesses (Claude Code, opencode, gh copilot,
+//     or a built-in shell). All harnesses in a room share the same
 //     worktree.
-//   - The right pane belongs to the session, not the harness — so when
-//     you switch agents inside the same workspace, the diff and status
+//   - The right pane belongs to the room, not the harness — so when
+//     you switch agents inside the same room, the diff and status
 //     stay put.
 
 import { invoke } from "@tauri-apps/api/core";
@@ -19,11 +19,11 @@ import { LiveStatus } from "./LiveStatus.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
-import { HChip, HarnessPicker, HarnessTab, SessionTab, StatusDot } from "./components.tsx";
+import { HChip, HarnessPicker, HarnessTab, RoomTab, StatusDot } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import { usePersistedState } from "./prefs.ts";
 import { isAppShortcut, isMac, modLabel } from "./shortcuts.ts";
-import type { Density, Harness, HarnessKind, Session, Theme } from "./types.ts";
+import type { Density, Harness, HarnessKind, Room, Theme } from "./types.ts";
 
 // ── Harness body ───────────────────────────────────────────────────
 
@@ -50,25 +50,25 @@ const HarnessBody = ({ harness, fontSize, defaultShell, onCmdChange }: HarnessBo
 	return null;
 };
 
-// ── Harness column (per session) ───────────────────────────────────
-// Phase 3: every session's column stays mounted at once; the App-level
-// renderer toggles visibility with display:none. PTYs survive tab
-// switches because LiveTerminal's effect is keyed on mountKey only.
+// ── Harness column (per room) ──────────────────────────────────────
+// Every room's column stays mounted at once; the App-level renderer
+// toggles visibility with display:none. PTYs survive tab switches
+// because LiveTerminal's effect is keyed on mountKey only.
 
 interface HarnessColumnProps {
-	session: Session;
+	room: Room;
 	fontSize: number;
 	defaultShell: string[];
 	showPicker: boolean;
 	onPick: (kind: HarnessKind) => void;
-	onAddHarness: (sessionId: string) => void;
-	onSwitchHarness: (sessionId: string, harnessId: string) => void;
-	onCloseHarness: (sessionId: string, harnessId: string) => void;
-	onHarnessCmdChange: (sessionId: string, harnessId: string, cmd: string[]) => void;
+	onAddHarness: (roomId: string) => void;
+	onSwitchHarness: (roomId: string, harnessId: string) => void;
+	onCloseHarness: (roomId: string, harnessId: string) => void;
+	onHarnessCmdChange: (roomId: string, harnessId: string, cmd: string[]) => void;
 }
 
 const HarnessColumn = ({
-	session,
+	room,
 	fontSize,
 	defaultShell,
 	showPicker,
@@ -80,22 +80,22 @@ const HarnessColumn = ({
 }: HarnessColumnProps) => (
 	<div className="sk-harness-col">
 		<div className="sk-harness-tabs">
-			{session.harnesses.map((h) => (
+			{room.harnesses.map((h) => (
 				<HarnessTab
 					key={h.id}
 					h={h}
-					active={h.id === session.activeHarnessId}
-					closable={session.harnesses.length > 1}
-					onClick={() => onSwitchHarness(session.id, h.id)}
-					onClose={() => onCloseHarness(session.id, h.id)}
+					active={h.id === room.activeHarnessId}
+					closable={room.harnesses.length > 1}
+					onClick={() => onSwitchHarness(room.id, h.id)}
+					onClose={() => onCloseHarness(room.id, h.id)}
 				/>
 			))}
-			<div className="sk-harness-add" onClick={() => onAddHarness(session.id)}>
+			<div className="sk-harness-add" onClick={() => onAddHarness(room.id)}>
 				+ harness
 			</div>
 			<div className="sk-harness-meta">
 				<span>
-					{session.repo} · {session.branch}
+					{room.repo} · {room.branch}
 				</span>
 			</div>
 		</div>
@@ -103,15 +103,15 @@ const HarnessColumn = ({
 		{showPicker ? (
 			<HarnessPicker onPick={onPick} />
 		) : (
-			// Mount every harness in this session at once; hide the
+			// Mount every harness in this room at once; hide the
 			// inactive ones via display:none so xterm scrollback,
 			// cursor position, and PTY state survive harness-tab
-			// switches inside the session.
-			session.harnesses.map((h) => (
+			// switches inside the room.
+			room.harnesses.map((h) => (
 				<div
 					key={h.id}
 					style={{
-						display: h.id === session.activeHarnessId ? "flex" : "none",
+						display: h.id === room.activeHarnessId ? "flex" : "none",
 						flexDirection: "column",
 						flex: 1,
 						minHeight: 0,
@@ -121,7 +121,7 @@ const HarnessColumn = ({
 						harness={h}
 						fontSize={fontSize}
 						defaultShell={defaultShell}
-						onCmdChange={(newCmd) => onHarnessCmdChange(session.id, h.id, newCmd)}
+						onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
 					/>
 				</div>
 			))
@@ -143,9 +143,9 @@ const UI_SCALE_MAX = 1.4;
 const UI_SCALE_STEP = 0.05;
 const UI_SCALE_DEFAULT = 1.0;
 
-// ── New session dialog ─────────────────────────────────────────────
-// The picked folder becomes the session's cwd; every harness in the
-// session spawns into it. "New worktree" mode resolves to a fresh
+// ── New room dialog ────────────────────────────────────────────────
+// The picked folder becomes the room's cwd; every harness in the
+// room spawns into it. "New worktree" mode resolves to a fresh
 // libgit2 worktree path; "Current branch" mode uses the picked path
 // as-is.
 
@@ -158,7 +158,7 @@ interface BranchInfoDto {
 // the spawn should land in — for "New worktree" mode the dialog has
 // already called git_add_worktree and resolved the worktree path; for
 // "Current branch" mode it's just the picked repo path.
-interface CreateSessionArgs {
+interface CreateRoomArgs {
 	cwd: string;
 	task: string;
 	harness: HarnessKind;
@@ -172,13 +172,13 @@ type RepoStatus =
 	| { kind: "valid"; branches: BranchInfoDto[]; head: string | null }
 	| { kind: "not-a-repo" };
 
-const NewSessionDialog = ({
+const NewRoomDialog = ({
 	defaultCwd,
 	onCommit,
 	onCancel,
 }: {
 	defaultCwd: string;
-	onCommit: (args: CreateSessionArgs) => void;
+	onCommit: (args: CreateRoomArgs) => void;
 	onCancel: () => void;
 }) => {
 	const [cwd, setCwd] = useState<string>("");
@@ -247,7 +247,7 @@ const NewSessionDialog = ({
 		const picked = await openDialog({
 			directory: true,
 			multiple: false,
-			title: "Pick a folder for this session",
+			title: "Pick a folder for this room",
 			...(start ? { defaultPath: start } : {}),
 		});
 		if (typeof picked === "string") {
@@ -315,10 +315,8 @@ const NewSessionDialog = ({
 		<div className="sk-modal-bg" onClick={onCancel}>
 			<div className="sk-modal" onClick={(e) => e.stopPropagation()}>
 				<div className="sk-modal-head">
-					<h2>New session</h2>
-					<div className="sub">
-						A session is a folder + task. You can add more harnesses inside.
-					</div>
+					<h2>New room</h2>
+					<div className="sub">A room is a folder + task. You can add more harnesses inside.</div>
 				</div>
 				<div className="sk-modal-body">
 					<div className="sk-field">
@@ -456,7 +454,7 @@ const NewSessionDialog = ({
 						style={{ opacity: canCreate ? 1 : 0.5, cursor: canCreate ? "pointer" : "not-allowed" }}
 						onClick={() => void submit()}
 					>
-						{busy ? "Creating…" : "Create session"}
+						{busy ? "Creating…" : "Create room"}
 					</button>
 				</div>
 			</div>
@@ -469,30 +467,30 @@ const NewSessionDialog = ({
 const EmptyState = ({ onNew }: { onNew: () => void }) => (
 	<div className="sk-empty">
 		<div className="glyph">⊜</div>
-		<h1>No sessions yet</h1>
+		<h1>No rooms yet</h1>
 		<div className="lede">
-			A session pins a repo and a task. Open as many harnesses inside as you want — Claude Code and
+			A room pins a folder and a task. Open as many harnesses inside as you want — Claude Code and
 			opencode on the same worktree, two Copilot runs on a fix, whatever shape the work takes.
 		</div>
 		<button className="start-btn" onClick={onNew}>
-			Create your first session
+			Create your first room
 		</button>
 		<div className="hint-list">
 			<div className="row">
 				<span className="kbd">{modLabel} N</span>
-				<span>New session</span>
+				<span>New room</span>
 			</div>
 			<div className="row">
 				<span className="kbd">{modLabel} ⇧ H</span>
-				<span>Add harness to current session</span>
+				<span>Add harness to current room</span>
 			</div>
 			<div className="row">
 				<span className="kbd">{modLabel} Tab</span>
-				<span>Next session (⇧ for previous, 1-9 for nth)</span>
+				<span>Next room (⇧ for previous, 1-9 for nth)</span>
 			</div>
 			<div className="row">
 				<span className="kbd">{modLabel} W</span>
-				<span>Close active session</span>
+				<span>Close active room</span>
 			</div>
 		</div>
 	</div>
@@ -552,16 +550,16 @@ const WindowControls = () => {
 };
 
 interface TitlebarProps {
-	activeSessionLabel: string | null;
+	activeRoomLabel: string | null;
 	onOpenSettings: () => void;
 }
 
-const Titlebar = ({ activeSessionLabel, onOpenSettings }: TitlebarProps) => (
+const Titlebar = ({ activeRoomLabel, onOpenSettings }: TitlebarProps) => (
 	<div className="sk-titlebar" data-tauri-drag-region>
 		<span className="sk-app-name">
 			<span className="dot">●</span> skein
 		</span>
-		{activeSessionLabel && <span className="sk-titlebar-session">{activeSessionLabel}</span>}
+		{activeRoomLabel && <span className="sk-titlebar-session">{activeRoomLabel}</span>}
 		<div className="sk-titlebar-actions" data-tauri-drag-region="false">
 			<button
 				type="button"
@@ -711,15 +709,15 @@ export default function App() {
 	// via flex:1. Splitter clamps against window size at drag time.
 	const [harnessColWidth, setHarnessColWidth] = usePersistedState<number>("harnessColWidth", 640);
 
-	const [sessions, setSessions] = useState<Session[]>([]);
-	const [activeSessionId, setActiveSessionId] = useState<string>("");
+	const [rooms, setRooms] = useState<Room[]>([]);
+	const [activeRoomId, setActiveRoomId] = useState<string>("");
 	const [showPicker, setShowPicker] = useState<string | null>(null);
-	const [showNewSession, setShowNewSession] = useState(false);
+	const [showNewRoom, setShowNewRoom] = useState(false);
 	const [showPalette, setShowPalette] = useState(false);
 	const [showSettings, setShowSettings] = useState(false);
 
 	// Phase 1: pull platform defaults once at boot. New harnesses spawn
-	// into these until Phase 4 wires real worktrees / per-session cwd.
+	// into these until Phase 4 wires real worktrees / per-room cwd.
 	const [defaultShell, setDefaultShell] = useState<string[]>([]);
 	const [defaultCwd, setDefaultCwd] = useState<string>("");
 	useEffect(() => {
@@ -727,7 +725,7 @@ export default function App() {
 		void invoke<string>("default_cwd").then(setDefaultCwd);
 	}, []);
 
-	// Phase 3: hydrate sessions from sqlite on boot. Until that round-trips,
+	// Phase 3: hydrate rooms from sqlite on boot. Until that round-trips,
 	// `loaded` stays false and the auto-save effect below stays parked —
 	// otherwise the empty initial state would clobber the DB before we read it.
 	const [loaded, setLoaded] = useState(false);
@@ -758,7 +756,7 @@ export default function App() {
 			return true;
 		};
 
-		invoke<Session[]>("db_load_sessions")
+		invoke<Room[]>("db_load_rooms")
 			.then(async (rows) => {
 				if (rows.length > 0) {
 					const verified = await Promise.all(
@@ -783,63 +781,60 @@ export default function App() {
 						...s,
 						harnesses: s.harnesses.map((h) => (h.cmd ? { ...h, cmd: resumeCmd(h) } : h)),
 					}));
-					setSessions(withResume);
+					setRooms(withResume);
 					const first = withResume[0];
-					if (first) setActiveSessionId(first.id);
+					if (first) setActiveRoomId(first.id);
 				}
 				setLoaded(true);
 			})
 			.catch((err: unknown) => {
 				const msg = err instanceof Error ? err.message : String(err);
-				console.error("[skein] db_load_sessions failed:", msg);
+				console.error("[skein] db_load_rooms failed:", msg);
 				setLoaded(true);
 			});
 	}, []);
 
-	// Phase 3: any time `sessions` changes after the initial load, mirror
+	// Phase 3: any time `rooms` changes after the initial load, mirror
 	// the new state to sqlite. Wipe-and-insert is fine at prototype scale.
 	useEffect(() => {
 		if (!loaded) return;
-		void invoke("db_save_sessions", { sessions }).catch((err: unknown) => {
+		void invoke("db_save_rooms", { rooms }).catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
-			console.error("[skein] db_save_sessions failed:", msg);
+			console.error("[skein] db_save_rooms failed:", msg);
 		});
-	}, [sessions, loaded]);
+	}, [rooms, loaded]);
 
-	const session = useMemo(
-		() => sessions.find((s) => s.id === activeSessionId),
-		[sessions, activeSessionId],
-	);
-	const activeHarness = session?.harnesses.find((h) => h.id === session.activeHarnessId);
+	const room = useMemo(() => rooms.find((r) => r.id === activeRoomId), [rooms, activeRoomId]);
+	const activeHarness = room?.harnesses.find((h) => h.id === room.activeHarnessId);
 
-	const switchSession = (id: string) => {
-		setActiveSessionId(id);
+	const switchRoom = (id: string) => {
+		setActiveRoomId(id);
 	};
 
-	const closeSession = (id: string) => {
-		// Confirm before delete — sessions can hold a lot of state and
+	const closeRoom = (id: string) => {
+		// Confirm before delete — rooms can hold a lot of state and
 		// the prototype has no undo. window.confirm is fine for v0.
-		if (!window.confirm("Close this session? Any running harnesses will be killed.")) {
+		if (!window.confirm("Close this room? Any running harnesses will be killed.")) {
 			return;
 		}
-		setSessions((prev) => {
+		setRooms((prev) => {
 			const remaining = prev.filter((s) => s.id !== id);
-			if (id === activeSessionId) {
+			if (id === activeRoomId) {
 				const first = remaining[0];
-				setActiveSessionId(first ? first.id : "");
+				setActiveRoomId(first ? first.id : "");
 			}
 			return remaining;
 		});
 	};
 
-	const switchHarnessInSession = (sessionId: string, harnessId: string) => {
-		setSessions((prev) =>
+	const switchHarnessInRoom = (sessionId: string, harnessId: string) => {
+		setRooms((prev) =>
 			prev.map((s) => (s.id === sessionId ? { ...s, activeHarnessId: harnessId } : s)),
 		);
 	};
 
 	const closeHarness = (sessionId: string, harnessId: string) => {
-		setSessions((prev) =>
+		setRooms((prev) =>
 			prev.map((s) => {
 				if (s.id !== sessionId) return s;
 				const remaining = s.harnesses.filter((h) => h.id !== harnessId);
@@ -855,7 +850,7 @@ export default function App() {
 	// shell-fallback path, LiveTerminal calls this so the new cmd
 	// persists to the DB and a Skein restart re-spawns the shell.
 	const updateHarnessCmd = (sessionId: string, harnessId: string, cmd: string[]) => {
-		setSessions((prev) =>
+		setRooms((prev) =>
 			prev.map((s) =>
 				s.id === sessionId
 					? { ...s, harnesses: s.harnesses.map((h) => (h.id === harnessId ? { ...h, cmd } : h)) }
@@ -876,41 +871,41 @@ export default function App() {
 	// bound across renders without re-listing every callback as a dep.
 	const addHarnessRef = useRef(addHarness);
 	addHarnessRef.current = addHarness;
-	const closeSessionRef = useRef(closeSession);
-	closeSessionRef.current = closeSession;
-	const sessionsRef = useRef(sessions);
-	sessionsRef.current = sessions;
-	const activeSessionIdRef = useRef(activeSessionId);
-	activeSessionIdRef.current = activeSessionId;
+	const closeRoomRef = useRef(closeRoom);
+	closeRoomRef.current = closeRoom;
+	const roomsRef = useRef(rooms);
+	roomsRef.current = rooms;
+	const activeRoomIdRef = useRef(activeRoomId);
+	activeRoomIdRef.current = activeRoomId;
 
 	useEffect(() => {
-		const cycleSession = (delta: number) => {
-			const list = sessionsRef.current;
+		const cycleRoom = (delta: number) => {
+			const list = roomsRef.current;
 			if (list.length === 0) return;
-			const active = activeSessionIdRef.current;
+			const active = activeRoomIdRef.current;
 			const idx = list.findIndex((s) => s.id === active);
 			if (idx === -1) {
 				const first = list[0];
-				if (first) setActiveSessionId(first.id);
+				if (first) setActiveRoomId(first.id);
 				return;
 			}
 			const nextIdx = (idx + delta + list.length) % list.length;
 			const next = list[nextIdx];
-			if (next) setActiveSessionId(next.id);
+			if (next) setActiveRoomId(next.id);
 		};
 
 		const onKey = (e: KeyboardEvent) => {
 			if (!isAppShortcut(e)) return;
 			e.preventDefault();
 
-			const active = activeSessionIdRef.current;
+			const active = activeRoomIdRef.current;
 
 			// Mod+Shift combos
 			if (e.shiftKey) {
 				if (e.code === "KeyH") {
 					if (active) addHarnessRef.current(active);
 				} else if (e.code === "Tab") {
-					cycleSession(-1);
+					cycleRoom(-1);
 				}
 				return;
 			}
@@ -924,10 +919,10 @@ export default function App() {
 					setFontSize((s) => Math.max(FONT_MIN, s - 1));
 					break;
 				case "KeyN":
-					setShowNewSession(true);
+					setShowNewRoom(true);
 					break;
 				case "KeyW":
-					if (active) closeSessionRef.current(active);
+					if (active) closeRoomRef.current(active);
 					break;
 				case "KeyK":
 					setShowPalette(true);
@@ -936,13 +931,13 @@ export default function App() {
 					setShowSettings(true);
 					break;
 				case "Tab":
-					cycleSession(1);
+					cycleRoom(1);
 					break;
 				default:
 					if (/^Digit[1-9]$/.test(e.code)) {
 						const n = Number.parseInt(e.code.slice(5), 10) - 1;
-						const target = sessionsRef.current[n];
-						if (target) setActiveSessionId(target.id);
+						const target = roomsRef.current[n];
+						if (target) setActiveRoomId(target.id);
 					}
 			}
 		};
@@ -967,18 +962,18 @@ export default function App() {
 	// when two opencode harnesses race in the same cwd.
 	const claimedSessionIds = (): Set<string> =>
 		new Set(
-			sessionsRef.current
+			roomsRef.current
 				.flatMap((s) => s.harnesses.map((h) => h.sessionId))
 				.filter((id): id is string => typeof id === "string"),
 		);
 
 	// Update one harness's sessionId after phase 2b's async capture
 	// finds the new opencode row. Wrapped here so both creation paths
-	// (pickHarness, createSession) share the same setSessions shape.
-	const setHarnessSessionId = (targetSessionId: string, harnessId: string, captured: string) => {
-		setSessions((prev) =>
+	// (pickHarness, createRoom) share the same setRooms shape.
+	const setHarnessSessionId = (targetRoomId: string, harnessId: string, captured: string) => {
+		setRooms((prev) =>
 			prev.map((s) =>
-				s.id === targetSessionId
+				s.id === targetRoomId
 					? {
 							...s,
 							harnesses: s.harnesses.map((h) =>
@@ -991,19 +986,19 @@ export default function App() {
 	};
 
 	const pickHarness = (kind: HarnessKind) => {
-		const targetSessionId = showPicker;
-		if (!targetSessionId) return;
-		const targetSession = sessions.find((s) => s.id === targetSessionId);
-		if (!targetSession) return;
+		const targetRoomId = showPicker;
+		if (!targetRoomId) return;
+		const targetRoom = rooms.find((s) => s.id === targetRoomId);
+		if (!targetRoom) return;
 		const id = newId("h");
-		const cwd = targetSession.cwd ?? defaultCwd;
+		const cwd = targetRoom.cwd ?? defaultCwd;
 		// Phase 2a: pre-allocate Claude's conversation id so the harness
-		// resumes to *this* session on Skein restart — no picker.
+		// resumes to *this* conversation on Skein restart — no picker.
 		const sessionId = kind === "claude" ? crypto.randomUUID() : undefined;
 		const cmd = cmdForKind(kind, defaultShell, sessionId);
-		setSessions((prev) =>
+		setRooms((prev) =>
 			prev.map((s) => {
-				if (s.id !== targetSessionId) return s;
+				if (s.id !== targetRoomId) return s;
 				const newH: Harness = {
 					id,
 					kind,
@@ -1027,12 +1022,12 @@ export default function App() {
 		// cycle keeps us ahead of the spawn.
 		if (kind === "opencode") {
 			void captureOpencodeSessionId(cwd, claimedSessionIds, (captured) => {
-				setHarnessSessionId(targetSessionId, id, captured);
+				setHarnessSessionId(targetRoomId, id, captured);
 			});
 		}
 	};
 
-	const createSession = ({ cwd, task, harness, branch }: CreateSessionArgs) => {
+	const createRoom = ({ cwd, task, harness, branch }: CreateRoomArgs) => {
 		const sid = newId("s");
 		const hid = newId("h");
 		// Phase 2a: pre-allocate Claude's conversation id (see pickHarness).
@@ -1044,7 +1039,7 @@ export default function App() {
 				.replace(/[\\/]+$/, "")
 				.split(/[\\/]/)
 				.pop() || cwd;
-		const newSession: Session = {
+		const newRoom: Room = {
 			id: sid,
 			name: `local · ${repoName}`,
 			branch,
@@ -1069,9 +1064,9 @@ export default function App() {
 			],
 			activeHarnessId: hid,
 		};
-		setSessions((prev) => [...prev, newSession]);
-		setActiveSessionId(sid);
-		setShowNewSession(false);
+		setRooms((prev) => [...prev, newRoom]);
+		setActiveRoomId(sid);
+		setShowNewRoom(false);
 		// Phase 2b: same pattern as pickHarness — async capture for
 		// opencode's auto-assigned session id.
 		if (harness === "opencode") {
@@ -1082,7 +1077,7 @@ export default function App() {
 	};
 
 	const titlebarProps: TitlebarProps = {
-		activeSessionLabel: session ? session.name : null,
+		activeRoomLabel: room ? room.name : null,
 		onOpenSettings: () => setShowSettings(true),
 	};
 
@@ -1109,47 +1104,47 @@ export default function App() {
 	// open is invisible, and useMemo here would mean tracking every
 	// callback as a dep.
 	const paletteItems: PaletteItem[] = [];
-	for (const s of sessions) {
+	for (const r of rooms) {
 		paletteItems.push({
-			id: `session:${s.id}`,
-			label: `${s.name}`,
-			hint: `session · ${s.branch}`,
-			invoke: () => setActiveSessionId(s.id),
+			id: `room:${r.id}`,
+			label: `${r.name}`,
+			hint: `room · ${r.branch}`,
+			invoke: () => setActiveRoomId(r.id),
 		});
 	}
-	for (const s of sessions) {
-		for (const h of s.harnesses) {
+	for (const r of rooms) {
+		for (const h of r.harnesses) {
 			paletteItems.push({
 				id: `harness:${h.id}`,
 				label: `${HARNESS_KINDS[h.kind].name} · ${h.name}`,
-				hint: `harness in ${s.name}`,
+				hint: `harness in ${r.name}`,
 				invoke: () => {
-					setActiveSessionId(s.id);
-					setSessions((prev) =>
-						prev.map((p) => (p.id === s.id ? { ...p, activeHarnessId: h.id } : p)),
+					setActiveRoomId(r.id);
+					setRooms((prev) =>
+						prev.map((p) => (p.id === r.id ? { ...p, activeHarnessId: h.id } : p)),
 					);
 				},
 			});
 		}
 	}
 	paletteItems.push({
-		id: "cmd:new-session",
-		label: "New session",
+		id: "cmd:new-room",
+		label: "New room",
 		hint: `${modLabel} N`,
-		invoke: () => setShowNewSession(true),
+		invoke: () => setShowNewRoom(true),
 	});
-	if (activeSessionId) {
+	if (activeRoomId) {
 		paletteItems.push({
 			id: "cmd:add-harness",
-			label: "Add harness to active session",
+			label: "Add harness to active room",
 			hint: `${modLabel} ⇧ H`,
-			invoke: () => addHarness(activeSessionId),
+			invoke: () => addHarness(activeRoomId),
 		});
 		paletteItems.push({
-			id: "cmd:close-session",
-			label: "Close active session",
+			id: "cmd:close-room",
+			label: "Close active room",
 			hint: `${modLabel} W`,
-			invoke: () => closeSession(activeSessionId),
+			invoke: () => closeRoom(activeRoomId),
 		});
 	}
 	paletteItems.push({
@@ -1166,8 +1161,8 @@ export default function App() {
 	// independent control over chrome density and terminal density.
 	const appStyle: CSSProperties = { zoom: uiScale };
 
-	// Empty state — no sessions at all.
-	if (sessions.length === 0) {
+	// Empty state — no rooms at all.
+	if (rooms.length === 0) {
 		return (
 			<div
 				className={`sk-app sk-${theme} density-${density}`}
@@ -1175,12 +1170,12 @@ export default function App() {
 				style={appStyle}
 			>
 				<Titlebar {...titlebarProps} />
-				<EmptyState onNew={() => setShowNewSession(true)} />
-				{showNewSession && (
-					<NewSessionDialog
+				<EmptyState onNew={() => setShowNewRoom(true)} />
+				{showNewRoom && (
+					<NewRoomDialog
 						defaultCwd={defaultCwd}
-						onCommit={createSession}
-						onCancel={() => setShowNewSession(false)}
+						onCommit={createRoom}
+						onCancel={() => setShowNewRoom(false)}
 					/>
 				)}
 				{showPalette && (
@@ -1191,8 +1186,8 @@ export default function App() {
 		);
 	}
 
-	if (!session || !activeHarness) {
-		// Shouldn't happen in practice: sessions is non-empty above.
+	if (!room || !activeHarness) {
+		// Shouldn't happen in practice: rooms is non-empty above.
 		return null;
 	}
 
@@ -1205,16 +1200,16 @@ export default function App() {
 			<Titlebar {...titlebarProps} />
 
 			<div className="sk-tabstrip">
-				{sessions.map((s) => (
-					<SessionTab
-						key={s.id}
-						s={s}
-						active={s.id === activeSessionId}
-						onClick={() => switchSession(s.id)}
-						onClose={() => closeSession(s.id)}
+				{rooms.map((r) => (
+					<RoomTab
+						key={r.id}
+						r={r}
+						active={r.id === activeRoomId}
+						onClick={() => switchRoom(r.id)}
+						onClose={() => closeRoom(r.id)}
 					/>
 				))}
-				<div className="sk-tab-newbtn" onClick={() => setShowNewSession(true)} title="New session">
+				<div className="sk-tab-newbtn" onClick={() => setShowNewRoom(true)} title="New room">
 					+
 				</div>
 			</div>
@@ -1226,38 +1221,38 @@ export default function App() {
 				onResize={setHarnessColWidth}
 				minFirst={320}
 				minSecond={320}
-				first={sessions.map((s) => (
+				first={rooms.map((r) => (
 					<div
-						key={s.id}
+						key={r.id}
 						style={{
-							display: s.id === activeSessionId ? "flex" : "none",
+							display: r.id === activeRoomId ? "flex" : "none",
 							flexDirection: "column",
 							flex: 1,
 							minHeight: 0,
 						}}
 					>
 						<HarnessColumn
-							session={s}
+							room={r}
 							fontSize={fontSize}
 							defaultShell={defaultShell}
-							showPicker={showPicker === s.id}
+							showPicker={showPicker === r.id}
 							onPick={pickHarness}
 							onAddHarness={addHarness}
-							onSwitchHarness={switchHarnessInSession}
+							onSwitchHarness={switchHarnessInRoom}
 							onCloseHarness={closeHarness}
 							onHarnessCmdChange={updateHarnessCmd}
 						/>
 					</div>
 				))}
-				second={sessions.map((s) => (
+				second={rooms.map((r) => (
 					<div
-						key={s.id}
+						key={r.id}
 						className="sk-right"
 						style={{
-							display: s.id === activeSessionId ? "flex" : "none",
+							display: r.id === activeRoomId ? "flex" : "none",
 						}}
 					>
-						{s.cwd && <LiveStatus cwd={s.cwd} />}
+						{r.cwd && <LiveStatus cwd={r.cwd} />}
 					</div>
 				))}
 			/>
@@ -1271,21 +1266,21 @@ export default function App() {
 					<span className={`dot-tiny st-${activeHarness.status}`} />
 					{activeHarness.status}
 				</span>
-				<span className="seg">{session.branch}</span>
-				{session.cwd && (
-					<span className="seg sk-statusbar-cwd" title={session.cwd}>
-						{session.cwd}
+				<span className="seg">{room.branch}</span>
+				{room.cwd && (
+					<span className="seg sk-statusbar-cwd" title={room.cwd}>
+						{room.cwd}
 					</span>
 				)}
 				<span className="spacer" />
 				<span className="seg">utf-8 · LF</span>
 			</div>
 
-			{showNewSession && (
-				<NewSessionDialog
+			{showNewRoom && (
+				<NewRoomDialog
 					defaultCwd={defaultCwd}
-					onCommit={createSession}
-					onCancel={() => setShowNewSession(false)}
+					onCommit={createRoom}
+					onCancel={() => setShowNewRoom(false)}
 				/>
 			)}
 			{showPalette && <CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />}

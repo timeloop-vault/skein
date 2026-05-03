@@ -81,7 +81,7 @@ export const SettingsModal = ({
 								onClick={() => onTheme("dark")}
 							>
 								<div className="top">Dark</div>
-								<div className="desc">Default. Easier on the eyes for long sessions.</div>
+								<div className="desc">Default. Easier on the eyes.</div>
 							</button>
 							<button
 								type="button"

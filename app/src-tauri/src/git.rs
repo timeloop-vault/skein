@@ -73,7 +73,7 @@ pub fn git_propose_worktree_path(repo_path: String, task_slug: String) -> String
 }
 
 /// Create a new worktree on a fresh branch. Returns the worktree path
-/// (which the frontend uses as the new session's `cwd`).
+/// (which the frontend uses as the new room's `cwd`).
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub fn git_add_worktree(

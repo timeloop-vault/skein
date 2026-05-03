@@ -16,7 +16,7 @@ use std::path::Path;
 use tauri::Manager;
 use tauri::ipc::Channel;
 
-use crate::db::{Database, Session};
+use crate::db::{Database, Room};
 use crate::pty::{PtyEvent, PtyManager};
 use crate::watcher::WatcherManager;
 
@@ -136,8 +136,8 @@ pub fn run() {
             pty_kill,
             default_shell,
             default_cwd,
-            db_load_sessions,
-            db_save_sessions,
+            db_load_rooms,
+            db_save_rooms,
             git::git_is_repo,
             git::git_branches,
             git::git_propose_worktree_path,
@@ -264,19 +264,19 @@ fn default_cwd() -> String {
         .unwrap_or_else(|| ".".into())
 }
 
-/// Returns every session currently in the DB. The frontend uses this
-/// once at boot — and falls back to seeding `INITIAL_SESSIONS` if empty.
+/// Returns every room currently in the DB. The frontend calls this
+/// once at boot to hydrate state.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-fn db_load_sessions(db: tauri::State<'_, Database>) -> Result<Vec<Session>, String> {
+fn db_load_rooms(db: tauri::State<'_, Database>) -> Result<Vec<Room>, String> {
     db.load_all()
 }
 
-/// Replaces the DB's session list wholesale. Called whenever the
-/// frontend's sessions state changes — wipe-and-insert is fine at
+/// Replaces the DB's room list wholesale. Called whenever the
+/// frontend's rooms state changes — wipe-and-insert is fine at
 /// prototype scale and avoids the bookkeeping of granular upserts.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-fn db_save_sessions(sessions: Vec<Session>, db: tauri::State<'_, Database>) -> Result<(), String> {
-    db.save_all(&sessions)
+fn db_save_rooms(rooms: Vec<Room>, db: tauri::State<'_, Database>) -> Result<(), String> {
+    db.save_all(&rooms)
 }

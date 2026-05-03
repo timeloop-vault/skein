@@ -1,7 +1,10 @@
 // Domain types.
 //
-// Sessions are workspaces (repo + branch + task). A session owns N harnesses;
-// every harness in a session shares the same worktree.
+// A Room is a top-level tab — repo + branch + task + cwd. A Room owns
+// N Harnesses; every harness in a Room shares the same worktree. The
+// agent tool's own conversation id (Claude / opencode) lives on the
+// Harness as `sessionId`, which is the only meaning of "session" in
+// Skein's vocabulary now.
 
 export type HarnessKind = "claude" | "opencode" | "copilot" | "byoh";
 
@@ -26,7 +29,7 @@ export interface Harness {
 	sessionId?: string;
 }
 
-export interface Session {
+export interface Room {
 	id: string;
 	name: string;
 	branch: string;

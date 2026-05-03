@@ -1,4 +1,4 @@
-// LiveStatus — real "what's changed?" pane for sessions with a real cwd.
+// LiveStatus — real "what's changed?" pane for rooms with a real cwd.
 //
 // Phase 5b: on mount we fetch the initial snapshot AND start a debounced
 // filesystem watcher; each tick re-fetches.
