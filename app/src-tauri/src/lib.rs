@@ -31,6 +31,15 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .on_menu_event(|app, event| {
+            // The macOS app menu (built in setup) drives this. Phase 4
+            // wires a frontend listener for skein://open-settings to open
+            // the settings modal; for now the event is fire-and-forget.
+            if event.id() == "preferences" {
+                use tauri::Emitter;
+                let _ = app.emit("skein://open-settings", ());
+            }
+        })
         .setup(|app| {
             // Persist Skein state under the OS-conventional app data dir
             // (e.g. %APPDATA%/com.timeloop-vault.skein on Windows). Create
@@ -59,6 +68,61 @@ pub fn run() {
                     .get_webview_window("main")
                     .ok_or("main window missing during setup")?;
                 window.set_decorations(false)?;
+            }
+
+            // macOS expects an app menu — without one ⌘Q doesn't work,
+            // there's no Edit menu for cut/copy/paste/select-all in
+            // text fields, and the app feels web-shimmed. Tauri's
+            // predefined items wrap AppKit's standard responder-chain
+            // selectors, so they target the focused element (xterm
+            // selection, modal text input, etc.) without per-surface
+            // wiring.
+            //
+            // "Preferences…" is custom — it carries id "preferences"
+            // and the on_menu_event handler above emits a tauri event
+            // that phase 4's settings modal will listen for.
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{
+                    AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder,
+                };
+
+                let about = AboutMetadataBuilder::new()
+                    .name(Some("Skein"))
+                    .version(Some(env!("CARGO_PKG_VERSION")))
+                    .build();
+
+                let preferences = MenuItemBuilder::new("Preferences…")
+                    .id("preferences")
+                    .accelerator("CmdOrCtrl+,")
+                    .build(app)?;
+
+                let app_menu = SubmenuBuilder::new(app, "Skein")
+                    .about(Some(about))
+                    .separator()
+                    .item(&preferences)
+                    .separator()
+                    .hide()
+                    .hide_others()
+                    .show_all()
+                    .separator()
+                    .quit()
+                    .build()?;
+
+                let edit_menu = SubmenuBuilder::new(app, "Edit")
+                    .undo()
+                    .redo()
+                    .separator()
+                    .cut()
+                    .copy()
+                    .paste()
+                    .select_all()
+                    .build()?;
+
+                let menu = MenuBuilder::new(app)
+                    .items(&[&app_menu, &edit_menu])
+                    .build()?;
+                app.set_menu(menu)?;
             }
 
             Ok(())
