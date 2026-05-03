@@ -12,6 +12,17 @@ moves into an active phase, delete it here.
   starting harness, default worktree placement, permission mode. The
   corner strip covers theme/density only because we've kept the surface
   tiny.
+- **Terminology cleanup: "session" is overloaded.** In Skein "session"
+  means a top-level tab (workspace = repo + branch + task). In Claude,
+  opencode, and the chapter 5 code it means the agent's conversation
+  id. Both end up on `Harness` (`session.id` for the workspace,
+  `harness.sessionId` for the conversation), and conversations end up
+  fragile to talk about — "the opencode session for this session" is
+  the kind of sentence we now have to write. Pick clearer terms before
+  the surface grows: e.g. **workspace** for the top-level tab and
+  **conversation** for the agent-tool id, or **room** + **thread**.
+  Naming is its own small chapter; do it before chapter 7's docs pass
+  so the public-facing copy lands once.
 - **Command palette (⌘K)** — fuzzy switcher for sessions, harnesses,
   and files. Most demoable single feature we don't have. Worth a
   chapter on its own when keyboard-first usage starts hurting.
