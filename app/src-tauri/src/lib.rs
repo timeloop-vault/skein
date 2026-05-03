@@ -45,6 +45,22 @@ pub fn run() {
             app.manage(db);
             app.manage(PtyManager::new());
             app.manage(WatcherManager::new());
+
+            // tauri.conf.json sets decorations: true so macOS draws its
+            // standard traffic-light controls (titleBarStyle: Overlay
+            // requires decorations to be true at window-creation time).
+            // On Windows / Linux we still want the chrome-less custom
+            // titlebar with our own min/max/close — strip the native
+            // chrome here. macOS-only fields (titleBarStyle, hiddenTitle)
+            // are quietly ignored on those platforms.
+            #[cfg(not(target_os = "macos"))]
+            {
+                let window = app
+                    .get_webview_window("main")
+                    .ok_or("main window missing during setup")?;
+                window.set_decorations(false)?;
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
