@@ -21,6 +21,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
+import { isAppShortcut } from "./shortcuts.ts";
 
 type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
 
@@ -119,6 +120,10 @@ export const LiveTerminal = ({
 		// convention as VS Code's terminal, gnome-terminal, kitty, etc.
 		term.attachCustomKeyEventHandler((e) => {
 			if (e.type !== "keydown") return true;
+
+			// Reserved app shortcuts: don't let xterm forward the byte to
+			// the PTY. The window-level listener in App.tsx handles them.
+			if (isAppShortcut(e)) return false;
 
 			if (phase === "exited") {
 				if (e.key === "Enter") {

@@ -12,13 +12,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { type CSSProperties, useEffect, useMemo, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { LiveStatus } from "./LiveStatus.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { HChip, HarnessPicker, HarnessTab, SessionTab, StatusDot } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import { usePersistedState } from "./prefs.ts";
+import { isAppShortcut } from "./shortcuts.ts";
 import type { Density, Harness, HarnessKind, Session, Theme } from "./types.ts";
 
 // ── Harness body ───────────────────────────────────────────────────
@@ -476,16 +477,20 @@ const EmptyState = ({ onNew }: { onNew: () => void }) => (
 		</button>
 		<div className="hint-list">
 			<div className="row">
-				<span className="kbd">⌘ N</span>
+				<span className="kbd">Ctrl N</span>
 				<span>New session</span>
 			</div>
 			<div className="row">
-				<span className="kbd">⌘ ⇧ H</span>
+				<span className="kbd">Ctrl ⇧ H</span>
 				<span>Add harness to current session</span>
 			</div>
 			<div className="row">
-				<span className="kbd">⌘ K</span>
-				<span>Switch session / harness</span>
+				<span className="kbd">Ctrl Tab</span>
+				<span>Next session (⇧ for previous, 1-9 for nth)</span>
+			</div>
+			<div className="row">
+				<span className="kbd">Ctrl W</span>
+				<span>Close active session</span>
 			</div>
 		</div>
 	</div>
@@ -680,24 +685,6 @@ export default function App() {
 	// via flex:1. Splitter clamps against window size at drag time.
 	const [harnessColWidth, setHarnessColWidth] = usePersistedState<number>("harnessColWidth", 640);
 
-	// Ctrl+= / Ctrl++ to bump font size, Ctrl+- to shrink. Window-level so
-	// it works no matter which pane has focus, including the terminal.
-	// preventDefault stops the WebView's built-in zoom.
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (!e.ctrlKey || e.altKey || e.metaKey) return;
-			if (e.key === "+" || e.key === "=") {
-				e.preventDefault();
-				setFontSize((s) => Math.min(FONT_MAX, s + 1));
-			} else if (e.key === "-") {
-				e.preventDefault();
-				setFontSize((s) => Math.max(FONT_MIN, s - 1));
-			}
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [setFontSize]);
-
 	const [sessions, setSessions] = useState<Session[]>([]);
 	const [activeSessionId, setActiveSessionId] = useState<string>("");
 	const [showPicker, setShowPicker] = useState<string | null>(null);
@@ -811,6 +798,89 @@ export default function App() {
 	};
 
 	const addHarness = (sessionId: string) => setShowPicker(sessionId);
+
+	// Phase 3: window-level keyboard shortcuts. Uses isAppShortcut as
+	// the gate — that same predicate also makes LiveTerminal's xterm
+	// custom handler return false for these combos, so the byte never
+	// reaches the PTY. preventDefault stops the WebView's defaults
+	// (Ctrl+W close, Ctrl+= zoom, Ctrl+1..9 tab jump, etc).
+	//
+	// Stash the per-render handler refs so the listener can stay
+	// bound across renders without re-listing every callback as a dep.
+	const addHarnessRef = useRef(addHarness);
+	addHarnessRef.current = addHarness;
+	const closeSessionRef = useRef(closeSession);
+	closeSessionRef.current = closeSession;
+	const sessionsRef = useRef(sessions);
+	sessionsRef.current = sessions;
+	const activeSessionIdRef = useRef(activeSessionId);
+	activeSessionIdRef.current = activeSessionId;
+
+	useEffect(() => {
+		const cycleSession = (delta: number) => {
+			const list = sessionsRef.current;
+			if (list.length === 0) return;
+			const active = activeSessionIdRef.current;
+			const idx = list.findIndex((s) => s.id === active);
+			if (idx === -1) {
+				const first = list[0];
+				if (first) setActiveSessionId(first.id);
+				return;
+			}
+			const nextIdx = (idx + delta + list.length) % list.length;
+			const next = list[nextIdx];
+			if (next) setActiveSessionId(next.id);
+		};
+
+		const onKey = (e: KeyboardEvent) => {
+			if (!isAppShortcut(e)) return;
+			e.preventDefault();
+
+			const active = activeSessionIdRef.current;
+
+			// Ctrl+Shift combos
+			if (e.shiftKey) {
+				if (e.code === "KeyH") {
+					if (active) addHarnessRef.current(active);
+				} else if (e.code === "Tab") {
+					cycleSession(-1);
+				}
+				return;
+			}
+
+			// Ctrl-only combos
+			switch (e.code) {
+				case "Equal":
+					setFontSize((s) => Math.min(FONT_MAX, s + 1));
+					break;
+				case "Minus":
+					setFontSize((s) => Math.max(FONT_MIN, s - 1));
+					break;
+				case "KeyN":
+					setShowNewSession(true);
+					break;
+				case "KeyW":
+					if (active) closeSessionRef.current(active);
+					break;
+				case "KeyK":
+					// Phase 4: open command palette. For now, no-op —
+					// preventDefault still suppresses the browser default.
+					break;
+				case "Tab":
+					cycleSession(1);
+					break;
+				default:
+					if (/^Digit[1-9]$/.test(e.code)) {
+						const n = Number.parseInt(e.code.slice(5), 10) - 1;
+						const target = sessionsRef.current[n];
+						if (target) setActiveSessionId(target.id);
+					}
+			}
+		};
+
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [setFontSize]);
 
 	const pickHarness = (kind: HarnessKind) => {
 		const targetSessionId = showPicker;
