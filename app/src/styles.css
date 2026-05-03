@@ -110,6 +110,21 @@ body {
 .sk-app-name .dot {
 	color: var(--accent);
 }
+.sk-titlebar-session {
+	font-family: var(--sk-mono);
+	font-size: 11px;
+	color: var(--fg-2);
+	letter-spacing: 0.01em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+.sk-titlebar-session::before {
+	content: "·";
+	color: var(--fg-3);
+	margin-right: 8px;
+}
 
 /* Settings group inside the titlebar */
 .sk-settings {
@@ -602,6 +617,16 @@ body {
 	width: 5px;
 	height: 5px;
 	border-radius: 50%;
+}
+.sk-statusbar-cwd {
+	color: var(--fg-3);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 50ch;
+	direction: rtl;
+	text-align: left;
 }
 
 /* Empty harness picker */

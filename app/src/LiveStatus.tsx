@@ -258,21 +258,30 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 					title={pulse ? "just refreshed" : "watching"}
 				/>
 				<span style={{ color: "var(--fg-3)" }}>·</span>
-				<span style={{ color: "var(--fg-3)", flex: 1, minWidth: 0 }} title={cwd}>
-					<span
-						style={{
-							display: "inline-block",
-							maxWidth: "100%",
-							overflow: "hidden",
-							textOverflow: "ellipsis",
-							whiteSpace: "nowrap",
-							verticalAlign: "bottom",
-						}}
-					>
-						{cwd}
-					</span>
+				{/* direction:rtl + text-align:left truncates from the start
+				    so the trailing path component (the worktree name) stays
+				    visible — that's the load-bearing bit. */}
+				<span
+					style={{
+						color: "var(--fg-3)",
+						flex: 1,
+						minWidth: 0,
+						overflow: "hidden",
+						textOverflow: "ellipsis",
+						whiteSpace: "nowrap",
+						direction: "rtl",
+						textAlign: "left",
+					}}
+					title={cwd}
+				>
+					{cwd}
 				</span>
-				<button className="sk-btn ghost" onClick={() => void refresh()} disabled={loading}>
+				<button
+					className="sk-btn ghost"
+					onClick={() => void refresh()}
+					disabled={loading}
+					style={{ flex: "0 0 auto" }}
+				>
 					{loading ? "…" : "Refresh"}
 				</button>
 			</div>

@@ -83,6 +83,7 @@ const HarnessColumn = ({
 					key={h.id}
 					h={h}
 					active={h.id === session.activeHarnessId}
+					closable={session.harnesses.length > 1}
 					onClick={() => onSwitchHarness(session.id, h.id)}
 					onClose={() => onCloseHarness(session.id, h.id)}
 				/>
@@ -553,6 +554,7 @@ interface TitlebarProps {
 	density: Density;
 	fontSize: number;
 	uiScale: number;
+	activeSessionLabel: string | null;
 	onTheme: (v: Theme) => void;
 	onDensity: (v: Density) => void;
 	onFontSize: (v: number) => void;
@@ -564,6 +566,7 @@ const Titlebar = ({
 	density,
 	fontSize,
 	uiScale,
+	activeSessionLabel,
 	onTheme,
 	onDensity,
 	onFontSize,
@@ -573,6 +576,7 @@ const Titlebar = ({
 		<span className="sk-app-name">
 			<span className="dot">●</span> skein
 		</span>
+		{activeSessionLabel && <span className="sk-titlebar-session">{activeSessionLabel}</span>}
 		{/* The settings group opts out of the drag region so its buttons
 		    receive clicks instead of starting a window drag. */}
 		<div className="sk-settings" data-tauri-drag-region="false">
@@ -952,6 +956,7 @@ export default function App() {
 		density,
 		fontSize,
 		uiScale,
+		activeSessionLabel: session ? session.name : null,
 		onTheme: setTheme,
 		onDensity: setDensity,
 		onFontSize: setFontSize,
@@ -1118,8 +1123,11 @@ export default function App() {
 					{activeHarness.status}
 				</span>
 				<span className="seg">{session.branch}</span>
-				<span className="seg">{activeHarness.model}</span>
-				<span className="seg">{activeHarness.tokens} tok</span>
+				{session.cwd && (
+					<span className="seg sk-statusbar-cwd" title={session.cwd}>
+						{session.cwd}
+					</span>
+				)}
 				<span className="spacer" />
 				<span className="seg">utf-8 · LF</span>
 			</div>

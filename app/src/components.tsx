@@ -67,11 +67,13 @@ export const SessionTab = ({
 export const HarnessTab = ({
 	h,
 	active,
+	closable,
 	onClick,
 	onClose,
 }: {
 	h: Harness;
 	active: boolean;
+	closable: boolean;
 	onClick: () => void;
 	onClose: () => void;
 }) => (
@@ -79,15 +81,17 @@ export const HarnessTab = ({
 		<StatusDot status={h.status} size={5} />
 		<HChip kind={h.kind} size={11} />
 		<span className="ht-name">{h.name}</span>
-		<span
-			className="ht-x"
-			onClick={(e) => {
-				e.stopPropagation();
-				onClose();
-			}}
-		>
-			×
-		</span>
+		{closable && (
+			<span
+				className="ht-x"
+				onClick={(e) => {
+					e.stopPropagation();
+					onClose();
+				}}
+			>
+				×
+			</span>
+		)}
 	</div>
 );
 
