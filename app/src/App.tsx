@@ -732,14 +732,54 @@ export default function App() {
 	// otherwise the empty initial state would clobber the DB before we read it.
 	const [loaded, setLoaded] = useState(false);
 	useEffect(() => {
+		// Chapter 5 phase 4: drop any stored sessionId that no longer
+		// exists on disk before resumeCmd uses it. claude --resume <id>
+		// or opencode --session <id> against a deleted conversation
+		// would either error or attach to nothing useful; falling back
+		// to picker / --continue is the safer default.
+		//
+		// Errors from the existence checks are conservative: keep the
+		// id (return true). The follow-up resume might fail noisily,
+		// but at least we don't drop a legitimate id over a transient
+		// rusqlite or fs hiccup.
+		const stillExists = async (h: Harness): Promise<boolean> => {
+			if (!h.sessionId) return true;
+			try {
+				if (h.kind === "claude") {
+					return await invoke<boolean>("claude_session_exists", { id: h.sessionId });
+				}
+				if (h.kind === "opencode") {
+					return await invoke<boolean>("opencode_session_exists", { id: h.sessionId });
+				}
+			} catch (err) {
+				console.warn(`[skein] ${h.kind} session_exists failed for ${h.sessionId}:`, err);
+				return true;
+			}
+			return true;
+		};
+
 		invoke<Session[]>("db_load_sessions")
-			.then((rows) => {
+			.then(async (rows) => {
 				if (rows.length > 0) {
+					const verified = await Promise.all(
+						rows.map(async (s) => ({
+							...s,
+							harnesses: await Promise.all(
+								s.harnesses.map(async (h) => {
+									if (await stillExists(h)) return h;
+									console.info(
+										`[skein] dropping stale ${h.kind} sessionId ${h.sessionId} on harness ${h.id}`,
+									);
+									const { sessionId, ...rest } = h;
+									return rest;
+								}),
+							),
+						})),
+					);
 					// Rewrite each harness's cmd to its resume form before
 					// mounting, so the PTY spawn re-attaches to the prior
-					// conversation instead of starting fresh. Chapter 5
-					// phase 3 makes this targeted via captured session ids.
-					const withResume = rows.map((s) => ({
+					// conversation instead of starting fresh.
+					const withResume = verified.map((s) => ({
 						...s,
 						harnesses: s.harnesses.map((h) => (h.cmd ? { ...h, cmd: resumeCmd(h) } : h)),
 					}));

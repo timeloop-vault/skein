@@ -147,6 +147,8 @@ pub fn run() {
             git::git_watch_stop,
             git::git_diff,
             resume::opencode_list_sessions,
+            resume::opencode_session_exists,
+            resume::claude_session_exists,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
