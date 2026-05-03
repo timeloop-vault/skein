@@ -12,7 +12,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
 import { LiveStatus } from "./LiveStatus.tsx";
@@ -811,14 +811,18 @@ export default function App() {
 		setActiveRoomId(id);
 	};
 
-	const closeRoom = (id: string) => {
+	const closeRoom = async (id: string) => {
 		// Confirm before delete — rooms can hold a lot of state and
-		// the prototype has no undo. window.confirm is fine for v0.
-		if (!window.confirm("Close this room? Any running harnesses will be killed.")) {
-			return;
-		}
+		// the prototype has no undo. Tauri's plugin-dialog gives us a
+		// native confirm; window.confirm is silently no-op'd in WebKit
+		// without a host-side handler we'd have to wire up ourselves.
+		const ok = await confirm("Close this room? Any running harnesses will be killed.", {
+			title: "Skein",
+			kind: "warning",
+		});
+		if (!ok) return;
 		setRooms((prev) => {
-			const remaining = prev.filter((s) => s.id !== id);
+			const remaining = prev.filter((r) => r.id !== id);
 			if (id === activeRoomId) {
 				const first = remaining[0];
 				setActiveRoomId(first ? first.id : "");
@@ -827,39 +831,39 @@ export default function App() {
 		});
 	};
 
-	const switchHarnessInRoom = (sessionId: string, harnessId: string) => {
+	const switchHarnessInRoom = (roomId: string, harnessId: string) => {
 		setRooms((prev) =>
-			prev.map((s) => (s.id === sessionId ? { ...s, activeHarnessId: harnessId } : s)),
+			prev.map((r) => (r.id === roomId ? { ...r, activeHarnessId: harnessId } : r)),
 		);
 	};
 
-	const closeHarness = (sessionId: string, harnessId: string) => {
+	const closeHarness = (roomId: string, harnessId: string) => {
 		setRooms((prev) =>
-			prev.map((s) => {
-				if (s.id !== sessionId) return s;
-				const remaining = s.harnesses.filter((h) => h.id !== harnessId);
-				if (remaining.length === 0) return s;
+			prev.map((r) => {
+				if (r.id !== roomId) return r;
+				const remaining = r.harnesses.filter((h) => h.id !== harnessId);
+				if (remaining.length === 0) return r;
 				const first = remaining[0];
-				if (!first) return s;
-				return { ...s, harnesses: remaining, activeHarnessId: first.id };
+				if (!first) return r;
+				return { ...r, harnesses: remaining, activeHarnessId: first.id };
 			}),
 		);
 	};
 
-	// Phase 4: when a harness's child exits and the user picks the
-	// shell-fallback path, LiveTerminal calls this so the new cmd
-	// persists to the DB and a Skein restart re-spawns the shell.
-	const updateHarnessCmd = (sessionId: string, harnessId: string, cmd: string[]) => {
+	// When a harness's child exits and the user picks the shell-fallback
+	// path, LiveTerminal calls this so the new cmd persists to the DB
+	// and a Skein restart re-spawns the shell.
+	const updateHarnessCmd = (roomId: string, harnessId: string, cmd: string[]) => {
 		setRooms((prev) =>
-			prev.map((s) =>
-				s.id === sessionId
-					? { ...s, harnesses: s.harnesses.map((h) => (h.id === harnessId ? { ...h, cmd } : h)) }
-					: s,
+			prev.map((r) =>
+				r.id === roomId
+					? { ...r, harnesses: r.harnesses.map((h) => (h.id === harnessId ? { ...h, cmd } : h)) }
+					: r,
 			),
 		);
 	};
 
-	const addHarness = (sessionId: string) => setShowPicker(sessionId);
+	const addHarness = (roomId: string) => setShowPicker(roomId);
 
 	// Window-level keyboard shortcuts. Uses isAppShortcut as the gate —
 	// that same predicate also makes LiveTerminal's xterm custom handler
@@ -972,15 +976,15 @@ export default function App() {
 	// (pickHarness, createRoom) share the same setRooms shape.
 	const setHarnessSessionId = (targetRoomId: string, harnessId: string, captured: string) => {
 		setRooms((prev) =>
-			prev.map((s) =>
-				s.id === targetRoomId
+			prev.map((r) =>
+				r.id === targetRoomId
 					? {
-							...s,
-							harnesses: s.harnesses.map((h) =>
+							...r,
+							harnesses: r.harnesses.map((h) =>
 								h.id === harnessId ? { ...h, sessionId: captured } : h,
 							),
 						}
-					: s,
+					: r,
 			),
 		);
 	};
@@ -988,7 +992,7 @@ export default function App() {
 	const pickHarness = (kind: HarnessKind) => {
 		const targetRoomId = showPicker;
 		if (!targetRoomId) return;
-		const targetRoom = rooms.find((s) => s.id === targetRoomId);
+		const targetRoom = rooms.find((r) => r.id === targetRoomId);
 		if (!targetRoom) return;
 		const id = newId("h");
 		const cwd = targetRoom.cwd ?? defaultCwd;
@@ -997,12 +1001,12 @@ export default function App() {
 		const sessionId = kind === "claude" ? crypto.randomUUID() : undefined;
 		const cmd = cmdForKind(kind, defaultShell, sessionId);
 		setRooms((prev) =>
-			prev.map((s) => {
-				if (s.id !== targetRoomId) return s;
+			prev.map((r) => {
+				if (r.id !== targetRoomId) return r;
 				const newH: Harness = {
 					id,
 					kind,
-					name: `${HARNESS_KINDS[kind].label}-${s.harnesses.length + 1}`,
+					name: `${HARNESS_KINDS[kind].label}-${r.harnesses.length + 1}`,
 					status: "running",
 					model: kind === "copilot" ? "gpt-5" : "sonnet-4.5",
 					tokens: "0",
@@ -1011,7 +1015,7 @@ export default function App() {
 					cwd,
 					...(sessionId ? { sessionId } : {}),
 				};
-				return { ...s, harnesses: [...s.harnesses, newH], activeHarnessId: id };
+				return { ...r, harnesses: [...r.harnesses, newH], activeHarnessId: id };
 			}),
 		);
 		setShowPicker(null);
