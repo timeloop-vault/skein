@@ -139,6 +139,12 @@ body {
 	text-align: center;
 	color: var(--fg-1);
 }
+.sk-font-label {
+	color: var(--fg-3);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	margin-right: 2px;
+}
 
 /* Window controls — minimize / toggle-maximize / close.
    30 px tall to match the titlebar; 46 px wide is the Windows convention.

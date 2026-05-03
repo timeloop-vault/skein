@@ -12,7 +12,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { useEffect, useMemo, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import { LiveStatus } from "./LiveStatus.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { Splitter } from "./Splitter.tsx";
@@ -129,6 +129,16 @@ const HarnessColumn = ({
 const FONT_MIN = 12;
 const FONT_MAX = 18;
 const FONT_DEFAULT = 13;
+
+// UI scale (zoom on .sk-app) — separate from the terminal font so a
+// large monitor can have readable chrome without a giant terminal grid.
+// 0.85 still legible on 1366×768; 1.4 is comfortable on 4K.
+const UI_SCALE_MIN = 0.85;
+const UI_SCALE_MAX = 1.4;
+const UI_SCALE_STEP = 0.05;
+const UI_SCALE_DEFAULT = 1.0;
+const clampUiScale = (n: number): number =>
+	Math.min(UI_SCALE_MAX, Math.max(UI_SCALE_MIN, Math.round(n * 100) / 100));
 
 // ── New session dialog ─────────────────────────────────────────────
 // The picked folder becomes the session's cwd; every harness in the
@@ -536,12 +546,23 @@ interface TitlebarProps {
 	theme: Theme;
 	density: Density;
 	fontSize: number;
+	uiScale: number;
 	onTheme: (v: Theme) => void;
 	onDensity: (v: Density) => void;
 	onFontSize: (v: number) => void;
+	onUiScale: (v: number) => void;
 }
 
-const Titlebar = ({ theme, density, fontSize, onTheme, onDensity, onFontSize }: TitlebarProps) => (
+const Titlebar = ({
+	theme,
+	density,
+	fontSize,
+	uiScale,
+	onTheme,
+	onDensity,
+	onFontSize,
+	onUiScale,
+}: TitlebarProps) => (
 	<div className="sk-titlebar" data-tauri-drag-region>
 		<span className="sk-app-name">
 			<span className="dot">●</span> skein
@@ -566,7 +587,8 @@ const Titlebar = ({ theme, density, fontSize, onTheme, onDensity, onFontSize }: 
 				<option value="regular">regular</option>
 				<option value="comfy">comfy</option>
 			</select>
-			<div className="sk-font-group" title="Terminal font size">
+			<div className="sk-font-group" title="Terminal font size (pt)">
+				<span className="sk-font-label">term</span>
 				<button
 					className="sk-btn ghost"
 					onClick={() => onFontSize(Math.max(FONT_MIN, fontSize - 1))}
@@ -579,6 +601,27 @@ const Titlebar = ({ theme, density, fontSize, onTheme, onDensity, onFontSize }: 
 					className="sk-btn ghost"
 					onClick={() => onFontSize(Math.min(FONT_MAX, fontSize + 1))}
 					disabled={fontSize >= FONT_MAX}
+				>
+					+
+				</button>
+			</div>
+			<div
+				className="sk-font-group"
+				title="UI scale (chrome only — terminal stays at the pt above)"
+			>
+				<span className="sk-font-label">ui</span>
+				<button
+					className="sk-btn ghost"
+					onClick={() => onUiScale(clampUiScale(uiScale - UI_SCALE_STEP))}
+					disabled={uiScale <= UI_SCALE_MIN + 0.001}
+				>
+					−
+				</button>
+				<span className="sk-font-size">{Math.round(uiScale * 100)}%</span>
+				<button
+					className="sk-btn ghost"
+					onClick={() => onUiScale(clampUiScale(uiScale + UI_SCALE_STEP))}
+					disabled={uiScale >= UI_SCALE_MAX - 0.001}
 				>
 					+
 				</button>
@@ -632,6 +675,7 @@ export default function App() {
 	const [theme, setTheme] = usePersistedState<Theme>("theme", "dark");
 	const [density, setDensity] = usePersistedState<Density>("density", "regular");
 	const [fontSize, setFontSize] = usePersistedState<number>("fontSize", FONT_DEFAULT);
+	const [uiScale, setUiScale] = usePersistedState<number>("uiScale", UI_SCALE_DEFAULT);
 	// Width of the harness column in px. Right pane absorbs the remainder
 	// via flex:1. Splitter clamps against window size at drag time.
 	const [harnessColWidth, setHarnessColWidth] = usePersistedState<number>("harnessColWidth", 640);
@@ -836,15 +880,25 @@ export default function App() {
 		theme,
 		density,
 		fontSize,
+		uiScale,
 		onTheme: setTheme,
 		onDensity: setDensity,
 		onFontSize: setFontSize,
+		onUiScale: setUiScale,
 	};
+
+	// CSS `zoom` on the root scales the entire chrome uniformly.
+	// xterm's container scales with it, but the terminal font is pinned
+	// by `fontSize` (xterm option), so the cell size in CSS pixels stays
+	// the same — the user just sees a bigger or smaller grid (more rows
+	// at lower scale, fewer at higher). That's what we want here:
+	// independent control over chrome density and terminal density.
+	const appStyle: CSSProperties = { zoom: uiScale };
 
 	// Empty state — no sessions at all.
 	if (sessions.length === 0) {
 		return (
-			<div className={`sk-app sk-${theme} density-${density}`}>
+			<div className={`sk-app sk-${theme} density-${density}`} style={appStyle}>
 				<Titlebar {...titlebarProps} />
 				<EmptyState onNew={() => setShowNewSession(true)} />
 				{showNewSession && (
@@ -864,7 +918,7 @@ export default function App() {
 	}
 
 	return (
-		<div className={`sk-app sk-${theme} density-${density}`}>
+		<div className={`sk-app sk-${theme} density-${density}`} style={appStyle}>
 			<Titlebar {...titlebarProps} />
 
 			<div className="sk-tabstrip">
