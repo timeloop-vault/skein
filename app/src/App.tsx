@@ -650,35 +650,34 @@ const cmdForKind = (kind: HarnessKind, fallbackShell: string[], sessionId?: stri
 	}
 };
 
-// Rewrite a stored cmd into its "resume the previous conversation"
+// Rewrite a stored harness into its "resume the previous conversation"
 // form, applied once at boot so a fresh PTY spawn transparently
-// re-attaches. Only matches the canonical kind-default argv — anything
-// customized (shell-swapped via chapter 2's onCmdChange, user-edited
-// extra args) passes through unchanged.
+// re-attaches. Only matches harnesses whose cmd still looks like a
+// freshly-spawned Claude / opencode launch — anything customized
+// (shell-swapped via chapter 2's onCmdChange, user-edited extra args,
+// or already in resume form from a previous Skein boot) passes through
+// unchanged.
 //
-// gh copilot has no resume mode; shells start fresh.
+// Three sources of session ids feed in:
+//   1. harness.sessionId set by phase 2a (Claude pre-allocate).
+//   2. harness.sessionId set by phase 2b (opencode capture-after-spawn).
+//   3. None — legacy harness created before chapter 5, or capture
+//      timed out. We fall back to chapter 2 phase 5a's behaviour:
+//      Claude shows its picker, opencode resumes most-recent-in-cwd.
 //
-// Claude has two stored forms:
-//   - ["claude", "--session-id", <uuid>]  (chapter 5 phase 2a — fresh
-//     harnesses pre-allocate the id, so we resume that exact session
-//     with no picker).
-//   - ["claude"]                           (chapter 2 phase 5a — legacy
-//     harnesses created before phase 2a, resume opens Claude's picker).
-//
-// opencode currently always resumes most-recent-in-cwd via --continue;
-// chapter 5 phase 3 will swap that for --session <id> once phase 2b
-// captures the id.
-const resumeCmd = (kind: HarnessKind, cmd: string[]): string[] => {
-	if (kind === "claude") {
-		if (cmd.length === 3 && cmd[0] === "claude" && cmd[1] === "--session-id" && cmd[2]) {
-			return ["claude", "--resume", cmd[2]];
-		}
-		if (cmd.length === 1 && cmd[0] === "claude") {
-			return ["claude", "--resume"];
+// gh copilot has no resume mode; shells start fresh; both pass through.
+const resumeCmd = (h: Harness): string[] => {
+	const cmd = h.cmd ?? [];
+	if (h.kind === "claude") {
+		const isFreshClaude =
+			(cmd.length === 1 && cmd[0] === "claude") ||
+			(cmd.length === 3 && cmd[0] === "claude" && cmd[1] === "--session-id");
+		if (isFreshClaude) {
+			return h.sessionId ? ["claude", "--resume", h.sessionId] : ["claude", "--resume"];
 		}
 	}
-	if (kind === "opencode" && cmd.length === 1 && cmd[0] === "opencode") {
-		return ["opencode", "--continue"];
+	if (h.kind === "opencode" && cmd.length === 1 && cmd[0] === "opencode") {
+		return h.sessionId ? ["opencode", "--session", h.sessionId] : ["opencode", "--continue"];
 	}
 	return cmd;
 };
@@ -716,14 +715,13 @@ export default function App() {
 		invoke<Session[]>("db_load_sessions")
 			.then((rows) => {
 				if (rows.length > 0) {
-					// Phase 5a: rewrite each harness's cmd to its resume form
-					// before mounting, so the PTY spawn re-attaches to the
-					// prior conversation instead of starting fresh.
+					// Rewrite each harness's cmd to its resume form before
+					// mounting, so the PTY spawn re-attaches to the prior
+					// conversation instead of starting fresh. Chapter 5
+					// phase 3 makes this targeted via captured session ids.
 					const withResume = rows.map((s) => ({
 						...s,
-						harnesses: s.harnesses.map((h) =>
-							h.cmd ? { ...h, cmd: resumeCmd(h.kind, h.cmd) } : h,
-						),
+						harnesses: s.harnesses.map((h) => (h.cmd ? { ...h, cmd: resumeCmd(h) } : h)),
 					}));
 					setSessions(withResume);
 					const first = withResume[0];
