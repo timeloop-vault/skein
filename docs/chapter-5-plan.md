@@ -61,36 +61,56 @@ unknowns, the alternative is debugging guesses through phase 2.
 
 ## Phase 2 — Capture session ids on first spawn
 
-**Goal:** when Claude or opencode spawns inside a harness, Skein
-records the session id that binary creates, and persists it on the
-harness.
+Phase 1's recon revealed Claude has `--session-id <uuid>` for
+*pre-allocating* a session id at spawn time, but opencode has no
+equivalent. The two paths are different enough to split into 2a / 2b
+— recon §5 / §7 has the details. Both phases share the new
+`sessionId?: string` field on `Harness`; it round-trips through the
+existing `db_save_sessions` JSON-blob path (phase 5a's stored `cmd`
+already proves arbitrary fields persist that way).
 
-- New optional field on `Harness`: `sessionId?: string`. Survives
-  `db_save_sessions` round-trip via the existing JSON-blob path
-  (phase 5a's stored `cmd` already proves this works).
-- Two new Tauri commands:
-  - `claude_list_sessions(cwd) -> Vec<String>` — directory listing
-    of `~/.claude/projects/<encoded-cwd>/*.jsonl`, returning UUIDs.
-  - `opencode_list_sessions(cwd) -> Vec<String>` — sqlite query
-    against `opencode.db`'s `session` table.
-- Capture flow on every Claude / opencode spawn:
-  1. Snapshot the current set of session ids for this cwd
-     (call the list command).
+### Phase 2a — Claude pre-allocate
+
+**Goal:** every Claude harness gets a Skein-picked UUID at spawn
+time, stored immediately on the harness.
+
+- Generate a fresh UUID v4 (browser `crypto.randomUUID()`) when a
+  Claude harness is created.
+- `cmdForKind("claude", …)` becomes
+  `["claude", "--session-id", <uuid>]`. Existing call sites (new
+  session dialog, harness picker) flow the uuid into the harness
+  record.
+- `harness.sessionId = uuid` set in the same React state update —
+  no follow-up effect, no async wait, no race.
+- gh copilot and shell paths unchanged.
+
+### Phase 2b — opencode capture
+
+**Goal:** when an opencode harness spawns, Skein figures out which
+session id opencode just created and stores it.
+
+- New Tauri command `opencode_list_sessions(cwd) -> Vec<String>`:
+  rusqlite query against `~/.local/share/opencode/opencode.db`,
+  `SELECT id FROM session WHERE directory = ? AND time_archived IS NULL
+  ORDER BY time_created DESC`. Same crate / pattern as Skein's
+  existing `db.rs`.
+- Capture flow on opencode spawn:
+  1. Before spawn, snapshot the current set of session ids for this
+     cwd via the list command.
   2. Spawn the harness as today.
-  3. After the PTY emits its first chunk of output (proxy for
-     "the binary is up and has written its session file"), poll the
-     list every ~250 ms for up to ~5 s.
+  3. After the PTY emits its first chunk of output (proxy for "the
+     binary is up and has written its session row"), poll the list
+     every ~250 ms for up to ~5 s.
   4. The first new id that wasn't in the snapshot is this harness's
      session id. Store it on the harness; fire the existing
      auto-save effect to persist.
-  5. If the timeout elapses with no new id, leave `sessionId`
-     undefined — phase 3 falls back to phase-5a behaviour for that
-     harness.
+  5. Timeout with no new id → leave `sessionId` undefined; phase 3
+     falls back to phase-5a's `--continue`.
 - Snapshot-then-diff handles the case where the user already had
-  conversations in this cwd from outside Skein. "Most recent file" is
-  not robust; the diff is.
-- Out of scope: real-time file watcher. Polling for 5 s after spawn
-  is enough; we don't need a watcher's lifetime cost.
+  conversations in this cwd from outside Skein. "Most recent row"
+  is not robust against pre-existing rows; the diff is.
+- Out of scope: real-time file / db watcher. 5 s of polling after
+  spawn is enough; we don't need a watcher's lifetime cost.
 
 ## Phase 3 — Targeted resume on restart
 
@@ -100,9 +120,10 @@ re-attaches to *its* conversation with no picker.
 - `resumeCmd` becomes session-id-aware:
   - Claude with `sessionId`: `["claude", "--resume", id]`.
   - Claude without: `["claude", "--resume"]` (existing fallback —
-    picker).
+    picker; should be rare after 2a since fresh harnesses always
+    pre-allocate).
   - opencode with `sessionId`: `["opencode", "--session", id]`
-    (or whatever phase 1 found).
+    (verified in recon §2).
   - opencode without: `["opencode", "--continue"]` (existing
     fallback — most-recent-in-cwd).
 - The signature changes from `(kind, cmd)` to `(harness)` so it can
@@ -117,9 +138,13 @@ exists (Claude pruned it, opencode db got rebuilt, user wiped
 `~/.claude/projects/`), Skein falls back to picker / fresh and
 re-captures next spawn instead of erroring.
 
-- Two new Tauri commands, mirroring phase 2's listers:
-  - `claude_session_exists(cwd, id) -> bool` — file presence check.
-  - `opencode_session_exists(id) -> bool` — sqlite point lookup.
+- Two new Tauri commands:
+  - `claude_session_exists(cwd, id) -> bool` — file presence check
+    at `~/.claude/projects/<encoded-cwd>/<id>.jsonl`. Phase 2a means
+    we know the exact filename (we picked the UUID), so the path-
+    encoding edge cases from recon §3 don't bite us.
+  - `opencode_session_exists(id) -> bool` — sqlite point lookup
+    against the same db as phase 2b's lister.
 - On boot, before applying phase 3's targeted resume, verify the
   stored id exists. If not, drop it from the harness and fall through
   to phase-5a's flag-only resume. Phase 2's capture flow then re-runs
