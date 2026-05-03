@@ -8,6 +8,7 @@
 mod db;
 mod git;
 mod pty;
+mod resume;
 mod watcher;
 
 use std::path::Path;
@@ -145,6 +146,7 @@ pub fn run() {
             git::git_watch_start,
             git::git_watch_stop,
             git::git_diff,
+            resume::opencode_list_sessions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

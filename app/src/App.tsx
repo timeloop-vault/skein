@@ -594,6 +594,45 @@ const newId = (prefix: string): string => prefix + Math.random().toString(36).sl
 // inline and the user can pick another kind. The `byoh` kind is our
 // "Shell" option — it drops into the user's default shell so they can
 // run whatever they want.
+// Phase 2b: opencode has no Claude-style --session-id pre-allocation.
+// Snapshot opencode's existing sessions for this cwd, spawn the
+// harness, then poll for the new id every 250 ms for up to 5 s. The
+// first id that wasn't in the snapshot is this harness's session.
+//
+// Polling, not watching: we don't need lifetime cost, and the capture
+// window is bounded — if 5 s isn't enough (opencode hasn't created
+// the row yet, the binary is missing, etc.) we leave sessionId
+// undefined and resume falls back to phase-5a's --continue.
+//
+// Errors from the Tauri command (db locked, permissions, etc.) are
+// silently retried — this is best-effort capture, not a critical path.
+const captureOpencodeSessionId = async (
+	cwd: string,
+	onCapture: (sessionId: string) => void,
+): Promise<void> => {
+	let snapshot: string[];
+	try {
+		snapshot = await invoke<string[]>("opencode_list_sessions", { cwd });
+	} catch {
+		return;
+	}
+	const before = new Set(snapshot);
+	const deadline = Date.now() + 5000;
+	while (Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, 250));
+		try {
+			const current = await invoke<string[]>("opencode_list_sessions", { cwd });
+			const fresh = current.find((id) => !before.has(id));
+			if (fresh) {
+				onCapture(fresh);
+				return;
+			}
+		} catch {
+			// Transient — try again on the next tick.
+		}
+	}
+};
+
 // Phase 2a: when sessionId is provided (always set by callers for
 // Claude, never for other kinds), pre-allocate Claude's conversation
 // id via --session-id <uuid>. Storing the same id on the harness
@@ -865,10 +904,31 @@ export default function App() {
 		};
 	}, []);
 
+	// Update one harness's sessionId after phase 2b's async capture
+	// finds the new opencode row. Wrapped here so both creation paths
+	// (pickHarness, createSession) share the same setSessions shape.
+	const setHarnessSessionId = (targetSessionId: string, harnessId: string, captured: string) => {
+		setSessions((prev) =>
+			prev.map((s) =>
+				s.id === targetSessionId
+					? {
+							...s,
+							harnesses: s.harnesses.map((h) =>
+								h.id === harnessId ? { ...h, sessionId: captured } : h,
+							),
+						}
+					: s,
+			),
+		);
+	};
+
 	const pickHarness = (kind: HarnessKind) => {
 		const targetSessionId = showPicker;
 		if (!targetSessionId) return;
+		const targetSession = sessions.find((s) => s.id === targetSessionId);
+		if (!targetSession) return;
 		const id = newId("h");
+		const cwd = targetSession.cwd ?? defaultCwd;
 		// Phase 2a: pre-allocate Claude's conversation id so the harness
 		// resumes to *this* session on Skein restart — no picker.
 		const sessionId = kind === "claude" ? crypto.randomUUID() : undefined;
@@ -885,13 +945,23 @@ export default function App() {
 					tokens: "0",
 					live: true,
 					cmd,
-					cwd: s.cwd ?? defaultCwd,
+					cwd,
 					...(sessionId ? { sessionId } : {}),
 				};
 				return { ...s, harnesses: [...s.harnesses, newH], activeHarnessId: id };
 			}),
 		);
 		setShowPicker(null);
+		// Phase 2b: kick off async capture for opencode harnesses. The
+		// snapshot has to happen *before* opencode writes its session
+		// row, which it doesn't do until LiveTerminal mounts and spawns
+		// the binary — fine to fire-and-forget here, the React render
+		// cycle keeps us ahead of the spawn.
+		if (kind === "opencode") {
+			void captureOpencodeSessionId(cwd, (captured) => {
+				setHarnessSessionId(targetSessionId, id, captured);
+			});
+		}
 	};
 
 	const createSession = ({ cwd, task, harness, branch }: CreateSessionArgs) => {
@@ -934,6 +1004,13 @@ export default function App() {
 		setSessions((prev) => [...prev, newSession]);
 		setActiveSessionId(sid);
 		setShowNewSession(false);
+		// Phase 2b: same pattern as pickHarness — async capture for
+		// opencode's auto-assigned session id.
+		if (harness === "opencode") {
+			void captureOpencodeSessionId(cwd, (captured) => {
+				setHarnessSessionId(sid, hid, captured);
+			});
+		}
 	};
 
 	const titlebarProps: TitlebarProps = {
