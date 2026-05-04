@@ -53,8 +53,12 @@ export const RoomTab = ({
 			</span>
 		</div>
 		<div className="row-2">
-			<span>{r.branch}</span>
-			<span>·</span>
+			{r.branch && (
+				<>
+					<span>{r.branch}</span>
+					<span>·</span>
+				</>
+			)}
 			<span style={{ display: "flex", gap: 2 }}>
 				{r.harnesses.map((h) => (
 					<HChip key={h.id} kind={h.kind} size={9} />

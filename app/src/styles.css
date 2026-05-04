@@ -837,6 +837,19 @@ body {
 	background: var(--bg-0);
 }
 
+/* Right pane placeholder for non-git rooms (chapter 6 phase 3).
+   Same flex container shape as LiveStatus so the layout doesn't shift. */
+.sk-no-git {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-family: var(--sk-mono);
+	font-size: 11px;
+	color: var(--fg-3);
+	letter-spacing: 0.02em;
+}
+
 /* Reopen-room modal: list of archived rooms, each clickable. */
 .sk-archived-list {
 	gap: 6px;

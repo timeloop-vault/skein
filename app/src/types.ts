@@ -32,14 +32,18 @@ export interface Harness {
 export interface Room {
 	id: string;
 	name: string;
-	branch: string;
-	repo: string;
 	task: string;
 	status: Status;
 	badge: number;
 	harnesses: Harness[];
 	activeHarnessId: string;
 	cwd?: string;
+	// Branch and repo display label are present only for git-backed
+	// rooms (chapter 6 phase 3). When `branch` is set the room renders
+	// a LiveStatus pane and the tab subtext shows `repo · branch`;
+	// when absent the cwd is treated as a plain folder.
+	branch?: string;
+	repo?: string;
 	// Close timestamp (epoch ms). Absent = active (rendered as a tab).
 	// Present = archived (hidden from the tab strip but listed in the
 	// reopen modal). Chapter 6 phase 2.

@@ -95,9 +95,7 @@ const HarnessColumn = ({
 				+ harness
 			</div>
 			<div className="sk-harness-meta">
-				<span>
-					{room.repo} · {room.branch}
-				</span>
+				<span>{room.branch ? `${room.repo} · ${room.branch}` : (room.cwd ?? "")}</span>
 			</div>
 		</div>
 
@@ -158,13 +156,14 @@ interface BranchInfoDto {
 // What the dialog hands back. The cwd is already the *real* directory
 // the spawn should land in — for "New worktree" mode the dialog has
 // already called git_add_worktree and resolved the worktree path; for
-// "Current branch" mode it's just the picked repo path.
+// "Current branch" mode it's the picked repo path; for non-git rooms
+// (chapter 6 phase 3) it's the picked folder verbatim, with branch
+// undefined.
 interface CreateRoomArgs {
 	cwd: string;
 	task: string;
 	harness: HarnessKind;
-	branch: string;
-	branchMode: "worktree" | "current";
+	branch?: string;
 }
 
 type RepoStatus =
@@ -239,9 +238,15 @@ const NewRoomDialog = ({
 			.slice(0, 28) || "task";
 	const proposedBranch = `skein/${slug}`;
 
-	const valid = repoStatus.kind === "valid";
+	const isRepo = repoStatus.kind === "valid";
+	const folderResolved = repoStatus.kind === "valid" || repoStatus.kind === "not-a-repo";
+	// Submit is fine for both git-backed and plain folders. The branch /
+	// worktree picker only gates submission when the folder *is* a repo.
 	const canCreate =
-		task.trim().length > 0 && valid && !busy && (branchMode === "current" || baseBranch.length > 0);
+		task.trim().length > 0 &&
+		!busy &&
+		folderResolved &&
+		(!isRepo || branchMode === "current" || baseBranch.length > 0);
 
 	const browse = async () => {
 		const start = cwd || defaultCwd;
@@ -261,6 +266,16 @@ const NewRoomDialog = ({
 		setBusy(true);
 		setError(null);
 		try {
+			if (!isRepo) {
+				// Non-git folder — no worktree, no branch. cwd is the
+				// picked folder verbatim.
+				onCommit({
+					cwd,
+					task: task.trim(),
+					harness,
+				});
+				return;
+			}
 			if (branchMode === "worktree") {
 				const worktreePath = await invoke<string>("git_propose_worktree_path", {
 					repoPath: cwd,
@@ -277,7 +292,6 @@ const NewRoomDialog = ({
 					task: task.trim(),
 					harness,
 					branch: proposedBranch,
-					branchMode,
 				});
 			} else {
 				onCommit({
@@ -285,7 +299,6 @@ const NewRoomDialog = ({
 					task: task.trim(),
 					harness,
 					branch: repoStatus.kind === "valid" ? (repoStatus.head ?? "HEAD") : "HEAD",
-					branchMode,
 				});
 			}
 		} catch (err: unknown) {
@@ -308,7 +321,11 @@ const NewRoomDialog = ({
 					</span>
 				);
 			case "not-a-repo":
-				return <span style={{ color: "var(--err)" }}>⚠ not a git repository</span>;
+				return (
+					<span style={{ color: "var(--fg-3)" }}>
+						not a git repo — harnesses run in this folder as-is.
+					</span>
+				);
 		}
 	})();
 
@@ -358,7 +375,7 @@ const NewRoomDialog = ({
 						)}
 					</div>
 
-					{valid && (
+					{isRepo && (
 						<div className="sk-field">
 							<label>Branch</label>
 							<div className="sk-radio-row">
@@ -1081,22 +1098,24 @@ export default function App() {
 		const hid = newId("h");
 		// Phase 2a: pre-allocate Claude's conversation id (see pickHarness).
 		const sessionId = harness === "claude" ? crypto.randomUUID() : undefined;
-		// "Repo" name from the trailing path component — `D:\code\skein` →
-		// `skein`. Cosmetic; the actual cwd is what spawns use.
-		const repoName =
+		// Display name from the trailing path component — `D:\code\skein`
+		// → `skein`. Cosmetic; the actual cwd is what spawns use.
+		const folderName =
 			cwd
 				.replace(/[\\/]+$/, "")
 				.split(/[\\/]/)
 				.pop() || cwd;
+		// Repo / branch are only set for git-backed rooms (chapter 6
+		// phase 3). For non-git rooms the tab subtext shows just the
+		// folder name and LiveStatus is replaced by a placeholder.
 		const newRoom: Room = {
 			id: sid,
-			name: `local · ${repoName}`,
-			branch,
-			repo: repoName,
+			name: `local · ${folderName}`,
 			task,
 			status: "running",
 			badge: 0,
 			cwd,
+			...(branch ? { branch, repo: folderName } : {}),
 			harnesses: [
 				{
 					id: hid,
@@ -1320,7 +1339,11 @@ export default function App() {
 							display: r.id === activeRoomId ? "flex" : "none",
 						}}
 					>
-						{r.cwd && <LiveStatus cwd={r.cwd} />}
+						{r.cwd && r.branch ? (
+							<LiveStatus cwd={r.cwd} />
+						) : r.cwd ? (
+							<div className="sk-no-git">no git repo</div>
+						) : null}
 					</div>
 				))}
 			/>
@@ -1334,7 +1357,7 @@ export default function App() {
 					<span className={`dot-tiny st-${activeHarness.status}`} />
 					{activeHarness.status}
 				</span>
-				<span className="seg">{room.branch}</span>
+				{room.branch && <span className="seg">{room.branch}</span>}
 				{room.cwd && (
 					<span className="seg sk-statusbar-cwd" title={room.cwd}>
 						{room.cwd}

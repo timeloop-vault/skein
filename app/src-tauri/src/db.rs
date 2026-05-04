@@ -51,8 +51,6 @@ pub struct Harness {
 pub struct Room {
     pub id: String,
     pub name: String,
-    pub branch: String,
-    pub repo: String,
     pub task: String,
     pub status: String,
     pub badge: i64,
@@ -60,6 +58,12 @@ pub struct Room {
     pub active_harness_id: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cwd: Option<String>,
+    /// `None` for non-git rooms (chapter 6 phase 3). Present together
+    /// with `branch` when the room was created from a git repo.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub repo: Option<String>,
     /// Close timestamp (epoch ms). `None` = active; `Some` = archived
     /// (chapter 6 phase 2). Skein round-trips this; the frontend reads
     /// it for tab-strip filtering and the reopen modal.
