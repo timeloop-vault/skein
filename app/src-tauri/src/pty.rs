@@ -18,6 +18,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -164,6 +165,19 @@ impl PtyManager {
             // child dies, regardless of pipe state. This is the *only*
             // reliable way to detect a natural exit on Windows `ConPTY`.
             let code = child.wait().ok().map(|s| s.exit_code());
+            // Chapter 7 phase 2: data-flush timeout. The reader thread
+            // can still deliver trailing bytes after the child has
+            // exited — on Windows ConPTY especially, the read pipe
+            // stays open until the master is dropped, so a TUI's last
+            // frame can lag the wait() return by a few ms. Sleeping a
+            // beat before firing Exit lets the reader drain so the
+            // user actually sees that final frame instead of a
+            // truncated viewport. Mirrors VS Code's
+            // ShutdownConstants.DataFlushTimeout (250 ms) — see
+            // microsoft/node-pty#72 for the original bug. Skein-side
+            // the latency is on the natural-exit path only, never
+            // during running output.
+            thread::sleep(Duration::from_millis(250));
             on_event_waiter(PtyEvent::Exit { code });
         });
 

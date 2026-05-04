@@ -21,7 +21,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
-import { isAppShortcut, isMac } from "./shortcuts.ts";
+import { isAppShortcut, isMac, isWindows } from "./shortcuts.ts";
 
 type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
 
@@ -276,6 +276,17 @@ export const LiveTerminal = ({
 			// dirty cells, so the user sees a mash-up until they type.
 			term.write("\x1b[?1049l\x1b[2J\x1b[H");
 			term.scrollToBottom();
+
+			// Chapter 7 phase 2: kill/spawn throttle on Windows ConPTY.
+			// VS Code mitigates microsoft/vscode#71966 (and friends) by
+			// keeping a 250 ms minimum between killing one PTY and
+			// spawning the next; without it, mashing R can hang the
+			// ConPTY host. portable-pty uses the same ConPTY API, so
+			// the same workaround applies. No-op on macOS / Linux —
+			// the bug is Windows-specific.
+			if (isWindows) {
+				await new Promise((resolve) => setTimeout(resolve, 250));
+			}
 
 			await startPty(cmdToSpawn);
 		};
