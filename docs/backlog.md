@@ -47,13 +47,3 @@ moves into an active phase, delete it here.
   bundle meaningfully without touching component code. `poe-inspect-2`
   uses this exact recipe under Tauri, so it's well-trodden. Wait until
   the UI shape settles — chapters 6 and 7 reshape a lot of it.
-- **PTY / terminal embedding rework** — chapter 7. The chapter 2
-  phase 4 R-retry path corrupts the visible state when the previous
-  child was a TUI (Claude, opencode). The handover between two
-  alt-screen-using programs in the same xterm requires careful state
-  management (force-exit alt screen, clear viewport, send SIGWINCH
-  to nudge the new child to redraw, handle Windows ConPTY's quirk
-  of keeping the reader pipe open after child exit). VS Code's
-  terminal and wezterm have solved this; lift their patterns. Study
-  `vscode/src/vs/platform/terminal/node/terminalProcess.ts` and
-  wezterm's `pty` crate.

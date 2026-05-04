@@ -89,25 +89,53 @@ Two pieces are missing.
 Frontend-only, OS-agnostic — DEC sequences and Tauri invokes work
 the same everywhere.
 
-## Phase 4 — R-retry of TUIs, end-to-end
+## Phase 4 — Remove R-retry, validate Enter-for-shell
 
-**Goal:** the original test case works on every OS we can build for.
+The chapter started by trying to make R-to-retry work on every OS.
+After landing phases 2 + 3, manual testing on Mac surfaced that R
+on a Claude harness can't re-use the chapter-5-phase-2a
+`--session-id <uuid>` form (Claude rejects with "Session ID is
+already in use"); a workaround that translates to `--resume <uuid>`
+on R got the spawn through but produced a blank viewport because
+Claude's resume protocol doesn't replay reliably into a recycled
+xterm. Each fix surfaced the next edge case.
 
-- Manual test matrix on macOS (primary dev box):
-  - Claude → R → Claude (same TUI re-spawn).
-  - Claude → R → opencode (TUI → TUI handover — the headline bug).
-  - Claude → R → shell (TUI → non-TUI).
-  - shell → R → Claude (non-TUI → TUI).
-- For each: viewport clean, cursor where the new child wants it,
-  no leftover SGR colour bleed, no "ghost" prompt from the previous
-  child, no input lag (phase 2's data-flush is 250 ms — make sure
-  it doesn't *feel* sluggish).
-- Update `docs/backlog.md` to remove the chapter-2 PTY-rework entry
-  now that the fix has shipped.
+**Decision:** drop the R-retry path entirely. It pre-dates chapter
+5's resume work, and the same intent ("come back to my Claude
+conversation in this pane") is now covered by Skein's
+restart-resume flow plus `claude --resume <uuid>` from the
+Enter-for-shell shell. The simplification is significant — no R
+handler, no `respawn` retry-form transform, no test matrix for
+TUI→TUI handover. Enter-for-shell stays and benefits from phases
+2 and 3 (shell spawning into a Claude alt-screen would still need
+the reset, even though shells aren't TUIs themselves).
 
-If a case fails the test, that's information for a follow-up patch
-in the same chapter — not a sign the design is wrong, more likely
-a missing reset byte or a TUI-specific quirk.
+What this phase actually does:
+- Remove the R key handling from `LiveTerminal`'s post-exit
+  prompt.
+- Update the prompt text from "Press Enter for shell, R to retry"
+  to "Press Enter for shell."
+- Update file-level comments to drop the R reference.
+- Update `docs/backlog.md` — remove the chapter-2 PTY-rework
+  entry now that the alt-screen handover bug class is sidestepped
+  rather than fixed.
+
+Test matrix on macOS:
+- Claude → `/exit` → Enter → shell prompt visible, no Claude
+  artifacts in the viewport, can run `claude --resume <uuid>`
+  manually to come back.
+- opencode → `/exit` → Enter → shell prompt visible, can run
+  `opencode --session <id>` manually.
+- Phase 2's data-flush timeout: the final pre-exit frame
+  (Claude's "Goodbye!" line, opencode's tear-down message) is
+  visible above the "[skein] x exited" line, not truncated.
+- Phase 3's reset is visible: shell prompt starts at the top of
+  the viewport with default colour, not where Claude's cursor
+  was, not coloured.
+
+Backlog cleanup:
+- Remove the chapter-2 PTY-rework entry. The alt-screen handover
+  bug class doesn't need fixing because we no longer trigger it.
 
 ## Phase 5 — Cross-platform validation hand-off
 
@@ -121,10 +149,12 @@ needs to wait for chapter 8's actual Windows / Linux runs.
   so a Windows runtime test can confirm them empirically:
   - Trailing-frame TUI output makes it to xterm after natural
     child exit (test by quitting Claude with `/exit` and verifying
-    the final goodbye line is visible).
-  - Mashing R repeatedly doesn't hang the harness pane (the
-    throttle does its job).
-  - `ResizePseudoConsole` propagates to the new child after R-retry.
+    the final goodbye line is visible above the [skein] line).
+  - Mashing Enter-for-shell repeatedly doesn't hang the harness
+    pane (the kill/spawn throttle does its job; same ConPTY bug
+    that affected R applies to any rapid kill+spawn cycle).
+  - `ResizePseudoConsole` propagates to the new shell after
+    Enter-for-shell.
 - Linux is mostly Unix-shaped, so the Mac validation likely
   applies — but the recon doesn't cover GTK / Wayland WebView
   rendering of xterm.js. Call out as "test on Linux when chapter 8

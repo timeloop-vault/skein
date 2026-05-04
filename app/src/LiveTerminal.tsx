@@ -9,11 +9,15 @@
 // alive — the resize/fit path is guarded against zero-size hosts so we
 // never tell xterm or the child that the terminal shrank to 1×1.
 //
-// Phase 4: when the child exits we keep the xterm and its scrollback
-// alive, write a "[skein] x exited (N)" line + footer, and intercept the
-// next keystroke. Enter spawns the user's default shell into the same
-// xterm (and persists that as the harness's cmd via onCmdChange);
-// R re-runs the command that just exited.
+// When the child exits we keep the xterm and its scrollback alive,
+// write a "[skein] x exited (N)" line + footer, and intercept the
+// next keystroke. Enter spawns the user's default shell into the
+// same xterm (and persists that as the harness's cmd via
+// onCmdChange) so the user can keep using the pane after a TUI
+// quits. There's no in-pane retry — chapter 5 makes harnesses
+// resume on Skein restart anyway, and "create a new harness" or
+// `claude --resume <uuid>` from the shell cover the same intent
+// without the alt-screen handover bug class.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -73,8 +77,8 @@ export const LiveTerminal = ({
 	onCmdChangeRef.current = onCmdChange;
 
 	// Run only on mountKey changes. cmd / cwd / fontSize are consumed
-	// once at first mount: cmd seeds lastCmd which respawn mutates
-	// thereafter; cwd is fixed for a harness; fontSize has its own
+	// once at first mount: cmd seeds the closure's programName /
+	// startPty call; cwd is fixed for a harness; fontSize has its own
 	// retune effect below. Listing them in the dep array (the obvious
 	// fix to satisfy useExhaustiveDependencies) made every App render
 	// produce a fresh cmd-array reference, which made the cleanup tear
@@ -119,11 +123,10 @@ export const LiveTerminal = ({
 		// ok if I work in this folder?" arrow-key dialog).
 		term.focus();
 
-		// Phase 4 state: which command spawned most recently (for the
-		// "[skein] x exited" message and for R-to-retry), and whether
-		// we're showing the post-exit prompt.
-		let lastCmd = cmd;
+		// Track whether we're showing the post-exit prompt, plus the
+		// program name for the "[skein] x exited (N)" line.
 		let phase: "running" | "exited" = "running";
+		let programName = cmd[0] ?? "child";
 
 		// Clipboard bindings plus the post-exit prompt keys.
 		// macOS:        ⌘C / ⌘V — Ctrl+C / Ctrl+V keep their terminal
@@ -146,28 +149,6 @@ export const LiveTerminal = ({
 						onCmdChangeRef.current(shell);
 						void respawn(shell);
 					}
-					return false;
-				}
-				if (e.key === "r" || e.key === "R") {
-					// Chapter 7 follow-up: a fresh Claude harness is spawned
-					// with `claude --session-id <uuid>` (chapter 5 phase 2a),
-					// which Claude refuses to re-use once the JSONL session
-					// file exists. Translate to the resume form so R re-
-					// attaches to the same conversation instead of erroring
-					// "Session ID is already in use." For other shapes
-					// (already-resume cmd, shell, opencode) lastCmd is fine
-					// as-is; opencode's session-id capture lives on the
-					// Harness, not in the cmd, so we can't reach it from
-					// here without plumbing — its R will spawn fresh
-					// opencode (creates new conversation, not ideal but
-					// not crashing).
-					const isFreshClaude =
-						lastCmd.length === 3 &&
-						lastCmd[0] === "claude" &&
-						lastCmd[1] === "--session-id" &&
-						!!lastCmd[2];
-					const retryCmd = isFreshClaude ? ["claude", "--resume", lastCmd[2] as string] : lastCmd;
-					void respawn(retryCmd);
 					return false;
 				}
 				// Swallow other keys while at the prompt — forwarding
@@ -213,7 +194,7 @@ export const LiveTerminal = ({
 			if (cancelled) return;
 			phase = "exited";
 			// Stop forwarding keystrokes — the writer is gone, and we
-			// want Enter/R to flow through the custom handler instead.
+			// want Enter to flow through the custom handler instead.
 			dataDisposable?.dispose();
 			dataDisposable = null;
 			// Note: deliberately keep ptyIdRef pointing at the dead
@@ -221,18 +202,15 @@ export const LiveTerminal = ({
 			// fresh one, which evicts the leaked Windows reader thread.
 			// Unmount cleanup also calls pty_kill so it doesn't leak.
 
-			const program = lastCmd[0] ?? "child";
 			const codeStr = code === null ? "?" : String(code);
 			// \x1b[2m = dim, \x1b[1m = bold, \x1b[0m = reset.
-			term.write(`\r\n\x1b[2m[skein] ${program} exited (${codeStr})\x1b[0m\r\n`);
-			term.write(
-				"\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell, \x1b[0;1mR\x1b[0;2m to retry.\x1b[0m\r\n",
-			);
+			term.write(`\r\n\x1b[2m[skein] ${programName} exited (${codeStr})\x1b[0m\r\n`);
+			term.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
 		};
 
 		const startPty = async (cmdToSpawn: string[]) => {
 			if (cancelled) return;
-			lastCmd = cmdToSpawn;
+			programName = cmdToSpawn[0] ?? "child";
 			phase = "running";
 			try {
 				const id = await invoke<string>("pty_spawn", {
@@ -275,10 +253,8 @@ export const LiveTerminal = ({
 				const msg = err instanceof Error ? err.message : String(err);
 				term.write(`\r\n\x1b[31m[skein] pty_spawn failed: ${msg}\x1b[0m\r\n`);
 				// Reprompt — without this the user sees the error and has
-				// no idea their input keys (Enter / R) still work.
-				term.write(
-					"\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell, \x1b[0;1mR\x1b[0;2m to retry.\x1b[0m\r\n",
-				);
+				// no idea Enter still drops them into a shell.
+				term.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
 				phase = "exited";
 			}
 		};
@@ -294,39 +270,33 @@ export const LiveTerminal = ({
 			ptyIdRef.current = null;
 
 			// Hand a clean canvas to the next child:
-			//   \x1b[?1049l — exit the alternate screen buffer if we
-			//                 were left in it (some TUIs terminate
-			//                 without restoring main screen).
+			//   \x1b[?1049l — exit the alternate screen buffer if the
+			//                 previous child left us in it (some TUIs
+			//                 terminate without restoring main screen).
 			//   \x1b[2J     — clear the visible viewport (does NOT touch
 			//                 main-screen scrollback).
 			//   \x1b[H      — home the cursor.
-			//   \x1b[0m     — reset SGR attributes (chapter 7 phase 3).
-			//                 Without this, Claude #1's last colour /
-			//                 bold / inverse state lingers and Claude #2
-			//                 starts writing onto a tinted buffer.
-			// Without this, Claude #2 enters its alt screen on top of
-			// stale buffer content from Claude #1 and only repaints
-			// dirty cells, so the user sees a mash-up until they type.
+			//   \x1b[0m     — reset SGR (colour / bold / inverse) so
+			//                 the previous child's last attributes
+			//                 don't tint the shell prompt.
 			term.write("\x1b[?1049l\x1b[2J\x1b[H\x1b[0m");
 			term.scrollToBottom();
 
-			// Chapter 7 phase 2: kill/spawn throttle on Windows ConPTY.
-			// VS Code mitigates microsoft/vscode#71966 (and friends) by
-			// keeping a 250 ms minimum between killing one PTY and
-			// spawning the next; without it, mashing R can hang the
-			// ConPTY host. portable-pty uses the same ConPTY API, so
-			// the same workaround applies. No-op on macOS / Linux —
-			// the bug is Windows-specific.
+			// Kill/spawn throttle on Windows ConPTY. VS Code mitigates
+			// microsoft/vscode#71966 (and friends) by keeping a 250 ms
+			// minimum between killing one PTY and spawning the next;
+			// without it the ConPTY host can hang. portable-pty uses
+			// the same ConPTY API. No-op on macOS / Linux.
 			if (isWindows) {
 				await new Promise((resolve) => setTimeout(resolve, 250));
 			}
 
 			await startPty(cmdToSpawn);
 
-			// Chapter 7 phase 3: nudge the new child to issue its
-			// initial redraw via SIGWINCH (Unix) / ResizePseudoConsole
-			// (Windows). The child was spawned with the correct dims,
-			// but some alt-screen TUIs only repaint when they see a
+			// Nudge the new child to issue its initial redraw via
+			// SIGWINCH (Unix) / ResizePseudoConsole (Windows). The
+			// child was spawned with the correct dims, but some
+			// alt-screen TUIs only repaint when they see a
 			// size signal — without the nudge, the first frame can be
 			// missing or partial until the user types something.
 			const newId = ptyIdRef.current;
