@@ -271,10 +271,14 @@ export const LiveTerminal = ({
 			//   \x1b[2J     — clear the visible viewport (does NOT touch
 			//                 main-screen scrollback).
 			//   \x1b[H      — home the cursor.
+			//   \x1b[0m     — reset SGR attributes (chapter 7 phase 3).
+			//                 Without this, Claude #1's last colour /
+			//                 bold / inverse state lingers and Claude #2
+			//                 starts writing onto a tinted buffer.
 			// Without this, Claude #2 enters its alt screen on top of
 			// stale buffer content from Claude #1 and only repaints
 			// dirty cells, so the user sees a mash-up until they type.
-			term.write("\x1b[?1049l\x1b[2J\x1b[H");
+			term.write("\x1b[?1049l\x1b[2J\x1b[H\x1b[0m");
 			term.scrollToBottom();
 
 			// Chapter 7 phase 2: kill/spawn throttle on Windows ConPTY.
@@ -289,6 +293,17 @@ export const LiveTerminal = ({
 			}
 
 			await startPty(cmdToSpawn);
+
+			// Chapter 7 phase 3: nudge the new child to issue its
+			// initial redraw via SIGWINCH (Unix) / ResizePseudoConsole
+			// (Windows). The child was spawned with the correct dims,
+			// but some alt-screen TUIs only repaint when they see a
+			// size signal — without the nudge, the first frame can be
+			// missing or partial until the user types something.
+			const newId = ptyIdRef.current;
+			if (newId) {
+				void invoke("pty_resize", { id: newId, rows: term.rows, cols: term.cols });
+			}
 		};
 
 		void startPty(cmd);
