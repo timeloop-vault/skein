@@ -1,0 +1,174 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # --- Workspace crates: test + clippy (Linux only, fast) ---
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Clippy
+        run: cargo clippy --workspace --tests -- -D warnings
+
+  # --- Tauri shell crate: clippy (Linux only, fast).
+  # The shell is excluded from the root workspace, so it needs its own
+  # invocation. webkit2gtk-4.1 + the GTK / X11 / Wayland headers are
+  # required for the Tauri Rust crate to even compile on Linux.
+  clippy-tauri:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libgtk-layer-shell-dev \
+            libx11-dev \
+            libxdo-dev \
+            libwayland-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: app/package.json
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          shared-key: tauri-shell
+
+      - name: Clippy (tauri shell)
+        working-directory: app/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+  # --- Frontend: biome + tsc ---
+  lint-frontend:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: app/package.json
+
+      - name: Install dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Biome check
+        working-directory: app
+        run: npx biome check .
+
+      - name: TypeScript check
+        working-directory: app
+        run: npx tsc --noEmit
+
+  # --- App build check per platform ---
+  # Uses `cargo check` rather than full `tauri build` to keep the matrix
+  # under a few minutes. The release workflow does the actual bundling.
+  build-app:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: linux-x86_64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows-x86_64
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            label: macos-aarch64
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libgtk-layer-shell-dev \
+            libx11-dev \
+            libxdo-dev \
+            libwayland-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: app/package.json
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Frontend build
+        working-directory: app
+        run: npm run build
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          shared-key: ci-${{ matrix.label }}
+
+      - name: Build app
+        working-directory: app/src-tauri
+        run: cargo check --target ${{ matrix.target }}
