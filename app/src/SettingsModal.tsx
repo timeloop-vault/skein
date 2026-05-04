@@ -8,8 +8,19 @@
 // The actual state lives in App.tsx via usePersistedState; this is a
 // dumb component that takes values + setters.
 
-import { useEffect } from "react";
+import { getVersion } from "@tauri-apps/api/app";
+import { check } from "@tauri-apps/plugin-updater";
+import { useCallback, useEffect, useState } from "react";
 import type { Density, Theme } from "./types.ts";
+
+type UpdateState =
+	| { status: "idle" }
+	| { status: "checking" }
+	| { status: "current" }
+	| { status: "available"; version: string; notes: string | undefined }
+	| { status: "downloading"; downloaded: number; total: number | undefined }
+	| { status: "ready" }
+	| { status: "error"; message: string };
 
 interface SettingsModalProps {
 	theme: Theme;
@@ -63,6 +74,58 @@ export const SettingsModal = ({
 
 	const clampScale = (n: number): number =>
 		Math.min(uiScaleMax, Math.max(uiScaleMin, Math.round(n * 100) / 100));
+
+	// Updater UI: pulled into the modal so the user can check + install
+	// updates from a discoverable surface. Tauri's updater plugin
+	// handles the cryptographic verification (against the pubkey in
+	// tauri.conf.json) and writes the new bundle in place.
+	const [version, setVersion] = useState<string>("");
+	useEffect(() => {
+		void getVersion().then(setVersion);
+	}, []);
+
+	const [update, setUpdate] = useState<UpdateState>({ status: "idle" });
+	const checkForUpdate = useCallback(async () => {
+		setUpdate({ status: "checking" });
+		try {
+			const found = await check();
+			if (!found) {
+				setUpdate({ status: "current" });
+				return;
+			}
+			setUpdate({ status: "available", version: found.version, notes: found.body });
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			setUpdate({ status: "error", message });
+		}
+	}, []);
+
+	const downloadAndInstall = useCallback(async () => {
+		setUpdate({ status: "downloading", downloaded: 0, total: undefined });
+		try {
+			const found = await check();
+			if (!found) {
+				setUpdate({ status: "current" });
+				return;
+			}
+			let downloaded = 0;
+			let total: number | undefined;
+			await found.downloadAndInstall((event) => {
+				if (event.event === "Started") {
+					total = event.data.contentLength;
+					setUpdate({ status: "downloading", downloaded: 0, total });
+				} else if (event.event === "Progress") {
+					downloaded += event.data.chunkLength;
+					setUpdate({ status: "downloading", downloaded, total });
+				} else if (event.event === "Finished") {
+					setUpdate({ status: "ready" });
+				}
+			});
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			setUpdate({ status: "error", message });
+		}
+	}, []);
 
 	return (
 		<div className="sk-modal-bg" onClick={onClose}>
@@ -156,6 +219,58 @@ export const SettingsModal = ({
 							>
 								+
 							</button>
+						</div>
+					</div>
+
+					<div className="sk-field">
+						<label>About</label>
+						<div className="sk-update">
+							<div className="sk-update-row">
+								<span className="sk-update-version">Skein {version || "—"}</span>
+								<button
+									type="button"
+									className="sk-btn"
+									onClick={checkForUpdate}
+									disabled={update.status === "checking" || update.status === "downloading"}
+								>
+									{update.status === "checking" ? "Checking…" : "Check for updates"}
+								</button>
+							</div>
+							{update.status === "current" && (
+								<div className="sk-update-msg ok">You're on the latest version.</div>
+							)}
+							{update.status === "available" && (
+								<div className="sk-update-msg">
+									<div>
+										Update available: <strong>{update.version}</strong>
+									</div>
+									{update.notes && <pre className="sk-update-notes">{update.notes}</pre>}
+									<button
+										type="button"
+										className="sk-btn primary"
+										onClick={downloadAndInstall}
+										style={{ marginTop: 6 }}
+									>
+										Download & install
+									</button>
+								</div>
+							)}
+							{update.status === "downloading" && (
+								<div className="sk-update-msg">
+									Downloading…{" "}
+									{update.total
+										? `${Math.round((update.downloaded / update.total) * 100)}%`
+										: `${(update.downloaded / 1024).toFixed(0)} KB`}
+								</div>
+							)}
+							{update.status === "ready" && (
+								<div className="sk-update-msg ok">
+									Update installed. Restart Skein to use the new version.
+								</div>
+							)}
+							{update.status === "error" && (
+								<div className="sk-update-msg err">Update failed: {update.message}</div>
+							)}
 						</div>
 					</div>
 				</div>

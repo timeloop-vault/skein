@@ -184,6 +184,48 @@ body {
 	margin-left: 8px;
 }
 
+/* Updater UI inside the settings modal — current version + check button
+   plus a multi-state result row underneath. */
+.sk-update {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.sk-update-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.sk-update-version {
+	font-family: var(--sk-mono);
+	font-size: 12px;
+	color: var(--fg-1);
+}
+.sk-update-msg {
+	font-family: var(--sk-mono);
+	font-size: 11px;
+	color: var(--fg-2);
+}
+.sk-update-msg.ok {
+	color: var(--ok);
+}
+.sk-update-msg.err {
+	color: var(--err);
+}
+.sk-update-notes {
+	margin: 6px 0 0;
+	padding: 8px 10px;
+	background: var(--bg-2);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	font-size: 10.5px;
+	color: var(--fg-1);
+	white-space: pre-wrap;
+	max-height: 120px;
+	overflow: auto;
+}
+
 /* Window controls — minimize / toggle-maximize / close.
    30 px tall to match the titlebar; 46 px wide is the Windows convention.
    Close hovers red (#c42b1c is the standard Win11 close-button red). */
