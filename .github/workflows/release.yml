@@ -1,0 +1,162 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: linux-x86_64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows-x86_64
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            label: macos-aarch64
+          - platform: macos-14
+            target: x86_64-apple-darwin
+            label: macos-x86_64
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libgtk-layer-shell-dev \
+            libx11-dev \
+            libxdo-dev \
+            libwayland-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: app/package.json
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          shared-key: ${{ matrix.label }}
+
+      # Derive version from git tag (v0.2.0 → 0.2.0,
+      # v0.2.0-beta.1 → 0.2.0-beta.1). For manual dispatch, fall
+      # back to 0.0.0-dev so the build still produces something
+      # uniquely-named without colliding with a real release.
+      - name: Derive version from tag
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+            VERSION="${TAG#v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Using version: $VERSION"
+
+      # MSI and Cargo.toml require strict numeric semver (X.Y.Z), so
+      # pre-release suffixes like -beta.1 are stripped for those files.
+      # tauri.conf.json and package.json keep the full version so the
+      # updater manifest and About display match the tag.
+      - name: Patch version
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SEMVER=$(echo "$VERSION" | sed 's/-.*//')
+          cd app
+          node -e "
+            const fs = require('fs');
+            const version = '$VERSION';
+            const semver = '$SEMVER';
+
+            const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+            conf.version = semver;
+            fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, '\t') + '\n');
+
+            let cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8');
+            cargo = cargo.replace(/^version = .*/m, 'version = \"' + semver + '\"');
+            fs.writeFileSync('src-tauri/Cargo.toml', cargo);
+
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = version;
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, '\t') + '\n');
+          "
+          cd ..
+
+      # --- Release event: build + attach artifacts to the GitHub Release ---
+      - name: Build and publish release
+        if: github.event_name == 'release'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tauriScript: npx tauri
+          args: --target ${{ matrix.target }}
+          tagName: ${{ github.event.release.tag_name }}
+          releaseName: ${{ github.event.release.name }}
+          releaseId: ${{ github.event.release.id }}
+          releaseDraft: false
+          prerelease: ${{ github.event.release.prerelease }}
+          includeUpdaterJson: true
+
+      # --- Manual dispatch: build only, upload as workflow artifacts ---
+      # Useful for sanity-checking the matrix builds cleanly before
+      # cutting a real release.
+      - name: Build (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: app
+        run: npx tauri build --target ${{ matrix.target }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Upload artifacts (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: |
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+            app/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.sig
