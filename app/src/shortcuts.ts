@@ -18,10 +18,6 @@
 export const isMac =
 	typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("mac");
 
-/** Cheap Windows detection used by chapter 7 phase 2's ConPTY throttle. */
-export const isWindows =
-	typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("win");
-
 /** True when the platform's primary modifier is held (and only that one). */
 export const isModKey = (e: KeyboardEvent): boolean =>
 	isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;

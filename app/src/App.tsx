@@ -37,11 +37,16 @@ interface HarnessBodyProps {
 
 const HarnessBody = ({ harness, fontSize, defaultShell, onCmdChange }: HarnessBodyProps) => {
 	if (harness.cmd && harness.cwd !== undefined) {
+		// mountKey changes whenever cmd content does — that's the trigger
+		// for a clean unmount + remount when the user picks Enter-for-
+		// shell after a child exits. Joining the array gives a value-
+		// equal string across renders that are content-identical, so a
+		// re-render with the same cmd doesn't churn the PTY.
 		return (
 			<LiveTerminal
 				cmd={harness.cmd}
 				cwd={harness.cwd}
-				mountKey={harness.id}
+				mountKey={`${harness.id}:${harness.cmd.join("\x00")}`}
 				fontSize={fontSize}
 				defaultShell={defaultShell}
 				onCmdChange={onCmdChange}

@@ -9,15 +9,18 @@
 // alive — the resize/fit path is guarded against zero-size hosts so we
 // never tell xterm or the child that the terminal shrank to 1×1.
 //
-// When the child exits we keep the xterm and its scrollback alive,
-// write a "[skein] x exited (N)" line + footer, and intercept the
-// next keystroke. Enter spawns the user's default shell into the
-// same xterm (and persists that as the harness's cmd via
-// onCmdChange) so the user can keep using the pane after a TUI
-// quits. There's no in-pane retry — chapter 5 makes harnesses
-// resume on Skein restart anyway, and "create a new harness" or
-// `claude --resume <uuid>` from the shell cover the same intent
-// without the alt-screen handover bug class.
+// When the child exits we keep the xterm and its scrollback alive
+// long enough to write a "[skein] x exited (N)" line + "Press Enter
+// for shell." footer. Pressing Enter calls `onCmdChange(shell)`,
+// which updates the harness's stored cmd. App.tsx's HarnessBody
+// derives the LiveTerminal mountKey from the cmd content, so a cmd
+// change triggers a React unmount + fresh remount: new xterm, new
+// PTY, no alt-screen state to reset, no scrollback to preserve. This
+// is the only path back to a usable pane after a TUI exits — there's
+// no in-pane retry. Chapter 5 makes harnesses resume on Skein
+// restart anyway, and `claude --resume <uuid>` from the shell covers
+// "come back to my conversation" without the alt-screen handover
+// bug class.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -25,7 +28,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
-import { isAppShortcut, isMac, isWindows } from "./shortcuts.ts";
+import { isAppShortcut, isMac } from "./shortcuts.ts";
 
 type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
 
@@ -146,8 +149,13 @@ export const LiveTerminal = ({
 				if (e.key === "Enter") {
 					const shell = defaultShellRef.current;
 					if (shell.length > 0) {
+						// onCmdChange propagates the new cmd up to App
+						// state. App's HarnessBody derives mountKey from
+						// cmd content, so this triggers an unmount +
+						// remount and a clean shell spawns into a fresh
+						// xterm. No respawn / reset logic to maintain
+						// here — just hand off and let React do it.
 						onCmdChangeRef.current(shell);
-						void respawn(shell);
 					}
 					return false;
 				}
@@ -256,52 +264,6 @@ export const LiveTerminal = ({
 				// no idea Enter still drops them into a shell.
 				term.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
 				phase = "exited";
-			}
-		};
-
-		const respawn = async (cmdToSpawn: string[]) => {
-			// Old PTY is already exited; pty_kill cleans the manager's
-			// HashMap entry and is a no-op against the dead child. We
-			// always call it, even if ptyIdRef was cleared by handleExit,
-			// because the manager entry (with its leaked reader thread on
-			// Windows ConPTY) is still parked on the old master.
-			const oldId = ptyIdRef.current;
-			if (oldId) void invoke("pty_kill", { id: oldId });
-			ptyIdRef.current = null;
-
-			// Hand a clean canvas to the next child:
-			//   \x1b[?1049l — exit the alternate screen buffer if the
-			//                 previous child left us in it (some TUIs
-			//                 terminate without restoring main screen).
-			//   \x1b[2J     — clear the visible viewport (does NOT touch
-			//                 main-screen scrollback).
-			//   \x1b[H      — home the cursor.
-			//   \x1b[0m     — reset SGR (colour / bold / inverse) so
-			//                 the previous child's last attributes
-			//                 don't tint the shell prompt.
-			term.write("\x1b[?1049l\x1b[2J\x1b[H\x1b[0m");
-			term.scrollToBottom();
-
-			// Kill/spawn throttle on Windows ConPTY. VS Code mitigates
-			// microsoft/vscode#71966 (and friends) by keeping a 250 ms
-			// minimum between killing one PTY and spawning the next;
-			// without it the ConPTY host can hang. portable-pty uses
-			// the same ConPTY API. No-op on macOS / Linux.
-			if (isWindows) {
-				await new Promise((resolve) => setTimeout(resolve, 250));
-			}
-
-			await startPty(cmdToSpawn);
-
-			// Nudge the new child to issue its initial redraw via
-			// SIGWINCH (Unix) / ResizePseudoConsole (Windows). The
-			// child was spawned with the correct dims, but some
-			// alt-screen TUIs only repaint when they see a
-			// size signal — without the nudge, the first frame can be
-			// missing or partial until the user types something.
-			const newId = ptyIdRef.current;
-			if (newId) {
-				void invoke("pty_resize", { id: newId, rows: term.rows, cols: term.cols });
 			}
 		};
 
