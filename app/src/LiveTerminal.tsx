@@ -72,6 +72,17 @@ export const LiveTerminal = ({
 	const onCmdChangeRef = useRef(onCmdChange);
 	onCmdChangeRef.current = onCmdChange;
 
+	// Run only on mountKey changes. cmd / cwd / fontSize are consumed
+	// once at first mount: cmd seeds lastCmd which respawn mutates
+	// thereafter; cwd is fixed for a harness; fontSize has its own
+	// retune effect below. Listing them in the dep array (the obvious
+	// fix to satisfy useExhaustiveDependencies) made every App render
+	// produce a fresh cmd-array reference, which made the cleanup tear
+	// down the live PTY and the next effect-run re-spawn with the same
+	// `--session-id <uuid>`. Claude refuses to reclaim a session whose
+	// .jsonl file already exists, so the existing harness died with
+	// "Session ID is already in use." Suppress the lint instead.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: see comment.
 	useEffect(() => {
 		const host = containerRef.current;
 		if (!host) return;
@@ -138,7 +149,25 @@ export const LiveTerminal = ({
 					return false;
 				}
 				if (e.key === "r" || e.key === "R") {
-					void respawn(lastCmd);
+					// Chapter 7 follow-up: a fresh Claude harness is spawned
+					// with `claude --session-id <uuid>` (chapter 5 phase 2a),
+					// which Claude refuses to re-use once the JSONL session
+					// file exists. Translate to the resume form so R re-
+					// attaches to the same conversation instead of erroring
+					// "Session ID is already in use." For other shapes
+					// (already-resume cmd, shell, opencode) lastCmd is fine
+					// as-is; opencode's session-id capture lives on the
+					// Harness, not in the cmd, so we can't reach it from
+					// here without plumbing — its R will spawn fresh
+					// opencode (creates new conversation, not ideal but
+					// not crashing).
+					const isFreshClaude =
+						lastCmd.length === 3 &&
+						lastCmd[0] === "claude" &&
+						lastCmd[1] === "--session-id" &&
+						!!lastCmd[2];
+					const retryCmd = isFreshClaude ? ["claude", "--resume", lastCmd[2] as string] : lastCmd;
+					void respawn(retryCmd);
 					return false;
 				}
 				// Swallow other keys while at the prompt — forwarding
@@ -320,11 +349,7 @@ export const LiveTerminal = ({
 			spawnedRef.current = null;
 			ptyIdRef.current = null;
 		};
-		// cmd/cwd/fontSize are stable for a given mountKey (cmd is mutated
-		// via onCmdChange but the spawnedRef guard short-circuits before
-		// any work happens; fontSize is reapplied by the effect below).
-		// Listed only to satisfy useExhaustiveDependencies.
-	}, [mountKey, cmd, cwd, fontSize]);
+	}, [mountKey]);
 
 	// Live font-size changes: retune the existing terminal without
 	// re-spawning the PTY. fit() recomputes rows/cols at the new cell
