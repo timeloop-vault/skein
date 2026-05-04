@@ -4,145 +4,110 @@ Chapter 2 phase 4 wired Enter-for-shell and R-to-retry into the
 post-exit prompt. Enter works reliably — the new child is a plain
 shell, no alt-screen contention with whatever just exited. **R is
 fragile when both the previous and the next child are TUIs**
-(Claude → R → opencode in the same harness). The first TUI's alt
+(Claude → R → opencode in the same harness): the first TUI's alt
 screen, cursor position, and SGR state linger; the second TUI
 inherits a corrupted viewport. This has been the longest-standing
 bug in the prototype and was deliberately parked for "its own
 chapter" since chapter 2's close.
 
-Two flavours of root cause:
-
-1. **PTY-side child-exit detection is OS-dependent.** Today
-   `PtyManager` treats reader EOF as "child gone." On macOS / Linux
-   that mostly correlates with the child actually exiting. On
-   Windows ConPTY the reader pipe stays open after the child exits
-   — Skein never notices, never offers Enter / R, and the harness
-   pane appears frozen.
-2. **xterm-side state isn't reset between PTY swaps.** When R
-   respawns, we just point xterm at a new PTY's byte stream. xterm
-   is still in alt-screen mode (DECSET 1049 from the previous
-   child), still has cursor position from the previous child's last
-   write, still has whatever SGR attributes were active. The new
-   child writes its own setup but starts from a polluted base.
-
 This chapter is **cross-platform from line one**. Mac, Windows, and
-Linux are all first-class targets; phase 1 documents per-OS
-contracts, phase 2 implements them, and phase 5 covers what
-verification a Mac dev box can't do alone (with chapter 8 picking up
-the rest as part of distribution).
+Linux are all first-class targets; Windows ConPTY in particular has
+known quirks ([microsoft/vscode#71966](https://github.com/microsoft/vscode/issues/71966)
+and friends) that VS Code worked around and Skein currently doesn't.
 
-We are not reinventing terminal embedding. VS Code's
-`vscode/src/vs/platform/terminal/node/terminalProcess.ts` and
-wezterm's `pty` crate have already worked through the corner cases
-on each OS. **Phase 1's deliverable is reading their patterns and
-documenting what we lift.** Skipping the recon and inventing risks
-re-finding bugs they already fixed.
+## Recon revised the scope
+
+Phase 1 (`docs/chapter-7-recon.md`) read portable-pty's per-OS
+contracts and VS Code's `terminalProcess.ts`, then re-read Skein's
+`pty.rs` and `LiveTerminal.respawn`. Headline finding: **the
+substrate is mostly already correct.** Chapter 2 phase 4 wired
+the dual-thread reader+waiter pattern needed for Windows ConPTY,
+and `respawn` already issues three of the four DEC reset sequences.
+The remaining work is filling specific holes, not rewriting.
+
+The original plan oversold this as a substrate rewrite. Below is the
+revised scope. Numbers in `[brackets]` reference recon §5's gap
+table.
 
 ## Phase 1 — Reconnaissance
 
-**Goal:** every assumption phases 2 / 3 / 4 make about how PTYs
-behave on macOS, Linux, and Windows is verified against
-already-working implementations and written down. Code-free spike;
-chapter 5 phase 1's pattern.
+**Done.** See [`chapter-7-recon.md`](./chapter-7-recon.md).
+Phases 2-4 cite it.
 
-- Read `vscode/src/vs/platform/terminal/node/terminalProcess.ts`
-  end-to-end. Note the platform branches (`process.platform`),
-  the child-spawn / signal / disposal lifecycle, and how alt-screen
-  handover is staged.
-- Read wezterm's `pty` crate (`unix.rs`, `win.rs`,
-  `cmdbuilder.rs`). Same — note the platform-specific `Child`
-  reaping, reader lifecycle, and ConPTY's `ResizePseudoConsole`
-  / `ClosePseudoConsole` ordering.
-- For each of macOS / Linux / Windows, document:
-  - **Child-exit signal**: how does the host know the child
-    process is gone? (SIGCHLD reap on Unix; `GetExitCodeProcess`
-    polling on Windows.)
-  - **Reader-pipe lifecycle**: does the reader EOF on child exit?
-    (Yes on Unix; no on Windows ConPTY — pipe stays open.)
-  - **Resize semantics**: how does a resize trigger a redraw?
-    (`TIOCSWINSZ` ioctl + SIGWINCH on Unix;
-    `ResizePseudoConsole` on Windows.)
-  - **Alt-screen sequence**: which DEC mode codes the next child
-    will expect, and what state we should reset *before* feeding it
-    bytes.
-- Capture the patterns we'll lift wholesale. Skein's PTY layer is
-  thin and we don't need bespoke infra — we mostly need to wire up
-  the right calls in the right order.
-- Output: `docs/chapter-7-recon.md` — short, factual, phase-by-phase
-  cross-references. Phases 2-4 cite it.
+## Phase 2 — Windows ConPTY reliability
 
-**No code in phase 1.** Same rationale as chapter 5: cheap, kills
-unknowns, the alternative is debugging guesses through phase 2 on
-three OSes.
+**Goal:** close the two known-bad behaviours that VS Code works
+around but Skein currently doesn't. Both are Windows-specific in
+trigger, but applying them uniformly is simpler than per-OS
+branching where the cost on Unix is negligible.
 
-## Phase 2 — Cross-platform child-exit detection
+- **[1] Data-flush timeout in `pty.rs`'s waiter thread.** VS Code
+  waits 250 ms after the child exits for trailing data to drain
+  before firing its `_onProcessExit`. Skein currently emits
+  `PtyEvent::Exit` the moment `child.wait()` returns, racing the
+  reader thread on Windows ConPTY where the read pipe stays open
+  until the master is dropped. Insert a `thread::sleep(250 ms)`
+  between `child.wait()` and the `Exit` event — the reader keeps
+  draining during the window, so any final TUI frame makes it to
+  xterm before the prompt overwrites it.
 
-**Goal:** a single contract — `PtyEvent::Exit(code)` — that fires
-on every OS regardless of which signal got us there. The frontend
-stops having to care about platform.
+- **[2] Kill/spawn throttle on Windows in `LiveTerminal.respawn`.**
+  Mashing R immediately after a child dies triggers VS Code's
+  workaround range (`microsoft/vscode#71966`, `#117956`,
+  `#121336`) — ConPTY can hang the host between rapid kill and
+  spawn calls. Add a 250 ms `setTimeout` between the `pty_kill`
+  of the old PTY and the `pty_spawn` of the new, gated on
+  `isWindows`. Same source pattern (`navigator.platform`) as
+  chapter 4's `isMac` helper; add an `isWindows` export to
+  `shortcuts.ts`.
 
-- `PtyManager` (Rust) gains an OS-aware exit detector:
-  - **macOS / Linux**: keep today's reader-EOF path as the primary
-    signal. Pair it with a `child.try_wait()` poll on a short
-    timer to avoid the rare cases where reader stays open after
-    child exits (e.g. orphaned grandchildren).
-  - **Windows (ConPTY)**: reader-EOF can't be relied on. Spawn a
-    background task that polls `child.try_wait()` every ~100 ms;
-    on exit, drain the reader for any final output, then emit the
-    `Exit` event and close the pipe explicitly via
-    `ClosePseudoConsole`.
-- Single Rust event sent over the existing
-  `Channel<PtyEvent>` so the frontend's existing `handleExit`
-  path continues to work — the contract changes, the wire format
-  doesn't.
-- Tests where feasible: spawn `echo hi`, observe `Exit` fires
-  within ~250 ms on each OS. portable-pty's API may not be
-  test-friendly for ConPTY; prefer integration smoke tests in
-  the `pty` module.
-- Out of scope: arbitrary signal forwarding (SIGTERM / SIGKILL
-  semantics across OSes). Today's `pty_kill` stays as is.
+Both changes are bounded — well under 50 lines combined. No new
+Tauri commands, no schema changes, no frontend state.
 
-## Phase 3 — xterm state reset between PTY swaps
+## Phase 3 — Complete the xterm reset between PTY swaps
 
-**Goal:** the next child writes onto a clean terminal, regardless of
-what the previous child left behind.
+**Goal:** the next child writes onto a fully clean terminal.
 
-This phase is purely frontend (xterm.js + Tauri invoke). The same
-DEC sequences work on all OSes; xterm.js is OS-agnostic.
+`LiveTerminal.respawn` already issues `\x1b[?1049l` (exit alt
+screen), `\x1b[2J` (clear viewport), and `\x1b[H` (cursor home).
+Two pieces are missing.
 
-- Before mounting the new PTY's `onData`, write a deterministic
-  reset sequence to the existing `Terminal` instance:
-  - `\x1b[?1049l` — exit alt screen (DECRST 1049). If the prior
-    child already exited cleanly out of alt screen this is a
-    no-op; if not, it forces us back to the main buffer.
-  - `\x1b[H` — cursor home.
-  - `\x1b[2J` — erase entire viewport.
-  - `\x1b[0m` — reset SGR (colour, bold, underline, etc.).
-- After the reset, immediately `pty_resize` to xterm's current
-  dimensions. On Unix this fires SIGWINCH; on Windows this fires
-  `ResizePseudoConsole`. Either way the new child sees a "fresh
-  size" signal and (per terminal convention) issues its own
-  redraw.
-- The reset block is a tiny helper function in `LiveTerminal.tsx`
-  that respawn / R-retry / Enter-for-shell all funnel through.
+- **[3] SGR reset (`\x1b[0m`).** Without this, the previous child's
+  active colour / bold / underline / inverse state bleeds into the
+  next child's first writes until *it* sets its own SGR. Append to
+  the existing reset string. One byte per attribute slot, two-byte
+  total addition.
+
+- **[4] Explicit `pty_resize` after the new spawn.** Some TUIs only
+  redraw on a window-size signal (the alt-screen entry sequence
+  alone isn't enough). After `startPty(cmdToSpawn)` returns, fire
+  a `pty_resize` to the current xterm dimensions. On Unix this
+  becomes a SIGWINCH; on Windows it becomes
+  `ResizePseudoConsole`. Both nudge the new child to issue a
+  fresh full redraw.
+
+Frontend-only, OS-agnostic — DEC sequences and Tauri invokes work
+the same everywhere.
 
 ## Phase 4 — R-retry of TUIs, end-to-end
 
 **Goal:** the original test case works on every OS we can build for.
 
-- Wire phase 2 (clean exit detection) and phase 3 (clean xterm
-  reset) into chapter 2 phase 4's existing R / Enter handlers.
-  Same UX surface; the substrate is now solid.
-- Test matrix on macOS (primary dev box):
+- Manual test matrix on macOS (primary dev box):
   - Claude → R → Claude (same TUI re-spawn).
   - Claude → R → opencode (TUI → TUI handover — the headline bug).
   - Claude → R → shell (TUI → non-TUI).
   - shell → R → Claude (non-TUI → TUI).
-- Verify each: viewport clean, cursor positioned where the new
-  child wants it, no leftover SGR colour bleed, no "ghost" prompt
-  from the previous child.
-- Update `docs/backlog.md` to remove the chapter-2 entry now that
-  the fix has shipped.
+- For each: viewport clean, cursor where the new child wants it,
+  no leftover SGR colour bleed, no "ghost" prompt from the previous
+  child, no input lag (phase 2's data-flush is 250 ms — make sure
+  it doesn't *feel* sluggish).
+- Update `docs/backlog.md` to remove the chapter-2 PTY-rework entry
+  now that the fix has shipped.
+
+If a case fails the test, that's information for a follow-up patch
+in the same chapter — not a sign the design is wrong, more likely
+a missing reset byte or a TUI-specific quirk.
 
 ## Phase 5 — Cross-platform validation hand-off
 
@@ -152,35 +117,40 @@ needs to wait for chapter 8's actual Windows / Linux runs.
 - Document the manual test plan from phase 4 in a form a Windows /
   Linux user can follow — short checklist, expected output,
   failure modes to flag.
-- Capture the *specific* ConPTY quirks phase 2 wrote code for so a
-  Windows runtime test can confirm them empirically:
-  - Child exits, `Exit` event fires within budget.
-  - Reader doesn't hang Skein after child exit.
-  - `ResizePseudoConsole` propagates to the child.
-- Linux is mostly Unix-shaped, so the same Mac validation likely
-  applies — but call out anything we'd want to double-check on
-  GTK/X11 / Wayland (nothing PTY-related, more "does the WebView
-  render xterm.js identically").
-- This phase is **mostly notes** — minimal code. The actual
-  cross-OS verification overlaps with chapter 8 (distribution)
-  where Windows / Linux builds become real artifacts.
+- Capture the **specific** Windows behaviours phase 2 wrote code for
+  so a Windows runtime test can confirm them empirically:
+  - Trailing-frame TUI output makes it to xterm after natural
+    child exit (test by quitting Claude with `/exit` and verifying
+    the final goodbye line is visible).
+  - Mashing R repeatedly doesn't hang the harness pane (the
+    throttle does its job).
+  - `ResizePseudoConsole` propagates to the new child after R-retry.
+- Linux is mostly Unix-shaped, so the Mac validation likely
+  applies — but the recon doesn't cover GTK / Wayland WebView
+  rendering of xterm.js. Call out as "test on Linux when chapter 8
+  builds an actual artifact."
+- This phase is **mostly notes** — minimal code. The actual cross-
+  OS verification overlaps with chapter 8 (distribution) where
+  Windows / Linux builds become real artifacts.
 
 ## Out of scope for chapter 7
 
 See [`backlog.md`](./backlog.md) — anything we considered but pushed
 out has been merged there. Notably:
 
+- **Switching off portable-pty.** It's wezterm's own crate and gives
+  us the OS abstractions we need. node-pty (VS Code's choice) would
+  mean adopting their workaround stack wholesale, including the
+  bugs they've worked around. Stay on portable-pty.
+- **Flow control (PTY pause/resume).** VS Code does this when
+  unacknowledged char count exceeds a threshold. Prototype scale;
+  revisit if a TUI ever overwhelms the channel.
+- **`conptyInheritCursor` for initialText launches.** We don't seed
+  initial text at spawn. Revisit if we ever do.
 - **Multi-buffer / scrollback persistence across PTY swaps.** Today
-  Skein clears the viewport between swaps (phase 3 makes this
-  deterministic); preserving the *previous* child's scrollback as
-  history above the new child's prompt is a separate UX call.
-- **Mouse / paste protocol passthrough between PTY swaps.** Today
-  xterm handles its own mouse / clipboard bindings. Children in
-  alt-screen mode that grab mouse events keep working; this
-  chapter doesn't change that contract.
-- **TUI-aware line buffering** (e.g. detecting when the child
-  expects bracketed paste vs. raw mode). Out of scope; xterm and
-  the child negotiate this directly.
+  Skein clears the viewport between swaps; preserving the previous
+  child's scrollback as history above the new child's prompt is a
+  separate UX call, not a substrate question.
 - **Windows-specific signal forwarding** beyond what ConPTY
   abstracts. SIGINT / SIGTERM / etc. mapping to Windows' control
   events is its own rabbit hole.
