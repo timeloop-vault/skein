@@ -27,6 +27,9 @@ uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.34", features = ["bundled"] }
 notify-debouncer-mini = "0.6"
 skein-git = { path = "../../crates/skein-git" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 [lints.rust]
 unsafe_code = "forbid"

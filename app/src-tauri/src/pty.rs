@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -96,6 +96,14 @@ impl PtyManager {
         let Some((program, args)) = cmd.split_first() else {
             return Err(PtyError("pty_spawn: empty cmd".into()));
         };
+        tracing::info!(
+            id = %id,
+            cmd = ?cmd,
+            cwd = %cwd.display(),
+            rows,
+            cols,
+            "pty_spawn"
+        );
 
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -120,13 +128,22 @@ impl PtyManager {
         for (k, v) in std::env::vars() {
             builder.env(k, v);
         }
+        // GUI-launched .app bundles on macOS / Linux inherit a stripped
+        // PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) — not the user's shell
+        // PATH. So `claude`, `opencode`, Homebrew binaries, etc. aren't
+        // found. Read PATH from a login + interactive shell once and
+        // use it for every spawn. No-op on Windows (different launch
+        // model, no equivalent issue).
+        if let Some(path) = login_shell_path() {
+            builder.env("PATH", path);
+        }
         builder.env("TERM", "xterm-256color");
         builder.env("COLORTERM", "truecolor");
 
-        let mut child = pair
-            .slave
-            .spawn_command(builder)
-            .map_err(PtyError::from_err)?;
+        let mut child = pair.slave.spawn_command(builder).map_err(|e| {
+            tracing::error!(id = %id, cmd = ?cmd, error = %e, "pty_spawn child spawn failed");
+            PtyError::from_err(e)
+        })?;
         let killer = child.clone_killer();
 
         // Drop the slave handle so EOF reaches the read end correctly
@@ -160,11 +177,13 @@ impl PtyManager {
             }
         });
 
+        let exit_id = id.clone();
         thread::spawn(move || {
             // Blocks on the OS process handle — returns the moment the
             // child dies, regardless of pipe state. This is the *only*
             // reliable way to detect a natural exit on Windows `ConPTY`.
             let code = child.wait().ok().map(|s| s.exit_code());
+            tracing::info!(id = %exit_id, code = ?code, "pty exit");
             // Chapter 7 phase 2: data-flush timeout. The reader thread
             // can still deliver trailing bytes after the child has
             // exited — on Windows ConPTY especially, the read pipe
@@ -223,4 +242,42 @@ impl PtyManager {
             let _ = pty.killer.kill();
         }
     }
+}
+
+/// PATH from the user's login + interactive shell. Cached on first call.
+///
+/// `Some` on macOS / Linux when the shell prints something usable.
+/// Always `None` on Windows (different launch model — Explorer-launched
+/// apps already inherit the user's PATH from the registry, no fix
+/// needed).
+///
+/// This is the "Finder/Dock launches my .app with PATH=`/usr/bin:/bin`"
+/// fix. The user's `.zshrc` / `.bashrc` typically prepends Homebrew,
+/// nvm, pyenv, `~/.local/bin`, etc. — none of which a Finder launch
+/// inherits. We invoke the shell as `-il` (interactive + login) so
+/// every rc / profile gets sourced, then read `$PATH`. Does cost a
+/// shell startup once per Skein run (~50 ms on macOS), only on the
+/// first PTY spawn.
+#[cfg(not(target_os = "windows"))]
+fn login_shell_path() -> Option<&'static str> {
+    static CACHE: OnceLock<Option<String>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
+            let output = std::process::Command::new(&shell)
+                .args(["-ilc", "echo $PATH"])
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if path.is_empty() { None } else { Some(path) }
+        })
+        .as_deref()
+}
+
+#[cfg(target_os = "windows")]
+fn login_shell_path() -> Option<&'static str> {
+    None
 }

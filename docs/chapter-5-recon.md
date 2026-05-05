@@ -2,7 +2,7 @@
 
 Verified on macOS arm64 (Darwin 25.2.0) on 2026-05-03 against:
 
-- `claude` 2.1.126 (`Claude Code`) at `/Users/<user>/.local/bin/claude`
+- `claude` 2.1.126 (`Claude Code`) at `~/.local/bin/claude`
 - `opencode` 1.14.28 at `/opt/homebrew/bin/opencode`
 
 Phase 2 / 3 / 4 should cite the section numbers below rather than
@@ -70,10 +70,10 @@ machine):
 Examples:
 
 ```
-/Users/<user>                        → -Users-<user>
-/Users/<user>/git/private/skein      → -Users-<user>-git-private-skein
-/Users/<user>/git/example/feature-x
-                                       → -Users-<user>-git-example-feature-x
+/Users/<user>                          → -Users-<user>
+/Users/<user>/code/myproject           → -Users-<user>-code-myproject
+/Users/<user>/work/some-service/bar-fix
+                                       → -Users-<user>-work-some-service-bar-fix
 ```
 
 We did **not** verify spaces or non-ASCII characters. Skein only
@@ -164,7 +164,7 @@ The first three lines of an in-progress Claude session are typically:
 ```jsonl
 {"type":"last-prompt","leafUuid":"3bae1650-...","sessionId":"23d38993-..."}
 {"type":"permission-mode","permissionMode":"acceptEdits","sessionId":"23d38993-..."}
-{"parentUuid":null,"isSidechain":false,"type":"system","subtype":"bridge_status","content":"/remote-control is active. ...","timestamp":"2026-05-03T12:39:17.916Z","uuid":"3bae1650-...","userType":"external","entrypoint":"cli","cwd":"/Users/<user>/git/private/skein","sessionId":"23d38993-...","version":"2.1.126","gitBranch":"main"}
+{"parentUuid":null,"isSidechain":false,"type":"system","subtype":"bridge_status","content":"/remote-control is active. ...","timestamp":"2026-05-03T12:39:17.916Z","uuid":"3bae1650-...","userType":"external","entrypoint":"cli","cwd":"/Users/<user>/code/skein","sessionId":"23d38993-...","version":"2.1.126","gitBranch":"main"}
 ```
 
 Useful fields if we ever do parse:
