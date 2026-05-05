@@ -17,8 +17,6 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
-#[cfg(not(target_os = "windows"))]
-use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
@@ -95,9 +93,9 @@ impl PtyManager {
     where
         F: Fn(PtyEvent) + Send + Sync + 'static,
     {
-        let Some((program, args)) = cmd.split_first() else {
+        if cmd.is_empty() {
             return Err(PtyError("pty_spawn: empty cmd".into()));
-        };
+        }
         tracing::info!(
             id = %id,
             cmd = ?cmd,
@@ -117,30 +115,7 @@ impl PtyManager {
             })
             .map_err(PtyError::from_err)?;
 
-        let mut builder = CommandBuilder::new(program);
-        for arg in args {
-            builder.arg(arg);
-        }
-        builder.cwd(cwd);
-
-        // Forward the user's environment so spawned CLIs find their
-        // auth tokens, PATH entries, locale, etc. We override TERM and
-        // COLORTERM unconditionally — those are about how we render,
-        // not about what the user has configured.
-        for (k, v) in std::env::vars() {
-            builder.env(k, v);
-        }
-        // GUI-launched .app bundles on macOS / Linux inherit a stripped
-        // PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) — not the user's shell
-        // PATH. So `claude`, `opencode`, Homebrew binaries, etc. aren't
-        // found. Read PATH from a login + interactive shell once and
-        // use it for every spawn. No-op on Windows (different launch
-        // model, no equivalent issue).
-        if let Some(path) = login_shell_path() {
-            builder.env("PATH", path);
-        }
-        builder.env("TERM", "xterm-256color");
-        builder.env("COLORTERM", "truecolor");
+        let builder = build_command_builder(cmd, cwd);
 
         let mut child = pair.slave.spawn_command(builder).map_err(|e| {
             tracing::error!(id = %id, cmd = ?cmd, error = %e, "pty_spawn child spawn failed");
@@ -162,12 +137,27 @@ impl PtyManager {
         let on_event_reader = Arc::clone(&on_event);
         let on_event_waiter = on_event;
 
+        let reader_id = id.clone();
         thread::spawn(move || {
             let mut buf = [0u8; 8192];
+            let mut first_chunk_logged = false;
+            let mut total_bytes: usize = 0;
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
+                        total_bytes += n;
+                        if !first_chunk_logged {
+                            let preview_len = n.min(256);
+                            let preview = String::from_utf8_lossy(&buf[..preview_len]);
+                            tracing::info!(
+                                id = %reader_id,
+                                bytes = n,
+                                preview = %preview.escape_debug(),
+                                "pty first chunk from child"
+                            );
+                            first_chunk_logged = true;
+                        }
                         // UTF-8 lossy is good enough here. Most TUI
                         // traffic is valid UTF-8; the few invalid
                         // sequences (e.g. mid-frame splits) become
@@ -177,6 +167,12 @@ impl PtyManager {
                     }
                 }
             }
+            tracing::info!(
+                id = %reader_id,
+                total_bytes,
+                first_chunk_seen = first_chunk_logged,
+                "pty reader exit"
+            );
         });
 
         let exit_id = id.clone();
@@ -246,105 +242,82 @@ impl PtyManager {
     }
 }
 
-/// PATH from the user's login + interactive shell. Cached on first call.
+/// Build a `CommandBuilder` for spawning `cmd` inside a freshly-sourced
+/// user shell.
 ///
-/// `Some` on macOS / Linux when the shell prints something usable.
-/// Always `None` on Windows (different launch model — Explorer-launched
-/// apps already inherit the user's PATH from the registry, no fix
-/// needed).
+/// On macOS / Linux every spawn becomes
+/// `<shell> -ilc 'exec "$@"' skein <cmd…>`:
 ///
-/// This is the "Finder/Dock launches my .app with PATH=`/usr/bin:/bin`"
-/// fix. The user's `.zshrc` typically prepends Homebrew, nvm, pyenv,
-/// `~/.local/bin`, etc. — none of which a Finder launch inherits. We
-/// invoke the shell as `-il` (interactive + login) so every rc /
-/// profile gets sourced, then read `$PATH`. Does cost a shell startup
-/// once per Skein run (~50–200 ms), only on the first PTY spawn.
+/// - The shell is `$SHELL`, falling back to `/bin/zsh` on macOS and
+///   `/bin/bash` on Linux. (`$SHELL` is *not* set in Finder-launched
+///   .app bundles, which is why a fallback matters.)
+/// - `-il` makes the shell login + interactive, so every rc file
+///   (`.zshenv`, `.zprofile`, `.zshrc` …) gets sourced. This is the
+///   load-bearing part — that's where the user's PATH, LANG, XDG_*,
+///   tool-specific tokens, etc. come from.
+/// - `'exec "$@"'` runs the cmd in argv form, replacing the shell
+///   process so signals / job control / PTY semantics behave as if
+///   the cmd were spawned directly. The first positional arg
+///   (`skein`) becomes `$0` (a label) and the remaining args become
+///   `$1..$N`.
+/// - The shell sources rc files first, then `exec` flips the running
+///   binary into `cmd[0]` with the rich env in place.
 ///
-/// Two subtleties:
+/// On Windows, Explorer-launched apps already inherit the user's full
+/// env from the registry, so we spawn `cmd[0] cmd[1..]` directly with
+/// no shell wrapper.
 ///
-/// 1. `$SHELL` is *not* set in a Finder-launched .app's environment.
-///    We can't rely on it to find the user's preferred shell. Falling
-///    back to `/bin/bash` (the previous version of this) reads bash
-///    rc files only — which a zsh user has empty, so the user's PATH
-///    customizations from `.zshrc` are never sourced. Default to
-///    `/bin/zsh` on macOS instead (the OS default since Catalina);
-///    `/bin/bash` on Linux remains the right baseline.
-/// 2. The shell may print startup noise to stdout (nvm messages,
-///    `brew shellenv` echoes, etc.) before our `echo $PATH` line.
-///    Wrap the value in a sentinel so we extract just the PATH and
-///    not whatever else happened to land in stdout first.
-#[cfg(not(target_os = "windows"))]
-const PATH_PROBE_START: &str = "___SKEIN_PATH_BEGIN___";
-#[cfg(not(target_os = "windows"))]
-const PATH_PROBE_END: &str = "___SKEIN_PATH_END___";
-
-#[cfg(not(target_os = "windows"))]
-fn login_shell_path() -> Option<&'static str> {
-    static CACHE: OnceLock<Option<String>> = OnceLock::new();
-    CACHE.get_or_init(probe_login_shell_path).as_deref()
-}
-
-#[cfg(not(target_os = "windows"))]
-fn probe_login_shell_path() -> Option<String> {
-    let shell = std::env::var("SHELL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            if cfg!(target_os = "macos") {
-                "/bin/zsh".into()
-            } else {
-                "/bin/bash".into()
-            }
-        });
-
-    let probe = format!(r#"printf '%s%s%s' '{PATH_PROBE_START}' "$PATH" '{PATH_PROBE_END}'"#);
-
-    let output = match std::process::Command::new(&shell)
-        .args(["-ilc", &probe])
-        .output()
+/// Cost: ~50–200 ms per spawn (shell startup) on macOS. Skein only
+/// spawns when a harness is created or restored, so this is paid
+/// rarely and never during steady-state interaction.
+fn build_command_builder(cmd: &[String], cwd: &Path) -> CommandBuilder {
+    #[cfg(not(target_os = "windows"))]
     {
-        Ok(o) => o,
-        Err(e) => {
-            tracing::warn!(shell = %shell, error = %e, "login_shell_path: spawn failed");
-            return None;
+        let shell = resolve_user_shell();
+        tracing::debug!(shell = %shell, cmd = ?cmd, "wrapping spawn in login shell");
+        let mut builder = CommandBuilder::new(&shell);
+        builder.arg("-ilc");
+        builder.arg(r#"exec "$@""#);
+        // $0 — a label only; the actual program is $1.
+        builder.arg("skein");
+        for arg in cmd {
+            builder.arg(arg);
         }
-    };
-    if !output.status.success() {
-        tracing::warn!(
-            shell = %shell,
-            status = ?output.status,
-            stderr = %String::from_utf8_lossy(&output.stderr),
-            "login_shell_path: shell exited non-zero"
-        );
-        return None;
+        builder.cwd(cwd);
+        for (k, v) in std::env::vars() {
+            builder.env(k, v);
+        }
+        builder.env("TERM", "xterm-256color");
+        builder.env("COLORTERM", "truecolor");
+        builder
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let extracted = stdout
-        .find(PATH_PROBE_START)
-        .and_then(|s| {
-            let after = &stdout[s + PATH_PROBE_START.len()..];
-            after.find(PATH_PROBE_END).map(|e| after[..e].to_owned())
-        })
-        .filter(|p| !p.is_empty());
-
-    if let Some(ref path) = extracted {
-        tracing::info!(
-            shell = %shell,
-            path = %path,
-            "login_shell_path: captured user PATH"
-        );
-    } else {
-        tracing::warn!(
-            shell = %shell,
-            raw_stdout = %stdout,
-            "login_shell_path: failed to extract PATH from shell output"
-        );
+    #[cfg(target_os = "windows")]
+    {
+        let (program, args) = cmd.split_first().expect("caller checked cmd was non-empty");
+        let mut builder = CommandBuilder::new(program);
+        for arg in args {
+            builder.arg(arg);
+        }
+        builder.cwd(cwd);
+        for (k, v) in std::env::vars() {
+            builder.env(k, v);
+        }
+        builder.env("TERM", "xterm-256color");
+        builder.env("COLORTERM", "truecolor");
+        builder
     }
-    extracted
 }
 
-#[cfg(target_os = "windows")]
-fn login_shell_path() -> Option<&'static str> {
-    None
+#[cfg(not(target_os = "windows"))]
+fn resolve_user_shell() -> String {
+    if let Ok(shell) = std::env::var("SHELL") {
+        if !shell.is_empty() {
+            return shell;
+        }
+    }
+    if cfg!(target_os = "macos") {
+        "/bin/zsh".into()
+    } else {
+        "/bin/bash".into()
+    }
 }
