@@ -16,7 +16,9 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+#[cfg(not(target_os = "windows"))]
+use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
