@@ -254,29 +254,94 @@ impl PtyManager {
 /// needed).
 ///
 /// This is the "Finder/Dock launches my .app with PATH=`/usr/bin:/bin`"
-/// fix. The user's `.zshrc` / `.bashrc` typically prepends Homebrew,
-/// nvm, pyenv, `~/.local/bin`, etc. — none of which a Finder launch
-/// inherits. We invoke the shell as `-il` (interactive + login) so
-/// every rc / profile gets sourced, then read `$PATH`. Does cost a
-/// shell startup once per Skein run (~50 ms on macOS), only on the
-/// first PTY spawn.
+/// fix. The user's `.zshrc` typically prepends Homebrew, nvm, pyenv,
+/// `~/.local/bin`, etc. — none of which a Finder launch inherits. We
+/// invoke the shell as `-il` (interactive + login) so every rc /
+/// profile gets sourced, then read `$PATH`. Does cost a shell startup
+/// once per Skein run (~50–200 ms), only on the first PTY spawn.
+///
+/// Two subtleties:
+///
+/// 1. `$SHELL` is *not* set in a Finder-launched .app's environment.
+///    We can't rely on it to find the user's preferred shell. Falling
+///    back to `/bin/bash` (the previous version of this) reads bash
+///    rc files only — which a zsh user has empty, so the user's PATH
+///    customizations from `.zshrc` are never sourced. Default to
+///    `/bin/zsh` on macOS instead (the OS default since Catalina);
+///    `/bin/bash` on Linux remains the right baseline.
+/// 2. The shell may print startup noise to stdout (nvm messages,
+///    `brew shellenv` echoes, etc.) before our `echo $PATH` line.
+///    Wrap the value in a sentinel so we extract just the PATH and
+///    not whatever else happened to land in stdout first.
+#[cfg(not(target_os = "windows"))]
+const PATH_PROBE_START: &str = "___SKEIN_PATH_BEGIN___";
+#[cfg(not(target_os = "windows"))]
+const PATH_PROBE_END: &str = "___SKEIN_PATH_END___";
+
 #[cfg(not(target_os = "windows"))]
 fn login_shell_path() -> Option<&'static str> {
     static CACHE: OnceLock<Option<String>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-            let output = std::process::Command::new(&shell)
-                .args(["-ilc", "echo $PATH"])
-                .output()
-                .ok()?;
-            if !output.status.success() {
-                return None;
+    CACHE.get_or_init(probe_login_shell_path).as_deref()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn probe_login_shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            if cfg!(target_os = "macos") {
+                "/bin/zsh".into()
+            } else {
+                "/bin/bash".into()
             }
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            if path.is_empty() { None } else { Some(path) }
+        });
+
+    let probe = format!(r#"printf '%s%s%s' '{PATH_PROBE_START}' "$PATH" '{PATH_PROBE_END}'"#);
+
+    let output = match std::process::Command::new(&shell)
+        .args(["-ilc", &probe])
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!(shell = %shell, error = %e, "login_shell_path: spawn failed");
+            return None;
+        }
+    };
+    if !output.status.success() {
+        tracing::warn!(
+            shell = %shell,
+            status = ?output.status,
+            stderr = %String::from_utf8_lossy(&output.stderr),
+            "login_shell_path: shell exited non-zero"
+        );
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let extracted = stdout
+        .find(PATH_PROBE_START)
+        .and_then(|s| {
+            let after = &stdout[s + PATH_PROBE_START.len()..];
+            after.find(PATH_PROBE_END).map(|e| after[..e].to_owned())
         })
-        .as_deref()
+        .filter(|p| !p.is_empty());
+
+    if let Some(ref path) = extracted {
+        tracing::info!(
+            shell = %shell,
+            path = %path,
+            "login_shell_path: captured user PATH"
+        );
+    } else {
+        tracing::warn!(
+            shell = %shell,
+            raw_stdout = %stdout,
+            "login_shell_path: failed to extract PATH from shell output"
+        );
+    }
+    extracted
 }
 
 #[cfg(target_os = "windows")]

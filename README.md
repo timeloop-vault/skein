@@ -67,6 +67,20 @@ cd app && npm install && cd ..
 cd app && npm run tauri dev
 ```
 
+To verify bundled-.app behavior (stripped PATH, OS-conventional log
+dir, signed-asset codepaths) without going through the CI release
+cycle, build + Finder-launch a real bundle locally:
+
+```sh
+scripts/local-bundle.sh
+# Or for a faster, debug-symbols build:
+scripts/local-bundle.sh --debug
+```
+
+`npm run tauri dev` inherits your shell environment, so launch-time
+bugs that only show up in installed apps don't reproduce there. Use
+the bundle script when you're chasing one.
+
 ## Pre-commit
 
 A pre-commit hook runs `cargo fmt`, `cargo clippy -- -D warnings`,
