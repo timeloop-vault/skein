@@ -23,7 +23,7 @@
 // bug class.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -131,13 +131,20 @@ export const LiveTerminal = ({
 		let phase: "running" | "exited" = "running";
 		let programName = cmd[0] ?? "child";
 
-		// Clipboard bindings plus the post-exit prompt keys.
-		// macOS:        ⌘C / ⌘V — Ctrl+C / Ctrl+V keep their terminal
-		//               meaning (SIGINT and the rare paste byte).
-		// Win/Linux:    Ctrl+Shift+C / Ctrl+Shift+V — Ctrl+C / Ctrl+V
-		//               keep their terminal meaning the same way; Shift
-		//               disambiguates editor-style copy/paste, matching
-		//               VS Code's terminal, gnome-terminal, kitty, etc.
+		// Copy binding plus the post-exit prompt keys.
+		//
+		// **Copy** is custom because xterm needs to write the *selection*
+		// to the system clipboard, not the input bytes:
+		// - macOS:     ⌘C        (Ctrl+C still sends SIGINT to the PTY)
+		// - Win/Linux: Ctrl+Shift+C (Ctrl+C still sends SIGINT)
+		//
+		// **Paste** is left to xterm.js's native paste handling. xterm
+		// listens to the browser's `paste` event on its hidden textarea
+		// and writes the bytes through `term.onData`, which our
+		// outer wiring then forwards to the PTY. Adding our own Cmd+V
+		// handler used to fire that path *plus* the native one for a
+		// double-paste; see #5 / #4 — removing the custom branch fixes
+		// both.
 		term.attachCustomKeyEventHandler((e) => {
 			if (e.type !== "keydown") return true;
 
@@ -164,22 +171,14 @@ export const LiveTerminal = ({
 				return false;
 			}
 
-			const clipboardCombo = isMac
+			const copyCombo = isMac
 				? e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey
 				: e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
-			if (!clipboardCombo) return true;
-			if (e.code === "KeyC") {
+			if (copyCombo && e.code === "KeyC") {
 				const sel = term.getSelection();
 				if (sel) void writeText(sel);
 				// Suppress xterm's default handling either way — sending the
 				// raw modifier byte sequence to the PTY is rarely useful.
-				return false;
-			}
-			if (e.code === "KeyV") {
-				void readText().then((text) => {
-					const id = ptyIdRef.current;
-					if (text && id) void invoke("pty_write", { id, data: text });
-				});
 				return false;
 			}
 			return true;
