@@ -1,9 +1,20 @@
-// LiveStatus — real "what's changed?" pane for rooms with a real cwd.
+// LiveStatus — right-pane "what's changed?" view for any room with a
+// real cwd. Owns the watcher for that cwd and self-promotes between
+// modes:
+//   * "no git repo" placeholder — the cwd exists but isn't (yet) a git
+//     repo. Watcher is still active so a `git init` / `git clone` /
+//     unzip-of-a-tarball-with-a-.git inside the folder causes us to
+//     re-evaluate and switch into the live view without a reload.
+//   * Live view — the cwd is a repo. Status + diff fetched on mount
+//     and on every debounced watcher tick.
 //
-// Phase 5b: on mount we fetch the initial snapshot AND start a debounced
-// filesystem watcher; each tick re-fetches.
+// Phase 5b: on mount we fetch the initial snapshot AND start a
+// debounced filesystem watcher; each tick re-fetches.
 // Phase 5c: clicking a row reveals its diff in the bottom half. Diff is
 // re-fetched on every refresh so it stays in sync with the file list.
+// Issue #6: the watcher also re-checks `git_is_repo` so the pane
+// flips from "no git repo" to live when an agent (or the user)
+// initialises / clones into a previously-empty room folder.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -61,6 +72,10 @@ interface LiveStatusProps {
 }
 
 export const LiveStatus = ({ cwd }: LiveStatusProps) => {
+	// `null` = haven't checked yet; renders a tiny "checking…" line
+	// rather than flashing the no-git placeholder for one frame on
+	// every cwd change.
+	const [isRepo, setIsRepo] = useState<boolean | null>(null);
 	const [entries, setEntries] = useState<StatusDto[] | null>(null);
 	const [diffs, setDiffs] = useState<FileDiffDto[]>([]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -76,6 +91,21 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 		setLoading(true);
 		setError(null);
 		try {
+			// Re-check `is_repo` first. Cheap (single libgit2 open
+			// attempt) and the answer can change between ticks: an
+			// agent inside a non-git room might run `git init` /
+			// `git clone` and we want the pane to switch modes without
+			// a reload.
+			const repo = await invoke<boolean>("git_is_repo", { path: cwd });
+			setIsRepo(repo);
+			if (!repo) {
+				// Drop any stale data from a previous git lifetime
+				// (e.g. user removed `.git`).
+				setEntries(null);
+				setDiffs([]);
+				setSelectedPath(null);
+				return;
+			}
 			// Status and diff are independent calls — fire in parallel
 			// so a diff containing a few large files doesn't hold up
 			// the file list rendering.
@@ -102,8 +132,11 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 		void refresh();
 	}, [refresh]);
 
-	// File watcher — fires `refresh` whenever the worktree changes
-	// (debounced 200ms on the Rust side).
+	// File watcher — fires `refresh` whenever anything in the cwd
+	// changes (debounced 200ms on the Rust side). Always active,
+	// regardless of git status: we need the watcher running for a
+	// non-git folder *because* that's how we notice it became a git
+	// repo.
 	useEffect(() => {
 		const channel = new Channel<null>();
 		channel.onmessage = () => {
@@ -149,6 +182,36 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 	// the list expands to fill the pane, so this only matters for the
 	// split view.
 	const [listHeight, setListHeight] = usePersistedState<number>("liveStatusListHeight", 220);
+
+	// Non-git folder: render a placeholder. The watcher is still
+	// running — if a `.git` dir appears, the next refresh promotes us
+	// to the live view automatically.
+	if (isRepo === false) {
+		return (
+			<div
+				style={{
+					flex: 1,
+					display: "flex",
+					flexDirection: "column",
+					alignItems: "center",
+					justifyContent: "center",
+					gap: 6,
+					padding: 24,
+					color: "var(--fg-3)",
+					background: "var(--bg-1)",
+					textAlign: "center",
+					fontFamily: "var(--sk-mono)",
+					fontSize: 11,
+				}}
+				title={cwd}
+			>
+				<span style={{ color: "var(--fg-2)", fontSize: 13 }}>no git repo</span>
+				<span>
+					Skein will switch to the live view automatically once this folder becomes a repo.
+				</span>
+			</div>
+		);
+	}
 
 	const fileListEl = (
 		<div

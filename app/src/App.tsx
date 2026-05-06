@@ -1344,11 +1344,11 @@ export default function App() {
 							display: r.id === activeRoomId ? "flex" : "none",
 						}}
 					>
-						{r.cwd && r.branch ? (
-							<LiveStatus cwd={r.cwd} />
-						) : r.cwd ? (
-							<div className="sk-no-git">no git repo</div>
-						) : null}
+						{/* LiveStatus owns the git-vs-not decision now (issue #6). It
+						    starts a watcher even on non-git cwds and self-promotes when
+						    a `.git` dir appears, so the room stops being frozen at
+						    creation time. */}
+						{r.cwd ? <LiveStatus cwd={r.cwd} /> : null}
 					</div>
 				))}
 			/>
