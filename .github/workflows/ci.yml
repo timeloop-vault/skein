@@ -1,10 +1,10 @@
 name: CI
 
+# Manual-only for now — the matrix is multi-platform and cycles
+# burn through Actions minutes faster than this prototype warrants.
+# Re-add `push:` / `pull_request:` triggers when the project is
+# closer to shipping.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch: {}
 
 concurrency:
