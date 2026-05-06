@@ -137,7 +137,7 @@ impl PtyManager {
         // use it for every spawn. No-op on Windows (different launch
         // model, no equivalent issue).
         if let Some(path) = login_shell_path() {
-            builder.env("PATH", path);
+            builder.env("PATH", augment_path(path));
         }
         builder.env("TERM", "xterm-256color");
         builder.env("COLORTERM", "truecolor");
@@ -349,4 +349,42 @@ fn probe_login_shell_path() -> Option<String> {
 #[cfg(target_os = "windows")]
 fn login_shell_path() -> Option<&'static str> {
     None
+}
+
+/// Prepend conventional Unix bin locations to a PATH so user-installed
+/// CLIs are findable even when the user's shell rc files don't add
+/// them.
+///
+/// `~/.local/bin` is the de-facto standard install location for `pip
+/// install --user`, `pipx`, `uv tool`, claude's installer, etc. Many
+/// shell configurations rely on it being already in `PATH` (set by
+/// `~/.zprofile`, VS Code's terminal-integrated env, or similar) and
+/// don't add it themselves — which means a Finder-launched `.app`
+/// gets a `PATH` that lacks it. `~/bin` is the same story for hand-
+/// rolled scripts.
+///
+/// Idempotent: skips entries already present. Skips entries whose
+/// directory doesn't exist.
+fn augment_path(base: &str) -> String {
+    let Ok(home) = std::env::var("HOME") else {
+        return base.to_owned();
+    };
+    let candidates = [format!("{home}/.local/bin"), format!("{home}/bin")];
+    let mut existing: Vec<&str> = base.split(':').collect();
+    let mut prepended: Vec<String> = Vec::new();
+    for c in &candidates {
+        if !std::path::Path::new(c).is_dir() {
+            continue;
+        }
+        if existing.contains(&c.as_str()) {
+            continue;
+        }
+        prepended.push(c.clone());
+    }
+    if prepended.is_empty() {
+        return base.to_owned();
+    }
+    let prepended_str = prepended.join(":");
+    existing.insert(0, &prepended_str);
+    existing.join(":")
 }
