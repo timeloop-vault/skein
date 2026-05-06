@@ -140,24 +140,10 @@ impl PtyManager {
         let reader_id = id.clone();
         thread::spawn(move || {
             let mut buf = [0u8; 8192];
-            let mut first_chunk_logged = false;
-            let mut total_bytes: usize = 0;
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        total_bytes += n;
-                        if !first_chunk_logged {
-                            let preview_len = n.min(256);
-                            let preview = String::from_utf8_lossy(&buf[..preview_len]);
-                            tracing::info!(
-                                id = %reader_id,
-                                bytes = n,
-                                preview = %preview.escape_debug(),
-                                "pty first chunk from child"
-                            );
-                            first_chunk_logged = true;
-                        }
                         // UTF-8 lossy is good enough here. Most TUI
                         // traffic is valid UTF-8; the few invalid
                         // sequences (e.g. mid-frame splits) become
@@ -167,12 +153,7 @@ impl PtyManager {
                     }
                 }
             }
-            tracing::info!(
-                id = %reader_id,
-                total_bytes,
-                first_chunk_seen = first_chunk_logged,
-                "pty reader exit"
-            );
+            tracing::info!(id = %reader_id, "pty reader exit");
         });
 
         let exit_id = id.clone();
