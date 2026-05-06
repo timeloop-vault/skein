@@ -159,6 +159,14 @@ install it.
 
 ## Phase 6 — Cross-platform runtime verification
 
+**Status: deferred.** Needs a Windows machine and a Linux machine
+neither of which I have access to. Will revisit when a tester
+materialises or when bug reports start coming in from real users.
+The MSI / AppImage artifacts *build* cleanly on the release
+matrix (CI passes on all four targets), but they haven't been
+*run*. Chapters 6/7 may have macOS-only assumptions that won't
+surface until then.
+
 **Goal:** chapter 7's phase 5 hand-off finally happens. Confirms
 chapter 6 + 7 work on the OSes we don't dev on.
 
