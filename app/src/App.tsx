@@ -523,6 +523,10 @@ const EmptyState = ({ onNew, archivedCount, onReopen }: EmptyStateProps) => (
 				<span>Next room (⇧ for previous, 1-9 for nth)</span>
 			</div>
 			<div className="row">
+				<span className="kbd">{modLabel} →</span>
+				<span>Next harness (⌘ ⇧ → for next room, ⌘ ← / ⌘ ⇧ ← for previous)</span>
+			</div>
+			<div className="row">
 				<span className="kbd">{modLabel} W</span>
 				<span>Close active room</span>
 			</div>
@@ -939,6 +943,8 @@ export default function App() {
 	addHarnessRef.current = addHarness;
 	const closeRoomRef = useRef(closeRoom);
 	closeRoomRef.current = closeRoom;
+	const switchHarnessInRoomRef = useRef(switchHarnessInRoom);
+	switchHarnessInRoomRef.current = switchHarnessInRoom;
 	const roomsRef = useRef(rooms);
 	roomsRef.current = rooms;
 	// Keyboard nav (Mod+Tab, Mod+1..9) keys off active rooms only —
@@ -965,6 +971,18 @@ export default function App() {
 			if (next) setActiveRoomId(next.id);
 		};
 
+		const cycleHarness = (delta: number) => {
+			const list = activeRoomsRef.current;
+			const active = activeRoomIdRef.current;
+			const room = list.find((r) => r.id === active);
+			if (!room || room.harnesses.length === 0) return;
+			const idx = room.harnesses.findIndex((h) => h.id === room.activeHarnessId);
+			const baseIdx = idx === -1 ? 0 : idx;
+			const nextIdx = (baseIdx + delta + room.harnesses.length) % room.harnesses.length;
+			const next = room.harnesses[nextIdx];
+			if (next) switchHarnessInRoomRef.current(room.id, next.id);
+		};
+
 		const onKey = (e: KeyboardEvent) => {
 			if (!isAppShortcut(e)) return;
 			e.preventDefault();
@@ -975,8 +993,10 @@ export default function App() {
 			if (e.shiftKey) {
 				if (e.code === "KeyH") {
 					if (active) addHarnessRef.current(active);
-				} else if (e.code === "Tab") {
+				} else if (e.code === "Tab" || e.code === "ArrowLeft") {
 					cycleRoom(-1);
+				} else if (e.code === "ArrowRight") {
+					cycleRoom(1);
 				}
 				return;
 			}
@@ -1003,6 +1023,12 @@ export default function App() {
 					break;
 				case "Tab":
 					cycleRoom(1);
+					break;
+				case "ArrowLeft":
+					cycleHarness(-1);
+					break;
+				case "ArrowRight":
+					cycleHarness(1);
 					break;
 				default:
 					if (/^Digit[1-9]$/.test(e.code)) {

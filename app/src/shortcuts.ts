@@ -32,6 +32,8 @@ export const isAppShortcut = (e: KeyboardEvent): boolean => {
 	if (e.shiftKey) {
 		if (e.code === "KeyH") return true; // add harness
 		if (e.code === "Tab") return true; // previous room
+		if (e.code === "ArrowLeft") return true; // previous room (alias)
+		if (e.code === "ArrowRight") return true; // next room (alias)
 		return false;
 	}
 
@@ -41,6 +43,8 @@ export const isAppShortcut = (e: KeyboardEvent): boolean => {
 	if (e.code === "KeyK") return true; // palette
 	if (e.code === "Comma") return true; // settings
 	if (e.code === "Tab") return true; // next room
+	if (e.code === "ArrowLeft") return true; // previous harness
+	if (e.code === "ArrowRight") return true; // next harness
 	if (/^Digit[1-9]$/.test(e.code)) return true; // jump to room N
 	// Font size — already wired in App.tsx; listed here so xterm doesn't
 	// also forward "=" / "+" / "-" to the PTY.
