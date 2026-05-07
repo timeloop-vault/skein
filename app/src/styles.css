@@ -452,6 +452,15 @@ body {
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
+	/* `min-height: 0` + `overflow: hidden` stop xterm's canvas from
+	   pushing this column taller when the user bumps the terminal
+	   font size. Without these, xterm's now-larger canvas doesn't
+	   fit the previous-cycle row count and grows the column instead
+	   of being clipped — fit then reads the stretched parent height,
+	   computes the same rows count back, and the grid stays
+	   overflowed (#16). */
+	min-height: 0;
+	overflow: hidden;
 	background: var(--bg-1);
 }
 

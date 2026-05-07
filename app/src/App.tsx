@@ -13,7 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
 import { LiveStatus } from "./LiveStatus.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
@@ -119,6 +119,10 @@ const HarnessColumn = ({
 						flexDirection: "column",
 						flex: 1,
 						minHeight: 0,
+						// Pair with `.sk-harness-col`'s overflow:hidden — stops
+						// xterm's canvas from pushing this wrapper taller when
+						// the terminal font grows (#16).
+						overflow: "hidden",
 					}}
 				>
 					<HarnessBody
@@ -138,14 +142,6 @@ const HarnessColumn = ({
 const FONT_MIN = 12;
 const FONT_MAX = 18;
 const FONT_DEFAULT = 13;
-
-// UI scale (zoom on .sk-app) — separate from the terminal font so a
-// large monitor can have readable chrome without a giant terminal grid.
-// 0.85 still legible on 1366×768; 1.4 is comfortable on 4K.
-const UI_SCALE_MIN = 0.85;
-const UI_SCALE_MAX = 1.4;
-const UI_SCALE_STEP = 0.05;
-const UI_SCALE_DEFAULT = 1.0;
 
 // ── New room dialog ────────────────────────────────────────────────
 // The picked folder becomes the room's cwd; every harness in the
@@ -742,7 +738,6 @@ export default function App() {
 	const [theme, setTheme] = usePersistedState<Theme>("theme", "dark");
 	const [density, setDensity] = usePersistedState<Density>("density", "regular");
 	const [fontSize, setFontSize] = usePersistedState<number>("fontSize", FONT_DEFAULT);
-	const [uiScale, setUiScale] = usePersistedState<number>("uiScale", UI_SCALE_DEFAULT);
 	// Width of the harness column in px. Right pane absorbs the remainder
 	// via flex:1. Splitter clamps against window size at drag time.
 	const [harnessColWidth, setHarnessColWidth] = usePersistedState<number>("harnessColWidth", 640);
@@ -1184,16 +1179,11 @@ export default function App() {
 		theme,
 		density,
 		fontSize,
-		uiScale,
 		fontMin: FONT_MIN,
 		fontMax: FONT_MAX,
-		uiScaleMin: UI_SCALE_MIN,
-		uiScaleMax: UI_SCALE_MAX,
-		uiScaleStep: UI_SCALE_STEP,
 		onTheme: setTheme,
 		onDensity: setDensity,
 		onFontSize: setFontSize,
-		onUiScale: setUiScale,
 		onClose: () => setShowSettings(false),
 	};
 
@@ -1259,14 +1249,6 @@ export default function App() {
 		invoke: () => setTheme(theme === "dark" ? "light" : "dark"),
 	});
 
-	// CSS `zoom` on the root scales the entire chrome uniformly.
-	// xterm's container scales with it, but the terminal font is pinned
-	// by `fontSize` (xterm option), so the cell size in CSS pixels stays
-	// the same — the user just sees a bigger or smaller grid (more rows
-	// at lower scale, fewer at higher). That's what we want here:
-	// independent control over chrome density and terminal density.
-	const appStyle: CSSProperties = { zoom: uiScale };
-
 	// Empty state — no *active* rooms. Archived rooms still in the list
 	// show via the reopen modal (linked from the empty state too).
 	if (activeRooms.length === 0) {
@@ -1274,7 +1256,6 @@ export default function App() {
 			<div
 				className={`sk-app sk-${theme} density-${density}`}
 				data-platform={isMac ? "mac" : "other"}
-				style={appStyle}
 			>
 				<Titlebar {...titlebarProps} />
 				<EmptyState
@@ -1313,7 +1294,6 @@ export default function App() {
 		<div
 			className={`sk-app sk-${theme} density-${density}`}
 			data-platform={isMac ? "mac" : "other"}
-			style={appStyle}
 		>
 			<Titlebar {...titlebarProps} />
 

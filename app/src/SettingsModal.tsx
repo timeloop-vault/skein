@@ -26,16 +26,11 @@ interface SettingsModalProps {
 	theme: Theme;
 	density: Density;
 	fontSize: number;
-	uiScale: number;
 	fontMin: number;
 	fontMax: number;
-	uiScaleMin: number;
-	uiScaleMax: number;
-	uiScaleStep: number;
 	onTheme: (v: Theme) => void;
 	onDensity: (v: Density) => void;
 	onFontSize: (v: number) => void;
-	onUiScale: (v: number) => void;
 	onClose: () => void;
 }
 
@@ -49,16 +44,11 @@ export const SettingsModal = ({
 	theme,
 	density,
 	fontSize,
-	uiScale,
 	fontMin,
 	fontMax,
-	uiScaleMin,
-	uiScaleMax,
-	uiScaleStep,
 	onTheme,
 	onDensity,
 	onFontSize,
-	onUiScale,
 	onClose,
 }: SettingsModalProps) => {
 	useEffect(() => {
@@ -71,9 +61,6 @@ export const SettingsModal = ({
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	}, [onClose]);
-
-	const clampScale = (n: number): number =>
-		Math.min(uiScaleMax, Math.max(uiScaleMin, Math.round(n * 100) / 100));
 
 	// Updater UI: pulled into the modal so the user can check + install
 	// updates from a discoverable surface. Tauri's updater plugin
@@ -171,32 +158,6 @@ export const SettingsModal = ({
 								</option>
 							))}
 						</select>
-					</div>
-
-					<div className="sk-field">
-						<label>UI scale</label>
-						<div className="sk-stepper">
-							<button
-								type="button"
-								className="sk-btn ghost"
-								onClick={() => onUiScale(clampScale(uiScale - uiScaleStep))}
-								disabled={uiScale <= uiScaleMin + 0.001}
-							>
-								−
-							</button>
-							<span className="sk-stepper-value">{Math.round(uiScale * 100)}%</span>
-							<button
-								type="button"
-								className="sk-btn ghost"
-								onClick={() => onUiScale(clampScale(uiScale + uiScaleStep))}
-								disabled={uiScale >= uiScaleMax - 0.001}
-							>
-								+
-							</button>
-							<span className="sk-stepper-hint">
-								Chrome only — terminal stays at the size below.
-							</span>
-						</div>
 					</div>
 
 					<div className="sk-field">

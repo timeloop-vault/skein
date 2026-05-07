@@ -285,15 +285,21 @@ export const LiveTerminal = ({
 	// Live font-size changes: retune the existing terminal without
 	// re-spawning the PTY. fit() recomputes rows/cols at the new cell
 	// size; we then tell the PTY to match so the child sees the resize.
+	//
+	// Containment for #16: the harness column and per-harness wrapper
+	// have `overflow: hidden` set (`.sk-harness-col` in styles.css and
+	// the inline style in `App.tsx`). Without that, xterm's canvas
+	// pushes the flex column taller when the font grows, fit reads the
+	// stretched parent height, and the row count never decreases —
+	// content overflows and stays overflowed. With containment in
+	// place, fit reads the constrained parent and reduces rows
+	// correctly.
 	useEffect(() => {
 		const term = termRef.current;
 		const fit = fitRef.current;
 		const host = containerRef.current;
 		if (!term || !fit) return;
 		term.options.fontSize = fontSize;
-		// Same hidden-host guard as the ResizeObserver: fitting a 0×0
-		// host would squish scrollback to 1 col. Updating fontSize alone
-		// is fine; the refit will happen on the next visibility tick.
 		if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
 		try {
 			fit.fit();
