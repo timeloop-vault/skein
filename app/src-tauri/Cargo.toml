@@ -30,6 +30,7 @@ skein-git = { path = "../../crates/skein-git" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+base64 = "0.22"
 
 [lints.rust]
 unsafe_code = "forbid"

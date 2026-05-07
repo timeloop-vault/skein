@@ -10,9 +10,10 @@
 // of files. Step-by-step navigation keeps each refresh cheap.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Splitter } from "./Splitter.tsx";
 import { usePersistedState } from "./prefs.ts";
+import { type PreviewProvider, findPreviewProvider } from "./preview/index.ts";
 
 interface DirEntryDto {
 	name: string;
@@ -21,8 +22,13 @@ interface DirEntryDto {
 	mtimeSecs: number | null;
 }
 
-interface FilePreviewDto {
+interface TextDto {
 	content: string;
+	truncated: boolean;
+}
+
+interface BytesDto {
+	base64: string;
 	truncated: boolean;
 }
 
@@ -59,7 +65,7 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 	const [error, setError] = useState<string | null>(null);
 	// Selected file (relative to current subPath) for preview.
 	const [selectedFile, setSelectedFile] = useState<string | null>(null);
-	const [preview, setPreview] = useState<FilePreviewDto | null>(null);
+	const [previewBody, setPreviewBody] = useState<ReactNode | null>(null);
 	const [previewError, setPreviewError] = useState<string | null>(null);
 
 	const currentDir = useMemo(() => joinPath(cwd, subPath), [cwd, subPath]);
@@ -91,7 +97,7 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 	// `src/` doesn't carry meaning when we navigate to `tests/`.
 	useEffect(() => {
 		setSelectedFile(null);
-		setPreview(null);
+		setPreviewBody(null);
 		setPreviewError(null);
 		void refresh();
 	}, [refresh]);
@@ -131,20 +137,55 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 
 	useEffect(() => {
 		if (!selectedFile) {
-			setPreview(null);
+			setPreviewBody(null);
 			setPreviewError(null);
 			return;
 		}
-		setPreview(null);
+		setPreviewBody(null);
 		setPreviewError(null);
-		void invoke<FilePreviewDto>("read_file_text", {
-			path: joinPath(currentDir, selectedFile),
-		})
-			.then((p) => setPreview(p))
-			.catch((err: unknown) => {
+		const fullPath = joinPath(currentDir, selectedFile);
+		const provider: PreviewProvider | null = findPreviewProvider(fullPath);
+		if (!provider) {
+			setPreviewError("no preview provider matched");
+			return;
+		}
+		let cancelled = false;
+		const load = async () => {
+			try {
+				if (provider.needs === "text") {
+					const dto = await invoke<TextDto>("read_file_text", { path: fullPath });
+					if (cancelled) return;
+					const body = provider.render({
+						path: fullPath,
+						text: dto.content,
+						truncated: dto.truncated,
+					});
+					setPreviewBody(body);
+				} else if (provider.needs === "bytes") {
+					const dto = await invoke<BytesDto>("read_file_bytes", { path: fullPath });
+					if (cancelled) return;
+					const body = provider.render({
+						path: fullPath,
+						bytesBase64: dto.base64,
+						truncated: dto.truncated,
+					});
+					setPreviewBody(body);
+				} else {
+					// "path" providers do their own io.
+					const body = provider.render({ path: fullPath, truncated: false });
+					if (cancelled) return;
+					setPreviewBody(body);
+				}
+			} catch (err: unknown) {
+				if (cancelled) return;
 				const msg = err instanceof Error ? err.message : String(err);
 				setPreviewError(msg);
-			});
+			}
+		};
+		void load();
+		return () => {
+			cancelled = true;
+		};
 	}, [selectedFile, currentDir]);
 
 	const breadcrumbSegments = useMemo(() => {
@@ -252,15 +293,10 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 			}}
 		>
 			{previewError && <div style={{ color: "var(--fg-3)" }}>cannot preview: {previewError}</div>}
-			{!previewError && preview === null && <div style={{ color: "var(--fg-3)" }}>loading…</div>}
-			{preview && (
-				<>
-					{preview.truncated && (
-						<div style={{ color: "var(--warn)", marginBottom: 8 }}>truncated to first 256 KB</div>
-					)}
-					<div>{preview.content}</div>
-				</>
+			{!previewError && previewBody === null && (
+				<div style={{ color: "var(--fg-3)" }}>loading…</div>
 			)}
+			{previewBody}
 		</div>
 	) : null;
 

@@ -173,6 +173,7 @@ pub fn run() {
             ping,
             fs::list_dir,
             fs::read_file_text,
+            fs::read_file_bytes,
             pty_spawn,
             pty_write,
             pty_resize,

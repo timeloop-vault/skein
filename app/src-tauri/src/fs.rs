@@ -12,6 +12,11 @@ use serde::Serialize;
 
 const PREVIEW_MAX_BYTES: u64 = 256 * 1024;
 const BINARY_SNIFF_BYTES: usize = 2048;
+/// Cap for the byte-returning preview path (`read_file_bytes`).
+/// Larger than the text cap because images are routinely >256 KB,
+/// but bounded so we don't blow up the IPC channel on accidental
+/// 100 MB previews.
+const BYTES_PREVIEW_MAX: u64 = 5 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
 pub struct DirEntryDto {
@@ -31,6 +36,15 @@ pub struct FilePreviewDto {
     pub content: String,
     /// True when the file was longer than `PREVIEW_MAX_BYTES` and we
     /// truncated. UI shows a banner.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct FileBytesDto {
+    /// Base64-encoded file contents. Frontend wraps in a data URL for
+    /// `<img src=…>` (or hex-decodes for the hex viewer, etc.).
+    pub base64: String,
     pub truncated: bool,
 }
 
@@ -96,6 +110,31 @@ pub fn read_file_text(path: String) -> Result<FilePreviewDto, String> {
     }
     Ok(FilePreviewDto {
         content: String::from_utf8_lossy(&buf).into_owned(),
+        truncated,
+    })
+}
+
+/// Read up to `BYTES_PREVIEW_MAX` of `path` and return as base64.
+/// Used by preview providers that need raw bytes (images, archives,
+/// hex viewer). The frontend wraps in `data:<mime>;base64,…` and
+/// renders accordingly.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn read_file_bytes(path: String) -> Result<FileBytesDto, String> {
+    use base64::Engine as _;
+    use std::io::Read;
+    let mut file = std::fs::File::open(Path::new(&path)).map_err(|e| format!("open: {e}"))?;
+    let meta = file.metadata().map_err(|e| format!("metadata: {e}"))?;
+    let total_size = meta.len();
+    let truncated = total_size > BYTES_PREVIEW_MAX;
+    let read_size = total_size.min(BYTES_PREVIEW_MAX);
+    let mut buf = Vec::with_capacity(usize::try_from(read_size).unwrap_or(0));
+    (&mut file)
+        .take(read_size)
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("read: {e}"))?;
+    Ok(FileBytesDto {
+        base64: base64::engine::general_purpose::STANDARD.encode(&buf),
         truncated,
     })
 }
