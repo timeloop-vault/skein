@@ -1,20 +1,26 @@
-// LiveStatus — right-pane "what's changed?" view for any room with a
-// real cwd. Owns the watcher for that cwd and self-promotes between
-// modes:
-//   * "no git repo" placeholder — the cwd exists but isn't (yet) a git
-//     repo. Watcher is still active so a `git init` / `git clone` /
-//     unzip-of-a-tarball-with-a-.git inside the folder causes us to
-//     re-evaluate and switch into the live view without a reload.
-//   * Live view — the cwd is a repo. Status + diff fetched on mount
-//     and on every debounced watcher tick.
+// LiveStatus — right-pane container for any room with a real cwd.
+// Owns the watcher and the git-vs-not detection; renders one of two
+// tabbed views below the chrome:
+//
+//   * **Status** — visible only when the cwd is a git repo. The
+//     classic "what's changed?" view: status list + click-to-diff.
+//   * **Files** — always visible. The `FileTree` browser from #7.
+//
+// In a non-git room we skip the tab bar entirely and render
+// `FileTree` directly — there's no second view to switch to. When
+// the watcher detects a `.git` dir appearing the tab bar surfaces
+// automatically (issue #6 / #13).
 //
 // Phase 5b: on mount we fetch the initial snapshot AND start a
 // debounced filesystem watcher; each tick re-fetches.
 // Phase 5c: clicking a row reveals its diff in the bottom half. Diff is
 // re-fetched on every refresh so it stays in sync with the file list.
-// Issue #6: the watcher also re-checks `git_is_repo` so the pane
-// flips from "no git repo" to live when an agent (or the user)
-// initialises / clones into a previously-empty room folder.
+// Issue #6: watcher also re-checks `git_is_repo` so the pane
+// promotes itself when an agent (or the user) initialises / clones
+// into a previously-empty room folder.
+// Issue #13: status and file viewer coexist as tabs — losing the
+// browser the moment a folder becomes git-tracked was a regression
+// in expressiveness.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -72,11 +78,18 @@ interface LiveStatusProps {
 	cwd: string;
 }
 
+type RightPaneTab = "status" | "files";
+
 export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 	// `null` = haven't checked yet; renders a tiny "checking…" line
 	// rather than flashing the no-git placeholder for one frame on
 	// every cwd change.
 	const [isRepo, setIsRepo] = useState<boolean | null>(null);
+	// Which tab is showing in the git-repo case. Defaults to "status"
+	// because a daily-driver opening a git room usually wants the
+	// changed-files summary; the Files tab is for the "let me poke at
+	// `src/lib.rs`" flow.
+	const [activeTab, setActiveTab] = useState<RightPaneTab>("status");
 	const [entries, setEntries] = useState<StatusDto[] | null>(null);
 	const [diffs, setDiffs] = useState<FileDiffDto[]>([]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -275,7 +288,7 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 		>
 			<div
 				style={{
-					padding: "10px 14px",
+					padding: "8px 14px",
 					borderBottom: "1px solid var(--line)",
 					display: "flex",
 					alignItems: "center",
@@ -286,7 +299,16 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 					color: "var(--fg-2)",
 				}}
 			>
-				<span style={{ color: "var(--fg-0)" }}>Status</span>
+				<TabButton
+					label="Status"
+					active={activeTab === "status"}
+					onClick={() => setActiveTab("status")}
+				/>
+				<TabButton
+					label="Files"
+					active={activeTab === "files"}
+					onClick={() => setActiveTab("files")}
+				/>
 				<span
 					style={{
 						width: 6,
@@ -295,6 +317,7 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 						background: pulse ? "var(--accent)" : "var(--ok)",
 						boxShadow: `0 0 ${pulse ? 8 : 4}px ${pulse ? "var(--accent)" : "var(--ok)"}`,
 						transition: "background 0.2s, box-shadow 0.2s",
+						marginLeft: 4,
 					}}
 					title={pulse ? "just refreshed" : "watching"}
 				/>
@@ -317,49 +340,83 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 				>
 					{cwd}
 				</span>
-				<button
-					className="sk-btn ghost"
-					onClick={() => void refresh()}
-					disabled={loading}
-					style={{ flex: "0 0 auto" }}
-				>
-					{loading ? "…" : "Refresh"}
-				</button>
+				{activeTab === "status" && (
+					<button
+						className="sk-btn ghost"
+						onClick={() => void refresh()}
+						disabled={loading}
+						style={{ flex: "0 0 auto" }}
+					>
+						{loading ? "…" : "Refresh"}
+					</button>
+				)}
 			</div>
 
-			{error && (
-				<div
-					style={{
-						margin: "10px 14px",
-						padding: "8px 10px",
-						color: "var(--err)",
-						fontFamily: "var(--sk-mono)",
-						fontSize: 11,
-						background: "color-mix(in srgb, var(--err) 8%, var(--bg-2))",
-						border: "1px solid color-mix(in srgb, var(--err) 35%, var(--line))",
-						borderRadius: 5,
-					}}
-				>
-					{error}
-				</div>
-			)}
-
-			{selectedDiff ? (
-				<Splitter
-					direction="column"
-					size={listHeight}
-					onResize={setListHeight}
-					minFirst={80}
-					minSecond={120}
-					first={fileListEl}
-					second={<DiffView file={selectedDiff} onClose={() => setSelectedPath(null)} />}
-				/>
+			{activeTab === "files" ? (
+				<FileTree cwd={cwd} />
 			) : (
-				fileListEl
+				<>
+					{error && (
+						<div
+							style={{
+								margin: "10px 14px",
+								padding: "8px 10px",
+								color: "var(--err)",
+								fontFamily: "var(--sk-mono)",
+								fontSize: 11,
+								background: "color-mix(in srgb, var(--err) 8%, var(--bg-2))",
+								border: "1px solid color-mix(in srgb, var(--err) 35%, var(--line))",
+								borderRadius: 5,
+							}}
+						>
+							{error}
+						</div>
+					)}
+					{selectedDiff ? (
+						<Splitter
+							direction="column"
+							size={listHeight}
+							onResize={setListHeight}
+							minFirst={80}
+							minSecond={120}
+							first={fileListEl}
+							second={<DiffView file={selectedDiff} onClose={() => setSelectedPath(null)} />}
+						/>
+					) : (
+						fileListEl
+					)}
+				</>
 			)}
 		</div>
 	);
 };
+
+interface TabButtonProps {
+	label: string;
+	active: boolean;
+	onClick: () => void;
+}
+
+const TabButton = ({ label, active, onClick }: TabButtonProps) => (
+	<button
+		type="button"
+		onClick={onClick}
+		style={{
+			background: "transparent",
+			border: "none",
+			padding: "4px 8px",
+			margin: 0,
+			cursor: "pointer",
+			fontFamily: "var(--sk-mono)",
+			fontSize: 11,
+			color: active ? "var(--fg-0)" : "var(--fg-3)",
+			borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
+			marginBottom: -9,
+		}}
+	>
+		{label}
+	</button>
+);
 
 // ── DiffView ───────────────────────────────────────────────────────
 // Compact patch renderer: hunk headers in dim mono, gutter with old/new
