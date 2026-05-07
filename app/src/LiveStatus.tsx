@@ -18,6 +18,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { FileTree } from "./FileTree.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { usePersistedState } from "./prefs.ts";
 
@@ -183,34 +184,11 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 	// split view.
 	const [listHeight, setListHeight] = usePersistedState<number>("liveStatusListHeight", 220);
 
-	// Non-git folder: render a placeholder. The watcher is still
-	// running — if a `.git` dir appears, the next refresh promotes us
-	// to the live view automatically.
+	// Non-git folder: render a file browser instead (issue #7). The
+	// watcher is still running — if a `.git` dir appears, the next
+	// refresh promotes us to the live view automatically.
 	if (isRepo === false) {
-		return (
-			<div
-				style={{
-					flex: 1,
-					display: "flex",
-					flexDirection: "column",
-					alignItems: "center",
-					justifyContent: "center",
-					gap: 6,
-					padding: 24,
-					color: "var(--fg-3)",
-					background: "var(--bg-1)",
-					textAlign: "center",
-					fontFamily: "var(--sk-mono)",
-					fontSize: 11,
-				}}
-				title={cwd}
-			>
-				<span style={{ color: "var(--fg-2)", fontSize: 13 }}>no git repo</span>
-				<span>
-					Skein will switch to the live view automatically once this folder becomes a repo.
-				</span>
-			</div>
-		);
+		return <FileTree cwd={cwd} />;
 	}
 
 	const fileListEl = (

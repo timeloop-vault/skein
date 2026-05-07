@@ -6,6 +6,7 @@
 //! streams back over a per-spawn `tauri::ipc::Channel<String>`.
 
 mod db;
+mod fs;
 mod git;
 mod pty;
 mod resume;
@@ -170,6 +171,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping,
+            fs::list_dir,
+            fs::read_file_text,
             pty_spawn,
             pty_write,
             pty_resize,
