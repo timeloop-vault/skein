@@ -201,6 +201,7 @@ pub fn run() {
             db_save_rooms,
             git::git_is_repo,
             git::git_branches,
+            git::git_head_branch,
             git::git_propose_worktree_path,
             git::git_add_worktree,
             git::git_status,

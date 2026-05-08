@@ -76,11 +76,19 @@ const KIND_GLYPH: Record<StatusKind, { glyph: string; color: string; label: stri
 
 interface LiveStatusProps {
 	cwd: string;
+	/**
+	 * Fired on every refresh with the current HEAD branch name (or `null`
+	 * for detached HEAD / non-git folders). Lets the parent surface a
+	 * *live* branch in chrome that doesn't see the watcher directly —
+	 * the bottom status bar uses this so `git checkout` inside a harness
+	 * is reflected within the watcher's debounce window.
+	 */
+	onBranchChange?: (branch: string | null) => void;
 }
 
 type RightPaneTab = "status" | "files";
 
-export const LiveStatus = ({ cwd }: LiveStatusProps) => {
+export const LiveStatus = ({ cwd, onBranchChange }: LiveStatusProps) => {
 	// `null` = haven't checked yet; renders a tiny "checking…" line
 	// rather than flashing the no-git placeholder for one frame on
 	// every cwd change.
@@ -100,6 +108,11 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 	// initial mount don't pulse.
 	const [pulse, setPulse] = useState(false);
 	const fromWatcherRef = useRef(false);
+	// Hold the latest onBranchChange in a ref so `refresh` doesn't have
+	// to depend on it — otherwise every parent re-render would tear down
+	// and re-establish the file watcher.
+	const onBranchChangeRef = useRef(onBranchChange);
+	onBranchChangeRef.current = onBranchChange;
 
 	const refresh = useCallback(async () => {
 		setLoading(true);
@@ -118,17 +131,20 @@ export const LiveStatus = ({ cwd }: LiveStatusProps) => {
 				setEntries(null);
 				setDiffs([]);
 				setSelectedPath(null);
+				onBranchChangeRef.current?.(null);
 				return;
 			}
-			// Status and diff are independent calls — fire in parallel
-			// so a diff containing a few large files doesn't hold up
-			// the file list rendering.
-			const [rows, files] = await Promise.all([
+			// Status, diff, and HEAD branch are independent calls —
+			// fire in parallel so a diff containing a few large files
+			// doesn't hold up the file list rendering.
+			const [rows, files, branch] = await Promise.all([
 				invoke<StatusDto[]>("git_status", { path: cwd }),
 				invoke<FileDiffDto[]>("git_diff", { path: cwd }),
+				invoke<string | null>("git_head_branch", { path: cwd }),
 			]);
 			setEntries(rows);
 			setDiffs(files);
+			onBranchChangeRef.current?.(branch);
 			if (fromWatcherRef.current) {
 				setPulse(true);
 				window.setTimeout(() => setPulse(false), 600);
