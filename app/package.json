@@ -12,6 +12,7 @@
 		"preview": "vite preview",
 		"tauri": "tauri",
 		"tauri:dev": "tauri dev --config tauri.dev.conf.json",
+		"tauri:build:local": "tauri build --config tauri.local.conf.json",
 		"lint": "biome check .",
 		"format": "biome format --write ."
 	},
