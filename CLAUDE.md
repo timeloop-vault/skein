@@ -68,11 +68,19 @@ real git operations.
     git config core.hooksPath .githooks
     cd app && npm install
 
-    # Dev loop:
-    cd app && npm run tauri dev
+    # Dev loop (uses the dev profile — separate APP_DATA, db, logs;
+    # window/dock label "Skein (dev)"; bundle id
+    # com.timeloop-vault.skein.dev — see issue #21):
+    cd app && npm run tauri:dev
 
-App data dir on Windows: `%APPDATA%\com.timeloop-vault.skein\`. Delete
-`skein.db` there to reset persisted state.
+    # Release-bundled app uses identifier `com.timeloop-vault.skein`,
+    # productName "Skein", APP_DATA path keyed off the release id. Dev
+    # never touches release state. Run with `npm run tauri build` (or a
+    # bundled .app/.dmg from a release).
+
+App data dir on Windows: `%APPDATA%\com.timeloop-vault.skein\` for
+release, `%APPDATA%\com.timeloop-vault.skein.dev\` for dev. Delete
+`skein.db` in either to reset persisted state for that profile.
 
 ## Conventions
 
