@@ -62,6 +62,16 @@ pub fn git_branches(path: String) -> Result<Vec<BranchDto>, String> {
     Ok(branches.into_iter().map(BranchDto::from).collect())
 }
 
+/// Current HEAD branch name, or `None` for detached HEAD / unborn branch /
+/// non-repo path. Used by the bottom status bar to track checkouts that
+/// happen inside a harness — `room.branch` is captured at room creation
+/// and doesn't follow `git checkout`.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn git_head_branch(path: String) -> Option<String> {
+    Repo::open(Path::new(&path)).ok()?.head_branch()
+}
+
 /// Default path proposal for a worktree under `repo_path` named after
 /// `task_slug`. Pure function; no filesystem access.
 #[allow(clippy::needless_pass_by_value)]

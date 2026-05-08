@@ -744,6 +744,12 @@ export default function App() {
 
 	const [rooms, setRooms] = useState<Room[]>([]);
 	const [activeRoomId, setActiveRoomId] = useState<string>("");
+	// Live HEAD branch per room, populated by LiveStatus on every watcher
+	// tick. `room.branch` is the *creation* branch (worktree identity);
+	// this is what's actually checked out right now. The status bar reads
+	// from here first so a `git checkout` inside a harness is visible.
+	// Issue #18.
+	const [liveBranches, setLiveBranches] = useState<Record<string, string | null>>({});
 	const [showPicker, setShowPicker] = useState<string | null>(null);
 	const [showNewRoom, setShowNewRoom] = useState(false);
 	const [showPalette, setShowPalette] = useState(false);
@@ -1354,7 +1360,14 @@ export default function App() {
 						    starts a watcher even on non-git cwds and self-promotes when
 						    a `.git` dir appears, so the room stops being frozen at
 						    creation time. */}
-						{r.cwd ? <LiveStatus cwd={r.cwd} /> : null}
+						{r.cwd ? (
+							<LiveStatus
+								cwd={r.cwd}
+								onBranchChange={(b) =>
+									setLiveBranches((prev) => (prev[r.id] === b ? prev : { ...prev, [r.id]: b }))
+								}
+							/>
+						) : null}
 					</div>
 				))}
 			/>
@@ -1368,14 +1381,31 @@ export default function App() {
 					<span className={`dot-tiny st-${activeHarness.status}`} />
 					{activeHarness.status}
 				</span>
-				{room.branch && <span className="seg">{room.branch}</span>}
+				{(() => {
+					// Prefer the live branch (updated on every watcher tick) but
+					// fall back to room.branch on first render before LiveStatus
+					// has had a chance to refresh. Issue #18.
+					const live = liveBranches[room.id];
+					const branch = live === undefined ? room.branch : (live ?? undefined);
+					if (!branch) return null;
+					const drifted =
+						live !== undefined && live !== null && room.branch && live !== room.branch;
+					return (
+						<span
+							className="seg"
+							title={drifted ? `worktree branch was ${room.branch}` : undefined}
+						>
+							{branch}
+							{drifted && <span style={{ color: "var(--warn)", marginLeft: 4 }}>•</span>}
+						</span>
+					);
+				})()}
 				{room.cwd && (
 					<span className="seg sk-statusbar-cwd" title={room.cwd}>
 						{room.cwd}
 					</span>
 				)}
 				<span className="spacer" />
-				<span className="seg">utf-8 · LF</span>
 			</div>
 
 			{showNewRoom && (
