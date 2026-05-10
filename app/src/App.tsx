@@ -32,10 +32,17 @@ interface HarnessBodyProps {
 	harness: Harness;
 	fontSize: number;
 	defaultShell: string[];
+	visible: boolean;
 	onCmdChange: (cmd: string[]) => void;
 }
 
-const HarnessBody = ({ harness, fontSize, defaultShell, onCmdChange }: HarnessBodyProps) => {
+const HarnessBody = ({
+	harness,
+	fontSize,
+	defaultShell,
+	visible,
+	onCmdChange,
+}: HarnessBodyProps) => {
 	if (harness.cmd && harness.cwd !== undefined) {
 		// mountKey changes whenever cmd content does — that's the trigger
 		// for a clean unmount + remount when the user picks Enter-for-
@@ -49,6 +56,7 @@ const HarnessBody = ({ harness, fontSize, defaultShell, onCmdChange }: HarnessBo
 				mountKey={`${harness.id}:${harness.cmd.join("\x00")}`}
 				fontSize={fontSize}
 				defaultShell={defaultShell}
+				visible={visible}
 				onCmdChange={onCmdChange}
 			/>
 		);
@@ -66,6 +74,10 @@ interface HarnessColumnProps {
 	fontSize: number;
 	defaultShell: string[];
 	showPicker: boolean;
+	// True iff this column's room is the active room. Combined with
+	// `showPicker` and per-harness activeness, it tells each
+	// LiveTerminal whether it should hold keyboard focus. Issue #22.
+	roomActive: boolean;
 	onPick: (kind: HarnessKind) => void;
 	onAddHarness: (roomId: string) => void;
 	onSwitchHarness: (roomId: string, harnessId: string) => void;
@@ -78,6 +90,7 @@ const HarnessColumn = ({
 	fontSize,
 	defaultShell,
 	showPicker,
+	roomActive,
 	onPick,
 	onAddHarness,
 	onSwitchHarness,
@@ -118,28 +131,36 @@ const HarnessColumn = ({
 		 * while present; harness panes survive untouched.
 		 */}
 		{showPicker && <HarnessPicker onPick={onPick} />}
-		{room.harnesses.map((h) => (
-			<div
-				key={h.id}
-				style={{
-					display: !showPicker && h.id === room.activeHarnessId ? "flex" : "none",
-					flexDirection: "column",
-					flex: 1,
-					minHeight: 0,
-					// Pair with `.sk-harness-col`'s overflow:hidden — stops
-					// xterm's canvas from pushing this wrapper taller when
-					// the terminal font grows (#16).
-					overflow: "hidden",
-				}}
-			>
-				<HarnessBody
-					harness={h}
-					fontSize={fontSize}
-					defaultShell={defaultShell}
-					onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
-				/>
-			</div>
-		))}
+		{room.harnesses.map((h) => {
+			// "Visible" = user can see and interact with this terminal:
+			// room is active, no picker shadowing it, and this is the
+			// room's active harness. Drives the focus effect in
+			// LiveTerminal (#22).
+			const visible = roomActive && !showPicker && h.id === room.activeHarnessId;
+			return (
+				<div
+					key={h.id}
+					style={{
+						display: visible ? "flex" : "none",
+						flexDirection: "column",
+						flex: 1,
+						minHeight: 0,
+						// Pair with `.sk-harness-col`'s overflow:hidden — stops
+						// xterm's canvas from pushing this wrapper taller when
+						// the terminal font grows (#16).
+						overflow: "hidden",
+					}}
+				>
+					<HarnessBody
+						harness={h}
+						fontSize={fontSize}
+						defaultShell={defaultShell}
+						visible={visible}
+						onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
+					/>
+				</div>
+			);
+		})}
 	</div>
 );
 
@@ -1346,6 +1367,7 @@ export default function App() {
 							fontSize={fontSize}
 							defaultShell={defaultShell}
 							showPicker={showPicker === r.id}
+							roomActive={r.id === activeRoomId}
 							onPick={pickHarness}
 							onAddHarness={addHarness}
 							onSwitchHarness={switchHarnessInRoom}
