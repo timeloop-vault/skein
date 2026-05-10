@@ -24,8 +24,10 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
@@ -136,6 +138,57 @@ export const LiveTerminal = ({
 		// AND activated).
 		term.loadAddon(new Unicode11Addon());
 		term.unicode.activeVersion = "11";
+
+		// Issue #24: Cmd-click (macOS) / Ctrl-click (Win/Linux) opens
+		// URIs in the OS-registered handler. Two paths:
+		//
+		// 1. Plain-text URIs that appear in terminal output (e.g. claude
+		//    printing a docs URL, gh printing a PR-create URL). Detected
+		//    by WebLinksAddon's regex matcher. The default regex only
+		//    catches http(s); we widen it to any well-formed
+		//    `scheme://...`, so vscode://, slack://, file://, ssh://,
+		//    etc. all work. The OS picks the handler app, so we don't
+		//    need a per-scheme allow-list. The leading word-boundary +
+		//    ASCII-only scheme guard avoids matching things like
+		//    `std::vector` (`vector` isn't a valid URI authority).
+		//
+		//    The regex has *no* `g` flag — WebLinkProvider always
+		//    appends `g` to whatever flags we pass (see
+		//    @xterm/addon-web-links/src/WebLinkProvider.ts:60), so
+		//    a global flag here would produce `'gg'` and throw
+		//    SyntaxError. Letting it own the global flag matches its
+		//    contract.
+		//
+		//    `mailto:` and other no-`://` URIs aren't supported via
+		//    this provider — the addon's `isUrl` validator requires
+		//    the matched text to start with `protocol://host`, and
+		//    `mailto:` URLs have empty hosts. A custom link provider
+		//    would be needed; deferred.
+		//
+		// 2. OSC 8 hyperlinks — the explicit terminal escape
+		//    `\e]8;;url\e\\text\e]8;;\e\\` that `gh`, `ls --hyperlink`,
+		//    etc. emit. Wired via `term.options.linkHandler`. xterm's
+		//    default would call `window.open` which Tauri's WebKit
+		//    refuses, so without this OSC 8 links are dead.
+		//
+		// Modifier check matches the rest of Skein: Cmd on mac, Ctrl
+		// elsewhere (see shortcuts.ts). Without modifier, the click
+		// falls through to xterm's normal selection behaviour.
+		const uriRegex = /\b[a-zA-Z][a-zA-Z0-9+.-]+:\/\/[^\s()[\]{}"'<>\\^`|]+/;
+		const handleUriClick = (event: MouseEvent, uri: string) => {
+			const isModifierClick = isMac ? event.metaKey : event.ctrlKey;
+			if (!isModifierClick) return;
+			event.preventDefault();
+			void openUrl(uri).catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.warn("[skein] openUrl failed:", uri, msg);
+			});
+		};
+		term.loadAddon(new WebLinksAddon(handleUriClick, { urlRegex: uriRegex }));
+		term.options.linkHandler = {
+			activate: (event, uri) => handleUriClick(event, uri),
+		};
+
 		term.open(host);
 		// If we're mounting into a hidden pane (e.g. an inactive room
 		// at app boot), skip the initial fit. xterm's defaults (24×80) are
