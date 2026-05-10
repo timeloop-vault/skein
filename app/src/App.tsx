@@ -104,36 +104,42 @@ const HarnessColumn = ({
 			</div>
 		</div>
 
-		{showPicker ? (
-			<HarnessPicker onPick={onPick} />
-		) : (
-			// Mount every harness in this room at once; hide the
-			// inactive ones via display:none so xterm scrollback,
-			// cursor position, and PTY state survive harness-tab
-			// switches inside the room.
-			room.harnesses.map((h) => (
-				<div
-					key={h.id}
-					style={{
-						display: h.id === room.activeHarnessId ? "flex" : "none",
-						flexDirection: "column",
-						flex: 1,
-						minHeight: 0,
-						// Pair with `.sk-harness-col`'s overflow:hidden — stops
-						// xterm's canvas from pushing this wrapper taller when
-						// the terminal font grows (#16).
-						overflow: "hidden",
-					}}
-				>
-					<HarnessBody
-						harness={h}
-						fontSize={fontSize}
-						defaultShell={defaultShell}
-						onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
-					/>
-				</div>
-			))
-		)}
+		{/*
+		 * Mount every harness in this room at once; hide the
+		 * inactive ones via display:none so xterm scrollback,
+		 * cursor position, and PTY state survive harness-tab
+		 * switches inside the room.
+		 *
+		 * Issue #25: when the picker is up we *also* hide every
+		 * harness pane rather than unmounting them — unmounting
+		 * fires LiveTerminal's cleanup, which pty_kills the PTY,
+		 * which kills the live Claude conversation we're trying
+		 * to add a sibling to. The picker takes the flex space
+		 * while present; harness panes survive untouched.
+		 */}
+		{showPicker && <HarnessPicker onPick={onPick} />}
+		{room.harnesses.map((h) => (
+			<div
+				key={h.id}
+				style={{
+					display: !showPicker && h.id === room.activeHarnessId ? "flex" : "none",
+					flexDirection: "column",
+					flex: 1,
+					minHeight: 0,
+					// Pair with `.sk-harness-col`'s overflow:hidden — stops
+					// xterm's canvas from pushing this wrapper taller when
+					// the terminal font grows (#16).
+					overflow: "hidden",
+				}}
+			>
+				<HarnessBody
+					harness={h}
+					fontSize={fontSize}
+					defaultShell={defaultShell}
+					onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
+				/>
+			</div>
+		))}
 	</div>
 );
 
