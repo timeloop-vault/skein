@@ -190,6 +190,32 @@ export const LiveTerminal = ({
 				// raw modifier byte sequence to the PTY is rarely useful.
 				return false;
 			}
+
+			// Issue #27: Shift+Enter / Option+Enter / Alt+Enter →
+			// ESC + CR ("insert newline in prompt"). Conventional
+			// modifier-Enter sequence read by Claude Code, opencode,
+			// and most TUI prompt UIs; matches iTerm's "Option as
+			// Meta" output. xterm.js's default sends a bare \r for
+			// every modifier-Enter combo, so the harness can't
+			// distinguish submit from newline without our help.
+			// Plain Enter falls through to xterm and still submits.
+			// Ctrl+Enter is intentionally untouched — no consistent
+			// convention there.
+			//
+			// preventDefault is load-bearing: returning false skips
+			// xterm's keydown processing including its own
+			// preventDefault call, so without this the browser's
+			// default textarea behaviour inserts a \n that xterm
+			// then forwards through its input listener — the
+			// harness sees ESC+CR (newline) followed by \n (which
+			// claude / opencode treat as submit). Suppress the
+			// default explicitly so only our ESC+CR reaches the PTY.
+			if (e.key === "Enter" && (e.shiftKey || e.altKey) && !e.ctrlKey && !e.metaKey) {
+				e.preventDefault();
+				const id = ptyIdRef.current;
+				if (id) void invoke("pty_write", { id, data: "\x1b\r" });
+				return false;
+			}
 			return true;
 		});
 
