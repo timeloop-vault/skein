@@ -164,17 +164,55 @@ impl PtyManager {
 
         let reader_id = id.clone();
         thread::spawn(move || {
+            // Issue #23: keep a small carry buffer so a multi-byte
+            // UTF-8 sequence split across two reads (em-dash, box-
+            // drawing chars, emoji — all 3 or 4 bytes) doesn't get
+            // replaced with U+FFFD on each side of the boundary.
+            // We append each read into `pending`, slice off the
+            // longest valid UTF-8 prefix, emit it, and carry the
+            // trailing partial bytes into the next iteration.
+            //
+            // For genuinely malformed bytes (not just incomplete),
+            // we still drop them via lossy conversion — same as
+            // before — but only for bytes we're *certain* are
+            // invalid (Utf8Error::error_len() is Some).
+            let mut pending: Vec<u8> = Vec::with_capacity(8192);
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        // UTF-8 lossy is good enough here. Most TUI
-                        // traffic is valid UTF-8; the few invalid
-                        // sequences (e.g. mid-frame splits) become
-                        // replacement chars in the renderer.
-                        let chunk = String::from_utf8_lossy(&buf[..n]).into_owned();
-                        on_event_reader(PtyEvent::Data { chunk });
+                        pending.extend_from_slice(&buf[..n]);
+                        match std::str::from_utf8(&pending) {
+                            Ok(s) => {
+                                on_event_reader(PtyEvent::Data {
+                                    chunk: s.to_owned(),
+                                });
+                                pending.clear();
+                            }
+                            Err(e) => {
+                                let valid_up_to = e.valid_up_to();
+                                if valid_up_to > 0 {
+                                    // Safe by construction: bytes
+                                    // [..valid_up_to] are valid UTF-8.
+                                    let valid =
+                                        std::str::from_utf8(&pending[..valid_up_to]).unwrap_or("");
+                                    on_event_reader(PtyEvent::Data {
+                                        chunk: valid.to_owned(),
+                                    });
+                                }
+                                if let Some(invalid_len) = e.error_len() {
+                                    // Definitely-malformed bytes — drop
+                                    // them (same as the old lossy path).
+                                    let drain_to = valid_up_to + invalid_len;
+                                    pending.drain(..drain_to);
+                                } else {
+                                    // Trailing bytes are an incomplete
+                                    // sequence — wait for the next read.
+                                    pending.drain(..valid_up_to);
+                                }
+                            }
+                        }
                     }
                 }
             }
