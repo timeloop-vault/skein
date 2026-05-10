@@ -97,6 +97,22 @@ pub fn run() {
             app.manage(PtyManager::new());
             app.manage(WatcherManager::new());
 
+            // Resolve the product name from the merged tauri config —
+            // base config gives "Skein"; the dev overlay
+            // (tauri.dev.conf.json, issue #21) gives "Skein (dev)" so
+            // the window/dock visibly reflect which build is running.
+            // The fallback covers the (impossible-in-practice) case
+            // where productName is missing from config entirely.
+            let product_name = app
+                .config()
+                .product_name
+                .clone()
+                .unwrap_or_else(|| "Skein".to_owned());
+
+            // Sync the window title to product_name so Windows/Linux
+            // taskbar + alt-tab labels follow the dev/release split.
+            // (macOS hides the title text via hiddenTitle, but does the
+            // right thing in the dock/app-menu via product_name.) Also:
             // tauri.conf.json sets decorations: true so macOS draws its
             // standard traffic-light controls (titleBarStyle: Overlay
             // requires decorations to be true at window-creation time).
@@ -104,11 +120,12 @@ pub fn run() {
             // titlebar with our own min/max/close — strip the native
             // chrome here. macOS-only fields (titleBarStyle, hiddenTitle)
             // are quietly ignored on those platforms.
-            #[cfg(not(target_os = "macos"))]
             {
                 let window = app
                     .get_webview_window("main")
                     .ok_or("main window missing during setup")?;
+                window.set_title(&product_name)?;
+                #[cfg(not(target_os = "macos"))]
                 window.set_decorations(false)?;
             }
 
@@ -130,7 +147,7 @@ pub fn run() {
                 };
 
                 let about = AboutMetadataBuilder::new()
-                    .name(Some("Skein"))
+                    .name(Some(product_name.clone()))
                     .version(Some(env!("CARGO_PKG_VERSION")))
                     .build();
 
@@ -139,7 +156,7 @@ pub fn run() {
                     .accelerator("CmdOrCtrl+,")
                     .build(app)?;
 
-                let app_menu = SubmenuBuilder::new(app, "Skein")
+                let app_menu = SubmenuBuilder::new(app, &product_name)
                     .about(Some(about))
                     .separator()
                     .item(&preferences)

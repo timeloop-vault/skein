@@ -68,11 +68,31 @@ real git operations.
     git config core.hooksPath .githooks
     cd app && npm install
 
-    # Dev loop:
-    cd app && npm run tauri dev
+Skein has three build profiles (issue #21). Each has its own bundle
+identifier, so APP_DATA / log dir / config dir are all isolated —
+state from one never bleeds into another.
 
-App data dir on Windows: `%APPDATA%\com.timeloop-vault.skein\`. Delete
-`skein.db` there to reset persisted state.
+| Profile       | Command                       | Identifier                         | Window/dock label |
+| ------------- | ----------------------------- | ---------------------------------- | ----------------- |
+| dev           | `npm run tauri:dev`           | `com.timeloop-vault.skein.dev`     | Skein (dev)       |
+| local release | `npm run tauri:build:local`   | `com.timeloop-vault.skein.local`   | Skein (local)     |
+| release       | `npm run tauri build`         | `com.timeloop-vault.skein`         | Skein             |
+
+- **dev** — debug build, hot-reload, what you use day-to-day for
+  feature work.
+- **local release** — release-mode optimized bundle for testing what
+  the *real* user experience looks like before cutting a release.
+  Lives next to your daily driver in /Applications without touching
+  its state.
+- **release** — what `tauri build` produces by default and what the
+  GitHub release pipeline ships. This is the daily-driver bundle.
+
+App data dirs on Windows:
+`%APPDATA%\com.timeloop-vault.skein\` (release),
+`%APPDATA%\com.timeloop-vault.skein.dev\` (dev),
+`%APPDATA%\com.timeloop-vault.skein.local\` (local release).
+Delete `skein.db` in any of them to reset persisted state for that
+profile.
 
 ## Conventions
 
