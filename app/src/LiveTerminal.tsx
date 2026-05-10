@@ -43,6 +43,13 @@ interface LiveTerminalProps {
 	// Default shell argv (from `default_shell`). Used when the user
 	// presses Enter on the post-exit prompt to drop into a usable shell.
 	defaultShell: string[];
+	// True iff this terminal is the one the user can currently see
+	// and interact with: its room is active, no picker is up in
+	// front of it, and it's the room's active harness. We focus the
+	// xterm whenever this flips true (or on mount with `visible:
+	// true`) so keyboard-driven room/harness switches don't leave
+	// focus stranded on document.body. Issue #22.
+	visible: boolean;
 	// Persists a new cmd against this harness so a Skein restart
 	// re-spawns the shell instead of the dead CLI.
 	onCmdChange: (cmd: string[]) => void;
@@ -54,6 +61,7 @@ export const LiveTerminal = ({
 	mountKey,
 	fontSize,
 	defaultShell,
+	visible,
 	onCmdChange,
 }: LiveTerminalProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -121,10 +129,11 @@ export const LiveTerminal = ({
 		}
 		termRef.current = term;
 		fitRef.current = fit;
-		// Take focus on mount so the user can immediately interact with
-		// any prompt the spawned CLI prints (e.g. Claude Code's "is it
-		// ok if I work in this folder?" arrow-key dialog).
-		term.focus();
+		// Initial focus is handled by the `visible` effect below — that
+		// effect fires on mount as well as on every visible-flip, so a
+		// terminal mounting visible (e.g. fresh harness from picker, only
+		// room at boot) still gets focus, but a terminal mounting hidden
+		// (inactive room's pre-mounted harness) doesn't steal it.
 
 		// Track whether we're showing the post-exit prompt, plus the
 		// program name for the "[skein] x exited (N)" line.
@@ -281,6 +290,19 @@ export const LiveTerminal = ({
 			ptyIdRef.current = null;
 		};
 	}, [mountKey]);
+
+	// Issue #22: focus the xterm whenever this pane becomes visible —
+	// covers keyboard-driven room switches (Mod+1..9, palette,
+	// Mod+Tab), harness-within-room switches, and the picker → pick
+	// → newly-active-harness flow. The mount effect runs before this
+	// one (declaration order), so termRef is populated by the time we
+	// dereference it. We *don't* track focus on visible→false: hiding
+	// the pane via display:none already drops focus naturally; trying
+	// to "restore" focus elsewhere would fight whatever just received
+	// it (modal, command palette, etc.).
+	useEffect(() => {
+		if (visible) termRef.current?.focus();
+	}, [visible]);
 
 	// Live font-size changes: retune the existing terminal without
 	// re-spawning the PTY. fit() recomputes rows/cols at the new cell
