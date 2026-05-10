@@ -25,6 +25,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
@@ -119,6 +120,22 @@ export const LiveTerminal = ({
 		});
 		const fit = new FitAddon();
 		term.loadAddon(fit);
+		// Issue #23: Ink-based TUIs (Claude Code, opencode) compute
+		// display widths using the `string-width` package, which uses
+		// Unicode 11+ tables. xterm.js's default width calculation
+		// uses Unicode 6 (circa 2010), so chars like → / ✓ / various
+		// arrows are width-2 to Ink but width-1 to xterm. Every such
+		// char drifts the cursor by one column, and Ink's incremental
+		// streaming redraws stack on top of each other instead of
+		// landing where the previous frame's content was — text and
+		// dividers leak through. Submitting forces a full clear + redraw
+		// so it self-heals on send, which is the smoking gun.
+		// The Unicode 11 addon ships an updated wcwidth table that
+		// matches what string-width sees. activeVersion = "11" engages
+		// it (default stays "6" otherwise — addon must be both loaded
+		// AND activated).
+		term.loadAddon(new Unicode11Addon());
+		term.unicode.activeVersion = "11";
 		term.open(host);
 		// If we're mounting into a hidden pane (e.g. an inactive room
 		// at app boot), skip the initial fit. xterm's defaults (24×80) are
