@@ -43,6 +43,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_opener::init())
         .on_menu_event(|app, event| {
             // The macOS app menu (built in setup) drives this. Phase 4
             // wires a frontend listener for skein://open-settings to open
