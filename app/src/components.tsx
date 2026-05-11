@@ -1,8 +1,27 @@
 // Shared, low-level components used across the app.
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, DragEvent } from "react";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { Harness, HarnessKind, Room, Status } from "./types.ts";
+
+// Drop indicator side relative to a tab. The dragOver handler picks
+// "before" if the cursor is left of the tab's horizontal midpoint,
+// "after" if right. CSS pseudo-elements render an accent-colored bar
+// on the matching edge so the user can see where the drop will land.
+// Issue #26.
+export type DropSide = "before" | "after" | null;
+
+// Drag-related props that both tab kinds share. All optional so the
+// presentational tab can render without drag wiring (e.g. in tests).
+export interface DragProps {
+	draggable?: boolean;
+	dragging?: boolean;
+	dropSide?: DropSide;
+	onDragStart?: (e: DragEvent<HTMLDivElement>) => void;
+	onDragOver?: (e: DragEvent<HTMLDivElement>) => void;
+	onDrop?: (e: DragEvent<HTMLDivElement>) => void;
+	onDragEnd?: (e: DragEvent<HTMLDivElement>) => void;
+}
 
 export const HChip = ({ kind, size = 14 }: { kind: HarnessKind; size?: number }) => {
 	const k = HARNESS_KINDS[kind];
@@ -30,13 +49,29 @@ export const RoomTab = ({
 	active,
 	onClick,
 	onClose,
+	draggable,
+	dragging,
+	dropSide,
+	onDragStart,
+	onDragOver,
+	onDrop,
+	onDragEnd,
 }: {
 	r: Room;
 	active: boolean;
 	onClick: () => void;
 	onClose: () => void;
-}) => (
-	<div className={`sk-tab ${active ? "active" : ""}`} onClick={onClick} title={r.task}>
+} & DragProps) => (
+	<div
+		className={`sk-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
+		onClick={onClick}
+		title={r.task}
+		draggable={draggable}
+		onDragStart={onDragStart}
+		onDragOver={onDragOver}
+		onDrop={onDrop}
+		onDragEnd={onDragEnd}
+	>
 		<div className="row-1">
 			<StatusDot status={r.status} />
 			<span className="name">{r.name}</span>
@@ -74,14 +109,29 @@ export const HarnessTab = ({
 	closable,
 	onClick,
 	onClose,
+	draggable,
+	dragging,
+	dropSide,
+	onDragStart,
+	onDragOver,
+	onDrop,
+	onDragEnd,
 }: {
 	h: Harness;
 	active: boolean;
 	closable: boolean;
 	onClick: () => void;
 	onClose: () => void;
-}) => (
-	<div className={`sk-harness-tab ${active ? "active" : ""}`} onClick={onClick}>
+} & DragProps) => (
+	<div
+		className={`sk-harness-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
+		onClick={onClick}
+		draggable={draggable}
+		onDragStart={onDragStart}
+		onDragOver={onDragOver}
+		onDrop={onDrop}
+		onDragEnd={onDragEnd}
+	>
 		<StatusDot status={h.status} size={5} />
 		<HChip kind={h.kind} size={11} />
 		<span className="ht-name">{h.name}</span>
