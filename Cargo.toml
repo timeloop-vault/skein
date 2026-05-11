@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/skein-git", "crates/skein-proto"]
+members = ["crates/skein-git", "crates/skein-proto", "crates/skein-proto-iced"]
 exclude = ["app/src-tauri"]
 
 [workspace.package]
