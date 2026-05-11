@@ -8,6 +8,7 @@
 
 import { useEffect } from "react";
 import type { Room } from "./types.ts";
+import { useFocusRestore } from "./useFocusRestore.ts";
 
 interface ReopenRoomModalProps {
 	rooms: Room[]; // already filtered to archived + sorted newest-first
@@ -25,6 +26,8 @@ const formatClosed = (ms: number): string => {
 };
 
 export const ReopenRoomModal = ({ rooms, onReopen, onClose }: ReopenRoomModalProps) => {
+	useFocusRestore();
+
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {

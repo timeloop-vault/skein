@@ -12,6 +12,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { check } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useState } from "react";
 import type { Density, Theme } from "./types.ts";
+import { useFocusRestore } from "./useFocusRestore.ts";
 
 type UpdateState =
 	| { status: "idle" }
@@ -51,6 +52,8 @@ export const SettingsModal = ({
 	onFontSize,
 	onClose,
 }: SettingsModalProps) => {
+	useFocusRestore();
+
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {

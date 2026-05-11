@@ -25,6 +25,7 @@ import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import { usePersistedState } from "./prefs.ts";
 import { isAppShortcut, isMac, modLabel } from "./shortcuts.ts";
 import type { Density, Harness, HarnessKind, Room, Theme } from "./types.ts";
+import { useFocusRestore } from "./useFocusRestore.ts";
 
 // ── Harness body ───────────────────────────────────────────────────
 
@@ -209,6 +210,7 @@ const NewRoomDialog = ({
 	onCommit: (args: CreateRoomArgs) => void;
 	onCancel: () => void;
 }) => {
+	useFocusRestore();
 	const [cwd, setCwd] = useState<string>("");
 	const [task, setTask] = useState("");
 	const [harness, setHarness] = useState<HarnessKind>("claude");
