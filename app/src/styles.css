@@ -506,6 +506,24 @@ body {
 	height: 1px;
 	background: var(--bg-2);
 }
+
+/* Issue #26 — drag-and-drop reorder. `dragging` dims the source
+ * tab while it's being dragged; `drop-before` / `drop-after` paint
+ * a 2px accent-coloured bar on the matching edge of the hovered
+ * tab to show where the drop will land. box-shadow over a border
+ * so the indicator doesn't shift adjacent tabs as it appears. */
+.sk-tab.dragging,
+.sk-harness-tab.dragging {
+	opacity: 0.4;
+}
+.sk-tab.drop-before,
+.sk-harness-tab.drop-before {
+	box-shadow: -2px 0 0 var(--accent);
+}
+.sk-tab.drop-after,
+.sk-harness-tab.drop-after {
+	box-shadow: 2px 0 0 var(--accent);
+}
 .sk-harness-tab .ht-name {
 	white-space: nowrap;
 	overflow: hidden;
