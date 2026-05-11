@@ -3,6 +3,7 @@
 // flat list with substring filtering.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useFocusRestore } from "./useFocusRestore.ts";
 
 export interface PaletteItem {
 	id: string;
@@ -18,6 +19,7 @@ interface CommandPaletteProps {
 }
 
 export const CommandPalette = ({ items, onClose }: CommandPaletteProps) => {
+	useFocusRestore();
 	const [query, setQuery] = useState("");
 	const [selectedIdx, setSelectedIdx] = useState(0);
 	const inputRef = useRef<HTMLInputElement>(null);

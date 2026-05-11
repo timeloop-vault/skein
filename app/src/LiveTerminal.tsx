@@ -32,6 +32,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
 import { isAppShortcut, isMac } from "./shortcuts.ts";
+import { OVERLAY_CLOSED_EVENT } from "./useFocusRestore.ts";
 
 type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
 
@@ -396,6 +397,20 @@ export const LiveTerminal = ({
 	// the pane via display:none already drops focus naturally; trying
 	// to "restore" focus elsewhere would fight whatever just received
 	// it (modal, command palette, etc.).
+	// Issue #33: when an overlay (Settings, command palette, etc.)
+	// dismisses, useFocusRestore in the overlay fires
+	// `skein:overlay-closed` on window. The currently-visible
+	// terminal grabs focus so the user can keep typing — regardless
+	// of where focus was before the overlay opened (it might have
+	// been on a chrome button rather than a terminal, in which case
+	// "restoring" the original focus would land back on the button).
+	useEffect(() => {
+		if (!visible) return;
+		const onOverlayClosed = () => termRef.current?.focus();
+		window.addEventListener(OVERLAY_CLOSED_EVENT, onOverlayClosed);
+		return () => window.removeEventListener(OVERLAY_CLOSED_EVENT, onOverlayClosed);
+	}, [visible]);
+
 	useEffect(() => {
 		if (visible) termRef.current?.focus();
 	}, [visible]);
