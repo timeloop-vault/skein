@@ -1,0 +1,21 @@
+[package]
+name = "skein-proto"
+version = "0.1.0"
+description = "Pure-Rust Skein prototype (issue #36). Throwaway spike — Floem + alacritty_terminal + skein-git."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+floem = "0.2"
+floem_renderer = "0.2"
+skein-git = { path = "../skein-git" }
+portable-pty = "0.8"
+crossbeam-channel = "0.5"
+alacritty_terminal = "0.26"
+parking_lot = "0.12"
+unicode-width = "0.2"
