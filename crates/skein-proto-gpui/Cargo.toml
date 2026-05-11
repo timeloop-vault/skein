@@ -1,0 +1,15 @@
+[package]
+name = "skein-proto-gpui"
+version = "0.1.0"
+description = "GPUI variant of the pure-Rust Skein prototype (issue #36). Throwaway spike."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+gpui = "0.2"
+skein-git = { path = "../skein-git" }

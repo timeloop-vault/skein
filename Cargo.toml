@@ -1,7 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["crates/skein-git", "crates/skein-proto", "crates/skein-proto-iced"]
-exclude = ["app/src-tauri"]
+members = [
+    "crates/skein-git",
+    "crates/skein-proto",
+    "crates/skein-proto-iced",
+]
+# skein-proto-gpui is research-record only; excluded because its
+# build requires full Xcode (not CLT) on macOS. See
+# docs/pure-rust-prototype-plan.md Phase 5b.
+exclude = ["app/src-tauri", "crates/skein-proto-gpui"]
 
 [workspace.package]
 edition = "2024"

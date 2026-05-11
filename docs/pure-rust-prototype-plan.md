@@ -291,3 +291,106 @@ on the features they actually use is reached.
   rewrite has its own binary. The crate transitions from
   "throwaway spike" to "first crate of the new app."
 
+---
+
+## Phase 5b — Iced and GPUI follow-up spikes (2026-05-11)
+
+After the initial Floem GO verdict, a concern surfaced about
+Floem's release cadence (0.2.0 on crates.io is from Nov 2024,
+and main is the de-facto target with no rev pin in Lapce
+itself). Rather than commit on Floem alone, two more spikes
+went up for side-by-side comparison.
+
+### `crates/skein-proto-iced/` — Iced 0.14 + `iced_term` 0.8
+
+- ~110 LoC of integration code
+- `iced_term` is a maintained Iced-native terminal widget that
+  Floem has no equivalent for — drop-in: focus, keyboard,
+  scrollback, selection, clipboard, paste all out of the box
+- `claude` renders cleanly on first run
+- Iced 0.14 published Oct 2025; healthy release cadence on
+  crates.io; larger contributor base than Floem
+- Auto-detect-theme picks dark on macOS by default
+- One real friction: `iced_term` hardcodes scroll direction;
+  users on inverted natural-scroll see it backwards and there's
+  no public API to flip. Fix would be fork / upstream PR /
+  wrapper widget.
+
+### `crates/skein-proto-gpui/` — GPUI 0.2.2 (stub, did not build)
+
+- Source files in place (`Cargo.toml` + `src/main.rs`), but the
+  crate is **excluded from the workspace** because it doesn't
+  build on a machine with only Command Line Tools.
+- GPUI 0.2.2 *is* on crates.io (Oct 2025) — earlier worry that
+  GPUI was git-only was outdated.
+- Build requires: full Xcode (not CLT), `xcode-select` pointing
+  at it (or `DEVELOPER_DIR`), Xcode license accepted via
+  `sudo xcodebuild -license`. On a machine with Xcode installed
+  but license not yet accepted, the build halts on the license
+  check.
+- Floem and Iced both build with CLT only.
+- This is a real onboarding / CI friction point. macOS is GPUI's
+  *home platform*; the Windows + Linux story is younger.
+
+### Three-way comparison, terminal widget only
+
+| | Floem | Iced + iced_term | GPUI |
+| --- | --- | --- | --- |
+| LoC of integration | ~815 (from scratch) | ~110 (drop-in) | n/a (didn't build) |
+| Crates.io release age | 18 months stale | Current (Oct 2025) | Current (Oct 2025) |
+| Pattern source | Lifted from Lapce | Maintained crate | Zed |
+| Build on CLT alone | yes | yes | no — needs Xcode |
+| Cross-platform proof | Lapce ships M/W/L+Wayland | iced_term claims M/W/L | Mac-first; W/L recent |
+| Behavioral control | Full | Limited (fork to change) | n/a |
+| Bus factor | Lapce team | Iced team + iced_term author | Zed team |
+
+### Revised verdict: **NO-GO for now**
+
+The original Floem spike confirmed the *technical* substrate
+works. The follow-up spikes confirmed the same for Iced and the
+same would presumably be true for GPUI given the Xcode setup.
+The substrate is not the question.
+
+The question is whether the cost-to-rewrite outweighs the cost
+of staying. After the three spikes:
+
+- Tauri is the known incumbent with bounded, addressable issues.
+  #2 and #23 are tractable inside the WebView with xterm.js
+  alternatives or different addons; we don't have to leave the
+  substrate to fix them.
+- None of the three alternatives is *so much* better that the
+  rewrite cost (months of parallel work, feature parity gating,
+  ecosystem swap) is clearly worth it right now.
+- Floem requires tracking main with a rev-pin maintenance tax
+  and ties us to Lapce's roadmap.
+- Iced + iced_term works well but cedes behavioral control to
+  another small project; we'd be forking or PR-ing for each
+  small UX disagreement.
+- GPUI's onboarding tax is real even on macOS.
+
+### What we keep regardless
+
+- The three proto crates stay on this branch as research record.
+- `crates/skein-proto-gpui` is excluded from the workspace so
+  unconfigured machines can still `cargo build` the workspace.
+- `docs/pure-rust-prototype-plan.md` (this doc) is the
+  decision-on-record so issue #36 can re-emerge with full
+  context if priorities change.
+
+### Future possibility flagged
+
+If we ever revisit this, the most interesting path is *neither*
+of the three frameworks — it's building directly on the
+foundational crates (winit + wgpu + vello + cosmic-text +
+alacritty_terminal) and owning the widget layer. That avoids
+the framework lock-in entirely. Probably wrong as a starting
+point; could be right after the lower layers stabilize and we
+have a clearer view of what Skein actually wants from a UI
+substrate.
+
+### Daily driver: Tauri stays
+
+`app/` and `app/src-tauri/` continue shipping. #2, #23, #27 get
+addressed inside the existing stack. This spike's outcome is
+**evidence on file** — not action.
+
