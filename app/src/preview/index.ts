@@ -4,5 +4,6 @@
 
 import "./providers/text.tsx";
 import "./providers/image.tsx";
+import "./providers/markdown.tsx";
 
 export { findPreviewProvider, type PreviewProvider, type PreviewCtx } from "./registry.ts";
