@@ -22,10 +22,39 @@ import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { HChip, HarnessPicker, HarnessTab, RoomTab, StatusDot } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
+import { activityToStatus, useHarnessActivity } from "./harnessActivity.ts";
 import { usePersistedState } from "./prefs.ts";
 import { isAppShortcut, isMac, modLabel } from "./shortcuts.ts";
 import type { Density, Harness, HarnessKind, Room, Theme } from "./types.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
+
+// ── Live wrappers that subscribe to the activity store ─────────────
+//
+// `HarnessTab` and the status bar both need to reflect what the
+// harness is *actually* doing right now (running / idle / exited)
+// rather than the hard-coded "running" stamped at creation time.
+// Each instance subscribes via `useHarnessActivity`; the hook only
+// re-renders on real phase changes so a harness streaming output
+// continuously doesn't churn its tab. Epic #50 (foundation for
+// #29, #12, etc.).
+
+const LiveHarnessTab = (props: Parameters<typeof HarnessTab>[0]) => {
+	const activity = useHarnessActivity(props.h.id);
+	if (!activity) return <HarnessTab {...props} />;
+	const status = activityToStatus(activity);
+	return <HarnessTab {...props} h={{ ...props.h, status }} />;
+};
+
+const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
+	const activity = useHarnessActivity(harness.id);
+	const status = activity ? activityToStatus(activity) : harness.status;
+	return (
+		<span className="seg">
+			<span className={`dot-tiny st-${status}`} />
+			{status}
+		</span>
+	);
+};
 
 // ── Harness body ───────────────────────────────────────────────────
 
@@ -55,6 +84,7 @@ const HarnessBody = ({
 				cmd={harness.cmd}
 				cwd={harness.cwd}
 				mountKey={`${harness.id}:${harness.cmd.join("\x00")}`}
+				harnessId={harness.id}
 				fontSize={fontSize}
 				defaultShell={defaultShell}
 				visible={visible}
@@ -117,7 +147,7 @@ const HarnessColumn = ({
 	<div className="sk-harness-col">
 		<div className="sk-harness-tabs">
 			{room.harnesses.map((h) => (
-				<HarnessTab
+				<LiveHarnessTab
 					key={h.id}
 					h={h}
 					active={h.id === room.activeHarnessId}
@@ -1615,10 +1645,7 @@ export default function App() {
 					<HChip kind={activeHarness.kind} size={10} />
 					<span>{HARNESS_KINDS[activeHarness.kind].name}</span>
 				</span>
-				<span className="seg">
-					<span className={`dot-tiny st-${activeHarness.status}`} />
-					{activeHarness.status}
-				</span>
+				<LiveStatusBarChip harness={activeHarness} />
 				{(() => {
 					// Prefer the live branch (updated on every watcher tick) but
 					// fall back to room.branch on first render before LiveStatus
