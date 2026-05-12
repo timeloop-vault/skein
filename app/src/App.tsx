@@ -22,7 +22,12 @@ import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { HChip, HarnessPicker, HarnessTab, RoomTab, StatusDot } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
-import { activityToStatus, useHarnessActivity, useRoomActivity } from "./harnessActivity.ts";
+import {
+	activityToStatus,
+	harnessActivity,
+	useHarnessActivity,
+	useRoomActivity,
+} from "./harnessActivity.ts";
 import { usePersistedState } from "./prefs.ts";
 import { isAppShortcut, isMac, modLabel } from "./shortcuts.ts";
 import type { Density, Harness, HarnessKind, Room, Theme } from "./types.ts";
@@ -30,9 +35,9 @@ import { useFocusRestore } from "./useFocusRestore.ts";
 
 // ── Live wrappers that subscribe to the activity store ─────────────
 //
-// `HarnessTab`, `RoomTab`, and the status bar all need to reflect
-// what each harness/room is *actually* doing right now (running /
-// idle / exited) rather than the hard-coded "running" stamped at
+// HarnessTab, RoomTab, and the status bar all need to reflect what
+// each harness/room is *actually* doing right now (running / idle
+// / exited) rather than the hard-coded "running" stamped at
 // creation time. Each instance subscribes via the activity hooks;
 // they only re-render on real phase changes so a harness streaming
 // output continuously doesn't churn its tab. Epic #50 (foundation
@@ -50,11 +55,17 @@ const LiveHarnessTab = (props: Parameters<typeof HarnessTab>[0]) => {
 // exited so the dot surfaces the most "alive" state across the
 // room's harnesses. `waiting` lands once L2b pattern-matching
 // ships.
+// L5a — derived badge. The persisted `r.badge` field is vestigial
+// now; the visible badge is the sum of each harness's pending
+// counter. Overriding it here means every room tab path
+// (active, archived list, etc.) shows the right value without
+// having to update `r.badge` from notification logic.
 const LiveRoomTab = (props: Parameters<typeof RoomTab>[0]) => {
 	const harnessIds = useMemo(() => props.r.harnesses.map((h) => h.id), [props.r.harnesses]);
 	const aggregate = useRoomActivity(harnessIds);
-	if (aggregate === null) return <RoomTab {...props} />;
-	return <RoomTab {...props} r={{ ...props.r, status: aggregate }} />;
+	const badge = props.r.harnesses.reduce((acc, h) => acc + (h.pendingNotifications ?? 0), 0);
+	const derived = { ...props.r, badge, ...(aggregate !== null && { status: aggregate }) };
+	return <RoomTab {...props} r={derived} />;
 };
 
 const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
@@ -980,6 +991,10 @@ export default function App() {
 
 	const switchRoom = (id: string) => {
 		setActiveRoomId(id);
+		// Pending-notification clearing for the now-displayed harness
+		// is handled by a useEffect below — it covers every path
+		// that changes the (active room, active harness) tuple, not
+		// just tab clicks (Mod+1..9, Mod+Tab, palette, initial load).
 	};
 
 	const closeRoom = async (id: string) => {
@@ -1207,6 +1222,72 @@ export default function App() {
 	activeRoomsRef.current = activeRooms;
 	const activeRoomIdRef = useRef(activeRoomId);
 	activeRoomIdRef.current = activeRoomId;
+
+	// L5a — pending-notification accounting. A harness transitioning
+	// from working (spawning|running) to passive (idle|exited) bumps
+	// its own `pendingNotifications` counter — unless it's the
+	// harness the user is currently viewing (active room's active
+	// harness), in which case we skip because the user can already
+	// see the dot change. Same harness in the active room but in a
+	// non-active harness tab WILL bump — its tab isn't visible.
+	// Room.badge is rendered as the sum across harnesses by
+	// LiveRoomTab; we don't write to it here. Counters persist via
+	// the rooms→sqlite mirror so the badge survives a restart.
+	useEffect(() => {
+		const unsub = harnessActivity.subscribeTransitions((harnessId, from, to) => {
+			const wasWorking = from === "running" || from === "spawning";
+			const becamePassive = to === "idle" || to === "exited";
+			if (!wasWorking || !becamePassive) return;
+			// Skip the spawn-banner cycle: a harness that hasn't
+			// been typed into is mechanically going idle because
+			// its startup output finished, not because a task did.
+			// Without this guard every Skein restart lights up
+			// every non-active room as persisted harnesses respawn.
+			const a = harnessActivity.get(harnessId);
+			if (!a || !a.hasUserInput) return;
+			const activeRoom = roomsRef.current.find((r) => r.id === activeRoomIdRef.current);
+			if (activeRoom && activeRoom.activeHarnessId === harnessId) return;
+			setRooms((prev) =>
+				prev.map((r) => {
+					if (!r.harnesses.some((h) => h.id === harnessId)) return r;
+					return {
+						...r,
+						harnesses: r.harnesses.map((h) =>
+							h.id === harnessId
+								? { ...h, pendingNotifications: (h.pendingNotifications ?? 0) + 1 }
+								: h,
+						),
+					};
+				}),
+			);
+		});
+		return unsub;
+	}, []);
+
+	// L5a — clear pending on view. Runs every time the (active room,
+	// active harness of active room) tuple changes — covers tab
+	// click, keyboard nav (Mod+1..9, Mod+Tab), command palette,
+	// initial load. Only the harness that's now displayed gets
+	// cleared; other harnesses in the same room keep their pending
+	// counts so a multi-harness room only loses badges as the user
+	// visits each tab.
+	const displayedHarnessId = room?.activeHarnessId ?? null;
+	useEffect(() => {
+		if (!activeRoomId || !displayedHarnessId) return;
+		setRooms((prev) =>
+			prev.map((r) => {
+				if (r.id !== activeRoomId) return r;
+				const target = r.harnesses.find((h) => h.id === displayedHarnessId);
+				if (!target || (target.pendingNotifications ?? 0) === 0) return r;
+				return {
+					...r,
+					harnesses: r.harnesses.map((h) =>
+						h.id === displayedHarnessId ? { ...h, pendingNotifications: 0 } : h,
+					),
+				};
+			}),
+		);
+	}, [activeRoomId, displayedHarnessId]);
 
 	useEffect(() => {
 		const cycleRoom = (delta: number) => {

@@ -374,6 +374,23 @@ export const LiveTerminal = ({
 					}
 					void invoke("pty_write", { id, data });
 				});
+				// Separate hook for "did the user actually press a
+				// key in this terminal?" — used by L5a notification
+				// gating to tell real work cycles apart from startup
+				// banner cycles. onKey is the right primitive:
+				// onData fires for *anything* the terminal sends to
+				// the child, including auto-responses to queries
+				// like `\x1b[6n` (cursor position) and `\x1b[5n`
+				// (device status). Treating those as input was the
+				// bug that lit up every room on Skein restart.
+				// Caveat: onKey doesn't fire for paste — if the user
+				// pastes without ever typing, their first task-idle
+				// transition won't bump. That's a corner-case false
+				// negative we'll address with a paste listener if it
+				// matters in practice.
+				term.onKey(() => {
+					harnessActivity.recordInput(harnessId);
+				});
 				if (!resizeObserver) {
 					// Track the dims we last sent so we can skip the
 					// pty_resize round-trip when nothing actually

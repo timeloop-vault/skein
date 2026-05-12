@@ -43,6 +43,12 @@ pub struct Harness {
     /// for how it gets populated; Skein only round-trips it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub session_id: Option<String>,
+    /// Count of attention-worthy transitions accumulated for this
+    /// harness while the user wasn't viewing it. Cleared when the
+    /// harness becomes the active harness in the active room.
+    /// Persisted so the badge survives Skein restarts. Epic #50 L5a.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pending_notifications: Option<i64>,
 }
 
 /// Mirrors the TS Room interface.

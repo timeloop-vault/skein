@@ -36,6 +36,12 @@ export interface HarnessActivity {
 	/// without a numeric code (signal-killed on some platforms).
 	exitCode: number | null;
 	spawnedAt: number;
+	/// Has the user typed anything into this harness since it
+	/// spawned (paste / arrow keys / any byte that wasn't a
+	/// focus-in/-out escape)? Used by L5a notification logic to
+	/// tell "user did a task" cycles apart from "startup banner
+	/// printed then quieted." Ephemeral; reset on every spawn.
+	hasUserInput: boolean;
 }
 
 /// Sustained silence threshold for `running → idle`. Hard-coded for
@@ -61,6 +67,13 @@ const listeners = new Map<string, Set<() => void>>();
 const muteUntil = new Map<string, number>();
 let tickHandle: ReturnType<typeof setInterval> | null = null;
 
+/// Global transition callback: receives every real phase change.
+/// Used by App-level notification logic (#12 L5a tab badges, L5b
+/// OS notifications, L5c toasts) which need to react to transitions
+/// across every harness without subscribing to each id separately.
+export type TransitionListener = (id: string, from: ActivityPhase, to: ActivityPhase) => void;
+const transitionListeners = new Set<TransitionListener>();
+
 const emit = (id: string): void => {
 	const set = listeners.get(id);
 	if (!set) return;
@@ -75,8 +88,12 @@ const setPhase = (id: string, phase: ActivityPhase, patch?: Partial<HarnessActiv
 	// real phase changes notify subscribers; `lastOutputAt`
 	// mutates silently inside `recordOutput`.
 	if (cur.phase === phase && !patch) return;
+	const from = cur.phase;
 	store.set(id, { ...cur, phase, ...patch });
 	emit(id);
+	if (from !== phase) {
+		for (const cb of transitionListeners) cb(id, from, phase);
+	}
 };
 
 const ensureTick = (): void => {
@@ -110,9 +127,20 @@ export const harnessActivity = {
 			lastOutputAt: null,
 			exitCode: null,
 			spawnedAt: now,
+			hasUserInput: false,
 		});
 		ensureTick();
 		emit(id);
+	},
+
+	/// Record user input (keystroke / paste) on a harness. Flips
+	/// `hasUserInput` to true exactly once per spawn; subsequent
+	/// keystrokes are no-ops. Doesn't emit — consumers that care
+	/// (notification logic) read the flag lazily at transition time.
+	recordInput(id: string): void {
+		const cur = store.get(id);
+		if (!cur || cur.hasUserInput) return;
+		store.set(id, { ...cur, hasUserInput: true });
 	},
 
 	/// Record a chunk of PTY output. Side-effects: bumps
@@ -162,6 +190,7 @@ export const harnessActivity = {
 				lastOutputAt: null,
 				exitCode: code,
 				spawnedAt: Date.now(),
+				hasUserInput: false,
 			});
 			emit(id);
 			return;
@@ -196,6 +225,17 @@ export const harnessActivity = {
 			if (!s) return;
 			s.delete(cb);
 			if (s.size === 0) listeners.delete(id);
+		};
+	},
+
+	/// Subscribe to every phase transition across every harness.
+	/// One callback fires for each real transition with `(id, from,
+	/// to)`. Returns an unsubscribe. Used by App-level notification
+	/// logic that fans out to multiple rooms.
+	subscribeTransitions(cb: TransitionListener): () => void {
+		transitionListeners.add(cb);
+		return () => {
+			transitionListeners.delete(cb);
 		};
 	},
 };
