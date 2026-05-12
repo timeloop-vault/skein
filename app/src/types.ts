@@ -8,7 +8,7 @@
 
 export type HarnessKind = "claude" | "opencode" | "copilot" | "byoh";
 
-export type Status = "running" | "waiting" | "idle" | "error";
+export type Status = "running" | "waiting" | "idle" | "error" | "exited";
 
 export interface Harness {
 	id: string;

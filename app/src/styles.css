@@ -428,6 +428,10 @@ body {
 	background: var(--err);
 	box-shadow: 0 0 6px var(--err);
 }
+.st-exited {
+	background: transparent;
+	border: 1px solid var(--fg-3);
+}
 @keyframes sk-pulse {
 	0%,
 	100% {

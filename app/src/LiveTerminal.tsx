@@ -31,6 +31,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
+import { harnessActivity } from "./harnessActivity.ts";
 import { isAppShortcut, isMac } from "./shortcuts.ts";
 import { OVERLAY_CLOSED_EVENT } from "./useFocusRestore.ts";
 
@@ -43,6 +44,12 @@ interface LiveTerminalProps {
 	// double-invocation in dev doesn't spawn twice. Passing the
 	// harness id is the natural choice.
 	mountKey: string;
+	// Stable across cmd changes (mountKey churns when the user
+	// picks "Enter for shell" — see App.tsx). Used as the key into
+	// the activity store so a respawn under the same harness shows
+	// up as a fresh `spawning → running` transition rather than a
+	// new ghost record. Epic #50.
+	harnessId: string;
 	fontSize: number;
 	// Default shell argv (from `default_shell`). Used when the user
 	// presses Enter on the post-exit prompt to drop into a usable shell.
@@ -63,6 +70,7 @@ export const LiveTerminal = ({
 	cmd,
 	cwd,
 	mountKey,
+	harnessId,
 	fontSize,
 	defaultShell,
 	visible,
@@ -294,6 +302,10 @@ export const LiveTerminal = ({
 		channel.onmessage = (ev) => {
 			if (ev.kind === "data") {
 				term.write(ev.chunk);
+				// Feed the activity model. Every PTY chunk is an
+				// "output" signal — the store throttles internally
+				// so we don't fire a React render per chunk. Epic #50.
+				harnessActivity.recordOutput(harnessId);
 			} else {
 				handleExit(ev.code);
 			}
@@ -306,6 +318,7 @@ export const LiveTerminal = ({
 		const handleExit = (code: number | null) => {
 			if (cancelled) return;
 			phase = "exited";
+			harnessActivity.exited(harnessId, code);
 			// Stop forwarding keystrokes — the writer is gone, and we
 			// want Enter to flow through the custom handler instead.
 			dataDisposable?.dispose();
@@ -325,6 +338,11 @@ export const LiveTerminal = ({
 			if (cancelled) return;
 			programName = cmdToSpawn[0] ?? "child";
 			phase = "running";
+			// Record the spawn before we await — gives a deterministic
+			// `spawning` window in the activity store even when
+			// pty_spawn is slow. recordOutput in the channel handler
+			// will flip it to `running` on the first chunk. Epic #50.
+			harnessActivity.spawned(harnessId);
 			try {
 				const id = await invoke<string>("pty_spawn", {
 					cmd: cmdToSpawn,
@@ -339,9 +357,37 @@ export const LiveTerminal = ({
 				}
 				ptyIdRef.current = id;
 				dataDisposable = term.onData((data) => {
+					// Focus-in / focus-out escapes are sent by xterm
+					// when the child enabled DECSET 1004 (Claude Code,
+					// opencode both do). The child typically reacts
+					// with a full screen redraw — those bytes come
+					// back through channel.onmessage and would
+					// otherwise count as "activity" and reset the
+					// idle timer. Mute the activity window for this
+					// harness so the induced redraw doesn't lie about
+					// what the child is doing. Covers every focus
+					// path: harness switch, alt+tab back to Skein,
+					// modal-close focus return, click into pane. Epic
+					// #50.
+					if (data === "\x1b[I" || data === "\x1b[O") {
+						harnessActivity.muteInducedOutput(harnessId);
+					}
 					void invoke("pty_write", { id, data });
 				});
 				if (!resizeObserver) {
+					// Track the dims we last sent so we can skip the
+					// pty_resize round-trip when nothing actually
+					// changed. Most ResizeObserver fires on a hidden→
+					// visible flip end up with the same rows/cols xterm
+					// already had — and many TUIs (Claude Code, opencode)
+					// react to SIGWINCH by repainting their entire screen,
+					// which then comes back to us as PTY output and
+					// counts as "activity" in the harnessActivity store.
+					// The visible symptom before this guard: switching
+					// to an idle background harness made its tab dot go
+					// green for 8s before settling back to idle. Epic #50.
+					let lastSentRows = term.rows;
+					let lastSentCols = term.cols;
 					resizeObserver = new ResizeObserver(() => {
 						// Phase 3 guard: when the room goes display:none,
 						// the host shrinks to 0×0 and the observer fires.
@@ -358,7 +404,11 @@ export const LiveTerminal = ({
 							return;
 						}
 						const cur = ptyIdRef.current;
-						if (cur) void invoke("pty_resize", { id: cur, rows: term.rows, cols: term.cols });
+						if (!cur) return;
+						if (term.rows === lastSentRows && term.cols === lastSentCols) return;
+						lastSentRows = term.rows;
+						lastSentCols = term.cols;
+						void invoke("pty_resize", { id: cur, rows: term.rows, cols: term.cols });
 					});
 					resizeObserver.observe(host);
 				}
@@ -369,6 +419,9 @@ export const LiveTerminal = ({
 				// no idea Enter still drops them into a shell.
 				term.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
 				phase = "exited";
+				// pty_spawn never produced a child; treat as exited
+				// so the status bar / tab dot don't sit on spawning.
+				harnessActivity.exited(harnessId, null);
 			}
 		};
 
@@ -385,6 +438,11 @@ export const LiveTerminal = ({
 			fitRef.current = null;
 			spawnedRef.current = null;
 			ptyIdRef.current = null;
+			// Drop the activity record so the store doesn't keep
+			// growing across the app's lifetime. A respawn (mountKey
+			// change for "Enter for shell") re-runs the effect and
+			// re-records via spawned() above. Epic #50.
+			harnessActivity.forget(harnessId);
 		};
 	}, [mountKey]);
 
