@@ -27,6 +27,15 @@ export interface Harness {
 	// kinds without a resume concept (copilot, shell), and for legacy
 	// harnesses created before the field existed.
 	sessionId?: string;
+	// Count of attention-worthy transitions (working → idle/exited)
+	// accumulated for this harness while it was *not* the harness
+	// the user was viewing. Cleared the moment the harness becomes
+	// the active harness in the active room. Room.badge is the sum
+	// across harnesses (derived at render time). Persisted to sqlite
+	// so badges survive a Skein restart — they represent "things
+	// you haven't looked at yet", and a restart doesn't change that.
+	// Epic #50 L5a.
+	pendingNotifications?: number;
 }
 
 export interface Room {
