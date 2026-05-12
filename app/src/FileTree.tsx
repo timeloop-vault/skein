@@ -13,7 +13,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Splitter } from "./Splitter.tsx";
 import { usePersistedState } from "./prefs.ts";
-import { type PreviewProvider, findPreviewProvider } from "./preview/index.ts";
+import { findPreviewProviders } from "./preview/index.ts";
 
 interface DirEntryDto {
 	name: string;
@@ -144,43 +144,56 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 		setPreviewBody(null);
 		setPreviewError(null);
 		const fullPath = joinPath(currentDir, selectedFile);
-		const provider: PreviewProvider | null = findPreviewProvider(fullPath);
-		if (!provider) {
+		const providers = findPreviewProviders(fullPath);
+		if (providers.length === 0) {
 			setPreviewError("no preview provider matched");
 			return;
 		}
 		let cancelled = false;
 		const load = async () => {
-			try {
-				if (provider.needs === "text") {
-					const dto = await invoke<TextDto>("read_file_text", { path: fullPath });
-					if (cancelled) return;
-					const body = provider.render({
-						path: fullPath,
-						text: dto.content,
-						truncated: dto.truncated,
-					});
-					setPreviewBody(body);
-				} else if (provider.needs === "bytes") {
-					const dto = await invoke<BytesDto>("read_file_bytes", { path: fullPath });
-					if (cancelled) return;
-					const body = provider.render({
-						path: fullPath,
-						bytesBase64: dto.base64,
-						truncated: dto.truncated,
-					});
-					setPreviewBody(body);
-				} else {
-					// "path" providers do their own io.
-					const body = provider.render({ path: fullPath, truncated: false });
-					if (cancelled) return;
-					setPreviewBody(body);
-				}
-			} catch (err: unknown) {
+			// Walk providers in priority order. A provider opts out by
+			// returning `null` from render, or by having its underlying
+			// fetch fail with the conventional `"binary"` error
+			// (`read_file_text` does this for files with NULs in the
+			// sniff window — the signal hex provider is waiting for).
+			let lastError: string | null = null;
+			for (const provider of providers) {
 				if (cancelled) return;
-				const msg = err instanceof Error ? err.message : String(err);
-				setPreviewError(msg);
+				try {
+					let body: ReactNode | null = null;
+					if (provider.needs === "text") {
+						const dto = await invoke<TextDto>("read_file_text", { path: fullPath });
+						if (cancelled) return;
+						body = provider.render({
+							path: fullPath,
+							text: dto.content,
+							truncated: dto.truncated,
+						});
+					} else if (provider.needs === "bytes") {
+						const dto = await invoke<BytesDto>("read_file_bytes", { path: fullPath });
+						if (cancelled) return;
+						body = provider.render({
+							path: fullPath,
+							bytesBase64: dto.base64,
+							truncated: dto.truncated,
+						});
+					} else {
+						// "path" providers do their own io.
+						body = provider.render({ path: fullPath, truncated: false });
+					}
+					if (body !== null) {
+						setPreviewBody(body);
+						return;
+					}
+				} catch (err: unknown) {
+					const msg = err instanceof Error ? err.message : String(err);
+					// "binary" is the expected fall-through signal —
+					// don't surface it unless every provider failed.
+					lastError = msg;
+				}
 			}
+			if (cancelled) return;
+			setPreviewError(lastError ?? "no preview provider could render this file");
 		};
 		void load();
 		return () => {
