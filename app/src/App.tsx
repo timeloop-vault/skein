@@ -22,7 +22,7 @@ import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { HChip, HarnessPicker, HarnessTab, RoomTab, StatusDot } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
-import { activityToStatus, useHarnessActivity } from "./harnessActivity.ts";
+import { activityToStatus, useHarnessActivity, useRoomActivity } from "./harnessActivity.ts";
 import { usePersistedState } from "./prefs.ts";
 import { isAppShortcut, isMac, modLabel } from "./shortcuts.ts";
 import type { Density, Harness, HarnessKind, Room, Theme } from "./types.ts";
@@ -30,19 +30,31 @@ import { useFocusRestore } from "./useFocusRestore.ts";
 
 // ── Live wrappers that subscribe to the activity store ─────────────
 //
-// `HarnessTab` and the status bar both need to reflect what the
-// harness is *actually* doing right now (running / idle / exited)
-// rather than the hard-coded "running" stamped at creation time.
-// Each instance subscribes via `useHarnessActivity`; the hook only
-// re-renders on real phase changes so a harness streaming output
-// continuously doesn't churn its tab. Epic #50 (foundation for
-// #29, #12, etc.).
+// `HarnessTab`, `RoomTab`, and the status bar all need to reflect
+// what each harness/room is *actually* doing right now (running /
+// idle / exited) rather than the hard-coded "running" stamped at
+// creation time. Each instance subscribes via the activity hooks;
+// they only re-render on real phase changes so a harness streaming
+// output continuously doesn't churn its tab. Epic #50 (foundation
+// for #29, #12, etc.).
 
 const LiveHarnessTab = (props: Parameters<typeof HarnessTab>[0]) => {
 	const activity = useHarnessActivity(props.h.id);
 	if (!activity) return <HarnessTab {...props} />;
 	const status = activityToStatus(activity);
 	return <HarnessTab {...props} h={{ ...props.h, status }} />;
+};
+
+// L4 — per-room aggregate. Subscribes to every harness in the
+// room; the aggregate priority is waiting > running > idle >
+// exited so the dot surfaces the most "alive" state across the
+// room's harnesses. `waiting` lands once L2b pattern-matching
+// ships.
+const LiveRoomTab = (props: Parameters<typeof RoomTab>[0]) => {
+	const harnessIds = useMemo(() => props.r.harnesses.map((h) => h.id), [props.r.harnesses]);
+	const aggregate = useRoomActivity(harnessIds);
+	if (aggregate === null) return <RoomTab {...props} />;
+	return <RoomTab {...props} r={{ ...props.r, status: aggregate }} />;
 };
 
 const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
@@ -1549,7 +1561,7 @@ export default function App() {
 					const dropSide =
 						dropTarget?.kind === "room" && dropTarget.id === r.id ? dropTarget.side : null;
 					return (
-						<RoomTab
+						<LiveRoomTab
 							key={r.id}
 							r={r}
 							active={r.id === activeRoomId}

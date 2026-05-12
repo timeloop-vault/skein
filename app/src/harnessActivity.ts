@@ -21,7 +21,7 @@
 // the natural shape is "frontend emits transitions, Rust appends
 // to a log" — the state machine itself can stay here.
 
-import { useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import type { Status } from "./types.ts";
 
 export type ActivityPhase = "spawning" | "running" | "idle" | "exited";
@@ -229,4 +229,56 @@ export function activityToStatus(activity: HarnessActivity | null): Status {
 		case "exited":
 			return "exited";
 	}
+}
+
+/// Priority order for combining multiple harness statuses into a
+/// single room-level status (epic #50 L4). Higher = more important
+/// to surface on the room dot.
+///
+/// `waiting` lands top once L2b ships — having a harness blocked on
+/// user input is the most urgent thing a room can be doing. Until
+/// then the order falls back to running > idle > exited.
+const STATUS_PRIORITY: Record<Status, number> = {
+	waiting: 5,
+	running: 4,
+	idle: 3,
+	exited: 2,
+	error: 1,
+};
+
+const aggregateRoomStatus = (harnessIds: readonly string[]): Status | null => {
+	let best: Status | null = null;
+	for (const id of harnessIds) {
+		const a = store.get(id);
+		if (!a) continue;
+		const s = activityToStatus(a);
+		if (best === null || STATUS_PRIORITY[s] > STATUS_PRIORITY[best]) {
+			best = s;
+		}
+	}
+	return best;
+};
+
+/// React hook: subscribes to every harness in a room and returns
+/// the aggregate room status. Returns `null` when no harness in
+/// the list has a record yet (first paint before LiveTerminal
+/// effects fire) so callers can fall back to the persisted
+/// `room.status`.
+///
+/// Caller responsibility: pass a stable `harnessIds` reference
+/// (use useMemo). `useSyncExternalStore` re-subscribes whenever
+/// `subscribe` changes; a fresh array reference each render would
+/// thrash the listener Sets without changing behaviour.
+export function useRoomActivity(harnessIds: readonly string[]): Status | null {
+	const subscribe = useCallback(
+		(cb: () => void) => {
+			const unsubs = harnessIds.map((id) => harnessActivity.subscribe(id, cb));
+			return () => {
+				for (const u of unsubs) u();
+			};
+		},
+		[harnessIds],
+	);
+	const getSnapshot = useCallback(() => aggregateRoomStatus(harnessIds), [harnessIds]);
+	return useSyncExternalStore(subscribe, getSnapshot);
 }
