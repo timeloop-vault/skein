@@ -51,14 +51,17 @@ export const registerPreviewProvider = (provider: PreviewProvider): void => {
 	REGISTRY.sort((a, b) => b.priority - a.priority);
 };
 
-export const findPreviewProvider = (path: string): PreviewProvider | null => {
+/// Returns every provider whose patterns match the path, ordered
+/// by priority (highest first). The host iterates this list and
+/// takes the first one whose render call yields a non-null body —
+/// a provider can return `null` (or its underlying fetch can fail
+/// with the conventional `"binary"` error) to signal "I matched by
+/// pattern but I can't handle this content; fall through to the
+/// next." That's how the text fallback yields to the hex viewer
+/// for binary files.
+export const findPreviewProviders = (path: string): PreviewProvider[] => {
 	const lower = path.toLowerCase();
-	for (const p of REGISTRY) {
-		if (p.patterns.some((pat) => matchPattern(lower, pat.toLowerCase()))) {
-			return p;
-		}
-	}
-	return null;
+	return REGISTRY.filter((p) => p.patterns.some((pat) => matchPattern(lower, pat.toLowerCase())));
 };
 
 const matchPattern = (path: string, pattern: string): boolean => {
