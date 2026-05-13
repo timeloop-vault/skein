@@ -9,6 +9,11 @@
 //     you switch agents inside the same room, the diff and status
 //     stay put.
 
+import {
+	isPermissionGranted,
+	requestPermission,
+	sendNotification,
+} from "@choochmeque/tauri-plugin-notifications-api";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -1223,6 +1228,78 @@ export default function App() {
 	const activeRoomIdRef = useRef(activeRoomId);
 	activeRoomIdRef.current = activeRoomId;
 
+	// L5b — window-focus state + OS-notification permission. The
+	// notification logic below skips firing an OS banner when Skein
+	// is the focused app, because the user is already looking at
+	// the badge update in real time and an extra OS-level banner is
+	// just noise. Refs (not state) since the transition callback
+	// reads these synchronously and we don't want them to retrigger
+	// the subscription effect on every focus change.
+	const windowFocusedRef = useRef(true);
+	const notificationPermissionRef = useRef<"unknown" | "granted" | "denied">("unknown");
+	useEffect(() => {
+		const win = getCurrentWindow();
+		let unlisten: (() => void) | null = null;
+		// Clear the badge on the currently-displayed harness. Used
+		// both by the (activeRoomId, displayedHarnessId) effect below
+		// AND by the focus listener — coming back to Skein on the
+		// same harness you alt+tabbed away from also counts as
+		// "viewing it now," but that effect doesn't re-fire because
+		// neither tuple value changed. Hook the focus→true edge
+		// instead.
+		const clearDisplayedHarnessPending = () => {
+			const room = roomsRef.current.find((r) => r.id === activeRoomIdRef.current);
+			if (!room) return;
+			const displayedH = room.activeHarnessId;
+			if (!displayedH) return;
+			setRooms((prev) =>
+				prev.map((r) => {
+					if (r.id !== room.id) return r;
+					const target = r.harnesses.find((h) => h.id === displayedH);
+					if (!target || (target.pendingNotifications ?? 0) === 0) return r;
+					return {
+						...r,
+						harnesses: r.harnesses.map((h) =>
+							h.id === displayedH ? { ...h, pendingNotifications: 0 } : h,
+						),
+					};
+				}),
+			);
+		};
+		void win.isFocused().then((f) => {
+			windowFocusedRef.current = f;
+		});
+		void win
+			.onFocusChanged(({ payload }) => {
+				windowFocusedRef.current = payload;
+				if (payload) clearDisplayedHarnessPending();
+			})
+			.then((u) => {
+				unlisten = u;
+			});
+		// Permission flow: prompt once on first run if the user
+		// hasn't decided yet. The OS remembers the choice and
+		// future `isPermissionGranted` calls return granted/denied
+		// without re-prompting.
+		void (async () => {
+			try {
+				const granted = await isPermissionGranted();
+				if (granted) {
+					notificationPermissionRef.current = "granted";
+					return;
+				}
+				const result = await requestPermission();
+				notificationPermissionRef.current = result === "granted" ? "granted" : "denied";
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.warn("[skein] notification permission flow failed:", msg);
+			}
+		})();
+		return () => {
+			unlisten?.();
+		};
+	}, []);
+
 	// L5a — pending-notification accounting. A harness transitioning
 	// from working (spawning|running) to passive (idle|exited) bumps
 	// its own `pendingNotifications` counter — unless it's the
@@ -1233,6 +1310,12 @@ export default function App() {
 	// Room.badge is rendered as the sum across harnesses by
 	// LiveRoomTab; we don't write to it here. Counters persist via
 	// the rooms→sqlite mirror so the badge survives a restart.
+	//
+	// L5b — OS notification. Same predicates as the badge bump
+	// (passive transition + not the viewed harness + hasUserInput),
+	// PLUS Skein is not the focused app. If Skein is focused the
+	// badge update is already visible and an OS banner would just
+	// duplicate it. Permission is granted lazily on first launch.
 	useEffect(() => {
 		const unsub = harnessActivity.subscribeTransitions((harnessId, from, to) => {
 			const wasWorking = from === "running" || from === "spawning";
@@ -1246,20 +1329,52 @@ export default function App() {
 			const a = harnessActivity.get(harnessId);
 			if (!a || !a.hasUserInput) return;
 			const activeRoom = roomsRef.current.find((r) => r.id === activeRoomIdRef.current);
-			if (activeRoom && activeRoom.activeHarnessId === harnessId) return;
-			setRooms((prev) =>
-				prev.map((r) => {
-					if (!r.harnesses.some((h) => h.id === harnessId)) return r;
-					return {
-						...r,
-						harnesses: r.harnesses.map((h) =>
-							h.id === harnessId
-								? { ...h, pendingNotifications: (h.pendingNotifications ?? 0) + 1 }
-								: h,
-						),
-					};
-				}),
-			);
+			const isViewedHarness = Boolean(activeRoom && activeRoom.activeHarnessId === harnessId);
+			const isWindowFocused = windowFocusedRef.current;
+			const owningRoom = roomsRef.current.find((r) => r.harnesses.some((h) => h.id === harnessId));
+			// Badge: skip when the user is staring at this exact
+			// harness — the tab dot color change tells them what
+			// happened. If they alt+tabbed away, though, bump
+			// anyway so they see "something happened while I was
+			// gone" when they come back.
+			if (!(isViewedHarness && isWindowFocused)) {
+				setRooms((prev) =>
+					prev.map((r) => {
+						if (!r.harnesses.some((h) => h.id === harnessId)) return r;
+						return {
+							...r,
+							harnesses: r.harnesses.map((h) =>
+								h.id === harnessId
+									? { ...h, pendingNotifications: (h.pendingNotifications ?? 0) + 1 }
+									: h,
+							),
+						};
+					}),
+				);
+			}
+			// OS notification — fire whenever the window isn't
+			// focused, regardless of which harness was "viewed"
+			// inside Skein. The user alt+tabbed away; they need
+			// the OS-level signal to know to come back. When
+			// focused, the badge update is already on screen and
+			// an OS banner would just duplicate it.
+			if (isWindowFocused) return;
+			if (notificationPermissionRef.current !== "granted") return;
+			if (!owningRoom) return;
+			const harness = owningRoom.harnesses.find((h) => h.id === harnessId);
+			const kindName = harness ? HARNESS_KINDS[harness.kind].name : "harness";
+			const state = to === "idle" ? "idle" : "exited";
+			// sendNotification's promise is fire-and-forget here, but
+			// it can reject when the plugin isn't loaded (dev builds
+			// skip it — see app/src-tauri/src/lib.rs). Catch so we
+			// don't spew unhandled-rejection warnings in dev.
+			void sendNotification({
+				title: "Skein",
+				body: `${owningRoom.name} · ${kindName}: ${state}`,
+			}).catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.warn("[skein] sendNotification failed:", msg);
+			});
 		});
 		return unsub;
 	}, []);
