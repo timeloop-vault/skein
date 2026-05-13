@@ -11,6 +11,13 @@ license = "MIT"
 name = "skein_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Webview devtools (right-click → Inspect Element). Off by default
+# so `tauri build` (full-release pipeline) ships without them.
+# Enabled by the `npm run tauri:dev` and `npm run tauri:build:local`
+# scripts via `--features devtools`.
+devtools = ["tauri/devtools"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -20,6 +27,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-notifications = { version = "0.4", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 portable-pty = "0.8"
