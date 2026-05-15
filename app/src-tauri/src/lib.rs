@@ -39,22 +39,23 @@ struct LogGuard(tracing_appender::non_blocking::WorkerGuard);
 /// errors that would prevent the app from ever starting.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // The notifications plugin (Choochmeque fork, native macOS path with
-    // `default-features = false`) requires the binary to live inside a
-    // real `.app` bundle — its init step calls `require_bundle()` and
-    // panics otherwise. `npm run tauri:dev` runs the binary directly, so
-    // we skip registering the plugin in debug builds. Frontend calls to
-    // sendNotification fail in that case (plugin missing), but the app
-    // still launches; in release / local-release builds the plugin is
-    // present and notifications work. Epic #50 L5b.
-    // `mut` is only used by the cfg'd block below in release builds.
+    // The notifications plugin on macOS uses a native Swift bridge
+    // (`default-features = false`) which requires the binary to live
+    // inside a real `.app` bundle — its init step calls
+    // `require_bundle()` and panics otherwise. `npm run tauri:dev`
+    // runs the binary directly, so we skip registering it in
+    // macOS-debug builds. Linux / Windows builds use the notify-rust
+    // backend, which has no such requirement, so they always register
+    // (both dev and release). Epic #50 L5b.
+    // `mut` is unused only in the macOS-debug case where no plugin is
+    // added below; quiet the warning for that one path.
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init());
-    #[cfg(not(debug_assertions))]
+    #[cfg(any(not(target_os = "macos"), not(debug_assertions)))]
     {
         builder = builder.plugin(tauri_plugin_notifications::init());
     }
