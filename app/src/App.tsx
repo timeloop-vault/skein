@@ -38,6 +38,63 @@ import { isAppShortcut, isMac, modLabel } from "./shortcuts.ts";
 import type { Density, Harness, HarnessKind, Room, Theme } from "./types.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
 
+// ── Toasts (in-app notifications, L5c) ─────────────────────────────
+//
+// A toast is the in-app complement to L5b's OS notification: it
+// fires when Skein has focus but the user isn't looking at the
+// source harness (e.g. they're in a different room when an agent
+// finishes). Fixed to the bottom-right corner, click to jump,
+// auto-dismiss after a few seconds.
+
+interface ToastEntry {
+	id: string;
+	roomId: string;
+	harnessId: string;
+	kind: HarnessKind;
+	roomName: string;
+	harnessName: string;
+	state: "idle" | "exited";
+}
+
+const TOAST_DISMISS_MS = 6_000;
+const TOAST_MAX_VISIBLE = 5;
+
+const Toast = ({
+	toast,
+	onClick,
+	onDismiss,
+}: {
+	toast: ToastEntry;
+	onClick: () => void;
+	onDismiss: () => void;
+}) => {
+	useEffect(() => {
+		const id = setTimeout(onDismiss, TOAST_DISMISS_MS);
+		return () => clearTimeout(id);
+	}, [onDismiss]);
+	return (
+		<div className="sk-toast" onClick={onClick} title="Go to this harness">
+			<HChip kind={toast.kind} size={14} />
+			<div className="sk-toast-body">
+				<div className="sk-toast-title">{toast.roomName}</div>
+				<div className="sk-toast-sub">
+					{toast.harnessName} · {toast.state}
+				</div>
+			</div>
+			<span
+				className="sk-toast-x"
+				title="Dismiss"
+				onClick={(e) => {
+					e.stopPropagation();
+					onDismiss();
+				}}
+			>
+				×
+			</span>
+		</div>
+	);
+};
+
 // ── Live wrappers that subscribe to the activity store ─────────────
 //
 // HarnessTab, RoomTab, and the status bar all need to reflect what
@@ -854,6 +911,11 @@ export default function App() {
 
 	const [rooms, setRooms] = useState<Room[]>([]);
 	const [activeRoomId, setActiveRoomId] = useState<string>("");
+	// L5c — in-app toasts. Ephemeral (no DB mirror) since they
+	// represent "right now, look here" state that doesn't survive
+	// a restart. Capped at TOAST_MAX_VISIBLE so a burst of
+	// transitions doesn't cover the screen.
+	const [toasts, setToasts] = useState<ToastEntry[]>([]);
 	// Live HEAD branch per room, populated by LiveStatus on every watcher
 	// tick. `room.branch` is the *creation* branch (worktree identity);
 	// this is what's actually checked out right now. The status bar reads
@@ -1038,6 +1100,18 @@ export default function App() {
 		setRooms((prev) =>
 			prev.map((r) => (r.id === roomId ? { ...r, activeHarnessId: harnessId } : r)),
 		);
+	};
+
+	const dismissToast = (id: string) => {
+		setToasts((prev) => prev.filter((t) => t.id !== id));
+	};
+
+	const jumpToToast = (toast: ToastEntry) => {
+		setActiveRoomId(toast.roomId);
+		setRooms((prev) =>
+			prev.map((r) => (r.id === toast.roomId ? { ...r, activeHarnessId: toast.harnessId } : r)),
+		);
+		dismissToast(toast.id);
 	};
 
 	const closeHarness = (roomId: string, harnessId: string) => {
@@ -1352,6 +1426,27 @@ export default function App() {
 					}),
 				);
 			}
+			const harness = owningRoom?.harnesses.find((h) => h.id === harnessId);
+			const kindName = harness ? HARNESS_KINDS[harness.kind].name : "harness";
+			const stateLabel: "idle" | "exited" = to === "idle" ? "idle" : "exited";
+			// L5c — in-app toast. Fires when window IS focused but
+			// the user isn't looking at the source harness (they're
+			// in Skein, but in a different room or different tab).
+			// Skipped when window is unfocused (OS notification
+			// handles that case) or when viewing the harness (badge
+			// dot + tab color already tell the story).
+			if (isWindowFocused && !isViewedHarness && owningRoom && harness) {
+				const entry: ToastEntry = {
+					id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+					roomId: owningRoom.id,
+					harnessId,
+					kind: harness.kind,
+					roomName: owningRoom.name,
+					harnessName: harness.name,
+					state: stateLabel,
+				};
+				setToasts((prev) => [...prev, entry].slice(-TOAST_MAX_VISIBLE));
+			}
 			// OS notification — fire whenever the window isn't
 			// focused, regardless of which harness was "viewed"
 			// inside Skein. The user alt+tabbed away; they need
@@ -1361,16 +1456,13 @@ export default function App() {
 			if (isWindowFocused) return;
 			if (notificationPermissionRef.current !== "granted") return;
 			if (!owningRoom) return;
-			const harness = owningRoom.harnesses.find((h) => h.id === harnessId);
-			const kindName = harness ? HARNESS_KINDS[harness.kind].name : "harness";
-			const state = to === "idle" ? "idle" : "exited";
 			// sendNotification's promise is fire-and-forget here, but
 			// it can reject when the plugin isn't loaded (dev builds
 			// skip it — see app/src-tauri/src/lib.rs). Catch so we
 			// don't spew unhandled-rejection warnings in dev.
 			void sendNotification({
 				title: "Skein",
-				body: `${owningRoom.name} · ${kindName}: ${state}`,
+				body: `${owningRoom.name} · ${kindName}: ${stateLabel}`,
 			}).catch((err: unknown) => {
 				const msg = err instanceof Error ? err.message : String(err);
 				console.warn("[skein] sendNotification failed:", msg);
@@ -1703,6 +1795,24 @@ export default function App() {
 		invoke: () => setTheme(theme === "dark" ? "light" : "dark"),
 	});
 
+	// L5c — toast stack rendered identically in both branches below
+	// (empty state and the normal app layout). Floats above
+	// everything via `position: fixed`; pointer-events on the
+	// container is `none` so it doesn't catch clicks on the
+	// underlying app, while each toast re-enables them.
+	const toastStack = toasts.length > 0 && (
+		<div className="sk-toast-stack">
+			{toasts.map((t) => (
+				<Toast
+					key={t.id}
+					toast={t}
+					onClick={() => jumpToToast(t)}
+					onDismiss={() => dismissToast(t.id)}
+				/>
+			))}
+		</div>
+	);
+
 	// Empty state — no *active* rooms. Archived rooms still in the list
 	// show via the reopen modal (linked from the empty state too).
 	if (activeRooms.length === 0) {
@@ -1735,6 +1845,7 @@ export default function App() {
 						onClose={() => setShowReopen(false)}
 					/>
 				)}
+				{toastStack}
 			</div>
 		);
 	}
@@ -1897,6 +2008,7 @@ export default function App() {
 					onClose={() => setShowReopen(false)}
 				/>
 			)}
+			{toastStack}
 		</div>
 	);
 }
