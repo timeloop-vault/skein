@@ -905,6 +905,13 @@ export default function App() {
 	const [theme, setTheme] = usePersistedState<Theme>("theme", "dark");
 	const [density, setDensity] = usePersistedState<Density>("density", "regular");
 	const [fontSize, setFontSize] = usePersistedState<number>("fontSize", FONT_DEFAULT);
+	// L5e — per-surface notification toggles. Defaults: in-app on,
+	// OS off (less surprising on first run; user opts in to OS
+	// banners when they want them).
+	const [notifyBadge, setNotifyBadge] = usePersistedState<boolean>("notifyBadge", true);
+	const [notifyToast, setNotifyToast] = usePersistedState<boolean>("notifyToast", true);
+	const [notifyUrgent, setNotifyUrgent] = usePersistedState<boolean>("notifyUrgent", true);
+	const [notifyOs, setNotifyOs] = usePersistedState<boolean>("notifyOs", false);
 	// Width of the harness column in px. Right pane absorbs the remainder
 	// via flex:1. Splitter clamps against window size at drag time.
 	const [harnessColWidth, setHarnessColWidth] = usePersistedState<number>("harnessColWidth", 640);
@@ -1301,6 +1308,15 @@ export default function App() {
 	activeRoomsRef.current = activeRooms;
 	const activeRoomIdRef = useRef(activeRoomId);
 	activeRoomIdRef.current = activeRoomId;
+	// L5e — notification toggles read inside the transition listener
+	// (mounted once with empty deps); refs let preference toggles
+	// take effect without re-subscribing.
+	const notifyBadgeRef = useRef(notifyBadge);
+	notifyBadgeRef.current = notifyBadge;
+	const notifyToastRef = useRef(notifyToast);
+	notifyToastRef.current = notifyToast;
+	const notifyOsRef = useRef(notifyOs);
+	notifyOsRef.current = notifyOs;
 
 	// L5b — window-focus state + OS-notification permission. The
 	// notification logic below skips firing an OS banner when Skein
@@ -1410,8 +1426,9 @@ export default function App() {
 			// harness — the tab dot color change tells them what
 			// happened. If they alt+tabbed away, though, bump
 			// anyway so they see "something happened while I was
-			// gone" when they come back.
-			if (!(isViewedHarness && isWindowFocused)) {
+			// gone" when they come back. Also skip when the badge
+			// surface is disabled in Settings (L5e).
+			if (notifyBadgeRef.current && !(isViewedHarness && isWindowFocused)) {
 				setRooms((prev) =>
 					prev.map((r) => {
 						if (!r.harnesses.some((h) => h.id === harnessId)) return r;
@@ -1433,9 +1450,10 @@ export default function App() {
 			// the user isn't looking at the source harness (they're
 			// in Skein, but in a different room or different tab).
 			// Skipped when window is unfocused (OS notification
-			// handles that case) or when viewing the harness (badge
-			// dot + tab color already tell the story).
-			if (isWindowFocused && !isViewedHarness && owningRoom && harness) {
+			// handles that case), when viewing the harness (badge
+			// dot + tab color already tell the story), or when
+			// disabled in Settings (L5e).
+			if (notifyToastRef.current && isWindowFocused && !isViewedHarness && owningRoom && harness) {
 				const entry: ToastEntry = {
 					id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
 					roomId: owningRoom.id,
@@ -1452,8 +1470,10 @@ export default function App() {
 			// inside Skein. The user alt+tabbed away; they need
 			// the OS-level signal to know to come back. When
 			// focused, the badge update is already on screen and
-			// an OS banner would just duplicate it.
+			// an OS banner would just duplicate it. Also gated on
+			// the per-surface Settings toggle (L5e).
 			if (isWindowFocused) return;
+			if (!notifyOsRef.current) return;
 			if (notificationPermissionRef.current !== "granted") return;
 			if (!owningRoom) return;
 			// sendNotification's promise is fire-and-forget here, but
@@ -1730,6 +1750,14 @@ export default function App() {
 		onTheme: setTheme,
 		onDensity: setDensity,
 		onFontSize: setFontSize,
+		notifyBadge,
+		notifyToast,
+		notifyUrgent,
+		notifyOs,
+		onNotifyBadge: setNotifyBadge,
+		onNotifyToast: setNotifyToast,
+		onNotifyUrgent: setNotifyUrgent,
+		onNotifyOs: setNotifyOs,
 		onClose: () => setShowSettings(false),
 	};
 
@@ -1990,6 +2018,35 @@ export default function App() {
 					</span>
 				)}
 				<span className="spacer" />
+				{notifyUrgent &&
+					(() => {
+						// L5d — urgent segment. Scan active (non-archived,
+						// non-active) rooms for any pending notifications;
+						// surface the room with the biggest backlog so
+						// the user has a one-click jump to whatever
+						// needs attention most. Ties broken by room
+						// order. Hidden when no room has anything pending,
+						// or when the surface is disabled in Settings (L5e).
+						let target: { room: Room; total: number } | null = null;
+						for (const r of activeRooms) {
+							if (r.id === activeRoomId) continue;
+							const total = r.harnesses.reduce((acc, h) => acc + (h.pendingNotifications ?? 0), 0);
+							if (total === 0) continue;
+							if (!target || total > target.total) target = { room: r, total };
+						}
+						if (!target) return null;
+						return (
+							<span
+								className="seg sk-statusbar-urgent"
+								title={`Jump to ${target.room.name}`}
+								onClick={() => switchRoom(target.room.id)}
+							>
+								<span className="dot-tiny st-waiting" />
+								{target.room.name}
+								<span className="sk-statusbar-urgent-count">{target.total}</span>
+							</span>
+						);
+					})()}
 			</div>
 
 			{showNewRoom && (
