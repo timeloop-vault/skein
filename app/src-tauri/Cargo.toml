@@ -27,7 +27,6 @@ tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-notifications = { version = "0.4", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 portable-pty = "0.8"
@@ -40,6 +39,23 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 base64 = "0.22"
+
+# `tauri-plugin-notifications` (Choochmeque fork) ships three mutually
+# exclusive cfg branches for its Notifications struct:
+#   - `desktop && feature="notify-rust"` → cross-platform notify-rust path
+#   - `target_os="macos" && !feature="notify-rust"` → native UNUserNotificationCenter
+#   - `mobile` → iOS / Android
+#
+# We disable `notify-rust` on macOS so we get the native Swift bridge
+# (notify-rust uses the deprecated NSUserNotificationCenter, which is
+# silently broken on Sequoia/Tahoe). But on Linux/Windows that flag
+# would leave neither branch active and the crate fails to compile.
+# So: macOS skips notify-rust, everything else keeps it.
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri-plugin-notifications = { version = "0.4", default-features = false }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+tauri-plugin-notifications = "0.4"
 
 [lints.rust]
 unsafe_code = "forbid"
