@@ -32,7 +32,9 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
 import { harnessActivity } from "./harnessActivity.ts";
+import { attachClaudeEvents } from "./harnessEvents.ts";
 import { isAppShortcut, isMac } from "./shortcuts.ts";
+import type { HarnessKind } from "./types.ts";
 import { OVERLAY_CLOSED_EVENT } from "./useFocusRestore.ts";
 
 type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
@@ -50,6 +52,13 @@ interface LiveTerminalProps {
 	// up as a fresh `spawning → running` transition rather than a
 	// new ghost record. Epic #50.
 	harnessId: string;
+	// Used to decide whether the L2c-1 Claude JSONL adapter should
+	// attach. Only `kind === "claude"` with a non-empty `sessionId`
+	// (from chapter 5's `--session-id <uuid>` pre-allocation) gets
+	// the adapter; everything else falls back to the L2a idle
+	// heuristic. Epic #50 L2c-1.
+	harnessKind: HarnessKind;
+	sessionId: string | undefined;
 	fontSize: number;
 	// Default shell argv (from `default_shell`). Used when the user
 	// presses Enter on the post-exit prompt to drop into a usable shell.
@@ -71,6 +80,8 @@ export const LiveTerminal = ({
 	cwd,
 	mountKey,
 	harnessId,
+	harnessKind,
+	sessionId,
 	fontSize,
 	defaultShell,
 	visible,
@@ -314,6 +325,13 @@ export const LiveTerminal = ({
 		let cancelled = false;
 		let dataDisposable: { dispose(): void } | null = null;
 		let resizeObserver: ResizeObserver | null = null;
+		// L2c-1: when a Claude harness has a pre-allocated sessionId
+		// (chapter 5), attach the JSONL adapter so the dot reflects
+		// `last-prompt` rows directly instead of waiting for the L2a
+		// idle heuristic to time out. `null` for every other case
+		// (non-claude kinds, claude without sessionId — picker
+		// fallback). Cleaned up alongside pty_kill below.
+		let detachClaudeAdapter: (() => void) | null = null;
 
 		const handleExit = (code: number | null) => {
 			if (cancelled) return;
@@ -356,6 +374,16 @@ export const LiveTerminal = ({
 					return;
 				}
 				ptyIdRef.current = id;
+				// L2c-1 attach point: after PTY is alive, hook into the
+				// Claude session log for authoritative running/waiting
+				// signals. Only fires for Claude harnesses that own a
+				// session uuid (chapter 5 `--session-id` pre-allocation).
+				// The translator marks the activity store authoritative
+				// once Rust confirms attach; until then L2a keeps
+				// ticking, so a slow attach is a graceful degradation.
+				if (harnessKind === "claude" && sessionId) {
+					detachClaudeAdapter = attachClaudeEvents(harnessId, sessionId, cwd);
+				}
 				dataDisposable = term.onData((data) => {
 					// Focus-in / focus-out escapes are sent by xterm
 					// when the child enabled DECSET 1004 (Claude Code,
@@ -448,6 +476,10 @@ export const LiveTerminal = ({
 			cancelled = true;
 			dataDisposable?.dispose();
 			resizeObserver?.disconnect();
+			// L2c-1: detach before pty_kill so the adapter stops
+			// reading the JSONL — Claude itself will flush a final
+			// system row on exit and we don't need to react to it.
+			detachClaudeAdapter?.();
 			const id = ptyIdRef.current;
 			if (id) void invoke("pty_kill", { id });
 			term.dispose();
