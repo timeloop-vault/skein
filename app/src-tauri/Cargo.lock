@@ -4031,6 +4031,7 @@ dependencies = [
  "tauri-plugin-notifications",
  "tauri-plugin-opener",
  "tauri-plugin-updater",
+ "tempfile",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

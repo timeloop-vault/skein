@@ -421,6 +421,18 @@ body {
 	box-shadow: 0 0 6px var(--waiting);
 	animation: sk-pulse 1.6s ease-in-out infinite;
 }
+/* L2c-1: suppress the pulse on dots the user is *already looking at* —
+   active harness/room tab and the bottom status bar's current-harness
+   chip. The pulse is an attention-grabber for inactive surfaces; once
+   you're on the harness, Claude's prompt is on screen and the pulsing
+   dot becomes nag-noise. The urgent indicator is excluded by selector
+   specificity (it lives inside .sk-statusbar but with its own class)
+   so it keeps pulsing for the inactive room it points at. */
+.sk-harness-tab.active .st-waiting,
+.sk-tab.active .st-waiting,
+.sk-statusbar > .seg:not(.sk-statusbar-urgent) .st-waiting {
+	animation: none;
+}
 .st-idle {
 	background: var(--fg-3);
 }

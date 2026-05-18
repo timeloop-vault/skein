@@ -8,6 +8,7 @@
 mod db;
 mod fs;
 mod git;
+mod harness_events_claude;
 mod pty;
 mod resume;
 mod watcher;
@@ -19,6 +20,7 @@ use tauri::ipc::Channel;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 use crate::db::{Database, Room};
+use crate::harness_events_claude::{ClaudeEvent, ClaudeEventsManager};
 use crate::pty::{PtyEvent, PtyManager};
 use crate::watcher::WatcherManager;
 
@@ -113,6 +115,7 @@ pub fn run() {
             app.manage(db);
             app.manage(PtyManager::new());
             app.manage(WatcherManager::new());
+            app.manage(ClaudeEventsManager::new());
 
             // Resolve the product name from the merged tauri config —
             // base config gives "Skein"; the dev overlay
@@ -228,6 +231,8 @@ pub fn run() {
             resume::opencode_list_sessions,
             resume::opencode_session_exists,
             resume::claude_session_exists,
+            claude_events_attach,
+            claude_events_detach,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -303,6 +308,38 @@ fn pty_resize(
 #[tauri::command]
 fn pty_kill(id: String, manager: tauri::State<'_, PtyManager>) {
     manager.kill(&id);
+}
+
+/// Start tailing the Claude JSONL session log for a harness. Emits
+/// semantic `ClaudeEvent` values over `on_event` whenever the file
+/// grows. Epic #50 L2c-1.
+///
+/// Purely additive: failing to attach (HOME unset, parent dir
+/// unwriteable, watcher init failure) just means the harness falls
+/// back to the L2a idle heuristic. We surface the error as a string
+/// for the frontend to log, but the frontend treats it as soft —
+/// notifications keep working from the chunk-based path.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn claude_events_attach(
+    harness_id: String,
+    session_id: String,
+    cwd: String,
+    on_event: Channel<ClaudeEvent>,
+    manager: tauri::State<'_, ClaudeEventsManager>,
+) -> Result<(), String> {
+    manager
+        .attach(harness_id, &session_id, &cwd, move |event| {
+            let _ = on_event.send(event);
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// Stop tailing the JSONL for `harness_id`. No-op if unknown.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn claude_events_detach(harness_id: String, manager: tauri::State<'_, ClaudeEventsManager>) {
+    manager.detach(&harness_id);
 }
 
 /// argv for the user's default interactive shell on this platform. Used
