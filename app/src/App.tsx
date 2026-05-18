@@ -29,6 +29,7 @@ import { HChip, HarnessPicker, HarnessTab, RoomTab, StatusDot } from "./componen
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import {
 	activityToStatus,
+	effectiveStatus,
 	harnessActivity,
 	useHarnessActivity,
 	useRoomActivity,
@@ -53,7 +54,10 @@ interface ToastEntry {
 	kind: HarnessKind;
 	roomName: string;
 	harnessName: string;
-	state: "idle" | "exited";
+	// "waiting" lands here once L2c-1 (Claude JSONL adapter) reports
+	// a `last-prompt` row → harness is awaiting user input. Rendered
+	// verbatim in the toast subtitle.
+	state: "idle" | "exited" | "waiting";
 }
 
 const TOAST_DISMISS_MS = 6_000;
@@ -108,7 +112,12 @@ const Toast = ({
 const LiveHarnessTab = (props: Parameters<typeof HarnessTab>[0]) => {
 	const activity = useHarnessActivity(props.h.id);
 	if (!activity) return <HarnessTab {...props} />;
-	const status = activityToStatus(activity);
+	// Apply the acknowledged-downgrade: a waiting harness with no
+	// pending notifications has already been seen, so render it as
+	// idle (grey) instead of waiting (yellow pulse). The phase in
+	// the store stays `waiting` — only the visual indicator
+	// collapses.
+	const status = effectiveStatus(activity, props.h.pendingNotifications ?? 0);
 	return <HarnessTab {...props} h={{ ...props.h, status }} />;
 };
 
@@ -123,8 +132,15 @@ const LiveHarnessTab = (props: Parameters<typeof HarnessTab>[0]) => {
 // (active, archived list, etc.) shows the right value without
 // having to update `r.badge` from notification logic.
 const LiveRoomTab = (props: Parameters<typeof RoomTab>[0]) => {
-	const harnessIds = useMemo(() => props.r.harnesses.map((h) => h.id), [props.r.harnesses]);
-	const aggregate = useRoomActivity(harnessIds);
+	// Pass the full harness records (not just ids) so the aggregate
+	// can apply the same acknowledged-downgrade per harness — a room
+	// dot shouldn't pulse for a waiting-but-seen harness.
+	const harnessRefs = useMemo(
+		() =>
+			props.r.harnesses.map((h) => ({ id: h.id, pendingNotifications: h.pendingNotifications })),
+		[props.r.harnesses],
+	);
+	const aggregate = useRoomActivity(harnessRefs);
 	const badge = props.r.harnesses.reduce((acc, h) => acc + (h.pendingNotifications ?? 0), 0);
 	const derived = { ...props.r, badge, ...(aggregate !== null && { status: aggregate }) };
 	return <RoomTab {...props} r={derived} />;
@@ -132,11 +148,19 @@ const LiveRoomTab = (props: Parameters<typeof RoomTab>[0]) => {
 
 const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
 	const activity = useHarnessActivity(harness.id);
-	const status = activity ? activityToStatus(activity) : harness.status;
+	// Dot color uses effectiveStatus so a waiting-but-acknowledged
+	// harness renders grey (no pulse) in the bottom bar. The TEXT
+	// keeps the underlying phase via activityToStatus — telling the
+	// user "idle" when Claude is sitting at a prompt would be a lie;
+	// the visual collapse to grey is a UX choice, the text isn't.
+	const dotStatus = activity
+		? effectiveStatus(activity, harness.pendingNotifications ?? 0)
+		: harness.status;
+	const label = activity ? activityToStatus(activity) : harness.status;
 	return (
 		<span className="seg">
-			<span className={`dot-tiny st-${status}`} />
-			{status}
+			<span className={`dot-tiny st-${dotStatus}`} />
+			{label}
 		</span>
 	);
 };
@@ -170,6 +194,8 @@ const HarnessBody = ({
 				cwd={harness.cwd}
 				mountKey={`${harness.id}:${harness.cmd.join("\x00")}`}
 				harnessId={harness.id}
+				harnessKind={harness.kind}
+				sessionId={harness.sessionId}
 				fontSize={fontSize}
 				defaultShell={defaultShell}
 				visible={visible}
@@ -1408,16 +1434,34 @@ export default function App() {
 	// duplicate it. Permission is granted lazily on first launch.
 	useEffect(() => {
 		const unsub = harnessActivity.subscribeTransitions((harnessId, from, to) => {
+			// Two trigger classes:
+			// • `running|idle → waiting` — a harness-native adapter
+			//   (L2c) reported the agent went from doing work to
+			//   awaiting user input. Notify-worthy regardless of
+			//   hasUserInput, since "Claude is now blocked on you"
+			//   is real news even for a freshly-spawned harness
+			//   (e.g. first-launch trust prompts).
+			//   `spawning → waiting` is excluded: that's the
+			//   synthetic initial-state transition the adapter
+			//   emits when probing the JSONL on attach. Pre-existing
+			//   waiting state isn't a notification — it was true
+			//   before Skein started and the yellow dot itself
+			//   conveys it. Without this gate every Skein restart
+			//   would badge every Claude room that was sitting at
+			//   a prompt before shutdown.
+			// • working → passive (running|spawning → idle|exited).
+			//   The pre-L2c surface: agent went quiet. We keep the
+			//   hasUserInput gate so the spawn-banner cycle on
+			//   every Skein restart doesn't light up every room.
+			const becameWaiting = to === "waiting" && (from === "running" || from === "idle");
 			const wasWorking = from === "running" || from === "spawning";
 			const becamePassive = to === "idle" || to === "exited";
-			if (!wasWorking || !becamePassive) return;
-			// Skip the spawn-banner cycle: a harness that hasn't
-			// been typed into is mechanically going idle because
-			// its startup output finished, not because a task did.
-			// Without this guard every Skein restart lights up
-			// every non-active room as persisted harnesses respawn.
+			if (!becameWaiting && !(wasWorking && becamePassive)) return;
 			const a = harnessActivity.get(harnessId);
-			if (!a || !a.hasUserInput) return;
+			if (!a) return;
+			// hasUserInput gate applies only to the passive transition.
+			// `→ waiting` from L2c is unconditional.
+			if (!becameWaiting && !a.hasUserInput) return;
 			const activeRoom = roomsRef.current.find((r) => r.id === activeRoomIdRef.current);
 			const isViewedHarness = Boolean(activeRoom && activeRoom.activeHarnessId === harnessId);
 			const isWindowFocused = windowFocusedRef.current;
@@ -1445,7 +1489,13 @@ export default function App() {
 			}
 			const harness = owningRoom?.harnesses.find((h) => h.id === harnessId);
 			const kindName = harness ? HARNESS_KINDS[harness.kind].name : "harness";
-			const stateLabel: "idle" | "exited" = to === "idle" ? "idle" : "exited";
+			// "waiting" wording surfaces the L2c case in toast / OS
+			// banner so the user knows the agent wants something from
+			// them — not that it finished. The ToastEntry's `state`
+			// field flows into the existing toast component, which
+			// renders it verbatim under the harness name.
+			const stateLabel: "idle" | "exited" | "waiting" =
+				to === "waiting" ? "waiting" : to === "idle" ? "idle" : "exited";
 			// L5c — in-app toast. Fires when window IS focused but
 			// the user isn't looking at the source harness (they're
 			// in Skein, but in a different room or different tab).

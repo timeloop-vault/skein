@@ -24,7 +24,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import type { Status } from "./types.ts";
 
-export type ActivityPhase = "spawning" | "running" | "idle" | "exited";
+export type ActivityPhase = "spawning" | "running" | "idle" | "waiting" | "exited";
 
 export interface HarnessActivity {
 	phase: ActivityPhase;
@@ -42,6 +42,12 @@ export interface HarnessActivity {
 	/// tell "user did a task" cycles apart from "startup banner
 	/// printed then quieted." Ephemeral; reset on every spawn.
 	hasUserInput: boolean;
+	/// True when a harness-native adapter (epic #50 L2c) is wired
+	/// up for this harness — Claude JSONL tail today, opencode
+	/// later. While set, the idle tick stands down and only the
+	/// adapter (plus PTY exit) writes phase transitions. The PTY
+	/// chunk stream still updates `lastOutputAt` for diagnostics.
+	authoritative: boolean;
 }
 
 /// Sustained silence threshold for `running → idle`. Hard-coded for
@@ -101,6 +107,13 @@ const ensureTick = (): void => {
 	tickHandle = setInterval(() => {
 		const now = Date.now();
 		for (const [id, a] of store) {
+			// Harnesses with an authoritative source (Claude JSONL
+			// tail, future opencode adapter) write their own phase
+			// from the L2c module. The idle heuristic would fight
+			// the adapter — e.g. when Claude is mid-turn but the
+			// PTY is briefly quiet during a tool call, L2a would
+			// flip to `idle` while L2c says `running`. Skip these.
+			if (a.authoritative) continue;
 			if (a.phase === "running" && a.lastOutputAt !== null) {
 				if (now - a.lastOutputAt >= IDLE_AFTER_MS) {
 					setPhase(id, "idle");
@@ -128,9 +141,46 @@ export const harnessActivity = {
 			exitCode: null,
 			spawnedAt: now,
 			hasUserInput: false,
+			authoritative: false,
 		});
 		ensureTick();
 		emit(id);
+	},
+
+	/// Mark a harness as having an authoritative L2c adapter
+	/// attached (Claude JSONL tail, opencode event stream, …).
+	/// While set, the L2a idle tick skips this harness — only
+	/// `setRunningFromAdapter` / `setWaitingFromAdapter` and
+	/// `exited` write its phase. Idempotent.
+	attachAuthoritativeSource(id: string): void {
+		const cur = store.get(id);
+		if (!cur || cur.authoritative) return;
+		store.set(id, { ...cur, authoritative: true });
+	},
+
+	/// Adapter detached — fall back to the L2a heuristic for this
+	/// harness. The next chunk or tick will re-evaluate.
+	detachAuthoritativeSource(id: string): void {
+		const cur = store.get(id);
+		if (!cur || !cur.authoritative) return;
+		store.set(id, { ...cur, authoritative: false });
+	},
+
+	/// L2c adapter says the harness is doing work. Bypasses the
+	/// recordOutput throttle so the transition fires on the
+	/// adapter event boundary, not on the next PTY chunk.
+	setRunningFromAdapter(id: string): void {
+		const cur = store.get(id);
+		if (!cur || cur.phase === "exited") return;
+		setPhase(id, "running");
+	},
+
+	/// L2c adapter says the harness is awaiting user input.
+	/// Bypasses the chunk throttle for the same reason.
+	setWaitingFromAdapter(id: string): void {
+		const cur = store.get(id);
+		if (!cur || cur.phase === "exited") return;
+		setPhase(id, "waiting");
 	},
 
 	/// Record user input (keystroke / paste) on a harness. Flips
@@ -148,12 +198,31 @@ export const harnessActivity = {
 	/// applicable; ignored when already `exited`. Skipped entirely
 	/// during an active mute window so induced redraws (focus
 	/// events, resize) don't reset the idle timer.
+	///
+	/// When a harness has an L2c adapter attached (`authoritative`),
+	/// PTY chunks still bump `lastOutputAt` for diagnostics but do
+	/// NOT change phase. Without this guard the resume case
+	/// regresses: adapter sets `waiting` from the history probe →
+	/// Claude redraws its TUI on attach → `recordOutput` overrides
+	/// back to `running`. Same trap during a normal turn: adapter
+	/// emits `AwaitingPrompt` on `end_turn`, Claude redraws on the
+	/// next keystroke or focus event, `recordOutput` flips it back
+	/// to `running`. Found in v0.1.9-dev — every Claude harness
+	/// stayed green forever; badges fired on the brief `→ waiting`
+	/// moment then the dot reverted.
 	recordOutput(id: string): void {
 		const cur = store.get(id);
 		if (!cur || cur.phase === "exited") return;
 		const now = Date.now();
 		const mute = muteUntil.get(id);
 		if (mute !== undefined && now < mute) return;
+		if (cur.authoritative) {
+			// Adapter owns phase. Update lastOutputAt silently so any
+			// future detach-fallback to L2a starts with a fresh
+			// timestamp; don't touch phase.
+			cur.lastOutputAt = now;
+			return;
+		}
 		if (cur.phase === "running") {
 			// Silent mutation: every PTY chunk fires this — emitting
 			// would re-render every subscriber on every chunk. The
@@ -191,6 +260,7 @@ export const harnessActivity = {
 				exitCode: code,
 				spawnedAt: Date.now(),
 				hasUserInput: false,
+				authoritative: false,
 			});
 			emit(id);
 			return;
@@ -256,8 +326,8 @@ export function useHarnessActivity(id: string | null): HarnessActivity | null {
 
 /// Map the internal activity phase onto the existing display
 /// `Status` enum used by `StatusDot` and the status bar. Keep
-/// the mapping centralized so future strategies (L2b waiting,
-/// L2c harness-native) can refine it in one place.
+/// the mapping centralized so future strategies (additional L2c
+/// adapters, eventual L2b pattern fallback) refine it in one place.
 export function activityToStatus(activity: HarnessActivity | null): Status {
 	if (!activity) return "running";
 	switch (activity.phase) {
@@ -266,18 +336,37 @@ export function activityToStatus(activity: HarnessActivity | null): Status {
 			return "running";
 		case "idle":
 			return "idle";
+		case "waiting":
+			return "waiting";
 		case "exited":
 			return "exited";
 	}
 }
 
+/// `activityToStatus` with the "acknowledged" downgrade applied:
+/// when the phase is `waiting` and the harness has zero pending
+/// notifications, render as `idle` (grey) instead of `waiting`
+/// (yellow + pulse). The user has already been to the harness
+/// since the last transition; the dot's job there is "telling you
+/// what's new," and there's nothing new to tell.
+///
+/// The bottom-bar TEXT label still uses the underlying phase
+/// (`waiting`) so callers can honestly report what Claude is
+/// doing; only the visual indicator collapses.
+export function effectiveStatus(
+	activity: HarnessActivity | null,
+	pendingNotifications: number,
+): Status {
+	const base = activityToStatus(activity);
+	if (base === "waiting" && pendingNotifications === 0) return "idle";
+	return base;
+}
+
 /// Priority order for combining multiple harness statuses into a
 /// single room-level status (epic #50 L4). Higher = more important
-/// to surface on the room dot.
-///
-/// `waiting` lands top once L2b ships — having a harness blocked on
-/// user input is the most urgent thing a room can be doing. Until
-/// then the order falls back to running > idle > exited.
+/// to surface on the room dot. `waiting` lands top — a harness
+/// blocked on user input is the most urgent thing a room can be
+/// doing.
 const STATUS_PRIORITY: Record<Status, number> = {
 	waiting: 5,
 	running: 4,
@@ -286,12 +375,27 @@ const STATUS_PRIORITY: Record<Status, number> = {
 	error: 1,
 };
 
-const aggregateRoomStatus = (harnessIds: readonly string[]): Status | null => {
+/// Minimal shape `useRoomActivity` needs from each harness: an id
+/// for store lookup + the pending-notifications count for the
+/// effective-status downgrade. `pendingNotifications` is explicitly
+/// `| undefined` so it accepts the `Harness` type (where the field
+/// is optional) under `exactOptionalPropertyTypes`.
+export interface RoomHarnessRef {
+	id: string;
+	pendingNotifications?: number | undefined;
+}
+
+const aggregateRoomStatus = (harnesses: readonly RoomHarnessRef[]): Status | null => {
 	let best: Status | null = null;
-	for (const id of harnessIds) {
-		const a = store.get(id);
+	for (const h of harnesses) {
+		const a = store.get(h.id);
 		if (!a) continue;
-		const s = activityToStatus(a);
+		// Per-harness effective status: waiting downgrades to idle
+		// when the harness has been viewed since the last
+		// transition. Otherwise a room with one waiting-but-
+		// acknowledged harness would keep pulsing the room tab
+		// even though the user knows.
+		const s = effectiveStatus(a, h.pendingNotifications ?? 0);
 		if (best === null || STATUS_PRIORITY[s] > STATUS_PRIORITY[best]) {
 			best = s;
 		}
@@ -305,20 +409,25 @@ const aggregateRoomStatus = (harnessIds: readonly string[]): Status | null => {
 /// effects fire) so callers can fall back to the persisted
 /// `room.status`.
 ///
-/// Caller responsibility: pass a stable `harnessIds` reference
+/// Takes the full harness records (rather than just ids) so the
+/// aggregation can apply the same acknowledged-downgrade rule
+/// `effectiveStatus` uses per-harness — a room dot shouldn't pulse
+/// for a harness the user has already seen.
+///
+/// Caller responsibility: pass a stable `harnesses` reference
 /// (use useMemo). `useSyncExternalStore` re-subscribes whenever
 /// `subscribe` changes; a fresh array reference each render would
 /// thrash the listener Sets without changing behaviour.
-export function useRoomActivity(harnessIds: readonly string[]): Status | null {
+export function useRoomActivity(harnesses: readonly RoomHarnessRef[]): Status | null {
 	const subscribe = useCallback(
 		(cb: () => void) => {
-			const unsubs = harnessIds.map((id) => harnessActivity.subscribe(id, cb));
+			const unsubs = harnesses.map((h) => harnessActivity.subscribe(h.id, cb));
 			return () => {
 				for (const u of unsubs) u();
 			};
 		},
-		[harnessIds],
+		[harnesses],
 	);
-	const getSnapshot = useCallback(() => aggregateRoomStatus(harnessIds), [harnessIds]);
+	const getSnapshot = useCallback(() => aggregateRoomStatus(harnesses), [harnesses]);
 	return useSyncExternalStore(subscribe, getSnapshot);
 }
