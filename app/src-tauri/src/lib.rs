@@ -375,19 +375,27 @@ fn claude_events_detach(harness_id: String, manager: tauri::State<'_, ClaudeEven
 /// mid-session disconnects via exponential backoff — see
 /// `harness_events_opencode::run_adapter`.
 ///
-/// Returns immediately (the background tokio task continues until
-/// `opencode_events_detach` is called or the manager is dropped).
+/// `async fn` so Tauri runs us on its tokio executor — the manager
+/// calls `tokio::spawn` internally to launch the background SSE
+/// reader, and that requires a runtime context. The function itself
+/// returns immediately; the spawned task lives on until
+/// `opencode_events_detach` is called or the manager is dropped.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-fn opencode_events_attach(
+async fn opencode_events_attach(
     harness_id: String,
     port: u16,
     on_event: Channel<OpencodeEvent>,
     manager: tauri::State<'_, OpencodeEventsManager>,
-) {
+) -> Result<(), String> {
+    // Tauri requires async commands with reference inputs (like
+    // `tauri::State`) to return `Result`. The attach itself is
+    // infallible — the manager just spawns a tokio task — so we
+    // always return Ok.
     manager.attach(harness_id, port, move |event| {
         let _ = on_event.send(event);
     });
+    Ok(())
 }
 
 /// Stop the SSE subscription for `harness_id`. No-op if unknown.
