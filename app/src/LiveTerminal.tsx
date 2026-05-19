@@ -32,7 +32,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
 import { harnessActivity } from "./harnessActivity.ts";
-import { attachClaudeEvents } from "./harnessEvents.ts";
+import { attachClaudeEvents, attachOpencodeEvents } from "./harnessEvents.ts";
 import { isAppShortcut, isMac } from "./shortcuts.ts";
 import type { HarnessKind } from "./types.ts";
 import { OVERLAY_CLOSED_EVENT } from "./useFocusRestore.ts";
@@ -59,6 +59,16 @@ interface LiveTerminalProps {
 	// heuristic. Epic #50 L2c-1.
 	harnessKind: HarnessKind;
 	sessionId: string | undefined;
+	// Epic #50 L2c-2: opencode embedded-server port. Required for
+	// kind === "opencode" to attach the SSE adapter; `undefined`
+	// means the adapter is disabled for this harness and L2a takes
+	// over.
+	opencodePort: number | undefined;
+	// Fired when the L2c-2 adapter observes a `session.created`
+	// event from opencode's SSE stream. Caller wires this to
+	// persist the captured sessionId on the harness for resume.
+	// `undefined` for non-opencode harnesses.
+	onSessionCaptured: ((sessionId: string) => void) | undefined;
 	fontSize: number;
 	// Default shell argv (from `default_shell`). Used when the user
 	// presses Enter on the post-exit prompt to drop into a usable shell.
@@ -82,6 +92,8 @@ export const LiveTerminal = ({
 	harnessId,
 	harnessKind,
 	sessionId,
+	opencodePort,
+	onSessionCaptured,
 	fontSize,
 	defaultShell,
 	visible,
@@ -332,6 +344,12 @@ export const LiveTerminal = ({
 		// (non-claude kinds, claude without sessionId — picker
 		// fallback). Cleaned up alongside pty_kill below.
 		let detachClaudeAdapter: (() => void) | null = null;
+		// L2c-2: same shape for opencode. Adapter SSE-subscribes to
+		// opencode's embedded server on the pre-allocated port, plus
+		// captures the auto-allocated sessionID via the SSE
+		// `session.created` event (chapter 5 phase 2b's sqlite poll
+		// stays as fallback in App.tsx).
+		let detachOpencodeAdapter: (() => void) | null = null;
 
 		const handleExit = (code: number | null) => {
 			if (cancelled) return;
@@ -383,6 +401,14 @@ export const LiveTerminal = ({
 				// ticking, so a slow attach is a graceful degradation.
 				if (harnessKind === "claude" && sessionId) {
 					detachClaudeAdapter = attachClaudeEvents(harnessId, sessionId, cwd);
+				}
+				// L2c-2: attach the opencode SSE adapter when we have a
+				// port (App allocated one via pick_free_port before the
+				// spawn argv was finalized). Without a port the adapter
+				// can't know where to subscribe — graceful fallback to
+				// L2a + the sqlite-poll session-id capture.
+				if (harnessKind === "opencode" && opencodePort !== undefined) {
+					detachOpencodeAdapter = attachOpencodeEvents(harnessId, opencodePort, onSessionCaptured);
 				}
 				dataDisposable = term.onData((data) => {
 					// Focus-in / focus-out escapes are sent by xterm
@@ -480,6 +506,7 @@ export const LiveTerminal = ({
 			// reading the JSONL — Claude itself will flush a final
 			// system row on exit and we don't need to react to it.
 			detachClaudeAdapter?.();
+			detachOpencodeAdapter?.();
 			const id = ptyIdRef.current;
 			if (id) void invoke("pty_kill", { id });
 			term.dispose();

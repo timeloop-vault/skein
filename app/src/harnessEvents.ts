@@ -109,3 +109,103 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			return;
 	}
 };
+
+// ── opencode (L2c-2) ───────────────────────────────────────────────
+
+/// Mirror of the Rust `OpencodeEvent` enum in
+/// `harness_events_opencode.rs`. Keep in lock-step; unknown event
+/// kinds added later are treated as no-ops by the translator until
+/// the frontend catches up.
+export type OpencodeEvent =
+	| { kind: "connected" }
+	| { kind: "session_created"; session_id: string }
+	| { kind: "session_busy" }
+	| { kind: "session_idle" }
+	| { kind: "message_delta" }
+	| { kind: "tool_use_start"; name: string }
+	| { kind: "session_end" };
+
+/// Subscribe an opencode harness to its embedded-server SSE stream
+/// on `127.0.0.1:<port>`. Synchronously marks the activity store as
+/// authoritative-source (same dance as Claude — see comment in
+/// `attachClaudeEvents`). Returns an unsubscribe.
+///
+/// `onSessionCaptured` fires when the SSE stream delivers a
+/// `session.created` event with its sessionID. The caller (App)
+/// wires this to `setHarnessSessionId` so the captured id becomes
+/// the resume target on next Skein restart. Chapter 5's sqlite
+/// poll stays as a fallback — see `captureOpencodeSessionId` for
+/// the relationship.
+///
+/// Soft-fail: any Rust-side rejection (port closed, IPC dropped)
+/// detaches authoritative + warns. The harness keeps running on
+/// L2a.
+export function attachOpencodeEvents(
+	harnessId: string,
+	port: number,
+	onSessionCaptured: ((sessionId: string) => void) | undefined,
+): () => void {
+	const channel = new Channel<OpencodeEvent>();
+	channel.onmessage = (event) => {
+		translateOpencode(harnessId, event, onSessionCaptured);
+	};
+
+	// See attachClaudeEvents for why this happens synchronously.
+	harnessActivity.attachAuthoritativeSource(harnessId);
+
+	void invoke("opencode_events_attach", { harnessId, port, onEvent: channel }).catch(
+		(err: unknown) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[skein] opencode_events_attach failed for ${harnessId}:`, msg);
+			harnessActivity.detachAuthoritativeSource(harnessId);
+		},
+	);
+
+	return () => {
+		harnessActivity.detachAuthoritativeSource(harnessId);
+		void invoke("opencode_events_detach", { harnessId }).catch((err: unknown) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[skein] opencode_events_detach failed for ${harnessId}:`, msg);
+		});
+	};
+}
+
+const translateOpencode = (
+	harnessId: string,
+	event: OpencodeEvent,
+	onSessionCaptured: ((sessionId: string) => void) | undefined,
+): void => {
+	switch (event.kind) {
+		case "connected":
+			// Server reachable. No phase change — we don't know yet
+			// whether opencode is busy or idle until the first
+			// session.status event arrives. The mere fact of
+			// attachment is signal to the Rust adapter (reset
+			// backoff); the frontend has nothing to do.
+			return;
+		case "session_created":
+			// SSE-driven session-id capture (replaces chapter 5
+			// phase 2b's sqlite poll on the happy path). The
+			// callback short-circuits the sqlite fallback once
+			// invoked.
+			onSessionCaptured?.(event.session_id);
+			return;
+		case "session_busy":
+		case "message_delta":
+		case "tool_use_start":
+			harnessActivity.setRunningFromAdapter(harnessId);
+			return;
+		case "session_idle":
+			// The signal we built this for: opencode finished its
+			// turn and is awaiting user input.
+			harnessActivity.setWaitingFromAdapter(harnessId);
+			return;
+		case "session_end":
+			// Server disconnected after a successful connect. Drop
+			// authoritative so L2a takes over until the Rust side
+			// reconnects (it keeps trying with backoff while the
+			// PTY lives).
+			harnessActivity.detachAuthoritativeSource(harnessId);
+			return;
+	}
+};

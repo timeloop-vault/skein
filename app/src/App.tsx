@@ -173,6 +173,15 @@ interface HarnessBodyProps {
 	defaultShell: string[];
 	visible: boolean;
 	onCmdChange: (cmd: string[]) => void;
+	// Epic #50 L2c-2: opencode embedded-server port allocated by App.
+	// `undefined` for non-opencode harnesses and for opencode harnesses
+	// where pick_free_port failed — in the latter case the adapter
+	// can't attach and the harness falls back to L2a.
+	opencodePort: number | undefined;
+	// SSE-capture callback: L2c-2 captures opencode's auto-allocated
+	// sessionID from the `session.created` event. App.tsx wires it
+	// to setHarnessSessionId; `undefined` for non-opencode harnesses.
+	onSessionCaptured: ((sessionId: string) => void) | undefined;
 }
 
 const HarnessBody = ({
@@ -181,6 +190,8 @@ const HarnessBody = ({
 	defaultShell,
 	visible,
 	onCmdChange,
+	opencodePort,
+	onSessionCaptured,
 }: HarnessBodyProps) => {
 	if (harness.cmd && harness.cwd !== undefined) {
 		// mountKey changes whenever cmd content does — that's the trigger
@@ -196,6 +207,8 @@ const HarnessBody = ({
 				harnessId={harness.id}
 				harnessKind={harness.kind}
 				sessionId={harness.sessionId}
+				opencodePort={opencodePort}
+				onSessionCaptured={onSessionCaptured}
 				fontSize={fontSize}
 				defaultShell={defaultShell}
 				visible={visible}
@@ -240,6 +253,13 @@ interface HarnessColumnProps {
 	onSwitchHarness: (roomId: string, harnessId: string) => void;
 	onCloseHarness: (roomId: string, harnessId: string) => void;
 	onHarnessCmdChange: (roomId: string, harnessId: string, cmd: string[]) => void;
+	// Epic #50 L2c-2: per-opencode-harness embedded-server port. The
+	// column pulls each harness's port out of this map (keyed by
+	// harnessId) and forwards it to the corresponding LiveTerminal.
+	opencodePorts: Map<string, number>;
+	// SSE-captured opencode session-id callback (per harness, room
+	// scope already bound by App).
+	onOpencodeSessionCaptured: (harnessId: string, sessionId: string) => void;
 }
 
 const HarnessColumn = ({
@@ -254,6 +274,8 @@ const HarnessColumn = ({
 	onSwitchHarness,
 	onCloseHarness,
 	onHarnessCmdChange,
+	opencodePorts,
+	onOpencodeSessionCaptured,
 }: HarnessColumnProps) => (
 	<div className="sk-harness-col">
 		<div className="sk-harness-tabs">
@@ -322,6 +344,8 @@ const HarnessColumn = ({
 						defaultShell={defaultShell}
 						visible={visible}
 						onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
+						opencodePort={opencodePorts.get(h.id)}
+						onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
 					/>
 				</div>
 			);
@@ -882,12 +906,28 @@ const captureOpencodeSessionId = async (
 // Claude, never for other kinds), pre-allocate Claude's conversation
 // id via --session-id <uuid>. Storing the same id on the harness
 // record lets phase 3 resume directly with no picker.
-const cmdForKind = (kind: HarnessKind, fallbackShell: string[], sessionId?: string): string[] => {
+//
+// Epic #50 L2c-2: opencode embeds an HTTP server. Skein allocates a
+// free port up front and passes `--port <N> --hostname 127.0.0.1` so
+// the L2c-2 SSE adapter knows where to subscribe. The port is fresh
+// per spawn (not persisted) — callers must pass one in for opencode.
+const cmdForKind = (
+	kind: HarnessKind,
+	fallbackShell: string[],
+	sessionId?: string,
+	opencodePort?: number,
+): string[] => {
 	switch (kind) {
 		case "claude":
 			return sessionId ? ["claude", "--session-id", sessionId] : ["claude"];
-		case "opencode":
-			return ["opencode"];
+		case "opencode": {
+			// Default port=0 lets opencode pick; that defeats the whole
+			// adapter, so require an allocated port. If a caller forgot,
+			// fall back to bare opencode and the adapter just won't
+			// attach — same behaviour as pre-L2c-2.
+			if (opencodePort === undefined) return ["opencode"];
+			return ["opencode", "--port", String(opencodePort), "--hostname", "127.0.0.1"];
+		}
 		case "copilot":
 			return ["gh", "copilot", "suggest"];
 		case "byoh":
@@ -911,7 +951,15 @@ const cmdForKind = (kind: HarnessKind, fallbackShell: string[], sessionId?: stri
 //      Claude shows its picker, opencode resumes most-recent-in-cwd.
 //
 // gh copilot has no resume mode; shells start fresh; both pass through.
-const resumeCmd = (h: Harness): string[] => {
+//
+// Epic #50 L2c-2: opencode resume always injects a fresh port. The
+// old port from sqlite is dead — the previous Skein run released it
+// when the harness exited. We "fresh-form" check is liberal: any
+// opencode cmd that hasn't been shell-swapped (cmd[0] === "opencode")
+// gets the resume rewrite. That covers (a) legacy `["opencode"]`
+// records from pre-L2c-2, (b) cmds with --port from a previous boot,
+// and (c) cmds already in --session/--continue form.
+const resumeCmd = (h: Harness, opencodePort?: number): string[] => {
 	const cmd = h.cmd ?? [];
 	if (h.kind === "claude") {
 		const isFreshClaude =
@@ -921,8 +969,14 @@ const resumeCmd = (h: Harness): string[] => {
 			return h.sessionId ? ["claude", "--resume", h.sessionId] : ["claude", "--resume"];
 		}
 	}
-	if (h.kind === "opencode" && cmd.length === 1 && cmd[0] === "opencode") {
-		return h.sessionId ? ["opencode", "--session", h.sessionId] : ["opencode", "--continue"];
+	if (h.kind === "opencode" && cmd[0] === "opencode") {
+		const args = ["opencode"];
+		if (opencodePort !== undefined) {
+			args.push("--port", String(opencodePort), "--hostname", "127.0.0.1");
+		}
+		if (h.sessionId) args.push("--session", h.sessionId);
+		else args.push("--continue");
+		return args;
 	}
 	return cmd;
 };
@@ -944,6 +998,12 @@ export default function App() {
 
 	const [rooms, setRooms] = useState<Room[]>([]);
 	const [activeRoomId, setActiveRoomId] = useState<string>("");
+	// Epic #50 L2c-2: per-opencode-harness embedded-server port.
+	// Ephemeral — each spawn gets a fresh port via `pick_free_port`,
+	// kept here so LiveTerminal can pass it to attachOpencodeEvents
+	// without re-allocating. Not persisted: a port is meaningless
+	// after the process that bound it dies.
+	const [opencodePorts, setOpencodePorts] = useState<Map<string, number>>(new Map());
 	// L5c — in-app toasts. Ephemeral (no DB mirror) since they
 	// represent "right now, look here" state that doesn't survive
 	// a restart. Capped at TOAST_MAX_VISIBLE so a burst of
@@ -1054,12 +1114,41 @@ export default function App() {
 							),
 						})),
 					);
+					// Epic #50 L2c-2: pre-allocate fresh embedded-server
+					// ports for every resumed opencode harness. The
+					// previous Skein run released its ports on exit;
+					// resumeCmd needs the new ones to bake into the
+					// argv. Awaiting in parallel keeps boot fast even
+					// with many opencode rooms.
+					const opencodeHarnesses = verified.flatMap((r) =>
+						r.harnesses.filter((h) => h.kind === "opencode" && h.cmd),
+					);
+					const allocations = await Promise.all(
+						opencodeHarnesses.map(async (h) => {
+							try {
+								const port = await invoke<number>("pick_free_port");
+								return [h.id, port] as const;
+							} catch (err) {
+								console.warn(
+									`[skein] pick_free_port failed for ${h.id}; L2c-2 adapter disabled for this harness`,
+									err,
+								);
+								return null;
+							}
+						}),
+					);
+					const portMap = new Map<string, number>(
+						allocations.filter((a): a is readonly [string, number] => a !== null),
+					);
+					setOpencodePorts(portMap);
 					// Rewrite each harness's cmd to its resume form before
 					// mounting, so the PTY spawn re-attaches to the prior
 					// conversation instead of starting fresh.
 					const withResume = verified.map((r) => ({
 						...r,
-						harnesses: r.harnesses.map((h) => (h.cmd ? { ...h, cmd: resumeCmd(h) } : h)),
+						harnesses: r.harnesses.map((h) =>
+							h.cmd ? { ...h, cmd: resumeCmd(h, portMap.get(h.id)) } : h,
+						),
 					}));
 					setRooms(withResume);
 					// Pick the first *active* room; archived ones aren't
@@ -1680,20 +1769,29 @@ export default function App() {
 	// (pickHarness, createRoom) share the same setRooms shape.
 	const setHarnessSessionId = (targetRoomId: string, harnessId: string, captured: string) => {
 		setRooms((prev) =>
-			prev.map((r) =>
-				r.id === targetRoomId
-					? {
-							...r,
-							harnesses: r.harnesses.map((h) =>
-								h.id === harnessId ? { ...h, sessionId: captured } : h,
-							),
-						}
-					: r,
-			),
+			prev.map((r) => {
+				if (r.id !== targetRoomId) return r;
+				return {
+					...r,
+					harnesses: r.harnesses.map((h) => {
+						if (h.id !== harnessId) return h;
+						// Idempotent: first-writer wins. Epic #50 L2c-2
+						// races the SSE adapter's `session.created`
+						// against the chapter-5 sqlite poll; whichever
+						// fires first sets sessionId, the other becomes
+						// a no-op. Without this guard, the sqlite poll
+						// could find a *different* session (e.g. user
+						// ran opencode in the same cwd from a shell
+						// alongside) and overwrite the right id.
+						if (h.sessionId) return h;
+						return { ...h, sessionId: captured };
+					}),
+				};
+			}),
 		);
 	};
 
-	const pickHarness = (kind: HarnessKind) => {
+	const pickHarness = async (kind: HarnessKind) => {
 		const targetRoomId = showPicker;
 		if (!targetRoomId) return;
 		const targetRoom = rooms.find((r) => r.id === targetRoomId);
@@ -1703,7 +1801,24 @@ export default function App() {
 		// Phase 2a: pre-allocate Claude's conversation id so the harness
 		// resumes to *this* conversation on Skein restart — no picker.
 		const sessionId = kind === "claude" ? crypto.randomUUID() : undefined;
-		const cmd = cmdForKind(kind, defaultShell, sessionId);
+		// Epic #50 L2c-2: allocate the opencode embedded-server port
+		// *before* we set the cmd into state — LiveTerminal mounts the
+		// PTY synchronously off the new harness record, so the port has
+		// to be baked into the argv at that moment.
+		let opencodePort: number | undefined;
+		if (kind === "opencode") {
+			try {
+				opencodePort = await invoke<number>("pick_free_port");
+				setOpencodePorts((prev) => {
+					const m = new Map(prev);
+					m.set(id, opencodePort as number);
+					return m;
+				});
+			} catch (err) {
+				console.warn("[skein] pick_free_port failed; falling back to L2a:", err);
+			}
+		}
+		const cmd = cmdForKind(kind, defaultShell, sessionId, opencodePort);
 		setRooms((prev) =>
 			prev.map((r) => {
 				if (r.id !== targetRoomId) return r;
@@ -1728,6 +1843,13 @@ export default function App() {
 		// row, which it doesn't do until LiveTerminal mounts and spawns
 		// the binary — fine to fire-and-forget here, the React render
 		// cycle keeps us ahead of the spawn.
+		//
+		// Epic #50 L2c-2: this is the sqlite-poll *fallback*. The
+		// primary path is the SSE adapter capturing `session.created`
+		// (wired in LiveTerminal). If the adapter beats this poll,
+		// `setHarnessSessionId` is idempotent — the second write sees
+		// `sessionId` already populated and the diff lookup in
+		// `captureOpencodeSessionId` excludes it via `claimedSessionIds`.
 		if (kind === "opencode") {
 			void captureOpencodeSessionId(cwd, claimedSessionIds, (captured) => {
 				setHarnessSessionId(targetRoomId, id, captured);
@@ -1735,11 +1857,26 @@ export default function App() {
 		}
 	};
 
-	const createRoom = ({ cwd, task, harness, branch }: CreateRoomArgs) => {
+	const createRoom = async ({ cwd, task, harness, branch }: CreateRoomArgs) => {
 		const sid = newId("s");
 		const hid = newId("h");
 		// Phase 2a: pre-allocate Claude's conversation id (see pickHarness).
 		const sessionId = harness === "claude" ? crypto.randomUUID() : undefined;
+		// Epic #50 L2c-2: pre-allocate opencode's embedded-server port
+		// before we bake the cmd into the harness record.
+		let opencodePort: number | undefined;
+		if (harness === "opencode") {
+			try {
+				opencodePort = await invoke<number>("pick_free_port");
+				setOpencodePorts((prev) => {
+					const m = new Map(prev);
+					m.set(hid, opencodePort as number);
+					return m;
+				});
+			} catch (err) {
+				console.warn("[skein] pick_free_port failed; falling back to L2a:", err);
+			}
+		}
 		// Display name from the trailing path component — `D:\code\skein`
 		// → `skein`. Cosmetic; the actual cwd is what spawns use.
 		const folderName =
@@ -1767,7 +1904,7 @@ export default function App() {
 					model: harness === "copilot" ? "gpt-5" : "sonnet-4.5",
 					tokens: "0",
 					live: true,
-					cmd: cmdForKind(harness, defaultShell, sessionId),
+					cmd: cmdForKind(harness, defaultShell, sessionId, opencodePort),
 					cwd,
 					...(sessionId ? { sessionId } : {}),
 				},
@@ -1777,8 +1914,8 @@ export default function App() {
 		setRooms((prev) => [...prev, newRoom]);
 		setActiveRoomId(sid);
 		setShowNewRoom(false);
-		// Phase 2b: same pattern as pickHarness — async capture for
-		// opencode's auto-assigned session id.
+		// Phase 2b sqlite-poll fallback (see pickHarness comment for
+		// the relationship with L2c-2's SSE capture).
 		if (harness === "opencode") {
 			void captureOpencodeSessionId(cwd, claimedSessionIds, (captured) => {
 				setHarnessSessionId(sid, hid, captured);
@@ -2010,6 +2147,10 @@ export default function App() {
 							onSwitchHarness={switchHarnessInRoom}
 							onCloseHarness={closeHarness}
 							onHarnessCmdChange={updateHarnessCmd}
+							opencodePorts={opencodePorts}
+							onOpencodeSessionCaptured={(harnessId, sid) =>
+								setHarnessSessionId(r.id, harnessId, sid)
+							}
 						/>
 					</div>
 				))}

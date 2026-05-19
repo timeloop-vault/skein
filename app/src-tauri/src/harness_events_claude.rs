@@ -615,7 +615,7 @@ mod tests {
     /// flakiness doesn't bite on CI.
     fn drain(rx: &mpsc::Receiver<ClaudeEvent>) -> Vec<ClaudeEvent> {
         let mut out = Vec::new();
-        let deadline = std::time::Instant::now() + Duration::from_millis(2_000);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
             match rx.recv_timeout(remaining) {
                 Ok(ev) => out.push(ev),
