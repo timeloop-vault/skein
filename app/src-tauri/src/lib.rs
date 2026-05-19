@@ -34,6 +34,17 @@ use crate::watcher::WatcherManager;
 #[allow(dead_code)]
 struct LogGuard(tracing_appender::non_blocking::WorkerGuard);
 
+/// Install rustls's default crypto provider so reqwest doesn't panic
+/// with "No provider set" on the first `Client::builder().build()`.
+/// Reqwest 0.13 + rustls 0.23 require an explicit `install_default`
+/// call before any TLS context is constructed — and reqwest constructs
+/// one eagerly even when we only ever use plain HTTP (the L2c-2
+/// opencode adapter talks to 127.0.0.1). Idempotent: `install_default`
+/// returns Err on the second call, which we ignore.
+fn install_rustls_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 /// Boots the Tauri runtime and blocks until the main window closes.
 ///
 /// # Panics
@@ -43,6 +54,7 @@ struct LogGuard(tracing_appender::non_blocking::WorkerGuard);
 /// errors that would prevent the app from ever starting.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_rustls_provider();
     // The notifications plugin on macOS uses a native Swift bridge
     // (`default-features = false`) which requires the binary to live
     // inside a real `.app` bundle — its init step calls
