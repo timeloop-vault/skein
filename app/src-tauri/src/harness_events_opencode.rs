@@ -33,9 +33,16 @@ use tokio::task::JoinHandle;
 /// minimal wasted polling.
 const BACKOFF_SCHEDULE_SECS: &[u64] = &[1, 2, 4, 8, 16, 30];
 
-/// HTTP request timeout. The SSE connect itself is fast on localhost;
-/// the timeout exists so a wedged opencode (bound but not responding)
-/// doesn't hang the reconnect loop forever.
+/// TCP connect timeout. Localhost is sub-millisecond when opencode is
+/// alive; we keep a small budget so a wedged opencode (port bound but
+/// listener dead) doesn't hang the reconnect loop forever.
+///
+/// Critical: this is `connect_timeout`, NOT `timeout`. `timeout` is
+/// the overall request budget — SSE responses are infinite by
+/// design, so a `timeout` would abort the stream after the budget
+/// expires with "error decoding response body" (observed against a
+/// live opencode session in v1: 5 s timeout, stream healthy, error
+/// fired after 5 s every reconnect cycle).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Semantic events emitted to the frontend. Mirrors the shape of
@@ -151,7 +158,10 @@ async fn run_adapter(
     on_event: Arc<dyn Fn(OpencodeEvent) + Send + Sync>,
 ) {
     let url = format!("http://127.0.0.1:{port}/event");
-    let client = match reqwest::Client::builder().timeout(CONNECT_TIMEOUT).build() {
+    let client = match reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .build()
+    {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(port, error = %e, "opencode_events: client build failed");
