@@ -177,11 +177,19 @@ const translateOpencode = (
 ): void => {
 	switch (event.kind) {
 		case "connected":
-			// Server reachable. No phase change — we don't know yet
-			// whether opencode is busy or idle until the first
-			// session.status event arrives. The mere fact of
-			// attachment is signal to the Rust adapter (reset
-			// backoff); the frontend has nothing to do.
+			// Re-arm authoritative on every successful (re)connect.
+			// First connect: synchronous `attachAuthoritativeSource`
+			// in `attachOpencodeEvents` already armed it; this is
+			// a no-op. Reconnect: SessionEnd previously detached
+			// authoritative so L2a could take over during the
+			// outage — now that we're back on the wire, we want
+			// adapter phases to win again.
+			//
+			// Phase change isn't done here; the synthetic
+			// SessionIdle the Rust adapter emits right after
+			// Connected handles the baseline state (see
+			// `stream_events` for the rationale).
+			harnessActivity.attachAuthoritativeSource(harnessId);
 			return;
 		case "session_created":
 			// SSE-driven session-id capture (replaces chapter 5

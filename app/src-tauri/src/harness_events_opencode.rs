@@ -260,6 +260,19 @@ async fn stream_events(
     // disconnect, not a cold-connect race.
     connected_once.store(true, Ordering::Release);
     on_event(OpencodeEvent::Connected);
+    // Synthetic "assume idle" emit. opencode only broadcasts
+    // `session.status` on *transitions*; subscribers don't get a
+    // baseline. A session that's been sitting at its prompt
+    // (fresh spawn or restart-of-idle-session) never emits
+    // `session.status idle` until the user types something — so
+    // without this, the dot stays in `spawning|running` forever
+    // for opencode rooms that started Skein already idle.
+    //
+    // If opencode is actually mid-turn (rare on attach), the next
+    // `session.status busy` arrives within ~100 ms and overrides
+    // this. The user sees a brief blue-then-green flash, which is
+    // fine. False idle is cheaper UX-wise than false running.
+    on_event(OpencodeEvent::SessionIdle);
 
     let mut byte_stream = response.bytes_stream();
     // Carries incomplete bytes across chunk boundaries. SSE framing
