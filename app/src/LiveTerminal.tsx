@@ -327,8 +327,12 @@ export const LiveTerminal = ({
 				term.write(ev.chunk);
 				// Feed the activity model. Every PTY chunk is an
 				// "output" signal — the store throttles internally
-				// so we don't fire a React render per chunk. Epic #50.
-				harnessActivity.recordOutput(harnessId);
+				// so we don't fire a React render per chunk. Epic
+				// #50. The chunk is also fed into the per-harness
+				// tail buffer the L2b pattern matcher (sudo / [y/n]
+				// / Press Enter prompts on non-adapter harness
+				// kinds) reads from.
+				harnessActivity.recordOutput(harnessId, ev.chunk);
 			} else {
 				handleExit(ev.code);
 			}
