@@ -22,6 +22,7 @@
 // to a log" — the state machine itself can stay here.
 
 import { useCallback, useSyncExternalStore } from "react";
+import { matchesWaitingPrompt, stripAnsi } from "./harnessPatterns.ts";
 import type { Status } from "./types.ts";
 
 export type ActivityPhase = "spawning" | "running" | "idle" | "waiting" | "exited";
@@ -48,11 +49,31 @@ export interface HarnessActivity {
 	/// adapter (plus PTY exit) writes phase transitions. The PTY
 	/// chunk stream still updates `lastOutputAt` for diagnostics.
 	authoritative: boolean;
+	/// Rolling tail of stripped PTY output, used by the L2b
+	/// pattern-match fallback (copilot / byoh / shell). Only
+	/// maintained when `authoritative === false` — the L2c
+	/// adapters supersede pattern matching for kinds that have
+	/// real event streams. Capped at `TAIL_MAX_CHARS` so it
+	/// doesn't grow without bound; the matcher only looks at the
+	/// last ~256 chars anyway.
+	tail: string;
 }
 
 /// Sustained silence threshold for `running → idle`. Hard-coded for
 /// v1; epic #50 L5e moves this into Settings.
 const IDLE_AFTER_MS = 8_000;
+/// Shorter silence threshold for `running → waiting` via L2b
+/// pattern match. The user types `sudo X`, "Password:" appears,
+/// output stops — we want the dot to flip blue near-instantly, not
+/// 8 s later. 500 ms is generous enough to avoid firing during
+/// mid-stream output that happens to contain a prompt-looking
+/// substring, while tight enough to feel responsive.
+const PATTERN_WAITING_AFTER_MS = 500;
+/// Maximum tail-buffer size per harness. The matcher only scans
+/// the last 256 chars; we keep more to handle large chunks that
+/// arrive in one PTY read (xterm splits at no fixed boundary) but
+/// cap so a chatty shell session doesn't grow memory unbounded.
+const TAIL_MAX_CHARS = 2_048;
 /// How often the background tick scans for idle transitions. A
 /// faster tick gives tighter detection latency; 1s strikes a
 /// sensible balance — at worst the user sees "idle" up to a second
@@ -108,16 +129,31 @@ const ensureTick = (): void => {
 		const now = Date.now();
 		for (const [id, a] of store) {
 			// Harnesses with an authoritative source (Claude JSONL
-			// tail, future opencode adapter) write their own phase
+			// tail, opencode SSE adapter) write their own phase
 			// from the L2c module. The idle heuristic would fight
 			// the adapter — e.g. when Claude is mid-turn but the
 			// PTY is briefly quiet during a tool call, L2a would
 			// flip to `idle` while L2c says `running`. Skip these.
 			if (a.authoritative) continue;
-			if (a.phase === "running" && a.lastOutputAt !== null) {
-				if (now - a.lastOutputAt >= IDLE_AFTER_MS) {
-					setPhase(id, "idle");
-				}
+			if (a.phase !== "running" || a.lastOutputAt === null) continue;
+			const quiet = now - a.lastOutputAt;
+			// L2b: pattern-match → waiting on a shorter threshold
+			// than idle. Triggered when output has been quiet for
+			// PATTERN_WAITING_AFTER_MS (500 ms) AND the tail buffer
+			// matches a known prompt regex (sudo password, [y/n],
+			// "Press Enter", …). The shorter threshold makes the
+			// dot flip blue near-instantly when a sudo prompt
+			// appears, instead of waiting the full 8 s idle window.
+			//
+			// If the tail doesn't match a known prompt, the
+			// harness falls through to the L2a `→ idle` check
+			// below — same behaviour as pre-L2b.
+			if (quiet >= PATTERN_WAITING_AFTER_MS && matchesWaitingPrompt(a.tail)) {
+				setPhase(id, "waiting");
+				continue;
+			}
+			if (quiet >= IDLE_AFTER_MS) {
+				setPhase(id, "idle");
 			}
 		}
 	}, TICK_INTERVAL_MS);
@@ -142,6 +178,7 @@ export const harnessActivity = {
 			spawnedAt: now,
 			hasUserInput: false,
 			authoritative: false,
+			tail: "",
 		});
 		ensureTick();
 		emit(id);
@@ -194,23 +231,26 @@ export const harnessActivity = {
 	},
 
 	/// Record a chunk of PTY output. Side-effects: bumps
-	/// `lastOutputAt`; transitions `spawning|idle → running` if
-	/// applicable; ignored when already `exited`. Skipped entirely
-	/// during an active mute window so induced redraws (focus
-	/// events, resize) don't reset the idle timer.
+	/// `lastOutputAt`; appends the stripped chunk to the L2b tail
+	/// buffer (only when no L2c adapter is attached); transitions
+	/// `spawning|idle → running` if applicable; ignored when already
+	/// `exited`. Skipped entirely during an active mute window so
+	/// induced redraws (focus events, resize) don't reset the idle
+	/// timer.
 	///
 	/// When a harness has an L2c adapter attached (`authoritative`),
 	/// PTY chunks still bump `lastOutputAt` for diagnostics but do
-	/// NOT change phase. Without this guard the resume case
-	/// regresses: adapter sets `waiting` from the history probe →
-	/// Claude redraws its TUI on attach → `recordOutput` overrides
-	/// back to `running`. Same trap during a normal turn: adapter
-	/// emits `AwaitingPrompt` on `end_turn`, Claude redraws on the
-	/// next keystroke or focus event, `recordOutput` flips it back
-	/// to `running`. Found in v0.1.9-dev — every Claude harness
-	/// stayed green forever; badges fired on the brief `→ waiting`
-	/// moment then the dot reverted.
-	recordOutput(id: string): void {
+	/// NOT change phase and do NOT feed the tail buffer. The
+	/// adapter is the truth source for those harnesses; running the
+	/// pattern matcher on Claude / opencode TUI output would only
+	/// invite false positives (an assistant message that quotes
+	/// "(y/n)" shouldn't flip the dot).
+	///
+	/// `chunk` is optional for backwards compatibility — callers
+	/// that don't have the raw bytes (e.g. synthetic recordings)
+	/// can pass `undefined` and the tail buffer stays empty for
+	/// that harness.
+	recordOutput(id: string, chunk?: string): void {
 		const cur = store.get(id);
 		if (!cur || cur.phase === "exited") return;
 		const now = Date.now();
@@ -219,8 +259,33 @@ export const harnessActivity = {
 		if (cur.authoritative) {
 			// Adapter owns phase. Update lastOutputAt silently so any
 			// future detach-fallback to L2a starts with a fresh
-			// timestamp; don't touch phase.
+			// timestamp; don't touch phase or tail.
 			cur.lastOutputAt = now;
+			return;
+		}
+		// L2b: append stripped output to the tail buffer. The
+		// matcher only looks at the last 256 chars, but we keep
+		// 2 KB so a single fat PTY chunk doesn't immediately blow
+		// past the matcher's window.
+		if (chunk !== undefined && chunk.length > 0) {
+			const stripped = stripAnsi(chunk);
+			if (stripped.length > 0) {
+				const combined = cur.tail + stripped;
+				cur.tail = combined.length > TAIL_MAX_CHARS ? combined.slice(-TAIL_MAX_CHARS) : combined;
+			}
+		}
+		// L2b: if we were in `waiting` and the freshly-arrived
+		// output drained the prompt out of the tail (user
+		// answered, child kept going), flip back to running.
+		// Without this, "Password:" → user types → output continues
+		// → we'd stay stuck in waiting because the pattern matched
+		// at the moment of transition but not anymore.
+		if (cur.phase === "waiting") {
+			if (matchesWaitingPrompt(cur.tail)) {
+				cur.lastOutputAt = now;
+				return;
+			}
+			setPhase(id, "running", { lastOutputAt: now });
 			return;
 		}
 		if (cur.phase === "running") {
@@ -261,6 +326,7 @@ export const harnessActivity = {
 				spawnedAt: Date.now(),
 				hasUserInput: false,
 				authoritative: false,
+				tail: "",
 			});
 			emit(id);
 			return;
