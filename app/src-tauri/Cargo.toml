@@ -34,6 +34,26 @@ parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.34", features = ["bundled"] }
 notify-debouncer-mini = "0.6"
+# reqwest is already in the tree transitively (via tauri-plugin-updater);
+# making it a direct dep is essentially free at compile time. We use it
+# for the opencode `/event` SSE stream — chunked streaming GET against
+# localhost. `default-features = false` + `stream` keeps the surface
+# minimal (no TLS, no cookies, no gzip — none of which we need for
+# 127.0.0.1 plain HTTP).
+reqwest = { version = "0.13", default-features = false, features = ["stream"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+# Already transitive via reqwest+tauri. Direct dep so we can name
+# StreamExt for the opencode SSE byte stream.
+futures-util = { version = "0.3", default-features = false }
+# Reqwest 0.13 + rustls 0.23 requires the crypto provider to be
+# explicitly installed at startup. Tauri's transitive feature flags
+# leave us with rustls but no default provider installed, so the
+# first reqwest::Client::builder().build() panics with "No provider
+# set". Pulling rustls as a direct dep with the `ring` feature
+# lets us install the default provider during run() — see
+# `install_rustls_provider()`. We pick ring over aws-lc-rs because
+# ring is already in the lockfile via other transitive deps.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 skein-git = { path = "../../crates/skein-git" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -406,7 +406,7 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
 /// - `Some(AssistantTurn)` if the last assistant row was non-terminal
 ///   (`tool_use`) — session ended mid-turn, `claude --resume` will
 ///   pick it up; treat as running so the dot doesn't immediately
-///   flip yellow.
+///   flip blue (the waiting indicator).
 /// - `Some(UserPrompt)` / `Some(ToolUseResult)` if the last event
 ///   was a user/tool row — Claude was in the middle of consuming
 ///   input; running.
@@ -615,7 +615,7 @@ mod tests {
     /// flakiness doesn't bite on CI.
     fn drain(rx: &mpsc::Receiver<ClaudeEvent>) -> Vec<ClaudeEvent> {
         let mut out = Vec::new();
-        let deadline = std::time::Instant::now() + Duration::from_millis(2_000);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
             match rx.recv_timeout(remaining) {
                 Ok(ev) => out.push(ev),

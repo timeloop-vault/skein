@@ -9,6 +9,7 @@ mod db;
 mod fs;
 mod git;
 mod harness_events_claude;
+mod harness_events_opencode;
 mod pty;
 mod resume;
 mod watcher;
@@ -21,6 +22,7 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 use crate::db::{Database, Room};
 use crate::harness_events_claude::{ClaudeEvent, ClaudeEventsManager};
+use crate::harness_events_opencode::{OpencodeEvent, OpencodeEventsManager};
 use crate::pty::{PtyEvent, PtyManager};
 use crate::watcher::WatcherManager;
 
@@ -32,6 +34,17 @@ use crate::watcher::WatcherManager;
 #[allow(dead_code)]
 struct LogGuard(tracing_appender::non_blocking::WorkerGuard);
 
+/// Install rustls's default crypto provider so reqwest doesn't panic
+/// with "No provider set" on the first `Client::builder().build()`.
+/// Reqwest 0.13 + rustls 0.23 require an explicit `install_default`
+/// call before any TLS context is constructed — and reqwest constructs
+/// one eagerly even when we only ever use plain HTTP (the L2c-2
+/// opencode adapter talks to 127.0.0.1). Idempotent: `install_default`
+/// returns Err on the second call, which we ignore.
+fn install_rustls_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 /// Boots the Tauri runtime and blocks until the main window closes.
 ///
 /// # Panics
@@ -41,6 +54,7 @@ struct LogGuard(tracing_appender::non_blocking::WorkerGuard);
 /// errors that would prevent the app from ever starting.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_rustls_provider();
     // The notifications plugin on macOS uses a native Swift bridge
     // (`default-features = false`) which requires the binary to live
     // inside a real `.app` bundle — its init step calls
@@ -116,6 +130,7 @@ pub fn run() {
             app.manage(PtyManager::new());
             app.manage(WatcherManager::new());
             app.manage(ClaudeEventsManager::new());
+            app.manage(OpencodeEventsManager::new());
 
             // Resolve the product name from the merged tauri config —
             // base config gives "Skein"; the dev overlay
@@ -233,6 +248,9 @@ pub fn run() {
             resume::claude_session_exists,
             claude_events_attach,
             claude_events_detach,
+            opencode_events_attach,
+            opencode_events_detach,
+            pick_free_port,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -310,6 +328,24 @@ fn pty_kill(id: String, manager: tauri::State<'_, PtyManager>) {
     manager.kill(&id);
 }
 
+/// Allocate a free TCP port on `127.0.0.1` for opencode's embedded
+/// HTTP server. Epic #50 L2c-2.
+///
+/// Implementation: bind a `TcpListener` to port 0, read the OS-assigned
+/// port, drop the listener. There's a small race window between drop
+/// and the next process binding it (~microseconds typically), but it
+/// only matters if another process simultaneously asks for a free
+/// port and beats opencode to bind. In practice we've never observed
+/// it; if it ever happens opencode reports the bind error in the PTY
+/// and the user can restart the harness.
+#[tauri::command]
+fn pick_free_port() -> Result<u16, String> {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .map(|a| a.port())
+        .map_err(|e| format!("pick_free_port: {e}"))
+}
+
 /// Start tailing the Claude JSONL session log for a harness. Emits
 /// semantic `ClaudeEvent` values over `on_event` whenever the file
 /// grows. Epic #50 L2c-1.
@@ -339,6 +375,45 @@ fn claude_events_attach(
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 fn claude_events_detach(harness_id: String, manager: tauri::State<'_, ClaudeEventsManager>) {
+    manager.detach(&harness_id);
+}
+
+/// Start subscribing to opencode's `/event` SSE stream on `127.0.0.1:<port>`.
+/// Epic #50 L2c-2.
+///
+/// Symmetrical with `claude_events_attach`: pass an `on_event` Channel
+/// that receives semantic `OpencodeEvent` values. The adapter handles
+/// initial-connect race (opencode hasn't bound the port yet) and
+/// mid-session disconnects via exponential backoff — see
+/// `harness_events_opencode::run_adapter`.
+///
+/// `async fn` so Tauri runs us on its tokio executor — the manager
+/// calls `tokio::spawn` internally to launch the background SSE
+/// reader, and that requires a runtime context. The function itself
+/// returns immediately; the spawned task lives on until
+/// `opencode_events_detach` is called or the manager is dropped.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+async fn opencode_events_attach(
+    harness_id: String,
+    port: u16,
+    on_event: Channel<OpencodeEvent>,
+    manager: tauri::State<'_, OpencodeEventsManager>,
+) -> Result<(), String> {
+    // Tauri requires async commands with reference inputs (like
+    // `tauri::State`) to return `Result`. The attach itself is
+    // infallible — the manager just spawns a tokio task — so we
+    // always return Ok.
+    manager.attach(harness_id, port, move |event| {
+        let _ = on_event.send(event);
+    });
+    Ok(())
+}
+
+/// Stop the SSE subscription for `harness_id`. No-op if unknown.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn opencode_events_detach(harness_id: String, manager: tauri::State<'_, OpencodeEventsManager>) {
     manager.detach(&harness_id);
 }
 

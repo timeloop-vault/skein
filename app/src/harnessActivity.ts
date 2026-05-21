@@ -346,7 +346,7 @@ export function activityToStatus(activity: HarnessActivity | null): Status {
 /// `activityToStatus` with the "acknowledged" downgrade applied:
 /// when the phase is `waiting` and the harness has zero pending
 /// notifications, render as `idle` (grey) instead of `waiting`
-/// (yellow + pulse). The user has already been to the harness
+/// (blue + pulse). The user has already been to the harness
 /// since the last transition; the dot's job there is "telling you
 /// what's new," and there's nothing new to tell.
 ///
