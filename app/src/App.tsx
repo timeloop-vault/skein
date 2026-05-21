@@ -114,7 +114,7 @@ const LiveHarnessTab = (props: Parameters<typeof HarnessTab>[0]) => {
 	if (!activity) return <HarnessTab {...props} />;
 	// Apply the acknowledged-downgrade: a waiting harness with no
 	// pending notifications has already been seen, so render it as
-	// idle (grey) instead of waiting (yellow pulse). The phase in
+	// idle (grey) instead of waiting (blue pulse). The phase in
 	// the store stays `waiting` — only the visual indicator
 	// collapses.
 	const status = effectiveStatus(activity, props.h.pendingNotifications ?? 0);
@@ -1534,7 +1534,7 @@ export default function App() {
 			//   synthetic initial-state transition the adapter
 			//   emits when probing the JSONL on attach. Pre-existing
 			//   waiting state isn't a notification — it was true
-			//   before Skein started and the yellow dot itself
+			//   before Skein started and the blue dot itself
 			//   conveys it. Without this gate every Skein restart
 			//   would badge every Claude room that was sitting at
 			//   a prompt before shutdown.
