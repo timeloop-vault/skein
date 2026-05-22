@@ -1630,6 +1630,38 @@ export default function App() {
 		return unsub;
 	}, []);
 
+	// L6 — append every real phase transition to the sqlite event
+	// log. Per-transition fire-and-forget; errors warn but don't
+	// surface UX. The log feeds (eventually) the L7 cross-harness
+	// activity feed; in the meantime the data exists for any
+	// "since last visit" surface to build on. Epic #50 L6.
+	useEffect(() => {
+		const unsub = harnessActivity.subscribeTransitions((harnessId, from, to) => {
+			const owningRoom = roomsRef.current.find((r) => r.harnesses.some((h) => h.id === harnessId));
+			if (!owningRoom) {
+				// Transition for a harness that's no longer in
+				// state — e.g. exit firing after the room was
+				// archived. Without a roomId we can't usefully log;
+				// skip.
+				return;
+			}
+			const activity = harnessActivity.get(harnessId);
+			void invoke("db_record_harness_event", {
+				harnessId,
+				roomId: owningRoom.id,
+				fromPhase: from,
+				toPhase: to,
+				timestampMs: Date.now(),
+				hasUserInput: activity?.hasUserInput ?? false,
+				source: null,
+			}).catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.warn(`[skein] db_record_harness_event failed for ${harnessId}:`, msg);
+			});
+		});
+		return unsub;
+	}, []);
+
 	// L5a — clear pending on view. Runs every time the (active room,
 	// active harness of active room) tuple changes — covers tab
 	// click, keyboard nav (Mod+1..9, Mod+Tab), command palette,
