@@ -20,7 +20,7 @@ use tauri::Manager;
 use tauri::ipc::Channel;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
-use crate::db::{Database, Room};
+use crate::db::{Database, HarnessEvent, Room};
 use crate::harness_events_claude::{ClaudeEvent, ClaudeEventsManager};
 use crate::harness_events_opencode::{OpencodeEvent, OpencodeEventsManager};
 use crate::pty::{PtyEvent, PtyManager};
@@ -251,6 +251,9 @@ pub fn run() {
             opencode_events_attach,
             opencode_events_detach,
             pick_free_port,
+            db_record_harness_event,
+            db_recent_harness_events_by_harness,
+            db_recent_harness_events_by_room,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -415,6 +418,64 @@ async fn opencode_events_attach(
 #[tauri::command]
 fn opencode_events_detach(harness_id: String, manager: tauri::State<'_, OpencodeEventsManager>) {
     manager.detach(&harness_id);
+}
+
+/// Append one row to the `harness_events` log. Epic #50 L6.
+///
+/// Called by the frontend's transition listener — once per real
+/// phase change. Fire-and-forget from the TS side; we still surface
+/// errors as `String` so the caller can console.warn if something
+/// goes wrong (most likely "disk full" or a corrupted DB; nothing
+/// actionable from the user's perspective beyond seeing a log).
+///
+/// `source` is reserved for L7 attribution ("which adapter event
+/// drove this transition"). For v1 the frontend passes `None`.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[tauri::command]
+fn db_record_harness_event(
+    harness_id: String,
+    room_id: String,
+    from_phase: String,
+    to_phase: String,
+    timestamp_ms: i64,
+    has_user_input: bool,
+    source: Option<String>,
+    db: tauri::State<'_, Database>,
+) -> Result<(), String> {
+    db.record_harness_event(
+        &harness_id,
+        &room_id,
+        &from_phase,
+        &to_phase,
+        timestamp_ms,
+        has_user_input,
+        source.as_deref(),
+    )
+}
+
+/// Read recent events for a single harness. Newest-first. Epic #50 L6.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn db_recent_harness_events_by_harness(
+    harness_id: String,
+    since_ms: i64,
+    limit: i64,
+    db: tauri::State<'_, Database>,
+) -> Result<Vec<HarnessEvent>, String> {
+    db.recent_harness_events_by_harness(&harness_id, since_ms, limit)
+}
+
+/// Read recent events across every harness in a room. Newest-first.
+/// Epic #50 L6 — foundation for the L7 activity feed.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn db_recent_harness_events_by_room(
+    room_id: String,
+    since_ms: i64,
+    limit: i64,
+    db: tauri::State<'_, Database>,
+) -> Result<Vec<HarnessEvent>, String> {
+    db.recent_harness_events_by_room(&room_id, since_ms, limit)
 }
 
 /// argv for the user's default interactive shell on this platform. Used
