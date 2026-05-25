@@ -94,12 +94,52 @@ const listeners = new Map<string, Set<() => void>>();
 const muteUntil = new Map<string, number>();
 let tickHandle: ReturnType<typeof setInterval> | null = null;
 
-/// Global transition callback: receives every real phase change.
+/// Global transition callback: receives every real phase change
+/// plus the `source` string identifying which strategy fired it
+/// (`l2a-idle`, `l2b-pattern`, `l2c1-claude-end-turn`, …).
+///
 /// Used by App-level notification logic (#12 L5a tab badges, L5b
 /// OS notifications, L5c toasts) which need to react to transitions
-/// across every harness without subscribing to each id separately.
-export type TransitionListener = (id: string, from: ActivityPhase, to: ActivityPhase) => void;
+/// across every harness, and by the L6 sqlite writer that persists
+/// each transition with its provenance for the L7 activity feed.
+export type TransitionListener = (
+	id: string,
+	from: ActivityPhase,
+	to: ActivityPhase,
+	source: TransitionSource,
+) => void;
 const transitionListeners = new Set<TransitionListener>();
+
+/// Free-form string identifying which detection strategy or
+/// lifecycle event fired a given phase transition. Persisted to
+/// `harness_events.source` and surfaced as the "why" chip in the
+/// L7 activity feed. The set is open-ended — new strategies
+/// (future L2d, additional adapters) just pick new strings — but
+/// the canonical values used today are exposed here so call sites
+/// can use the constants instead of stringly-typed literals.
+export type TransitionSource = string;
+
+export const TRANSITION_SOURCE = {
+	// PTY-driven (L1 substrate).
+	PtyOutput: "pty-output",
+	PtyExit: "pty-exit",
+	// L2a — idle heuristic on the worktree-watcher tick.
+	L2aIdle: "l2a-idle",
+	// L2b — generic prompt-pattern fallback.
+	L2bPattern: "l2b-pattern",
+	L2bDrained: "l2b-drained",
+	// L2c-1 — Claude JSONL adapter.
+	L2c1ClaudeAssistant: "l2c1-claude-assistant",
+	L2c1ClaudeEndTurn: "l2c1-claude-end-turn",
+	L2c1ClaudeToolUse: "l2c1-claude-tool-use",
+	L2c1ClaudeToolResult: "l2c1-claude-tool-result",
+	L2c1ClaudeUserPrompt: "l2c1-claude-user-prompt",
+	// L2c-2 — opencode SSE adapter.
+	L2c2OpencodeBusy: "l2c2-opencode-busy",
+	L2c2OpencodeIdle: "l2c2-opencode-idle",
+	L2c2OpencodeMessageDelta: "l2c2-opencode-message-delta",
+	L2c2OpencodeToolUse: "l2c2-opencode-tool-use",
+} as const;
 
 const emit = (id: string): void => {
 	const set = listeners.get(id);
@@ -107,7 +147,12 @@ const emit = (id: string): void => {
 	for (const cb of set) cb();
 };
 
-const setPhase = (id: string, phase: ActivityPhase, patch?: Partial<HarnessActivity>): void => {
+const setPhase = (
+	id: string,
+	phase: ActivityPhase,
+	source: TransitionSource,
+	patch?: Partial<HarnessActivity>,
+): void => {
 	const cur = store.get(id);
 	if (!cur) return;
 	// Suppress no-op transitions so consumers don't churn on
@@ -119,7 +164,7 @@ const setPhase = (id: string, phase: ActivityPhase, patch?: Partial<HarnessActiv
 	store.set(id, { ...cur, phase, ...patch });
 	emit(id);
 	if (from !== phase) {
-		for (const cb of transitionListeners) cb(id, from, phase);
+		for (const cb of transitionListeners) cb(id, from, phase, source);
 	}
 };
 
@@ -149,11 +194,11 @@ const ensureTick = (): void => {
 			// harness falls through to the L2a `→ idle` check
 			// below — same behaviour as pre-L2b.
 			if (quiet >= PATTERN_WAITING_AFTER_MS && matchesWaitingPrompt(a.tail)) {
-				setPhase(id, "waiting");
+				setPhase(id, "waiting", TRANSITION_SOURCE.L2bPattern);
 				continue;
 			}
 			if (quiet >= IDLE_AFTER_MS) {
-				setPhase(id, "idle");
+				setPhase(id, "idle", TRANSITION_SOURCE.L2aIdle);
 			}
 		}
 	}, TICK_INTERVAL_MS);
@@ -205,19 +250,22 @@ export const harnessActivity = {
 
 	/// L2c adapter says the harness is doing work. Bypasses the
 	/// recordOutput throttle so the transition fires on the
-	/// adapter event boundary, not on the next PTY chunk.
-	setRunningFromAdapter(id: string): void {
+	/// adapter event boundary, not on the next PTY chunk. The
+	/// `source` identifies which adapter event drove the transition
+	/// (e.g. `l2c1-claude-assistant`, `l2c2-opencode-busy`) and
+	/// flows through to the persisted event log for L7 attribution.
+	setRunningFromAdapter(id: string, source: TransitionSource): void {
 		const cur = store.get(id);
 		if (!cur || cur.phase === "exited") return;
-		setPhase(id, "running");
+		setPhase(id, "running", source);
 	},
 
 	/// L2c adapter says the harness is awaiting user input.
 	/// Bypasses the chunk throttle for the same reason.
-	setWaitingFromAdapter(id: string): void {
+	setWaitingFromAdapter(id: string, source: TransitionSource): void {
 		const cur = store.get(id);
 		if (!cur || cur.phase === "exited") return;
-		setPhase(id, "waiting");
+		setPhase(id, "waiting", source);
 	},
 
 	/// Record user input (keystroke / paste) on a harness. Flips
@@ -285,7 +333,7 @@ export const harnessActivity = {
 				cur.lastOutputAt = now;
 				return;
 			}
-			setPhase(id, "running", { lastOutputAt: now });
+			setPhase(id, "running", TRANSITION_SOURCE.L2bDrained, { lastOutputAt: now });
 			return;
 		}
 		if (cur.phase === "running") {
@@ -296,7 +344,7 @@ export const harnessActivity = {
 			cur.lastOutputAt = now;
 			return;
 		}
-		setPhase(id, "running", { lastOutputAt: now });
+		setPhase(id, "running", TRANSITION_SOURCE.PtyOutput, { lastOutputAt: now });
 	},
 
 	/// Mute incoming output for this harness for ~800 ms. Call right
@@ -332,7 +380,7 @@ export const harnessActivity = {
 			return;
 		}
 		if (cur.phase === "exited") return;
-		setPhase(id, "exited", { exitCode: code });
+		setPhase(id, "exited", TRANSITION_SOURCE.PtyExit, { exitCode: code });
 	},
 
 	/// Drop a harness from the store entirely. Call from LiveTerminal

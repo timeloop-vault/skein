@@ -15,7 +15,7 @@
 // that reads from the store.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { harnessActivity } from "./harnessActivity.ts";
+import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
 
 /// Mirror of the Rust enum. `kind` is the serde tag from
 /// `harness_events_claude.rs`'s `ClaudeEvent`. Keep these in lock-step;
@@ -80,20 +80,25 @@ export function attachClaudeEvents(harnessId: string, sessionId: string, cwd: st
 const translate = (harnessId: string, event: ClaudeEvent): void => {
 	switch (event.kind) {
 		case "assistant_turn":
+			// Adapter saw the start of a Claude turn. Persisted with
+			// `l2c1-claude-assistant` so the activity feed can tell
+			// "started thinking" apart from "tool result returned".
+			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeAssistant);
+			return;
 		case "tool_use_start":
+			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeToolUse);
+			return;
 		case "tool_use_result":
+			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeToolResult);
+			return;
 		case "user_prompt":
-			// All four mean the harness is on a turn / processing
-			// input. The state machine just needs `running`; the
-			// richer events (which tool, etc.) get surfaced by L7
-			// when the activity feed lands.
-			harnessActivity.setRunningFromAdapter(harnessId);
+			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeUserPrompt);
 			return;
 		case "awaiting_prompt":
 			// The signal we built this for: an assistant row with a
 			// terminal stop_reason (end_turn / stop_sequence /
 			// max_tokens) → "I'm done, awaiting your next prompt."
-			harnessActivity.setWaitingFromAdapter(harnessId);
+			harnessActivity.setWaitingFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
 			return;
 		case "attachment":
 			// User-side action between turns — doesn't shift phase
@@ -199,14 +204,18 @@ const translateOpencode = (
 			onSessionCaptured?.(event.session_id);
 			return;
 		case "session_busy":
+			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c2OpencodeBusy);
+			return;
 		case "message_delta":
+			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c2OpencodeMessageDelta);
+			return;
 		case "tool_use_start":
-			harnessActivity.setRunningFromAdapter(harnessId);
+			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c2OpencodeToolUse);
 			return;
 		case "session_idle":
 			// The signal we built this for: opencode finished its
 			// turn and is awaiting user input.
-			harnessActivity.setWaitingFromAdapter(harnessId);
+			harnessActivity.setWaitingFromAdapter(harnessId, TRANSITION_SOURCE.L2c2OpencodeIdle);
 			return;
 		case "session_end":
 			// Server disconnected after a successful connect. Drop
