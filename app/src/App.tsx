@@ -2205,6 +2205,8 @@ export default function App() {
 						{r.cwd ? (
 							<LiveStatus
 								cwd={r.cwd}
+								roomId={r.id}
+								harnesses={r.harnesses}
 								onBranchChange={(b) =>
 									setLiveBranches((prev) => (prev[r.id] === b ? prev : { ...prev, [r.id]: b }))
 								}

@@ -1,15 +1,18 @@
 // LiveStatus — right-pane container for any room with a real cwd.
-// Owns the watcher and the git-vs-not detection; renders one of two
-// tabbed views below the chrome:
+// Owns the watcher and the git-vs-not detection; renders one of
+// three tabbed views below the chrome:
 //
 //   * **Status** — visible only when the cwd is a git repo. The
 //     classic "what's changed?" view: status list + click-to-diff.
 //   * **Files** — always visible. The `FileTree` browser from #7.
+//   * **Activity** — always visible. Cross-harness activity feed
+//     (epic #50 L7c) showing recent phase transitions for harnesses
+//     in this room.
 //
-// In a non-git room we skip the tab bar entirely and render
-// `FileTree` directly — there's no second view to switch to. When
-// the watcher detects a `.git` dir appearing the tab bar surfaces
-// automatically (issue #6 / #13).
+// When the watcher detects a `.git` dir appearing the Status tab
+// surfaces automatically (issue #6 / #13). When `.git` disappears
+// we auto-switch the active tab away from Status to avoid showing
+// a blank pane.
 //
 // Phase 5b: on mount we fetch the initial snapshot AND start a
 // debounced filesystem watcher; each tick re-fetches.
@@ -24,9 +27,11 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityFeed } from "./ActivityFeed.tsx";
 import { FileTree } from "./FileTree.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { usePersistedState } from "./prefs.ts";
+import type { Harness } from "./types.ts";
 
 type StatusKind =
 	| "added"
@@ -76,6 +81,15 @@ const KIND_GLYPH: Record<StatusKind, { glyph: string; color: string; label: stri
 
 interface LiveStatusProps {
 	cwd: string;
+	/// Room owning this pane. Forwarded to ActivityFeed so it can
+	/// scope its `harness_events` query and live subscriptions to
+	/// just this room's harnesses (epic #50 L7c).
+	roomId: string;
+	/// The room's current harness list. ActivityFeed uses it for
+	/// chip/name lookup on each event row. Passing the list (not
+	/// just ids) keeps the rendering side simple and lets new
+	/// harnesses appear in the feed without a full re-mount.
+	harnesses: readonly Harness[];
 	/**
 	 * Fired on every refresh with the current HEAD branch name (or `null`
 	 * for detached HEAD / non-git folders). Lets the parent surface a
@@ -86,9 +100,9 @@ interface LiveStatusProps {
 	onBranchChange?: (branch: string | null) => void;
 }
 
-type RightPaneTab = "status" | "files";
+type RightPaneTab = "status" | "files" | "activity";
 
-export const LiveStatus = ({ cwd, onBranchChange }: LiveStatusProps) => {
+export const LiveStatus = ({ cwd, roomId, harnesses, onBranchChange }: LiveStatusProps) => {
 	// `null` = haven't checked yet; renders a tiny "checking…" line
 	// rather than flashing the no-git placeholder for one frame on
 	// every cwd change.
@@ -213,12 +227,14 @@ export const LiveStatus = ({ cwd, onBranchChange }: LiveStatusProps) => {
 	// split view.
 	const [listHeight, setListHeight] = usePersistedState<number>("liveStatusListHeight", 220);
 
-	// Non-git folder: render a file browser instead (issue #7). The
-	// watcher is still running — if a `.git` dir appears, the next
-	// refresh promotes us to the live view automatically.
-	if (isRepo === false) {
-		return <FileTree cwd={cwd} />;
-	}
+	// When `.git` disappears, snap active tab away from Status so
+	// we don't render the empty-state placeholder under the wrong
+	// label. Files / Activity stay valid in either mode.
+	useEffect(() => {
+		if (isRepo === false && activeTab === "status") {
+			setActiveTab("files");
+		}
+	}, [isRepo, activeTab]);
 
 	const fileListEl = (
 		<div
@@ -315,15 +331,25 @@ export const LiveStatus = ({ cwd, onBranchChange }: LiveStatusProps) => {
 					color: "var(--fg-2)",
 				}}
 			>
-				<TabButton
-					label="Status"
-					active={activeTab === "status"}
-					onClick={() => setActiveTab("status")}
-				/>
+				{/* Status only shows up for git-backed rooms. Files /
+				    Activity are always available regardless of the
+				    cwd being tracked by git. */}
+				{isRepo && (
+					<TabButton
+						label="Status"
+						active={activeTab === "status"}
+						onClick={() => setActiveTab("status")}
+					/>
+				)}
 				<TabButton
 					label="Files"
 					active={activeTab === "files"}
 					onClick={() => setActiveTab("files")}
+				/>
+				<TabButton
+					label="Activity"
+					active={activeTab === "activity"}
+					onClick={() => setActiveTab("activity")}
 				/>
 				<span
 					style={{
@@ -370,6 +396,8 @@ export const LiveStatus = ({ cwd, onBranchChange }: LiveStatusProps) => {
 
 			{activeTab === "files" ? (
 				<FileTree cwd={cwd} />
+			) : activeTab === "activity" ? (
+				<ActivityFeed roomId={roomId} harnesses={harnesses} />
 			) : (
 				<>
 					{error && (
