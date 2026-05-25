@@ -1636,7 +1636,7 @@ export default function App() {
 	// activity feed; in the meantime the data exists for any
 	// "since last visit" surface to build on. Epic #50 L6.
 	useEffect(() => {
-		const unsub = harnessActivity.subscribeTransitions((harnessId, from, to) => {
+		const unsub = harnessActivity.subscribeTransitions((harnessId, from, to, source) => {
 			const owningRoom = roomsRef.current.find((r) => r.harnesses.some((h) => h.id === harnessId));
 			if (!owningRoom) {
 				// Transition for a harness that's no longer in
@@ -1653,7 +1653,11 @@ export default function App() {
 				toPhase: to,
 				timestampMs: Date.now(),
 				hasUserInput: activity?.hasUserInput ?? false,
-				source: null,
+				// L7a (#73): per-transition attribution.
+				// Identifies which strategy fired it (`l2a-idle`,
+				// `l2b-pattern`, `l2c1-claude-end-turn`, etc.) for
+				// the eventual L7c activity feed.
+				source,
 			}).catch((err: unknown) => {
 				const msg = err instanceof Error ? err.message : String(err);
 				console.warn(`[skein] db_record_harness_event failed for ${harnessId}:`, msg);
