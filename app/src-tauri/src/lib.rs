@@ -20,7 +20,7 @@ use tauri::Manager;
 use tauri::ipc::Channel;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
-use crate::db::{Database, HarnessEvent, Room};
+use crate::db::{Database, HarnessAction, HarnessEvent, Room};
 use crate::harness_events_claude::{ClaudeEvent, ClaudeEventsManager};
 use crate::harness_events_opencode::{OpencodeEvent, OpencodeEventsManager};
 use crate::pty::{PtyEvent, PtyManager};
@@ -254,6 +254,10 @@ pub fn run() {
             db_record_harness_event,
             db_recent_harness_events_by_harness,
             db_recent_harness_events_by_room,
+            db_record_harness_action,
+            db_recent_harness_actions_by_harness,
+            db_recent_harness_actions_by_room,
+            db_recent_harness_actions_by_room_and_kind,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -476,6 +480,73 @@ fn db_recent_harness_events_by_room(
     db: tauri::State<'_, Database>,
 ) -> Result<Vec<HarnessEvent>, String> {
     db.recent_harness_events_by_room(&room_id, since_ms, limit)
+}
+
+/// Append one row to the `harness_actions` log. Issue #80.
+///
+/// Adapters call this per extracted action. `kind` should be one of
+/// the `action_kind` constants. `payload` is an opaque JSON string —
+/// the canonical shape per kind is documented in the design brief.
+/// `source` carries the adapter event id (mirrors the L7a `source`
+/// column on `harness_events`).
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[tauri::command]
+fn db_record_harness_action(
+    harness_id: String,
+    room_id: String,
+    timestamp_ms: i64,
+    kind: String,
+    payload: String,
+    source: Option<String>,
+    db: tauri::State<'_, Database>,
+) -> Result<(), String> {
+    db.record_harness_action(
+        &harness_id,
+        &room_id,
+        timestamp_ms,
+        &kind,
+        &payload,
+        source.as_deref(),
+    )
+}
+
+/// Read recent actions for a single harness. Newest-first.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn db_recent_harness_actions_by_harness(
+    harness_id: String,
+    since_ms: i64,
+    limit: i64,
+    db: tauri::State<'_, Database>,
+) -> Result<Vec<HarnessAction>, String> {
+    db.recent_harness_actions_by_harness(&harness_id, since_ms, limit)
+}
+
+/// Read recent actions across every harness in a room. Newest-first.
+/// Backs the Activity card.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn db_recent_harness_actions_by_room(
+    room_id: String,
+    since_ms: i64,
+    limit: i64,
+    db: tauri::State<'_, Database>,
+) -> Result<Vec<HarnessAction>, String> {
+    db.recent_harness_actions_by_room(&room_id, since_ms, limit)
+}
+
+/// Read recent actions of a single `kind` in a room. Backs the Plan
+/// card (`kind = "plan_change"`) and other per-kind surfaces.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn db_recent_harness_actions_by_room_and_kind(
+    room_id: String,
+    kind: String,
+    since_ms: i64,
+    limit: i64,
+    db: tauri::State<'_, Database>,
+) -> Result<Vec<HarnessAction>, String> {
+    db.recent_harness_actions_by_room_and_kind(&room_id, &kind, since_ms, limit)
 }
 
 /// argv for the user's default interactive shell on this platform. Used
