@@ -21,6 +21,13 @@
 //! visit" surface. The TS side writes per transition via
 //! `db_record_harness_event`; reads come back via the `recent_*`
 //! query commands.
+//!
+//! Issue #80 ("Live Context") adds a third table — `harness_actions` —
+//! that keeps the richer per-tool-call / per-plan-change / per-patch
+//! log feeding the right-pane card stack. Phase transitions stay in
+//! `harness_events`; everything else lands here with a `kind`
+//! discriminator and a JSON `payload`. Rationale and the v1 kind set
+//! are in `docs/live-context-recon.md` §4 and the design brief.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -79,6 +86,63 @@ pub struct HarnessEvent {
     pub has_user_input: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source: Option<String>,
+}
+
+/// One row in the `harness_actions` append-only log. Issue #80.
+///
+/// Sibling of [`HarnessEvent`] — that table tracks phase transitions
+/// (a tight finite state machine); this one tracks everything else
+/// (tool calls, plan changes, patches, …). They join naturally on
+/// `(harness_id, timestamp_ms)` if a unified room timeline is ever
+/// needed.
+///
+/// `kind` is a free-form string. The v1 vocabulary lives in
+/// [`action_kind`] as constants — adapters write rows with those
+/// values, consumers compare against them. Adding a new kind is zero
+/// schema work: a new `pub const` here, populate it in the adapter.
+///
+/// `payload` is an opaque JSON string. Shape varies per kind; the
+/// canonical shape per kind is documented in
+/// `docs/live-context-design-brief.md` §3. The DB layer stores +
+/// returns it verbatim — no parsing or validation here.
+///
+/// `source` carries the adapter event id that produced this row
+/// (mirrors the L7a `source` column on `harness_events`). Reserved
+/// for cross-room / cross-harness correlation in later issues.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessAction {
+    pub id: i64,
+    pub harness_id: String,
+    pub room_id: String,
+    /// Epoch milliseconds.
+    pub timestamp_ms: i64,
+    pub kind: String,
+    pub payload: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<String>,
+}
+
+/// The v1 `kind` vocabulary for [`HarnessAction`] rows. Adapters and
+/// consumers refer to these constants instead of magic strings so a
+/// rename is one place. Adding a new kind doesn't require changing
+/// this list — it's a convenience, not a constraint.
+///
+/// `#[allow(dead_code)]` because this PR lands the schema + record/
+/// read API ahead of the adapter PRs that consume the full kind set.
+#[allow(dead_code)]
+pub mod action_kind {
+    pub const TOOL_CALL: &str = "tool_call";
+    pub const PLAN_CHANGE: &str = "plan_change";
+    pub const PATCH: &str = "patch";
+    pub const PR_LINK: &str = "pr_link";
+    pub const QUEUE_OP: &str = "queue_op";
+    pub const EDITED_TEXT_FILE: &str = "edited_text_file";
+    pub const SLASH_COMMAND: &str = "slash_command";
+    pub const AWAY_SUMMARY: &str = "away_summary";
+    pub const TURN_DURATION: &str = "turn_duration";
+    pub const API_ERROR: &str = "api_error";
+    pub const TURN_COST: &str = "turn_cost";
 }
 
 /// Mirrors the TS Room interface.
@@ -171,6 +235,43 @@ impl Database {
             [],
         )
         .map_err(|e| e.to_string())?;
+
+        // Issue #80: append-only log of tool calls / plan changes /
+        // patches / etc. Same shape concerns as `harness_events` —
+        // monotonic id, time-ordered indexes — plus a (room, kind, ts)
+        // index for the Plan card which queries one kind across a room.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS harness_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                harness_id TEXT NOT NULL,
+                room_id TEXT NOT NULL,
+                timestamp_ms INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                source TEXT
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_harness_actions_harness \
+             ON harness_actions(harness_id, timestamp_ms)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_harness_actions_room \
+             ON harness_actions(room_id, timestamp_ms)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_harness_actions_room_kind \
+             ON harness_actions(room_id, kind, timestamp_ms)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
         Ok(())
     }
 
@@ -304,6 +405,109 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
     }
+
+    // ── harness action log (issue #80) ────────────────────────────
+
+    /// Append one row to `harness_actions`. Adapters call this from
+    /// the Rust side per extracted action; the canonical payload
+    /// shape per `kind` is documented in the design brief. We don't
+    /// validate `payload` here — it's stored verbatim.
+    pub fn record_harness_action(
+        &self,
+        harness_id: &str,
+        room_id: &str,
+        timestamp_ms: i64,
+        kind: &str,
+        payload: &str,
+        source: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO harness_actions \
+             (harness_id, room_id, timestamp_ms, kind, payload, source) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![harness_id, room_id, timestamp_ms, kind, payload, source],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Most recent actions for a single harness with
+    /// `timestamp_ms > since_ms`. Newest-first.
+    pub fn recent_harness_actions_by_harness(
+        &self,
+        harness_id: &str,
+        since_ms: i64,
+        limit: i64,
+    ) -> Result<Vec<HarnessAction>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, harness_id, room_id, timestamp_ms, kind, payload, source \
+                 FROM harness_actions \
+                 WHERE harness_id = ?1 AND timestamp_ms > ?2 \
+                 ORDER BY timestamp_ms DESC, id DESC \
+                 LIMIT ?3",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![harness_id, since_ms, limit], row_to_action)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Most recent actions across every harness in a room. Newest-first.
+    /// Backs the Activity card's unified per-room timeline.
+    pub fn recent_harness_actions_by_room(
+        &self,
+        room_id: &str,
+        since_ms: i64,
+        limit: i64,
+    ) -> Result<Vec<HarnessAction>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, harness_id, room_id, timestamp_ms, kind, payload, source \
+                 FROM harness_actions \
+                 WHERE room_id = ?1 AND timestamp_ms > ?2 \
+                 ORDER BY timestamp_ms DESC, id DESC \
+                 LIMIT ?3",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![room_id, since_ms, limit], row_to_action)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Most recent actions of a single `kind` in a room. Backs the
+    /// Plan card (`kind = "plan_change"`) and other per-kind surfaces.
+    /// Uses the `(room_id, kind, timestamp_ms)` index.
+    pub fn recent_harness_actions_by_room_and_kind(
+        &self,
+        room_id: &str,
+        kind: &str,
+        since_ms: i64,
+        limit: i64,
+    ) -> Result<Vec<HarnessAction>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, harness_id, room_id, timestamp_ms, kind, payload, source \
+                 FROM harness_actions \
+                 WHERE room_id = ?1 AND kind = ?2 AND timestamp_ms > ?3 \
+                 ORDER BY timestamp_ms DESC, id DESC \
+                 LIMIT ?4",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![room_id, kind, since_ms, limit], row_to_action)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
 }
 
 fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<HarnessEvent> {
@@ -316,6 +520,18 @@ fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<HarnessEvent> {
         timestamp_ms: row.get(5)?,
         has_user_input: row.get::<_, i64>(6)? != 0,
         source: row.get(7)?,
+    })
+}
+
+fn row_to_action(row: &rusqlite::Row<'_>) -> rusqlite::Result<HarnessAction> {
+    Ok(HarnessAction {
+        id: row.get(0)?,
+        harness_id: row.get(1)?,
+        room_id: row.get(2)?,
+        timestamp_ms: row.get(3)?,
+        kind: row.get(4)?,
+        payload: row.get(5)?,
+        source: row.get(6)?,
     })
 }
 
@@ -442,5 +658,191 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    // ── harness_actions (issue #80) ───────────────────────────────
+
+    #[test]
+    fn action_record_then_query_by_harness_returns_row() {
+        let (_dir, db) = fresh_db();
+        let payload = r#"{"tool":"bash","input":{"command":"ls"}}"#;
+        db.record_harness_action(
+            "h1",
+            "r1",
+            1_000,
+            action_kind::TOOL_CALL,
+            payload,
+            Some("l2c1"),
+        )
+        .unwrap();
+        let actions = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
+        assert_eq!(actions.len(), 1);
+        let a = &actions[0];
+        assert_eq!(a.harness_id, "h1");
+        assert_eq!(a.room_id, "r1");
+        assert_eq!(a.timestamp_ms, 1_000);
+        assert_eq!(a.kind, "tool_call");
+        assert_eq!(a.payload, payload);
+        assert_eq!(a.source.as_deref(), Some("l2c1"));
+    }
+
+    #[test]
+    fn action_query_excludes_rows_at_or_before_since_ms() {
+        let (_dir, db) = fresh_db();
+        for ts in [100, 200, 300, 400] {
+            db.record_harness_action("h1", "r1", ts, action_kind::PATCH, "{}", None)
+                .unwrap();
+        }
+        let actions = db.recent_harness_actions_by_harness("h1", 200, 10).unwrap();
+        let timestamps: Vec<i64> = actions.iter().map(|a| a.timestamp_ms).collect();
+        assert_eq!(timestamps, vec![400, 300]);
+    }
+
+    #[test]
+    fn action_query_is_scoped_by_harness_id() {
+        let (_dir, db) = fresh_db();
+        db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, "{}", None)
+            .unwrap();
+        db.record_harness_action("h2", "r1", 200, action_kind::TOOL_CALL, "{}", None)
+            .unwrap();
+        db.record_harness_action("h1", "r1", 300, action_kind::PATCH, "{}", None)
+            .unwrap();
+        let h1 = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
+        assert_eq!(h1.len(), 2);
+        assert!(h1.iter().all(|a| a.harness_id == "h1"));
+    }
+
+    #[test]
+    fn action_query_by_room_returns_all_harnesses_in_that_room() {
+        let (_dir, db) = fresh_db();
+        db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, "{}", None)
+            .unwrap();
+        db.record_harness_action("h2", "r1", 200, action_kind::TOOL_CALL, "{}", None)
+            .unwrap();
+        db.record_harness_action("h3", "r2", 300, action_kind::TOOL_CALL, "{}", None)
+            .unwrap();
+        let r1 = db.recent_harness_actions_by_room("r1", 0, 10).unwrap();
+        assert_eq!(r1.len(), 2);
+        assert!(r1.iter().all(|a| a.room_id == "r1"));
+    }
+
+    #[test]
+    fn action_query_by_room_and_kind_filters_other_kinds_out() {
+        let (_dir, db) = fresh_db();
+        db.record_harness_action(
+            "h1",
+            "r1",
+            100,
+            action_kind::PLAN_CHANGE,
+            r#"{"n":1}"#,
+            None,
+        )
+        .unwrap();
+        db.record_harness_action("h1", "r1", 200, action_kind::TOOL_CALL, "{}", None)
+            .unwrap();
+        db.record_harness_action(
+            "h2",
+            "r1",
+            300,
+            action_kind::PLAN_CHANGE,
+            r#"{"n":2}"#,
+            None,
+        )
+        .unwrap();
+        let plans = db
+            .recent_harness_actions_by_room_and_kind("r1", action_kind::PLAN_CHANGE, 0, 10)
+            .unwrap();
+        assert_eq!(plans.len(), 2);
+        assert!(plans.iter().all(|a| a.kind == "plan_change"));
+        // Newest first.
+        assert_eq!(plans[0].timestamp_ms, 300);
+        assert_eq!(plans[1].timestamp_ms, 100);
+    }
+
+    #[test]
+    fn action_query_respects_limit() {
+        let (_dir, db) = fresh_db();
+        for ts in 0..50 {
+            db.record_harness_action("h1", "r1", ts, action_kind::TOOL_CALL, "{}", None)
+                .unwrap();
+        }
+        let actions = db.recent_harness_actions_by_harness("h1", -1, 5).unwrap();
+        assert_eq!(actions.len(), 5);
+        assert_eq!(actions[0].timestamp_ms, 49);
+        assert_eq!(actions[4].timestamp_ms, 45);
+    }
+
+    #[test]
+    fn action_payload_is_stored_verbatim_including_unicode_and_quotes() {
+        // The DB layer must not parse / re-serialize / escape payloads
+        // beyond what sqlite needs — adapters write JSON, consumers
+        // read the same bytes back.
+        let (_dir, db) = fresh_db();
+        let payload = r#"{"text":"hello \"world\" — café 🌮","nested":{"k":[1,2,3]}}"#;
+        db.record_harness_action("h1", "r1", 100, action_kind::AWAY_SUMMARY, payload, None)
+            .unwrap();
+        let actions = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
+        assert_eq!(actions[0].payload, payload);
+    }
+
+    #[test]
+    fn action_query_orders_same_ms_rows_by_id_desc() {
+        // Two actions written in the same millisecond must come back
+        // in insertion order (newest first), so the timeline doesn't
+        // flicker between Skein restarts.
+        let (_dir, db) = fresh_db();
+        db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, r#"{"n":1}"#, None)
+            .unwrap();
+        db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, r#"{"n":2}"#, None)
+            .unwrap();
+        db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, r#"{"n":3}"#, None)
+            .unwrap();
+        let actions = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
+        assert_eq!(actions.len(), 3);
+        assert_eq!(actions[0].payload, r#"{"n":3}"#);
+        assert_eq!(actions[2].payload, r#"{"n":1}"#);
+    }
+
+    #[test]
+    fn action_null_source_round_trips_as_none() {
+        let (_dir, db) = fresh_db();
+        db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, "{}", None)
+            .unwrap();
+        let actions = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
+        assert!(actions[0].source.is_none());
+    }
+
+    #[test]
+    fn action_schema_is_idempotent_across_open_calls() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let _db1 = Database::open(&path).unwrap();
+        let db2 = Database::open(&path).unwrap();
+        db2.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, "{}", None)
+            .unwrap();
+        assert_eq!(
+            db2.recent_harness_actions_by_harness("h1", 0, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn action_kind_constants_match_persisted_strings() {
+        // Lock the v1 vocabulary so accidental renames trigger a
+        // failing test (consumers read these strings directly from
+        // the DB; renaming would orphan historical rows).
+        assert_eq!(action_kind::TOOL_CALL, "tool_call");
+        assert_eq!(action_kind::PLAN_CHANGE, "plan_change");
+        assert_eq!(action_kind::PATCH, "patch");
+        assert_eq!(action_kind::PR_LINK, "pr_link");
+        assert_eq!(action_kind::QUEUE_OP, "queue_op");
+        assert_eq!(action_kind::EDITED_TEXT_FILE, "edited_text_file");
+        assert_eq!(action_kind::SLASH_COMMAND, "slash_command");
+        assert_eq!(action_kind::AWAY_SUMMARY, "away_summary");
+        assert_eq!(action_kind::TURN_DURATION, "turn_duration");
+        assert_eq!(action_kind::API_ERROR, "api_error");
+        assert_eq!(action_kind::TURN_COST, "turn_cost");
     }
 }
