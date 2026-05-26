@@ -173,6 +173,9 @@ interface HarnessBodyProps {
 	defaultShell: string[];
 	visible: boolean;
 	onCmdChange: (cmd: string[]) => void;
+	// Stamped on every `harness_actions` row this harness emits
+	// (issue #80). Threaded down to LiveTerminal → attachClaudeEvents.
+	roomId: string;
 	// Epic #50 L2c-2: opencode embedded-server port allocated by App.
 	// `undefined` for non-opencode harnesses and for opencode harnesses
 	// where pick_free_port failed — in the latter case the adapter
@@ -190,6 +193,7 @@ const HarnessBody = ({
 	defaultShell,
 	visible,
 	onCmdChange,
+	roomId,
 	opencodePort,
 	onSessionCaptured,
 }: HarnessBodyProps) => {
@@ -205,6 +209,7 @@ const HarnessBody = ({
 				cwd={harness.cwd}
 				mountKey={`${harness.id}:${harness.cmd.join("\x00")}`}
 				harnessId={harness.id}
+				roomId={roomId}
 				harnessKind={harness.kind}
 				sessionId={harness.sessionId}
 				opencodePort={opencodePort}
@@ -344,6 +349,7 @@ const HarnessColumn = ({
 						defaultShell={defaultShell}
 						visible={visible}
 						onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
+						roomId={room.id}
 						opencodePort={opencodePorts.get(h.id)}
 						onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
 					/>

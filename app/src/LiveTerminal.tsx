@@ -52,6 +52,9 @@ interface LiveTerminalProps {
 	// up as a fresh `spawning → running` transition rather than a
 	// new ghost record. Epic #50.
 	harnessId: string;
+	// Stamped on every `harness_actions` row this harness emits
+	// (issue #80). The Live Context cards query per-room.
+	roomId: string;
 	// Used to decide whether the L2c-1 Claude JSONL adapter should
 	// attach. Only `kind === "claude"` with a non-empty `sessionId`
 	// (from chapter 5's `--session-id <uuid>` pre-allocation) gets
@@ -90,6 +93,7 @@ export const LiveTerminal = ({
 	cwd,
 	mountKey,
 	harnessId,
+	roomId,
 	harnessKind,
 	sessionId,
 	opencodePort,
@@ -404,7 +408,7 @@ export const LiveTerminal = ({
 				// once Rust confirms attach; until then L2a keeps
 				// ticking, so a slow attach is a graceful degradation.
 				if (harnessKind === "claude" && sessionId) {
-					detachClaudeAdapter = attachClaudeEvents(harnessId, sessionId, cwd);
+					detachClaudeAdapter = attachClaudeEvents(harnessId, roomId, sessionId, cwd);
 				}
 				// L2c-2: attach the opencode SSE adapter when we have a
 				// port (App allocated one via pick_free_port before the
