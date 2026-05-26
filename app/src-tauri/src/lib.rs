@@ -8,6 +8,7 @@
 mod db;
 mod fs;
 mod git;
+mod harness_actions_claude;
 mod harness_events_claude;
 mod harness_events_opencode;
 mod pty;
@@ -15,6 +16,7 @@ mod resume;
 mod watcher;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use tauri::Manager;
 use tauri::ipc::Channel;
@@ -126,11 +128,12 @@ pub fn run() {
             let db = Database::open(&db_path).map_err(|e| {
                 Box::<dyn std::error::Error>::from(format!("opening {}: {e}", db_path.display()))
             })?;
-            app.manage(db);
+            let db = Arc::new(db);
             app.manage(PtyManager::new());
             app.manage(WatcherManager::new());
-            app.manage(ClaudeEventsManager::new());
+            app.manage(ClaudeEventsManager::new(Arc::clone(&db)));
             app.manage(OpencodeEventsManager::new());
+            app.manage(db);
 
             // Resolve the product name from the merged tauri config —
             // base config gives "Skein"; the dev overlay
@@ -362,17 +365,18 @@ fn pick_free_port() -> Result<u16, String> {
 /// back to the L2a idle heuristic. We surface the error as a string
 /// for the frontend to log, but the frontend treats it as soft —
 /// notifications keep working from the chunk-based path.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 #[tauri::command]
 fn claude_events_attach(
     harness_id: String,
+    room_id: String,
     session_id: String,
     cwd: String,
     on_event: Channel<ClaudeEvent>,
     manager: tauri::State<'_, ClaudeEventsManager>,
 ) -> Result<(), String> {
     manager
-        .attach(harness_id, &session_id, &cwd, move |event| {
+        .attach(harness_id, room_id, &session_id, &cwd, move |event| {
             let _ = on_event.send(event);
         })
         .map_err(|e| e.to_string())
@@ -444,7 +448,7 @@ fn db_record_harness_event(
     timestamp_ms: i64,
     has_user_input: bool,
     source: Option<String>,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, Arc<Database>>,
 ) -> Result<(), String> {
     db.record_harness_event(
         &harness_id,
@@ -464,7 +468,7 @@ fn db_recent_harness_events_by_harness(
     harness_id: String,
     since_ms: i64,
     limit: i64,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, Arc<Database>>,
 ) -> Result<Vec<HarnessEvent>, String> {
     db.recent_harness_events_by_harness(&harness_id, since_ms, limit)
 }
@@ -477,7 +481,7 @@ fn db_recent_harness_events_by_room(
     room_id: String,
     since_ms: i64,
     limit: i64,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, Arc<Database>>,
 ) -> Result<Vec<HarnessEvent>, String> {
     db.recent_harness_events_by_room(&room_id, since_ms, limit)
 }
@@ -498,7 +502,7 @@ fn db_record_harness_action(
     kind: String,
     payload: String,
     source: Option<String>,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, Arc<Database>>,
 ) -> Result<(), String> {
     db.record_harness_action(
         &harness_id,
@@ -517,7 +521,7 @@ fn db_recent_harness_actions_by_harness(
     harness_id: String,
     since_ms: i64,
     limit: i64,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, Arc<Database>>,
 ) -> Result<Vec<HarnessAction>, String> {
     db.recent_harness_actions_by_harness(&harness_id, since_ms, limit)
 }
@@ -530,7 +534,7 @@ fn db_recent_harness_actions_by_room(
     room_id: String,
     since_ms: i64,
     limit: i64,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, Arc<Database>>,
 ) -> Result<Vec<HarnessAction>, String> {
     db.recent_harness_actions_by_room(&room_id, since_ms, limit)
 }
@@ -544,7 +548,7 @@ fn db_recent_harness_actions_by_room_and_kind(
     kind: String,
     since_ms: i64,
     limit: i64,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, Arc<Database>>,
 ) -> Result<Vec<HarnessAction>, String> {
     db.recent_harness_actions_by_room_and_kind(&room_id, &kind, since_ms, limit)
 }
@@ -591,7 +595,7 @@ fn default_cwd() -> String {
 /// once at boot to hydrate state.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-fn db_load_rooms(db: tauri::State<'_, Database>) -> Result<Vec<Room>, String> {
+fn db_load_rooms(db: tauri::State<'_, Arc<Database>>) -> Result<Vec<Room>, String> {
     db.load_all()
 }
 
@@ -600,6 +604,6 @@ fn db_load_rooms(db: tauri::State<'_, Database>) -> Result<Vec<Room>, String> {
 /// prototype scale and avoids the bookkeeping of granular upserts.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-fn db_save_rooms(rooms: Vec<Room>, db: tauri::State<'_, Database>) -> Result<(), String> {
+fn db_save_rooms(rooms: Vec<Room>, db: tauri::State<'_, Arc<Database>>) -> Result<(), String> {
     db.save_all(&rooms)
 }

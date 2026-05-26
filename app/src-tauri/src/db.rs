@@ -143,6 +143,10 @@ pub mod action_kind {
     pub const TURN_DURATION: &str = "turn_duration";
     pub const API_ERROR: &str = "api_error";
     pub const TURN_COST: &str = "turn_cost";
+    pub const PERMISSION_MODE: &str = "permission_mode";
+    pub const AI_TITLE: &str = "ai_title";
+    pub const BRIDGE_STATUS: &str = "bridge_status";
+    pub const USER_PROMPT: &str = "user_prompt";
 }
 
 /// Mirrors the TS Room interface.
@@ -844,5 +848,9 @@ mod tests {
         assert_eq!(action_kind::TURN_DURATION, "turn_duration");
         assert_eq!(action_kind::API_ERROR, "api_error");
         assert_eq!(action_kind::TURN_COST, "turn_cost");
+        assert_eq!(action_kind::PERMISSION_MODE, "permission_mode");
+        assert_eq!(action_kind::AI_TITLE, "ai_title");
+        assert_eq!(action_kind::BRIDGE_STATUS, "bridge_status");
+        assert_eq!(action_kind::USER_PROMPT, "user_prompt");
     }
 }

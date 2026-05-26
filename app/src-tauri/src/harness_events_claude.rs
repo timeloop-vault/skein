@@ -33,6 +33,9 @@ use notify_debouncer_mini::{DebounceEventResult, Debouncer, new_debouncer, notif
 use parking_lot::Mutex;
 use serde::Serialize;
 
+use crate::db::Database;
+use crate::harness_actions_claude::ActionExtractor;
+
 /// Tighter than the worktree watcher's 200 ms — notification UX cares
 /// about latency, and a JSONL append produces exactly one event we
 /// want to react to quickly.
@@ -135,27 +138,54 @@ struct TailState {
     /// assistant turn — used to coalesce streamed `assistant` rows
     /// into one `AssistantTurn` event per turn boundary.
     in_assistant_turn: bool,
+    /// Action persistence sink. `None` for path-injected tests that
+    /// only care about phase events. Populated in production by
+    /// `attach_at_with_actions`. Lives in `TailState` so the watcher
+    /// callback can both extract and persist on each tick. Issue #80.
+    actions: Option<ActionPersistence>,
+}
+
+/// Action-extraction context bundled per attached harness. The
+/// `extractor` holds the pending-tool-use buffer between rows; `db`
+/// is the persistence sink; `harness_id`/`room_id` are stamped on
+/// every row before insert.
+struct ActionPersistence {
+    extractor: ActionExtractor,
+    db: Arc<Database>,
+    harness_id: String,
+    room_id: String,
 }
 
 /// Manager — registry of live Claude adapters keyed by harness id.
 /// Mirrors the shape of `PtyManager` / `WatcherManager`.
-#[derive(Default)]
 pub struct ClaudeEventsManager {
     inner: Mutex<HashMap<String, Adapter>>,
+    /// Shared with the per-attach persistence sink so each adapter
+    /// can write `harness_actions` rows directly from its tick
+    /// thread. Issue #80.
+    db: Arc<Database>,
 }
 
 impl ClaudeEventsManager {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(db: Arc<Database>) -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+            db,
+        }
     }
 
     /// Start tailing the JSONL for `harness_id`. `on_event` fires on
     /// every parsed event from the debouncer's flush thread. Replaces
     /// any prior adapter for the same harness id (caller-driven
     /// reattach during respawn — fine to be idempotent).
+    ///
+    /// `room_id` is stamped on every `harness_actions` row this
+    /// adapter persists (issue #80). The Live Context cards query
+    /// per-room.
     pub fn attach<F>(
         &self,
         harness_id: String,
+        room_id: String,
         session_id: &str,
         cwd: &str,
         on_event: F,
@@ -166,18 +196,28 @@ impl ClaudeEventsManager {
         let Some(path) = session_jsonl_path(cwd, session_id) else {
             return Err(ClaudeEventsError("claude_events attach: HOME unset".into()));
         };
-        self.attach_at(harness_id, path, on_event)
+        let persistence = Some(ActionPersistence {
+            extractor: ActionExtractor::new(),
+            db: Arc::clone(&self.db),
+            harness_id: harness_id.clone(),
+            room_id,
+        });
+        self.attach_at(harness_id, path, on_event, persistence)
     }
 
     /// Path-injected variant — used by tests to point the adapter at
     /// a tempdir without touching `HOME`. The production path goes
     /// through `attach()` above, which resolves the JSONL path from
     /// `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`.
+    ///
+    /// `actions` is the persistence sink; pass `None` from phase-only
+    /// tests to skip the `harness_actions` table entirely.
     fn attach_at<F>(
         &self,
         harness_id: String,
         path: PathBuf,
         on_event: F,
+        actions: Option<ActionPersistence>,
     ) -> Result<(), ClaudeEventsError>
     where
         F: Fn(ClaudeEvent) + Send + Sync + 'static,
@@ -195,9 +235,21 @@ impl ClaudeEventsManager {
         //     v0.1.9-dev — see `determine_initial_state` below.
         //   • Error other than NotFound — treat as "fresh" (file
         //     will appear later, or it really doesn't exist).
+        // Backfill (issue #80): before seeking to EOF for live tail,
+        // extract every action from the file's existing content and
+        // persist anything newer than what we've already seen. On
+        // first-ever attach for this harness, that's the whole file;
+        // on re-attach after Skein restart, we only insert rows newer
+        // than the largest persisted timestamp. The phase-side
+        // initial-event probe is unchanged; both consume the same
+        // file read.
+        let mut actions = actions;
         let (last_pos, attached, initial_event) = match fs::read_to_string(&path) {
             Ok(content) => {
                 let init = determine_initial_state(&content);
+                if let Some(ap) = actions.as_mut() {
+                    backfill_actions(ap, &content);
+                }
                 let len = u64::try_from(content.len()).unwrap_or(u64::MAX);
                 (len, true, init)
             }
@@ -219,6 +271,7 @@ impl ClaudeEventsManager {
             partial: String::new(),
             attached,
             in_assistant_turn: false,
+            actions,
         }));
         let cb_state = Arc::clone(&state);
         let on_event = Arc::new(on_event);
@@ -380,8 +433,19 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
         if trimmed.is_empty() {
             continue;
         }
-        if let Some(event) = parse_line(trimmed, &mut in_assistant_turn) {
+        // Parse once, fan out to both consumers: phase (the
+        // pre-existing path) and actions (issue #80). Action
+        // persistence is best-effort — a single failed insert
+        // shouldn't kill the tail loop.
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        if let Some(event) = parse_value(&value, &mut in_assistant_turn) {
             events.push(event);
+        }
+        if let Some(ap) = s.actions.as_mut() {
+            let extracted = ap.extractor.ingest(&value);
+            persist_extracted(ap, extracted);
         }
     }
     s.in_assistant_turn = in_assistant_turn;
@@ -390,6 +454,67 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     for event in events {
         on_event(event);
     }
+}
+
+/// One-shot historical scan of the JSONL — runs once on attach
+/// before the watcher arms. We walk every row in order so the
+/// extractor's `tool_use` buffer can join with its result row even if
+/// they fall on different lines. Insert only rows whose timestamp
+/// is newer than the largest one already persisted for this harness
+/// (`max_persisted_ts_ms`) — that's how a re-attach after Skein
+/// restart avoids duplicating rows. On first attach the max is 0,
+/// so every row goes in.
+fn backfill_actions(ap: &mut ActionPersistence, content: &str) {
+    let max_ts = max_persisted_ts_ms(&ap.db, &ap.harness_id);
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        let extracted = ap.extractor.ingest(&value);
+        let fresh: Vec<_> = extracted
+            .into_iter()
+            .filter(|a| a.timestamp_ms > max_ts)
+            .collect();
+        persist_extracted(ap, fresh);
+    }
+}
+
+/// Insert every action in `extracted` into `harness_actions`. Logs
+/// at trace on insert failure (sqlite locked, disk full) but doesn't
+/// propagate — the tail loop continues. The user's recourse is to
+/// check the log; nothing actionable from inside the adapter.
+fn persist_extracted(
+    ap: &ActionPersistence,
+    extracted: Vec<crate::harness_actions_claude::ExtractedAction>,
+) {
+    for action in extracted {
+        if let Err(e) = ap.db.record_harness_action(
+            &ap.harness_id,
+            &ap.room_id,
+            action.timestamp_ms,
+            action.kind,
+            &action.payload,
+            action.source.as_deref(),
+        ) {
+            tracing::trace!(harness_id = %ap.harness_id, kind = %action.kind, error = %e,
+                "claude_events: record_harness_action failed");
+        }
+    }
+}
+
+/// Query the largest `timestamp_ms` already persisted for this
+/// harness. Returns 0 when the harness has no rows yet (first
+/// attach). Read errors fall back to 0 — re-inserting rows is
+/// recoverable, missing the backfill entirely is not.
+fn max_persisted_ts_ms(db: &Database, harness_id: &str) -> i64 {
+    db.recent_harness_actions_by_harness(harness_id, -1, 1)
+        .ok()
+        .and_then(|rows| rows.into_iter().next())
+        .map_or(0, |r| r.timestamp_ms)
 }
 
 /// Scan a JSONL session log (entire content) and return the event
@@ -481,8 +606,7 @@ fn determine_initial_state(content: &str) -> Option<ClaudeEvent> {
 /// retry/edit). They appear at the *start* of a Claude turn, not
 /// the end. Treating them as "awaiting input" was the bug that
 /// kept the dot green until the L2a 8 s idle timeout finally fired.
-fn parse_line(line: &str, in_assistant_turn: &mut bool) -> Option<ClaudeEvent> {
-    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+fn parse_value(value: &serde_json::Value, in_assistant_turn: &mut bool) -> Option<ClaudeEvent> {
     let ty = value.get("type")?.as_str()?;
 
     // Sub-agent rows carry isSidechain=true. The main session is
@@ -587,6 +711,19 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
+    /// In-memory Database for tests that want to construct a
+    /// `ClaudeEventsManager` without touching disk. We don't use the
+    /// action sink in these phase-focused tests (each `attach_at`
+    /// passes `None`); the manager just needs *a* db to hold.
+    fn test_manager() -> ClaudeEventsManager {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = crate::db::Database::open(&dir.path().join("t.db")).unwrap();
+        // Leak the TempDir — only needed for the duration of the
+        // test, and not worth a per-test handle.
+        std::mem::forget(dir);
+        ClaudeEventsManager::new(Arc::new(db))
+    }
+
     /// Drive `attach_at` against a tempdir, returning a receiver the
     /// test collects events from. The manager is returned so the test
     /// can hold it (dropping ends the watch).
@@ -597,12 +734,17 @@ mod tests {
     /// it would also race across the test binary's parallel threads.
     fn make_adapter(dir: &TempDir) -> (ClaudeEventsManager, PathBuf, mpsc::Receiver<ClaudeEvent>) {
         let (tx, rx) = mpsc::channel();
-        let manager = ClaudeEventsManager::new();
+        let manager = test_manager();
         let path = dir.path().join("session.jsonl");
         manager
-            .attach_at("harness-1".into(), path.clone(), move |event| {
-                tx.send(event).unwrap();
-            })
+            .attach_at(
+                "harness-1".into(),
+                path.clone(),
+                move |event| {
+                    tx.send(event).unwrap();
+                },
+                None,
+            )
             .unwrap();
         (manager, path, rx)
     }
@@ -837,11 +979,16 @@ mod tests {
         }
 
         let (tx, rx) = mpsc::channel();
-        let manager = ClaudeEventsManager::new();
+        let manager = test_manager();
         manager
-            .attach_at("h1".into(), path.clone(), move |e| {
-                tx.send(e).unwrap();
-            })
+            .attach_at(
+                "h1".into(),
+                path.clone(),
+                move |e| {
+                    tx.send(e).unwrap();
+                },
+                None,
+            )
             .unwrap();
 
         // Append a fresh end_turn row. Scope the file handle so the
@@ -938,11 +1085,16 @@ mod tests {
         let path = dir.path().join("session.jsonl");
 
         let (tx, rx) = mpsc::channel();
-        let manager = ClaudeEventsManager::new();
+        let manager = test_manager();
         manager
-            .attach_at("h1".into(), path.clone(), move |e| {
-                tx.send(e).unwrap();
-            })
+            .attach_at(
+                "h1".into(),
+                path.clone(),
+                move |e| {
+                    tx.send(e).unwrap();
+                },
+                None,
+            )
             .unwrap();
 
         // File doesn't exist yet — adapter should be waiting on the
@@ -1001,9 +1153,9 @@ mod tests {
         }
 
         let (tx, rx) = mpsc::channel();
-        let manager = ClaudeEventsManager::new();
+        let manager = test_manager();
         manager
-            .attach_at("h1".into(), path, move |e| tx.send(e).unwrap())
+            .attach_at("h1".into(), path, move |e| tx.send(e).unwrap(), None)
             .unwrap();
 
         let events = drain_brief(&rx);
@@ -1034,9 +1186,9 @@ mod tests {
         }
 
         let (tx, rx) = mpsc::channel();
-        let manager = ClaudeEventsManager::new();
+        let manager = test_manager();
         manager
-            .attach_at("h1".into(), path, move |e| tx.send(e).unwrap())
+            .attach_at("h1".into(), path, move |e| tx.send(e).unwrap(), None)
             .unwrap();
 
         let events = drain_brief(&rx);
@@ -1092,5 +1244,200 @@ mod tests {
         // Verified against real project dirs in chapter-5-recon §3.
         assert_eq!(encode_cwd("/Users/foo/bar"), "-Users-foo-bar");
         assert_eq!(encode_cwd("/foo-bar/baz"), "-foo-bar-baz");
+    }
+
+    // ── action persistence + backfill (issue #80) ────────────────
+
+    /// Build a manager wired to a real on-disk Database in `dir`, and
+    /// return the path used so the caller can re-open it. Action sink
+    /// is enabled — call sites populate JSONL via `attach_at` with a
+    /// `Some(ActionPersistence)`.
+    fn make_persisting_adapter(
+        jsonl: PathBuf,
+        db_path: &Path,
+        harness_id: &str,
+        room_id: &str,
+    ) -> ClaudeEventsManager {
+        let db = Arc::new(crate::db::Database::open(db_path).unwrap());
+        let manager = ClaudeEventsManager::new(Arc::clone(&db));
+        let persistence = Some(ActionPersistence {
+            extractor: ActionExtractor::new(),
+            db,
+            harness_id: harness_id.into(),
+            room_id: room_id.into(),
+        });
+        manager
+            .attach_at(harness_id.into(), jsonl, |_event| {}, persistence)
+            .unwrap();
+        manager
+    }
+
+    /// `Tool_use` + `tool_result` rows already in the file at attach
+    /// time are backfilled into `harness_actions` on first attach.
+    #[test]
+    fn backfill_persists_existing_tool_calls() {
+        let dir = TempDir::new().unwrap();
+        let jsonl = dir.path().join("session.jsonl");
+        let db_path = dir.path().join("test.db");
+
+        // Pre-seed the JSONL with a tool_use + result pair.
+        {
+            let mut f = std::fs::File::create(&jsonl).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"assistant","uuid":"a1","timestamp":"2026-05-15T21:16:22.572Z","message":{{"content":[{{"type":"tool_use","id":"toolu_1","name":"Bash","input":{{"command":"ls"}}}}]}}}}"#
+            ).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"user","timestamp":"2026-05-15T21:16:23.000Z","toolUseResult":{{"stdout":"x"}},"message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_1","content":"x","is_error":false}}]}}}}"#
+            ).unwrap();
+            f.sync_all().unwrap();
+        }
+
+        let _manager = make_persisting_adapter(jsonl, &db_path, "h1", "r1");
+
+        let db = crate::db::Database::open(&db_path).unwrap();
+        let actions = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
+        assert_eq!(actions.len(), 1, "expected 1 backfilled action");
+        let a = &actions[0];
+        assert_eq!(a.kind, crate::db::action_kind::TOOL_CALL);
+        assert_eq!(a.harness_id, "h1");
+        let payload: serde_json::Value = serde_json::from_str(&a.payload).unwrap();
+        assert_eq!(payload["tool"], "Bash");
+    }
+
+    /// Re-attaching to the same session (Skein restart) does not
+    /// re-insert rows already in `harness_actions`. Only rows with
+    /// a strictly newer `timestamp_ms` are persisted.
+    #[test]
+    fn second_attach_skips_already_persisted_rows() {
+        let dir = TempDir::new().unwrap();
+        let jsonl = dir.path().join("session.jsonl");
+        let db_path = dir.path().join("test.db");
+
+        {
+            let mut f = std::fs::File::create(&jsonl).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"assistant","uuid":"a1","timestamp":"2026-05-15T21:16:22.572Z","message":{{"content":[{{"type":"tool_use","id":"toolu_1","name":"Bash","input":{{"command":"ls"}}}}]}}}}"#
+            ).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"user","timestamp":"2026-05-15T21:16:23.000Z","toolUseResult":{{"stdout":"x"}},"message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_1","content":"x","is_error":false}}]}}}}"#
+            ).unwrap();
+            f.sync_all().unwrap();
+        }
+
+        // First attach: backfill = 1 row.
+        let manager1 = make_persisting_adapter(jsonl.clone(), &db_path, "h1", "r1");
+        drop(manager1);
+
+        // Re-attach to same JSONL + same DB. Should be a no-op for actions.
+        let _manager2 = make_persisting_adapter(jsonl, &db_path, "h1", "r1");
+
+        let db = crate::db::Database::open(&db_path).unwrap();
+        let actions = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
+        assert_eq!(actions.len(), 1, "expected no duplicate on re-attach");
+    }
+
+    /// Rows that appear in the file after the first backfill (Skein
+    /// closed, Claude wrote more, Skein re-opens) ARE persisted.
+    #[test]
+    fn second_attach_picks_up_rows_added_while_skein_was_down() {
+        let dir = TempDir::new().unwrap();
+        let jsonl = dir.path().join("session.jsonl");
+        let db_path = dir.path().join("test.db");
+
+        // First batch (before Skein "closes").
+        {
+            let mut f = std::fs::File::create(&jsonl).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"assistant","uuid":"a1","timestamp":"2026-05-15T21:16:22.572Z","message":{{"content":[{{"type":"tool_use","id":"toolu_1","name":"Read","input":{{"file_path":"/x"}}}}]}}}}"#
+            ).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"user","timestamp":"2026-05-15T21:16:23.000Z","toolUseResult":{{"file":"x","type":"file"}},"message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_1","content":"x","is_error":false}}]}}}}"#
+            ).unwrap();
+            f.sync_all().unwrap();
+        }
+        let manager1 = make_persisting_adapter(jsonl.clone(), &db_path, "h1", "r1");
+        drop(manager1);
+
+        // Append a second tool call (Skein was down, Claude kept working).
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&jsonl)
+                .unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"assistant","uuid":"a2","timestamp":"2026-05-15T21:17:00.000Z","message":{{"content":[{{"type":"tool_use","id":"toolu_2","name":"Bash","input":{{"command":"pwd"}}}}]}}}}"#
+            ).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"user","timestamp":"2026-05-15T21:17:01.000Z","toolUseResult":{{"stdout":"/foo"}},"message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_2","content":"/foo","is_error":false}}]}}}}"#
+            ).unwrap();
+            f.sync_all().unwrap();
+        }
+
+        let _manager2 = make_persisting_adapter(jsonl, &db_path, "h1", "r1");
+        let db = crate::db::Database::open(&db_path).unwrap();
+        let actions = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
+        assert_eq!(
+            actions.len(),
+            2,
+            "expected backfill to pick up only the new row"
+        );
+        // Newest first.
+        let p0: serde_json::Value = serde_json::from_str(&actions[0].payload).unwrap();
+        let p1: serde_json::Value = serde_json::from_str(&actions[1].payload).unwrap();
+        assert_eq!(p0["tool"], "Bash");
+        assert_eq!(p1["tool"], "Read");
+    }
+
+    /// Each row that arrives on the live tail (after attach) ALSO
+    /// gets persisted. This is the steady-state path: Claude writes
+    /// a new row, notify fires, tick reads + extracts + persists.
+    #[test]
+    fn live_tail_persists_rows_appended_after_attach() {
+        let dir = TempDir::new().unwrap();
+        let jsonl = dir.path().join("session.jsonl");
+        let db_path = dir.path().join("test.db");
+
+        // File doesn't exist yet — adapter will attach via parent-dir
+        // watcher and start at byte 0 on create.
+        let _manager = make_persisting_adapter(jsonl.clone(), &db_path, "h1", "r1");
+
+        // Create + append a tool_use/result pair.
+        {
+            let mut f = std::fs::File::create(&jsonl).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"assistant","uuid":"a1","timestamp":"2026-05-15T21:16:22.572Z","message":{{"content":[{{"type":"tool_use","id":"toolu_1","name":"Bash","input":{{"command":"echo hi"}}}}]}}}}"#
+            ).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"user","timestamp":"2026-05-15T21:16:23.000Z","toolUseResult":{{"stdout":"hi"}},"message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_1","content":"hi","is_error":false}}]}}}}"#
+            ).unwrap();
+            f.sync_all().unwrap();
+        }
+
+        // FSEvents can take up to ~1-2 s on macOS to deliver. Poll
+        // the DB until the row lands or the deadline trips.
+        let db = crate::db::Database::open(&db_path).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let actions = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
+            if !actions.is_empty() {
+                assert_eq!(actions[0].kind, crate::db::action_kind::TOOL_CALL);
+                break;
+            }
+            assert!(
+                std::time::Instant::now() <= deadline,
+                "live tail never persisted the action"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 }

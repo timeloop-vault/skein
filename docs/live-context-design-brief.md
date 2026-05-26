@@ -257,13 +257,22 @@ they're rendering-shaped, not data-shaped:
 
 A new table `harness_actions(id, harness_id, room_id, timestamp_ms,
 kind, source, payload)` populated by the existing Claude/opencode
-adapters. Ten `kind` values capture everything in §2:
+adapters. Fifteen `kind` values capture everything in §2:
 
 ```
 tool_call, plan_change, patch,
 pr_link, queue_op, edited_text_file, slash_command,
-away_summary, turn_duration, api_error, turn_cost
+away_summary, turn_duration, api_error, turn_cost,
+permission_mode, ai_title, bridge_status, user_prompt
 ```
+
+The last four were added during Part B implementation — they're
+all cheap one-row→one-action extractions from Claude row types
+not originally surfaced as v1 kinds. The principle: err on
+capturing more signal, not less. (`file-history-snapshot` and
+`summary` remain excluded; the former is internal Claude undo
+bookkeeping with no user-facing event, the latter was never
+observed in any recon session.)
 
 Behaviour:
 

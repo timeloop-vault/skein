@@ -39,7 +39,12 @@ export type ClaudeEvent =
 /// Soft-fail: if the Rust side rejects `claude_events_attach` (HOME
 /// unset, parent dir unwritable, …) we log and fall back to L2a. The
 /// harness keeps working, just without the sharper waiting signal.
-export function attachClaudeEvents(harnessId: string, sessionId: string, cwd: string): () => void {
+export function attachClaudeEvents(
+	harnessId: string,
+	roomId: string,
+	sessionId: string,
+	cwd: string,
+): () => void {
 	const channel = new Channel<ClaudeEvent>();
 	channel.onmessage = (event) => {
 		translate(harnessId, event);
@@ -59,6 +64,7 @@ export function attachClaudeEvents(harnessId: string, sessionId: string, cwd: st
 
 	void invoke("claude_events_attach", {
 		harnessId,
+		roomId,
 		sessionId,
 		cwd,
 		onEvent: channel,
