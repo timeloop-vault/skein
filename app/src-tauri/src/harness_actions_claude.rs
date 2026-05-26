@@ -27,6 +27,10 @@
 //! - `api_error` — system subtype `api_error`.
 //! - `turn_cost` — terminal assistant row (`end_turn` / `stop_sequence`
 //!   / `max_tokens`); payload carries the row's `message.usage` + model.
+//! - `permission_mode` — `permission-mode` row.
+//! - `ai_title` — `ai-title` row (Claude's auto-generated session title).
+//! - `bridge_status` — `bridge-session` row (Remote Control bridge id).
+//! - `user_prompt` — `last-prompt` row (user-typed prompt captured).
 //!
 //! ## Tool-use / tool-result joining
 //!
@@ -62,10 +66,21 @@ pub struct ExtractedAction {
 }
 
 /// Stateful extractor — buffers `tool_use` blocks until their result
-/// arrives. One instance per attached session.
+/// arrives, and carries the most-recent observed timestamp forward
+/// for row types that don't carry their own.
 #[derive(Default)]
 pub struct ActionExtractor {
     pending: HashMap<String, PendingToolUse>,
+    /// Some row types (`last-prompt`, `ai-title`, `permission-mode`,
+    /// `bridge-session`) don't carry a `timestamp` field. They're
+    /// always interleaved with timestamped rows in the JSONL, so we
+    /// stamp them with the prior row's time to keep them ordered
+    /// correctly relative to surrounding activity. Starts at 0;
+    /// rows that arrive before any timestamped row get 0 (sort to
+    /// bottom of newest-first queries — acceptable since this only
+    /// happens on a session that opens with those rows, which we
+    /// haven't observed).
+    last_ts_ms: i64,
 }
 
 #[derive(Debug)]
@@ -99,6 +114,12 @@ impl ActionExtractor {
         {
             return out;
         }
+        // Track the most recent real timestamp for timestamp-less
+        // rows that follow.
+        let row_ts = parse_timestamp_ms(value);
+        if row_ts > 0 {
+            self.last_ts_ms = row_ts;
+        }
         let Some(ty) = value.get("type").and_then(Value::as_str) else {
             return out;
         };
@@ -109,11 +130,16 @@ impl ActionExtractor {
             "attachment" => extract_attachment(value, &mut out),
             "pr-link" => extract_pr_link(value, &mut out),
             "queue-operation" => extract_queue_op(value, &mut out),
-            // Other row types — `ai-title`, `last-prompt`,
-            // `file-history-snapshot`, `permission-mode`,
-            // `bridge-session`, `summary` — aren't part of the v1
-            // action vocabulary. Adding them later is a one-arm
-            // addition here.
+            "permission-mode" => extract_permission_mode(value, self.last_ts_ms, &mut out),
+            "ai-title" => extract_ai_title(value, self.last_ts_ms, &mut out),
+            "bridge-session" => extract_bridge_session(value, self.last_ts_ms, &mut out),
+            "last-prompt" => extract_user_prompt(value, self.last_ts_ms, &mut out),
+            // Row types we deliberately don't surface:
+            // - `file-history-snapshot`: Claude's internal undo
+            //   bookkeeping (a `trackedFileBackups` map rewritten
+            //   every message). No user-facing event.
+            // - `summary`: 0 rows observed in any session in recon;
+            //   shape unknown — extractor would be writing blind.
             _ => {}
         }
         out
@@ -470,6 +496,68 @@ fn extract_queue_op(value: &Value, out: &mut Vec<ExtractedAction>) {
         timestamp_ms: ts,
         payload: payload.to_string(),
         source: None,
+    });
+}
+
+/// Permission-mode rows are timestamp-less in the JSONL; we use the
+/// carry-forward `last_ts_ms` so they sort next to surrounding
+/// activity. Same pattern for `ai-title`, `bridge-session`, and
+/// `last-prompt` below.
+fn extract_permission_mode(value: &Value, last_ts_ms: i64, out: &mut Vec<ExtractedAction>) {
+    let payload = json!({
+        "permission_mode": value.get("permissionMode").cloned().unwrap_or(Value::Null),
+    });
+    out.push(ExtractedAction {
+        kind: action_kind::PERMISSION_MODE,
+        timestamp_ms: last_ts_ms,
+        payload: payload.to_string(),
+        source: None,
+    });
+}
+
+fn extract_ai_title(value: &Value, last_ts_ms: i64, out: &mut Vec<ExtractedAction>) {
+    let payload = json!({
+        "ai_title": value.get("aiTitle").cloned().unwrap_or(Value::Null),
+    });
+    out.push(ExtractedAction {
+        kind: action_kind::AI_TITLE,
+        timestamp_ms: last_ts_ms,
+        payload: payload.to_string(),
+        source: None,
+    });
+}
+
+fn extract_bridge_session(value: &Value, last_ts_ms: i64, out: &mut Vec<ExtractedAction>) {
+    let payload = json!({
+        "bridge_session_id": value.get("bridgeSessionId").cloned().unwrap_or(Value::Null),
+        "last_sequence_num": value.get("lastSequenceNum").cloned().unwrap_or(Value::Null),
+    });
+    out.push(ExtractedAction {
+        kind: action_kind::BRIDGE_STATUS,
+        timestamp_ms: last_ts_ms,
+        payload: payload.to_string(),
+        source: None,
+    });
+}
+
+/// `last-prompt` rows are written when Claude captures a new
+/// user-typed prompt. The full prompt text is on `lastPrompt`
+/// (truncated to ~200 chars by Claude); `leafUuid` identifies the
+/// row in Claude's conversation DAG.
+fn extract_user_prompt(value: &Value, last_ts_ms: i64, out: &mut Vec<ExtractedAction>) {
+    let leaf = value
+        .get("leafUuid")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let payload = json!({
+        "prompt": value.get("lastPrompt").cloned().unwrap_or(Value::Null),
+        "leaf_uuid": value.get("leafUuid").cloned().unwrap_or(Value::Null),
+    });
+    out.push(ExtractedAction {
+        kind: action_kind::USER_PROMPT,
+        timestamp_ms: last_ts_ms,
+        payload: payload.to_string(),
+        source: leaf,
     });
 }
 
@@ -1094,17 +1182,153 @@ mod tests {
         assert!(actions.is_empty());
     }
 
-    // ── row types not in v1 vocab ────────────────────────────────
+    // ── timestamp-less rows ──────────────────────────────────────
 
     #[test]
-    fn unknown_or_metadata_rows_emit_nothing() {
+    fn permission_mode_emits_action_with_carry_forward_ts() {
+        // Permission-mode rows don't carry a `timestamp` field; the
+        // extractor stamps them with the previous row's time.
+        let mut x = ActionExtractor::new();
+        // Prime a known timestamp from a real row first.
+        ingest_one(
+            &mut x,
+            json!({
+                "type": "system", "subtype": "turn_duration",
+                "uuid": "u1",
+                "timestamp": "2026-05-15T21:16:22.572Z",
+                "durationMs": 100, "messageCount": 1,
+            }),
+        );
+        let actions = ingest_one(
+            &mut x,
+            json!({
+                "type": "permission-mode",
+                "permissionMode": "acceptEdits",
+                "sessionId": "s1",
+            }),
+        );
+        assert_eq!(actions.len(), 1);
+        let a = &actions[0];
+        assert_eq!(a.kind, action_kind::PERMISSION_MODE);
+        assert_eq!(a.timestamp_ms, ts_572());
+        let payload: Value = serde_json::from_str(&a.payload).unwrap();
+        assert_eq!(payload["permission_mode"], "acceptEdits");
+    }
+
+    #[test]
+    fn ai_title_emits_action() {
+        let mut x = ActionExtractor::new();
+        ingest_one(
+            &mut x,
+            json!({
+                "type": "system", "subtype": "turn_duration",
+                "uuid": "u1",
+                "timestamp": "2026-05-15T21:16:22.572Z",
+                "durationMs": 100, "messageCount": 1,
+            }),
+        );
+        let actions = ingest_one(
+            &mut x,
+            json!({
+                "type": "ai-title",
+                "aiTitle": "Refactoring the activity feed",
+                "sessionId": "s1",
+            }),
+        );
+        assert_eq!(actions.len(), 1);
+        let a = &actions[0];
+        assert_eq!(a.kind, action_kind::AI_TITLE);
+        assert_eq!(a.timestamp_ms, ts_572());
+        let payload: Value = serde_json::from_str(&a.payload).unwrap();
+        assert_eq!(payload["ai_title"], "Refactoring the activity feed");
+    }
+
+    #[test]
+    fn bridge_session_emits_bridge_status_action() {
+        let mut x = ActionExtractor::new();
+        ingest_one(
+            &mut x,
+            json!({
+                "type": "system", "subtype": "turn_duration",
+                "uuid": "u1",
+                "timestamp": "2026-05-15T21:16:22.572Z",
+                "durationMs": 100, "messageCount": 1,
+            }),
+        );
+        let actions = ingest_one(
+            &mut x,
+            json!({
+                "type": "bridge-session",
+                "sessionId": "s1",
+                "bridgeSessionId": "cse_01ABC",
+                "lastSequenceNum": 0,
+            }),
+        );
+        assert_eq!(actions.len(), 1);
+        let a = &actions[0];
+        assert_eq!(a.kind, action_kind::BRIDGE_STATUS);
+        let payload: Value = serde_json::from_str(&a.payload).unwrap();
+        assert_eq!(payload["bridge_session_id"], "cse_01ABC");
+    }
+
+    #[test]
+    fn last_prompt_emits_user_prompt_with_leaf_uuid_as_source() {
+        let mut x = ActionExtractor::new();
+        ingest_one(
+            &mut x,
+            json!({
+                "type": "system", "subtype": "turn_duration",
+                "uuid": "u1",
+                "timestamp": "2026-05-15T21:16:22.572Z",
+                "durationMs": 100, "messageCount": 1,
+            }),
+        );
+        let actions = ingest_one(
+            &mut x,
+            json!({
+                "type": "last-prompt",
+                "lastPrompt": "please continue",
+                "leafUuid": "leaf-abc",
+                "sessionId": "s1",
+            }),
+        );
+        assert_eq!(actions.len(), 1);
+        let a = &actions[0];
+        assert_eq!(a.kind, action_kind::USER_PROMPT);
+        assert_eq!(a.source.as_deref(), Some("leaf-abc"));
+        let payload: Value = serde_json::from_str(&a.payload).unwrap();
+        assert_eq!(payload["prompt"], "please continue");
+    }
+
+    #[test]
+    fn timestamp_less_row_before_any_timestamped_row_gets_ts_zero() {
+        // Edge case: session opens with a timestamp-less row. We
+        // have no prior timestamp to carry forward; the row gets 0
+        // and sorts to the bottom of newest-first queries. Not great
+        // but bounded and not observed in real sessions.
+        let mut x = ActionExtractor::new();
+        let actions = ingest_one(
+            &mut x,
+            json!({
+                "type": "permission-mode",
+                "permissionMode": "default",
+                "sessionId": "s1",
+            }),
+        );
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].timestamp_ms, 0);
+    }
+
+    // ── row types we deliberately skip ───────────────────────────
+
+    #[test]
+    fn file_history_snapshot_and_summary_rows_emit_nothing() {
+        // Documented exclusions: file-history-snapshot is Claude's
+        // internal undo bookkeeping (no user-facing event); summary
+        // wasn't observed in any recon session (shape unknown).
         let mut x = ActionExtractor::new();
         for ty in [
-            "ai-title",
-            "last-prompt",
             "file-history-snapshot",
-            "permission-mode",
-            "bridge-session",
             "summary",
             "completely-new-row-type",
         ] {
