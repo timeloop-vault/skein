@@ -11,7 +11,7 @@ use rusqlite::{Connection, OpenFlags};
 /// Path to opencode's on-disk session db. Returns `None` when `HOME`
 /// isn't set — exotic environments (some CI / sandboxes) — in which
 /// case the caller treats it the same as "db doesn't exist."
-fn opencode_db_path() -> Option<PathBuf> {
+pub(crate) fn opencode_db_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| {
         PathBuf::from(home)
             .join(".local")

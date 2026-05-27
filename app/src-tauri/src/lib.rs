@@ -9,6 +9,7 @@ mod db;
 mod fs;
 mod git;
 mod harness_actions_claude;
+mod harness_actions_opencode;
 mod harness_events_claude;
 mod harness_events_opencode;
 mod pty;
@@ -132,7 +133,7 @@ pub fn run() {
             app.manage(PtyManager::new());
             app.manage(WatcherManager::new());
             app.manage(ClaudeEventsManager::new(Arc::clone(&db)));
-            app.manage(OpencodeEventsManager::new());
+            app.manage(OpencodeEventsManager::new(Arc::clone(&db)));
             app.manage(db);
 
             // Resolve the product name from the merged tauri config —
@@ -403,19 +404,17 @@ fn claude_events_detach(harness_id: String, manager: tauri::State<'_, ClaudeEven
 /// reader, and that requires a runtime context. The function itself
 /// returns immediately; the spawned task lives on until
 /// `opencode_events_detach` is called or the manager is dropped.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 #[tauri::command]
 async fn opencode_events_attach(
     harness_id: String,
+    room_id: String,
     port: u16,
+    session_id: Option<String>,
     on_event: Channel<OpencodeEvent>,
     manager: tauri::State<'_, OpencodeEventsManager>,
 ) -> Result<(), String> {
-    // Tauri requires async commands with reference inputs (like
-    // `tauri::State`) to return `Result`. The attach itself is
-    // infallible — the manager just spawns a tokio task — so we
-    // always return Ok.
-    manager.attach(harness_id, port, move |event| {
+    manager.attach(harness_id, room_id, port, session_id, move |event| {
         let _ = on_event.send(event);
     });
     Ok(())
