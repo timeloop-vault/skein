@@ -21,9 +21,9 @@
 //! - `user_prompt` — user-role messages.
 //! - `ai_title` — `session.updated` SSE events with a title change.
 //!
-//! opencode-specific kinds not present in Claude:
-//! - (future: `compaction` from part.type=compaction, `reasoning`
-//!   from part.type=reasoning — trivial to add when we have UI.)
+//! opencode-specific kinds not present in Claude today:
+//! - `compaction` — context-window compaction events.
+//! - `reasoning` — the model's reasoning blocks (text + opaque blob).
 
 use serde_json::{Value, json};
 
@@ -85,7 +85,8 @@ fn extract_from_part(part: &Value, out: &mut Vec<ExtractedAction>) {
         "tool" => extract_tool_part(part, out),
         "step-finish" => extract_step_finish(part, out),
         "patch" => extract_patch_part(part, out),
-        // Future: "compaction", "reasoning" — add when we have UI.
+        "compaction" => extract_compaction(part, out),
+        "reasoning" => extract_reasoning(part, out),
         _ => {}
     }
 }
@@ -243,6 +244,63 @@ fn extract_patch_part(part: &Value, out: &mut Vec<ExtractedAction>) {
     out.push(ExtractedAction {
         kind: action_kind::PATCH,
         timestamp_ms: 0,
+        payload: payload.to_string(),
+        source: None,
+    });
+}
+
+/// Context-window compaction event. opencode auto-compacts when the
+/// session grows beyond a threshold (and the user can trigger it
+/// manually). Payload carries `auto: bool`; opencode 1.14 doesn't
+/// expose the before/after token counts on this part, so we just
+/// surface the event itself — the surrounding `step-finish` parts
+/// before/after give the token deltas.
+fn extract_compaction(part: &Value, out: &mut Vec<ExtractedAction>) {
+    let payload = json!({
+        "auto": part.get("auto").cloned().unwrap_or(Value::Null),
+    });
+    out.push(ExtractedAction {
+        kind: action_kind::COMPACTION,
+        timestamp_ms: 0,
+        payload: payload.to_string(),
+        source: None,
+    });
+}
+
+/// Model reasoning block. Carries `text` (plain-text summary opencode
+/// keeps client-side) and `metadata.copilot.reasoningOpaque` (the
+/// provider's encrypted reasoning blob). We persist both — the UI
+/// decides what to show; the opaque blob is what re-hydrates
+/// reasoning on resume so future tooling may want it.
+fn extract_reasoning(part: &Value, out: &mut Vec<ExtractedAction>) {
+    let text = part.get("text").cloned().unwrap_or(Value::Null);
+    let started_at = part
+        .get("time")
+        .and_then(|t| t.get("start"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let ended_at = part
+        .get("time")
+        .and_then(|t| t.get("end"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let duration_ms = ended_at.saturating_sub(started_at);
+    let opaque = part
+        .get("metadata")
+        .and_then(|m| m.get("copilot"))
+        .and_then(|c| c.get("reasoningOpaque"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let payload = json!({
+        "text": text,
+        "started_at_ms": started_at,
+        "ended_at_ms": ended_at,
+        "duration_ms": duration_ms,
+        "reasoning_opaque": opaque,
+    });
+    out.push(ExtractedAction {
+        kind: action_kind::REASONING,
+        timestamp_ms: started_at,
         payload: payload.to_string(),
         source: None,
     });
@@ -585,8 +643,8 @@ mod tests {
     }
 
     #[test]
-    fn text_and_step_start_parts_do_not_emit() {
-        for part_type in ["text", "step-start", "reasoning", "compaction", "file"] {
+    fn narration_and_step_start_parts_do_not_emit() {
+        for part_type in ["text", "step-start", "file"] {
             let payload = json!({
                 "type": "message.part.updated",
                 "properties": {"part": {"type": part_type, "text": "hello"}}
@@ -596,6 +654,61 @@ mod tests {
                 "{part_type} part should not emit"
             );
         }
+    }
+
+    #[test]
+    fn compaction_part_emits_compaction_action() {
+        let payload = json!({
+            "type": "message.part.updated",
+            "properties": {"part": {"type": "compaction", "auto": true}}
+        });
+        let actions = extract_from_sse(&payload);
+        assert_eq!(actions.len(), 1);
+        let a = &actions[0];
+        assert_eq!(a.kind, action_kind::COMPACTION);
+        let p: Value = serde_json::from_str(&a.payload).unwrap();
+        assert_eq!(p["auto"], true);
+    }
+
+    #[test]
+    fn reasoning_part_emits_reasoning_action() {
+        let payload = json!({
+            "type": "message.part.updated",
+            "properties": {"part": {
+                "type": "reasoning",
+                "text": "Update summary with progress.",
+                "time": {"start": 1_000, "end": 1_500},
+                "metadata": {"copilot": {"reasoningOpaque": "OPAQUE_BLOB"}},
+            }}
+        });
+        let actions = extract_from_sse(&payload);
+        assert_eq!(actions.len(), 1);
+        let a = &actions[0];
+        assert_eq!(a.kind, action_kind::REASONING);
+        assert_eq!(a.timestamp_ms, 1_000);
+        let p: Value = serde_json::from_str(&a.payload).unwrap();
+        assert_eq!(p["text"], "Update summary with progress.");
+        assert_eq!(p["duration_ms"], 500);
+        assert_eq!(p["reasoning_opaque"], "OPAQUE_BLOB");
+    }
+
+    #[test]
+    fn reasoning_part_without_opaque_blob_still_emits() {
+        // Some providers don't supply the opaque blob — we still
+        // capture the text.
+        let payload = json!({
+            "type": "message.part.updated",
+            "properties": {"part": {
+                "type": "reasoning",
+                "text": "Thinking through the problem.",
+                "time": {"start": 2_000, "end": 2_200},
+            }}
+        });
+        let actions = extract_from_sse(&payload);
+        assert_eq!(actions.len(), 1);
+        let p: Value = serde_json::from_str(&actions[0].payload).unwrap();
+        assert_eq!(p["text"], "Thinking through the problem.");
+        assert!(p["reasoning_opaque"].is_null());
     }
 
     #[test]

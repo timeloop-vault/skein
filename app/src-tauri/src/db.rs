@@ -147,6 +147,8 @@ pub mod action_kind {
     pub const AI_TITLE: &str = "ai_title";
     pub const BRIDGE_STATUS: &str = "bridge_status";
     pub const USER_PROMPT: &str = "user_prompt";
+    pub const COMPACTION: &str = "compaction";
+    pub const REASONING: &str = "reasoning";
 }
 
 /// Mirrors the TS Room interface.
@@ -852,5 +854,7 @@ mod tests {
         assert_eq!(action_kind::AI_TITLE, "ai_title");
         assert_eq!(action_kind::BRIDGE_STATUS, "bridge_status");
         assert_eq!(action_kind::USER_PROMPT, "user_prompt");
+        assert_eq!(action_kind::COMPACTION, "compaction");
+        assert_eq!(action_kind::REASONING, "reasoning");
     }
 }
