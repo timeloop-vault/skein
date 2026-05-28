@@ -37,10 +37,13 @@ real git operations.
     │       ├── src/watcher.rs        # Filesystem watcher (notify-debouncer-mini)
     │       └── src/db.rs             # rusqlite session persistence
     ├── docs/
-    │   ├── design/                   # Original handoff bundle (read-only ref)
+    │   ├── design/                   # Design handoff bundles (read-only ref)
     │   ├── working-prototype-plan.md # Chapter 1 (complete)
     │   ├── chapter-2-plan.md         # Current work
-    │   └── backlog.md                # Parked ideas (read before adding to a plan)
+    │   ├── backlog.md                # Parked ideas (read before adding to a plan)
+    │   ├── live-context-recon.md     # Issue #80: data inventory
+    │   ├── live-context-design-brief.md  # Issue #80: handoff to designer
+    │   └── live-context-handover.md  # Issue #80: authoritative impl spec
     └── .githooks/pre-commit          # Activate via:
                                       #   git config core.hooksPath .githooks
 
@@ -125,3 +128,12 @@ When in doubt about a UI convention, the design archive in
 `docs/design/` is the source of truth — start with
 `docs/design/skein/project/Skein Prototype.html` and the chat
 transcript in `docs/design/skein/chats/chat1.md`.
+
+For the right-pane **Live Context** stack (issue #80) the spec
+trio at the docs root is authoritative: `live-context-recon.md`
+(data we can extract), `live-context-design-brief.md` (the
+handoff to the design pass), and `live-context-handover.md`
+(what to build). The handover wins on conflicts; the prototype
+files in `docs/design/skein/project/` (`Live Context.html`,
+`Live Context Prototype.html`, `live-context-*.jsx`,
+`lc-proto.jsx`) are the visual reference.

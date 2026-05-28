@@ -1,5 +1,12 @@
 # Live Context — design brief
 
+> **Design pass is complete.** For *what to build*, read
+> [`docs/live-context-handover.md`](./live-context-handover.md) —
+> it answers the 10 open UX questions in §6 and is authoritative
+> for the v1 implementation. This brief is the input the designer
+> consumed; keep it for the data inventory and the why behind the
+> backend decisions, but the renderer should follow the handover.
+
 Companion to the recon (`docs/live-context-recon.md`) and the
 re-scoped issue (#80). Recon decided **what data we can extract**;
 this doc translates that into **what a designer can mock** without

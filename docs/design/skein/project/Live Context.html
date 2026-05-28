@@ -1,0 +1,699 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Live Context — design exploration</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Inter", system-ui, sans-serif; }
+
+  :root {
+    --sk-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sk-sans: "Inter", system-ui, sans-serif;
+  }
+
+  /* Dark tokens (the artboards always render dark for now) */
+  .lc {
+    --bg-0: #0d0e10;
+    --bg-1: #131418;
+    --bg-2: #181a1f;
+    --bg-3: #20232a;
+    --bg-card: #14161b;
+    --line: rgba(255,255,255,0.06);
+    --line-strong: rgba(255,255,255,0.12);
+    --fg-0: #e8e6df;
+    --fg-1: #b6b3aa;
+    --fg-2: #7a786f;
+    --fg-3: #4a4944;
+    --accent: #c96442;
+    --ok: #7aa37f;
+    --warn: #d4a657;
+    --err: #c97163;
+    --waiting: #8a96c9;
+    --diff-add: rgba(122,163,127,0.18);
+    --diff-del: rgba(201,113,99,0.16);
+
+    /* harness colors — match real Skein chips */
+    --h-claude:   #c96442;
+    --h-opencode: #5b8a72;
+    --h-copilot:  #4a6b9a;
+    --h-byoh:     #8a7a4a;
+  }
+
+  /* ───────── Right-pane shell (lives inside an artboard) ───────── */
+  .lc-pane {
+    background: var(--bg-1);
+    color: var(--fg-0);
+    font-family: var(--sk-sans);
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    letter-spacing: -0.005em;
+  }
+
+  /* Room subtitle — this is where the away_summary lives */
+  .lc-subtitle {
+    flex: 0 0 auto;
+    padding: 8px 14px 9px;
+    background: var(--bg-0);
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px;
+    min-height: 18px;
+  }
+  .lc-subtitle .glyph {
+    color: var(--accent);
+    font-family: var(--sk-mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    flex: 0 0 auto;
+  }
+  .lc-subtitle .text {
+    color: var(--fg-1);
+    font-size: 11.5px;
+    line-height: 1.45;
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .lc-subtitle .meta {
+    color: var(--fg-3);
+    font-family: var(--sk-mono);
+    font-size: 9.5px;
+    flex: 0 0 auto;
+  }
+  .lc-subtitle.is-empty .text { color: var(--fg-3); font-style: italic; }
+
+  /* Stack of cards with drag dividers */
+  .lc-stack {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column;
+  }
+  .lc-divider {
+    flex: 0 0 5px;
+    height: 5px;
+    background: transparent;
+    cursor: row-resize;
+    position: relative;
+  }
+  .lc-divider::before {
+    content: "";
+    position: absolute; left: 0; right: 0; top: 2px;
+    height: 1px;
+    background: var(--line);
+  }
+  .lc-divider:hover::before { background: var(--accent); height: 2px; top: 1.5px; }
+
+  /* Card — all three share this chrome */
+  .lc-card {
+    background: var(--bg-card);
+    display: flex; flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .lc-card-head {
+    flex: 0 0 30px;
+    height: 30px;
+    padding: 0 12px;
+    display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-0);
+    user-select: none; cursor: pointer;
+  }
+  .lc-card-head .chev {
+    color: var(--fg-3);
+    font-size: 9px;
+    transition: transform .12s;
+  }
+  .lc-card.collapsed .chev { transform: rotate(-90deg); }
+  .lc-card.collapsed .lc-card-body { display: none; }
+  .lc-card.collapsed { flex: 0 0 30px !important; }
+  .lc-card-head .label {
+    font-family: var(--sk-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg-1);
+  }
+  .lc-card-head .meta {
+    margin-left: auto;
+    font-family: var(--sk-mono);
+    font-size: 10px;
+    color: var(--fg-2);
+    display: flex; gap: 12px; align-items: center;
+  }
+  .lc-card-head .meta .pulse {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 6px var(--ok);
+  }
+  .lc-card-head .meta .pulse.idle { background: var(--fg-3); box-shadow: none; }
+  .lc-card-body {
+    flex: 1; min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin; scrollbar-color: var(--bg-3) transparent;
+  }
+  .lc-card-body::-webkit-scrollbar { width: 7px; }
+  .lc-card-body::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
+
+  /* ───────── Harness chip ───────── */
+  .h-chip {
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: var(--sk-mono); font-weight: 700; color: #fff;
+    border-radius: 3px; flex: 0 0 auto;
+  }
+  .h-chip.h-claude   { background: var(--h-claude); }
+  .h-chip.h-opencode { background: var(--h-opencode); }
+  .h-chip.h-copilot  { background: var(--h-copilot); }
+  .h-chip.h-byoh     { background: var(--h-byoh); }
+
+  /* ───────── Diff card ───────── */
+  .lc-diff {
+    display: flex; flex-direction: column; height: 100%;
+  }
+  .lc-diff-tabs {
+    flex: 0 0 28px;
+    height: 28px;
+    display: flex; align-items: stretch;
+    border-bottom: 1px solid var(--line);
+    padding: 0 6px;
+    gap: 1px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .lc-diff-tab {
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 10px;
+    color: var(--fg-2);
+    font-family: var(--sk-mono);
+    font-size: 10.5px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    white-space: nowrap;
+    position: relative;
+  }
+  .lc-diff-tab .delta-add { color: var(--ok); font-size: 9.5px; }
+  .lc-diff-tab .delta-del { color: var(--err); font-size: 9.5px; }
+  .lc-diff-tab.active { color: var(--fg-0); border-bottom-color: var(--accent); }
+  /* Ambient: this file was just touched by another harness — soft glow */
+  .lc-diff-tab.flicker::after {
+    content: "";
+    position: absolute; left: 4px; right: 4px; top: 2px;
+    height: 1px;
+    background: var(--h-opencode);
+    opacity: 0.6;
+    animation: lc-flicker 1.4s ease-in-out infinite;
+  }
+  @keyframes lc-flicker {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 0.9; }
+  }
+  .lc-diff-body {
+    flex: 1; min-height: 0;
+    overflow-y: auto;
+    font-family: var(--sk-mono);
+    font-size: 11px;
+    line-height: 1.55;
+    padding: 6px 0;
+    position: relative;
+  }
+  .lc-line { display: flex; padding: 0 12px 0 0; min-height: 17px; }
+  .lc-line.add { background: var(--diff-add); }
+  .lc-line.del { background: var(--diff-del); }
+  .lc-line .gutter { flex: 0 0 56px; display: flex; color: var(--fg-3); font-size: 10px; user-select: none; }
+  .lc-line .gutter .ln { flex: 1; text-align: right; padding: 0 6px; }
+  .lc-line .marker { flex: 0 0 14px; text-align: center; color: var(--fg-3); }
+  .lc-line.add .marker { color: var(--ok); }
+  .lc-line.del .marker { color: var(--err); }
+  .lc-line .src { white-space: pre; }
+  .tk-key { color: #c97163; }
+  .tk-fn  { color: #d4a657; }
+  .tk-str { color: #7aa37f; }
+  .tk-num { color: #b08bd4; }
+  .tk-com { color: var(--fg-3); }
+
+  /* "ambient flicker" notice when another harness edits this same file */
+  .lc-ambient-pill {
+    position: absolute; top: 8px; right: 12px;
+    background: color-mix(in srgb, var(--h-opencode) 14%, var(--bg-2));
+    border: 1px solid color-mix(in srgb, var(--h-opencode) 45%, var(--line));
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-family: var(--sk-mono);
+    font-size: 10px;
+    color: var(--fg-0);
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  /* sticky/jump-to-latest affordance — kept for later, not in v1 of this canvas */
+
+  /* ───────── Plan card ───────── */
+  .lc-plan {
+    padding: 6px 0 8px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .lc-plan-group { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; }
+  .lc-plan-grouphead {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 12px 2px;
+    font-family: var(--sk-mono);
+    font-size: 9.5px;
+    color: var(--fg-2);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .lc-plan-grouphead .count { color: var(--fg-3); margin-left: 4px; }
+  .lc-plan-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 3px 12px;
+    font-family: var(--sk-mono);
+    font-size: 11px;
+    color: var(--fg-1);
+  }
+  .lc-plan-row .box {
+    width: 11px; height: 11px;
+    border: 1px solid var(--line-strong);
+    border-radius: 2px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px;
+    flex: 0 0 11px;
+  }
+  .lc-plan-row.done { color: var(--fg-3); text-decoration: line-through; }
+  .lc-plan-row.done .box { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .lc-plan-row.now  { color: var(--fg-0); }
+  .lc-plan-row.now  .box { border-color: var(--accent); color: var(--accent); }
+  .lc-plan-row.now  .box::after { content: "◆"; }
+  .lc-plan-row.next .box { /* empty */ }
+  .lc-plan-row.cancelled { color: var(--fg-3); }
+  .lc-plan-row.cancelled .box { background: var(--fg-3); border-color: var(--fg-3); color: var(--bg-0); }
+  .lc-plan-row.cancelled .box::after { content: "×"; font-size: 11px; }
+  .lc-plan-row .text { flex: 1; min-width: 0; }
+  .lc-plan-row.cancelled .text { text-decoration: line-through; }
+  .lc-plan-row .pri {
+    font-size: 8.5px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: var(--sk-mono);
+    letter-spacing: 0.04em;
+  }
+  .lc-plan-row .pri.high { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); }
+  .lc-plan-row .pri.med  { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+  /* opencode doesn't have "in_progress"; we infer "now" as first pending under latest completed.
+     Render that softly so it's clear it's inferred. */
+  .lc-plan-row.now.inferred .text::after {
+    content: " · inferred";
+    color: var(--fg-3);
+    font-style: italic;
+  }
+
+  /* ───────── Activity card ───────── */
+  .lc-activity {
+    padding: 0;
+    display: flex; flex-direction: column;
+  }
+  /* Turn boundary — appears between assistant turns */
+  .lc-turn-sep {
+    height: 1px;
+    background: var(--line);
+    margin: 6px 12px;
+    position: relative;
+  }
+  .lc-turn-sep .stamp {
+    position: absolute; top: -7px; left: 0;
+    background: var(--bg-card);
+    padding-right: 8px;
+    font-family: var(--sk-mono);
+    font-size: 9px;
+    color: var(--fg-3);
+    letter-spacing: 0.04em;
+  }
+  .lc-turn-sep .right-stamp {
+    position: absolute; top: -7px; right: 0;
+    background: var(--bg-card);
+    padding-left: 8px;
+    font-family: var(--sk-mono);
+    font-size: 9px;
+    color: var(--fg-3);
+  }
+  .lc-turn-cost {
+    padding: 2px 12px 8px 36px;
+    font-family: var(--sk-mono);
+    font-size: 9.5px;
+    color: var(--fg-3);
+    display: flex; gap: 10px;
+  }
+  .lc-turn-cost .v { color: var(--fg-2); }
+
+  /* The generic Activity row layout */
+  .lc-row {
+    display: grid;
+    grid-template-columns: 38px 14px 1fr auto;
+    align-items: baseline;
+    gap: 8px;
+    padding: 3px 12px;
+    font-family: var(--sk-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--fg-1);
+    position: relative;
+    border-left: 2px solid transparent;
+  }
+  .lc-row:hover { background: rgba(255,255,255,0.02); }
+  .lc-row .time { color: var(--fg-3); font-size: 9.5px; align-self: center; }
+  .lc-row .by {
+    display: flex; align-items: center; justify-content: center;
+    align-self: center;
+  }
+  .lc-row .gist { color: var(--fg-1); min-width: 0; }
+  .lc-row .gist .tool { color: var(--fg-2); }
+  .lc-row .gist .target { color: var(--fg-0); }
+  .lc-row .gist .arg { color: var(--accent); }
+  .lc-row .gist .ok { color: var(--ok); }
+  .lc-row .gist .err-text { color: var(--err); }
+  .lc-row .gist .dim { color: var(--fg-3); }
+  .lc-row .gist .pill {
+    font-size: 8.5px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-left: 6px;
+    font-family: var(--sk-mono);
+    letter-spacing: 0.04em;
+    background: var(--bg-3);
+    color: var(--fg-2);
+    text-transform: uppercase;
+  }
+  .lc-row .right {
+    font-family: var(--sk-mono);
+    font-size: 9.5px;
+    color: var(--fg-3);
+    align-self: center;
+    white-space: nowrap;
+  }
+  .lc-row .right .delta-add { color: var(--ok); }
+  .lc-row .right .delta-del { color: var(--err); }
+
+  /* Glyphs per kind */
+  .lc-row .glyph {
+    font-family: var(--sk-mono);
+    font-weight: 600;
+    text-align: center;
+    color: var(--fg-2);
+  }
+  .lc-row.k-edit  .glyph,
+  .lc-row.k-write .glyph { color: var(--ok); }
+  .lc-row.k-read  .glyph { color: var(--fg-3); }
+  .lc-row.k-grep  .glyph,
+  .lc-row.k-glob  .glyph { color: var(--fg-2); }
+  .lc-row.k-bash  .glyph { color: var(--warn); }
+  .lc-row.k-task  .glyph { color: var(--accent); }
+  .lc-row.k-todowrite .glyph { color: var(--accent); }
+  .lc-row.k-ask   .glyph { color: var(--waiting); }
+  .lc-row.k-agent .glyph { color: var(--waiting); }
+  .lc-row.k-pr    .glyph { color: var(--ok); }
+  .lc-row.k-error .glyph { color: var(--err); }
+  .lc-row.k-error { border-left-color: var(--err); }
+  .lc-row.k-error .gist .err-text { font-weight: 500; }
+  .lc-row.k-queue .glyph { color: var(--fg-2); }
+  .lc-row.k-userfile .glyph { color: var(--warn); }
+  .lc-row.k-slash .glyph { color: var(--accent); }
+  .lc-row.k-compact .glyph { color: var(--fg-2); }
+  .lc-row.k-cost  .glyph { color: var(--fg-3); }
+  .lc-row.k-perm  .glyph { color: var(--waiting); }
+  .lc-row.k-perm  { border-left-color: var(--waiting); background: color-mix(in srgb, var(--waiting) 5%, transparent); }
+  .lc-row.k-burst { color: var(--fg-0); cursor: pointer; }
+
+  /* user_prompt — distinct from agent rows; left-edge accent in terracotta */
+  .lc-row.k-user {
+    border-left-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+  }
+  .lc-row.k-user:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+  /* permission_mode / ai_title / bridge_status — quiet context rows */
+  .lc-row.k-perm-mode .glyph { color: var(--waiting); }
+  .lc-row.k-perm-mode .glyph::before { content: "⏵"; }
+  .lc-row.k-title .glyph { color: var(--fg-3); }
+  .lc-row.k-title .glyph::before { content: "❝"; }
+  .lc-row.k-bridge .glyph { color: var(--fg-2); }
+  .lc-row.k-bridge .glyph::before { content: "⇄"; }
+  .lc-row.bridge-connected .glyph { color: var(--ok); }
+  .lc-row.bridge-disconnected,
+  .lc-row.bridge-reconnecting {
+    border-left-color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 4%, transparent);
+  }
+  .lc-row.bridge-disconnected .glyph,
+  .lc-row.bridge-reconnecting .glyph { color: var(--warn); }
+  .lc-row.k-burst .gist .tool {
+    background: var(--bg-3);
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--fg-0);
+  }
+  .lc-row.k-burst .gist .target { color: var(--fg-1); }
+  /* Shimmer effect for an active burst row */
+  .lc-row.k-burst.live::before {
+    content: "";
+    position: absolute; left: -2px; right: 0; top: 0; bottom: 0;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 8%, transparent), transparent);
+    background-size: 60% 100%;
+    background-repeat: no-repeat;
+    animation: lc-shimmer 1.6s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes lc-shimmer {
+    0%   { background-position: -100% 0; }
+    100% { background-position: 200%  0; }
+  }
+
+  /* Permission row sub-content (the two buttons) */
+  .lc-row.k-perm .perm-actions {
+    grid-column: 3 / -1;
+    display: flex; gap: 6px;
+    margin-top: 4px;
+  }
+  .lc-perm-btn {
+    font: inherit; font-family: var(--sk-sans); font-size: 10.5px;
+    padding: 3px 9px; border-radius: 3px;
+    background: var(--bg-2); color: var(--fg-0);
+    border: 1px solid var(--line-strong);
+    cursor: pointer;
+  }
+  .lc-perm-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .lc-perm-btn.ghost   { background: transparent; color: var(--fg-1); }
+
+  /* Expanded preview area for an event (Bash output, AskUserQuestion, etc.) */
+  .lc-row-preview {
+    grid-column: 3 / -1;
+    margin: 4px 0 2px;
+    padding: 6px 8px;
+    background: var(--bg-0);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-size: 10.5px;
+    color: var(--fg-1);
+    line-height: 1.5;
+    max-height: 6em;
+    overflow: hidden;
+    white-space: pre-wrap;
+    position: relative;
+  }
+  .lc-row-preview.tall { max-height: 12em; }
+  .lc-row-preview .head {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 9.5px;
+    color: var(--fg-3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+  }
+  .lc-row-preview .head .size { margin-left: auto; }
+  .lc-row-preview .expand-link {
+    color: var(--accent); cursor: pointer; font-size: 9.5px;
+  }
+  .lc-row-preview.api-error {
+    background: color-mix(in srgb, var(--err) 6%, var(--bg-0));
+    border-color: color-mix(in srgb, var(--err) 35%, var(--line));
+  }
+
+  /* The "now" turn marker (live indicator at the bottom of the activity list) */
+  .lc-tail {
+    padding: 8px 12px 14px;
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--sk-mono);
+    font-size: 10px;
+    color: var(--fg-3);
+  }
+  .lc-tail .blinker {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--ok); box-shadow: 0 0 6px var(--ok);
+    animation: lc-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes lc-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .lc-tail.idle .blinker { background: var(--fg-3); box-shadow: none; animation: none; }
+
+  /* Empty states */
+  .lc-empty {
+    flex: 1;
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .lc-empty-inner {
+    text-align: center;
+    color: var(--fg-3);
+    font-family: var(--sk-mono);
+    font-size: 11px;
+    max-width: 240px;
+    line-height: 1.6;
+  }
+  .lc-empty-inner .big {
+    font-size: 22px;
+    color: var(--fg-2);
+    margin-bottom: 6px;
+  }
+
+  /* Sub-agent inspector overlay (right-sheet).
+     Low-opacity scrim: you can still see the parent activity behind it,
+     so it reads as "popped open a drawer" not "left the room". */
+  .lc-inspector {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.25);
+    backdrop-filter: blur(1.5px);
+    display: flex; justify-content: flex-end;
+    z-index: 5;
+  }
+  .lc-inspector-panel {
+    width: 80%;
+    background: var(--bg-1);
+    border-left: 1px solid var(--line-strong);
+    display: flex; flex-direction: column;
+    box-shadow: -16px 0 40px rgba(0,0,0,0.4);
+  }
+  .lc-inspector-head {
+    flex: 0 0 auto;
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-0);
+  }
+  .lc-inspector-head .title {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px;
+    color: var(--fg-0);
+  }
+  .lc-inspector-head .title .kind {
+    font-family: var(--sk-mono);
+    font-size: 9.5px;
+    color: var(--fg-2);
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    padding: 2px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .lc-inspector-head .meta {
+    margin-top: 6px;
+    font-family: var(--sk-mono);
+    font-size: 10px;
+    color: var(--fg-2);
+    display: flex; gap: 14px;
+  }
+  .lc-inspector-head .meta .v { color: var(--fg-1); }
+  .lc-inspector-body {
+    flex: 1; overflow-y: auto;
+    padding: 12px 0;
+  }
+  .lc-inspector-prompt {
+    margin: 0 14px 12px;
+    background: var(--bg-2);
+    border-left: 2px solid var(--accent);
+    padding: 8px 10px;
+    font-family: var(--sk-mono);
+    font-size: 10.5px;
+    color: var(--fg-1);
+    line-height: 1.55;
+  }
+  .lc-inspector-section-head {
+    padding: 4px 14px 4px;
+    font-family: var(--sk-mono);
+    font-size: 9.5px;
+    color: var(--fg-2);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .lc-inspector-finalreport {
+    margin: 0 14px;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--fg-1);
+    line-height: 1.55;
+  }
+  .lc-inspector-close {
+    position: absolute; top: 12px; right: 12px;
+    background: transparent; border: 0;
+    color: var(--fg-2); font-size: 16px;
+    cursor: pointer;
+  }
+
+  /* Annotations on the canvas — small caption blocks next to artboards */
+  .ann {
+    color: rgba(60,50,40,0.8);
+    font-family: var(--sk-mono);
+    font-size: 10.5px;
+    line-height: 1.55;
+    white-space: normal;
+    max-width: 340px;
+  }
+  .ann strong { color: rgba(40,30,20,0.95); font-weight: 600; }
+
+  /* The canvas page bg (lighter so dark artboards pop) */
+  .canvas-host { background: #1a1814; min-height: 100vh; }
+
+  /* Toast — used in the "errored" frame */
+  .lc-toast {
+    position: absolute; right: 12px; bottom: 12px;
+    background: var(--bg-2);
+    border: 1px solid color-mix(in srgb, var(--err) 50%, var(--line));
+    border-left: 3px solid var(--err);
+    border-radius: 5px;
+    padding: 8px 12px 8px 10px;
+    display: flex; align-items: flex-start; gap: 10px;
+    font-size: 11px; color: var(--fg-0);
+    max-width: 260px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  }
+  .lc-toast .body { line-height: 1.45; }
+  .lc-toast .body .dim {
+    color: var(--fg-2);
+    font-family: var(--sk-mono);
+    font-size: 9.5px;
+    margin-top: 2px;
+    display: block;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="live-context-rows.jsx"></script>
+<script type="text/babel" src="live-context-cards.jsx"></script>
+<script type="text/babel" src="live-context-canvas.jsx"></script>
+</body>
+</html>
