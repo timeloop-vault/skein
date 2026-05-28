@@ -153,7 +153,9 @@ export type OpencodeEvent =
 /// L2a.
 export function attachOpencodeEvents(
 	harnessId: string,
+	roomId: string,
 	port: number,
+	sessionId: string | undefined,
 	onSessionCaptured: ((sessionId: string) => void) | undefined,
 ): () => void {
 	const channel = new Channel<OpencodeEvent>();
@@ -164,13 +166,17 @@ export function attachOpencodeEvents(
 	// See attachClaudeEvents for why this happens synchronously.
 	harnessActivity.attachAuthoritativeSource(harnessId);
 
-	void invoke("opencode_events_attach", { harnessId, port, onEvent: channel }).catch(
-		(err: unknown) => {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.warn(`[skein] opencode_events_attach failed for ${harnessId}:`, msg);
-			harnessActivity.detachAuthoritativeSource(harnessId);
-		},
-	);
+	void invoke("opencode_events_attach", {
+		harnessId,
+		roomId,
+		port,
+		sessionId: sessionId ?? null,
+		onEvent: channel,
+	}).catch((err: unknown) => {
+		const msg = err instanceof Error ? err.message : String(err);
+		console.warn(`[skein] opencode_events_attach failed for ${harnessId}:`, msg);
+		harnessActivity.detachAuthoritativeSource(harnessId);
+	});
 
 	return () => {
 		harnessActivity.detachAuthoritativeSource(harnessId);

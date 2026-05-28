@@ -416,7 +416,13 @@ export const LiveTerminal = ({
 				// can't know where to subscribe — graceful fallback to
 				// L2a + the sqlite-poll session-id capture.
 				if (harnessKind === "opencode" && opencodePort !== undefined) {
-					detachOpencodeAdapter = attachOpencodeEvents(harnessId, opencodePort, onSessionCaptured);
+					detachOpencodeAdapter = attachOpencodeEvents(
+						harnessId,
+						roomId,
+						opencodePort,
+						sessionId,
+						onSessionCaptured,
+					);
 				}
 				dataDisposable = term.onData((data) => {
 					// Focus-in / focus-out escapes are sent by xterm

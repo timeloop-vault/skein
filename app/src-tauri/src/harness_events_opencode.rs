@@ -27,6 +27,9 @@ use serde::Serialize;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
+use crate::db::Database;
+use crate::harness_actions_opencode;
+
 /// Reconnect backoff schedule (seconds), capped at the last value
 /// for any further attempts. 1 → 2 → 4 → 8 → 16 → 30 → 30 … gets us
 /// from "opencode hasn't bound yet" to "opencode is dead" with
@@ -101,14 +104,17 @@ impl Drop for Adapter {
     }
 }
 
-#[derive(Default)]
 pub struct OpencodeEventsManager {
     inner: Mutex<HashMap<String, Adapter>>,
+    db: Arc<Database>,
 }
 
 impl OpencodeEventsManager {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(db: Arc<Database>) -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+            db,
+        }
     }
 
     /// Start watching opencode's SSE stream on `127.0.0.1:<port>`.
@@ -116,23 +122,53 @@ impl OpencodeEventsManager {
     /// that owns the reqwest connection + reconnect loop; cancelled
     /// by `detach` (or `Drop`).
     ///
+    /// `room_id` stamps every persisted action row (issue #80).
+    /// `session_id` enables backfill from the opencode `SQLite` DB —
+    /// `None` for fresh sessions (backfill will happen once the SSE
+    /// `session.created` event fires; fresh sessions have no history
+    /// anyway).
+    ///
     /// Idempotent: re-attaching the same `harness_id` cancels the
     /// previous adapter first.
-    pub fn attach<F>(&self, harness_id: String, port: u16, on_event: F)
-    where
+    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    pub fn attach<F>(
+        &self,
+        harness_id: String,
+        room_id: String,
+        port: u16,
+        session_id: Option<String>,
+        on_event: F,
+    ) where
         F: Fn(OpencodeEvent) + Send + Sync + 'static,
     {
-        // Cancel any prior attach for this id — caller is asking for
-        // a fresh stream and we don't want two tasks racing.
         {
             let mut inner = self.inner.lock();
             inner.remove(&harness_id);
         }
+        // Backfill from opencode's SQLite when we know the session.
+        if let Some(sid) = &session_id {
+            let max_ts = self
+                .db
+                .recent_harness_actions_by_harness(&harness_id, -1, 1)
+                .ok()
+                .and_then(|rows| rows.into_iter().next())
+                .map_or(0, |r| r.timestamp_ms);
+            harness_actions_opencode::backfill_from_db(
+                sid,
+                &harness_id,
+                &room_id,
+                max_ts,
+                &self.db,
+            );
+        }
         let cancel = Arc::new(Notify::new());
         let cancel_for_task = Arc::clone(&cancel);
         let on_event = Arc::new(on_event);
+        let db = Arc::clone(&self.db);
+        let hid = harness_id.clone();
+        let rid = room_id;
         let handle = tokio::spawn(async move {
-            run_adapter(port, cancel_for_task, on_event).await;
+            run_adapter(port, cancel_for_task, on_event, db, hid, rid).await;
         });
         self.inner.lock().insert(
             harness_id,
@@ -152,10 +188,14 @@ impl OpencodeEventsManager {
 
 /// The reconnect / read loop. Lives in a tokio task. Loops until
 /// `cancel` fires, with exponential backoff between attempts.
+#[allow(clippy::too_many_arguments)]
 async fn run_adapter(
     port: u16,
     cancel: Arc<Notify>,
     on_event: Arc<dyn Fn(OpencodeEvent) + Send + Sync>,
+    db: Arc<Database>,
+    harness_id: String,
+    room_id: String,
 ) {
     let url = format!("http://127.0.0.1:{port}/event");
     let client = match reqwest::Client::builder()
@@ -187,6 +227,9 @@ async fn run_adapter(
             &cancel,
             on_event.as_ref(),
             &connected_for_call,
+            &db,
+            &harness_id,
+            &room_id,
         );
         tokio::select! {
             biased;
@@ -241,12 +284,16 @@ async fn run_adapter(
 /// any failure (connect refused, HTTP non-200, transport error).
 /// Mutates the `connected_once` signal indirectly by emitting
 /// `Connected` on first message.
+#[allow(clippy::too_many_arguments)]
 async fn stream_events(
     client: &reqwest::Client,
     url: &str,
     cancel: &Notify,
     on_event: &(dyn Fn(OpencodeEvent) + Send + Sync),
     connected_once: &AtomicBool,
+    db: &Database,
+    harness_id: &str,
+    room_id: &str,
 ) -> Result<(), reqwest::Error> {
     use futures_util::StreamExt;
 
@@ -290,7 +337,7 @@ async fn stream_events(
                 };
                 let chunk = chunk?;
                 buf.extend_from_slice(&chunk);
-                process_buffer(&mut buf, on_event);
+                process_buffer(&mut buf, on_event, db, harness_id, room_id);
             }
         }
     }
@@ -299,21 +346,21 @@ async fn stream_events(
 /// Walk `buf` for complete SSE frames (`...\n\n`), parse each, emit
 /// matched events. Leaves any trailing partial frame in `buf` for
 /// the next chunk to extend.
-fn process_buffer(buf: &mut Vec<u8>, on_event: &(dyn Fn(OpencodeEvent) + Send + Sync)) {
+fn process_buffer(
+    buf: &mut Vec<u8>,
+    on_event: &(dyn Fn(OpencodeEvent) + Send + Sync),
+    db: &Database,
+    harness_id: &str,
+    room_id: &str,
+) {
     loop {
         let Some(sep) = find_double_newline(buf) else {
             return;
         };
-        // Drain the frame (including the terminator) out of buf.
         let frame: Vec<u8> = buf.drain(..sep + 2).collect();
-        // Trim the trailing `\n\n` before parsing.
         let Ok(frame_str) = std::str::from_utf8(&frame[..frame.len().saturating_sub(2)]) else {
             continue;
         };
-        // Each frame may contain `event:`, `id:`, `data:` lines.
-        // We only care about `data:`. Multiple `data:` lines join
-        // with `\n` per SSE spec, but opencode emits single-line
-        // data frames in practice — we still concatenate defensively.
         let mut payload = String::new();
         for line in frame_str.split('\n') {
             if let Some(rest) = line.strip_prefix("data:") {
@@ -326,8 +373,25 @@ fn process_buffer(buf: &mut Vec<u8>, on_event: &(dyn Fn(OpencodeEvent) + Send + 
         if payload.is_empty() {
             continue;
         }
+        // Phase event (existing path).
         if let Some(event) = parse_event(&payload) {
             on_event(event);
+        }
+        // Action extraction (issue #80).
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) {
+            for action in harness_actions_opencode::extract_from_sse(&value) {
+                if let Err(e) = db.record_harness_action(
+                    harness_id,
+                    room_id,
+                    action.timestamp_ms,
+                    action.kind,
+                    &action.payload,
+                    action.source.as_deref(),
+                ) {
+                    tracing::trace!(harness_id, kind = action.kind, error = %e,
+                        "opencode_events: record_harness_action failed");
+                }
+            }
         }
     }
 }
@@ -404,6 +468,12 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
 
+    fn test_db() -> (tempfile::TempDir, crate::db::Database) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = crate::db::Database::open(&dir.path().join("t.db")).unwrap();
+        (dir, db)
+    }
+
     /// `process_buffer` is the unit-testable core. We feed it canned
     /// SSE bytes and assert the emitted events. Reconnect / reqwest
     /// concerns are covered by integration dogfood.
@@ -415,10 +485,11 @@ mod tests {
         let cb = move |e: OpencodeEvent| {
             tx.send(e).unwrap();
         };
+        let (_dir, db) = test_db();
         let mut buf = Vec::new();
         for (i, chunk) in input.iter().enumerate() {
             buf.extend_from_slice(&frame_each(i, chunk));
-            process_buffer(&mut buf, &cb);
+            process_buffer(&mut buf, &cb, &db, "h-test", "r-test");
         }
         let mut out = Vec::new();
         while let Ok(e) = rx.try_recv() {
@@ -519,9 +590,7 @@ mod tests {
 
     #[test]
     fn partial_chunk_split_across_writes() {
-        // First write contains only the prefix; second write completes
-        // the frame. process_buffer must not emit until the full frame
-        // is present.
+        let (_tdir, tdb) = test_db();
         let (tx, rx) = mpsc::channel();
         let cb = move |e: OpencodeEvent| {
             tx.send(e).unwrap();
@@ -530,11 +599,11 @@ mod tests {
         buf.extend_from_slice(
             br#"data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"#,
         );
-        process_buffer(&mut buf, &cb);
+        process_buffer(&mut buf, &cb, &tdb, "h-test", "r-test");
         assert!(rx.try_recv().is_err(), "partial frame must not emit");
         buf.extend_from_slice(br#""idle"}}}"#);
         buf.extend_from_slice(b"\n\n");
-        process_buffer(&mut buf, &cb);
+        process_buffer(&mut buf, &cb, &tdb, "h-test", "r-test");
         let mut out: Vec<OpencodeEvent> = Vec::new();
         while let Ok(e) = rx.try_recv() {
             out.push(e);
@@ -547,8 +616,7 @@ mod tests {
 
     #[test]
     fn multiple_frames_in_one_chunk_all_emit() {
-        // TCP can deliver several SSE frames in one read. process_buffer
-        // must loop until the buffer no longer contains a terminator.
+        let (_tdir, tdb) = test_db();
         let mut buf = Vec::new();
         for payload in [
             r#"{"type":"session.status","properties":{"sessionID":"s","status":{"type":"busy"}}}"#,
@@ -561,7 +629,7 @@ mod tests {
         let cb = move |e: OpencodeEvent| {
             tx.send(e).unwrap();
         };
-        process_buffer(&mut buf, &cb);
+        process_buffer(&mut buf, &cb, &tdb, "h-test", "r-test");
         let mut out = Vec::new();
         while let Ok(e) = rx.try_recv() {
             out.push(e);
@@ -574,8 +642,7 @@ mod tests {
 
     #[test]
     fn data_field_with_no_space_after_colon_still_parsed() {
-        // SSE spec allows `data:...` (no space). Validate we strip
-        // the colon + optional whitespace.
+        let (_tdir, tdb) = test_db();
         let mut buf = Vec::new();
         buf.extend_from_slice(
             br#"data:{"type":"session.status","properties":{"sessionID":"s","status":{"type":"idle"}}}"#,
@@ -585,7 +652,7 @@ mod tests {
         let cb = move |e: OpencodeEvent| {
             tx.send(e).unwrap();
         };
-        process_buffer(&mut buf, &cb);
+        process_buffer(&mut buf, &cb, &tdb, "h-test", "r-test");
         let mut out: Vec<OpencodeEvent> = Vec::new();
         while let Ok(e) = rx.try_recv() {
             out.push(e);
