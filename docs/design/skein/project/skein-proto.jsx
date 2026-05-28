@@ -268,6 +268,9 @@ const HARNESS_PANEL = {
 };
 
 // Per-session right-pane data.
+// NOTE: The old shape (tree/activeFile/diff/plan/activity) below is retained
+// only because some legacy code references it. The Live Context card stack
+// reads SESSION_LC defined immediately after.
 const SESSION_DATA = {
   s1: {
     tree: [
@@ -419,6 +422,222 @@ const SESSION_DATA = {
       { time: '12:14:33', by: 'h5a', kind: 'copilot', msg: <span>str_replace <span className="arg">pgvector.rs</span> <span className="ok">+24 −2</span></span> },
       { time: '12:15:08', by: 'h5a', kind: 'copilot', msg: <span>stream <span className="err">interrupted · 401 unauthorized</span></span> },
     ],
+  },
+};
+
+// ── Live Context data — what each room shows in the right-pane card stack.
+// Shape:
+//   subtitle: { text, age, empty? }
+//   diff:     { tabs: [{file, adds, dels, harness, active, flicker?}], body: JSX }
+//   plan:     [{ harness, items: [{status, text, priority?, inferred?}] }]
+//   activity: { totals: {events, cost, tokens, idleFor?}, items: [{type, ...}] }
+
+const LcLine = ({ ctx, add, del, n1, n2, src }) => {
+  const kind = add ? 'add' : del ? 'del' : 'ctx';
+  return (
+    <div className={`lc-line ${kind}`}>
+      <div className="gutter">
+        <span className="ln">{n1 ?? ''}</span>
+        <span className="ln">{n2 ?? ''}</span>
+      </div>
+      <span className="marker">{add ? '+' : del ? '−' : ''}</span>
+      <span className="src">{src}</span>
+    </div>
+  );
+};
+
+const DIFF_TITLEBAR = (
+  <>
+    <LcLine add n2={1}  src={<span><span className="tk-key">import</span> {'{'} useEffect {'}'} <span className="tk-key">from</span> <span className="tk-str">"react"</span>;</span>} />
+    <LcLine add n2={2}  src={<span><span className="tk-key">import</span> {'{'} getCurrentWindow {'}'} <span className="tk-key">from</span> <span className="tk-str">"@tauri-apps/api/window"</span>;</span>} />
+    <LcLine add n2={3}  src={<span></span>} />
+    <LcLine add n2={4}  src={<span><span className="tk-key">export function</span> <span className="tk-fn">Titlebar</span>() {'{'}</span>} />
+    <LcLine add n2={5}  src={<span>  <span className="tk-key">return</span> (</span>} />
+    <LcLine add n2={6}  src={<span>    {'<'}<span className="tk-fn">div</span> className=<span className="tk-str">"sk-titlebar"</span> data-tauri-drag-region{'>'}</span>} />
+    <LcLine add n2={7}  src={<span>      {'<'}<span className="tk-fn">TrafficLights</span> /{'>'}</span>} />
+    <LcLine add n2={8}  src={<span>      {'<'}<span className="tk-fn">span</span> className=<span className="tk-str">"sk-app-name"</span>{'>'}skein{'<'}/<span className="tk-fn">span</span>{'>'}</span>} />
+    <LcLine add n2={9}  src={<span>    {'<'}/<span className="tk-fn">div</span>{'>'}</span>} />
+    <LcLine add n2={10} src={<span>  );</span>} />
+    <LcLine add n2={11} src={<span>{'}'}</span>} />
+  </>
+);
+
+const DIFF_WATCHER = (
+  <>
+    <LcLine ctx n1={24} n2={24} src={<span><span className="tk-com">// poll the worktree for fs changes; debounce 80ms</span></span>} />
+    <LcLine ctx n1={25} n2={25} src={<span><span className="tk-key">pub async fn</span> <span className="tk-fn">watch_worktree</span>(path: <span className="tk-key">&Path</span>) {'->'} <span className="tk-key">Result</span>{'<'}<span className="tk-key">Watcher</span>{'>'} {'{'}</span>} />
+    <LcLine ctx n1={26} n2={26} src={<span>    <span className="tk-key">let</span> (tx, rx) = mpsc::<span className="tk-fn">channel</span>(<span className="tk-num">64</span>);</span>} />
+    <LcLine del n1={27}         src={<span>    <span className="tk-key">let mut</span> watcher = notify::<span className="tk-fn">recommended_watcher</span>(tx)?;</span>} />
+    <LcLine add n2={27}         src={<span>    <span className="tk-key">let mut</span> watcher = notify::<span className="tk-fn">recommended_watcher</span>(<span className="tk-fn">debounce</span>(tx, <span className="tk-num">80</span>))?;</span>} />
+    <LcLine ctx n1={28} n2={28} src={<span>    watcher.<span className="tk-fn">watch</span>(path, RecursiveMode::<span className="tk-fn">Recursive</span>)?;</span>} />
+    <LcLine add n2={30}         src={<span>    <span className="tk-com">// emit only on .rs / .toml / .md to keep the diff pane quiet</span></span>} />
+    <LcLine add n2={31}         src={<span>    <span className="tk-key">let</span> filtered = rx.<span className="tk-fn">filter_map</span>(<span className="tk-fn">interesting_path</span>);</span>} />
+    <LcLine ctx n1={30} n2={32} src={<span>    <span className="tk-key">Ok</span>(<span className="tk-key">Watcher</span> {'{'} watcher, rx: filtered {'}'})</span>} />
+    <LcLine ctx n1={31} n2={33} src={<span>{'}'}</span>} />
+  </>
+);
+
+const DIFF_REINDEX = (
+  <>
+    <LcLine ctx n1={102} n2={102} src={<span><span className="tk-key">const</span> <span className="tk-fn">BATCH_SIZE</span>: <span className="tk-key">usize</span> = <span className="tk-num">50_000</span>;</span>} />
+    <LcLine ctx n1={103} n2={103} src={<span></span>} />
+    <LcLine ctx n1={104} n2={104} src={<span><span className="tk-key">async fn</span> <span className="tk-fn">reindex</span>() {'{'}</span>} />
+    <LcLine ctx n1={105} n2={105} src={<span>    <span className="tk-key">while let Some</span>(batch) = <span className="tk-fn">next_batch</span>().<span className="tk-fn">await</span> {'{'}</span>} />
+    <LcLine ctx n1={106} n2={106} src={<span>        es.<span className="tk-fn">bulk_index</span>(batch).<span className="tk-fn">await</span>?;</span>} />
+    <LcLine ctx n1={107} n2={107} src={<span>    {'}'}</span>} />
+    <LcLine ctx n1={108} n2={108} src={<span>{'}'}</span>} />
+  </>
+);
+
+const DIFF_PGVECTOR = (
+  <>
+    <LcLine ctx n1={1} n2={1} src={<span><span className="tk-key">use</span> sqlx::PgPool;</span>} />
+    <LcLine add n2={2}        src={<span><span className="tk-key">use</span> pgvector::Vector;</span>} />
+    <LcLine ctx n1={2} n2={3} src={<span></span>} />
+    <LcLine ctx n1={3} n2={4} src={<span><span className="tk-key">pub async fn</span> <span className="tk-fn">upsert_embedding</span>(pool: <span className="tk-key">&PgPool</span>, id: <span className="tk-key">&str</span>, v: <span className="tk-key">&[f32]</span>) {'->'} <span className="tk-key">Result</span>{'<'}<span className="tk-key">()</span>{'>'} {'{'}</span>} />
+    <LcLine add n2={5}        src={<span>    <span className="tk-key">let</span> v = <span className="tk-key">Vector</span>::<span className="tk-fn">from</span>(v.<span className="tk-fn">to_vec</span>());</span>} />
+    <LcLine ctx n1={4} n2={6} src={<span>    sqlx::<span className="tk-fn">query</span>(<span className="tk-str">"INSERT INTO embeddings (id, v) VALUES ($1, $2)"</span>)</span>} />
+    <LcLine ctx n1={5} n2={7} src={<span>{'}'}</span>} />
+  </>
+);
+
+const SESSION_LC = {
+  s1: {
+    subtitle: { text: "Wiring the Tauri window chrome — Claude shipped the titlebar; opencode flagged a token mismatch.", age: '2m ago · Claude' },
+    diff: {
+      tabs: [
+        { file: 'Titlebar.tsx',     adds: 38, harness: 'claude',   active: true },
+        { file: 'tauri.conf.json',  adds: 3, dels: 1, harness: 'claude' },
+        { file: 'lib.rs',           adds: 1, harness: 'opencode', flicker: true },
+      ],
+      body: DIFF_TITLEBAR,
+    },
+    plan: [
+      { harness: 'claude', items: [
+        { status: 'done', text: 'wire titleBarStyle Overlay on macOS' },
+        { status: 'done', text: 'add drag region to titlebar' },
+        { status: 'now',  text: 'fix space-3 token usage (h1b flagged)' },
+        { status: 'next', text: 'tabstrip overflow scroll' },
+      ]},
+      { harness: 'opencode', items: [
+        { status: 'done', text: 'review titlebar against design tokens', priority: 'high' },
+        { status: 'now',  text: 'flag remaining space-N usage drift',    priority: 'med', inferred: true },
+      ]},
+    ],
+    activity: {
+      totals: { events: 18, cost: '0.31', tokens: '6.2k' },
+      items: [
+        { type: 'sep', label: 'turn · 14:01:54' },
+        { type: 'row', row: { kind: 'user_prompt', time: '14:01:54', harness: 'claude', text: 'Wire up the title bar with traffic-light buttons and a custom drag region.' } },
+        { type: 'row', row: { kind: 'ai_title', harness: 'claude', time: '14:01:55', title: 'titlebar + drag region' } },
+        { type: 'row', row: { kind: 'read',  harness: 'claude', time: '14:02:14', file: 'src-tauri/tauri.conf.json', lines: 22 } },
+        { type: 'row', row: { kind: 'edit',  harness: 'claude', time: '14:02:18', file: 'src-tauri/tauri.conf.json', adds: 3, dels: 1 } },
+        { type: 'row', row: { kind: 'write', harness: 'claude', time: '14:02:31', file: 'src/components/Titlebar.tsx', adds: 38 } },
+        { type: 'cost', tokens: '4,218', usd: '0.18', ms: '37s' },
+        { type: 'sep', label: 'turn · 14:03:04' },
+        { type: 'row', row: { kind: 'user_prompt', time: '14:03:04', harness: 'opencode', text: 'Read what Claude just shipped and check it against the design tokens.' } },
+        { type: 'row', row: { kind: 'read', harness: 'opencode', time: '14:03:04', file: 'src/components/Titlebar.tsx', lines: 38 } },
+        { type: 'row', row: { kind: 'edit', harness: 'opencode', time: '14:03:18', file: 'src/components/Titlebar.tsx', adds: 1, dels: 1 } },
+      ],
+    },
+  },
+
+  s2: {
+    subtitle: { text: "BYOH paused for cargo test — waiting on you to approve.", age: 'just now' },
+    diff: {
+      tabs: [{ file: 'src/fs/watcher.rs', adds: 5, dels: 1, harness: 'byoh', active: true }],
+      body: DIFF_WATCHER,
+    },
+    plan: [
+      { harness: 'byoh', items: [
+        { status: 'done', text: 'read src/fs/watcher.rs' },
+        { status: 'done', text: 'add debounce wrapper around notify channel' },
+        { status: 'done', text: 'filter to .rs / .toml / .md' },
+        { status: 'now',  text: 'run cargo test for fs::watcher' },
+        { status: 'next', text: 'update CHANGELOG with debounce default' },
+      ]},
+    ],
+    activity: {
+      totals: { events: 8 },
+      items: [
+        { type: 'sep', label: 'turn · 13:51:00' },
+        { type: 'row', row: { kind: 'user_prompt', time: '13:51:00', harness: 'byoh', text: "Debounce the fs watcher so the diff pane doesn't flicker on every keystroke. 80ms feels right." } },
+        { type: 'row', row: { kind: 'read', harness: 'byoh', time: '13:51:02', file: 'src/fs/watcher.rs', lines: 38 } },
+        { type: 'row', row: { kind: 'grep', harness: 'byoh', time: '13:51:14', pattern: 'recommended_watcher', matches: 1 } },
+        { type: 'row', row: { kind: 'edit', harness: 'byoh', time: '13:51:18', file: 'src/fs/watcher.rs', adds: 5, dels: 1 } },
+        { type: 'row', row: { kind: 'permission', harness: 'byoh', time: '13:52:01', command: 'cargo test --package skein-core fs::watcher' } },
+      ],
+    },
+  },
+
+  s3: {
+    subtitle: { text: "Reducing memory pressure in the reindexer — Copilot is drafting the BATCH_SIZE change.", age: '14s ago · Copilot' },
+    diff: {
+      tabs: [{ file: 'src/indexer/main.rs', harness: 'copilot', active: true }],
+      body: DIFF_REINDEX,
+    },
+    plan: [
+      { harness: 'copilot', items: [
+        { status: 'now',  text: 'measure memory under current batch size' },
+        { status: 'next', text: 'reduce BATCH_SIZE to 5_000' },
+        { status: 'next', text: 'add tokio::time::yield between batches' },
+      ]},
+    ],
+    activity: {
+      totals: { events: 12, cost: '0.42', tokens: '22.7k' },
+      items: [
+        { type: 'sep', label: 'turn · 13:48:00' },
+        { type: 'row', row: { kind: 'user_prompt', time: '13:48:00', harness: 'copilot', text: 'The reindex is bringing the search API to its knees. Look at how we read from the canonical store.' } },
+        { type: 'row', row: { kind: 'read', harness: 'copilot', time: '13:48:11', file: 'src/indexer/main.rs', lines: 142 } },
+        { type: 'row', row: { kind: 'grep', harness: 'copilot', time: '13:48:42', pattern: 'BATCH_SIZE', matches: 4 } },
+      ],
+    },
+  },
+
+  s4: {
+    subtitle: { text: "Paused — sessions schema work resumes when you're ready.", age: '2h 14m ago' },
+    diff: {
+      tabs: [{ file: 'src/db/schema.sql', harness: 'claude', active: true }],
+      body: (
+        <>
+          <LcLine ctx n1={1} n2={1} src={<span><span className="tk-com">-- sessions, messages, tool_calls</span></span>} />
+          <LcLine ctx n1={2} n2={2} src={<span><span className="tk-key">CREATE TABLE</span> sessions (</span>} />
+          <LcLine ctx n1={3} n2={3} src={<span>    id <span className="tk-key">TEXT PRIMARY KEY</span>,</span>} />
+          <LcLine ctx n1={4} n2={4} src={<span>    name <span className="tk-key">TEXT NOT NULL</span></span>} />
+          <LcLine ctx n1={5} n2={5} src={<span>);</span>} />
+        </>
+      ),
+    },
+    plan: [{ harness: 'claude', items: [{ status: 'next', text: 'finalize sessions schema' }] }],
+    activity: { totals: { events: 4, idleFor: '2h 14m' }, items: [] },
+  },
+
+  s5: {
+    subtitle: { text: "Copilot stream interrupted — 401 Unauthorized. Worktree is safe; re-auth and resume.", age: 'happening now' },
+    diff: {
+      tabs: [{ file: 'src/embeddings/pgvector.rs', adds: 24, dels: 2, harness: 'copilot', active: true }],
+      body: DIFF_PGVECTOR,
+    },
+    plan: [
+      { harness: 'copilot', items: [
+        { status: 'done', text: 'add pgvector dep + migrations' },
+        { status: 'done', text: 'upsert_embedding helper' },
+        { status: 'now',  text: 'wire similarity_search endpoint' },
+        { status: 'next', text: 'benchmark vs sqlite-vss' },
+      ]},
+    ],
+    activity: {
+      totals: { events: 6 },
+      items: [
+        { type: 'sep', label: 'turn · 12:14:00' },
+        { type: 'row', row: { kind: 'user_prompt', time: '12:14:00', harness: 'copilot', text: 'Try pgvector for product search. Add the migration and upsert helper.' } },
+        { type: 'row', row: { kind: 'bridge', harness: 'copilot', time: '12:14:01', status: 'connected', detail: 'gh entitlement · ok' } },
+        { type: 'row', row: { kind: 'read',   harness: 'copilot', time: '12:14:01', file: 'src/embeddings/pgvector.rs', lines: 18 } },
+        { type: 'row', row: { kind: 'edit',   harness: 'copilot', time: '12:14:33', file: 'src/embeddings/pgvector.rs', adds: 24, dels: 2 } },
+        { type: 'row', row: { kind: 'bridge', harness: 'copilot', time: '12:15:07', status: 'reconnecting', detail: 'attempt 1 of 5' } },
+        { type: 'row', row: { kind: 'api_error', harness: 'copilot', time: '12:15:08', status: 'HTTP 401', attempt: 1, retryIn: 12, message: 'subscription token expired' } },
+      ],
+    },
   },
 };
 
@@ -587,156 +806,11 @@ const HarnessBody = ({ harness, resolved, onApprove, onDeny, onRetry, onReauth }
   return <Panel harnessId={harness.id} />;
 };
 
-const FileTree = ({ tree }) => (
-  <div className="sk-tree">
-    {tree.map((n, i) => (
-      <div key={i} className={`sk-tree-row ${n.kind} ${n.touched ? 'touched' : ''} ${n.active ? 'active' : ''}`}>
-        {Array.from({ length: n.depth }).map((_, k) => <span key={k} className="indent" />)}
-        <span className="icon">{n.kind === 'dir' ? (n.open ? '▾' : '▸') : '·'}</span>
-        <span>{n.name}</span>
-        {n.touched && <span className="badge">{n.touched}</span>}
-      </div>
-    ))}
-  </div>
-);
-
-const DiffEditor = ({ activeFile, diff }) => (
-  <div className="sk-editor">
-    <div className="sk-editor-head">
-      <span className="path">{activeFile.path}</span>
-      <span style={{ color: 'var(--fg-3)' }}>· modified just now</span>
-      {activeFile.adds > 0 && <span className="delta-add">+{activeFile.adds}</span>}
-      {activeFile.dels > 0 && <span className="delta-del">−{activeFile.dels}</span>}
-    </div>
-    <div className="sk-code">
-      {diff.map((l, i) => (
-        <div key={i} className={`sk-line ${l.kind === 'add' ? 'add' : l.kind === 'del' ? 'del' : ''}`}>
-          <div className="gutter">
-            <span className="ln">{l.n1}</span>
-            <span className="ln">{l.n2}</span>
-          </div>
-          <span className="marker">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ''}</span>
-          <span className="src">{l.src}</span>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const PlanCard = ({ plan }) => (
-  <div className="sk-todo">
-    {plan.map((t, i) => {
-      const h = t.by ? t.by[1] : null;
-      return (
-        <div key={i} className={`row ${t.state}`}>
-          <span className="box">{t.state === 'done' ? '✓' : t.state === 'now' ? '◆' : ''}</span>
-          <span style={{ flex: 1 }}>{t.text}</span>
-          {t.by && <span className="by"><span style={{ fontFamily: 'var(--sk-mono)' }}>{t.by}</span></span>}
-        </div>
-      );
-    })}
-  </div>
-);
-
-const ActivityFeed = ({ activity }) => (
-  <div className="sk-activity">
-    {activity.map((a, i) => (
-      <div key={i} className="a-row">
-        <span className="a-time">{a.time}</span>
-        <span className="a-by"><HChip kind={a.kind} size={11} /></span>
-        <span className="a-msg">{a.msg}</span>
-      </div>
-    ))}
-    {activity.length === 0 && <div style={{ color: 'var(--fg-3)', fontSize: 10.5 }}>No activity yet.</div>}
-  </div>
-);
-
-// Full-pane variants — same building blocks, no stack chrome,
-// just one large surface so you can focus when the stack is too dense.
-
-const FullPaneHead = ({ title, meta }) => (
-  <div className="sk-fullpane-head">
-    <span className="title">{title}</span>
-    {meta && <span className="meta">{meta}</span>}
-  </div>
-);
-
-const FilesFullPane = ({ data }) => (
-  <div className="sk-fullpane">
-    <FullPaneHead title={`Files · ${data.activeFile.path}`} meta={`+${data.activeFile.adds} −${data.activeFile.dels}`} />
-    <div className="sk-fullpane-body sk-fullpane-files">
-      <FileTree tree={data.tree} />
-      <DiffEditor activeFile={data.activeFile} diff={data.diff} />
-    </div>
-  </div>
-);
-
-const DiffFullPane = ({ data }) => (
-  <div className="sk-fullpane">
-    <FullPaneHead title={`Diff · ${data.activeFile.path}`} meta={`+${data.activeFile.adds} −${data.activeFile.dels} · since session start`} />
-    <div className="sk-fullpane-body sk-fullpane-diff">
-      <DiffEditor activeFile={data.activeFile} diff={data.diff} />
-    </div>
-  </div>
-);
-
-const PlanFullPane = ({ data }) => (
-  <div className="sk-fullpane">
-    <FullPaneHead title="Plan" meta={`${data.plan.filter(t => t.state === 'done').length}/${data.plan.length} done`} />
-    <div className="sk-fullpane-body sk-fullpane-plan">
-      <PlanCard plan={data.plan} />
-      <div className="sk-fullpane-section">
-        <div className="sec-label">Recent activity</div>
-        <ActivityFeed activity={data.activity} />
-      </div>
-    </div>
-  </div>
-);
-
-const ContextStack = ({ data, showActivity }) => {
-  const [collapsed, setCollapsed] = useState({});
-  const toggle = (k) => setCollapsed(p => ({ ...p, [k]: !p[k] }));
-  return (
-    <div className="sk-context-stack">
-      <div className={`sk-context-card h-2 ${collapsed.diff ? 'collapsed' : ''}`}>
-        <div className="sk-context-head" onClick={() => toggle('diff')}>
-          <span className="chev">▾</span>
-          <span className="live" />
-          <span className="label">Diff · {data.activeFile.path.split('/').pop()}</span>
-          <span className="meta">+{data.activeFile.adds} −{data.activeFile.dels} · live</span>
-        </div>
-        <div className="sk-context-body">
-          <FileTree tree={data.tree} />
-          <DiffEditor activeFile={data.activeFile} diff={data.diff} />
-        </div>
-      </div>
-
-      <div className={`sk-context-card h-1 ${collapsed.plan ? 'collapsed' : ''}`}>
-        <div className="sk-context-head" onClick={() => toggle('plan')}>
-          <span className="chev">▾</span>
-          <span className="label">Plan</span>
-          <span className="meta">{data.plan.filter(t => t.state === 'done').length}/{data.plan.length} done</span>
-        </div>
-        <div className="sk-context-body" style={{ overflow: 'auto' }}>
-          <PlanCard plan={data.plan} />
-        </div>
-      </div>
-
-      {showActivity && (
-        <div className={`sk-context-card h-1 ${collapsed.activity ? 'collapsed' : ''}`}>
-          <div className="sk-context-head" onClick={() => toggle('activity')}>
-            <span className="chev">▾</span>
-            <span className="label">Activity · all harnesses</span>
-            <span className="meta">{data.activity.length} events</span>
-          </div>
-          <div className="sk-context-body" style={{ overflow: 'auto' }}>
-            <ActivityFeed activity={data.activity} />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
+// (old card components — FileTree, DiffEditor, PlanCard, ActivityFeed,
+// FullPaneHead, FilesFullPane, DiffFullPane, PlanFullPane, ContextStack —
+// removed in the Live Context migration. The new card stack lives in
+// live-context-rows.jsx / live-context-cards.jsx and is used directly
+// from App via the SESSION_LC data above.)
 
 // ── New session dialog ──────────────────────────────────────────
 // Most decisions are pre-filled with sensible defaults; the user
@@ -1049,7 +1123,6 @@ function App() {
   const [showPicker, setShowPicker] = useState(null); // sessionId waiting for harness pick
   const [toastDismissed, setToastDismissed] = useState(false);
   const [showNewSession, setShowNewSession] = useState(false);
-  const [rightTab, setRightTab] = useState('stack'); // stack | files | diff | plan
   const [tourIdx, setTourIdx] = useState(null); // null = off, otherwise step index
 
   const session = sessions.find(s => s.id === activeSessionId);
@@ -1119,7 +1192,6 @@ function App() {
     setPermissionResolved({});
     setToastDismissed(false);
     setShowNewSession(false);
-    setRightTab('stack');
     setTourIdx(0);
   };
   const nextStep = () => {
@@ -1205,26 +1277,64 @@ function App() {
         </div>
 
         <div className="sk-right">
-          <div className="sk-right-tabs">
-            {[
-              ['stack', 'Live context'],
-              ['files', 'Files'],
-              ['diff',  'Diff'],
-              ['plan',  'Plan'],
-            ].map(([k, label]) => (
-              <div key={k}
-                className={`sk-right-tab ${rightTab === k ? 'active' : ''}`}
-                onClick={() => setRightTab(k)}>{label}</div>
-            ))}
-            <div className="sk-right-meta">
-              <span className="live-dot" />
-              <span>auto-follow</span>
-            </div>
+          <div className="lc">
+            {(() => {
+              const lc = SESSION_LC[session.id];
+              if (!lc) return <div className="lc-empty"><div className="lc-empty-inner"><div className="big">·</div>no live context for this room yet</div></div>;
+              return (
+                <>
+                  <div className={`lc-subtitle ${lc.subtitle.empty ? 'is-empty' : ''}`}>
+                    <span className="glyph">{lc.subtitle.empty ? 'IDLE' : 'AT'}</span>
+                    <span className="text">{lc.subtitle.text}</span>
+                    <span className="meta">{lc.subtitle.age}</span>
+                  </div>
+                  <div className="lc-stack">
+                    <DiffCard flex={1.2} tabs={lc.diff.tabs} body={lc.diff.body} />
+                    <div className="lc-divider" />
+                    <PlanCard flex={1} groups={lc.plan} />
+                    <div className="lc-divider" />
+                    <ActivityCard flex={1.2} totals={lc.activity.totals}>
+                      {lc.activity.items.map((it, i) => {
+                        if (it.type === 'sep')  return <TurnSep key={i} label={it.label} />;
+                        if (it.type === 'cost') return t.showActivityFeed ? <TurnCost key={i} tokens={it.tokens} usd={it.usd} ms={it.ms} /> : null;
+                        if (it.type === 'row') {
+                          const r = it.row;
+                          switch (r.kind) {
+                            case 'edit':        return <EditRow key={i} {...r} />;
+                            case 'write':       return <EditRow key={i} {...r} kind="write" />;
+                            case 'read':        return <ReadRow key={i} {...r} />;
+                            case 'grep':        return <SearchRow key={i} {...r} />;
+                            case 'glob':        return <SearchRow key={i} {...r} kind="glob" />;
+                            case 'bash':        return <BashRow key={i} {...r} />;
+                            case 'task':        return <TaskRow key={i} {...r} />;
+                            case 'todowrite':   return <TodoWriteRow key={i} {...r} />;
+                            case 'ask':         return <AskRow key={i} {...r} />;
+                            case 'agent':       return <AgentRow key={i} {...r} />;
+                            case 'pr':          return <PrRow key={i} {...r} />;
+                            case 'queue':       return <QueueRow key={i} {...r} />;
+                            case 'userfile':    return <UserFileRow key={i} {...r} />;
+                            case 'slash':       return <SlashRow key={i} {...r} />;
+                            case 'compact':     return <CompactRow key={i} {...r} />;
+                            case 'api_error':   return <ApiErrorRow key={i} {...r} />;
+                            case 'tool_error':  return <ToolErrorRow key={i} {...r} />;
+                            case 'permission':  return <PermissionRow key={i} {...r} />;
+                            case 'user_prompt': return <UserPromptRow key={i} {...r} />;
+                            case 'perm_mode':   return <PermissionModeRow key={i} {...r} />;
+                            case 'ai_title':    return <AiTitleRow key={i} {...r} />;
+                            case 'bridge':      return <BridgeStatusRow key={i} {...r} />;
+                            case 'burst':       return <BurstRow key={i} {...r} />;
+                            default:            return null;
+                          }
+                        }
+                        return null;
+                      })}
+                      <ActivityTail idle={!!lc.activity.totals?.idleFor} />
+                    </ActivityCard>
+                  </div>
+                </>
+              );
+            })()}
           </div>
-          {data && rightTab === 'stack' && <ContextStack data={data} showActivity={t.showActivityFeed} />}
-          {data && rightTab === 'files' && <FilesFullPane data={data} />}
-          {data && rightTab === 'diff'  && <DiffFullPane  data={data} />}
-          {data && rightTab === 'plan'  && <PlanFullPane  data={data} />}
         </div>
       </div>
 
