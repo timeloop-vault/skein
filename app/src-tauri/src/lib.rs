@@ -8,6 +8,7 @@
 mod db;
 mod fs;
 mod git;
+mod harness_action_event;
 mod harness_actions_claude;
 mod harness_actions_opencode;
 mod harness_events_claude;
@@ -132,8 +133,14 @@ pub fn run() {
             let db = Arc::new(db);
             app.manage(PtyManager::new());
             app.manage(WatcherManager::new());
-            app.manage(ClaudeEventsManager::new(Arc::clone(&db)));
-            app.manage(OpencodeEventsManager::new(Arc::clone(&db)));
+            app.manage(ClaudeEventsManager::new(
+                Arc::clone(&db),
+                app.handle().clone(),
+            ));
+            app.manage(OpencodeEventsManager::new(
+                Arc::clone(&db),
+                app.handle().clone(),
+            ));
             app.manage(db);
 
             // Resolve the product name from the merged tauri config —
@@ -511,6 +518,7 @@ fn db_record_harness_action(
         &payload,
         source.as_deref(),
     )
+    .map(drop)
 }
 
 /// Read recent actions for a single harness. Newest-first.

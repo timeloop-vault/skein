@@ -38,6 +38,8 @@ body {
 	--waiting: #8a96c9;
 	--diff-add: rgba(122, 163, 127, 0.18);
 	--diff-del: rgba(201, 113, 99, 0.16);
+	/* Live Context card surface (issue #80). */
+	--bg-card: #14161b;
 }
 .sk-light {
 	--bg-0: #f5f3ee;
@@ -57,6 +59,7 @@ body {
 	--waiting: #5a6aa0;
 	--diff-add: rgba(84, 127, 91, 0.14);
 	--diff-del: rgba(166, 79, 63, 0.12);
+	--bg-card: #ffffff;
 }
 
 .density-compact {

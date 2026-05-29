@@ -154,6 +154,10 @@ struct ActionPersistence {
     db: Arc<Database>,
     harness_id: String,
     room_id: String,
+    /// Frontend emitter for live rows. `None` in tests. Backfill never
+    /// emits (the frontend loads history via its initial query); only
+    /// the live tail broadcasts. Issue #80 D1.
+    app: Option<tauri::AppHandle>,
 }
 
 /// Manager — registry of live Claude adapters keyed by harness id.
@@ -164,13 +168,29 @@ pub struct ClaudeEventsManager {
     /// can write `harness_actions` rows directly from its tick
     /// thread. Issue #80.
     db: Arc<Database>,
+    /// Cloned into each attach's `ActionPersistence` so the live tail
+    /// can broadcast new rows. `None` in tests. Issue #80 D1.
+    app: Option<tauri::AppHandle>,
 }
 
 impl ClaudeEventsManager {
-    pub fn new(db: Arc<Database>) -> Self {
+    pub fn new(db: Arc<Database>, app: tauri::AppHandle) -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
             db,
+            app: Some(app),
+        }
+    }
+
+    /// Test constructor — no `AppHandle`, so the live tail persists
+    /// without broadcasting (nothing to assert on the emit in a unit
+    /// test, and building a real `AppHandle` needs a running app).
+    #[cfg(test)]
+    fn new_for_test(db: Arc<Database>) -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+            db,
+            app: None,
         }
     }
 
@@ -201,6 +221,7 @@ impl ClaudeEventsManager {
             db: Arc::clone(&self.db),
             harness_id: harness_id.clone(),
             room_id,
+            app: self.app.clone(),
         });
         self.attach_at(harness_id, path, on_event, persistence)
     }
@@ -445,7 +466,7 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
         }
         if let Some(ap) = s.actions.as_mut() {
             let extracted = ap.extractor.ingest(&value);
-            persist_extracted(ap, extracted);
+            persist_extracted(ap, extracted, true);
         }
     }
     s.in_assistant_turn = in_assistant_turn;
@@ -479,20 +500,24 @@ fn backfill_actions(ap: &mut ActionPersistence, content: &str) {
             .into_iter()
             .filter(|a| a.timestamp_ms > max_ts)
             .collect();
-        persist_extracted(ap, fresh);
+        // Backfill: persist silently. The frontend loads history via
+        // its initial per-room query, so broadcasting thousands of
+        // backfilled rows would be wasted IPC.
+        persist_extracted(ap, fresh, false);
     }
 }
 
-/// Insert every action in `extracted` into `harness_actions`. Logs
-/// at trace on insert failure (sqlite locked, disk full) but doesn't
-/// propagate — the tail loop continues. The user's recourse is to
-/// check the log; nothing actionable from inside the adapter.
+/// Insert every action in `extracted` into `harness_actions`. When
+/// `emit` is set (live tail), broadcast each inserted row to the
+/// frontend. Logs at trace on insert failure (sqlite locked, disk
+/// full) but doesn't propagate — the tail loop continues.
 fn persist_extracted(
     ap: &ActionPersistence,
     extracted: Vec<crate::harness_actions_claude::ExtractedAction>,
+    emit: bool,
 ) {
     for action in extracted {
-        if let Err(e) = ap.db.record_harness_action(
+        match ap.db.record_harness_action(
             &ap.harness_id,
             &ap.room_id,
             action.timestamp_ms,
@@ -500,8 +525,26 @@ fn persist_extracted(
             &action.payload,
             action.source.as_deref(),
         ) {
-            tracing::trace!(harness_id = %ap.harness_id, kind = %action.kind, error = %e,
-                "claude_events: record_harness_action failed");
+            Ok(id) => {
+                if emit {
+                    if let Some(app) = &ap.app {
+                        crate::harness_action_event::emit(
+                            app,
+                            id,
+                            &ap.harness_id,
+                            &ap.room_id,
+                            action.timestamp_ms,
+                            action.kind,
+                            &action.payload,
+                            action.source.as_deref(),
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::trace!(harness_id = %ap.harness_id, kind = %action.kind, error = %e,
+                    "claude_events: record_harness_action failed");
+            }
         }
     }
 }
@@ -721,7 +764,7 @@ mod tests {
         // Leak the TempDir — only needed for the duration of the
         // test, and not worth a per-test handle.
         std::mem::forget(dir);
-        ClaudeEventsManager::new(Arc::new(db))
+        ClaudeEventsManager::new_for_test(Arc::new(db))
     }
 
     /// Drive `attach_at` against a tempdir, returning a receiver the
@@ -1259,12 +1302,13 @@ mod tests {
         room_id: &str,
     ) -> ClaudeEventsManager {
         let db = Arc::new(crate::db::Database::open(db_path).unwrap());
-        let manager = ClaudeEventsManager::new(Arc::clone(&db));
+        let manager = ClaudeEventsManager::new_for_test(Arc::clone(&db));
         let persistence = Some(ActionPersistence {
             extractor: ActionExtractor::new(),
             db,
             harness_id: harness_id.into(),
             room_id: room_id.into(),
+            app: None,
         });
         manager
             .attach_at(harness_id.into(), jsonl, |_event| {}, persistence)

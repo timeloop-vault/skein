@@ -20,7 +20,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
-import { LiveStatus } from "./LiveStatus.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
 import { SettingsModal } from "./SettingsModal.tsx";
@@ -34,6 +33,7 @@ import {
 	useHarnessActivity,
 	useRoomActivity,
 } from "./harnessActivity.ts";
+import { LiveContext } from "./liveContext/index.ts";
 import { usePersistedState } from "./prefs.ts";
 import { isAppShortcut, isMac, modLabel } from "./shortcuts.ts";
 import type { Density, Harness, HarnessKind, Room, Theme } from "./types.ts";
@@ -2204,12 +2204,13 @@ export default function App() {
 							display: r.id === activeRoomId ? "flex" : "none",
 						}}
 					>
-						{/* LiveStatus owns the git-vs-not decision now (issue #6). It
-						    starts a watcher even on non-git cwds and self-promotes when
-						    a `.git` dir appears, so the room stops being frozen at
-						    creation time. */}
+						{/* The right pane is the Live Context card stack (issue #80):
+						    Diff / Plan / Activity, sourced from harness_actions. It
+						    also keeps the status-bar branch live via a lightweight
+						    git watcher (issue #18), the role LiveStatus used to own. */}
 						{r.cwd ? (
-							<LiveStatus
+							<LiveContext
+								roomId={r.id}
 								cwd={r.cwd}
 								onBranchChange={(b) =>
 									setLiveBranches((prev) => (prev[r.id] === b ? prev : { ...prev, [r.id]: b }))
