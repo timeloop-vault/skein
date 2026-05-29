@@ -426,7 +426,7 @@ impl Database {
         kind: &str,
         payload: &str,
         source: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<i64, String> {
         let conn = self.conn.lock();
         conn.execute(
             "INSERT INTO harness_actions \
@@ -435,7 +435,7 @@ impl Database {
             params![harness_id, room_id, timestamp_ms, kind, payload, source],
         )
         .map_err(|e| e.to_string())?;
-        Ok(())
+        Ok(conn.last_insert_rowid())
     }
 
     /// Most recent actions for a single harness with
