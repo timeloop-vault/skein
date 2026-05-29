@@ -20,7 +20,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
-import { LiveContext } from "./LiveContext.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
 import { SettingsModal } from "./SettingsModal.tsx";
@@ -34,6 +33,7 @@ import {
 	useHarnessActivity,
 	useRoomActivity,
 } from "./harnessActivity.ts";
+import { LiveContext } from "./liveContext/index.ts";
 import { usePersistedState } from "./prefs.ts";
 import { isAppShortcut, isMac, modLabel } from "./shortcuts.ts";
 import type { Density, Harness, HarnessKind, Room, Theme } from "./types.ts";

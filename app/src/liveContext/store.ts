@@ -1,10 +1,9 @@
-// Live Context store — issue #80 D1.
+// Live Context store — issue #80.
 //
 // Loads the backfilled `harness_actions` history for a room (one query
 // on mount) and tails live rows broadcast by the backend over the
 // `harness-action` Tauri event. The three Live Context cards read from
-// this; D1 wires the subscription + exposes the row list, the cards in
-// D2–D4 render the rows.
+// this.
 //
 // Ordering: rows are kept sorted ascending by `id` (the sqlite
 // AUTOINCREMENT rowid, which is monotonic insertion order, i.e.
@@ -46,7 +45,6 @@ const BACKFILL_LIMIT = 5000;
 
 /// Insert `incoming` into `sorted` (ascending by id), skipping ids
 /// already present. Returns a new array; never mutates the input.
-/// O(n+m) merge since both sides are id-sorted.
 function mergeById(sorted: HarnessAction[], incoming: HarnessAction[]): HarnessAction[] {
 	if (incoming.length === 0) return sorted;
 	const seen = new Set(sorted.map((a) => a.id));
