@@ -1,10 +1,20 @@
-// Activity card body. D1 renders a count + a tailing sentinel to
-// prove the live subscription works; the full row catalogue,
-// burst-collapse, turn separators, and auto-tail (handover §5.3, §6)
-// land in D2.
+// Activity card body. D2a renders every action as its row (via the
+// ActivityRow dispatcher) plus a tailing sentinel. Turn separators,
+// per-turn cost hair-lines, the backfill banner, burst-collapse, and
+// auto-tail land in D2d–D2f; virtualization in D2g.
 
-export const ActivityCardBody = ({ count }: { count: number }) => {
-	if (count === 0) {
+import type { HarnessKind } from "../types.ts";
+import { ActivityRow } from "./rows.tsx";
+import type { HarnessAction } from "./store.ts";
+
+export const ActivityCardBody = ({
+	actions,
+	harnessKindOf,
+}: {
+	actions: HarnessAction[];
+	harnessKindOf: (harnessId: string) => HarnessKind;
+}) => {
+	if (actions.length === 0) {
 		return (
 			<div className="lc-empty">
 				<div className="lc-empty-inner">
@@ -16,12 +26,12 @@ export const ActivityCardBody = ({ count }: { count: number }) => {
 	}
 	return (
 		<div className="lc-activity">
-			<div className="lc-activity-d1note">
-				{count} action{count === 1 ? "" : "s"} captured — row rendering lands in the next slice
-			</div>
+			{actions.map((row) => (
+				<ActivityRow key={row.id} row={row} harnessKindOf={harnessKindOf} />
+			))}
 			<div className="lc-tail">
 				<span className="blinker" />
-				tailing — new rows will appear live
+				tailing — new rows appear live
 			</div>
 		</div>
 	);
