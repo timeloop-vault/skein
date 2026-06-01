@@ -2212,6 +2212,7 @@ export default function App() {
 							<LiveContext
 								roomId={r.id}
 								cwd={r.cwd}
+								harnesses={r.harnesses}
 								onBranchChange={(b) =>
 									setLiveBranches((prev) => (prev[r.id] === b ? prev : { ...prev, [r.id]: b }))
 								}

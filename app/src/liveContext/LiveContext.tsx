@@ -16,12 +16,13 @@
 // Spec: docs/live-context-handover.md. Visual reference:
 // docs/design/skein/project/Live Context.html.
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { usePersistedState } from "../prefs.ts";
+import type { Harness, HarnessKind } from "../types.ts";
 import { ActivityCardBody } from "./ActivityCard.tsx";
 import { type CardLayout, CardStack, DEFAULT_LAYOUT } from "./CardStack.tsx";
 import { DiffCardBody } from "./DiffCard.tsx";
-import "./live-context.css";
+import "./chrome.css";
 import { PlanCardBody } from "./PlanCard.tsx";
 import { RoomSubtitle } from "./RoomSubtitle.tsx";
 import { useRoomActions } from "./store.ts";
@@ -30,6 +31,10 @@ import { useGitBranchWatcher } from "./useGitBranchWatcher.ts";
 interface LiveContextProps {
 	roomId: string;
 	cwd: string;
+	/** The room's harnesses — used to resolve a row's `harnessId` to a
+	 *  `HarnessKind` for its chip (the action store carries ids, chips
+	 *  render by kind). */
+	harnesses: Harness[];
 	/**
 	 * Fired with the current HEAD branch on every git-watcher tick (or
 	 * `null` for detached HEAD / non-git folders). The status bar reads
@@ -40,12 +45,20 @@ interface LiveContextProps {
 	onBranchChange?: (branch: string | null) => void;
 }
 
-export const LiveContext = ({ roomId, cwd, onBranchChange }: LiveContextProps) => {
+export const LiveContext = ({ roomId, cwd, harnesses, onBranchChange }: LiveContextProps) => {
 	const { actions } = useRoomActions(roomId);
 	const [layout, setLayout] = usePersistedState<CardLayout>(
 		`liveContext:layout:${roomId}`,
 		DEFAULT_LAYOUT,
 	);
+
+	// Resolve harnessId → kind for row chips. Unknown ids (a harness
+	// closed since the action was logged) fall back to "byoh" so the
+	// chip still renders rather than crashing.
+	const harnessKindOf = useMemo(() => {
+		const byId = new Map<string, HarnessKind>(harnesses.map((h) => [h.id, h.kind]));
+		return (harnessId: string): HarnessKind => byId.get(harnessId) ?? "byoh";
+	}, [harnesses]);
 
 	// Keep the status-bar branch live (issue #18) until the Diff card's
 	// status/diff fetch lands in D3.
@@ -87,7 +100,7 @@ export const LiveContext = ({ roomId, cwd, onBranchChange }: LiveContextProps) =
 					{
 						label: "Activity",
 						meta: <span>{actions.length} events</span>,
-						body: <ActivityCardBody count={actions.length} />,
+						body: <ActivityCardBody actions={actions} harnessKindOf={harnessKindOf} />,
 					},
 				]}
 			/>

@@ -1,0 +1,495 @@
+/* Live Context — Activity feed styles (issue #80).
+   The Activity card body: rows, per-kind glyph colors, turn separators,
+   per-turn cost, tool-result previews, backfill banner + end marker,
+   burst rows, the tailing sentinel, and the error toast. Imported by
+   ActivityCard.tsx. Some selectors activate in later D2 slices (D2c–D2f).
+   Tokens inherit from the .sk-dark / .sk-light ancestor. Lifted from the
+   design canvas + prototype. */
+
+/* Activity card body. */
+.lc-activity {
+	display: flex;
+	flex-direction: column;
+}
+
+/* Activity tail sentinel. */
+.lc-tail {
+	padding: 8px 12px 14px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-family: var(--sk-mono);
+	font-size: 10px;
+	color: var(--fg-3);
+}
+.lc-tail .blinker {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--ok);
+	box-shadow: 0 0 6px var(--ok);
+	animation: lc-pulse 1.6s ease-in-out infinite;
+}
+@keyframes lc-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.4;
+	}
+}
+.lc-tail.idle .blinker {
+	background: var(--fg-3);
+	box-shadow: none;
+	animation: none;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Activity card — rows, turn separators, costs, bursts, previews,
+   backfill. The D2 layer on top of the D1 chrome above. Lifted from the
+   design canvas + prototype. Some selectors (turn/cost/burst/preview/
+   backfill/toast) activate in later D2 slices; the block is added once
+   so the feature owns its CSS in one place rather than across 6 edits.
+   ───────────────────────────────────────────────────────────────────── */
+
+/* Turn boundary — appears between assistant turns (D2d). */
+.lc-turn-sep {
+	height: 1px;
+	background: var(--line);
+	margin: 6px 12px;
+	position: relative;
+}
+.lc-turn-sep .stamp {
+	position: absolute;
+	top: -7px;
+	left: 0;
+	background: var(--bg-card);
+	padding-right: 8px;
+	font-family: var(--sk-mono);
+	font-size: 9px;
+	color: var(--fg-3);
+	letter-spacing: 0.04em;
+}
+.lc-turn-sep .right-stamp {
+	position: absolute;
+	top: -7px;
+	right: 0;
+	background: var(--bg-card);
+	padding-left: 8px;
+	font-family: var(--sk-mono);
+	font-size: 9px;
+	color: var(--fg-3);
+}
+
+/* Per-turn cost row under a separator (D2d). */
+.lc-turn-cost {
+	padding: 2px 12px 8px 36px;
+	font-family: var(--sk-mono);
+	font-size: 9.5px;
+	color: var(--fg-3);
+	display: flex;
+	gap: 10px;
+}
+.lc-turn-cost .v {
+	color: var(--fg-2);
+}
+
+/* The generic Activity row layout. */
+.lc-row {
+	display: grid;
+	grid-template-columns: 38px 14px 1fr auto;
+	align-items: baseline;
+	gap: 8px;
+	padding: var(--row-py, 3px) 12px;
+	font-family: var(--sk-mono);
+	font-size: 11px;
+	line-height: 1.5;
+	color: var(--fg-1);
+	position: relative;
+	border-left: 2px solid transparent;
+}
+.lc-row:hover {
+	background: rgba(255, 255, 255, 0.02);
+}
+.sk-light .lc-row:hover {
+	background: rgba(0, 0, 0, 0.02);
+}
+.lc-row .time {
+	color: var(--fg-3);
+	font-size: 9.5px;
+	align-self: center;
+}
+.lc-row .by {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	align-self: center;
+}
+.lc-row .gist {
+	color: var(--fg-1);
+	min-width: 0;
+}
+.lc-row .gist .tool {
+	color: var(--fg-2);
+}
+.lc-row .gist .target {
+	color: var(--fg-0);
+}
+.lc-row .gist .arg {
+	color: var(--accent);
+}
+.lc-row .gist .ok {
+	color: var(--ok);
+}
+.lc-row .gist .err-text {
+	color: var(--err);
+}
+.lc-row .gist .dim {
+	color: var(--fg-3);
+}
+.lc-row .gist .pill {
+	font-size: 8.5px;
+	padding: 1px 5px;
+	border-radius: 3px;
+	margin-left: 6px;
+	font-family: var(--sk-mono);
+	letter-spacing: 0.04em;
+	background: var(--bg-3);
+	color: var(--fg-2);
+	text-transform: uppercase;
+}
+.lc-row .right {
+	font-family: var(--sk-mono);
+	font-size: 9.5px;
+	color: var(--fg-3);
+	align-self: center;
+	white-space: nowrap;
+}
+.lc-row .right .delta-add {
+	color: var(--ok);
+}
+.lc-row .right .delta-del {
+	color: var(--err);
+}
+
+/* Glyphs per kind. */
+.lc-row .glyph {
+	font-family: var(--sk-mono);
+	font-weight: 600;
+	text-align: center;
+	color: var(--fg-2);
+}
+.lc-row.k-edit .glyph,
+.lc-row.k-write .glyph {
+	color: var(--ok);
+}
+.lc-row.k-read .glyph {
+	color: var(--fg-3);
+}
+.lc-row.k-grep .glyph,
+.lc-row.k-glob .glyph {
+	color: var(--fg-2);
+}
+.lc-row.k-bash .glyph {
+	color: var(--warn);
+}
+.lc-row.k-task .glyph {
+	color: var(--accent);
+}
+.lc-row.k-todowrite .glyph {
+	color: var(--accent);
+}
+.lc-row.k-ask .glyph {
+	color: var(--waiting);
+}
+.lc-row.k-agent .glyph {
+	color: var(--waiting);
+}
+.lc-row.k-pr .glyph {
+	color: var(--ok);
+}
+.lc-row.k-error .glyph {
+	color: var(--err);
+}
+.lc-row.k-error {
+	border-left-color: var(--err);
+}
+.lc-row.k-error .gist .err-text {
+	font-weight: 500;
+}
+.lc-row.k-queue .glyph {
+	color: var(--fg-2);
+}
+.lc-row.k-userfile .glyph {
+	color: var(--warn);
+}
+.lc-row.k-slash .glyph {
+	color: var(--accent);
+}
+.lc-row.k-compact .glyph {
+	color: var(--fg-2);
+}
+.lc-row.k-cost .glyph {
+	color: var(--fg-3);
+}
+.lc-row.k-perm .glyph {
+	color: var(--waiting);
+}
+.lc-row.k-perm {
+	border-left-color: var(--waiting);
+	background: color-mix(in srgb, var(--waiting) 5%, transparent);
+	cursor: pointer;
+}
+.lc-row.k-perm:hover {
+	background: color-mix(in srgb, var(--waiting) 10%, transparent);
+}
+.lc-row.k-burst {
+	color: var(--fg-0);
+	cursor: pointer;
+}
+
+/* user_prompt — distinct from agent rows; left-edge accent. */
+.lc-row.k-user {
+	border-left-color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.lc-row.k-user:hover {
+	background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.lc-row.k-user .glyph {
+	color: var(--accent);
+}
+
+/* permission_mode / ai_title / bridge_status — quiet context rows.
+   (Glyphs come from the GLYPH map as text, not CSS ::before.) */
+.lc-row.k-perm-mode .glyph {
+	color: var(--waiting);
+}
+.lc-row.k-title .glyph {
+	color: var(--fg-3);
+}
+.lc-row.k-bridge .glyph {
+	color: var(--fg-2);
+}
+.lc-row.bridge-connected .glyph {
+	color: var(--ok);
+}
+.lc-row.bridge-disconnected,
+.lc-row.bridge-reconnecting {
+	border-left-color: var(--warn);
+	background: color-mix(in srgb, var(--warn) 4%, transparent);
+}
+.lc-row.bridge-disconnected .glyph,
+.lc-row.bridge-reconnecting .glyph {
+	color: var(--warn);
+}
+
+/* Burst row internals + shimmer for an active burst (D2e). */
+.lc-row.k-burst .gist .tool {
+	background: var(--bg-3);
+	padding: 1px 6px;
+	border-radius: 3px;
+	color: var(--fg-0);
+}
+.lc-row.k-burst .gist .target {
+	color: var(--fg-1);
+}
+.lc-row.k-burst.live::before {
+	content: "";
+	position: absolute;
+	left: -2px;
+	right: 0;
+	top: 0;
+	bottom: 0;
+	background: linear-gradient(
+		90deg,
+		transparent,
+		color-mix(in srgb, var(--accent) 8%, transparent),
+		transparent
+	);
+	background-size: 60% 100%;
+	background-repeat: no-repeat;
+	animation: lc-shimmer 1.6s linear infinite;
+	pointer-events: none;
+}
+@keyframes lc-shimmer {
+	0% {
+		background-position: -100% 0;
+	}
+	100% {
+		background-position: 200% 0;
+	}
+}
+
+/* Tool-result expansion preview (D2c). */
+.lc-row-preview {
+	grid-column: 3 / -1;
+	margin: 4px 0 2px;
+	padding: 6px 8px;
+	background: var(--bg-0);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	font-size: 10.5px;
+	color: var(--fg-1);
+	line-height: 1.5;
+	max-height: 6em;
+	overflow: hidden;
+	white-space: pre-wrap;
+	position: relative;
+}
+.lc-row-preview.tall {
+	max-height: 12em;
+}
+.lc-row-preview .head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 9.5px;
+	color: var(--fg-3);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	margin-bottom: 4px;
+}
+.lc-row-preview .head .size {
+	margin-left: auto;
+}
+.lc-row-preview .expand-link {
+	color: var(--accent);
+	cursor: pointer;
+	font-size: 9.5px;
+}
+.lc-row-preview.api-error {
+	background: color-mix(in srgb, var(--err) 6%, var(--bg-0));
+	border-color: color-mix(in srgb, var(--err) 35%, var(--line));
+}
+
+/* Backfill banner + end marker (D2d). */
+.lc-backfill-banner {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 12px 6px;
+	font-family: var(--sk-mono);
+	font-size: 10.5px;
+	color: var(--fg-2);
+	background: color-mix(in srgb, var(--waiting) 6%, transparent);
+	border-top: 1px solid color-mix(in srgb, var(--waiting) 30%, var(--line));
+	border-bottom: 1px solid color-mix(in srgb, var(--waiting) 30%, var(--line));
+	letter-spacing: 0.02em;
+}
+.lc-backfill-banner .glyph {
+	color: var(--waiting);
+	font-size: 12px;
+}
+.lc-backfill-banner b {
+	color: var(--fg-0);
+	font-weight: 500;
+}
+.lc-backfill-banner .dim {
+	color: var(--fg-3);
+}
+.lc-backfill-end {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px 6px;
+	font-family: var(--sk-mono);
+	font-size: 9.5px;
+	color: var(--fg-3);
+	letter-spacing: 0.04em;
+}
+.lc-backfill-end .line {
+	flex: 1;
+	height: 1px;
+	background: var(--line);
+}
+.lc-backfill-end .text {
+	white-space: nowrap;
+}
+
+/* Slide-in for a freshly-streamed row (D2d). */
+.row-slide-in {
+	animation: lc-slide-in 320ms ease-out;
+}
+@keyframes lc-slide-in {
+	from {
+		transform: translateY(8px);
+		opacity: 0;
+	}
+	to {
+		transform: translateY(0);
+		opacity: 1;
+	}
+}
+
+/* "N new below" jump-to-latest pill when scrolled up (D2f). */
+.lc-newbelow {
+	position: absolute;
+	right: 14px;
+	bottom: 14px;
+	background: var(--accent);
+	color: #fff;
+	font-family: var(--sk-mono);
+	font-size: 10.5px;
+	font-weight: 500;
+	padding: 5px 10px;
+	border-radius: 999px;
+	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+	cursor: pointer;
+	z-index: 4;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.lc-newbelow:hover {
+	filter: brightness(1.08);
+}
+
+/* Diff card ambient/focus animations (D3). */
+@keyframes lc-flicker {
+	0%,
+	100% {
+		opacity: 0.25;
+	}
+	50% {
+		opacity: 0.9;
+	}
+}
+@keyframes lc-refocus {
+	0% {
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
+	}
+	100% {
+		box-shadow: inset 0 0 0 1px transparent;
+	}
+}
+
+/* Bottom-right error toast for an inactive room (D2f). */
+.lc-toast {
+	position: absolute;
+	right: 12px;
+	bottom: 12px;
+	background: var(--bg-2);
+	border: 1px solid color-mix(in srgb, var(--err) 50%, var(--line));
+	border-left: 3px solid var(--err);
+	border-radius: 5px;
+	padding: 8px 12px 8px 10px;
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	font-size: 11px;
+	color: var(--fg-0);
+	max-width: 260px;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+.lc-toast .body {
+	line-height: 1.45;
+}
+.lc-toast .body .dim {
+	color: var(--fg-2);
+	font-family: var(--sk-mono);
+	font-size: 9.5px;
+	margin-top: 2px;
+	display: block;
+}

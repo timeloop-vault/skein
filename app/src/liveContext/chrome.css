@@ -1,10 +1,10 @@
-/* Live Context card stack (issue #80).
-   Co-located with the components (imported by LiveContext.tsx) — the
-   first feature to own its CSS rather than pile into the monolithic
-   styles.css. Tokens (--bg-*, --fg-*, --accent, …) are inherited from
-   the .sk-dark / .sk-light ancestor, so these structural rules theme
-   automatically. Lifted from the design canvas
-   (docs/design/skein/project/Live Context.html). */
+/* Live Context — shared card-stack chrome (issue #80).
+   The pane shell, room subtitle, card stack + dividers, card head/body,
+   and the empty state — used by all three cards (Diff/Plan/Activity), so
+   imported once by LiveContext.tsx. Activity-feed styles live in
+   activity.css; D3/D4 will add diff.css / plan.css alongside. Tokens
+   (--bg-*, --fg-*, --accent, …) inherit from the .sk-dark / .sk-light
+   ancestor. Lifted from the design canvas. */
 
 .lc-pane {
 	background: var(--bg-1);
@@ -185,50 +185,4 @@
 	font-size: 22px;
 	color: var(--fg-2);
 	margin-bottom: 6px;
-}
-
-/* Activity card body. */
-.lc-activity {
-	display: flex;
-	flex-direction: column;
-}
-/* D1 placeholder note above the tail; removed when D2 renders rows. */
-.lc-activity-d1note {
-	padding: 10px 12px;
-	font-family: var(--sk-mono);
-	font-size: 11px;
-	color: var(--fg-2);
-}
-
-/* Activity tail sentinel. */
-.lc-tail {
-	padding: 8px 12px 14px;
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	font-family: var(--sk-mono);
-	font-size: 10px;
-	color: var(--fg-3);
-}
-.lc-tail .blinker {
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background: var(--ok);
-	box-shadow: 0 0 6px var(--ok);
-	animation: lc-pulse 1.6s ease-in-out infinite;
-}
-@keyframes lc-pulse {
-	0%,
-	100% {
-		opacity: 1;
-	}
-	50% {
-		opacity: 0.4;
-	}
-}
-.lc-tail.idle .blinker {
-	background: var(--fg-3);
-	box-shadow: none;
-	animation: none;
 }
