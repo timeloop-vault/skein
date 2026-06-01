@@ -255,7 +255,22 @@ impl ActionExtractor {
                 // secondary results in parallel-tool-call rows.
                 block.get("content").cloned().unwrap_or(Value::Null)
             };
-            out.push(build_tool_action(&pending, &result_body, is_error, ts));
+            // On error the message lives in the tool_result `content`
+            // block (a `<tool_use_error>` string), NOT in toolUseResult
+            // (success-shaped or null). Capture it as `error` so the
+            // activity feed's error row has a message — mirrors opencode.
+            let error_text = if is_error {
+                block.get("content").and_then(Value::as_str)
+            } else {
+                None
+            };
+            out.push(build_tool_action(
+                &pending,
+                &result_body,
+                is_error,
+                error_text,
+                ts,
+            ));
         }
     }
 }
@@ -269,6 +284,7 @@ fn build_tool_action(
     pending: &PendingToolUse,
     result: &Value,
     is_error: bool,
+    error_text: Option<&str>,
     ended_at_ms: i64,
 ) -> ExtractedAction {
     let kind = classify_tool(&pending.name);
@@ -282,6 +298,13 @@ fn build_tool_action(
         "ended_at_ms": ended_at_ms,
         "duration_ms": duration_ms,
     });
+
+    // Error message (when present) so the feed's error row isn't blank.
+    if let Some(err) = error_text
+        && let Some(obj) = payload.as_object_mut()
+    {
+        obj.insert("error".into(), json!(err));
+    }
 
     // Card-specific normalization on top of the raw shape.
     if kind == action_kind::PATCH {
@@ -924,6 +947,40 @@ mod tests {
         assert_eq!(actions.len(), 1);
         let payload: Value = serde_json::from_str(&actions[0].payload).unwrap();
         assert_eq!(payload["is_error"], true);
+        // The error message comes from the tool_result content block (not
+        // toolUseResult) so the activity feed's error row isn't blank.
+        assert_eq!(payload["error"], "Exit code 1\n");
+    }
+
+    #[test]
+    fn successful_result_has_no_error_field() {
+        let mut x = ActionExtractor::new();
+        ingest_one(
+            &mut x,
+            json!({
+                "type": "assistant",
+                "uuid": "a1",
+                "timestamp": "2026-05-15T21:16:22.572Z",
+                "message": {"content": [{
+                    "type": "tool_use", "id": "toolu_1", "name": "Bash",
+                    "input": {"command": "ls"},
+                }]},
+            }),
+        );
+        let actions = ingest_one(
+            &mut x,
+            json!({
+                "type": "user",
+                "timestamp": "2026-05-15T21:16:23.000Z",
+                "toolUseResult": {"stdout": "ok", "stderr": "", "interrupted": false},
+                "message": {"content": [{
+                    "type": "tool_result", "tool_use_id": "toolu_1",
+                    "content": "ok", "is_error": false
+                }]},
+            }),
+        );
+        let payload: Value = serde_json::from_str(&actions[0].payload).unwrap();
+        assert!(payload.get("error").is_none(), "no error field on success");
     }
 
     #[test]
