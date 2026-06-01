@@ -230,7 +230,7 @@ const SlashRow = ({ payload, harness, timestampMs }: SimpleRowProps) => {
 /// a leading token when the content actually looks like a "/cmd"
 /// invocation, otherwise a neutral "command" placeholder. (Grabbing the
 /// first word of arbitrary stdout would render a garbage name.)
-/// Capturing the real name upstream is a backend follow-up.
+/// Capturing the real name upstream is a backend follow-up (issue #91).
 function parseSlashName(content: string): string {
 	const tag = content.match(/<command-name>\s*\/?([^<\s]+)/i);
 	if (tag?.[1]) return tag[1];

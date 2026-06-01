@@ -137,3 +137,13 @@ GLYPH key. Gist/right-meta name the exact payload paths.
 - Glyph/color collisions (`⏵` queue/perm/perm-mode; `$` bash/cost) are
   resolved only by the per-kind `k-*` CSS class — the `is_error → k-error`
   short-circuit must override the per-tool class.
+
+## Backend follow-ups (tracked: #91)
+
+The "omit / best-effort, frontend-only" decision leaves several payload
+fields the design wants but the extractors don't emit. These are
+captured in **issue #91** (backend extractor enrichments) so the
+frontend's placeholders can be upgraded later without re-deriving the
+gaps: slash-command name, opencode `user_prompt` text, `bridge_status`
+connection state, `compaction` token delta, `pr_link` title, Claude
+`turn_cost` USD, and the PermissionRow backing signal.

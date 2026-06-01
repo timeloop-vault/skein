@@ -4,6 +4,7 @@
 // auto-tail land in D2d–D2f; virtualization in D2g.
 
 import type { HarnessKind } from "../types.ts";
+import "./activity.css";
 import { ActivityRow } from "./rows.tsx";
 import type { HarnessAction } from "./store.ts";
 

@@ -22,7 +22,7 @@ import type { Harness, HarnessKind } from "../types.ts";
 import { ActivityCardBody } from "./ActivityCard.tsx";
 import { type CardLayout, CardStack, DEFAULT_LAYOUT } from "./CardStack.tsx";
 import { DiffCardBody } from "./DiffCard.tsx";
-import "./live-context.css";
+import "./chrome.css";
 import { PlanCardBody } from "./PlanCard.tsx";
 import { RoomSubtitle } from "./RoomSubtitle.tsx";
 import { useRoomActions } from "./store.ts";
