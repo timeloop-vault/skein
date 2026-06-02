@@ -650,6 +650,11 @@ body {
 	flex-direction: column;
 	background: var(--bg-1);
 	min-width: 0;
+	/* Without min-height:0 a flex item's min size is its content height,
+	   so the Live Context card stack would grow past the window instead
+	   of letting each card body scroll. Matches the splitter panes. */
+	min-height: 0;
+	overflow: hidden;
 }
 
 /* Diff body — used by LiveStatus's DiffView */
