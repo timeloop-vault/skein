@@ -35,6 +35,10 @@ interface LiveContextProps {
 	 *  `HarnessKind` for its chip (the action store carries ids, chips
 	 *  render by kind). */
 	harnesses: Harness[];
+	/** True iff this room is the active one (its `.sk-right` is
+	 *  display:flex, not none). The Activity card needs it to re-pin its
+	 *  auto-tail when shown — a hidden card can't measure scroll. */
+	visible: boolean;
 	/**
 	 * Fired with the current HEAD branch on every git-watcher tick (or
 	 * `null` for detached HEAD / non-git folders). The status bar reads
@@ -45,7 +49,13 @@ interface LiveContextProps {
 	onBranchChange?: (branch: string | null) => void;
 }
 
-export const LiveContext = ({ roomId, cwd, harnesses, onBranchChange }: LiveContextProps) => {
+export const LiveContext = ({
+	roomId,
+	cwd,
+	harnesses,
+	visible,
+	onBranchChange,
+}: LiveContextProps) => {
 	const { actions } = useRoomActions(roomId);
 	const [layout, setLayout] = usePersistedState<CardLayout>(
 		`liveContext:layout:${roomId}`,
@@ -100,7 +110,9 @@ export const LiveContext = ({ roomId, cwd, harnesses, onBranchChange }: LiveCont
 					{
 						label: "Activity",
 						meta: <span>{actions.length} events</span>,
-						body: <ActivityCardBody actions={actions} harnessKindOf={harnessKindOf} />,
+						body: (
+							<ActivityCardBody actions={actions} harnessKindOf={harnessKindOf} visible={visible} />
+						),
 					},
 				]}
 			/>
