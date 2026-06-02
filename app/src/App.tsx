@@ -2213,6 +2213,7 @@ export default function App() {
 								roomId={r.id}
 								cwd={r.cwd}
 								harnesses={r.harnesses}
+								visible={r.id === activeRoomId}
 								onBranchChange={(b) =>
 									setLiveBranches((prev) => (prev[r.id] === b ? prev : { ...prev, [r.id]: b }))
 								}

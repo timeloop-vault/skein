@@ -165,9 +165,11 @@
 	border-radius: 4px;
 }
 
-/* Empty states (shared by all three cards in D1). */
+/* Empty states (shared by all three cards). height:100% (not flex:1)
+   because .lc-card-body is a block container — flex:1 would be inert and
+   the empty state would collapse to the top instead of centering. */
 .lc-empty {
-	flex: 1;
+	height: 100%;
 	display: flex;
 	align-items: center;
 	justify-content: center;
