@@ -1,31 +1,16 @@
-// Activity-row dispatcher + the D2a "simple" rows.
+// Activity-row dispatcher + the simple single-shape rows.
 //
 // Two-level dispatch (see docs/live-context-d2-buildmap.md): switch on
-// the backend `kind`, then for the tool family sub-classify by
-// `payload.tool`. D2a implements the single-shape rows (no Claude/
-// opencode divergence, no result normalization) plus a minimal generic
-// fallback for the tool_call/patch/plan_change family — the full
-// per-tool components with deltas/previews/error-handling land in D2b.
+// the backend `kind` here; the tool_call/patch/plan_change family
+// (where all the Claude↔opencode divergence lives) is handed to
+// ToolFamilyRow (toolRows.tsx) for its second-level dispatch. The rows
+// in this file are the kinds with one clean shape and no divergence.
 
 import type { HarnessKind } from "../types.ts";
 import { Row, basename } from "./Row.tsx";
+import { type Payload, num, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
-
-// ── tiny safe payload accessors ────────────────────────────────────
-
-type Payload = Record<string, unknown>;
-
-function parsePayload(raw: string): Payload {
-	try {
-		const v: unknown = JSON.parse(raw);
-		return v && typeof v === "object" ? (v as Payload) : {};
-	} catch {
-		return {};
-	}
-}
-
-const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
-const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+import { ToolFamilyRow } from "./toolRows.tsx";
 
 interface SimpleRowProps {
 	payload: Payload;
@@ -71,9 +56,7 @@ export const ActivityRow = ({
 		case "plan_change":
 		case "api_error":
 		case "compaction":
-			return (
-				<GenericToolRow kind={row.kind} payload={payload} harness={harness} timestampMs={ts} />
-			);
+			return <ToolFamilyRow kind={row.kind} payload={payload} harness={harness} timestampMs={ts} />;
 		// turn_duration → turn separator, turn_cost → cost hair-line:
 		// both rendered by the flattened-item layer in D2d, not as rows.
 		default:
@@ -240,131 +223,4 @@ function parseSlashName(content: string): string {
 		if (lead?.[1]) return lead[1];
 	}
 	return "command";
-}
-
-// ── generic tool-family fallback (replaced per-tool in D2b) ─────────
-
-/// Normalize a (possibly CamelCase) tool name to the displayKind used
-/// for the glyph + CSS class. "" when unrecognized.
-function toolDisplayKind(tool: string): string {
-	switch (tool) {
-		case "edit":
-		case "multiedit":
-			return "edit";
-		case "write":
-			return "write";
-		case "read":
-			return "read";
-		case "grep":
-			return "grep";
-		case "glob":
-			return "glob";
-		case "bash":
-			return "bash";
-		case "taskcreate":
-		case "taskupdate":
-			return "task";
-		case "todowrite":
-			return "todowrite";
-		case "askuserquestion":
-		case "question":
-			return "ask";
-		case "task":
-		case "agent":
-			return "agent";
-		default:
-			return "";
-	}
-}
-
-/// Minimal row for the tool_call / patch / plan_change family plus
-/// api_error / compaction. D2a shows the glyph + a best-effort target
-/// (file basename / command / pattern — the low-divergence input
-/// fields); D2b replaces this with the full per-tool components
-/// (deltas, result previews, error short-circuit, sub-agent inspector).
-const GenericToolRow = ({
-	kind,
-	payload,
-	harness,
-	timestampMs,
-}: {
-	kind: string;
-	payload: Payload;
-	harness: HarnessKind | undefined;
-	timestampMs: number;
-}) => {
-	if (kind === "api_error") {
-		const status = errorStatus(payload);
-		return (
-			<Row kind="error" harness={harness} timestampMs={timestampMs}>
-				<span className="tool err-text">api error</span>
-				{status ? (
-					<>
-						{" "}
-						<span className="target">{status}</span>
-					</>
-				) : null}
-			</Row>
-		);
-	}
-	if (kind === "compaction") {
-		const auto = payload.auto === true;
-		return (
-			<Row kind="compact" harness={harness} timestampMs={timestampMs}>
-				<span className="tool">compacted context</span>
-				{auto ? <span className="dim"> · auto</span> : null}
-			</Row>
-		);
-	}
-
-	const tool = (str(payload.tool) ?? "").toLowerCase();
-	const dk = toolDisplayKind(tool);
-	const isError = payload.is_error === true;
-	const target = genericTarget(tool, payload);
-	const toolClass = isError ? "tool err-text" : "tool";
-	return (
-		<Row kind={isError ? "error" : dk || "bash"} harness={harness} timestampMs={timestampMs}>
-			<span className={toolClass}>{dk || tool || kind}</span>
-			{target ? (
-				<>
-					{" "}
-					<span className="target">{target}</span>
-				</>
-			) : null}
-		</Row>
-	);
-};
-
-/// Best-effort target for the generic tool row — the low-divergence
-/// input fields only (file path key differs claude/opencode; command
-/// + pattern are shared). No deltas/counts (those are D2b).
-function genericTarget(tool: string, payload: Payload): string {
-	const input = payload.input;
-	const inp: Payload = input && typeof input === "object" ? (input as Payload) : {};
-	switch (tool) {
-		case "edit":
-		case "multiedit":
-		case "write":
-		case "read":
-			return basename(str(inp.file_path) ?? str(inp.filePath));
-		case "bash":
-			return str(payload.title) ?? str(inp.command) ?? "";
-		case "grep":
-		case "glob":
-			return str(inp.pattern) ?? "";
-		default:
-			return "";
-	}
-}
-
-/// Extract a status code/string from an api_error payload whose
-/// `error` may be an object ({status}), a string, or absent.
-function errorStatus(payload: Payload): string {
-	const e = payload.error;
-	if (e && typeof e === "object") {
-		const s = (e as Payload).status;
-		if (typeof s === "number" || typeof s === "string") return String(s);
-	}
-	if (typeof e === "string") return e;
-	return "";
 }
