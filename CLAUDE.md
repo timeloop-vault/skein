@@ -129,11 +129,14 @@ When in doubt about a UI convention, the design archive in
 `docs/design/skein/project/Skein Prototype.html` and the chat
 transcript in `docs/design/skein/chats/chat1.md`.
 
-For the right-pane **Live Context** stack (issue #80) the spec
-trio at the docs root is authoritative: `live-context-recon.md`
-(data we can extract), `live-context-design-brief.md` (the
-handoff to the design pass), and `live-context-handover.md`
-(what to build). The handover wins on conflicts; the prototype
-files in `docs/design/skein/project/` (`Live Context.html`,
-`Live Context Prototype.html`, `live-context-*.jsx`,
-`lc-proto.jsx`) are the visual reference.
+For the right-pane **Live Context** stack (issue #80) start with
+`docs/live-context-progress.md` — the status/handover (what's
+merged, what's next, the file map, the gotchas). The spec trio at
+the docs root is authoritative: `live-context-recon.md` (data we
+can extract), `live-context-design-brief.md` (the handoff to the
+design pass), and `live-context-handover.md` (what to build). The
+handover wins on conflicts; `live-context-d2-buildmap.md` carries
+the Activity-card slice plan. The prototype files in
+`docs/design/skein/project/` (`Live Context.html`, `Live Context
+Prototype.html`, `live-context-*.jsx`, `lc-proto.jsx`) are the
+visual reference.
