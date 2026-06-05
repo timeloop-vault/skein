@@ -8,6 +8,7 @@
 // normalized tool name / plan_item.op.
 
 import type { HarnessKind } from "../types.ts";
+import { ResultPreview, byteLen, formatBytes } from "./ResultPreview.tsx";
 import { Row, basename } from "./Row.tsx";
 import { type Payload, num, obj, str } from "./payload.ts";
 
@@ -16,6 +17,11 @@ interface ToolRowProps {
 	harness: HarnessKind | undefined;
 	timestampMs: number;
 }
+
+/// Results smaller than this (in UTF-8 bytes, same basis as the size
+/// pill) stay inline; larger ones get an expandable preview block.
+/// Matches the handover's ~200-byte rule.
+const PREVIEW_MIN = 200;
 
 // ── dispatch ───────────────────────────────────────────────────────
 
@@ -123,12 +129,21 @@ const ReadRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
 	const input = obj(payload.input);
 	const file = basename(str(input?.file_path) ?? str(input?.filePath));
 	const lines = lineCount(payload.result);
+	const content = normalizeResultString(payload.result);
+	const contentBytes = byteLen(content);
+	// Pill is bytes (the line count already rides in the row's right-meta,
+	// so showing "N ln" in both places would be redundant).
+	const preview =
+		contentBytes > PREVIEW_MIN ? (
+			<ResultPreview label="file" body={content} sizeLabel={formatBytes(contentBytes)} />
+		) : undefined;
 	return (
 		<Row
 			kind="read"
 			harness={harness}
 			timestampMs={timestampMs}
 			right={lines != null ? <span className="dim">{lines} ln</span> : undefined}
+			extra={preview}
 		>
 			<span className="tool">read</span> <span className="target">{file}</span>
 		</Row>
@@ -162,12 +177,19 @@ const BashRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
 	const title = str(payload.title); // opencode supplies a human title; Claude does not
 	const ms = num(payload.duration_ms);
 	const isError = payload.is_error === true;
+	const out = bashOutput(payload);
+	const outBytes = byteLen(out);
+	const preview =
+		outBytes > PREVIEW_MIN ? (
+			<ResultPreview label="output" body={out} sizeLabel={formatBytes(outBytes)} />
+		) : undefined;
 	return (
 		<Row
 			kind="bash"
 			harness={harness}
 			timestampMs={timestampMs}
 			right={ms != null ? <span className="dim">{ms}ms</span> : undefined}
+			extra={preview}
 		>
 			<span className="tool">bash</span> <span className="target">{title ?? command}</span>
 			{isError && <span className="err-text"> · failed</span>}
@@ -201,13 +223,23 @@ const TaskRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
 };
 
 const TodoWriteRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
-	const count = num(obj(payload.plan_item)?.count) ?? 0;
+	const pi = obj(payload.plan_item);
+	const count = num(pi?.count) ?? 0;
+	// opencode persists the full item list at plan_item.items (Claude
+	// never reaches this row — it emits create/update, not write).
+	const itemsRaw = pi?.items;
+	const items = Array.isArray(itemsRaw) ? itemsRaw : [];
+	const body = todoItemsText(items);
+	const preview = body ? (
+		<ResultPreview label="plan" body={body} sizeLabel={`${count} todos`} />
+	) : undefined;
 	return (
 		<Row
 			kind="todowrite"
 			harness={harness}
 			timestampMs={timestampMs}
 			right={<span className="dim">replaced plan</span>}
+			extra={preview}
 		>
 			<span className="tool">todowrite</span> <span className="target">{count} todos</span>
 		</Row>
@@ -217,12 +249,22 @@ const TodoWriteRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
 const AskRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
 	const question = firstQuestion(obj(payload.input));
 	const chosen = chosenAnswer(payload.result);
+	// Claude carries a structured {answers} object (the chosen value is
+	// already inline above); opencode carries a result string, which is
+	// the only thing long enough to warrant a preview.
+	const detail = normalizeResultString(payload.result);
+	const detailBytes = byteLen(detail);
+	const preview =
+		detailBytes > PREVIEW_MIN ? (
+			<ResultPreview label="result" body={detail} sizeLabel={formatBytes(detailBytes)} />
+		) : undefined;
 	return (
 		<Row
 			kind="ask"
 			harness={harness}
 			timestampMs={timestampMs}
 			right={<span className="dim">user chose</span>}
+			extra={preview}
 		>
 			<span className="tool">asked</span> <span className="target">{question}</span>
 			{chosen ? (
@@ -267,13 +309,24 @@ const CompactRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
 const ApiErrorRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
 	const status = errorStatus(payload);
 	const attempt = num(payload.retry_attempt);
-	// The message + retry countdown preview block lands in D2c.
+	// Preview = the human message + the (static) retry interval. The
+	// interval is shown as a fixed "retrying in Xs", not a live ticking
+	// countdown: these rows are almost always historical by the time the
+	// feed is read, so a running timer would lie.
+	const message = apiErrorMessage(payload);
+	const retryMs = num(payload.retry_in_ms);
+	const retryLine = retryMs != null ? `retrying in ${formatDuration(Math.round(retryMs))}` : "";
+	const detail = [message, retryLine].filter(Boolean).join("\n");
+	const preview = detail ? (
+		<ResultPreview label="error" body={detail} variant="api-error" />
+	) : undefined;
 	return (
 		<Row
 			kind="error"
 			harness={harness}
 			timestampMs={timestampMs}
 			right={attempt != null ? <span className="dim">attempt {attempt}</span> : undefined}
+			extra={preview}
 		>
 			<span className="tool err-text">api error</span>
 			{status ? (
@@ -423,6 +476,60 @@ function genericTarget(tool: string, payload: Payload): string {
 		default:
 			return "";
 	}
+}
+
+/// Bash preview body: Claude's result is an object → stdout, with
+/// stderr appended when present; opencode's is the plain output string.
+function bashOutput(payload: Payload): string {
+	const r = obj(payload.result);
+	if (r) {
+		const out = str(r.stdout) ?? "";
+		const err = str(r.stderr) ?? "";
+		return err.trim() ? `${out}${out ? "\n" : ""}${err}` : out;
+	}
+	return normalizeResultString(payload.result);
+}
+
+/// Render an opencode todo list (plan_item.items: {content,status,…})
+/// as a status-marked text block. Empty when no items have text.
+function todoItemsText(items: unknown[]): string {
+	return items
+		.map((it) => {
+			const o = obj(it);
+			const text = str(o?.content) ?? str(o?.text) ?? str(o?.subject) ?? "";
+			return `${todoMark(str(o?.status))} ${text}`.trimEnd();
+		})
+		.filter((line) => line.length > 1)
+		.join("\n");
+}
+
+/// Glyph for a todo status. Unknown/pending → "○".
+function todoMark(status: string | undefined): string {
+	switch (status) {
+		case "completed":
+		case "done":
+			return "✓";
+		case "in_progress":
+		case "active":
+			return "▸";
+		default:
+			return "○";
+	}
+}
+
+/// Human-readable api_error message. The raw SDK error object nests one
+/// level deeper than the obvious path (live data: error.error.error.message),
+/// so walk a few shapes and fall back to the type tag.
+function apiErrorMessage(payload: Payload): string {
+	const e = obj(payload.error);
+	if (!e) return "";
+	return (
+		str(obj(obj(e.error)?.error)?.message) ??
+		str(obj(e.error)?.message) ??
+		str(e.message) ??
+		str(e.type) ??
+		""
+	);
 }
 
 /// ms → "850ms" / "4.2s" / "3m".

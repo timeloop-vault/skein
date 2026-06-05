@@ -359,7 +359,14 @@
 	position: relative;
 }
 .lc-row-preview.tall {
-	max-height: 12em;
+	max-height: 18em;
+	overflow-y: auto;
+}
+.lc-row-preview pre.body {
+	margin: 0;
+	font: inherit;
+	white-space: pre-wrap;
+	word-break: break-word;
 }
 .lc-row-preview .head {
 	display: flex;
@@ -378,6 +385,15 @@
 	color: var(--accent);
 	cursor: pointer;
 	font-size: 9.5px;
+	background: none;
+	border: 0;
+	padding: 0;
+	font-family: var(--sk-mono);
+	letter-spacing: inherit;
+	text-transform: inherit;
+}
+.lc-row-preview .expand-link:hover {
+	text-decoration: underline;
 }
 .lc-row-preview.api-error {
 	background: color-mix(in srgb, var(--err) 6%, var(--bg-0));
