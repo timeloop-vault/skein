@@ -41,18 +41,21 @@ export const ResultPreview = ({
 	/** `api-error` tints the block red (retry notices). */
 	variant?: "api-error" | undefined;
 }) => {
-	const boxRef = useRef<HTMLDivElement>(null);
+	const bodyRef = useRef<HTMLPreElement>(null);
 	const [expanded, setExpanded] = useState(false);
 	const [overflowing, setOverflowing] = useState(false);
 
-	// Show the expand affordance only when content actually overflows the
-	// cap. A ResizeObserver (not a one-shot measure) is required because
-	// inactive room cards stay mounted with display:none: a block that
-	// first lays out while hidden measures 0×0, and must re-measure when
-	// the card becomes visible (0 → real size fires the observer). It also
-	// re-measures on expand/collapse, when the cap itself changes.
+	// The body (not the whole block) is the scroll region, so the head —
+	// which holds the collapse control — stays pinned above it and never
+	// scrolls out of reach. Measure the body's overflow against its cap to
+	// decide whether to show the expand affordance. A ResizeObserver (not
+	// a one-shot measure) is required because inactive room cards stay
+	// mounted with display:none: a block that first lays out while hidden
+	// measures 0×0 and must re-measure when shown (0 → real size fires the
+	// observer); it also re-measures on expand/collapse, when the cap
+	// itself changes.
 	useLayoutEffect(() => {
-		const el = boxRef.current;
+		const el = bodyRef.current;
 		if (!el) return;
 		const measure = () => setOverflowing(el.scrollHeight > el.clientHeight + 2);
 		measure();
@@ -65,7 +68,7 @@ export const ResultPreview = ({
 	const cls = `lc-row-preview${expanded ? " tall" : ""}${variant ? ` ${variant}` : ""}`;
 
 	return (
-		<div className={cls} ref={boxRef}>
+		<div className={cls}>
 			<div className="head">
 				<span>{label}</span>
 				<span className="size">
@@ -78,7 +81,9 @@ export const ResultPreview = ({
 					)}
 				</span>
 			</div>
-			<pre className="body">{body}</pre>
+			<pre className="body" ref={bodyRef}>
+				{body}
+			</pre>
 		</div>
 	);
 };
