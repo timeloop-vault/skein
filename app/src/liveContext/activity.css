@@ -353,13 +353,30 @@
 	font-size: 10.5px;
 	color: var(--fg-1);
 	line-height: 1.5;
-	max-height: 6em;
-	overflow: hidden;
-	white-space: pre-wrap;
 	position: relative;
 }
-.lc-row-preview.tall {
-	max-height: 12em;
+/* The body is the scroll region — NOT the whole block — so the head (with
+   the collapse control) stays pinned above and never scrolls away. */
+.lc-row-preview pre.body {
+	margin: 0;
+	font: inherit;
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 4.5em;
+	overflow: hidden;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bg-3) transparent;
+}
+.lc-row-preview.tall pre.body {
+	max-height: 16em;
+	overflow-y: auto;
+}
+.lc-row-preview pre.body::-webkit-scrollbar {
+	width: 7px;
+}
+.lc-row-preview pre.body::-webkit-scrollbar-thumb {
+	background: var(--bg-3);
+	border-radius: 4px;
 }
 .lc-row-preview .head {
 	display: flex;
@@ -378,6 +395,15 @@
 	color: var(--accent);
 	cursor: pointer;
 	font-size: 9.5px;
+	background: none;
+	border: 0;
+	padding: 0;
+	font-family: var(--sk-mono);
+	letter-spacing: inherit;
+	text-transform: inherit;
+}
+.lc-row-preview .expand-link:hover {
+	text-decoration: underline;
 }
 .lc-row-preview.api-error {
 	background: color-mix(in srgb, var(--err) 6%, var(--bg-0));

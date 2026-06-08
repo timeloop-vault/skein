@@ -7,6 +7,7 @@
 // in this file are the kinds with one clean shape and no divergence.
 
 import type { HarnessKind } from "../types.ts";
+import { ResultPreview } from "./ResultPreview.tsx";
 import { Row, basename } from "./Row.tsx";
 import { type Payload, num, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
@@ -170,25 +171,7 @@ const UserFileRow = ({ payload, harness, timestampMs }: SimpleRowProps) => {
 			harness={harness}
 			timestampMs={timestampMs}
 			right={<span className="dim">user edited</span>}
-			extra={
-				snippet ? (
-					<div className="lc-row-preview">
-						<div className="head">
-							<span>snippet</span>
-						</div>
-						<pre
-							style={{
-								margin: 0,
-								fontFamily: "inherit",
-								fontSize: "inherit",
-								whiteSpace: "pre-wrap",
-							}}
-						>
-							{snippet}
-						</pre>
-					</div>
-				) : undefined
-			}
+			extra={snippet ? <ResultPreview label="snippet" body={snippet} /> : undefined}
 		>
 			<span className="tool">noticed</span> <span className="target">{basename(filename)}</span>{" "}
 			<span className="dim">edited outside</span>
