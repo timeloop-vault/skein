@@ -103,3 +103,11 @@ export function basename(path: string | null | undefined): string {
 	const i = trimmed.lastIndexOf("/");
 	return i === -1 ? trimmed : trimmed.slice(i + 1);
 }
+
+/// ms → "850ms" / "4.2s" / "3m". Shared by tool rows (durations) and the
+/// turn separator (turn length).
+export function formatDuration(ms: number): string {
+	if (ms < 1000) return `${ms}ms`;
+	if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+	return `${Math.round(ms / 60_000)}m`;
+}
