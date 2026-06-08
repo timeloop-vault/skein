@@ -21,9 +21,10 @@ interface SimpleRowProps {
 
 // ── the dispatcher ─────────────────────────────────────────────────
 
-/// Render one action as its Activity row, or `null` for kinds that are
-/// consumed elsewhere (turn_duration → separators, turn_cost → cost
-/// hair-lines; both land in D2d).
+/// Render one action as its Activity row, or `null` for kinds consumed
+/// elsewhere: turn_duration → turn separators (flattenFeed), turn_cost →
+/// cost hair-lines (D2d-2), away_summary → the room subtitle, reasoning →
+/// not shown. flattenFeed's SKIP_KINDS mirrors this null set.
 export const ActivityRow = ({
 	row,
 	harnessKindOf,

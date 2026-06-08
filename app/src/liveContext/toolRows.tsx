@@ -9,7 +9,7 @@
 
 import type { HarnessKind } from "../types.ts";
 import { ResultPreview, byteLen, formatBytes } from "./ResultPreview.tsx";
-import { Row, basename } from "./Row.tsx";
+import { Row, basename, formatDuration } from "./Row.tsx";
 import { type Payload, num, obj, str } from "./payload.ts";
 
 interface ToolRowProps {
@@ -530,11 +530,4 @@ function apiErrorMessage(payload: Payload): string {
 		str(e.type) ??
 		""
 	);
-}
-
-/// ms → "850ms" / "4.2s" / "3m".
-function formatDuration(ms: number): string {
-	if (ms < 1000) return `${ms}ms`;
-	if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-	return `${Math.round(ms / 60_000)}m`;
 }

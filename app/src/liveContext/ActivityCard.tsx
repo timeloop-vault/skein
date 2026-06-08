@@ -21,6 +21,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { HarnessKind } from "../types.ts";
 import "./activity.css";
+import { TurnSeparator, flattenFeed } from "./feedItems.tsx";
 import { ActivityRow } from "./rows.tsx";
 import type { HarnessAction } from "./store.ts";
 
@@ -60,22 +61,41 @@ export const ActivityCardBody = ({
 	visible: boolean;
 }) => {
 	const ordered = useMemo(() => orderForDisplay(actions), [actions]);
-	const bottomId = ordered.length > 0 ? ordered[ordered.length - 1]?.id : undefined;
+	// Flatten to rendered items (rows + derived turn separators). The feed
+	// maps over these, and the unseen-counter counts them — not raw
+	// actions — so derived/dropped kinds don't skew the "N new" pill.
+	const items = useMemo(() => flattenFeed(ordered), [ordered]);
+	// The marker tracks the last *row* (separators are chrome), so it
+	// always names a real activity entry even when a turn separator is the
+	// tail item. Behaviourally identical to the last-item key for counting
+	// — rows after either index match — but keeps the marker contract true.
+	const bottomKey = useMemo(() => {
+		for (let i = items.length - 1; i >= 0; i--) {
+			const it = items[i];
+			if (it?.type === "row") return it.key;
+		}
+		return undefined;
+	}, [items]);
 
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	const [atBottom, setAtBottom] = useState(true);
-	// Id of the bottom row the last time the user was at the bottom.
-	const [seenBottomId, setSeenBottomId] = useState<number | undefined>(undefined);
+	// Key of the bottom item the last time the user was at the bottom.
+	const [seenBottomKey, setSeenBottomKey] = useState<string | undefined>(undefined);
 
-	// Unseen rows = those appended after the last-seen bottom. Derived,
-	// so mid-list inserts of older rows (which sort above the marker)
-	// don't count, and the pill always reflects what's actually below.
+	// Unseen rows = the *row* items after the last-seen bottom (separators
+	// aren't counted — they're chrome, not new activity). Derived, so a
+	// mid-list insert of an older row (which sorts above the marker)
+	// doesn't count, and the pill reflects what's actually below.
 	const newCount = useMemo(() => {
 		if (atBottom) return 0;
-		if (seenBottomId === undefined) return ordered.length;
-		const idx = ordered.findIndex((r) => r.id === seenBottomId);
-		return idx >= 0 ? ordered.length - 1 - idx : ordered.length;
-	}, [ordered, atBottom, seenBottomId]);
+		const start =
+			seenBottomKey === undefined ? 0 : items.findIndex((it) => it.key === seenBottomKey) + 1;
+		let n = 0;
+		for (let i = Math.max(start, 0); i < items.length; i++) {
+			if (items[i]?.type === "row") n++;
+		}
+		return n;
+	}, [items, atBottom, seenBottomKey]);
 
 	// Pin to the bottom while tailing. Skipped while hidden (a
 	// display:none card can't measure); re-runs and catches up the moment
@@ -83,30 +103,30 @@ export const ActivityCardBody = ({
 	useEffect(() => {
 		const el = scrollerRef.current;
 		if (!el || !visible) return;
-		// Re-pin on any content growth, not just a tail-id change, so a
+		// Re-pin on any content growth, not just a tail-key change, so a
 		// mid-list insert while tailing still keeps us at the bottom.
-		if (atBottom && ordered.length > 0) {
+		if (atBottom && items.length > 0) {
 			el.scrollTop = el.scrollHeight;
-			setSeenBottomId(ordered[ordered.length - 1]?.id);
+			setSeenBottomKey(bottomKey);
 		}
-	}, [ordered, atBottom, visible]);
+	}, [items, atBottom, visible, bottomKey]);
 
 	const onScroll = () => {
 		const el = scrollerRef.current;
 		if (!el) return;
 		const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < TAIL_THRESHOLD_PX;
 		setAtBottom(bottom);
-		if (bottom) setSeenBottomId(bottomId);
+		if (bottom) setSeenBottomKey(bottomKey);
 	};
 
 	const jumpToLatest = () => {
 		const el = scrollerRef.current;
 		if (el) el.scrollTop = el.scrollHeight;
 		setAtBottom(true);
-		setSeenBottomId(bottomId);
+		setSeenBottomKey(bottomKey);
 	};
 
-	if (actions.length === 0) {
+	if (items.length === 0) {
 		return (
 			<div className="lc-empty">
 				<div className="lc-empty-inner">
@@ -120,9 +140,13 @@ export const ActivityCardBody = ({
 	return (
 		<div className="lc-activity">
 			<div className="lc-activity-scroll" ref={scrollerRef} onScroll={onScroll}>
-				{ordered.map((row) => (
-					<ActivityRow key={row.id} row={row} harnessKindOf={harnessKindOf} />
-				))}
+				{items.map((it) =>
+					it.type === "separator" ? (
+						<TurnSeparator key={it.key} timestampMs={it.timestampMs} durationMs={it.durationMs} />
+					) : (
+						<ActivityRow key={it.key} row={it.action} harnessKindOf={harnessKindOf} />
+					),
+				)}
 				<div className="lc-tail">
 					<span className="blinker" />
 					tailing — new rows appear live
