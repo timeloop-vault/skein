@@ -23,8 +23,8 @@ interface SimpleRowProps {
 
 /// Render one action as its Activity row, or `null` for kinds consumed
 /// elsewhere: turn_duration → turn separators and turn_cost → cost
-/// hair-lines (both flattenFeed), away_summary → the room subtitle,
-/// reasoning → not shown. flattenFeed's SKIP_KINDS mirrors this null set.
+/// hair-lines (both derived items in flattenFeed), away_summary → the
+/// room subtitle, reasoning → not shown (flattenFeed's SKIP_KINDS).
 export const ActivityRow = ({
 	row,
 	harnessKindOf,

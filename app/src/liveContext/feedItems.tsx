@@ -55,7 +55,10 @@ const SKIP_KINDS = new Set(["away_summary", "reasoning"]);
 ///   turn's cost is the sum over its steps. There is no per-turn grouping
 ///   key in the payload (`source` is null, `snapshot` is a worktree hash),
 ///   so steps are accumulated per harness and flushed on the terminal
-///   step's reason.
+///   step's reason. Backfill can re-insert a live-written step a second
+///   time (#93); token totals grow monotonically through a session, so a
+///   byte-identical (harness, payload) repeat is a re-emission, never a
+///   real step — dropped, or the sums double.
 ///
 /// Shapes are disjoint, so detection is by payload keys, not harness kind.
 function costFromClaude(p: Payload): { tokens: number; usd: number } | undefined {
@@ -91,12 +94,20 @@ function stepFromOpencode(p: Payload): { tokens: number; usd: number; terminal: 
 /// turn_cost arrives just before its turn_duration, so the hair-line sits
 /// directly above the separator (matching the prototype tape); opencode
 /// has no separators, so the hair-line itself marks the turn boundary.
-/// An opencode turn still in flight (no terminal step yet) emits nothing.
+/// An opencode turn still in flight (no terminal step yet) emits nothing,
+/// and one orphaned mid-flight (interrupted — next prompt arrives first)
+/// is dropped rather than leaked into the following turn's line. Caveat:
+/// live-streamed opencode steps are stamped ts=0 (#93), so their position
+/// comes from the display-order carry and can drift from the turn's true
+/// place in history.
 export function flattenFeed(actions: HarnessAction[], showTurnCosts: boolean): FeedItem[] {
 	const items: FeedItem[] = [];
 	// Claude re-emits a turn's cost row verbatim sometimes; request_id
 	// identifies the API call, so it de-dupes them.
 	const seenRequestIds = new Set<string>();
+	// opencode re-emissions have no id at all — de-dupe by payload identity
+	// (see the shape comment above).
+	const seenSteps = new Set<string>();
 	// Per-harness running totals for opencode's per-step cost rows.
 	const openTurns = new Map<string, { tokens: number; usd: number }>();
 	for (const a of actions) {
@@ -112,16 +123,20 @@ export function flattenFeed(actions: HarnessAction[], showTurnCosts: boolean): F
 			if (!showTurnCosts) continue;
 			const p: Payload = parsePayload(a.payload);
 			if ("usage" in p || "stop_reason" in p) {
+				const cost = costFromClaude(p);
+				if (!cost || cost.tokens <= 0) continue;
+				// Register the request_id only for an emission that counts,
+				// so a degenerate row can't swallow a later real one.
 				const requestId = str(p.request_id);
 				if (requestId) {
 					if (seenRequestIds.has(requestId)) continue;
 					seenRequestIds.add(requestId);
 				}
-				const cost = costFromClaude(p);
-				if (cost && cost.tokens > 0) {
-					items.push({ type: "cost", key: `cost-${a.id}`, ...cost });
-				}
+				items.push({ type: "cost", key: `cost-${a.id}`, ...cost });
 			} else if ("tokens" in p || "reason" in p) {
+				const stepKey = `${a.harnessId}|${a.payload}`;
+				if (seenSteps.has(stepKey)) continue;
+				seenSteps.add(stepKey);
 				const acc = openTurns.get(a.harnessId) ?? { tokens: 0, usd: 0 };
 				const step = stepFromOpencode(p);
 				acc.tokens += step.tokens;
@@ -135,8 +150,14 @@ export function flattenFeed(actions: HarnessAction[], showTurnCosts: boolean): F
 					}
 				}
 			}
-		} else if (!SKIP_KINDS.has(a.kind)) {
-			items.push({ type: "row", key: `row-${a.id}`, action: a });
+		} else {
+			// A prompt starts this harness's next turn: steps still
+			// accumulated here belong to a turn that never reached a
+			// terminal step — drop them, don't bill them forward.
+			if (a.kind === "user_prompt") openTurns.delete(a.harnessId);
+			if (!SKIP_KINDS.has(a.kind)) {
+				items.push({ type: "row", key: `row-${a.id}`, action: a });
+			}
 		}
 	}
 	return items;

@@ -125,6 +125,7 @@ export const LiveContext = ({
 								<button
 									type="button"
 									className={`lc-cost-toggle ${showTurnCosts ? "on" : ""}`}
+									aria-pressed={showTurnCosts}
 									title={showTurnCosts ? "hide per-turn cost lines" : "show per-turn cost lines"}
 									onClick={(e) => {
 										e.stopPropagation();
