@@ -14,6 +14,13 @@
 // query runs, so any row inserted in the window between query and
 // listen still lands. De-dupe is by `id` — a live event for a row the
 // query already returned is dropped.
+//
+// Provenance: backfilled rows are never broadcast (see
+// harness_action_event.rs) — the event channel only ever carries live
+// rows. `liveIds` records the ids first seen on that channel, which is
+// what the Activity card's backfill banner / slide-in distinguish on.
+// An event for a row the query already delivered does NOT mark it live:
+// the row was history by the time the user saw it.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -56,14 +63,21 @@ function mergeById(sorted: HarnessAction[], incoming: HarnessAction[]): HarnessA
 }
 
 /// Subscribe a component to the live action stream for `roomId`.
-/// Returns the room's rows (ascending by id) and a `loading` flag that
-/// is true until the initial backfill query resolves.
+/// Returns the room's rows (ascending by id), the set of ids that
+/// arrived over the live event channel (everything else came from the
+/// backfill query), and a `loading` flag that is true until the initial
+/// backfill query resolves.
+///
+/// `liveIds` keeps a stable identity and is mutated in lockstep with
+/// `actions` updates — consumers re-read it on the re-render the same
+/// event causes, so it must not be used as a memo dependency on its own.
 ///
 /// Re-runs cleanly when `roomId` changes: tears down the previous
 /// listener + clears rows so a room switch never shows another room's
 /// activity.
 export function useRoomActions(roomId: string | undefined): {
 	actions: HarnessAction[];
+	liveIds: ReadonlySet<number>;
 	loading: boolean;
 } {
 	const [actions, setActions] = useState<HarnessAction[]>([]);
@@ -72,6 +86,10 @@ export function useRoomActions(roomId: string | undefined): {
 	// against current state without being re-created on every append.
 	const actionsRef = useRef<HarnessAction[]>([]);
 	actionsRef.current = actions;
+	// Ids already in `actions`, so the listener can tell a genuinely new
+	// live row from a late duplicate event for a queried one.
+	const idsRef = useRef<Set<number>>(new Set());
+	const liveIdsRef = useRef<Set<number>>(new Set());
 
 	useEffect(() => {
 		if (!roomId) {
@@ -82,6 +100,8 @@ export function useRoomActions(roomId: string | undefined): {
 
 		let cancelled = false;
 		setActions([]);
+		idsRef.current = new Set();
+		liveIdsRef.current = new Set();
 		setLoading(true);
 
 		const apply = (incoming: HarnessAction[]) => {
@@ -89,6 +109,7 @@ export function useRoomActions(roomId: string | undefined): {
 			const next = mergeById(actionsRef.current, incoming);
 			if (next !== actionsRef.current) {
 				actionsRef.current = next;
+				idsRef.current = new Set(next.map((a) => a.id));
 				setActions(next);
 			}
 		};
@@ -98,6 +119,9 @@ export function useRoomActions(roomId: string | undefined): {
 		// also returned it).
 		const unlistenPromise = listen<HarnessAction>(ACTION_EVENT, (event) => {
 			if (event.payload.roomId === roomId) {
+				if (!idsRef.current.has(event.payload.id)) {
+					liveIdsRef.current.add(event.payload.id);
+				}
 				apply([event.payload]);
 			}
 		});
@@ -126,5 +150,5 @@ export function useRoomActions(roomId: string | undefined): {
 		};
 	}, [roomId]);
 
-	return { actions, loading };
+	return { actions, liveIds: liveIdsRef.current, loading };
 }

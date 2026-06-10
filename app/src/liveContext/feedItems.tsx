@@ -8,16 +8,28 @@
 // actually rendered, so the Activity card maps over *items*, and the
 // auto-tail unseen-counter counts items rather than raw actions.
 //
-// The backfill banner/end-marker (D2d-3) adds more item variants here.
+// Provenance (D2d-3): backfilled rows are loaded once by the mount query
+// and never broadcast, so "live" = the row arrived over the harness-action
+// event (store.ts `liveIds`). The flattened feed marks row items with it
+// (the slide-in animation keys off it) and splices a backfill banner
+// before the first backfilled item plus an end-marker after the last one
+// when live items follow.
 
 import { formatClock, formatDuration } from "./Row.tsx";
 import { type Payload, num, obj, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
 
 /// A renderable entry in the feed: an action row, a derived turn-boundary
-/// separator, or a per-turn cost hair-line.
+/// separator, a per-turn cost hair-line, or backfill-boundary chrome.
 export type FeedItem =
-	| { type: "row"; key: string; action: HarnessAction }
+	| {
+			type: "row";
+			key: string;
+			action: HarnessAction;
+			/** Arrived over the live event channel (vs the backfill query).
+			 *  Live rows slide in; backfilled rows snap. */
+			live: boolean;
+	  }
 	| {
 			type: "separator";
 			key: string;
@@ -34,7 +46,19 @@ export type FeedItem =
 			/** Turn cost in USD. 0 when the harness doesn't report it (Claude
 			 *  has no cost field — backend gap #91). */
 			usd: number;
-	  };
+	  }
+	| {
+			type: "backfill-banner";
+			key: string;
+			/** Backfilled action count (raw events, same unit as the card
+			 *  head's "N events"). */
+			count: number;
+			/** First/last real timestamp among backfilled actions; 0 when
+			 *  none carries a clock. */
+			rangeStartMs: number;
+			rangeEndMs: number;
+	  }
+	| { type: "backfill-end"; key: string };
 
 /// Kinds that never render as their own row and aren't derived chrome
 /// either: consumed elsewhere. Keep in sync with the dispatcher in
@@ -85,6 +109,13 @@ function stepFromOpencode(p: Payload): { tokens: number; usd: number; terminal: 
 	return { tokens, usd: num(p.cost) ?? 0, terminal: str(p.reason) !== "tool-calls" };
 }
 
+export interface FlattenOptions {
+	/** Render per-turn cost hair-lines (user pref, off by default). */
+	showTurnCosts: boolean;
+	/** Action ids that arrived over the live event channel (store.ts). */
+	liveIds: ReadonlySet<number>;
+}
+
 /// Flatten display-ordered actions into feed items: turn_duration → a
 /// separator, turn_cost → a per-turn cost hair-line (when enabled),
 /// SKIP_KINDS dropped, everything else → a row. Input must already be in
@@ -100,8 +131,22 @@ function stepFromOpencode(p: Payload): { tokens: number; usd: number; terminal: 
 /// live-streamed opencode steps are stamped ts=0 (#93), so their position
 /// comes from the display-order carry and can drift from the turn's true
 /// place in history.
-export function flattenFeed(actions: HarnessAction[], showTurnCosts: boolean): FeedItem[] {
+///
+/// Backfill chrome: the banner goes immediately before the first
+/// backfilled-derived item and the end-marker after the last one (only
+/// when live items follow — handover §11). Positional, not id-boundary,
+/// because a live row can legitimately sort between backfilled rows
+/// (multi-harness timestamp skew); such a row sits inside the marked
+/// region rather than corrupting the markers.
+export function flattenFeed(actions: HarnessAction[], opts: FlattenOptions): FeedItem[] {
+	const { showTurnCosts, liveIds } = opts;
 	const items: FeedItem[] = [];
+	// Per-item provenance, parallel to `items` — drives the splice below.
+	const itemLive: boolean[] = [];
+	const push = (item: FeedItem, live: boolean) => {
+		items.push(item);
+		itemLive.push(live);
+	};
 	// Claude re-emits a turn's cost row verbatim sometimes; request_id
 	// identifies the API call, so it de-dupes them.
 	const seenRequestIds = new Set<string>();
@@ -111,14 +156,18 @@ export function flattenFeed(actions: HarnessAction[], showTurnCosts: boolean): F
 	// Per-harness running totals for opencode's per-step cost rows.
 	const openTurns = new Map<string, { tokens: number; usd: number }>();
 	for (const a of actions) {
+		const live = liveIds.has(a.id);
 		if (a.kind === "turn_duration") {
 			const p: Payload = parsePayload(a.payload);
-			items.push({
-				type: "separator",
-				key: `sep-${a.id}`,
-				timestampMs: a.timestampMs,
-				durationMs: num(p.duration_ms),
-			});
+			push(
+				{
+					type: "separator",
+					key: `sep-${a.id}`,
+					timestampMs: a.timestampMs,
+					durationMs: num(p.duration_ms),
+				},
+				live,
+			);
 		} else if (a.kind === "turn_cost") {
 			if (!showTurnCosts) continue;
 			const p: Payload = parsePayload(a.payload);
@@ -132,7 +181,7 @@ export function flattenFeed(actions: HarnessAction[], showTurnCosts: boolean): F
 					if (seenRequestIds.has(requestId)) continue;
 					seenRequestIds.add(requestId);
 				}
-				items.push({ type: "cost", key: `cost-${a.id}`, ...cost });
+				push({ type: "cost", key: `cost-${a.id}`, ...cost }, live);
 			} else if ("tokens" in p || "reason" in p) {
 				const stepKey = `${a.harnessId}|${a.payload}`;
 				if (seenSteps.has(stepKey)) continue;
@@ -146,7 +195,9 @@ export function flattenFeed(actions: HarnessAction[], showTurnCosts: boolean): F
 				} else {
 					openTurns.delete(a.harnessId);
 					if (acc.tokens > 0 || acc.usd > 0) {
-						items.push({ type: "cost", key: `cost-${a.id}`, ...acc });
+						// A turn spanning the boundary (backfilled steps,
+						// live terminal) counts live — it completed on watch.
+						push({ type: "cost", key: `cost-${a.id}`, ...acc }, live);
 					}
 				}
 			}
@@ -156,9 +207,37 @@ export function flattenFeed(actions: HarnessAction[], showTurnCosts: boolean): F
 			// terminal step — drop them, don't bill them forward.
 			if (a.kind === "user_prompt") openTurns.delete(a.harnessId);
 			if (!SKIP_KINDS.has(a.kind)) {
-				items.push({ type: "row", key: `row-${a.id}`, action: a });
+				push({ type: "row", key: `row-${a.id}`, action: a, live }, live);
 			}
 		}
+	}
+
+	// Splice in the backfill chrome. The end-marker first — it sits at the
+	// higher index, so the banner's insertion below can't shift it.
+	const firstBackfilled = itemLive.indexOf(false);
+	if (firstBackfilled !== -1) {
+		const lastBackfilled = itemLive.lastIndexOf(false);
+		if (itemLive.includes(true)) {
+			items.splice(lastBackfilled + 1, 0, { type: "backfill-end", key: "backfill-end" });
+		}
+		let count = 0;
+		let rangeStartMs = 0;
+		let rangeEndMs = 0;
+		for (const a of actions) {
+			if (liveIds.has(a.id)) continue;
+			count++;
+			if (a.timestampMs > 0) {
+				if (rangeStartMs === 0 || a.timestampMs < rangeStartMs) rangeStartMs = a.timestampMs;
+				if (a.timestampMs > rangeEndMs) rangeEndMs = a.timestampMs;
+			}
+		}
+		items.splice(firstBackfilled, 0, {
+			type: "backfill-banner",
+			key: "backfill-banner",
+			count,
+			rangeStartMs,
+			rangeEndMs,
+		});
 	}
 	return items;
 }
@@ -185,6 +264,58 @@ export const TurnCost = ({ tokens, usd }: { tokens: number; usd: number }) => (
 				<span className="v">{formatUsd(usd)}</span>
 			</span>
 		)}
+	</div>
+);
+
+/// Epoch-ms → "HH:MM" for the banner's window range — the handover drops
+/// seconds there (row clocks keep them). Empty for missing clocks.
+function formatClockShort(ms: number): string {
+	if (!ms || ms <= 0) return "";
+	const d = new Date(ms);
+	const p = (n: number) => String(n).padStart(2, "0");
+	return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/// `↩ backfilled from disk · N events · 09:14 – 13:51` — precedes the
+/// first backfilled item (handover §11). The range collapses to a single
+/// clock when start and end share a minute, and is omitted entirely when
+/// no backfilled row carries a timestamp.
+export const BackfillBanner = ({
+	count,
+	rangeStartMs,
+	rangeEndMs,
+}: {
+	count: number;
+	rangeStartMs: number;
+	rangeEndMs: number;
+}) => {
+	const start = formatClockShort(rangeStartMs);
+	const end = formatClockShort(rangeEndMs);
+	const range = start && end ? (start === end ? start : `${start} – ${end}`) : "";
+	return (
+		<div className="lc-backfill-banner">
+			<span className="glyph">↩</span>
+			<span className="text">
+				backfilled from disk · <b>{count}</b> events
+				{range && (
+					<>
+						{" · "}
+						<span className="dim">{range}</span>
+					</>
+				)}
+			</span>
+		</div>
+	);
+};
+
+/// `─ resume tailing — live below ─` — follows the last backfilled item,
+/// only when live items actually follow (handover §11; the prototype
+/// renders it unconditionally, the handover wins).
+export const BackfillEnd = () => (
+	<div className="lc-backfill-end">
+		<span className="line" />
+		<span className="text">resume tailing — live below</span>
+		<span className="line" />
 	</div>
 );
 

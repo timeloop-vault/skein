@@ -14,14 +14,13 @@
 // running delta) so an older backfilled row inserted mid-list doesn't
 // inflate it. The `visible` prop matters because every room's card stays
 // mounted (display:none toggled) — a hidden card can't measure scroll,
-// so we re-pin when it becomes visible. Backfill banner / burst are
-// D2d-3–D2e; virtualization D2g (the per-event re-sort is acceptable
-// until then).
+// so we re-pin when it becomes visible. Burst collapse is D2e;
+// virtualization D2g (the per-event re-sort is acceptable until then).
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { HarnessKind } from "../types.ts";
 import "./activity.css";
-import { TurnCost, TurnSeparator, flattenFeed } from "./feedItems.tsx";
+import { BackfillBanner, BackfillEnd, TurnCost, TurnSeparator, flattenFeed } from "./feedItems.tsx";
 import { ActivityRow } from "./rows.tsx";
 import type { HarnessAction } from "./store.ts";
 
@@ -53,11 +52,16 @@ function orderForDisplay(actions: HarnessAction[]): HarnessAction[] {
 
 export const ActivityCardBody = ({
 	actions,
+	liveIds,
 	harnessKindOf,
 	visible,
 	showTurnCosts,
 }: {
 	actions: HarnessAction[];
+	/** Ids that arrived over the live event channel (store.ts). Stable
+	 *  identity, mutated in lockstep with `actions` — additions never
+	 *  re-render on their own, only via the `actions` update they ride. */
+	liveIds: ReadonlySet<number>;
 	harnessKindOf: (harnessId: string) => HarnessKind;
 	visible: boolean;
 	/** Render per-turn cost hair-lines (user-level pref, off by default). */
@@ -65,10 +69,30 @@ export const ActivityCardBody = ({
 }) => {
 	const ordered = useMemo(() => orderForDisplay(actions), [actions]);
 	// Flatten to rendered items (rows + derived turn separators / cost
-	// lines). The feed maps over these, and the unseen-counter counts them
-	// — not raw actions — so derived/dropped kinds don't skew the "N new"
-	// pill. (Cost items, like separators, are chrome: never counted.)
-	const items = useMemo(() => flattenFeed(ordered, showTurnCosts), [ordered, showTurnCosts]);
+	// lines + backfill chrome). The feed maps over these, and the
+	// unseen-counter counts them — not raw actions — so derived/dropped
+	// kinds don't skew the "N new" pill. (Chrome items are never counted.)
+	const items = useMemo(
+		() => flattenFeed(ordered, { showTurnCosts, liveIds }),
+		[ordered, showTurnCosts, liveIds],
+	);
+
+	// Keys whose slide-in already played (or never should). A one-shot CSS
+	// animation restarts from 0% whenever its element re-enters layout, and
+	// every room's card sits under display:none while inactive — without
+	// this, switching rooms would replay every live row's slide at once.
+	// onAnimationEnd marks rows that animated to completion; the effect
+	// below marks everything whenever the card is hidden, which covers rows
+	// that arrive while hidden (they snap on reveal) and animations cut
+	// short by a room switch.
+	const animatedKeys = useRef<Set<string>>(new Set());
+	useEffect(() => {
+		if (!visible) {
+			for (const it of items) {
+				if (it.type === "row" && it.live) animatedKeys.current.add(it.key);
+			}
+		}
+	}, [items, visible]);
 	// The marker tracks the last *row* (separators are chrome), so it
 	// always names a real activity entry even when a turn separator is the
 	// tail item. Behaviourally identical to the last-item key for counting
@@ -149,8 +173,28 @@ export const ActivityCardBody = ({
 						<TurnSeparator key={it.key} timestampMs={it.timestampMs} durationMs={it.durationMs} />
 					) : it.type === "cost" ? (
 						<TurnCost key={it.key} tokens={it.tokens} usd={it.usd} />
+					) : it.type === "backfill-banner" ? (
+						<BackfillBanner
+							key={it.key}
+							count={it.count}
+							rangeStartMs={it.rangeStartMs}
+							rangeEndMs={it.rangeEndMs}
+						/>
+					) : it.type === "backfill-end" ? (
+						<BackfillEnd key={it.key} />
 					) : (
-						<ActivityRow key={it.key} row={it.action} harnessKindOf={harnessKindOf} />
+						// Stable wrapper so dropping the animation class after its
+						// one-shot play never remounts the row (a remount would
+						// reset D2c's expanded-preview state and replay the slide).
+						<div
+							key={it.key}
+							className={it.live && !animatedKeys.current.has(it.key) ? "row-slide-in" : undefined}
+							onAnimationEnd={(e) => {
+								if (e.animationName === "lc-slide-in") animatedKeys.current.add(it.key);
+							}}
+						>
+							<ActivityRow row={it.action} harnessKindOf={harnessKindOf} />
+						</div>
 					),
 				)}
 				<div className="lc-tail">

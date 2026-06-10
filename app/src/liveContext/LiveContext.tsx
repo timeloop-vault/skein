@@ -64,7 +64,7 @@ export const LiveContext = ({
 	onToggleTurnCosts,
 	onBranchChange,
 }: LiveContextProps) => {
-	const { actions } = useRoomActions(roomId);
+	const { actions, liveIds } = useRoomActions(roomId);
 	const [layout, setLayout] = usePersistedState<CardLayout>(
 		`liveContext:layout:${roomId}`,
 		DEFAULT_LAYOUT,
@@ -139,6 +139,7 @@ export const LiveContext = ({
 						body: (
 							<ActivityCardBody
 								actions={actions}
+								liveIds={liveIds}
 								harnessKindOf={harnessKindOf}
 								visible={visible}
 								showTurnCosts={showTurnCosts}
