@@ -150,6 +150,28 @@
 	background: var(--fg-3);
 	box-shadow: none;
 }
+/* Per-turn cost toggle in the Activity head (D2d-2). Sits inside the
+   collapse click target, so the component stops propagation. */
+.lc-card-head .meta .lc-cost-toggle {
+	font-family: var(--sk-mono);
+	font-size: 9px;
+	letter-spacing: 0.04em;
+	color: var(--fg-3);
+	background: none;
+	border: 1px solid var(--line);
+	border-radius: 3px;
+	padding: 1px 6px;
+	cursor: pointer;
+}
+.lc-card-head .meta .lc-cost-toggle:hover {
+	color: var(--fg-1);
+	border-color: var(--line-strong);
+}
+.lc-card-head .meta .lc-cost-toggle.on {
+	color: var(--accent);
+	border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+	background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
 .lc-card-body {
 	flex: 1;
 	min-height: 0;

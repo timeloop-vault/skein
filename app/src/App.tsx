@@ -998,6 +998,10 @@ export default function App() {
 	const [notifyToast, setNotifyToast] = usePersistedState<boolean>("notifyToast", true);
 	const [notifyUrgent, setNotifyUrgent] = usePersistedState<boolean>("notifyUrgent", true);
 	const [notifyOs, setNotifyOs] = usePersistedState<boolean>("notifyOs", false);
+	// Per-turn cost hair-lines in the Activity feed (issue #80 D2d-2).
+	// Off by default; toggled from the Activity card head. App-owned so
+	// every room's mounted LiveContext sees the same value.
+	const [showTurnCosts, setShowTurnCosts] = usePersistedState<boolean>("showTurnCosts", false);
 	// Width of the harness column in px. Right pane absorbs the remainder
 	// via flex:1. Splitter clamps against window size at drag time.
 	const [harnessColWidth, setHarnessColWidth] = usePersistedState<number>("harnessColWidth", 640);
@@ -2214,6 +2218,8 @@ export default function App() {
 								cwd={r.cwd}
 								harnesses={r.harnesses}
 								visible={r.id === activeRoomId}
+								showTurnCosts={showTurnCosts}
+								onToggleTurnCosts={() => setShowTurnCosts((v) => !v)}
 								onBranchChange={(b) =>
 									setLiveBranches((prev) => (prev[r.id] === b ? prev : { ...prev, [r.id]: b }))
 								}

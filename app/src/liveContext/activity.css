@@ -102,7 +102,8 @@
 	color: var(--fg-3);
 }
 
-/* Per-turn cost row under a separator (D2d). */
+/* Per-turn cost hair-line, adjacent to its turn's closing separator
+   (D2d-2). */
 .lc-turn-cost {
 	padding: 2px 12px 8px 36px;
 	font-family: var(--sk-mono);

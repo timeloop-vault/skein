@@ -39,6 +39,12 @@ interface LiveContextProps {
 	 *  display:flex, not none). The Activity card needs it to re-pin its
 	 *  auto-tail when shown — a hidden card can't measure scroll. */
 	visible: boolean;
+	/** Per-turn cost hair-lines in the Activity feed. User-level pref
+	 *  owned by App (one LiveContext is mounted per room — instance-local
+	 *  state would desync across rooms), toggled from the Activity card
+	 *  head. Off by default (handover §12, resolved in the buildmap). */
+	showTurnCosts: boolean;
+	onToggleTurnCosts: () => void;
 	/**
 	 * Fired with the current HEAD branch on every git-watcher tick (or
 	 * `null` for detached HEAD / non-git folders). The status bar reads
@@ -54,6 +60,8 @@ export const LiveContext = ({
 	cwd,
 	harnesses,
 	visible,
+	showTurnCosts,
+	onToggleTurnCosts,
 	onBranchChange,
 }: LiveContextProps) => {
 	const { actions } = useRoomActions(roomId);
@@ -109,9 +117,32 @@ export const LiveContext = ({
 					},
 					{
 						label: "Activity",
-						meta: <span>{actions.length} events</span>,
+						meta: (
+							<>
+								<span>{actions.length} events</span>
+								{/* The whole card head is the collapse click target, so
+								    the toggle must not let its click bubble. */}
+								<button
+									type="button"
+									className={`lc-cost-toggle ${showTurnCosts ? "on" : ""}`}
+									aria-pressed={showTurnCosts}
+									title={showTurnCosts ? "hide per-turn cost lines" : "show per-turn cost lines"}
+									onClick={(e) => {
+										e.stopPropagation();
+										onToggleTurnCosts();
+									}}
+								>
+									$ costs
+								</button>
+							</>
+						),
 						body: (
-							<ActivityCardBody actions={actions} harnessKindOf={harnessKindOf} visible={visible} />
+							<ActivityCardBody
+								actions={actions}
+								harnessKindOf={harnessKindOf}
+								visible={visible}
+								showTurnCosts={showTurnCosts}
+							/>
 						),
 					},
 				]}
