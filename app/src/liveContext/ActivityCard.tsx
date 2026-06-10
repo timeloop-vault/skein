@@ -14,14 +14,14 @@
 // running delta) so an older backfilled row inserted mid-list doesn't
 // inflate it. The `visible` prop matters because every room's card stays
 // mounted (display:none toggled) — a hidden card can't measure scroll,
-// so we re-pin when it becomes visible. Turn separators / cost lines /
-// backfill banner / burst are D2d–D2e; virtualization D2g (the
-// per-event re-sort is acceptable until then).
+// so we re-pin when it becomes visible. Backfill banner / burst are
+// D2d-3–D2e; virtualization D2g (the per-event re-sort is acceptable
+// until then).
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { HarnessKind } from "../types.ts";
 import "./activity.css";
-import { TurnSeparator, flattenFeed } from "./feedItems.tsx";
+import { TurnCost, TurnSeparator, flattenFeed } from "./feedItems.tsx";
 import { ActivityRow } from "./rows.tsx";
 import type { HarnessAction } from "./store.ts";
 
@@ -55,16 +55,20 @@ export const ActivityCardBody = ({
 	actions,
 	harnessKindOf,
 	visible,
+	showTurnCosts,
 }: {
 	actions: HarnessAction[];
 	harnessKindOf: (harnessId: string) => HarnessKind;
 	visible: boolean;
+	/** Render per-turn cost hair-lines (user-level pref, off by default). */
+	showTurnCosts: boolean;
 }) => {
 	const ordered = useMemo(() => orderForDisplay(actions), [actions]);
-	// Flatten to rendered items (rows + derived turn separators). The feed
-	// maps over these, and the unseen-counter counts them — not raw
-	// actions — so derived/dropped kinds don't skew the "N new" pill.
-	const items = useMemo(() => flattenFeed(ordered), [ordered]);
+	// Flatten to rendered items (rows + derived turn separators / cost
+	// lines). The feed maps over these, and the unseen-counter counts them
+	// — not raw actions — so derived/dropped kinds don't skew the "N new"
+	// pill. (Cost items, like separators, are chrome: never counted.)
+	const items = useMemo(() => flattenFeed(ordered, showTurnCosts), [ordered, showTurnCosts]);
 	// The marker tracks the last *row* (separators are chrome), so it
 	// always names a real activity entry even when a turn separator is the
 	// tail item. Behaviourally identical to the last-item key for counting
@@ -143,6 +147,8 @@ export const ActivityCardBody = ({
 				{items.map((it) =>
 					it.type === "separator" ? (
 						<TurnSeparator key={it.key} timestampMs={it.timestampMs} durationMs={it.durationMs} />
+					) : it.type === "cost" ? (
+						<TurnCost key={it.key} tokens={it.tokens} usd={it.usd} />
 					) : (
 						<ActivityRow key={it.key} row={it.action} harnessKindOf={harnessKindOf} />
 					),
