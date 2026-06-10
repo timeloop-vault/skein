@@ -44,10 +44,10 @@ export interface HarnessAction {
 /// payload carries `roomId` so we filter to the active room.
 const ACTION_EVENT = "harness-action";
 
-/// Upper bound on the initial backfill load. Recon-scale rooms can
-/// have ≥6k rows; D2 adds virtualization + a larger/paged load. For
-/// D1 this is plenty to make the cards meaningful without a jank
-/// frame on mount.
+/// Upper bound on the initial backfill load (newest-N by timestamp).
+/// Recon-scale rooms can have ≥6k rows; virtualization + a larger or
+/// paged load is deferred to D2g, so until then the backfill banner's
+/// window describes the newest 5000, not necessarily the room's start.
 const BACKFILL_LIMIT = 5000;
 
 /// Insert `incoming` into `sorted` (ascending by id), skipping ids
@@ -86,8 +86,9 @@ export function useRoomActions(roomId: string | undefined): {
 	// against current state without being re-created on every append.
 	const actionsRef = useRef<HarnessAction[]>([]);
 	actionsRef.current = actions;
-	// Ids already in `actions`, so the listener can tell a genuinely new
-	// live row from a late duplicate event for a queried one.
+	// Ids ever seen this room (superset of `actions` ids), so the listener
+	// can tell a genuinely new live row from a late duplicate event for a
+	// queried one. Grown incrementally — rebuilding per event is O(n).
 	const idsRef = useRef<Set<number>>(new Set());
 	const liveIdsRef = useRef<Set<number>>(new Set());
 
@@ -106,10 +107,10 @@ export function useRoomActions(roomId: string | undefined): {
 
 		const apply = (incoming: HarnessAction[]) => {
 			if (cancelled) return;
+			for (const a of incoming) idsRef.current.add(a.id);
 			const next = mergeById(actionsRef.current, incoming);
 			if (next !== actionsRef.current) {
 				actionsRef.current = next;
-				idsRef.current = new Set(next.map((a) => a.id));
 				setActions(next);
 			}
 		};

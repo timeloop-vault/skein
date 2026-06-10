@@ -217,7 +217,11 @@ export function flattenFeed(actions: HarnessAction[], opts: FlattenOptions): Fee
 	const firstBackfilled = itemLive.indexOf(false);
 	if (firstBackfilled !== -1) {
 		const lastBackfilled = itemLive.lastIndexOf(false);
-		if (itemLive.includes(true)) {
+		// Everything past the last backfilled item is live by construction,
+		// so "live items follow" is exactly "the last item isn't backfilled".
+		// (A live row sorted above it — timestamp skew — must not summon a
+		// marker that would dangle at the bottom claiming "live below".)
+		if (lastBackfilled !== itemLive.length - 1) {
 			items.splice(lastBackfilled + 1, 0, { type: "backfill-end", key: "backfill-end" });
 		}
 		let count = 0;

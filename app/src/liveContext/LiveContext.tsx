@@ -141,7 +141,12 @@ export const LiveContext = ({
 								actions={actions}
 								liveIds={liveIds}
 								harnessKindOf={harnessKindOf}
-								visible={visible}
+								// Collapsing the card display:nones its body exactly like
+								// a room switch does, so it must gate the scroll/animation
+								// effects the same way — otherwise rows arriving while
+								// collapsed replay their slide-in en masse on expand, and
+								// the auto-tail never re-pins.
+								visible={visible && !layout.collapsed[2]}
 								showTurnCosts={showTurnCosts}
 							/>
 						),
