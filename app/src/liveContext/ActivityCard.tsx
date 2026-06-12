@@ -14,19 +14,31 @@
 // running delta) so an older backfilled row inserted mid-list doesn't
 // inflate it. The `visible` prop matters because every room's card stays
 // mounted (display:none toggled) — a hidden card can't measure scroll,
-// so we re-pin when it becomes visible. Burst collapse is D2e;
-// virtualization D2g (the per-event re-sort is acceptable until then).
+// so we re-pin when it becomes visible. Virtualization is D2g (the
+// per-event re-sort is acceptable until then).
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { HarnessKind } from "../types.ts";
 import "./activity.css";
-import { BackfillBanner, BackfillEnd, TurnCost, TurnSeparator, flattenFeed } from "./feedItems.tsx";
+import {
+	BackfillBanner,
+	BackfillEnd,
+	BurstRow,
+	TurnCost,
+	TurnSeparator,
+	flattenFeed,
+} from "./feedItems.tsx";
 import { ActivityRow } from "./rows.tsx";
 import type { HarnessAction } from "./store.ts";
 
 /// Pixels from the bottom within which the feed counts as "at the
 /// bottom" and keeps auto-tailing.
 const TAIL_THRESHOLD_PX = 30;
+
+/// How long after its newest constituent a burst keeps the live shimmer.
+/// Matches the fold gap — while another edit could still join, the storm
+/// is plausibly ongoing.
+const BURST_LIVE_MS = 5000;
 
 /// Re-order id-ordered rows chronologically. Each row's effective
 /// timestamp is its own when > 0, else carried forward from the prior
@@ -93,14 +105,48 @@ export const ActivityCardBody = ({
 			}
 		}
 	}, [items, visible]);
-	// The marker tracks the last *row* (separators are chrome), so it
-	// always names a real activity entry even when a turn separator is the
-	// tail item. Behaviourally identical to the last-item key for counting
-	// — rows after either index match — but keeps the marker contract true.
+	// Expanded bursts, by burst key (stable: the first constituent's id,
+	// so growth doesn't collapse an open burst).
+	const [expandedBursts, setExpandedBursts] = useState<ReadonlySet<string>>(new Set());
+	const toggleBurst = (key: string) =>
+		setExpandedBursts((prev) => {
+			const next = new Set(prev);
+			if (next.has(key)) {
+				next.delete(key);
+			} else {
+				next.add(key);
+			}
+			return next;
+		});
+
+	// Re-render once when the newest live burst's shimmer window lapses;
+	// liveness itself is computed at render time from the burst's last
+	// constituent timestamp.
+	const [, setLiveTick] = useState(0);
+	const maxLiveUntil = useMemo(() => {
+		let until = 0;
+		for (const it of items) {
+			if (it.type === "burst" && it.live) {
+				until = Math.max(until, it.lastTimestampMs + BURST_LIVE_MS);
+			}
+		}
+		return until;
+	}, [items]);
+	useEffect(() => {
+		const delta = maxLiveUntil - Date.now();
+		if (delta <= 0) return;
+		const t = setTimeout(() => setLiveTick((n) => n + 1), delta + 50);
+		return () => clearTimeout(t);
+	}, [maxLiveUntil]);
+
+	// The marker tracks the last *content* item — a row or a burst, never
+	// chrome — so it always names real activity even when a separator is
+	// the tail item. Burst keys are stable as the burst grows, so a marker
+	// naming one survives the storm continuing.
 	const bottomKey = useMemo(() => {
 		for (let i = items.length - 1; i >= 0; i--) {
 			const it = items[i];
-			if (it?.type === "row") return it.key;
+			if (it?.type === "row" || it?.type === "burst") return it.key;
 		}
 		return undefined;
 	}, [items]);
@@ -110,17 +156,32 @@ export const ActivityCardBody = ({
 	// Key of the bottom item the last time the user was at the bottom.
 	const [seenBottomKey, setSeenBottomKey] = useState<string | undefined>(undefined);
 
-	// Unseen rows = the *row* items after the last-seen bottom (separators
-	// aren't counted — they're chrome, not new activity). Derived, so a
-	// mid-list insert of an older row (which sorts above the marker)
-	// doesn't count, and the pill reflects what's actually below.
+	// Unseen activity = the row/burst items after the last-seen bottom
+	// (chrome isn't counted). Bursts weigh their constituent count — a
+	// 12-edit storm is 12 events, not 1. Derived, so a mid-list insert of
+	// an older row (which sorts above the marker) doesn't count, and the
+	// pill reflects what's actually below.
 	const newCount = useMemo(() => {
 		if (atBottom) return 0;
-		const start =
-			seenBottomKey === undefined ? 0 : items.findIndex((it) => it.key === seenBottomKey) + 1;
+		let start = 0;
+		if (seenBottomKey !== undefined) {
+			let idx = items.findIndex((it) => it.key === seenBottomKey);
+			if (idx === -1 && seenBottomKey.startsWith("row-")) {
+				// The marker row may have folded into a burst since it was
+				// recorded — resolve to the burst containing it. (Its later
+				// constituents go uncounted; better a slight under-count
+				// than the whole feed.)
+				const id = Number(seenBottomKey.slice(4));
+				idx = items.findIndex((it) => it.type === "burst" && it.actions.some((a) => a.id === id));
+			}
+			// Marker gone entirely: count nothing rather than everything.
+			start = idx === -1 ? items.length : idx + 1;
+		}
 		let n = 0;
-		for (let i = Math.max(start, 0); i < items.length; i++) {
-			if (items[i]?.type === "row") n++;
+		for (let i = start; i < items.length; i++) {
+			const it = items[i];
+			if (it?.type === "row") n++;
+			else if (it?.type === "burst") n += it.actions.length;
 		}
 		return n;
 	}, [items, atBottom, seenBottomKey]);
@@ -173,6 +234,30 @@ export const ActivityCardBody = ({
 						<TurnSeparator key={it.key} timestampMs={it.timestampMs} durationMs={it.durationMs} />
 					) : it.type === "cost" ? (
 						<TurnCost key={it.key} tokens={it.tokens} usd={it.usd} />
+					) : it.type === "burst" ? (
+						expandedBursts.has(it.key) ? (
+							<Fragment key={it.key}>
+								<div className="lc-burst-head">
+									<span className="label">
+										burst expanded · {it.actions.length} {it.tool}s in {it.scope}
+									</span>
+									<button type="button" className="collapse" onClick={() => toggleBurst(it.key)}>
+										collapse
+									</button>
+								</div>
+								{it.actions.map((a) => (
+									<ActivityRow key={`row-${a.id}`} row={a} harnessKindOf={harnessKindOf} />
+								))}
+							</Fragment>
+						) : (
+							<BurstRow
+								key={it.key}
+								item={it}
+								harness={harnessKindOf(it.harnessId)}
+								live={it.live && Date.now() - it.lastTimestampMs < BURST_LIVE_MS}
+								onToggle={() => toggleBurst(it.key)}
+							/>
+						)
 					) : it.type === "backfill-banner" ? (
 						<BackfillBanner
 							key={it.key}

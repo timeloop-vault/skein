@@ -65,6 +65,10 @@ interface RowProps {
 	extra?: ReactNode;
 	/** Explicit glyph override (wins over the GLYPH map). */
 	glyph?: string | undefined;
+	/** Extra modifier class on the row element itself (e.g. the burst
+	 *  shimmer's `live` — its selector needs it on `.lc-row`, where the
+	 *  slide-in wrapper class can't reach). */
+	className?: string | undefined;
 }
 
 export const Row = ({
@@ -76,9 +80,10 @@ export const Row = ({
 	onClick,
 	extra,
 	glyph,
+	className,
 }: RowProps) => (
 	<div
-		className={`lc-row k-${kind}`}
+		className={`lc-row k-${kind}${className ? ` ${className}` : ""}`}
 		onClick={onClick}
 		style={onClick ? { cursor: "pointer" } : undefined}
 	>
