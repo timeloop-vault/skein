@@ -40,6 +40,11 @@ const TAIL_THRESHOLD_PX = 30;
 /// is plausibly ongoing.
 const BURST_LIVE_MS = 5000;
 
+/// Silence after which the tail sentinel reads "idle" with a static dot
+/// (handover §5.3 item 6; the 90 s figure is §12's suggestion, tunable).
+/// Shared with the card head's "· idle 2h 14m" meta in LiveContext.
+export const IDLE_AFTER_MS = 90_000;
+
 /// The last-seen-bottom marker: the bottom content item's key, plus its
 /// constituent count when it was a burst (growth past it is unseen).
 interface BottomMark {
@@ -153,6 +158,25 @@ export const ActivityCardBody = ({
 		const t = setTimeout(() => setLiveTick((n) => n + 1), next - now + 50);
 		return () => clearTimeout(t);
 	}, [items, liveTick]);
+
+	// Tail sentinel idle state: the room's been silent past the
+	// threshold. Computed from the newest action timestamp at render
+	// time; the timeout re-renders once when the threshold passes.
+	const lastActionTs = useMemo(() => {
+		let m = 0;
+		for (const a of actions) if (a.timestampMs > m) m = a.timestampMs;
+		return m;
+	}, [actions]);
+	const [idleTick, setIdleTick] = useState(0);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: idleTick is the re-arm trigger — it re-runs the effect after the flip so a future-stamped row can re-schedule, though the body never reads it.
+	useEffect(() => {
+		if (lastActionTs <= 0) return;
+		const delta = lastActionTs + IDLE_AFTER_MS - Date.now();
+		if (delta <= 0) return;
+		const t = setTimeout(() => setIdleTick((n) => n + 1), delta + 50);
+		return () => clearTimeout(t);
+	}, [lastActionTs, idleTick]);
+	const tailIdle = lastActionTs > 0 && Date.now() - lastActionTs > IDLE_AFTER_MS;
 
 	// Constituents of an on-screen live burst have been shown (folded);
 	// pre-mark their row keys so a later un-fold (a retro-sorted row
@@ -334,9 +358,9 @@ export const ActivityCardBody = ({
 						</div>
 					),
 				)}
-				<div className="lc-tail">
+				<div className={`lc-tail${tailIdle ? " idle" : ""}`}>
 					<span className="blinker" />
-					tailing — new rows appear live
+					{tailIdle ? "idle" : "tailing — new rows appear live"}
 				</div>
 			</div>
 			{!atBottom && newCount > 0 && (

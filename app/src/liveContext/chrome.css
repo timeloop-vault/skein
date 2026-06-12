@@ -150,6 +150,10 @@
 	background: var(--fg-3);
 	box-shadow: none;
 }
+/* "· idle 2h 14m" in the Activity head (§10 long-quiet, D2f). */
+.lc-card-head .meta .idle-for {
+	color: var(--fg-3);
+}
 /* Per-turn cost toggle in the Activity head (D2d-2). Sits inside the
    collapse click target, so the component stops propagation. */
 .lc-card-head .meta .lc-cost-toggle {
