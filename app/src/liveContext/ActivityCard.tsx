@@ -17,7 +17,7 @@
 // so we re-pin when it becomes visible. Virtualization is D2g (the
 // per-event re-sort is acceptable until then).
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HarnessKind } from "../types.ts";
 import "./activity.css";
 import {
@@ -39,6 +39,20 @@ const TAIL_THRESHOLD_PX = 30;
 /// Matches the fold gap — while another edit could still join, the storm
 /// is plausibly ongoing.
 const BURST_LIVE_MS = 5000;
+
+/// The last-seen-bottom marker: the bottom content item's key, plus its
+/// constituent count when it was a burst (growth past it is unseen).
+interface BottomMark {
+	key: string;
+	burstSize: number | undefined;
+}
+
+/// The action id a content-item key encodes (`row-<id>` / `burst-<first
+/// id>`), for re-resolving a marker whose item folded or dissolved.
+function keyActionId(key: string): number | undefined {
+	const m = /^(?:row|burst)-(\d+)$/.exec(key);
+	return m?.[1] ? Number(m[1]) : undefined;
+}
 
 /// Re-order id-ordered rows chronologically. Each row's effective
 /// timestamp is its own when > 0, else carried forward from the prior
@@ -119,72 +133,110 @@ export const ActivityCardBody = ({
 			return next;
 		});
 
-	// Re-render once when the newest live burst's shimmer window lapses;
-	// liveness itself is computed at render time from the burst's last
-	// constituent timestamp.
-	const [, setLiveTick] = useState(0);
-	const maxLiveUntil = useMemo(() => {
-		let until = 0;
+	// Re-render at the EARLIEST upcoming shimmer lapse (one burst at a
+	// time — a single max-based timer would let an older live burst
+	// overstay by up to the full window); ticking re-runs the effect to
+	// arm the next lapse. Liveness itself is computed at render time from
+	// the burst's last constituent timestamp.
+	const [liveTick, setLiveTick] = useState(0);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: liveTick is the re-arm trigger — each tick re-runs the effect to schedule the next future lapse, though the body never reads it.
+	useEffect(() => {
+		const now = Date.now();
+		let next = Number.POSITIVE_INFINITY;
 		for (const it of items) {
 			if (it.type === "burst" && it.live) {
-				until = Math.max(until, it.lastTimestampMs + BURST_LIVE_MS);
+				const lapse = it.lastTimestampMs + BURST_LIVE_MS;
+				if (lapse > now) next = Math.min(next, lapse);
 			}
 		}
-		return until;
-	}, [items]);
-	useEffect(() => {
-		const delta = maxLiveUntil - Date.now();
-		if (delta <= 0) return;
-		const t = setTimeout(() => setLiveTick((n) => n + 1), delta + 50);
+		if (!Number.isFinite(next)) return;
+		const t = setTimeout(() => setLiveTick((n) => n + 1), next - now + 50);
 		return () => clearTimeout(t);
-	}, [maxLiveUntil]);
+	}, [items, liveTick]);
+
+	// Constituents of an on-screen live burst have been shown (folded);
+	// pre-mark their row keys so a later un-fold (a retro-sorted row
+	// splitting the streak below the minimum) re-renders them as plain
+	// rows without replaying the slide-in.
+	useEffect(() => {
+		for (const it of items) {
+			if (it.type === "burst" && it.live) {
+				for (const a of it.actions) animatedKeys.current.add(`row-${a.id}`);
+			}
+		}
+	}, [items]);
 
 	// The marker tracks the last *content* item — a row or a burst, never
 	// chrome — so it always names real activity even when a separator is
-	// the tail item. Burst keys are stable as the burst grows, so a marker
-	// naming one survives the storm continuing.
-	const bottomKey = useMemo(() => {
+	// the tail item. For a burst it also records the constituent count at
+	// the time, so the storm growing *inside* the marker item still reads
+	// as unseen activity.
+	const bottomMark = useMemo<BottomMark | undefined>(() => {
 		for (let i = items.length - 1; i >= 0; i--) {
 			const it = items[i];
-			if (it?.type === "row" || it?.type === "burst") return it.key;
+			if (it?.type === "row") return { key: it.key, burstSize: undefined };
+			if (it?.type === "burst") return { key: it.key, burstSize: it.actions.length };
 		}
 		return undefined;
 	}, [items]);
 
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	const [atBottom, setAtBottom] = useState(true);
-	// Key of the bottom item the last time the user was at the bottom.
-	const [seenBottomKey, setSeenBottomKey] = useState<string | undefined>(undefined);
+	// The bottom item the last time the user was at the bottom.
+	const [seenBottom, setSeenBottom] = useState<BottomMark | undefined>(undefined);
+	const markSeenBottom = useCallback(() => {
+		// Bail on equal content so per-event renders while pinned don't
+		// churn state with fresh-but-identical marker objects.
+		setSeenBottom((prev) =>
+			prev && bottomMark && prev.key === bottomMark.key && prev.burstSize === bottomMark.burstSize
+				? prev
+				: bottomMark,
+		);
+	}, [bottomMark]);
 
 	// Unseen activity = the row/burst items after the last-seen bottom
-	// (chrome isn't counted). Bursts weigh their constituent count — a
-	// 12-edit storm is 12 events, not 1. Derived, so a mid-list insert of
-	// an older row (which sorts above the marker) doesn't count, and the
-	// pill reflects what's actually below.
+	// (chrome isn't counted), plus the marker burst's own growth. Bursts
+	// weigh their constituent count — a 12-edit storm is 12 events,
+	// matching the card head's units (the buildmap's "bursts collapse
+	// N→1" parenthetical reads as 1-per-burst; deliberate deviation).
+	// Derived, so a mid-list insert of an older row (which sorts above
+	// the marker) doesn't count, and the pill reflects what's below.
 	const newCount = useMemo(() => {
 		if (atBottom) return 0;
 		let start = 0;
-		if (seenBottomKey !== undefined) {
-			let idx = items.findIndex((it) => it.key === seenBottomKey);
-			if (idx === -1 && seenBottomKey.startsWith("row-")) {
-				// The marker row may have folded into a burst since it was
-				// recorded — resolve to the burst containing it. (Its later
-				// constituents go uncounted; better a slight under-count
-				// than the whole feed.)
-				const id = Number(seenBottomKey.slice(4));
-				idx = items.findIndex((it) => it.type === "burst" && it.actions.some((a) => a.id === id));
+		let n = 0;
+		if (seenBottom !== undefined) {
+			let idx = items.findIndex((it) => it.key === seenBottom.key);
+			if (idx === -1) {
+				// The marker item may have folded into a burst (row → burst)
+				// or dissolved back into rows (burst → rows) since it was
+				// recorded — resolve by the action id both key shapes encode.
+				// Fold direction under-counts the burst's later constituents;
+				// better slight under-count than the whole feed.
+				const id = keyActionId(seenBottom.key);
+				if (id !== undefined) {
+					idx = items.findIndex(
+						(it) =>
+							(it.type === "row" && it.action.id === id) ||
+							(it.type === "burst" && it.actions.some((a) => a.id === id)),
+					);
+				}
 			}
 			// Marker gone entirely: count nothing rather than everything.
-			start = idx === -1 ? items.length : idx + 1;
+			if (idx === -1) return 0;
+			const at = items[idx];
+			if (at?.type === "burst" && at.key === seenBottom.key && seenBottom.burstSize != null) {
+				n += Math.max(0, at.actions.length - seenBottom.burstSize);
+			}
+			start = idx + 1;
 		}
-		let n = 0;
 		for (let i = start; i < items.length; i++) {
 			const it = items[i];
 			if (it?.type === "row") n++;
 			else if (it?.type === "burst") n += it.actions.length;
 		}
 		return n;
-	}, [items, atBottom, seenBottomKey]);
+	}, [items, atBottom, seenBottom]);
 
 	// Pin to the bottom while tailing. Skipped while hidden (a
 	// display:none card can't measure); re-runs and catches up the moment
@@ -196,23 +248,23 @@ export const ActivityCardBody = ({
 		// mid-list insert while tailing still keeps us at the bottom.
 		if (atBottom && items.length > 0) {
 			el.scrollTop = el.scrollHeight;
-			setSeenBottomKey(bottomKey);
+			markSeenBottom();
 		}
-	}, [items, atBottom, visible, bottomKey]);
+	}, [items, atBottom, visible, markSeenBottom]);
 
 	const onScroll = () => {
 		const el = scrollerRef.current;
 		if (!el) return;
 		const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < TAIL_THRESHOLD_PX;
 		setAtBottom(bottom);
-		if (bottom) setSeenBottomKey(bottomKey);
+		if (bottom) markSeenBottom();
 	};
 
 	const jumpToLatest = () => {
 		const el = scrollerRef.current;
 		if (el) el.scrollTop = el.scrollHeight;
 		setAtBottom(true);
-		setSeenBottomKey(bottomKey);
+		markSeenBottom();
 	};
 
 	if (items.length === 0) {

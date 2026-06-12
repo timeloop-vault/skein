@@ -111,11 +111,13 @@ interface BurstCandidate {
 	live: boolean;
 }
 
-/// Path without its last segment ("" for bare filenames). Mirrors
-/// `basename` in Row.tsx — "/" separators only, per the codebase.
+/// Path without its last segment ("" for bare filenames). Handles both
+/// separators — harnesses emit native paths, and a "/"-only split would
+/// collapse every Windows fold key to "", merging unrelated directories
+/// into one repo-wide burst.
 function dirname(path: string): string {
-	const trimmed = path.replace(/\/+$/, "");
-	const i = trimmed.lastIndexOf("/");
+	const trimmed = path.replace(/[\\/]+$/, "");
+	const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
 	return i === -1 ? "" : trimmed.slice(0, i);
 }
 
@@ -123,7 +125,7 @@ function dirname(path: string): string {
 /// two segments with a trailing slash, "…/"-prefixed when deeper.
 function shortScope(dir: string): string {
 	if (!dir) return "./";
-	const segs = dir.split("/").filter(Boolean);
+	const segs = dir.split(/[\\/]/).filter(Boolean);
 	const tail = segs.slice(-2).join("/");
 	return `${segs.length > 2 ? "…/" : ""}${tail}/`;
 }
@@ -136,8 +138,8 @@ function burstCandidate(a: HarnessAction, live: boolean): BurstCandidate | undef
 	if (a.timestampMs <= 0) return undefined;
 	const p: Payload = parsePayload(a.payload);
 	if (p.is_error === true) return undefined;
-	const tool = (str(p.tool) ?? "").toLowerCase();
-	if (tool !== "edit" && tool !== "write" && tool !== "multiedit") return undefined;
+	const raw = (str(p.tool) ?? "").toLowerCase();
+	if (raw !== "edit" && raw !== "write" && raw !== "multiedit") return undefined;
 	const files = Array.isArray(p.files) ? p.files : [];
 	const file = str(files[0]);
 	if (!file) return undefined;
@@ -145,7 +147,10 @@ function burstCandidate(a: HarnessAction, live: boolean): BurstCandidate | undef
 	return {
 		action: a,
 		dir: dirname(file),
-		tool,
+		// multiedit folds (and labels) as "write" — EditRow renders it as
+		// write, and a fold key the user can't see would split visually
+		// identical rows.
+		tool: raw === "multiedit" ? "write" : raw,
 		adds: pi ? num(pi.additions) : undefined,
 		dels: pi ? num(pi.deletions) : undefined,
 		live,
@@ -255,7 +260,10 @@ export function flattenFeed(actions: HarnessAction[], opts: FlattenOptions): Fee
 			}
 			return;
 		}
-		const hasDeltas = cands.some((c) => c.adds != null || c.dels != null);
+		// Totals only when every constituent reported a diff — a partial
+		// sum rendered as "+12 −0" reads as definite. (Single rows omit
+		// unknown deltas the same way.)
+		const hasDeltas = cands.every((c) => c.adds != null || c.dels != null);
 		pushRaw(
 			{
 				type: "burst",
@@ -361,6 +369,10 @@ export function flattenFeed(actions: HarnessAction[], opts: FlattenOptions): Fee
 			// accumulated here belong to a turn that never reached a
 			// terminal step — drop them, don't bill them forward.
 			if (a.kind === "user_prompt") openTurns.delete(a.harnessId);
+			// Null-title ai_title rows render nothing (rows.tsx) — emitting
+			// an invisible item would break streaks and count as unseen
+			// activity the user can't see.
+			if (a.kind === "ai_title" && !str(parsePayload(a.payload).ai_title)) continue;
 			if (!SKIP_KINDS.has(a.kind)) {
 				push({ type: "row", key: `row-${a.id}`, action: a, live }, live);
 			}

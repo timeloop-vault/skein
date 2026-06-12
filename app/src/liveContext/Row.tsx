@@ -100,12 +100,13 @@ export const Row = ({
 	</div>
 );
 
-/// Last path segment of a "/"-separated path. Tolerates trailing
-/// slashes and empty input.
+/// Last path segment. Splits on either separator — harnesses emit
+/// native paths, so Windows rows carry backslashes. Tolerates trailing
+/// separators and empty input.
 export function basename(path: string | null | undefined): string {
 	if (!path) return "";
-	const trimmed = path.replace(/\/+$/, "");
-	const i = trimmed.lastIndexOf("/");
+	const trimmed = path.replace(/[\\/]+$/, "");
+	const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
 	return i === -1 ? trimmed : trimmed.slice(i + 1);
 }
 
