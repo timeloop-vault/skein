@@ -1707,9 +1707,11 @@ export default function App() {
 				const i = prev.findIndex((t) => t.state === "error" && t.harnessId === a.harnessId);
 				const existing = i === -1 ? undefined : prev[i];
 				if (existing) {
-					// Keep the entry id, so the component's dismiss timer
-					// keeps running from the first retry — a long burst
-					// re-toasts when the next retry lands after dismissal.
+					// Update in place (same id, fresh detail). Each update
+					// re-renders the stack, which re-arms the component's
+					// dismiss timer — so the toast rides the whole burst and
+					// dismisses ~6s after its last retry, instead of four
+					// toasts stacking up.
 					const next = [...prev];
 					next[i] = { ...existing, detail };
 					return next;

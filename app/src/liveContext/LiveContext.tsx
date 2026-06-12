@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePersistedState } from "../prefs.ts";
 import type { Harness, HarnessKind } from "../types.ts";
-import { ActivityCardBody, IDLE_AFTER_MS } from "./ActivityCard.tsx";
+import { ActivityCardBody, IDLE_AFTER_MS, useIdleBasis } from "./ActivityCard.tsx";
 import { type CardLayout, CardStack, DEFAULT_LAYOUT } from "./CardStack.tsx";
 import { DiffCardBody } from "./DiffCard.tsx";
 import "./chrome.css";
@@ -95,11 +95,7 @@ export const LiveContext = ({
 	// past the tail threshold (§10 long-quiet). A per-minute ticker
 	// (visible rooms only) keeps the figure fresh; minute granularity is
 	// all the format shows.
-	const lastActionTs = useMemo(() => {
-		let m = 0;
-		for (const a of actions) if (a.timestampMs > m) m = a.timestampMs;
-		return m;
-	}, [actions]);
+	const idleBasis = useIdleBasis(actions, liveIds);
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		if (!visible) return;
@@ -108,9 +104,7 @@ export const LiveContext = ({
 		return () => clearInterval(t);
 	}, [visible]);
 	const idleFor =
-		lastActionTs > 0 && now - lastActionTs > IDLE_AFTER_MS
-			? formatIdle(now - lastActionTs)
-			: undefined;
+		idleBasis > 0 && now - idleBasis > IDLE_AFTER_MS ? formatIdle(now - idleBasis) : undefined;
 
 	const toggleCollapse = useCallback(
 		(i: number) => {
