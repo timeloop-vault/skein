@@ -64,7 +64,7 @@ export const LiveContext = ({
 	onToggleTurnCosts,
 	onBranchChange,
 }: LiveContextProps) => {
-	const { actions } = useRoomActions(roomId);
+	const { actions, liveIds } = useRoomActions(roomId);
 	const [layout, setLayout] = usePersistedState<CardLayout>(
 		`liveContext:layout:${roomId}`,
 		DEFAULT_LAYOUT,
@@ -139,8 +139,14 @@ export const LiveContext = ({
 						body: (
 							<ActivityCardBody
 								actions={actions}
+								liveIds={liveIds}
 								harnessKindOf={harnessKindOf}
-								visible={visible}
+								// Collapsing the card display:nones its body exactly like
+								// a room switch does, so it must gate the scroll/animation
+								// effects the same way — otherwise rows arriving while
+								// collapsed replay their slide-in en masse on expand, and
+								// the auto-tail never re-pins.
+								visible={visible && !layout.collapsed[2]}
 								showTurnCosts={showTurnCosts}
 							/>
 						),
