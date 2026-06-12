@@ -2,11 +2,12 @@
 //
 // The feed isn't a 1:1 map of actions to rows: some kinds become derived
 // chrome (a turn_duration row becomes a turn separator, turn_cost rows
-// become per-turn cost hair-lines) and some are consumed elsewhere
-// entirely (away_summary → the room subtitle, reasoning → not shown).
-// This module turns the ordered action list into the list of things
-// actually rendered, so the Activity card maps over *items*, and the
-// auto-tail unseen-counter counts items rather than raw actions.
+// become per-turn cost hair-lines), edit storms fold into burst items,
+// and some kinds are consumed elsewhere entirely (away_summary → the
+// room subtitle, reasoning → not shown). This module turns the ordered
+// action list into the list of things actually rendered, so the Activity
+// card maps over *items*, and the auto-tail unseen-counter counts items
+// rather than raw actions.
 //
 // Provenance (D2d-3): backfilled rows are loaded once by the mount query
 // and never broadcast, so "live" = the row arrived over the harness-action
@@ -15,7 +16,8 @@
 // before the first backfilled item plus an end-marker after the last one
 // when live items follow.
 
-import { formatClock, formatDuration } from "./Row.tsx";
+import type { HarnessKind } from "../types.ts";
+import { Row, formatClock, formatDuration } from "./Row.tsx";
 import { type Payload, num, obj, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
 
@@ -58,13 +60,124 @@ export type FeedItem =
 			rangeStartMs: number;
 			rangeEndMs: number;
 	  }
-	| { type: "backfill-end"; key: string };
+	| { type: "backfill-end"; key: string }
+	| {
+			type: "burst";
+			/** `burst-<first constituent id>` — stable as the burst grows. */
+			key: string;
+			harnessId: string;
+			/** Normalized tool name (edit / write / multiedit). */
+			tool: string;
+			/** Deepest common ancestor of the constituents' directories,
+			 *  "/"-normalized full path ("" when nothing is shared). */
+			dir: string;
+			/** Display scope — `dir` shortened for the gist, `**`-suffixed
+			 *  when constituents span subdirectories. */
+			scope: string;
+			/** Cumulative additions/deletions; undefined when no constituent
+			 *  carried patch_info (e.g. fresh Writes with no diff). */
+			adds: number | undefined;
+			dels: number | undefined;
+			/** First/last constituent timestamps — the burst window. */
+			firstTimestampMs: number;
+			lastTimestampMs: number;
+			/** Constituent provenance (uniform — a fold never crosses the
+			 *  backfill boundary, or the chrome splice would lie). */
+			live: boolean;
+			/** The folded rows, in order, for the expanded view. */
+			actions: HarnessAction[];
+	  };
 
 /// Kinds that never render as their own row and aren't derived chrome
 /// either: consumed elsewhere. Keep in sync with the dispatcher in
 /// rows.tsx, whose default case returns null for these (plus turn_cost /
 /// turn_duration, which this module turns into derived items instead).
 const SKIP_KINDS = new Set(["away_summary", "reasoning"]);
+
+/// Burst fold rule: consecutive emitted items from the same harness,
+/// same normalized tool, gap < 5 s. Scope renders as the constituents'
+/// deepest common ancestor — `skills/**` when they span directories,
+/// the exact `…/src/auth/` when they don't. This widens handover §6's
+/// "same dirname" letter: the prototype's own bursts span subdirs with
+/// `/**` scopes, and dogfooding hit the canonical miss (one file per
+/// sibling directory, e.g. seven skills/<name>/SKILL.md edits) on day
+/// one. §12 marks the fold rule as a dogfooding knob. "Consecutive" is
+/// over *items* — kinds that emit nothing (reasoning, suppressed
+/// turn_cost) don't break a streak the user can't see broken.
+const BURST_GAP_MS = 5000;
+/// Minimum constituents before folding: a pair isn't a storm, and folding
+/// it would hide detail for no real de-noising. Tune per §12.
+const BURST_MIN = 3;
+
+interface BurstCandidate {
+	action: HarnessAction;
+	dir: string;
+	tool: string;
+	adds: number | undefined;
+	dels: number | undefined;
+	live: boolean;
+}
+
+/// Path without its last segment ("" for bare filenames). Handles both
+/// separators — harnesses emit native paths, and a "/"-only split would
+/// flatten every Windows path to "", degrading burst scopes.
+function dirname(path: string): string {
+	const trimmed = path.replace(/[\\/]+$/, "");
+	const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+	return i === -1 ? "" : trimmed.slice(0, i);
+}
+
+/// Shorten an (often absolute) directory for the burst gist: the last
+/// two segments with a trailing slash, "…/"-prefixed when deeper.
+function shortScope(dir: string): string {
+	if (!dir) return "./";
+	const segs = dir.split(/[\\/]/).filter(Boolean);
+	const tail = segs.slice(-2).join("/");
+	return `${segs.length > 2 ? "…/" : ""}${tail}/`;
+}
+
+/// Deepest directory containing every input, in "/"-normalized form
+/// (Windows backslashes normalize so mixed-separator runs still share
+/// ancestry). "" when nothing is shared.
+function commonAncestor(dirs: string[]): string {
+	const norm = dirs.map((d) => d.replace(/\\/g, "/"));
+	let anc = norm[0] ?? "";
+	for (const d of norm) {
+		while (anc && d !== anc && !d.startsWith(`${anc}/`)) {
+			const i = anc.lastIndexOf("/");
+			anc = i === -1 ? "" : anc.slice(0, i);
+		}
+		if (!anc) break;
+	}
+	return anc;
+}
+
+/// A patch row that may fold into a burst: a successful edit/write with
+/// a file and a real timestamp. Excluded on purpose: errored patches
+/// (they render as error rows and should visibly break a storm) and the
+/// opencode `{files, hash}` snapshot flavor (no tool, no deltas, ts=0).
+function burstCandidate(a: HarnessAction, live: boolean): BurstCandidate | undefined {
+	if (a.timestampMs <= 0) return undefined;
+	const p: Payload = parsePayload(a.payload);
+	if (p.is_error === true) return undefined;
+	const raw = (str(p.tool) ?? "").toLowerCase();
+	if (raw !== "edit" && raw !== "write" && raw !== "multiedit") return undefined;
+	const files = Array.isArray(p.files) ? p.files : [];
+	const file = str(files[0]);
+	if (!file) return undefined;
+	const pi = obj(p.patch_info);
+	return {
+		action: a,
+		dir: dirname(file),
+		// multiedit folds (and labels) as "write" — EditRow renders it as
+		// write, and a fold key the user can't see would split visually
+		// identical rows.
+		tool: raw === "multiedit" ? "write" : raw,
+		adds: pi ? num(pi.additions) : undefined,
+		dels: pi ? num(pi.deletions) : undefined,
+		live,
+	};
+}
 
 /// The two turn_cost payload shapes (see docs/live-context-d2-buildmap.md
 /// "Claude ↔ opencode payload divergence"):
@@ -138,14 +251,70 @@ export interface FlattenOptions {
 /// because a live row can legitimately sort between backfilled rows
 /// (multi-harness timestamp skew); such a row sits inside the marked
 /// region rather than corrupting the markers.
+///
+/// Burst fold: runs of BURST_MIN+ qualifying patch rows (same harness /
+/// tool / provenance, gaps < BURST_GAP_MS) collapse into one burst item
+/// carrying its constituents, scoped to their deepest common directory.
+/// A fold never crosses the backfill boundary — itemLive stays honest,
+/// so the chrome splice does too. Streaks shorter than the minimum
+/// re-emit as plain rows.
 export function flattenFeed(actions: HarnessAction[], opts: FlattenOptions): FeedItem[] {
 	const { showTurnCosts, liveIds } = opts;
 	const items: FeedItem[] = [];
 	// Per-item provenance, parallel to `items` — drives the splice below.
 	const itemLive: boolean[] = [];
-	const push = (item: FeedItem, live: boolean) => {
+	const pushRaw = (item: FeedItem, live: boolean) => {
 		items.push(item);
 		itemLive.push(live);
+	};
+	// Pending same-tool same-dir patch streak (all entries share
+	// harnessId, tool, dir, and provenance).
+	let streak: BurstCandidate[] = [];
+	const flushStreak = () => {
+		if (streak.length === 0) return;
+		const cands = streak;
+		streak = [];
+		const first = cands[0];
+		const last = cands[cands.length - 1];
+		if (!first || !last) return;
+		if (cands.length < BURST_MIN) {
+			for (const c of cands) {
+				pushRaw({ type: "row", key: `row-${c.action.id}`, action: c.action, live: c.live }, c.live);
+			}
+			return;
+		}
+		// Totals only when every constituent reported a diff — a partial
+		// sum rendered as "+12 −0" reads as definite. (Single rows omit
+		// unknown deltas the same way.)
+		const hasDeltas = cands.every((c) => c.adds != null || c.dels != null);
+		// Single-dir storms keep the exact `…/src/auth/` scope; spanning
+		// storms render their common ancestor as `skills/**` (recursive,
+		// matching the prototype's burst scopes).
+		const ancestor = commonAncestor(cands.map((c) => c.dir));
+		const spans = cands.some((c) => c.dir.replace(/\\/g, "/") !== ancestor);
+		pushRaw(
+			{
+				type: "burst",
+				key: `burst-${first.action.id}`,
+				harnessId: first.action.harnessId,
+				tool: first.tool,
+				dir: ancestor,
+				scope: spans ? (ancestor ? `${shortScope(ancestor)}**` : "**") : shortScope(ancestor),
+				adds: hasDeltas ? cands.reduce((n, c) => n + (c.adds ?? 0), 0) : undefined,
+				dels: hasDeltas ? cands.reduce((n, c) => n + (c.dels ?? 0), 0) : undefined,
+				firstTimestampMs: first.action.timestampMs,
+				lastTimestampMs: last.action.timestampMs,
+				live: first.live,
+				actions: cands.map((c) => c.action),
+			},
+			first.live,
+		);
+	};
+	// Any non-streak emission visibly interrupts a storm, so it closes
+	// the pending fold first.
+	const push = (item: FeedItem, live: boolean) => {
+		flushStreak();
+		pushRaw(item, live);
 	};
 	// Claude re-emits a turn's cost row verbatim sometimes; request_id
 	// identifies the API call, so it de-dupes them.
@@ -157,7 +326,28 @@ export function flattenFeed(actions: HarnessAction[], opts: FlattenOptions): Fee
 	const openTurns = new Map<string, { tokens: number; usd: number }>();
 	for (const a of actions) {
 		const live = liveIds.has(a.id);
-		if (a.kind === "turn_duration") {
+		if (a.kind === "patch") {
+			const cand = burstCandidate(a, live);
+			if (cand) {
+				const prev = streak[streak.length - 1];
+				if (
+					prev &&
+					prev.action.harnessId === a.harnessId &&
+					prev.tool === cand.tool &&
+					prev.live === cand.live &&
+					a.timestampMs - prev.action.timestampMs < BURST_GAP_MS
+				) {
+					streak.push(cand);
+				} else {
+					flushStreak();
+					streak = [cand];
+				}
+				continue;
+			}
+			// Non-candidate patch (errored, snapshot flavor, no file):
+			// renders as its own row and breaks any pending streak.
+			push({ type: "row", key: `row-${a.id}`, action: a, live }, live);
+		} else if (a.kind === "turn_duration") {
 			const p: Payload = parsePayload(a.payload);
 			push(
 				{
@@ -206,11 +396,18 @@ export function flattenFeed(actions: HarnessAction[], opts: FlattenOptions): Fee
 			// accumulated here belong to a turn that never reached a
 			// terminal step — drop them, don't bill them forward.
 			if (a.kind === "user_prompt") openTurns.delete(a.harnessId);
+			// Null-title ai_title rows render nothing (rows.tsx) — emitting
+			// an invisible item would break streaks and count as unseen
+			// activity the user can't see.
+			if (a.kind === "ai_title" && !str(parsePayload(a.payload).ai_title)) continue;
 			if (!SKIP_KINDS.has(a.kind)) {
 				push({ type: "row", key: `row-${a.id}`, action: a, live }, live);
 			}
 		}
 	}
+	// A streak at the very tail is still a burst (it may keep growing —
+	// the card decides live shimmer at render time).
+	flushStreak();
 
 	// Splice in the backfill chrome. The end-marker first — it sits at the
 	// higher index, so the banner's insertion below can't shift it.
@@ -309,6 +506,49 @@ export const BackfillBanner = ({
 				)}
 			</span>
 		</div>
+	);
+};
+
+/// Collapsed burst — `edit ×12 …/skein-core/src/ · click to expand` with
+/// cumulative deltas and the storm window on the right. `live` (decided
+/// by the card at render time: provenance-live and still inside the fold
+/// window) drives the shimmer class and the accent pill.
+export const BurstRow = ({
+	item,
+	harness,
+	live,
+	onToggle,
+}: {
+	item: Extract<FeedItem, { type: "burst" }>;
+	harness: HarnessKind;
+	live: boolean;
+	onToggle: () => void;
+}) => {
+	const span = item.lastTimestampMs - item.firstTimestampMs;
+	return (
+		<Row
+			kind="burst"
+			className={live ? "live" : undefined}
+			harness={harness}
+			timestampMs={item.firstTimestampMs}
+			onClick={onToggle}
+			right={
+				<>
+					{item.adds != null && <span className="delta-add">+{item.adds}</span>}{" "}
+					{item.dels != null && <span className="delta-del">−{item.dels}</span>}{" "}
+					{span > 0 && <span className="dim">in {formatDuration(span)}</span>}
+				</>
+			}
+		>
+			<span className="tool">
+				{item.tool} ×{item.actions.length}
+			</span>{" "}
+			<span className="target" title={item.dir || undefined}>
+				{item.scope}
+			</span>
+			<span className="dim"> · click to expand</span>
+			{live && <span className="pill live">live</span>}
+		</Row>
 	);
 };
 

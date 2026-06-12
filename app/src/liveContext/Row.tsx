@@ -65,6 +65,10 @@ interface RowProps {
 	extra?: ReactNode;
 	/** Explicit glyph override (wins over the GLYPH map). */
 	glyph?: string | undefined;
+	/** Extra modifier class on the row element itself (e.g. the burst
+	 *  shimmer's `live` — its selector needs it on `.lc-row`, where the
+	 *  slide-in wrapper class can't reach). */
+	className?: string | undefined;
 }
 
 export const Row = ({
@@ -76,9 +80,10 @@ export const Row = ({
 	onClick,
 	extra,
 	glyph,
+	className,
 }: RowProps) => (
 	<div
-		className={`lc-row k-${kind}`}
+		className={`lc-row k-${kind}${className ? ` ${className}` : ""}`}
 		onClick={onClick}
 		style={onClick ? { cursor: "pointer" } : undefined}
 	>
@@ -95,12 +100,13 @@ export const Row = ({
 	</div>
 );
 
-/// Last path segment of a "/"-separated path. Tolerates trailing
-/// slashes and empty input.
+/// Last path segment. Splits on either separator — harnesses emit
+/// native paths, so Windows rows carry backslashes. Tolerates trailing
+/// separators and empty input.
 export function basename(path: string | null | undefined): string {
 	if (!path) return "";
-	const trimmed = path.replace(/\/+$/, "");
-	const i = trimmed.lastIndexOf("/");
+	const trimmed = path.replace(/[\\/]+$/, "");
+	const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
 	return i === -1 ? trimmed : trimmed.slice(i + 1);
 }
 
