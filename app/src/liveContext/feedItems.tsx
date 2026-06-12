@@ -68,9 +68,11 @@ export type FeedItem =
 			harnessId: string;
 			/** Normalized tool name (edit / write / multiedit). */
 			tool: string;
-			/** The constituents' shared directory (fold key), full path. */
+			/** Deepest common ancestor of the constituents' directories,
+			 *  "/"-normalized full path ("" when nothing is shared). */
 			dir: string;
-			/** Display scope — `dir` shortened for the gist. */
+			/** Display scope — `dir` shortened for the gist, `**`-suffixed
+			 *  when constituents span subdirectories. */
 			scope: string;
 			/** Cumulative additions/deletions; undefined when no constituent
 			 *  carried patch_info (e.g. fresh Writes with no diff). */
@@ -92,11 +94,16 @@ export type FeedItem =
 /// turn_duration, which this module turns into derived items instead).
 const SKIP_KINDS = new Set(["away_summary", "reasoning"]);
 
-/// Burst fold rule (handover §6, the §12-confirmed variant of the spec's
-/// three mutually inconsistent statements): consecutive emitted items
-/// from the same harness, same normalized tool, same dirname, gap < 5 s.
-/// "Consecutive" is over *items* — kinds that emit nothing (reasoning,
-/// suppressed turn_cost) don't break a streak the user can't see broken.
+/// Burst fold rule: consecutive emitted items from the same harness,
+/// same normalized tool, gap < 5 s. Scope renders as the constituents'
+/// deepest common ancestor — `skills/**` when they span directories,
+/// the exact `…/src/auth/` when they don't. This widens handover §6's
+/// "same dirname" letter: the prototype's own bursts span subdirs with
+/// `/**` scopes, and dogfooding hit the canonical miss (one file per
+/// sibling directory, e.g. seven skills/<name>/SKILL.md edits) on day
+/// one. §12 marks the fold rule as a dogfooding knob. "Consecutive" is
+/// over *items* — kinds that emit nothing (reasoning, suppressed
+/// turn_cost) don't break a streak the user can't see broken.
 const BURST_GAP_MS = 5000;
 /// Minimum constituents before folding: a pair isn't a storm, and folding
 /// it would hide detail for no real de-noising. Tune per §12.
@@ -113,8 +120,7 @@ interface BurstCandidate {
 
 /// Path without its last segment ("" for bare filenames). Handles both
 /// separators — harnesses emit native paths, and a "/"-only split would
-/// collapse every Windows fold key to "", merging unrelated directories
-/// into one repo-wide burst.
+/// flatten every Windows path to "", degrading burst scopes.
 function dirname(path: string): string {
 	const trimmed = path.replace(/[\\/]+$/, "");
 	const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
@@ -128,6 +134,22 @@ function shortScope(dir: string): string {
 	const segs = dir.split(/[\\/]/).filter(Boolean);
 	const tail = segs.slice(-2).join("/");
 	return `${segs.length > 2 ? "…/" : ""}${tail}/`;
+}
+
+/// Deepest directory containing every input, in "/"-normalized form
+/// (Windows backslashes normalize so mixed-separator runs still share
+/// ancestry). "" when nothing is shared.
+function commonAncestor(dirs: string[]): string {
+	const norm = dirs.map((d) => d.replace(/\\/g, "/"));
+	let anc = norm[0] ?? "";
+	for (const d of norm) {
+		while (anc && d !== anc && !d.startsWith(`${anc}/`)) {
+			const i = anc.lastIndexOf("/");
+			anc = i === -1 ? "" : anc.slice(0, i);
+		}
+		if (!anc) break;
+	}
+	return anc;
 }
 
 /// A patch row that may fold into a burst: a successful edit/write with
@@ -231,10 +253,11 @@ export interface FlattenOptions {
 /// region rather than corrupting the markers.
 ///
 /// Burst fold: runs of BURST_MIN+ qualifying patch rows (same harness /
-/// tool / dirname / provenance, gaps < BURST_GAP_MS) collapse into one
-/// burst item carrying its constituents. A fold never crosses the
-/// backfill boundary — itemLive stays honest, so the chrome splice does
-/// too. Streaks shorter than the minimum re-emit as plain rows.
+/// tool / provenance, gaps < BURST_GAP_MS) collapse into one burst item
+/// carrying its constituents, scoped to their deepest common directory.
+/// A fold never crosses the backfill boundary — itemLive stays honest,
+/// so the chrome splice does too. Streaks shorter than the minimum
+/// re-emit as plain rows.
 export function flattenFeed(actions: HarnessAction[], opts: FlattenOptions): FeedItem[] {
 	const { showTurnCosts, liveIds } = opts;
 	const items: FeedItem[] = [];
@@ -264,14 +287,19 @@ export function flattenFeed(actions: HarnessAction[], opts: FlattenOptions): Fee
 		// sum rendered as "+12 −0" reads as definite. (Single rows omit
 		// unknown deltas the same way.)
 		const hasDeltas = cands.every((c) => c.adds != null || c.dels != null);
+		// Single-dir storms keep the exact `…/src/auth/` scope; spanning
+		// storms render their common ancestor as `skills/**` (recursive,
+		// matching the prototype's burst scopes).
+		const ancestor = commonAncestor(cands.map((c) => c.dir));
+		const spans = cands.some((c) => c.dir.replace(/\\/g, "/") !== ancestor);
 		pushRaw(
 			{
 				type: "burst",
 				key: `burst-${first.action.id}`,
 				harnessId: first.action.harnessId,
 				tool: first.tool,
-				dir: first.dir,
-				scope: shortScope(first.dir),
+				dir: ancestor,
+				scope: spans ? (ancestor ? `${shortScope(ancestor)}**` : "**") : shortScope(ancestor),
 				adds: hasDeltas ? cands.reduce((n, c) => n + (c.adds ?? 0), 0) : undefined,
 				dels: hasDeltas ? cands.reduce((n, c) => n + (c.dels ?? 0), 0) : undefined,
 				firstTimestampMs: first.action.timestampMs,
@@ -306,7 +334,6 @@ export function flattenFeed(actions: HarnessAction[], opts: FlattenOptions): Fee
 					prev &&
 					prev.action.harnessId === a.harnessId &&
 					prev.tool === cand.tool &&
-					prev.dir === cand.dir &&
 					prev.live === cand.live &&
 					a.timestampMs - prev.action.timestampMs < BURST_GAP_MS
 				) {
