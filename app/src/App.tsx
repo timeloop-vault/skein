@@ -1707,11 +1707,13 @@ export default function App() {
 				const i = prev.findIndex((t) => t.state === "error" && t.harnessId === a.harnessId);
 				const existing = i === -1 ? undefined : prev[i];
 				if (existing) {
-					// Update in place (same id, fresh detail). Each update
-					// re-renders the stack, which re-arms the component's
-					// dismiss timer — so the toast rides the whole burst and
-					// dismisses ~6s after its last retry, instead of four
-					// toasts stacking up.
+					// Coalesce onto the live toast (same id) with fresh detail,
+					// so a fast burst is one toast, not a stack. Retries that
+					// outpace the 6s dismiss (529 backoff spaces them out:
+					// ~0.5/1/2/4s and growing) let the toast lapse between
+					// rows, so the next retry re-surfaces a fresh one — the
+					// incident keeps re-announcing itself, which is fine; the
+					// badge (one bump per incident) is the persistent signal.
 					const next = [...prev];
 					next[i] = { ...existing, detail };
 					return next;
