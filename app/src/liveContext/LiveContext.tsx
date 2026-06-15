@@ -16,10 +16,10 @@
 // Spec: docs/live-context-handover.md. Visual reference:
 // docs/design/skein/project/Live Context.html.
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePersistedState } from "../prefs.ts";
 import type { Harness, HarnessKind } from "../types.ts";
-import { ActivityCardBody } from "./ActivityCard.tsx";
+import { ActivityCardBody, IDLE_AFTER_MS, useIdleBasis } from "./ActivityCard.tsx";
 import { type CardLayout, CardStack, DEFAULT_LAYOUT } from "./CardStack.tsx";
 import { DiffCardBody } from "./DiffCard.tsx";
 import "./chrome.css";
@@ -55,6 +55,15 @@ interface LiveContextProps {
 	onBranchChange?: (branch: string | null) => void;
 }
 
+/// Idle-duration display: "14m" under an hour, "2h 14m" past it — the
+/// §10 long-quiet artboard's format. Minute floor; never sub-minute
+/// (the threshold guarantees at least 90 s).
+function formatIdle(ms: number): string {
+	const mins = Math.floor(ms / 60_000);
+	if (mins < 60) return `${mins}m`;
+	return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
 export const LiveContext = ({
 	roomId,
 	cwd,
@@ -81,6 +90,21 @@ export const LiveContext = ({
 	// Keep the status-bar branch live (issue #18) until the Diff card's
 	// status/diff fetch lands in D3.
 	useGitBranchWatcher(cwd, onBranchChange);
+
+	// "· idle 2h 14m" in the Activity head once the room's been silent
+	// past the tail threshold (§10 long-quiet). A per-minute ticker
+	// (visible rooms only) keeps the figure fresh; minute granularity is
+	// all the format shows.
+	const idleBasis = useIdleBasis(actions, liveIds);
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (!visible) return;
+		setNow(Date.now());
+		const t = setInterval(() => setNow(Date.now()), 60_000);
+		return () => clearInterval(t);
+	}, [visible]);
+	const idleFor =
+		idleBasis > 0 && now - idleBasis > IDLE_AFTER_MS ? formatIdle(now - idleBasis) : undefined;
 
 	const toggleCollapse = useCallback(
 		(i: number) => {
@@ -120,6 +144,7 @@ export const LiveContext = ({
 						meta: (
 							<>
 								<span>{actions.length} events</span>
+								{idleFor && <span className="idle-for">· idle {idleFor}</span>}
 								{/* The whole card head is the collapse click target, so
 								    the toggle must not let its click bubble. */}
 								<button

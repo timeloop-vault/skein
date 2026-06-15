@@ -517,6 +517,27 @@ function todoMark(status: string | undefined): string {
 	}
 }
 
+/// Cross-room error-toast copy (D2f, handover §6 step 2): a headline
+/// like `Overloaded (529), retrying · attempt 4 of 10 · retry in 4.4s`,
+/// composed from the same payload paths the inline ApiErrorRow reads.
+export function apiErrorToastText(payload: Payload): string {
+	const message = apiErrorMessage(payload);
+	const status = errorStatus(payload);
+	const retryMs = num(payload.retry_in_ms);
+	const attempt = num(payload.retry_attempt);
+	const max = num(payload.max_retries);
+	const line = `${message || "api error"}${status ? ` (${status})` : ""}${
+		retryMs != null ? ", retrying" : ""
+	}`;
+	return [
+		line,
+		attempt != null ? `attempt ${attempt}${max != null ? ` of ${max}` : ""}` : "",
+		retryMs != null ? `retry in ${formatDuration(Math.round(retryMs))}` : "",
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
 /// Human-readable api_error message. The raw SDK error object nests one
 /// level deeper than the obvious path (live data: error.error.error.message),
 /// so walk a few shapes and fall back to the type tag.

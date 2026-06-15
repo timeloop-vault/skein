@@ -41,8 +41,10 @@ export interface HarnessAction {
 }
 
 /// The Tauri event name the backend broadcasts live rows on. Global;
-/// payload carries `roomId` so we filter to the active room.
-const ACTION_EVENT = "harness-action";
+/// payload carries `roomId` so we filter to the active room. Exported
+/// for App's cross-room api_error watcher (D2f) — errors don't flow
+/// through harnessActivity, so the toast/badge surfaces tap this.
+export const ACTION_EVENT = "harness-action";
 
 /// Upper bound on the initial backfill load (newest-N by timestamp).
 /// Recon-scale rooms can have ≥6k rows; virtualization + a larger or

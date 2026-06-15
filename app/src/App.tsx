@@ -33,7 +33,13 @@ import {
 	useHarnessActivity,
 	useRoomActivity,
 } from "./harnessActivity.ts";
-import { LiveContext } from "./liveContext/index.ts";
+import {
+	ACTION_EVENT,
+	type HarnessAction,
+	LiveContext,
+	apiErrorToastText,
+	parsePayload,
+} from "./liveContext/index.ts";
 import { usePersistedState } from "./prefs.ts";
 import { isAppShortcut, isMac, modLabel } from "./shortcuts.ts";
 import type { Density, Harness, HarnessKind, Room, Theme } from "./types.ts";
@@ -56,12 +62,19 @@ interface ToastEntry {
 	harnessName: string;
 	// "waiting" lands here once L2c-1 (Claude JSONL adapter) reports
 	// a `last-prompt` row → harness is awaiting user input. Rendered
-	// verbatim in the toast subtitle.
-	state: "idle" | "exited" | "waiting";
+	// verbatim in the toast subtitle. "error" is the D2f api_error
+	// variant — red treatment plus the dim `detail` line.
+	state: "idle" | "exited" | "waiting" | "error";
+	/** Error variant only: summary under the subtitle, e.g.
+	 *  "Overloaded (529), retrying · attempt 4 of 10 · retry in 4.4s". */
+	detail?: string | undefined;
 }
 
 const TOAST_DISMISS_MS = 6_000;
 const TOAST_MAX_VISIBLE = 5;
+/// api_error rows within this window count as one incident (a retry
+/// burst lands as several rows seconds apart — badge once, not per row).
+const API_ERROR_INCIDENT_MS = 60_000;
 
 const Toast = ({
 	toast,
@@ -77,13 +90,18 @@ const Toast = ({
 		return () => clearTimeout(id);
 	}, [onDismiss]);
 	return (
-		<div className="sk-toast" onClick={onClick} title="Go to this harness">
+		<div
+			className={`sk-toast${toast.state === "error" ? " error" : ""}`}
+			onClick={onClick}
+			title="Go to this harness"
+		>
 			<HChip kind={toast.kind} size={14} />
 			<div className="sk-toast-body">
 				<div className="sk-toast-title">{toast.roomName}</div>
 				<div className="sk-toast-sub">
 					{toast.harnessName} · {toast.state}
 				</div>
+				{toast.detail && <div className="sk-toast-detail">{toast.detail}</div>}
 			</div>
 			<span
 				className="sk-toast-x"
@@ -1442,6 +1460,9 @@ export default function App() {
 	notifyToastRef.current = notifyToast;
 	const notifyOsRef = useRef(notifyOs);
 	notifyOsRef.current = notifyOs;
+	// D2f — last api_error arrival per harness, for coalescing a retry
+	// burst into one badge-worthy incident.
+	const lastApiErrorAtRef = useRef<Map<string, number>>(new Map());
 
 	// L5b — window-focus state + OS-notification permission. The
 	// notification logic below skips firing an OS banner when Skein
@@ -1638,6 +1659,81 @@ export default function App() {
 			});
 		});
 		return unsub;
+	}, []);
+
+	// D2f (#80) — graduated error treatment, steps 2+3 (handover §6).
+	// api_error rows don't flow through harnessActivity (they're
+	// harness_actions rows), so this dedicated listener feeds the
+	// existing notification surfaces: an error-variant toast when the
+	// error lands in a room the user isn't looking at, and a
+	// pendingNotifications bump so the tab badge + status-bar urgent
+	// segment persist until the room gets attention (the stream carries
+	// no "resolved" signal — attention is the only clearing semantic).
+	// A retry burst is one incident (real data: 4 rows in 11 s) — the
+	// badge bumps once per window, and the toast updates in place while
+	// it's still showing rather than stacking.
+	useEffect(() => {
+		const unlistenPromise = listen<HarnessAction>(ACTION_EVENT, (event) => {
+			const a = event.payload;
+			if (a.kind !== "api_error") return;
+			// §6: the inline ApiErrorRow covers the active room; the toast
+			// exists for errors the user can't currently see.
+			if (a.roomId === activeRoomIdRef.current) return;
+			const owningRoom = roomsRef.current.find((r) => r.id === a.roomId);
+			const harness = owningRoom?.harnesses.find((h) => h.id === a.harnessId);
+			if (!owningRoom || !harness) return;
+			const now = Date.now();
+			const last = lastApiErrorAtRef.current.get(a.harnessId) ?? 0;
+			const newIncident = now - last > API_ERROR_INCIDENT_MS;
+			lastApiErrorAtRef.current.set(a.harnessId, now);
+			if (notifyBadgeRef.current && newIncident) {
+				setRooms((prev) =>
+					prev.map((r) => {
+						if (!r.harnesses.some((h) => h.id === a.harnessId)) return r;
+						return {
+							...r,
+							harnesses: r.harnesses.map((h) =>
+								h.id === a.harnessId
+									? { ...h, pendingNotifications: (h.pendingNotifications ?? 0) + 1 }
+									: h,
+							),
+						};
+					}),
+				);
+			}
+			if (!notifyToastRef.current || !windowFocusedRef.current) return;
+			const detail = apiErrorToastText(parsePayload(a.payload));
+			setToasts((prev) => {
+				const i = prev.findIndex((t) => t.state === "error" && t.harnessId === a.harnessId);
+				const existing = i === -1 ? undefined : prev[i];
+				if (existing) {
+					// Coalesce onto the live toast (same id) with fresh detail,
+					// so a fast burst is one toast, not a stack. Retries that
+					// outpace the 6s dismiss (529 backoff spaces them out:
+					// ~0.5/1/2/4s and growing) let the toast lapse between
+					// rows, so the next retry re-surfaces a fresh one — the
+					// incident keeps re-announcing itself, which is fine; the
+					// badge (one bump per incident) is the persistent signal.
+					const next = [...prev];
+					next[i] = { ...existing, detail };
+					return next;
+				}
+				const entry: ToastEntry = {
+					id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+					roomId: owningRoom.id,
+					harnessId: a.harnessId,
+					kind: harness.kind,
+					roomName: owningRoom.name,
+					harnessName: harness.name,
+					state: "error",
+					detail,
+				};
+				return [...prev, entry].slice(-TOAST_MAX_VISIBLE);
+			});
+		});
+		return () => {
+			void unlistenPromise.then((un) => un());
+		};
 	}, []);
 
 	// L6 — append every real phase transition to the sqlite event

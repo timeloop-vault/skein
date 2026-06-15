@@ -2,9 +2,8 @@
    The Activity card body: rows, per-kind glyph colors, turn separators,
    per-turn cost, tool-result previews, backfill banner + end marker,
    burst rows, the tailing sentinel, and the error toast. Imported by
-   ActivityCard.tsx. The error toast (D2f) activates in a later slice.
-   Tokens inherit from the .sk-dark / .sk-light ancestor. Lifted from the
-   design canvas + prototype. */
+   ActivityCard.tsx. Tokens inherit from the .sk-dark / .sk-light
+   ancestor. Lifted from the design canvas + prototype. */
 
 /* Activity card body. Wrapper = positioning context for the jump pill
    (so it stays pinned to the viewport, not scrolling with content). */
@@ -68,9 +67,8 @@
 /* ─────────────────────────────────────────────────────────────────────
    Activity card — rows, turn separators, costs, bursts, previews,
    backfill. The D2 layer on top of the D1 chrome above. Lifted from the
-   design canvas + prototype. Toast (D2f) selectors activate in a later
-   slice; the block was added once so the feature owns its CSS in one
-   place rather than across 6 edits.
+   design canvas + prototype. The block was added once so the feature
+   owns its CSS in one place rather than across 6 edits.
    ───────────────────────────────────────────────────────────────────── */
 
 /* Turn boundary — appears between assistant turns (D2d). */
@@ -542,31 +540,7 @@
 	}
 }
 
-/* Bottom-right error toast for an inactive room (D2f). */
-.lc-toast {
-	position: absolute;
-	right: 12px;
-	bottom: 12px;
-	background: var(--bg-2);
-	border: 1px solid color-mix(in srgb, var(--err) 50%, var(--line));
-	border-left: 3px solid var(--err);
-	border-radius: 5px;
-	padding: 8px 12px 8px 10px;
-	display: flex;
-	align-items: flex-start;
-	gap: 10px;
-	font-size: 11px;
-	color: var(--fg-0);
-	max-width: 260px;
-	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-}
-.lc-toast .body {
-	line-height: 1.45;
-}
-.lc-toast .body .dim {
-	color: var(--fg-2);
-	font-family: var(--sk-mono);
-	font-size: 9.5px;
-	margin-top: 2px;
-	display: block;
-}
+/* The design's in-pane .lc-toast was dropped in D2f: an inactive room's
+   pane is display:none, so the cross-room error alert rides the app
+   shell's sk-toast stack instead (error variant in styles.css), which
+   already has dismissal, stacking, and click-to-jump. */

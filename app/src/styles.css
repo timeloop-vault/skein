@@ -1389,6 +1389,22 @@ body {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* D2f (#80) — api_error toast variant. Red-edge treatment lifted from
+   the design's lc-toast (Live Context.html "errored" frame). */
+.sk-toast.error {
+	border-left: 3px solid var(--err);
+}
+.sk-toast.error .sk-toast-sub {
+	color: var(--err);
+}
+.sk-toast-detail {
+	font-family: var(--sk-mono);
+	font-size: 9.5px;
+	color: var(--fg-3);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
 .sk-toast-x {
 	color: var(--fg-3);
 	font-size: 16px;
