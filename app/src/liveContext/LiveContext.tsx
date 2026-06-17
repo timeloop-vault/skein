@@ -25,6 +25,7 @@ import { DiffCardBody } from "./DiffCard.tsx";
 import "./chrome.css";
 import { PlanCardBody } from "./PlanCard.tsx";
 import { RoomSubtitle } from "./RoomSubtitle.tsx";
+import { type PlanGroup, planTotals, reducePlan } from "./plan.ts";
 import { useRoomActions } from "./store.ts";
 import { useGitBranchWatcher } from "./useGitBranchWatcher.ts";
 
@@ -87,6 +88,19 @@ export const LiveContext = ({
 		return (harnessId: string): HarnessKind => byId.get(harnessId) ?? "byoh";
 	}, [harnesses]);
 
+	// Plan-card group head wants the harness's instance name; fall back to
+	// the id when a harness has been closed since its rows were logged.
+	const harnessNameOf = useMemo(() => {
+		const byId = new Map<string, string>(harnesses.map((h) => [h.id, h.name]));
+		return (harnessId: string): string => byId.get(harnessId) ?? harnessId;
+	}, [harnesses]);
+
+	// Current plan state, reduced from the room's plan_change rows
+	// (opencode latest-snapshot vs Claude create/update deltas — see
+	// plan.ts). Drives both the Plan card body and its header tally.
+	const planGroups: PlanGroup[] = useMemo(() => reducePlan(actions), [actions]);
+	const planTally = useMemo(() => planTotals(planGroups), [planGroups]);
+
 	// Keep the status-bar branch live (issue #18) until the Diff card's
 	// status/diff fetch lands in D3.
 	useGitBranchWatcher(cwd, onBranchChange);
@@ -136,8 +150,21 @@ export const LiveContext = ({
 					},
 					{
 						label: "Plan",
-						meta: <span>0 now</span>,
-						body: <PlanCardBody />,
+						meta: (
+							<>
+								<span>{planTally.now} now</span>
+								<span className="plan-tally">
+									· {planTally.done}/{planTally.total}
+								</span>
+							</>
+						),
+						body: (
+							<PlanCardBody
+								groups={planGroups}
+								harnessKindOf={harnessKindOf}
+								harnessNameOf={harnessNameOf}
+							/>
+						),
 					},
 					{
 						label: "Activity",

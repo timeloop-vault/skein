@@ -282,8 +282,12 @@ const AgentRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
 	const title =
 		str(payload.title) ?? str(input?.description) ?? str(input?.subagent_type) ?? "sub-agent";
 	const ms = num(payload.duration_ms);
-	// D4 wires the inspector (onOpen seam); D2b renders the row
-	// non-clickable.
+	// The sub-agent inspector (handover §7) is deferred: its centrepiece —
+	// the ordered list of tool calls the sub-agent made — isn't in
+	// harness_actions (Claude drops isSidechain rows; opencode's run is a
+	// separate session), and capturing it is backend work tracked under
+	// #91. Until then the row stays non-clickable rather than open a
+	// near-empty drawer.
 	return (
 		<Row
 			kind="agent"
