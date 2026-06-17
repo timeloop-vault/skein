@@ -18,7 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
-import { type DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
@@ -1043,6 +1043,15 @@ export default function App() {
 	// from here first so a `git checkout` inside a harness is visible.
 	// Issue #18.
 	const [liveBranches, setLiveBranches] = useState<Record<string, string | null>>({});
+	// Stable callbacks for the per-room LiveContext (memoized below): a
+	// room switch re-renders App, and without stable props React.memo
+	// can't skip the rooms whose `visible` didn't change — every mounted
+	// room would reconcile its whole feed. setShowTurnCosts is stable;
+	// onBranchChange takes the roomId so one callback serves all rooms.
+	const handleToggleTurnCosts = useCallback(() => setShowTurnCosts((v) => !v), [setShowTurnCosts]);
+	const handleBranchChange = useCallback((roomId: string, branch: string | null) => {
+		setLiveBranches((prev) => (prev[roomId] === branch ? prev : { ...prev, [roomId]: branch }));
+	}, []);
 	// Drag-and-drop reorder state. `drag` tracks what's being dragged
 	// (a whole room, or a harness scoped to its room — cross-room
 	// harness drops are rejected). `dropTarget` tracks where the drop
@@ -2315,10 +2324,8 @@ export default function App() {
 								harnesses={r.harnesses}
 								visible={r.id === activeRoomId}
 								showTurnCosts={showTurnCosts}
-								onToggleTurnCosts={() => setShowTurnCosts((v) => !v)}
-								onBranchChange={(b) =>
-									setLiveBranches((prev) => (prev[r.id] === b ? prev : { ...prev, [r.id]: b }))
-								}
+								onToggleTurnCosts={handleToggleTurnCosts}
+								onBranchChange={handleBranchChange}
 							/>
 						) : null}
 					</div>
