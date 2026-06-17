@@ -16,7 +16,7 @@
 // Spec: docs/live-context-handover.md. Visual reference:
 // docs/design/skein/project/Live Context.html.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { usePersistedState } from "../prefs.ts";
 import type { Harness, HarnessKind } from "../types.ts";
 import { ActivityCardBody, IDLE_AFTER_MS, useIdleBasis } from "./ActivityCard.tsx";
@@ -47,13 +47,15 @@ interface LiveContextProps {
 	showTurnCosts: boolean;
 	onToggleTurnCosts: () => void;
 	/**
-	 * Fired with the current HEAD branch on every git-watcher tick (or
-	 * `null` for detached HEAD / non-git folders). The status bar reads
-	 * this so a `git checkout` inside a harness reflects within the
+	 * Fired with this room's id + current HEAD branch on every git-watcher
+	 * tick (or `null` for detached HEAD / non-git folders). The status bar
+	 * reads this so a `git checkout` inside a harness reflects within the
 	 * watcher's debounce window (issue #18) — previously owned by
-	 * `LiveStatus`, now that the card stack is the right pane.
+	 * `LiveStatus`, now that the card stack is the right pane. Takes the
+	 * roomId so App can pass one stable callback to every room (needed for
+	 * the memo below to skip non-switching rooms).
 	 */
-	onBranchChange?: (branch: string | null) => void;
+	onBranchChange?: (roomId: string, branch: string | null) => void;
 }
 
 /// Idle-duration display: "14m" under an hour, "2h 14m" past it — the
@@ -65,7 +67,12 @@ function formatIdle(ms: number): string {
 	return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
-export const LiveContext = ({
+// memo: a room switch re-renders App, which would otherwise re-render
+// every mounted room's LiveContext (and reconcile its whole feed). With
+// stable props from App (callbacks via useCallback, harnesses/roomId
+// stable per room), only the rooms whose `visible` actually flips
+// re-render — the rest bail out here.
+export const LiveContext = memo(function LiveContext({
 	roomId,
 	cwd,
 	harnesses,
@@ -73,7 +80,7 @@ export const LiveContext = ({
 	showTurnCosts,
 	onToggleTurnCosts,
 	onBranchChange,
-}: LiveContextProps) => {
+}: LiveContextProps) {
 	const { actions, liveIds } = useRoomActions(roomId);
 	const [layout, setLayout] = usePersistedState<CardLayout>(
 		`liveContext:layout:${roomId}`,
@@ -102,8 +109,14 @@ export const LiveContext = ({
 	const planTally = useMemo(() => planTotals(planGroups), [planGroups]);
 
 	// Keep the status-bar branch live (issue #18) until the Diff card's
-	// status/diff fetch lands in D3.
-	useGitBranchWatcher(cwd, onBranchChange);
+	// status/diff fetch lands in D3. Bind this room's id to App's shared
+	// callback; the watcher holds it in a ref (deps [cwd]) so this
+	// per-render closure never re-subscribes it.
+	const onBranch = useCallback(
+		(branch: string | null) => onBranchChange?.(roomId, branch),
+		[onBranchChange, roomId],
+	);
+	useGitBranchWatcher(cwd, onBranch);
 
 	// "· idle 2h 14m" in the Activity head once the room's been silent
 	// past the tail threshold (§10 long-quiet). A per-minute ticker
@@ -207,4 +220,4 @@ export const LiveContext = ({
 			/>
 		</div>
 	);
-};
+});
