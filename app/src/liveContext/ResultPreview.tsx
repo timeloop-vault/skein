@@ -12,7 +12,19 @@
 // this is the component that finally drives it. `formatBytes`/`byteLen`
 // are exported for the rows that compute a size pill.
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, useState } from "react";
+
+/// Per-row preview expansion, lifted out of ResultPreview so it survives
+/// the row unmounting/remounting as the virtualized feed scrolls (D2g) —
+/// local state would collapse every expanded preview the moment it
+/// scrolls out of view. A row has at most one preview, so ActivityRow
+/// provides a single bool + toggle for its own row. Absent provider →
+/// ResultPreview falls back to local state (keeps it usable standalone).
+export interface PreviewExpansion {
+	expanded: boolean;
+	toggle: () => void;
+}
+export const PreviewExpansionContext = createContext<PreviewExpansion | null>(null);
 
 /// Human-readable byte size for a result body: "342 B" / "1.2 KB" / "3.4 MB".
 export function formatBytes(n: number): string {
@@ -42,7 +54,13 @@ export const ResultPreview = ({
 	variant?: "api-error" | undefined;
 }) => {
 	const bodyRef = useRef<HTMLPreElement>(null);
-	const [expanded, setExpanded] = useState(false);
+	// Expansion comes from the parent (survives scroll unmount) when an
+	// ActivityRow provides it; otherwise local. `overflowing` stays local
+	// — it's a measurement of the rendered DOM, re-derived on mount.
+	const ctx = useContext(PreviewExpansionContext);
+	const [localExpanded, setLocalExpanded] = useState(false);
+	const expanded = ctx ? ctx.expanded : localExpanded;
+	const toggleExpanded = ctx ? ctx.toggle : () => setLocalExpanded((e) => !e);
 	const [overflowing, setOverflowing] = useState(false);
 
 	// The body (not the whole block) is the scroll region, so the head —
@@ -74,7 +92,7 @@ export const ResultPreview = ({
 				<span className="size">
 					{sizeLabel}
 					{canToggle && (
-						<button type="button" className="expand-link" onClick={() => setExpanded((e) => !e)}>
+						<button type="button" className="expand-link" onClick={toggleExpanded}>
 							{sizeLabel ? " · " : ""}
 							{expanded ? "collapse" : "expand"}
 						</button>

@@ -26,3 +26,7 @@ Thumbs.db
 # Tauri
 src-tauri/gen/
 
+
+# Local perf/timeline recordings (large, never commit)
+*-recording.json
+laggy-recording*.json
