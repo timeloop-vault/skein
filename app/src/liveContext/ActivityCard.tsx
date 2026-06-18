@@ -8,22 +8,30 @@
 // their insertion neighbours instead of flying to the top. Backend
 // ts-stamping + dedup is tracked in #93.
 //
-// Auto-tail: the feed sticks to the bottom while you're at the bottom;
-// scroll up and a "▼ N new" pill appears, click to jump back to live.
-// The unseen count is *derived* from a last-seen-bottom marker (not a
-// running delta) so an older backfilled row inserted mid-list doesn't
-// inflate it. The `visible` prop matters because every room's card stays
-// mounted (display:none toggled) — a hidden card can't measure scroll,
-// so we re-pin when it becomes visible. Virtualization is D2g (the
-// per-event re-sort is acceptable until then).
+// The feed is virtualized via react-virtuoso (D2g): only ~viewport rows
+// are in the DOM, so a heavy room no longer force-lays-out thousands of
+// rows when it reveals. Virtuoso owns the scroll + stick-to-bottom
+// (followOutput); we keep the unseen-counter / idle / slide-in / burst /
+// backfill machinery, all of which work off the in-memory `items` array,
+// not the DOM.
+//
+// Auto-tail: followOutput keeps us pinned while at the bottom; scroll up
+// and a "▼ N new" pill appears, click to jump back to live. The unseen
+// count is *derived* from a last-seen-bottom marker (not a running
+// delta) so an older backfilled row inserted mid-list doesn't inflate
+// it. The `visible` prop matters because every room's card stays mounted
+// (display:none toggled) — Virtuoso can't measure while hidden, so we
+// re-assert the bottom when it becomes visible.
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { HarnessKind } from "../types.ts";
 import "./activity.css";
 import {
 	BackfillBanner,
 	BackfillEnd,
 	BurstRow,
+	type FeedItem,
 	TurnCost,
 	TurnSeparator,
 	flattenFeed,
@@ -164,6 +172,22 @@ export const ActivityCardBody = ({
 			return next;
 		});
 
+	// Expanded tool-result previews, by preview key (`pv-<action id>`).
+	// Held here, not in ResultPreview, so an expanded preview survives the
+	// row unmounting when the virtualized feed scrolls it off (D2g).
+	const [expandedPreviews, setExpandedPreviews] = useState<ReadonlySet<string>>(new Set());
+	const togglePreview = useCallback((key: string) => {
+		setExpandedPreviews((prev) => {
+			const next = new Set(prev);
+			if (next.has(key)) {
+				next.delete(key);
+			} else {
+				next.add(key);
+			}
+			return next;
+		});
+	}, []);
+
 	// Re-render at the EARLIEST upcoming shimmer lapse (one burst at a
 	// time — a single max-based timer would let an older live burst
 	// overstay by up to the full window); ticking re-runs the effect to
@@ -226,7 +250,7 @@ export const ActivityCardBody = ({
 		return undefined;
 	}, [items]);
 
-	const scrollerRef = useRef<HTMLDivElement>(null);
+	const virtuosoRef = useRef<VirtuosoHandle>(null);
 	const [atBottom, setAtBottom] = useState(true);
 	// The bottom item the last time the user was at the bottom.
 	const [seenBottom, setSeenBottom] = useState<BottomMark | undefined>(undefined);
@@ -284,33 +308,117 @@ export const ActivityCardBody = ({
 		return n;
 	}, [items, atBottom, seenBottom]);
 
-	// Pin to the bottom while tailing. Skipped while hidden (a
-	// display:none card can't measure); re-runs and catches up the moment
-	// `visible` flips true.
+	// Keep the seen-bottom marker pinned to the live tail while the user
+	// is at the bottom (and the card visible), so the "N new" pill stays
+	// at 0; once they scroll up we stop marking and it counts. Virtuoso's
+	// followOutput does the actual scroll-to-bottom — we no longer read
+	// scrollHeight: only ~viewport rows are in the DOM now, so there's
+	// nothing to force-lay-out when a room reveals (the D2g point).
+	// markSeenBottom's identity already changes whenever the bottom item
+	// does (it closes over bottomMark, derived from items), so listing it
+	// is enough to re-fire as the tail grows.
 	useEffect(() => {
-		const el = scrollerRef.current;
-		if (!el || !visible) return;
-		// Re-pin on any content growth, not just a tail-key change, so a
-		// mid-list insert while tailing still keeps us at the bottom.
-		if (atBottom && items.length > 0) {
-			el.scrollTop = el.scrollHeight;
-			markSeenBottom();
-		}
-	}, [items, atBottom, visible, markSeenBottom]);
+		if (atBottom && visible) markSeenBottom();
+	}, [atBottom, visible, markSeenBottom]);
 
-	const onScroll = () => {
-		const el = scrollerRef.current;
-		if (!el) return;
-		const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < TAIL_THRESHOLD_PX;
-		setAtBottom(bottom);
-		if (bottom) markSeenBottom();
-	};
+	// A room reveals (display:none → flex) without remounting; Virtuoso
+	// couldn't measure while hidden, so re-assert the bottom on the flip
+	// if we were tailing. Only on the visibility transition.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: re-pin only when `visible` flips; atBottom/items are read as guards, not triggers.
+	useEffect(() => {
+		if (visible && atBottom && items.length > 0) {
+			virtuosoRef.current?.scrollToIndex({ index: items.length - 1, align: "end" });
+		}
+	}, [visible]);
 
 	const jumpToLatest = () => {
-		const el = scrollerRef.current;
-		if (el) el.scrollTop = el.scrollHeight;
+		virtuosoRef.current?.scrollToIndex({ index: items.length - 1, align: "end" });
 		setAtBottom(true);
 		markSeenBottom();
+	};
+
+	// The tail sentinel becomes Virtuoso's Footer (it renders after the
+	// last item). Memoised so it only re-creates when the idle state
+	// flips, not on every scroll tick.
+	const tailComponents = useMemo(
+		() => ({
+			Footer: () => (
+				<div className={`lc-tail${tailIdle ? " idle" : ""}`}>
+					<span className="blinker" />
+					{tailIdle ? "idle" : "tailing — new rows appear live"}
+				</div>
+			),
+		}),
+		[tailIdle],
+	);
+
+	// One feed item → its element. Virtuoso owns the key (computeItemKey)
+	// and the positioning, so nothing here carries a key except the
+	// expanded-burst constituents (a list within one item).
+	const renderItem = (item: FeedItem) => {
+		switch (item.type) {
+			case "separator":
+				return <TurnSeparator timestampMs={item.timestampMs} durationMs={item.durationMs} />;
+			case "cost":
+				return <TurnCost tokens={item.tokens} usd={item.usd} />;
+			case "backfill-banner":
+				return (
+					<BackfillBanner
+						count={item.count}
+						rangeStartMs={item.rangeStartMs}
+						rangeEndMs={item.rangeEndMs}
+					/>
+				);
+			case "backfill-end":
+				return <BackfillEnd />;
+			case "burst":
+				return expandedBursts.has(item.key) ? (
+					<>
+						<div className="lc-burst-head">
+							<span className="label">
+								burst expanded · {item.actions.length} {item.tool}s in {item.scope}
+							</span>
+							<button type="button" className="collapse" onClick={() => toggleBurst(item.key)}>
+								collapse
+							</button>
+						</div>
+						{item.actions.map((a) => (
+							<ActivityRow
+								key={`row-${a.id}`}
+								row={a}
+								harnessKindOf={harnessKindOf}
+								expandedPreviews={expandedPreviews}
+								onTogglePreview={togglePreview}
+							/>
+						))}
+					</>
+				) : (
+					<BurstRow
+						item={item}
+						harness={harnessKindOf(item.harnessId)}
+						live={item.live && Date.now() - item.lastTimestampMs < BURST_LIVE_MS}
+						onToggle={() => toggleBurst(item.key)}
+					/>
+				);
+			case "row":
+				return (
+					<div
+						className={
+							item.live && !animatedKeys.current.has(item.key) ? "row-slide-in" : undefined
+						}
+						onAnimationEnd={(e) => {
+							if (e.animationName === "lc-slide-in") animatedKeys.current.add(item.key);
+						}}
+					>
+						<ActivityRow
+							row={item.action}
+							harnessKindOf={harnessKindOf}
+							expandedPreviews={expandedPreviews}
+							onTogglePreview={togglePreview}
+						/>
+					</div>
+				);
+		}
 	};
 
 	if (items.length === 0) {
@@ -326,65 +434,23 @@ export const ActivityCardBody = ({
 
 	return (
 		<div className="lc-activity">
-			<div className="lc-activity-scroll" ref={scrollerRef} onScroll={onScroll}>
-				{items.map((it) =>
-					it.type === "separator" ? (
-						<TurnSeparator key={it.key} timestampMs={it.timestampMs} durationMs={it.durationMs} />
-					) : it.type === "cost" ? (
-						<TurnCost key={it.key} tokens={it.tokens} usd={it.usd} />
-					) : it.type === "burst" ? (
-						expandedBursts.has(it.key) ? (
-							<Fragment key={it.key}>
-								<div className="lc-burst-head">
-									<span className="label">
-										burst expanded · {it.actions.length} {it.tool}s in {it.scope}
-									</span>
-									<button type="button" className="collapse" onClick={() => toggleBurst(it.key)}>
-										collapse
-									</button>
-								</div>
-								{it.actions.map((a) => (
-									<ActivityRow key={`row-${a.id}`} row={a} harnessKindOf={harnessKindOf} />
-								))}
-							</Fragment>
-						) : (
-							<BurstRow
-								key={it.key}
-								item={it}
-								harness={harnessKindOf(it.harnessId)}
-								live={it.live && Date.now() - it.lastTimestampMs < BURST_LIVE_MS}
-								onToggle={() => toggleBurst(it.key)}
-							/>
-						)
-					) : it.type === "backfill-banner" ? (
-						<BackfillBanner
-							key={it.key}
-							count={it.count}
-							rangeStartMs={it.rangeStartMs}
-							rangeEndMs={it.rangeEndMs}
-						/>
-					) : it.type === "backfill-end" ? (
-						<BackfillEnd key={it.key} />
-					) : (
-						// Stable wrapper so dropping the animation class after its
-						// one-shot play never remounts the row (a remount would
-						// reset D2c's expanded-preview state and replay the slide).
-						<div
-							key={it.key}
-							className={it.live && !animatedKeys.current.has(it.key) ? "row-slide-in" : undefined}
-							onAnimationEnd={(e) => {
-								if (e.animationName === "lc-slide-in") animatedKeys.current.add(it.key);
-							}}
-						>
-							<ActivityRow row={it.action} harnessKindOf={harnessKindOf} />
-						</div>
-					),
-				)}
-				<div className={`lc-tail${tailIdle ? " idle" : ""}`}>
-					<span className="blinker" />
-					{tailIdle ? "idle" : "tailing — new rows appear live"}
-				</div>
-			</div>
+			<Virtuoso
+				ref={virtuosoRef}
+				className="lc-activity-scroll"
+				style={{ height: "100%" }}
+				data={items}
+				computeItemKey={(_index, item) => item.key}
+				itemContent={(_index, item) => renderItem(item)}
+				// followOutput="auto": stick to the bottom only while already
+				// there — Virtuoso owns the scroll, replacing the old
+				// scrollHeight pin. atBottomStateChange drives our pill.
+				followOutput="auto"
+				atBottomThreshold={TAIL_THRESHOLD_PX}
+				atBottomStateChange={setAtBottom}
+				initialTopMostItemIndex={Math.max(0, items.length - 1)}
+				increaseViewportBy={400}
+				components={tailComponents}
+			/>
 			{!atBottom && newCount > 0 && (
 				<button type="button" className="lc-newbelow" onClick={jumpToLatest}>
 					▼ {newCount} new

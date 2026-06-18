@@ -6,8 +6,9 @@
 // ToolFamilyRow (toolRows.tsx) for its second-level dispatch. The rows
 // in this file are the kinds with one clean shape and no divergence.
 
+import { useMemo } from "react";
 import type { HarnessKind } from "../types.ts";
-import { ResultPreview } from "./ResultPreview.tsx";
+import { type PreviewExpansion, PreviewExpansionContext, ResultPreview } from "./ResultPreview.tsx";
 import { Row, basename } from "./Row.tsx";
 import { type Payload, num, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
@@ -28,42 +29,71 @@ interface SimpleRowProps {
 export const ActivityRow = ({
 	row,
 	harnessKindOf,
+	expandedPreviews,
+	onTogglePreview,
 }: {
 	row: HarnessAction;
 	harnessKindOf: (harnessId: string) => HarnessKind;
+	/** Set of expanded preview keys + toggle, owned by ActivityCard so a
+	 *  preview survives the row unmounting on scroll (D2g). Omitted →
+	 *  ResultPreview falls back to its own local state. */
+	expandedPreviews?: ReadonlySet<string> | undefined;
+	onTogglePreview?: ((key: string) => void) | undefined;
 }) => {
 	const payload = parsePayload(row.payload);
 	const harness = harnessKindOf(row.harnessId);
 	const ts = row.timestampMs;
 
-	switch (row.kind) {
-		case "user_prompt":
-			return <UserPromptRow payload={payload} harness={harness} timestampMs={ts} />;
-		case "ai_title":
-			return <AiTitleRow payload={payload} harness={harness} timestampMs={ts} />;
-		case "permission_mode":
-			return <PermissionModeRow payload={payload} harness={harness} timestampMs={ts} />;
-		case "bridge_status":
-			return <BridgeStatusRow payload={payload} harness={harness} timestampMs={ts} />;
-		case "pr_link":
-			return <PrRow payload={payload} harness={harness} timestampMs={ts} />;
-		case "queue_op":
-			return <QueueRow payload={payload} harness={harness} timestampMs={ts} />;
-		case "edited_text_file":
-			return <UserFileRow payload={payload} harness={harness} timestampMs={ts} />;
-		case "slash_command":
-			return <SlashRow payload={payload} harness={harness} timestampMs={ts} />;
-		case "tool_call":
-		case "patch":
-		case "plan_change":
-		case "api_error":
-		case "compaction":
-			return <ToolFamilyRow kind={row.kind} payload={payload} harness={harness} timestampMs={ts} />;
-		// turn_duration → turn separator, turn_cost → cost hair-line:
-		// both rendered by the flattened-item layer in D2d, not as rows.
-		default:
-			return null;
-	}
+	// One preview per row, keyed by the row's action id, so its expanded
+	// state is stable across scroll-driven unmount/remount.
+	const previewKey = `pv-${row.id}`;
+	const previewExpansion = useMemo<PreviewExpansion | null>(
+		() =>
+			expandedPreviews && onTogglePreview
+				? { expanded: expandedPreviews.has(previewKey), toggle: () => onTogglePreview(previewKey) }
+				: null,
+		[expandedPreviews, onTogglePreview, previewKey],
+	);
+
+	const rendered = (() => {
+		switch (row.kind) {
+			case "user_prompt":
+				return <UserPromptRow payload={payload} harness={harness} timestampMs={ts} />;
+			case "ai_title":
+				return <AiTitleRow payload={payload} harness={harness} timestampMs={ts} />;
+			case "permission_mode":
+				return <PermissionModeRow payload={payload} harness={harness} timestampMs={ts} />;
+			case "bridge_status":
+				return <BridgeStatusRow payload={payload} harness={harness} timestampMs={ts} />;
+			case "pr_link":
+				return <PrRow payload={payload} harness={harness} timestampMs={ts} />;
+			case "queue_op":
+				return <QueueRow payload={payload} harness={harness} timestampMs={ts} />;
+			case "edited_text_file":
+				return <UserFileRow payload={payload} harness={harness} timestampMs={ts} />;
+			case "slash_command":
+				return <SlashRow payload={payload} harness={harness} timestampMs={ts} />;
+			case "tool_call":
+			case "patch":
+			case "plan_change":
+			case "api_error":
+			case "compaction":
+				return (
+					<ToolFamilyRow kind={row.kind} payload={payload} harness={harness} timestampMs={ts} />
+				);
+			// turn_duration → turn separator, turn_cost → cost hair-line:
+			// both rendered by the flattened-item layer in D2d, not as rows.
+			default:
+				return null;
+		}
+	})();
+
+	if (rendered === null) return null;
+	return (
+		<PreviewExpansionContext.Provider value={previewExpansion}>
+			{rendered}
+		</PreviewExpansionContext.Provider>
+	);
 };
 
 // ── simple rows ────────────────────────────────────────────────────

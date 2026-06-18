@@ -12,14 +12,10 @@
 	height: 100%;
 	min-height: 0;
 }
-/* The actual scroll region — exactly the wrapper's height, so the
-   generic .lc-card-body never needs to scroll; this inner element does,
-   which lets the pill anchor to the (non-scrolling) wrapper. */
+/* The scroll region is Virtuoso's scroller (D2g) — this class rides on
+   it for the scrollbar cosmetics only; Virtuoso owns height/overflow/
+   layout. The pill still anchors to the non-scrolling .lc-activity. */
 .lc-activity-scroll {
-	height: 100%;
-	overflow-y: auto;
-	display: flex;
-	flex-direction: column;
 	scrollbar-width: thin;
 	scrollbar-color: var(--bg-3) transparent;
 }
