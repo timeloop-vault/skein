@@ -1,0 +1,128 @@
+/* Diff card body (§5.1, D3). Tab bar + hand-rolled unified-diff body.
+   Lifted from the design prototype (Live Context Prototype.html). The
+   @keyframes lc-flicker / lc-refocus live in activity.css (shipped with
+   the D2 chrome); this file only consumes them. Imported by DiffCard.tsx.
+   Syntax highlighting (the prototype's .tk-* tokens) is deferred — the
+   body renders plain text for v1. */
+
+.lc-diff {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+.lc-diff-tabs {
+	flex: 0 0 28px;
+	height: 28px;
+	display: flex;
+	align-items: stretch;
+	border-bottom: 1px solid var(--line);
+	padding: 0 6px;
+	gap: 1px;
+	overflow-x: auto;
+	scrollbar-width: thin;
+}
+.lc-diff-tab {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0 10px;
+	color: var(--fg-2);
+	font-family: var(--sk-mono);
+	font-size: 10.5px;
+	cursor: pointer;
+	border: 0;
+	background: none;
+	border-bottom: 2px solid transparent;
+	margin-bottom: -1px;
+	white-space: nowrap;
+	position: relative;
+}
+.lc-diff-tab:hover {
+	color: var(--fg-1);
+}
+.lc-diff-tab .delta-add {
+	color: var(--ok);
+	font-size: 9.5px;
+}
+.lc-diff-tab .delta-del {
+	color: var(--err);
+	font-size: 9.5px;
+}
+.lc-diff-tab.active {
+	color: var(--fg-0);
+	border-bottom-color: var(--accent);
+}
+/* Thin pulsing accent line: another harness edited this file and you're
+   not looking at it (handover §5.1). */
+.lc-diff-tab.flicker::after {
+	content: "";
+	position: absolute;
+	left: 4px;
+	right: 4px;
+	top: 2px;
+	height: 1px;
+	background: var(--accent);
+	opacity: 0.6;
+	animation: lc-flicker 1.4s ease-in-out infinite;
+}
+.lc-diff-body {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	font-family: var(--sk-mono);
+	font-size: 11px;
+	line-height: 1.55;
+	padding: 6px 0;
+	position: relative;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bg-3) transparent;
+}
+/* Brief accent glow when auto-focus jumps the body to a new file. */
+.lc-diff-body.refocus {
+	animation: lc-refocus 700ms ease-out;
+}
+.lc-diff-hunk-sep {
+	padding: 2px 12px;
+	color: var(--fg-3);
+	font-size: 9.5px;
+	background: color-mix(in srgb, var(--line) 50%, transparent);
+}
+.lc-line {
+	display: flex;
+	padding: 0 12px 0 0;
+	min-height: 17px;
+}
+.lc-line.add {
+	background: var(--diff-add);
+}
+.lc-line.del {
+	background: var(--diff-del);
+}
+.lc-line .gutter {
+	flex: 0 0 56px;
+	display: flex;
+	color: var(--fg-3);
+	font-size: 10px;
+	user-select: none;
+}
+.lc-line .gutter .ln {
+	flex: 1;
+	text-align: right;
+	padding: 0 6px;
+}
+.lc-line .marker {
+	flex: 0 0 14px;
+	text-align: center;
+	color: var(--fg-3);
+}
+.lc-line.add .marker {
+	color: var(--ok);
+}
+.lc-line.del .marker {
+	color: var(--err);
+}
+.lc-line .src {
+	white-space: pre;
+	min-width: 0;
+}
+/* Diff body empty / binary states reuse the shared .lc-empty chrome. */

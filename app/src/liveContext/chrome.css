@@ -158,6 +158,10 @@
 .lc-card-head .meta .plan-tally {
 	color: var(--fg-3);
 }
+/* "· focused: <harness>" in the Diff head (§5.1, D3). */
+.lc-card-head .meta .diff-focused {
+	color: var(--fg-3);
+}
 
 /* ───────── Plan card body (§5.2, D4) ─────────
    Per-harness sub-lists; status box + text + opencode priority pill.

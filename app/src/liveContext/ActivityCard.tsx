@@ -98,7 +98,7 @@ function keyActionId(key: string): number | undefined {
 /// row; the carry is seeded with the first real timestamp so a run of
 /// `ts=0` rows at the head doesn't sort above everything. Stable on
 /// (effectiveTs, id).
-function orderForDisplay(actions: HarnessAction[]): HarnessAction[] {
+export function orderForDisplay(actions: HarnessAction[]): HarnessAction[] {
 	let carry = 0;
 	for (const a of actions) {
 		if (a.timestampMs > 0) {
