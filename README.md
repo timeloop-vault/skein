@@ -18,7 +18,7 @@ code-signing certificates yet (defer to a future release).
 
 ### macOS
 
-1. Download `Skein_*_aarch64.dmg` (Apple Silicon) or `Skein_*_x64.dmg` (Intel).
+1. Download `Skein_*_aarch64.dmg` (Apple Silicon).
 2. Open the DMG, drag Skein into Applications.
 3. **First launch only:** right-click Skein → **Open** → **Open**. macOS will
    say "unidentified developer"; right-click-Open is Apple's standard bypass.
