@@ -5,13 +5,12 @@
 // in the room is doing, sourced from the `harness_actions` table via
 // `useRoomActions`.
 //
-// This is the D1 slice: card-stack chrome (collapse, drag-resize,
-// per-room layout persistence), the room subtitle (latest away_summary),
-// and the live subscription wired through to the Activity header's event
-// count. The card *bodies* are filled in later slices:
-//   - D2: Activity card rows + burst-collapse + auto-tail
-//   - D3: Diff card (Monaco diff + auto-focus + flicker)
-//   - D4: Plan card + sub-agent inspector
+// Card-stack chrome (collapse, drag-resize, per-room layout persistence)
+// plus the room subtitle. The three card bodies are their own modules:
+//   - Activity (D2): rows + burst-collapse + auto-tail, virtualized (D2g)
+//   - Plan (D4): per-harness plan reduced from plan_change rows
+//   - Diff (D3): hand-rolled worktree/harness diff + auto-focus + flicker
+// The sub-agent inspector is deferred to a backend follow-up (#91).
 //
 // Spec: docs/live-context-handover.md. Visual reference:
 // docs/design/skein/project/Live Context.html.
@@ -36,6 +35,9 @@ interface LiveContextProps {
 	 *  `HarnessKind` for its chip (the action store carries ids, chips
 	 *  render by kind). */
 	harnesses: Harness[];
+	/** The harness the user is currently chatting with (the room's active
+	 *  tab). The Diff card auto-focuses its latest file edit (§5.1). */
+	focusedHarnessId: string | undefined;
 	/** True iff this room is the active one (its `.sk-right` is
 	 *  display:flex, not none). The Activity card needs it to re-pin its
 	 *  auto-tail when shown — a hidden card can't measure scroll. */
@@ -76,6 +78,7 @@ export const LiveContext = memo(function LiveContext({
 	roomId,
 	cwd,
 	harnesses,
+	focusedHarnessId,
 	visible,
 	showTurnCosts,
 	onToggleTurnCosts,
@@ -108,10 +111,10 @@ export const LiveContext = memo(function LiveContext({
 	const planGroups: PlanGroup[] = useMemo(() => reducePlan(actions), [actions]);
 	const planTally = useMemo(() => planTotals(planGroups), [planGroups]);
 
-	// Keep the status-bar branch live (issue #18) until the Diff card's
-	// status/diff fetch lands in D3. Bind this room's id to App's shared
-	// callback; the watcher holds it in a ref (deps [cwd]) so this
-	// per-render closure never re-subscribes it.
+	// Keep the status-bar branch live (issue #18). Bind this room's id to
+	// App's shared callback; the watcher holds it in a ref (deps [cwd]) so
+	// this per-render closure never re-subscribes it. (The Diff card runs
+	// its own git_diff watcher; this stays for the status-bar branch.)
 	const onBranch = useCallback(
 		(branch: string | null) => onBranchChange?.(roomId, branch),
 		[onBranchChange, roomId],
@@ -156,10 +159,23 @@ export const LiveContext = memo(function LiveContext({
 						label: "Diff",
 						meta: (
 							<>
-								<span className="pulse" /> auto-follow
+								<span>
+									<span className="pulse" /> auto-follow
+								</span>
+								{focusedHarnessId && (
+									<span className="diff-focused">· focused: {harnessKindOf(focusedHarnessId)}</span>
+								)}
 							</>
 						),
-						body: <DiffCardBody />,
+						body: (
+							<DiffCardBody
+								cwd={cwd}
+								actions={actions}
+								harnessKindOf={harnessKindOf}
+								focusedHarnessId={focusedHarnessId}
+								visible={visible}
+							/>
+						),
 					},
 					{
 						label: "Plan",

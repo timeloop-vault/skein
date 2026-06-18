@@ -2322,6 +2322,7 @@ export default function App() {
 								roomId={r.id}
 								cwd={r.cwd}
 								harnesses={r.harnesses}
+								focusedHarnessId={r.activeHarnessId}
 								visible={r.id === activeRoomId}
 								showTurnCosts={showTurnCosts}
 								onToggleTurnCosts={handleToggleTurnCosts}
