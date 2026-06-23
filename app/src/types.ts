@@ -27,6 +27,12 @@ export interface Harness {
 	// kinds without a resume concept (copilot, shell), and for legacy
 	// harnesses created before the field existed.
 	sessionId?: string;
+	// Bumped on every deliberate respawn (Enter-for-shell after a child
+	// exits). Folded into the LiveTerminal mountKey so the remount fires
+	// even when the new cmd equals the old one — the case the cmd-identity
+	// trick missed for shell harnesses (#53). Undefined = 0; needn't reset
+	// across restarts (it only has to *change* on respawn).
+	spawnGen?: number;
 	// Count of attention-worthy transitions (working → idle/exited)
 	// accumulated for this harness while it was *not* the harness
 	// the user was viewing. Cleared the moment the harness becomes
