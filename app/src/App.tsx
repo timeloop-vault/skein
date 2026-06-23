@@ -75,6 +75,25 @@ const TOAST_MAX_VISIBLE = 5;
 /// api_error rows within this window count as one incident (a retry
 /// burst lands as several rows seconds apart — badge once, not per row).
 const API_ERROR_INCIDENT_MS = 60_000;
+/// #84: the notification plugin (Swift) crashed (use-after-free in
+/// `saveNotification`) after long uptime — its `show` isn't safe to call
+/// concurrently, and multiple harness transitions while the user is away
+/// fire `sendNotification` from overlapping async tasks. Serialize every
+/// OS notification through one promise chain so at most one is ever in
+/// flight, removing the concurrency the race needs. Each link swallows
+/// its own rejection so one failure (e.g. plugin absent in dev) doesn't
+/// stall the chain.
+let osNotifyChain: Promise<unknown> = Promise.resolve();
+const enqueueOsNotification = (title: string, body: string): void => {
+	osNotifyChain = osNotifyChain
+		.catch(() => {})
+		.then(() => sendNotification({ title, body }))
+		.catch((err: unknown) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn("[skein] sendNotification failed:", msg);
+		});
+};
+
 /// Per-harness badge coalesce window. A burst of badge-worthy
 /// transitions inside this window (a Claude JSONL truncation-replay
 /// re-emitting old end_turns — #62; shell prompt-redraw chatter
@@ -1687,17 +1706,11 @@ export default function App() {
 			if (!notifyOsRef.current) return;
 			if (notificationPermissionRef.current !== "granted") return;
 			if (!owningRoom) return;
-			// sendNotification's promise is fire-and-forget here, but
-			// it can reject when the plugin isn't loaded (dev builds
-			// skip it — see app/src-tauri/src/lib.rs). Catch so we
-			// don't spew unhandled-rejection warnings in dev.
-			void sendNotification({
-				title: "Skein",
-				body: `${owningRoom.name} · ${kindName}: ${stateLabel}`,
-			}).catch((err: unknown) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				console.warn("[skein] sendNotification failed:", msg);
-			});
+			// Serialized through the module-level chain (#84) so concurrent
+			// transitions never call the plugin's `show` at the same time.
+			// The helper also catches plugin-absent rejections (dev builds
+			// skip it — see app/src-tauri/src/lib.rs).
+			enqueueOsNotification("Skein", `${owningRoom.name} · ${kindName}: ${stateLabel}`);
 		});
 		return unsub;
 	}, []);
