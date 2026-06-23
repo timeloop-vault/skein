@@ -69,6 +69,14 @@ pub enum ClaudeEvent {
     /// Session log was deleted or otherwise vanished — fall back to
     /// L2a heuristics.
     SessionEnd,
+    /// A newer session JSONL appeared in the project dir than the one
+    /// we're bound to — the user likely restarted `claude` inside the
+    /// pane, so our follower has gone stale (#98). Carries the new
+    /// session id (the file stem) so the frontend can offer a one-click
+    /// re-attach. Surfaced as an affordance, not auto-acted-on: a
+    /// parallel `claude` in the same cwd would also trip this, and only
+    /// the user knows whether it's their pane's restart.
+    NewerSessionDetected { session_id: String },
 }
 
 #[derive(Debug)]
@@ -143,6 +151,10 @@ struct TailState {
     /// `attach_at_with_actions`. Lives in `TailState` so the watcher
     /// callback can both extract and persist on each tick. Issue #80.
     actions: Option<ActionPersistence>,
+    /// The newer-session stem we've already announced (#98), so a
+    /// `NewerSessionDetected` fires once per superseding session, not
+    /// on every tick while the new file keeps growing.
+    announced_newer: Option<String>,
 }
 
 /// Action-extraction context bundled per attached harness. The
@@ -293,6 +305,7 @@ impl ClaudeEventsManager {
             attached,
             in_assistant_turn: false,
             actions,
+            announced_newer: None,
         }));
         let cb_state = Arc::clone(&state);
         let on_event = Arc::new(on_event);
@@ -470,11 +483,62 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
         }
     }
     s.in_assistant_turn = in_assistant_turn;
+
+    // #98: detect a newer session JSONL in the project dir than the one
+    // we're bound to — the user likely ran `claude` again inside the
+    // pane, minting a new session id → a new file our follower would
+    // never read. The parent dir is already watched, so this tick fired;
+    // we just have to look. Announce once per superseding session (the
+    // new file keeps growing, re-ticking) and let the frontend offer a
+    // re-attach rather than auto-switching (a parallel claude in the same
+    // cwd would trip this too).
+    let newer = detect_newer_session(&mut s);
     drop(s);
 
     for event in events {
         on_event(event);
     }
+    if let Some(session_id) = newer {
+        on_event(ClaudeEvent::NewerSessionDetected { session_id });
+    }
+}
+
+/// Returns the stem (session id) of the newest sibling `*.jsonl` in the
+/// bound file's project dir that supersedes the bound session — a
+/// different stem with a strictly-newer mtime — or `None`. Sets
+/// `announced_newer` so a given superseding session is reported once.
+fn detect_newer_session(s: &mut TailState) -> Option<String> {
+    let parent = s.path.parent()?;
+    let bound_stem = s.path.file_stem()?.to_str()?.to_string();
+    let bound_mtime = fs::metadata(&s.path).ok()?.modified().ok()?;
+    let mut best: Option<(String, std::time::SystemTime)> = None;
+    for entry in fs::read_dir(parent).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if stem == bound_stem {
+            continue;
+        }
+        let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else {
+            continue;
+        };
+        if mtime <= bound_mtime {
+            continue;
+        }
+        if best.as_ref().is_none_or(|(_, m)| mtime > *m) {
+            best = Some((stem.to_string(), mtime));
+        }
+    }
+    let (stem, _) = best?;
+    if s.announced_newer.as_deref() == Some(&stem) {
+        return None;
+    }
+    s.announced_newer = Some(stem.clone());
+    Some(stem)
 }
 
 /// One-shot historical scan of the JSONL — runs once on attach
@@ -1483,5 +1547,84 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    // ── #98 detect_newer_session ───────────────────────────────────
+
+    /// Build a bare `TailState` pointed at `path` with no action sink —
+    /// enough to exercise `detect_newer_session`, which only reads
+    /// `path` + `announced_newer`.
+    fn tail_state_at(path: PathBuf) -> TailState {
+        TailState {
+            path,
+            last_pos: 0,
+            partial: String::new(),
+            attached: true,
+            in_assistant_turn: false,
+            actions: None,
+            announced_newer: None,
+        }
+    }
+
+    /// Stamp an explicit mtime so the strict `mtime >` comparison in
+    /// `detect_newer_session` is deterministic — back-to-back writes can
+    /// otherwise land in the same coarse filesystem tick.
+    fn set_mtime(path: &std::path::Path, secs: u64) {
+        let when = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+    }
+
+    #[test]
+    fn detect_newer_session_reports_superseding_jsonl_once() {
+        let dir = TempDir::new().unwrap();
+        let bound = dir.path().join("aaaaaaaa.jsonl");
+        fs::write(&bound, "{}\n").unwrap();
+        set_mtime(&bound, 1_000_000);
+        let mut s = tail_state_at(bound);
+
+        // Nothing newer in the dir yet.
+        assert_eq!(detect_newer_session(&mut s), None);
+
+        // The user restarts `claude` — a newer session file appears.
+        let newer = dir.path().join("bbbbbbbb.jsonl");
+        fs::write(&newer, "{}\n").unwrap();
+        set_mtime(&newer, 1_000_060);
+        assert_eq!(detect_newer_session(&mut s), Some("bbbbbbbb".to_string()));
+
+        // De-duped: the same superseding session reports only once even
+        // as it keeps growing tick after tick.
+        assert_eq!(detect_newer_session(&mut s), None);
+
+        // A *third*, even-newer session supersedes again → fires once more.
+        let newest = dir.path().join("cccccccc.jsonl");
+        fs::write(&newest, "{}\n").unwrap();
+        set_mtime(&newest, 1_000_120);
+        assert_eq!(detect_newer_session(&mut s), Some("cccccccc".to_string()));
+    }
+
+    #[test]
+    fn detect_newer_session_ignores_older_self_and_non_jsonl() {
+        let dir = TempDir::new().unwrap();
+        let bound = dir.path().join("aaaaaaaa.jsonl");
+        fs::write(&bound, "{}\n").unwrap();
+        set_mtime(&bound, 1_000_000);
+
+        // An older sibling session — predates the bound one, not a restart.
+        let older = dir.path().join("zzzzzzzz.jsonl");
+        fs::write(&older, "{}\n").unwrap();
+        set_mtime(&older, 999_000);
+
+        // A newer file that isn't a session log — must be ignored.
+        let other = dir.path().join("scratch.txt");
+        fs::write(&other, "x").unwrap();
+        set_mtime(&other, 1_000_999);
+
+        let mut s = tail_state_at(bound);
+        assert_eq!(detect_newer_session(&mut s), None);
     }
 }

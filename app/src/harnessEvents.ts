@@ -29,7 +29,8 @@ export type ClaudeEvent =
 	| { kind: "user_prompt" }
 	| { kind: "awaiting_prompt" }
 	| { kind: "attachment" }
-	| { kind: "session_end" };
+	| { kind: "session_end" }
+	| { kind: "newer_session_detected"; session_id: string };
 
 /// Subscribe a Claude harness to its JSONL event stream. Marks the
 /// activity store as authoritative-source so the L2a idle tick stops
@@ -39,15 +40,21 @@ export type ClaudeEvent =
 /// Soft-fail: if the Rust side rejects `claude_events_attach` (HOME
 /// unset, parent dir unwritable, …) we log and fall back to L2a. The
 /// harness keeps working, just without the sharper waiting signal.
+/// `onNewerSession` fires when the adapter notices a JSONL newer than
+/// the one we're bound to in the same project dir — the user likely
+/// restarted `claude` inside the pane (#98). The caller (App) surfaces
+/// a one-click re-attach affordance; we deliberately don't auto-rebind
+/// (a parallel `claude` in the same cwd would also trip this).
 export function attachClaudeEvents(
 	harnessId: string,
 	roomId: string,
 	sessionId: string,
 	cwd: string,
+	onNewerSession?: (sessionId: string) => void,
 ): () => void {
 	const channel = new Channel<ClaudeEvent>();
 	channel.onmessage = (event) => {
-		translate(harnessId, event);
+		translate(harnessId, event, onNewerSession);
 	};
 
 	// Mark authoritative *synchronously*, not on `.then()`. By the
@@ -83,7 +90,11 @@ export function attachClaudeEvents(
 	};
 }
 
-const translate = (harnessId: string, event: ClaudeEvent): void => {
+const translate = (
+	harnessId: string,
+	event: ClaudeEvent,
+	onNewerSession?: (sessionId: string) => void,
+): void => {
 	switch (event.kind) {
 		case "assistant_turn":
 			// Adapter saw the start of a Claude turn. Persisted with
@@ -117,6 +128,13 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			// case the file reappears, but until then the dot
 			// reflects PTY truth.
 			harnessActivity.detachAuthoritativeSource(harnessId);
+			return;
+		case "newer_session_detected":
+			// A newer session JSONL appeared in the same project dir —
+			// our follower has likely gone stale because the user
+			// restarted `claude` in the pane (#98). Surface it as an
+			// affordance; don't change phase and don't auto-rebind.
+			onNewerSession?.(event.session_id);
 			return;
 	}
 };

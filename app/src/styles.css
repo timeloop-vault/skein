@@ -657,6 +657,61 @@ body {
 	overflow: hidden;
 }
 
+/* Re-attach banner (#98) — sits above the Live Context stack when a
+   Claude harness's follower has gone stale. Warn-toned but quiet:
+   it's an offer, not an error. */
+.sk-reattach {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--line);
+	background: color-mix(in srgb, var(--warn) 12%, var(--bg-1));
+	font-size: 12px;
+	color: var(--fg-0);
+}
+
+.sk-reattach-text {
+	flex: 1;
+	min-width: 0;
+	line-height: 1.45;
+}
+
+.sk-reattach-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex-shrink: 0;
+}
+
+.sk-reattach-btn {
+	padding: 4px 10px;
+	border: 1px solid var(--accent);
+	border-radius: 4px;
+	background: var(--accent);
+	color: #fff;
+	font-size: 12px;
+	cursor: pointer;
+}
+
+.sk-reattach-btn:hover {
+	filter: brightness(1.08);
+}
+
+.sk-reattach-dismiss {
+	padding: 4px 6px;
+	border: none;
+	background: transparent;
+	color: var(--fg-2);
+	font-size: 12px;
+	cursor: pointer;
+	line-height: 1;
+}
+
+.sk-reattach-dismiss:hover {
+	color: var(--fg-0);
+}
+
 /* Diff body — used by LiveStatus's DiffView */
 .sk-code {
 	flex: 1;

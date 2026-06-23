@@ -230,6 +230,10 @@ interface HarnessBodyProps {
 	// sessionID from the `session.created` event. App.tsx wires it
 	// to setHarnessSessionId; `undefined` for non-opencode harnesses.
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
+	// #98: fires when the Claude adapter spots a newer session JSONL
+	// than the bound one. Pre-bound to this harness's id by the column.
+	// `undefined` for non-claude harnesses.
+	onNewerSession: ((sessionId: string) => void) | undefined;
 }
 
 const HarnessBody = ({
@@ -241,6 +245,7 @@ const HarnessBody = ({
 	roomId,
 	opencodePort,
 	onSessionCaptured,
+	onNewerSession,
 }: HarnessBodyProps) => {
 	if (harness.cmd && harness.cwd !== undefined) {
 		// mountKey changes whenever cmd content does — that's the trigger
@@ -259,6 +264,7 @@ const HarnessBody = ({
 				sessionId={harness.sessionId}
 				opencodePort={opencodePort}
 				onSessionCaptured={onSessionCaptured}
+				onNewerSession={onNewerSession}
 				fontSize={fontSize}
 				defaultShell={defaultShell}
 				visible={visible}
@@ -268,6 +274,40 @@ const HarnessBody = ({
 	}
 	return null;
 };
+
+// ── Re-attach banner (#98) ─────────────────────────────────────────
+// Shown at the top of the Live Context pane when a Claude harness's
+// follower has gone stale — a newer session JSONL appeared in the
+// same project dir, almost always because the user ran `claude`
+// again inside the pane (e.g. after `/clear`, a crash, or a manual
+// restart). We don't auto-rebind: a parallel `claude` in the same
+// cwd would also trip the detector, and only the user knows whether
+// this newer session is the one they care about. One click rebinds
+// the follower so Activity/Plan/Diff resume tracking — no need to
+// recreate the harness.
+
+interface ReattachBannerProps {
+	harnessName: string;
+	onReattach: () => void;
+	onDismiss: () => void;
+}
+
+const ReattachBanner = ({ harnessName, onReattach, onDismiss }: ReattachBannerProps) => (
+	<div className="sk-reattach" role="status">
+		<span className="sk-reattach-text">
+			Tracking the original session for <strong>{harnessName}</strong> — a newer one started in this
+			folder.
+		</span>
+		<div className="sk-reattach-actions">
+			<button type="button" className="sk-reattach-btn" onClick={onReattach}>
+				Re-attach
+			</button>
+			<button type="button" className="sk-reattach-dismiss" onClick={onDismiss} title="Dismiss">
+				✕
+			</button>
+		</div>
+	</div>
+);
 
 // ── Harness column (per room) ──────────────────────────────────────
 // Every room's column stays mounted at once; the App-level renderer
@@ -310,6 +350,11 @@ interface HarnessColumnProps {
 	// SSE-captured opencode session-id callback (per harness, room
 	// scope already bound by App).
 	onOpencodeSessionCaptured: (harnessId: string, sessionId: string) => void;
+	// #98: per-harness callback fired when a Claude harness's follower
+	// goes stale (newer session JSONL in the same project dir). The
+	// column binds the harnessId; App records it for the re-attach
+	// affordance.
+	onNewerClaudeSession: (harnessId: string, sessionId: string) => void;
 }
 
 const HarnessColumn = ({
@@ -326,6 +371,7 @@ const HarnessColumn = ({
 	onHarnessCmdChange,
 	opencodePorts,
 	onOpencodeSessionCaptured,
+	onNewerClaudeSession,
 }: HarnessColumnProps) => (
 	<div className="sk-harness-col">
 		<div className="sk-harness-tabs">
@@ -397,6 +443,7 @@ const HarnessColumn = ({
 						roomId={room.id}
 						opencodePort={opencodePorts.get(h.id)}
 						onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
+						onNewerSession={(sid) => onNewerClaudeSession(h.id, sid)}
 					/>
 				</div>
 			);
@@ -1059,6 +1106,13 @@ export default function App() {
 	// without re-allocating. Not persisted: a port is meaningless
 	// after the process that bound it dies.
 	const [opencodePorts, setOpencodePorts] = useState<Map<string, number>>(new Map());
+	// #98: harnesses whose Claude follower has gone stale because a
+	// newer session JSONL appeared in the same project dir (the user
+	// restarted `claude` in the pane). Maps harnessId → the newer
+	// session id we'd re-attach to. Ephemeral — it's a "right now,
+	// re-attach?" affordance, meaningless across a restart (a fresh
+	// boot re-attaches to the persisted sessionId from scratch).
+	const [staleSessions, setStaleSessions] = useState<Map<string, string>>(new Map());
 	// L5c — in-app toasts. Ephemeral (no DB mirror) since they
 	// represent "right now, look here" state that doesn't survive
 	// a restart. Capped at TOAST_MAX_VISIBLE so a burst of
@@ -1987,6 +2041,53 @@ export default function App() {
 		);
 	};
 
+	// #98: the Claude adapter spotted a newer session JSONL than the
+	// one it's bound to. Record it as a re-attach affordance — but only
+	// if it's genuinely newer than what this harness is bound to (the
+	// adapter already de-dupes per superseding session, this guards the
+	// window right after a re-attach when state hasn't propagated yet).
+	const onNewerClaudeSession = (harnessId: string, newSessionId: string) => {
+		const harness = rooms.flatMap((r) => r.harnesses).find((h) => h.id === harnessId);
+		if (harness?.sessionId === newSessionId) return;
+		setStaleSessions((prev) => {
+			if (prev.get(harnessId) === newSessionId) return prev;
+			const next = new Map(prev);
+			next.set(harnessId, newSessionId);
+			return next;
+		});
+	};
+
+	const dismissStaleSession = (harnessId: string) => {
+		setStaleSessions((prev) => {
+			if (!prev.has(harnessId)) return prev;
+			const next = new Map(prev);
+			next.delete(harnessId);
+			return next;
+		});
+	};
+
+	// #98 re-attach: rebind the harness to the newer session id. This
+	// flips Harness.sessionId, which re-runs LiveTerminal's Claude
+	// adapter effect (keyed on sessionId) — it detaches the stale
+	// follower and attaches a fresh one against the new JSONL, same
+	// room, same harness, without respawning the PTY. The persisted
+	// sessionId also updates so a later Skein restart resumes the
+	// session the user actually cares about. Unlike the opencode
+	// capture path this is a deliberate overwrite, not first-writer.
+	const reattachClaudeSession = (harnessId: string) => {
+		const newSessionId = staleSessions.get(harnessId);
+		if (!newSessionId) return;
+		setRooms((prev) =>
+			prev.map((r) => ({
+				...r,
+				harnesses: r.harnesses.map((h) =>
+					h.id === harnessId ? { ...h, sessionId: newSessionId } : h,
+				),
+			})),
+		);
+		dismissStaleSession(harnessId);
+	};
+
 	const pickHarness = async (kind: HarnessKind) => {
 		const targetRoomId = showPicker;
 		if (!targetRoomId) return;
@@ -2347,35 +2448,52 @@ export default function App() {
 							onOpencodeSessionCaptured={(harnessId, sid) =>
 								setHarnessSessionId(r.id, harnessId, sid)
 							}
+							onNewerClaudeSession={onNewerClaudeSession}
 						/>
 					</div>
 				))}
-				second={activeRooms.map((r) => (
-					<div
-						key={r.id}
-						className="sk-right"
-						style={{
-							display: r.id === activeRoomId ? "flex" : "none",
-						}}
-					>
-						{/* The right pane is the Live Context card stack (issue #80):
+				second={activeRooms.map((r) => {
+					// #98: surface the re-attach affordance for the room's
+					// active harness when its Claude follower has gone
+					// stale. Scoped to the active harness because that's
+					// what the Live Context pane below is tracking.
+					const staleHarness = r.harnesses.find(
+						(h) => h.id === r.activeHarnessId && staleSessions.has(h.id),
+					);
+					return (
+						<div
+							key={r.id}
+							className="sk-right"
+							style={{
+								display: r.id === activeRoomId ? "flex" : "none",
+							}}
+						>
+							{staleHarness ? (
+								<ReattachBanner
+									harnessName={staleHarness.name}
+									onReattach={() => reattachClaudeSession(staleHarness.id)}
+									onDismiss={() => dismissStaleSession(staleHarness.id)}
+								/>
+							) : null}
+							{/* The right pane is the Live Context card stack (issue #80):
 						    Diff / Plan / Activity, sourced from harness_actions. It
 						    also keeps the status-bar branch live via a lightweight
 						    git watcher (issue #18), the role LiveStatus used to own. */}
-						{r.cwd ? (
-							<LiveContext
-								roomId={r.id}
-								cwd={r.cwd}
-								harnesses={r.harnesses}
-								focusedHarnessId={r.activeHarnessId}
-								visible={r.id === activeRoomId}
-								showTurnCosts={showTurnCosts}
-								onToggleTurnCosts={handleToggleTurnCosts}
-								onBranchChange={handleBranchChange}
-							/>
-						) : null}
-					</div>
-				))}
+							{r.cwd ? (
+								<LiveContext
+									roomId={r.id}
+									cwd={r.cwd}
+									harnesses={r.harnesses}
+									focusedHarnessId={r.activeHarnessId}
+									visible={r.id === activeRoomId}
+									showTurnCosts={showTurnCosts}
+									onToggleTurnCosts={handleToggleTurnCosts}
+									onBranchChange={handleBranchChange}
+								/>
+							) : null}
+						</div>
+					);
+				})}
 			/>
 
 			<div className="sk-statusbar">

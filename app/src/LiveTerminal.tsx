@@ -72,6 +72,12 @@ interface LiveTerminalProps {
 	// persist the captured sessionId on the harness for resume.
 	// `undefined` for non-opencode harnesses.
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
+	// Fired when the L2c-1 Claude adapter spots a newer session JSONL
+	// in the same project dir than the one it's bound to — the user
+	// likely restarted `claude` inside the pane and our follower has
+	// gone stale (#98). Carries the new session id; App surfaces a
+	// one-click re-attach. `undefined` for non-claude harnesses.
+	onNewerSession: ((sessionId: string) => void) | undefined;
 	fontSize: number;
 	// Default shell argv (from `default_shell`). Used when the user
 	// presses Enter on the post-exit prompt to drop into a usable shell.
@@ -98,6 +104,7 @@ export const LiveTerminal = ({
 	sessionId,
 	opencodePort,
 	onSessionCaptured,
+	onNewerSession,
 	fontSize,
 	defaultShell,
 	visible,
@@ -125,6 +132,12 @@ export const LiveTerminal = ({
 	defaultShellRef.current = defaultShell;
 	const onCmdChangeRef = useRef(onCmdChange);
 	onCmdChangeRef.current = onCmdChange;
+	// #98: synced into a ref so the Claude-adapter effect below can read
+	// the latest callback without re-running (App recreates it on every
+	// render). The effect must re-run only when the *bound session*
+	// changes, not when this closure identity does.
+	const onNewerSessionRef = useRef(onNewerSession);
+	onNewerSessionRef.current = onNewerSession;
 
 	// Run only on mountKey changes. cmd / cwd / fontSize are consumed
 	// once at first mount: cmd seeds the closure's programName /
@@ -345,14 +358,7 @@ export const LiveTerminal = ({
 		let cancelled = false;
 		let dataDisposable: { dispose(): void } | null = null;
 		let resizeObserver: ResizeObserver | null = null;
-		// L2c-1: when a Claude harness has a pre-allocated sessionId
-		// (chapter 5), attach the JSONL adapter so the dot reflects
-		// `last-prompt` rows directly instead of waiting for the L2a
-		// idle heuristic to time out. `null` for every other case
-		// (non-claude kinds, claude without sessionId — picker
-		// fallback). Cleaned up alongside pty_kill below.
-		let detachClaudeAdapter: (() => void) | null = null;
-		// L2c-2: same shape for opencode. Adapter SSE-subscribes to
+		// L2c-2: opencode SSE adapter. Adapter SSE-subscribes to
 		// opencode's embedded server on the pre-allocated port, plus
 		// captures the auto-allocated sessionID via the SSE
 		// `session.created` event (chapter 5 phase 2b's sqlite poll
@@ -400,16 +406,11 @@ export const LiveTerminal = ({
 					return;
 				}
 				ptyIdRef.current = id;
-				// L2c-1 attach point: after PTY is alive, hook into the
-				// Claude session log for authoritative running/waiting
-				// signals. Only fires for Claude harnesses that own a
-				// session uuid (chapter 5 `--session-id` pre-allocation).
-				// The translator marks the activity store authoritative
-				// once Rust confirms attach; until then L2a keeps
-				// ticking, so a slow attach is a graceful degradation.
-				if (harnessKind === "claude" && sessionId) {
-					detachClaudeAdapter = attachClaudeEvents(harnessId, roomId, sessionId, cwd);
-				}
+				// L2c-1 (Claude JSONL adapter) is attached in its own
+				// effect keyed on sessionId — see below — so it can
+				// re-bind to a newer session without respawning the PTY
+				// (#98). It's independent of the PTY: it tails a file,
+				// not the child's stdout.
 				// L2c-2: attach the opencode SSE adapter when we have a
 				// port (App allocated one via pick_free_port before the
 				// spawn argv was finalized). Without a port the adapter
@@ -516,10 +517,6 @@ export const LiveTerminal = ({
 			cancelled = true;
 			dataDisposable?.dispose();
 			resizeObserver?.disconnect();
-			// L2c-1: detach before pty_kill so the adapter stops
-			// reading the JSONL — Claude itself will flush a final
-			// system row on exit and we don't need to react to it.
-			detachClaudeAdapter?.();
 			detachOpencodeAdapter?.();
 			const id = ptyIdRef.current;
 			if (id) void invoke("pty_kill", { id });
@@ -535,6 +532,28 @@ export const LiveTerminal = ({
 			harnessActivity.forget(harnessId);
 		};
 	}, [mountKey]);
+
+	// L2c-1 Claude JSONL adapter — its own effect, deliberately NOT
+	// folded into the PTY spawn effect above. Two reasons:
+	//   1. It tails a file (`~/.claude/projects/.../<sessionId>.jsonl`),
+	//      not the child's stdout, so it has no real dependency on the
+	//      PTY being alive — attaching on mount (before pty_spawn even
+	//      resolves) flips the activity store authoritative *earlier*,
+	//      which only sharpens the running/waiting signal.
+	//   2. Keying on `sessionId` means a re-attach (#98: user restarted
+	//      `claude` in the pane, App rebinds Harness.sessionId to the
+	//      newer session) tears down the old follower and attaches the
+	//      new one — same room, same harness — without respawning the
+	//      PTY and killing their live session.
+	// onNewerSession is read through a ref so App recreating the
+	// callback each render doesn't thrash the adapter.
+	useEffect(() => {
+		if (harnessKind !== "claude" || !sessionId) return;
+		const detach = attachClaudeEvents(harnessId, roomId, sessionId, cwd, (newId) =>
+			onNewerSessionRef.current?.(newId),
+		);
+		return detach;
+	}, [harnessKind, sessionId, harnessId, roomId, cwd]);
 
 	// Issue #22: focus the xterm whenever this pane becomes visible —
 	// covers keyboard-driven room switches (Mod+1..9, palette,
