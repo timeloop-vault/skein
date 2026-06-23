@@ -1261,15 +1261,21 @@ export default function App() {
 		);
 	};
 
+	// Jump to a specific harness: activate its room AND focus it within
+	// that room. Every click-to-jump surface (toast, status-bar urgent
+	// indicator, future inbox) should land on the harness that wanted
+	// attention, not just its room (#65).
+	const jumpToHarness = (roomId: string, harnessId: string) => {
+		setActiveRoomId(roomId);
+		switchHarnessInRoom(roomId, harnessId);
+	};
+
 	const dismissToast = (id: string) => {
 		setToasts((prev) => prev.filter((t) => t.id !== id));
 	};
 
 	const jumpToToast = (toast: ToastEntry) => {
-		setActiveRoomId(toast.roomId);
-		setRooms((prev) =>
-			prev.map((r) => (r.id === toast.roomId ? { ...r, activeHarnessId: toast.harnessId } : r)),
-		);
+		jumpToHarness(toast.roomId, toast.harnessId);
 		dismissToast(toast.id);
 	};
 
@@ -2385,7 +2391,18 @@ export default function App() {
 							<span
 								className="seg sk-statusbar-urgent"
 								title={`Jump to ${target.room.name}`}
-								onClick={() => switchRoom(target.room.id)}
+								onClick={() => {
+									// Land on the harness that drove the room to the top —
+									// most pending, ties broken by harness order (#65).
+									const winner =
+										[...target.room.harnesses]
+											.filter((h) => (h.pendingNotifications ?? 0) > 0)
+											.sort(
+												(a, b) => (b.pendingNotifications ?? 0) - (a.pendingNotifications ?? 0),
+											)[0] ?? target.room.harnesses[0];
+									if (winner) jumpToHarness(target.room.id, winner.id);
+									else switchRoom(target.room.id);
+								}}
 							>
 								<span className="dot-tiny st-waiting" />
 								{target.room.name}
