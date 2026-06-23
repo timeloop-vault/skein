@@ -75,6 +75,14 @@ const TOAST_MAX_VISIBLE = 5;
 /// api_error rows within this window count as one incident (a retry
 /// burst lands as several rows seconds apart — badge once, not per row).
 const API_ERROR_INCIDENT_MS = 60_000;
+/// Per-harness badge coalesce window. A burst of badge-worthy
+/// transitions inside this window (a Claude JSONL truncation-replay
+/// re-emitting old end_turns — #62; shell prompt-redraw chatter
+/// flipping running↔idle — #64) only bumps the count once. Genuine
+/// activity spaced further apart than this still increments, and a
+/// harness with no pending badge always shows the first one. The
+/// underlying replay/dedup at the source is tracked in #93.
+const BADGE_COALESCE_MS = 10_000;
 
 const Toast = ({
 	toast,
@@ -1472,6 +1480,9 @@ export default function App() {
 	// D2f — last api_error arrival per harness, for coalescing a retry
 	// burst into one badge-worthy incident.
 	const lastApiErrorAtRef = useRef<Map<string, number>>(new Map());
+	// Per-harness time of the last badge bump, for the coalesce window
+	// (#62/#64 — collapse a burst/chatter of transitions into one badge).
+	const lastBadgeAtRef = useRef<Map<string, number>>(new Map());
 
 	// L5b — window-focus state + OS-notification permission. The
 	// notification logic below skips firing an OS banner when Skein
@@ -1601,7 +1612,22 @@ export default function App() {
 			// anyway so they see "something happened while I was
 			// gone" when they come back. Also skip when the badge
 			// surface is disabled in Settings (L5e).
-			if (notifyBadgeRef.current && !(isViewedHarness && isWindowFocused)) {
+			//
+			// Coalesce window (#62/#64): a burst of badge-worthy
+			// transitions within BADGE_COALESCE_MS only bumps once, so a
+			// Claude JSONL replay or shell redraw-chatter can't pile up
+			// 31 phantom badges. The first badge on a clean harness
+			// (pending 0) always shows; genuine activity spaced past the
+			// window still increments. Record the time on every
+			// badge-worthy transition (skipped or not) so continuous
+			// sub-window chatter never crosses the window.
+			const nowMs = Date.now();
+			const curPending =
+				owningRoom?.harnesses.find((h) => h.id === harnessId)?.pendingNotifications ?? 0;
+			const lastBadgeAt = lastBadgeAtRef.current.get(harnessId) ?? 0;
+			const coalesced = curPending > 0 && nowMs - lastBadgeAt < BADGE_COALESCE_MS;
+			lastBadgeAtRef.current.set(harnessId, nowMs);
+			if (notifyBadgeRef.current && !(isViewedHarness && isWindowFocused) && !coalesced) {
 				setRooms((prev) =>
 					prev.map((r) => {
 						if (!r.harnesses.some((h) => h.id === harnessId)) return r;
