@@ -2047,8 +2047,16 @@ export default function App() {
 	// adapter already de-dupes per superseding session, this guards the
 	// window right after a re-attach when state hasn't propagated yet).
 	const onNewerClaudeSession = (harnessId: string, newSessionId: string) => {
-		const harness = rooms.flatMap((r) => r.harnesses).find((h) => h.id === harnessId);
+		const room = rooms.find((r) => r.harnesses.some((h) => h.id === harnessId));
+		const harness = room?.harnesses.find((h) => h.id === harnessId);
 		if (harness?.sessionId === newSessionId) return;
+		// Second line of defence behind the Rust-side bound-session
+		// filter: two Claude harnesses in one room share a cwd, so each
+		// sees the other's growing JSONL. If the "newer" session is just
+		// a sibling harness's own session, it isn't a restart — ignore.
+		if (room?.harnesses.some((h) => h.id !== harnessId && h.sessionId === newSessionId)) {
+			return;
+		}
 		setStaleSessions((prev) => {
 			if (prev.get(harnessId) === newSessionId) return prev;
 			const next = new Map(prev);

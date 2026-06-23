@@ -155,6 +155,12 @@ struct TailState {
     /// `NewerSessionDetected` fires once per superseding session, not
     /// on every tick while the new file keeps growing.
     announced_newer: Option<String>,
+    /// Shared view of every session id currently bound to a live
+    /// adapter (see `ClaudeEventsManager::bound_sessions`). Lets
+    /// `detect_newer_session` ignore sibling JSONLs that belong to
+    /// *other* harnesses sharing this cwd rather than mistaking them
+    /// for a restart-in-pane. #98.
+    bound_sessions: Arc<Mutex<HashMap<String, String>>>,
 }
 
 /// Action-extraction context bundled per attached harness. The
@@ -183,6 +189,14 @@ pub struct ClaudeEventsManager {
     /// Cloned into each attach's `ActionPersistence` so the live tail
     /// can broadcast new rows. `None` in tests. Issue #80 D1.
     app: Option<tauri::AppHandle>,
+    /// Session ids currently bound to a live adapter, keyed by harness
+    /// id. Shared (cloned) into every `TailState` so `detect_newer_session`
+    /// can tell a genuine restart-in-pane (#98) apart from a *sibling*
+    /// harness's session: two Claude harnesses in one room share a cwd,
+    /// hence one project dir, so each would otherwise see the other's
+    /// growing JSONL as a "newer" session every turn. Maintained by
+    /// `attach_at` (insert) and `detach` (remove).
+    bound_sessions: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl ClaudeEventsManager {
@@ -191,6 +205,7 @@ impl ClaudeEventsManager {
             inner: Mutex::new(HashMap::new()),
             db,
             app: Some(app),
+            bound_sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -203,6 +218,7 @@ impl ClaudeEventsManager {
             inner: Mutex::new(HashMap::new()),
             db,
             app: None,
+            bound_sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -298,6 +314,16 @@ impl ClaudeEventsManager {
             .parent()
             .map(Path::to_path_buf)
             .ok_or_else(|| ClaudeEventsError("session path has no parent".into()))?;
+        // Register this harness's bound session so sibling adapters in
+        // the same cwd don't mistake it for a restart (#98). Re-attach
+        // for the same harness id overwrites the entry; `detach` removes
+        // it. Done before building TailState so the map already reflects
+        // this binding by the first tick.
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            self.bound_sessions
+                .lock()
+                .insert(harness_id.clone(), stem.to_string());
+        }
         let state = Arc::new(Mutex::new(TailState {
             path,
             last_pos,
@@ -306,6 +332,7 @@ impl ClaudeEventsManager {
             in_assistant_turn: false,
             actions,
             announced_newer: None,
+            bound_sessions: Arc::clone(&self.bound_sessions),
         }));
         let cb_state = Arc::clone(&state);
         let on_event = Arc::new(on_event);
@@ -375,6 +402,7 @@ impl ClaudeEventsManager {
     /// Stop the adapter for `harness_id`. No-op if unknown.
     pub fn detach(&self, harness_id: &str) {
         self.inner.lock().remove(harness_id);
+        self.bound_sessions.lock().remove(harness_id);
     }
 }
 
@@ -521,6 +549,13 @@ fn detect_newer_session(s: &mut TailState) -> Option<String> {
             continue;
         };
         if stem == bound_stem {
+            continue;
+        }
+        // Skip sessions already bound to a live adapter — those are
+        // sibling harnesses sharing this cwd, not a restart-in-pane.
+        // Without this, two Claude harnesses in one room each see the
+        // other's growing JSONL as "newer" every turn (#98).
+        if s.bound_sessions.lock().values().any(|v| v == stem) {
             continue;
         }
         let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else {
@@ -1553,8 +1588,15 @@ mod tests {
 
     /// Build a bare `TailState` pointed at `path` with no action sink —
     /// enough to exercise `detect_newer_session`, which only reads
-    /// `path` + `announced_newer`.
-    fn tail_state_at(path: PathBuf) -> TailState {
+    /// `path`, `announced_newer`, and `bound_sessions`. `bound` is the
+    /// set of session ids already bound to live adapters (keyed by an
+    /// arbitrary harness id), used to model sibling harnesses sharing a
+    /// cwd (#98).
+    fn tail_state_at(path: PathBuf, bound: &[(&str, &str)]) -> TailState {
+        let map: HashMap<String, String> = bound
+            .iter()
+            .map(|(h, s)| ((*h).to_string(), (*s).to_string()))
+            .collect();
         TailState {
             path,
             last_pos: 0,
@@ -1563,6 +1605,7 @@ mod tests {
             in_assistant_turn: false,
             actions: None,
             announced_newer: None,
+            bound_sessions: Arc::new(Mutex::new(map)),
         }
     }
 
@@ -1585,7 +1628,7 @@ mod tests {
         let bound = dir.path().join("aaaaaaaa.jsonl");
         fs::write(&bound, "{}\n").unwrap();
         set_mtime(&bound, 1_000_000);
-        let mut s = tail_state_at(bound);
+        let mut s = tail_state_at(bound, &[]);
 
         // Nothing newer in the dir yet.
         assert_eq!(detect_newer_session(&mut s), None);
@@ -1624,7 +1667,37 @@ mod tests {
         fs::write(&other, "x").unwrap();
         set_mtime(&other, 1_000_999);
 
-        let mut s = tail_state_at(bound);
+        let mut s = tail_state_at(bound, &[]);
         assert_eq!(detect_newer_session(&mut s), None);
+    }
+
+    #[test]
+    fn detect_newer_session_ignores_sibling_harness_session() {
+        // Two Claude harnesses in one room share a cwd → one project
+        // dir. Harness A is bound to aaaa; harness B (bound to bbbb) is
+        // actively running, so bbbb keeps growing. A's follower must NOT
+        // treat bbbb as a restart-in-pane — it belongs to a live sibling.
+        let dir = TempDir::new().unwrap();
+        let bound = dir.path().join("aaaaaaaa.jsonl");
+        fs::write(&bound, "{}\n").unwrap();
+        set_mtime(&bound, 1_000_000);
+
+        let sibling = dir.path().join("bbbbbbbb.jsonl");
+        fs::write(&sibling, "{}\n").unwrap();
+        set_mtime(&sibling, 1_000_060);
+
+        // bbbb is bound to a live adapter (harness B) → excluded.
+        let mut s = tail_state_at(
+            bound,
+            &[("harness-a", "aaaaaaaa"), ("harness-b", "bbbbbbbb")],
+        );
+        assert_eq!(detect_newer_session(&mut s), None);
+
+        // But a genuinely *untracked* newer session (a real restart) is
+        // still reported even with the sibling present.
+        let restart = dir.path().join("cccccccc.jsonl");
+        fs::write(&restart, "{}\n").unwrap();
+        set_mtime(&restart, 1_000_120);
+        assert_eq!(detect_newer_session(&mut s), Some("cccccccc".to_string()));
     }
 }
