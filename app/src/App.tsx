@@ -2213,6 +2213,23 @@ export default function App() {
 
 	// Empty state — no *active* rooms. Archived rooms still in the list
 	// show via the reopen modal (linked from the empty state too).
+	// Pre-hydration: rooms haven't loaded from sqlite yet, so `activeRooms`
+	// is transiently []. Render a quiet shell (titlebar + blank pane), not
+	// the EmptyState — otherwise users with existing rooms get a flash of
+	// new-user onboarding every boot (#39). The auto-save effect is already
+	// parked on !loaded, so this never writes over the unread DB.
+	if (!loaded) {
+		return (
+			<div
+				className={`sk-app sk-${theme} density-${density}`}
+				data-platform={isMac ? "mac" : "other"}
+			>
+				<Titlebar {...titlebarProps} />
+				<div className="sk-boot" />
+			</div>
+		);
+	}
+
 	if (activeRooms.length === 0) {
 		return (
 			<div

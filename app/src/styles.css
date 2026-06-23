@@ -106,6 +106,12 @@ body {
 /* On macOS the OS draws traffic lights at the upper-left of our custom
    titlebar (titleBarStyle: Overlay). 80 px clears the standard cluster
    so the wordmark and session label don't overlap them. */
+/* Boot surface (#39): fills the area below the titlebar with the app
+   background while rooms hydrate from sqlite — quiet, not onboarding. */
+.sk-boot {
+	flex: 1;
+	min-height: 0;
+}
 .sk-app[data-platform="mac"] .sk-titlebar {
 	padding-left: 80px;
 }
