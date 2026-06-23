@@ -271,16 +271,18 @@ const HarnessBody = ({
 	onSessionCaptured,
 }: HarnessBodyProps) => {
 	if (harness.cmd && harness.cwd !== undefined) {
-		// mountKey changes whenever cmd content does — that's the trigger
-		// for a clean unmount + remount when the user picks Enter-for-
-		// shell after a child exits. Joining the array gives a value-
-		// equal string across renders that are content-identical, so a
-		// re-render with the same cmd doesn't churn the PTY.
+		// mountKey changes on cmd content OR spawnGen — the trigger for a
+		// clean unmount + remount when the user picks Enter-for-shell
+		// after a child exits. spawnGen is the explicit respawn signal:
+		// the cmd-identity part alone misses a shell→shell respawn (new
+		// cmd == old cmd → no remount → #53). Joining the array gives a
+		// value-equal string across content-identical renders, so a
+		// re-render with the same cmd + spawnGen doesn't churn the PTY.
 		return (
 			<LiveTerminal
 				cmd={harness.cmd}
 				cwd={harness.cwd}
-				mountKey={`${harness.id}:${harness.cmd.join("\x00")}`}
+				mountKey={`${harness.id}:${harness.spawnGen ?? 0}:${harness.cmd.join("\x00")}`}
 				harnessId={harness.id}
 				roomId={roomId}
 				harnessKind={harness.kind}
@@ -1367,10 +1369,18 @@ export default function App() {
 	// path, LiveTerminal calls this so the new cmd persists to the DB
 	// and a Skein restart re-spawns the shell.
 	const updateHarnessCmd = (roomId: string, harnessId: string, cmd: string[]) => {
+		// Every cmd change is a deliberate respawn (Enter-for-shell), so
+		// bump spawnGen too — that's what remounts the terminal when the
+		// new cmd equals the old one (shell→shell, #53).
 		setRooms((prev) =>
 			prev.map((r) =>
 				r.id === roomId
-					? { ...r, harnesses: r.harnesses.map((h) => (h.id === harnessId ? { ...h, cmd } : h)) }
+					? {
+							...r,
+							harnesses: r.harnesses.map((h) =>
+								h.id === harnessId ? { ...h, cmd, spawnGen: (h.spawnGen ?? 0) + 1 } : h,
+							),
+						}
 					: r,
 			),
 		);
