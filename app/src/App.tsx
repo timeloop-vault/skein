@@ -1946,6 +1946,11 @@ export default function App() {
 			if (e.shiftKey) {
 				if (e.code === "KeyH") {
 					if (active) addHarnessRef.current(active);
+				} else if (e.code === "KeyR") {
+					// #121: recover from a wedged webview (and the #120 black
+					// screen on older builds). Rust-side PTYs survive the
+					// reload; boot re-hydrates and resumes.
+					window.location.reload();
 				} else if (e.code === "Tab" || e.code === "ArrowLeft") {
 					cycleRoom(-1);
 				} else if (e.code === "ArrowRight") {
@@ -2004,6 +2009,27 @@ export default function App() {
 		const promise = listen("skein://open-settings", () => setShowSettings(true));
 		return () => {
 			void promise.then((un) => un());
+		};
+	}, []);
+
+	// #120: the window has `dragDropEnabled: false` (so the in-webview
+	// harness-reorder DnD works, #26). The side effect is that a stray OS
+	// file drop hits the webview's default handler and navigates to the
+	// `file://` URL — a black screen with no way back. Swallow file drags
+	// at the window level so they can't navigate. Gated to actual file
+	// drags (`dataTransfer` carries "Files"), so the harness-reorder DnD —
+	// and its cross-room no-drop cursor, which relies on NOT preventing
+	// default — is left completely untouched.
+	useEffect(() => {
+		// DOM DragEvent (the bare `DragEvent` name is React's in this file).
+		const swallow = (e: WindowEventMap["drop"]) => {
+			if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+		};
+		window.addEventListener("dragover", swallow);
+		window.addEventListener("drop", swallow);
+		return () => {
+			window.removeEventListener("dragover", swallow);
+			window.removeEventListener("drop", swallow);
 		};
 	}, []);
 
@@ -2312,6 +2338,12 @@ export default function App() {
 		id: "cmd:toggle-theme",
 		label: `Toggle theme (currently ${theme})`,
 		invoke: () => setTheme(theme === "dark" ? "light" : "dark"),
+	});
+	paletteItems.push({
+		id: "cmd:reload-window",
+		label: "Reload window",
+		hint: `${modLabel} ⇧ R`,
+		invoke: () => window.location.reload(),
 	});
 
 	// L5c — toast stack rendered identically in both branches below

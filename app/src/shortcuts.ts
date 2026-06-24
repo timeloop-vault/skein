@@ -31,6 +31,7 @@ export const isAppShortcut = (e: KeyboardEvent): boolean => {
 	// Mod+Shift combos
 	if (e.shiftKey) {
 		if (e.code === "KeyH") return true; // add harness
+		if (e.code === "KeyR") return true; // reload window (#121)
 		if (e.code === "Tab") return true; // previous room
 		if (e.code === "ArrowLeft") return true; // previous room (alias)
 		if (e.code === "ArrowRight") return true; // next room (alias)
