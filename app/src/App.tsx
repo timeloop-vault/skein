@@ -11,6 +11,7 @@
 
 import {
 	isPermissionGranted,
+	onNotificationClicked,
 	requestPermission,
 	sendNotification,
 } from "@choochmeque/tauri-plugin-notifications-api";
@@ -84,10 +85,24 @@ const API_ERROR_INCIDENT_MS = 60_000;
 /// its own rejection so one failure (e.g. plugin absent in dev) doesn't
 /// stall the chain.
 let osNotifyChain: Promise<unknown> = Promise.resolve();
-const enqueueOsNotification = (title: string, body: string): void => {
+/// Monotonic 32-bit id per notification (the plugin requires a 32-bit
+/// int). Only used so each banner is a distinct object; we don't
+/// reference them later.
+let osNotifyId = 0;
+/// `extra` rides along as the notification's payload and comes back via
+/// `onNotificationClicked` so a click can jump to the harness that fired
+/// it (#118). Values must be strings (the click data is Record<string,
+/// string>).
+const enqueueOsNotification = (
+	title: string,
+	body: string,
+	extra?: { roomId: string; harnessId: string },
+): void => {
+	osNotifyId = (osNotifyId + 1) % 0x7fff_ffff;
+	const id = osNotifyId;
 	osNotifyChain = osNotifyChain
 		.catch(() => {})
-		.then(() => sendNotification({ title, body }))
+		.then(() => sendNotification(extra ? { id, title, body, extra } : { title, body }))
 		.catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.warn("[skein] sendNotification failed:", msg);
@@ -1726,7 +1741,10 @@ export default function App() {
 			// transitions never call the plugin's `show` at the same time.
 			// The helper also catches plugin-absent rejections (dev builds
 			// skip it — see app/src-tauri/src/lib.rs).
-			enqueueOsNotification("Skein", `${owningRoom.name} · ${kindName}: ${stateLabel}`);
+			enqueueOsNotification("Skein", `${owningRoom.name} · ${kindName}: ${stateLabel}`, {
+				roomId: owningRoom.id,
+				harnessId,
+			});
 		});
 		return unsub;
 	}, []);
@@ -1963,6 +1981,55 @@ export default function App() {
 		const promise = listen("skein://open-settings", () => setShowSettings(true));
 		return () => {
 			void promise.then((un) => un());
+		};
+	}, []);
+
+	// #118: clicking the OS notification brings Skein to the front and
+	// jumps to the harness that fired it. The banner carries
+	// {roomId, harnessId} as `extra`; here it comes back as `clicked.data`.
+	// Degrades to a no-op where the notification backend doesn't deliver
+	// clicks (the notify-rust path on non-macOS — see #108). Wrapped so a
+	// missing-permission rejection doesn't surface as an unhandled error.
+	useEffect(() => {
+		const promise = onNotificationClicked((clicked) => {
+			// Always surface the window — the user clicked a Skein banner.
+			const win = getCurrentWindow();
+			void win.show();
+			void win.unminimize();
+			void win.setFocus();
+
+			const roomId = clicked.data?.roomId;
+			const harnessId = clicked.data?.harnessId;
+			if (!roomId || !harnessId) return;
+			const room = roomsRef.current.find((r) => r.id === roomId);
+			if (!room) return; // closed-and-deleted since the banner fired
+			// Reopen it if it was archived in the meantime, so it's reachable.
+			if (room.archived) {
+				setRooms((prev) =>
+					prev.map((r) => {
+						if (r.id !== roomId) return r;
+						const { archived, ...rest } = r;
+						return rest;
+					}),
+				);
+			}
+			setActiveRoomId(roomId);
+			// Inline the harness switch (rather than calling
+			// switchHarnessInRoom) so this startup effect depends only on
+			// stable setters and stays []-keyed — otherwise it would
+			// re-register the native click listener on every render.
+			if (room.harnesses.some((h) => h.id === harnessId)) {
+				setRooms((prev) =>
+					prev.map((r) => (r.id === roomId ? { ...r, activeHarnessId: harnessId } : r)),
+				);
+			}
+		}).catch((err: unknown) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn("[skein] onNotificationClicked unavailable:", msg);
+			return null;
+		});
+		return () => {
+			void promise.then((listener) => listener?.unregister());
 		};
 	}, []);
 
