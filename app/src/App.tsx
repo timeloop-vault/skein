@@ -93,9 +93,15 @@ const logToBackend = (message: string): void => {
 
 let osNotifyChain: Promise<unknown> = Promise.resolve();
 /// Monotonic 32-bit id per notification (the plugin requires a 32-bit
-/// int). Only used so each banner is a distinct object; we don't
-/// reference them later.
+/// int). On macOS the native plugin drops the `extra` payload but DOES
+/// round-trip this id to the click event (verified via skein.log, #118),
+/// so we key the jump target off the id instead of `extra`.
 let osNotifyId = 0;
+/// id → where-to-jump, populated at send time and consumed on click.
+/// Bounded so a long-running session can't grow it unboundedly; ids are
+/// monotonic so the oldest insertion is the first key.
+const osNotifyTargets = new Map<number, { roomId: string; harnessId: string }>();
+const OS_NOTIFY_TARGETS_MAX = 100;
 /// `extra` rides along as the notification's payload and comes back via
 /// `onNotificationClicked` so a click can jump to the harness that fired
 /// it (#118). Values must be strings (the click data is Record<string,
@@ -107,6 +113,13 @@ const enqueueOsNotification = (
 ): void => {
 	osNotifyId = (osNotifyId + 1) % 0x7fff_ffff;
 	const id = osNotifyId;
+	if (extra) {
+		osNotifyTargets.set(id, extra);
+		if (osNotifyTargets.size > OS_NOTIFY_TARGETS_MAX) {
+			const oldest = osNotifyTargets.keys().next().value;
+			if (oldest !== undefined) osNotifyTargets.delete(oldest);
+		}
+	}
 	logToBackend(`[#118] os-notify send id=${id} extra=${JSON.stringify(extra ?? null)}`);
 	osNotifyChain = osNotifyChain
 		.catch(() => {})
@@ -2008,11 +2021,15 @@ export default function App() {
 			void win.unminimize();
 			void win.setFocus();
 
-			const roomId = clicked.data?.roomId;
-			const harnessId = clicked.data?.harnessId;
+			// macOS drops `extra`, but the notification id round-trips, so
+			// resolve the jump target from the id-keyed map (#118).
+			const target = osNotifyTargets.get(clicked.id);
+			osNotifyTargets.delete(clicked.id);
+			const roomId = target?.roomId;
+			const harnessId = target?.harnessId;
 			if (!roomId || !harnessId) {
 				logToBackend(
-					`[#118] click had no roomId/harnessId — data=${JSON.stringify(clicked.data ?? null)}`,
+					`[#118] no jump target for id=${clicked.id} (data=${JSON.stringify(clicked.data ?? null)})`,
 				);
 				return;
 			}
