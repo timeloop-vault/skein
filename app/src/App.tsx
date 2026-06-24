@@ -84,6 +84,13 @@ const API_ERROR_INCIDENT_MS = 60_000;
 /// flight, removing the concurrency the race needs. Each link swallows
 /// its own rejection so one failure (e.g. plugin absent in dev) doesn't
 /// stall the chain.
+/// Write a line into the Rust-side `skein.log`. Bundled builds don't
+/// surface the webview console, so this is how we capture frontend
+/// diagnostics from a real `.app` (#118). Best-effort; never throws.
+const logToBackend = (message: string): void => {
+	void invoke("frontend_log", { message }).catch(() => {});
+};
+
 let osNotifyChain: Promise<unknown> = Promise.resolve();
 /// Monotonic 32-bit id per notification (the plugin requires a 32-bit
 /// int). Only used so each banner is a distinct object; we don't
@@ -100,12 +107,14 @@ const enqueueOsNotification = (
 ): void => {
 	osNotifyId = (osNotifyId + 1) % 0x7fff_ffff;
 	const id = osNotifyId;
+	logToBackend(`[#118] os-notify send id=${id} extra=${JSON.stringify(extra ?? null)}`);
 	osNotifyChain = osNotifyChain
 		.catch(() => {})
 		.then(() => sendNotification(extra ? { id, title, body, extra } : { title, body }))
 		.catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.warn("[skein] sendNotification failed:", msg);
+			logToBackend(`[#118] os-notify send FAILED id=${id}: ${msg}`);
 		});
 };
 
@@ -1992,6 +2001,7 @@ export default function App() {
 	// missing-permission rejection doesn't surface as an unhandled error.
 	useEffect(() => {
 		const promise = onNotificationClicked((clicked) => {
+			logToBackend(`[#118] notification clicked: ${JSON.stringify(clicked)}`);
 			// Always surface the window — the user clicked a Skein banner.
 			const win = getCurrentWindow();
 			void win.show();
@@ -2000,9 +2010,17 @@ export default function App() {
 
 			const roomId = clicked.data?.roomId;
 			const harnessId = clicked.data?.harnessId;
-			if (!roomId || !harnessId) return;
+			if (!roomId || !harnessId) {
+				logToBackend(
+					`[#118] click had no roomId/harnessId — data=${JSON.stringify(clicked.data ?? null)}`,
+				);
+				return;
+			}
 			const room = roomsRef.current.find((r) => r.id === roomId);
-			if (!room) return; // closed-and-deleted since the banner fired
+			if (!room) {
+				logToBackend(`[#118] click room not found roomId=${roomId}`);
+				return; // closed-and-deleted since the banner fired
+			}
 			// Reopen it if it was archived in the meantime, so it's reachable.
 			if (room.archived) {
 				setRooms((prev) =>
@@ -2018,16 +2036,26 @@ export default function App() {
 			// switchHarnessInRoom) so this startup effect depends only on
 			// stable setters and stays []-keyed — otherwise it would
 			// re-register the native click listener on every render.
-			if (room.harnesses.some((h) => h.id === harnessId)) {
+			const harnessFound = room.harnesses.some((h) => h.id === harnessId);
+			if (harnessFound) {
 				setRooms((prev) =>
 					prev.map((r) => (r.id === roomId ? { ...r, activeHarnessId: harnessId } : r)),
 				);
 			}
-		}).catch((err: unknown) => {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.warn("[skein] onNotificationClicked unavailable:", msg);
-			return null;
-		});
+			logToBackend(
+				`[#118] jumped roomId=${roomId} harnessId=${harnessId} archived=${!!room.archived} harnessFound=${harnessFound}`,
+			);
+		})
+			.then((listener) => {
+				logToBackend("[#118] onNotificationClicked listener registered");
+				return listener;
+			})
+			.catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.warn("[skein] onNotificationClicked unavailable:", msg);
+				logToBackend(`[#118] onNotificationClicked unavailable: ${msg}`);
+				return null;
+			});
 		return () => {
 			void promise.then((listener) => listener?.unregister());
 		};
