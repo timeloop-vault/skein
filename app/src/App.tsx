@@ -1282,6 +1282,22 @@ export default function App() {
 		setShowReopen(false);
 	};
 
+	// #89: permanently drop an archived room. `db_save_rooms` is a full
+	// DELETE + re-insert of the current `rooms` array, so removing it
+	// from state *is* the delete — the autosave effect mirrors it out.
+	// (Orphaned `harness_actions`/`harness_events` rows for the room are
+	// harmless activity-log leftovers; a later pass can vacuum them.)
+	const deleteRoomForever = (id: string) => {
+		setRooms((prev) => prev.filter((r) => r.id !== id));
+	};
+
+	// #89: undo a just-deleted room — re-insert it with its `archived`
+	// flag intact, so it returns to the reopen list (not the tab strip).
+	// The archivedRooms memo re-sorts it back into place.
+	const restoreRoom = (room: Room) => {
+		setRooms((prev) => (prev.some((r) => r.id === room.id) ? prev : [...prev, room]));
+	};
+
 	const switchHarnessInRoom = (roomId: string, harnessId: string) => {
 		setRooms((prev) =>
 			prev.map((r) => (r.id === roomId ? { ...r, activeHarnessId: harnessId } : r)),
@@ -2253,6 +2269,8 @@ export default function App() {
 					<ReopenRoomModal
 						rooms={archivedRooms}
 						onReopen={reopenRoom}
+						onDelete={deleteRoomForever}
+						onRestore={restoreRoom}
 						onClose={() => setShowReopen(false)}
 					/>
 				)}
@@ -2464,6 +2482,8 @@ export default function App() {
 				<ReopenRoomModal
 					rooms={archivedRooms}
 					onReopen={reopenRoom}
+					onDelete={deleteRoomForever}
+					onRestore={restoreRoom}
 					onClose={() => setShowReopen(false)}
 				/>
 			)}

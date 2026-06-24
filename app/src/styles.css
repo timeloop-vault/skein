@@ -1006,8 +1006,29 @@ body {
 }
 
 /* Reopen-room modal: list of archived rooms, each clickable. */
+/* #89: filter box between the modal head and the list. Mirrors the
+   command-palette input so the two search affordances feel the same. */
+.sk-reopen-search {
+	background: transparent;
+	border: 0;
+	border-bottom: 1px solid var(--line);
+	padding: 11px 20px;
+	color: var(--fg-0);
+	font: inherit;
+	font-family: var(--sk-mono);
+	font-size: 12px;
+	outline: none;
+}
+.sk-reopen-search::placeholder {
+	color: var(--fg-3);
+}
+/* #89: bounded, scrolling list so the modal stops growing off-screen. */
 .sk-archived-list {
 	gap: 6px;
+	max-height: 50vh;
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bg-3) transparent;
 }
 .sk-archived-empty {
 	padding: 18px 0;
@@ -1016,23 +1037,36 @@ body {
 	font-size: 11px;
 	color: var(--fg-2);
 }
+/* Row is a flex container holding the clickable open-area + a trash
+   button. The visual frame (border/bg/highlight) lives on the row; the
+   inner buttons are transparent so the row tint shows through. */
 .sk-archived-row {
+	display: flex;
+	align-items: stretch;
+	background: var(--bg-2);
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	overflow: hidden;
+	transition: border-color 0.12s, background 0.12s;
+}
+.sk-archived-row:hover,
+.sk-archived-row.selected {
+	border-color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
+}
+.sk-archived-open {
+	flex: 1;
+	min-width: 0;
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
 	padding: 10px 12px;
-	background: var(--bg-2);
-	border: 1px solid var(--line);
-	border-radius: 5px;
+	background: transparent;
+	border: 0;
 	cursor: pointer;
 	text-align: left;
 	font: inherit;
 	color: inherit;
-	transition: border-color 0.12s, background 0.12s;
-}
-.sk-archived-row:hover {
-	border-color: var(--accent);
-	background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
 }
 .sk-archived-row .top {
 	font-size: 12px;
@@ -1042,12 +1076,63 @@ body {
 .sk-archived-row .meta {
 	display: flex;
 	justify-content: space-between;
+	gap: 10px;
 	font-family: var(--sk-mono);
 	font-size: 10.5px;
 	color: var(--fg-2);
 }
 .sk-archived-row .age {
 	color: var(--fg-3);
+	flex-shrink: 0;
+}
+.sk-archived-del {
+	flex: 0 0 auto;
+	width: 40px;
+	border: 0;
+	border-left: 1px solid var(--line);
+	background: transparent;
+	color: var(--fg-3);
+	cursor: pointer;
+	font-size: 13px;
+	opacity: 0.55;
+	transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.sk-archived-del:hover {
+	opacity: 1;
+	color: var(--err);
+	background: color-mix(in srgb, var(--err) 12%, transparent);
+}
+/* #89: brief in-modal undo after a delete-forever. */
+.sk-reopen-undo {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 10px 20px;
+	border-top: 1px solid var(--line);
+	background: var(--bg-2);
+	font-size: 12px;
+	color: var(--fg-1);
+}
+.sk-reopen-undo .msg {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sk-reopen-undo-btn {
+	flex-shrink: 0;
+	padding: 4px 12px;
+	border: 1px solid var(--accent);
+	border-radius: 4px;
+	background: transparent;
+	color: var(--accent);
+	font-size: 12px;
+	cursor: pointer;
+}
+.sk-reopen-undo-btn:hover {
+	background: var(--accent);
+	color: #fff;
 }
 
 /* Command palette — modal-styled but tighter and list-driven. */
