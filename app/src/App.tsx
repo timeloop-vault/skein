@@ -84,13 +84,6 @@ const API_ERROR_INCIDENT_MS = 60_000;
 /// flight, removing the concurrency the race needs. Each link swallows
 /// its own rejection so one failure (e.g. plugin absent in dev) doesn't
 /// stall the chain.
-/// Write a line into the Rust-side `skein.log`. Bundled builds don't
-/// surface the webview console, so this is how we capture frontend
-/// diagnostics from a real `.app` (#118). Best-effort; never throws.
-const logToBackend = (message: string): void => {
-	void invoke("frontend_log", { message }).catch(() => {});
-};
-
 let osNotifyChain: Promise<unknown> = Promise.resolve();
 /// Monotonic 32-bit id per notification (the plugin requires a 32-bit
 /// int). On macOS the native plugin drops the `extra` payload but DOES
@@ -120,14 +113,12 @@ const enqueueOsNotification = (
 			if (oldest !== undefined) osNotifyTargets.delete(oldest);
 		}
 	}
-	logToBackend(`[#118] os-notify send id=${id} extra=${JSON.stringify(extra ?? null)}`);
 	osNotifyChain = osNotifyChain
 		.catch(() => {})
 		.then(() => sendNotification(extra ? { id, title, body, extra } : { title, body }))
 		.catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.warn("[skein] sendNotification failed:", msg);
-			logToBackend(`[#118] os-notify send FAILED id=${id}: ${msg}`);
 		});
 };
 
@@ -2007,37 +1998,26 @@ export default function App() {
 	}, []);
 
 	// #118: clicking the OS notification brings Skein to the front and
-	// jumps to the harness that fired it. The banner carries
-	// {roomId, harnessId} as `extra`; here it comes back as `clicked.data`.
-	// Degrades to a no-op where the notification backend doesn't deliver
+	// jumps to the harness that fired it. macOS's native plugin delivers
+	// the click as `{ id }` and drops the `extra` payload, so we resolve
+	// the jump target from the id-keyed `osNotifyTargets` map populated at
+	// send time. Degrades to a no-op where the backend doesn't deliver
 	// clicks (the notify-rust path on non-macOS — see #108). Wrapped so a
 	// missing-permission rejection doesn't surface as an unhandled error.
 	useEffect(() => {
 		const promise = onNotificationClicked((clicked) => {
-			logToBackend(`[#118] notification clicked: ${JSON.stringify(clicked)}`);
 			// Always surface the window — the user clicked a Skein banner.
 			const win = getCurrentWindow();
 			void win.show();
 			void win.unminimize();
 			void win.setFocus();
 
-			// macOS drops `extra`, but the notification id round-trips, so
-			// resolve the jump target from the id-keyed map (#118).
 			const target = osNotifyTargets.get(clicked.id);
 			osNotifyTargets.delete(clicked.id);
-			const roomId = target?.roomId;
-			const harnessId = target?.harnessId;
-			if (!roomId || !harnessId) {
-				logToBackend(
-					`[#118] no jump target for id=${clicked.id} (data=${JSON.stringify(clicked.data ?? null)})`,
-				);
-				return;
-			}
+			if (!target) return;
+			const { roomId, harnessId } = target;
 			const room = roomsRef.current.find((r) => r.id === roomId);
-			if (!room) {
-				logToBackend(`[#118] click room not found roomId=${roomId}`);
-				return; // closed-and-deleted since the banner fired
-			}
+			if (!room) return; // closed-and-deleted since the banner fired
 			// Reopen it if it was archived in the meantime, so it's reachable.
 			if (room.archived) {
 				setRooms((prev) =>
@@ -2053,26 +2033,16 @@ export default function App() {
 			// switchHarnessInRoom) so this startup effect depends only on
 			// stable setters and stays []-keyed — otherwise it would
 			// re-register the native click listener on every render.
-			const harnessFound = room.harnesses.some((h) => h.id === harnessId);
-			if (harnessFound) {
+			if (room.harnesses.some((h) => h.id === harnessId)) {
 				setRooms((prev) =>
 					prev.map((r) => (r.id === roomId ? { ...r, activeHarnessId: harnessId } : r)),
 				);
 			}
-			logToBackend(
-				`[#118] jumped roomId=${roomId} harnessId=${harnessId} archived=${!!room.archived} harnessFound=${harnessFound}`,
-			);
-		})
-			.then((listener) => {
-				logToBackend("[#118] onNotificationClicked listener registered");
-				return listener;
-			})
-			.catch((err: unknown) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				console.warn("[skein] onNotificationClicked unavailable:", msg);
-				logToBackend(`[#118] onNotificationClicked unavailable: ${msg}`);
-				return null;
-			});
+		}).catch((err: unknown) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn("[skein] onNotificationClicked unavailable:", msg);
+			return null;
+		});
 		return () => {
 			void promise.then((listener) => listener?.unregister());
 		};

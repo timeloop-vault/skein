@@ -234,7 +234,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping,
-            frontend_log,
             fs::list_dir,
             fs::read_file_text,
             fs::read_file_bytes,
@@ -280,17 +279,6 @@ pub fn run() {
 #[tauri::command]
 fn ping(message: String) -> String {
     format!("pong: {message}")
-}
-
-/// Bridge so the frontend can write into the same `skein.log` as the
-/// Rust side. Release/bundled builds don't surface the webview console
-/// anywhere user-visible, so this is the only way to capture frontend
-/// diagnostics from a real `.app` (e.g. OS-notification click handling,
-/// #118).
-#[allow(clippy::needless_pass_by_value)]
-#[tauri::command]
-fn frontend_log(message: String) {
-    tracing::info!(target: "skein_app::frontend", "{message}");
 }
 
 /// Spawn a child process attached to a fresh PTY and stream its output
