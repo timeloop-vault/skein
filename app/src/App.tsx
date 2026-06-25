@@ -150,7 +150,7 @@ const Toast = ({
 			onClick={onClick}
 			title="Go to this harness"
 		>
-			<HChip kind={toast.kind} size={14} />
+			<HChip kind={toast.kind} />
 			<div className="sk-toast-body">
 				<div className="sk-toast-title">{toast.roomName}</div>
 				<div className="sk-toast-sub">
@@ -736,7 +736,7 @@ const NewRoomDialog = ({
 										onClick={() => setHarness(id)}
 									>
 										<div className="top">
-											<HChip kind={id} size={14} /> {k.name}
+											<HChip kind={id} /> {k.name}
 										</div>
 										<div className="desc">{k.desc}</div>
 									</div>
@@ -2658,7 +2658,7 @@ export default function App() {
 
 			<div className="sk-statusbar">
 				<span className="seg">
-					<HChip kind={activeHarness.kind} size={10} />
+					<HChip kind={activeHarness.kind} />
 					<span>{HARNESS_KINDS[activeHarness.kind].name}</span>
 				</span>
 				<LiveStatusBarChip harness={activeHarness} />
