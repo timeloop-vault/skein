@@ -439,6 +439,11 @@ const HarnessColumn = ({
 const FONT_MIN = 12;
 const FONT_MAX = 18;
 const FONT_DEFAULT = 13;
+// #17: chrome font size — scales the UI chrome (tabs, cards, feed,
+// status bar) via the --cfs variable, independent of the terminal font.
+const CHROME_FONT_MIN = 10;
+const CHROME_FONT_MAX = 20;
+const CHROME_FONT_DEFAULT = 12;
 
 // ── New room dialog ────────────────────────────────────────────────
 // The picked folder becomes the room's cwd; every harness in the
@@ -1066,6 +1071,10 @@ export default function App() {
 	const [theme, setTheme] = usePersistedState<Theme>("theme", "dark");
 	const [density, setDensity] = usePersistedState<Density>("density", "regular");
 	const [fontSize, setFontSize] = usePersistedState<number>("fontSize", FONT_DEFAULT);
+	const [chromeFontPt, setChromeFontPt] = usePersistedState<number>(
+		"chromeFontPt",
+		CHROME_FONT_DEFAULT,
+	);
 	// L5e — per-surface notification toggles. Defaults: in-app on,
 	// OS off (less surprising on first run; user opts in to OS
 	// banners when they want them).
@@ -2351,9 +2360,13 @@ export default function App() {
 		fontSize,
 		fontMin: FONT_MIN,
 		fontMax: FONT_MAX,
+		chromeFontSize: chromeFontPt,
+		chromeFontMin: CHROME_FONT_MIN,
+		chromeFontMax: CHROME_FONT_MAX,
 		onTheme: setTheme,
 		onDensity: setDensity,
 		onFontSize: setFontSize,
+		onChromeFontSize: setChromeFontPt,
 		notifyBadge,
 		notifyToast,
 		notifyUrgent,
@@ -2502,6 +2515,7 @@ export default function App() {
 			<div
 				className={`sk-app sk-${theme} density-${density}`}
 				data-platform={isMac ? "mac" : "other"}
+				style={{ ["--cfs" as string]: `${chromeFontPt}px` }}
 			>
 				<Titlebar {...titlebarProps} />
 				<div className="sk-boot" />
@@ -2514,6 +2528,7 @@ export default function App() {
 			<div
 				className={`sk-app sk-${theme} density-${density}`}
 				data-platform={isMac ? "mac" : "other"}
+				style={{ ["--cfs" as string]: `${chromeFontPt}px` }}
 			>
 				<Titlebar {...titlebarProps} />
 				<EmptyState
@@ -2555,6 +2570,7 @@ export default function App() {
 		<div
 			className={`sk-app sk-${theme} density-${density}`}
 			data-platform={isMac ? "mac" : "other"}
+			style={{ ["--cfs" as string]: `${chromeFontPt}px` }}
 		>
 			<Titlebar {...titlebarProps} />
 
