@@ -196,13 +196,13 @@ body {
 	align-items: center;
 	gap: 6px;
 	font-family: var(--sk-mono);
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	color: var(--fg-1);
 }
 .sk-stepper .sk-btn {
 	min-width: 28px;
 	padding: 4px 8px;
-	font-size: 13px;
+	font-size: calc(var(--cfs) * 1.0833);
 }
 .sk-stepper-value {
 	min-width: 56px;
@@ -211,7 +211,7 @@ body {
 }
 .sk-stepper-hint {
 	font-family: var(--sk-mono);
-	font-size: 10.5px;
+	font-size: calc(var(--cfs) * 0.875);
 	color: var(--fg-2);
 	margin-left: 8px;
 }
@@ -231,12 +231,12 @@ body {
 }
 .sk-update-version {
 	font-family: var(--sk-mono);
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	color: var(--fg-1);
 }
 .sk-update-msg {
 	font-family: var(--sk-mono);
-	font-size: 11px;
+	font-size: calc(var(--cfs) * 0.9167);
 	color: var(--fg-2);
 }
 .sk-update-msg.ok {
@@ -251,7 +251,7 @@ body {
 	background: var(--bg-2);
 	border: 1px solid var(--line);
 	border-radius: 4px;
-	font-size: 10.5px;
+	font-size: calc(var(--cfs) * 0.875);
 	color: var(--fg-1);
 	white-space: pre-wrap;
 	max-height: 120px;
@@ -367,7 +367,7 @@ body {
 }
 .sk-tab-close {
 	color: var(--fg-3);
-	font-size: 13px;
+	font-size: calc(var(--cfs) * 1.0833);
 	padding: 0 2px;
 	border-radius: 3px;
 	opacity: 0;
@@ -393,7 +393,7 @@ body {
 .tab-badge {
 	background: var(--accent);
 	color: #fff;
-	font-size: 9px;
+	font-size: calc(var(--cfs) * 0.75);
 	font-weight: 600;
 	padding: 1px 5px;
 	border-radius: 8px;
@@ -409,7 +409,7 @@ body {
 	justify-content: center;
 	color: var(--fg-2);
 	font-family: var(--sk-mono);
-	font-size: 14px;
+	font-size: calc(var(--cfs) * 1.1667);
 	border-left: 1px solid var(--line);
 	margin-left: 2px;
 	cursor: pointer;
@@ -610,7 +610,7 @@ body {
 }
 .sk-harness-tab .ht-x {
 	color: var(--fg-3);
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	margin-left: 2px;
 	opacity: 0;
 	transition: opacity 0.12s;
@@ -656,7 +656,7 @@ body {
 .sk-btn {
 	font: inherit;
 	font-family: var(--sk-sans);
-	font-size: 11px;
+	font-size: calc(var(--cfs) * 0.9167);
 	padding: 5px 10px;
 	border-radius: 4px;
 	border: 1px solid var(--line-strong);
@@ -721,7 +721,7 @@ body {
 	flex: 1;
 	overflow-y: auto;
 	font-family: var(--sk-mono);
-	font-size: 11px;
+	font-size: calc(var(--cfs) * 0.9167);
 	line-height: 1.55;
 	padding: 8px 0;
 	scrollbar-width: thin;
@@ -742,7 +742,7 @@ body {
 	flex: 0 0 56px;
 	display: flex;
 	color: var(--fg-3);
-	font-size: 10px;
+	font-size: calc(var(--cfs) * 0.8333);
 	user-select: none;
 }
 .sk-line .gutter .ln {
@@ -819,7 +819,7 @@ body {
 	border-radius: 7px;
 	background: var(--accent);
 	color: var(--bg-0);
-	font-size: 9px;
+	font-size: calc(var(--cfs) * 0.75);
 	font-weight: 600;
 }
 .sk-statusbar-cwd {
@@ -844,7 +844,7 @@ body {
 	gap: 24px;
 }
 .sk-empty-harness h3 {
-	font-size: 14px;
+	font-size: calc(var(--cfs) * 1.1667);
 	font-weight: 500;
 	color: var(--fg-0);
 	margin: 0;
@@ -853,7 +853,7 @@ body {
 }
 .sk-empty-harness p {
 	color: var(--fg-2);
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	max-width: 360px;
 	text-align: center;
 	margin: 0;
@@ -886,12 +886,12 @@ body {
 	gap: 8px;
 }
 .sk-harness-card .h-name {
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	font-weight: 500;
 	color: var(--fg-0);
 }
 .sk-harness-card .h-desc {
-	font-size: 10.5px;
+	font-size: calc(var(--cfs) * 0.875);
 	color: var(--fg-2);
 	line-height: 1.5;
 	font-family: var(--sk-mono);
@@ -928,7 +928,7 @@ body {
 }
 .sk-modal-head h2 {
 	margin: 0;
-	font-size: 14px;
+	font-size: calc(var(--cfs) * 1.1667);
 	font-weight: 500;
 	color: var(--fg-0);
 	letter-spacing: -0.01em;
@@ -936,7 +936,7 @@ body {
 .sk-modal-head .sub {
 	margin-top: 4px;
 	font-family: var(--sk-mono);
-	font-size: 10.5px;
+	font-size: calc(var(--cfs) * 0.875);
 	color: var(--fg-2);
 }
 .sk-modal-body {
@@ -952,13 +952,13 @@ body {
 }
 .sk-field label {
 	font-family: var(--sk-mono);
-	font-size: 10px;
+	font-size: calc(var(--cfs) * 0.8333);
 	color: var(--fg-2);
 	text-transform: uppercase;
 	letter-spacing: 0.08em;
 }
 .sk-help {
-	font-size: 11px;
+	font-size: calc(var(--cfs) * 0.9167);
 	color: var(--fg-3);
 	line-height: 1.5;
 	max-width: 60ch;
@@ -994,12 +994,12 @@ body {
 	min-width: 0;
 }
 .sk-toggle-title {
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	color: var(--fg-0);
 	font-weight: 500;
 }
 .sk-toggle-sub {
-	font-size: 11px;
+	font-size: calc(var(--cfs) * 0.9167);
 	color: var(--fg-3);
 	line-height: 1.4;
 }
@@ -1012,7 +1012,7 @@ body {
 	color: var(--fg-0);
 	font: inherit;
 	font-family: var(--sk-mono);
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	outline: none;
 }
 .sk-input:focus,
@@ -1046,13 +1046,13 @@ body {
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	font-size: 11.5px;
+	font-size: calc(var(--cfs) * 0.9583);
 	color: var(--fg-0);
 	font-weight: 500;
 }
 .sk-radio-card .desc {
 	font-family: var(--sk-mono);
-	font-size: 9.5px;
+	font-size: calc(var(--cfs) * 0.7917);
 	color: var(--fg-2);
 }
 .sk-modal-foot {
@@ -1075,7 +1075,7 @@ body {
 	color: var(--fg-0);
 	font: inherit;
 	font-family: var(--sk-mono);
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	outline: none;
 }
 .sk-reopen-search::placeholder {
@@ -1093,7 +1093,7 @@ body {
 	padding: 18px 0;
 	text-align: center;
 	font-family: var(--sk-mono);
-	font-size: 11px;
+	font-size: calc(var(--cfs) * 0.9167);
 	color: var(--fg-2);
 }
 /* Row is a flex container holding the clickable open-area + a trash
@@ -1128,7 +1128,7 @@ body {
 	color: inherit;
 }
 .sk-archived-row .top {
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	color: var(--fg-0);
 	font-weight: 500;
 }
@@ -1137,7 +1137,7 @@ body {
 	justify-content: space-between;
 	gap: 10px;
 	font-family: var(--sk-mono);
-	font-size: 10.5px;
+	font-size: calc(var(--cfs) * 0.875);
 	color: var(--fg-2);
 }
 .sk-archived-row .age {
@@ -1152,7 +1152,7 @@ body {
 	background: transparent;
 	color: var(--fg-3);
 	cursor: pointer;
-	font-size: 13px;
+	font-size: calc(var(--cfs) * 1.0833);
 	opacity: 0.55;
 	transition: opacity 0.12s, background 0.12s, color 0.12s;
 }
@@ -1170,7 +1170,7 @@ body {
 	padding: 10px 20px;
 	border-top: 1px solid var(--line);
 	background: var(--bg-2);
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	color: var(--fg-1);
 }
 .sk-reopen-undo .msg {
@@ -1186,7 +1186,7 @@ body {
 	border-radius: 4px;
 	background: transparent;
 	color: var(--accent);
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	cursor: pointer;
 }
 .sk-reopen-undo-btn:hover {
@@ -1215,7 +1215,7 @@ body {
 	color: var(--fg-0);
 	font: inherit;
 	font-family: var(--sk-mono);
-	font-size: 13px;
+	font-size: calc(var(--cfs) * 1.0833);
 	outline: none;
 }
 .sk-palette-input::placeholder {
@@ -1231,7 +1231,7 @@ body {
 	padding: 12px 16px;
 	color: var(--fg-3);
 	font-family: var(--sk-mono);
-	font-size: 11px;
+	font-size: calc(var(--cfs) * 0.9167);
 }
 .sk-palette-row {
 	display: flex;
@@ -1239,7 +1239,7 @@ body {
 	gap: 12px;
 	padding: 6px 16px;
 	cursor: pointer;
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 }
 .sk-palette-row .label {
 	flex: 1;
@@ -1252,7 +1252,7 @@ body {
 .sk-palette-row .hint {
 	color: var(--fg-3);
 	font-family: var(--sk-mono);
-	font-size: 10.5px;
+	font-size: calc(var(--cfs) * 0.875);
 }
 .sk-palette-row.selected {
 	background: color-mix(in srgb, var(--accent) 14%, var(--bg-2));
@@ -1274,14 +1274,14 @@ body {
 }
 .sk-empty .glyph {
 	font-family: var(--sk-mono);
-	font-size: 56px;
+	font-size: calc(var(--cfs) * 4.6667);
 	color: var(--accent);
 	line-height: 1;
 	letter-spacing: -0.04em;
 }
 .sk-empty h1 {
 	margin: 0;
-	font-size: 22px;
+	font-size: calc(var(--cfs) * 1.8333);
 	font-weight: 500;
 	color: var(--fg-0);
 	letter-spacing: -0.02em;
@@ -1291,14 +1291,14 @@ body {
 	max-width: 520px;
 	text-align: center;
 	line-height: 1.6;
-	font-size: 13px;
+	font-size: calc(var(--cfs) * 1.0833);
 }
 .sk-empty .hint-list {
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
 	font-family: var(--sk-mono);
-	font-size: 11px;
+	font-size: calc(var(--cfs) * 0.9167);
 	color: var(--fg-2);
 	margin-top: 8px;
 }
@@ -1313,7 +1313,7 @@ body {
 	border: 1px solid var(--line);
 	border-radius: 3px;
 	padding: 2px 6px;
-	font-size: 10px;
+	font-size: calc(var(--cfs) * 0.8333);
 }
 .sk-empty .start-btn {
 	margin-top: 4px;
@@ -1321,7 +1321,7 @@ body {
 	background: var(--accent);
 	color: #fff;
 	font-family: var(--sk-sans);
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	font-weight: 500;
 	border: 0;
 	border-radius: 6px;
@@ -1333,7 +1333,7 @@ body {
 	background: transparent;
 	color: var(--fg-2);
 	font-family: var(--sk-mono);
-	font-size: 11px;
+	font-size: calc(var(--cfs) * 0.9167);
 	border: 1px solid var(--line);
 	border-radius: 4px;
 	cursor: pointer;
@@ -1352,7 +1352,7 @@ body {
    markdown provider needs prose typography and normal wrapping. */
 .sk-md {
 	font-family: var(--sk-sans);
-	font-size: 13px;
+	font-size: calc(var(--cfs) * 1.0833);
 	line-height: 1.55;
 	color: var(--fg-1);
 	white-space: normal;
@@ -1415,7 +1415,7 @@ body {
 }
 .sk-md pre {
 	font-family: var(--sk-mono);
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	background: var(--bg-2);
 	border: 1px solid var(--line);
 	border-radius: 4px;
@@ -1455,7 +1455,7 @@ body {
 .sk-md table {
 	border-collapse: collapse;
 	margin: 0 0 0.9em;
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 }
 .sk-md th,
 .sk-md td {
@@ -1519,7 +1519,7 @@ body {
 	gap: 2px;
 }
 .sk-toast-title {
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 	color: var(--fg-0);
 	font-weight: 500;
 	overflow: hidden;
@@ -1527,7 +1527,7 @@ body {
 	white-space: nowrap;
 }
 .sk-toast-sub {
-	font-size: 11px;
+	font-size: calc(var(--cfs) * 0.9167);
 	color: var(--fg-2);
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1543,7 +1543,7 @@ body {
 }
 .sk-toast-detail {
 	font-family: var(--sk-mono);
-	font-size: 9.5px;
+	font-size: calc(var(--cfs) * 0.7917);
 	color: var(--fg-3);
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1551,7 +1551,7 @@ body {
 }
 .sk-toast-x {
 	color: var(--fg-3);
-	font-size: 16px;
+	font-size: calc(var(--cfs) * 1.3333);
 	line-height: 1;
 	padding: 0 4px;
 	cursor: pointer;

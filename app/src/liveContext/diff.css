@@ -70,7 +70,7 @@
 	min-height: 0;
 	overflow-y: auto;
 	font-family: var(--sk-mono);
-	font-size: 11px;
+	font-size: calc(var(--cfs) * 0.9167);
 	line-height: 1.55;
 	padding: 6px 0;
 	position: relative;
@@ -84,7 +84,7 @@
 .lc-diff-hunk-sep {
 	padding: 2px 12px;
 	color: var(--fg-3);
-	font-size: 9.5px;
+	font-size: calc(var(--cfs) * 0.7917);
 	background: color-mix(in srgb, var(--line) 50%, transparent);
 }
 .lc-line {
@@ -102,7 +102,7 @@
 	flex: 0 0 56px;
 	display: flex;
 	color: var(--fg-3);
-	font-size: 10px;
+	font-size: calc(var(--cfs) * 0.8333);
 	user-select: none;
 }
 .lc-line .gutter .ln {
