@@ -917,6 +917,9 @@ body {
 	border-radius: 10px;
 	width: 560px;
 	max-width: 92vw;
+	/* #134: bound to the viewport so a large chrome font (#17/#131)
+	   can't push the modal off-screen; the body scrolls instead. */
+	max-height: 90vh;
 	box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
 	overflow: hidden;
 	display: flex;
@@ -944,6 +947,11 @@ body {
 	display: flex;
 	flex-direction: column;
 	gap: 14px;
+	/* #134: head stays fixed, body scrolls within the max-height modal.
+	   min-height:0 lets this flex child shrink below content size so the
+	   overflow actually engages. */
+	overflow-y: auto;
+	min-height: 0;
 }
 .sk-field {
 	display: flex;
