@@ -34,7 +34,7 @@
 	align-items: center;
 	gap: 8px;
 	font-family: var(--sk-mono);
-	font-size: 10px;
+	font-size: calc(var(--cfs) * 0.8333);
 	color: var(--fg-3);
 }
 .lc-tail .blinker {
@@ -81,7 +81,7 @@
 	background: var(--bg-card);
 	padding-right: 8px;
 	font-family: var(--sk-mono);
-	font-size: 9px;
+	font-size: calc(var(--cfs) * 0.75);
 	color: var(--fg-3);
 	letter-spacing: 0.04em;
 }
@@ -92,7 +92,7 @@
 	background: var(--bg-card);
 	padding-left: 8px;
 	font-family: var(--sk-mono);
-	font-size: 9px;
+	font-size: calc(var(--cfs) * 0.75);
 	color: var(--fg-3);
 }
 
@@ -101,7 +101,7 @@
 .lc-turn-cost {
 	padding: 2px 12px 8px 36px;
 	font-family: var(--sk-mono);
-	font-size: 9.5px;
+	font-size: calc(var(--cfs) * 0.7917);
 	color: var(--fg-3);
 	display: flex;
 	gap: 10px;
@@ -164,7 +164,7 @@
 	color: var(--fg-3);
 }
 .lc-row .gist .pill {
-	font-size: 8.5px;
+	font-size: calc(var(--cfs) * 0.7083);
 	padding: 1px 5px;
 	border-radius: 3px;
 	margin-left: 6px;
@@ -348,7 +348,7 @@
 	gap: 8px;
 	padding: 6px 12px 2px;
 	font-family: var(--sk-mono);
-	font-size: 10px;
+	font-size: calc(var(--cfs) * 0.8333);
 	color: var(--fg-3);
 }
 .lc-burst-head .label {
@@ -374,7 +374,7 @@
 	background: var(--bg-0);
 	border: 1px solid var(--line);
 	border-radius: 4px;
-	font-size: 10.5px;
+	font-size: calc(var(--cfs) * 0.875);
 	color: var(--fg-1);
 	line-height: 1.5;
 	position: relative;
@@ -406,7 +406,7 @@
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	font-size: 9.5px;
+	font-size: calc(var(--cfs) * 0.7917);
 	color: var(--fg-3);
 	text-transform: uppercase;
 	letter-spacing: 0.06em;
@@ -418,7 +418,7 @@
 .lc-row-preview .expand-link {
 	color: var(--accent);
 	cursor: pointer;
-	font-size: 9.5px;
+	font-size: calc(var(--cfs) * 0.7917);
 	background: none;
 	border: 0;
 	padding: 0;
@@ -441,7 +441,7 @@
 	gap: 10px;
 	padding: 8px 12px 6px;
 	font-family: var(--sk-mono);
-	font-size: 10.5px;
+	font-size: calc(var(--cfs) * 0.875);
 	color: var(--fg-2);
 	background: color-mix(in srgb, var(--waiting) 6%, transparent);
 	border-top: 1px solid color-mix(in srgb, var(--waiting) 30%, var(--line));
@@ -450,7 +450,7 @@
 }
 .lc-backfill-banner .glyph {
 	color: var(--waiting);
-	font-size: 12px;
+	font-size: calc(var(--cfs) * 1);
 }
 .lc-backfill-banner b {
 	color: var(--fg-0);
@@ -465,7 +465,7 @@
 	gap: 10px;
 	padding: 10px 12px 6px;
 	font-family: var(--sk-mono);
-	font-size: 9.5px;
+	font-size: calc(var(--cfs) * 0.7917);
 	color: var(--fg-3);
 	letter-spacing: 0.04em;
 }
@@ -501,7 +501,7 @@
 	background: var(--accent);
 	color: #fff;
 	font-family: var(--sk-mono);
-	font-size: 10.5px;
+	font-size: calc(var(--cfs) * 0.875);
 	font-weight: 500;
 	padding: 5px 10px;
 	border: 0;
