@@ -1744,6 +1744,13 @@ export default function App() {
 			const isViewedHarness = Boolean(activeRoom && activeRoom.activeHarnessId === harnessId);
 			const isWindowFocused = windowFocusedRef.current;
 			const owningRoom = roomsRef.current.find((r) => r.harnesses.some((h) => h.id === harnessId));
+			// #127: shell (byoh) harnesses aren't agents — an idle/exited
+			// shell is just a prompt sitting there (or an `exit` you typed),
+			// never notification-worthy, and L2a idle-timeout / prompt-redraw
+			// chatter made them pop up spuriously. Suppress every surface
+			// (badge / toast / OS) for them; the status dot still reflects
+			// running/idle. Agents (claude/opencode) notify as before.
+			if (owningRoom?.harnesses.find((h) => h.id === harnessId)?.kind === "byoh") return;
 			// Badge: skip when the user is staring at this exact
 			// harness — the tab dot color change tells them what
 			// happened. If they alt+tabbed away, though, bump
