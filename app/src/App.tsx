@@ -1965,6 +1965,17 @@ export default function App() {
 				};
 			}),
 		);
+		// Landing on a harness means you're now looking at it, so drop any
+		// lingering toast for it — regardless of how you got here (Mod+J/L,
+		// palette, tab, Mod+1..9). Clicking a toast already dismisses it via
+		// jumpToToast; this covers every other path. Return the same array
+		// when nothing matches so we don't trigger a needless re-render.
+		setToasts((prev) => {
+			const next = prev.filter(
+				(t) => !(t.roomId === activeRoomId && t.harnessId === displayedHarnessId),
+			);
+			return next.length === prev.length ? prev : next;
+		});
 	}, [activeRoomId, displayedHarnessId]);
 
 	useEffect(() => {
