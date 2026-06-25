@@ -32,6 +32,8 @@ export const isAppShortcut = (e: KeyboardEvent): boolean => {
 	if (e.shiftKey) {
 		if (e.code === "KeyH") return true; // add harness
 		if (e.code === "KeyR") return true; // reload window (#121)
+		if (e.code === "KeyJ") return true; // previous alerted room (#67)
+		if (e.code === "KeyL") return true; // previous alerted harness (#67)
 		if (e.code === "Tab") return true; // previous room
 		if (e.code === "ArrowLeft") return true; // previous room (alias)
 		if (e.code === "ArrowRight") return true; // next room (alias)
@@ -43,6 +45,8 @@ export const isAppShortcut = (e: KeyboardEvent): boolean => {
 	if (e.code === "KeyW") return true; // close room
 	if (e.code === "KeyK") return true; // palette
 	if (e.code === "Comma") return true; // settings
+	if (e.code === "KeyJ") return true; // next alerted room (#67)
+	if (e.code === "KeyL") return true; // next alerted harness (#67)
 	if (e.code === "Tab") return true; // next room
 	if (e.code === "ArrowLeft") return true; // previous harness
 	if (e.code === "ArrowRight") return true; // next harness

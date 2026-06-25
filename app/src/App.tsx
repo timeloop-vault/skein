@@ -1343,6 +1343,61 @@ export default function App() {
 		switchHarnessInRoom(roomId, harnessId);
 	};
 
+	// #67: the same "highest-pending harness, ties broken by harness
+	// order" picker the urgent indicator uses (#65).
+	const topPendingHarness = (room: Room) =>
+		[...room.harnesses]
+			.filter((h) => (h.pendingNotifications ?? 0) > 0)
+			.sort((a, b) => (b.pendingNotifications ?? 0) - (a.pendingNotifications ?? 0))[0] ??
+		room.harnesses[0];
+
+	// #67: step to the next/previous room that has any pending
+	// notifications, landing on its most-pending harness. Wraps; no-op if
+	// nothing is pending. If the current room isn't alerted, a forward
+	// step starts at the first alerted room (backward at the last).
+	const cycleAlertedRoom = (delta: number) => {
+		const alerted = activeRooms.filter(
+			(r) => r.harnesses.reduce((a, h) => a + (h.pendingNotifications ?? 0), 0) > 0,
+		);
+		if (alerted.length === 0) return;
+		const idx = alerted.findIndex((r) => r.id === activeRoomId);
+		const nextIdx =
+			idx === -1
+				? delta > 0
+					? 0
+					: alerted.length - 1
+				: (idx + delta + alerted.length) % alerted.length;
+		const next = alerted[nextIdx];
+		if (!next) return;
+		const winner = topPendingHarness(next);
+		if (winner) jumpToHarness(next.id, winner.id);
+		else setActiveRoomId(next.id);
+	};
+
+	// #67: step across every alerted harness (room order × harness order),
+	// visiting each once before wrapping. Lands on the exact harness.
+	const cycleAlertedHarness = (delta: number) => {
+		const tuples: Array<{ roomId: string; harnessId: string }> = [];
+		for (const r of activeRooms) {
+			for (const h of r.harnesses) {
+				if ((h.pendingNotifications ?? 0) > 0) tuples.push({ roomId: r.id, harnessId: h.id });
+			}
+		}
+		if (tuples.length === 0) return;
+		const curRoom = activeRooms.find((r) => r.id === activeRoomId);
+		const idx = tuples.findIndex(
+			(t) => t.roomId === activeRoomId && t.harnessId === curRoom?.activeHarnessId,
+		);
+		const nextIdx =
+			idx === -1
+				? delta > 0
+					? 0
+					: tuples.length - 1
+				: (idx + delta + tuples.length) % tuples.length;
+		const next = tuples[nextIdx];
+		if (next) jumpToHarness(next.roomId, next.harnessId);
+	};
+
 	const dismissToast = (id: string) => {
 		setToasts((prev) => prev.filter((t) => t.id !== id));
 	};
@@ -1538,6 +1593,10 @@ export default function App() {
 	closeRoomRef.current = closeRoom;
 	const switchHarnessInRoomRef = useRef(switchHarnessInRoom);
 	switchHarnessInRoomRef.current = switchHarnessInRoom;
+	const cycleAlertedRoomRef = useRef(cycleAlertedRoom);
+	cycleAlertedRoomRef.current = cycleAlertedRoom;
+	const cycleAlertedHarnessRef = useRef(cycleAlertedHarness);
+	cycleAlertedHarnessRef.current = cycleAlertedHarness;
 	const roomsRef = useRef(rooms);
 	roomsRef.current = rooms;
 	// Keyboard nav (Mod+Tab, Mod+1..9) keys off active rooms only —
@@ -1951,6 +2010,10 @@ export default function App() {
 					// screen on older builds). Rust-side PTYs survive the
 					// reload; boot re-hydrates and resumes.
 					window.location.reload();
+				} else if (e.code === "KeyJ") {
+					cycleAlertedRoomRef.current(-1); // #67: prev alerted room
+				} else if (e.code === "KeyL") {
+					cycleAlertedHarnessRef.current(-1); // #67: prev alerted harness
 				} else if (e.code === "Tab" || e.code === "ArrowLeft") {
 					cycleRoom(-1);
 				} else if (e.code === "ArrowRight") {
@@ -1978,6 +2041,12 @@ export default function App() {
 					break;
 				case "Comma":
 					setShowSettings(true);
+					break;
+				case "KeyJ":
+					cycleAlertedRoomRef.current(1); // #67: next alerted room
+					break;
+				case "KeyL":
+					cycleAlertedHarnessRef.current(1); // #67: next alerted harness
 					break;
 				case "Tab":
 					cycleRoom(1);
@@ -2345,6 +2414,45 @@ export default function App() {
 		hint: `${modLabel} ⇧ R`,
 		invoke: () => window.location.reload(),
 	});
+	// #67: inbox navigation — only surfaced when something is actually
+	// pending, so Cmd+K stays uncluttered otherwise.
+	const otherAlertedRooms = activeRooms.filter(
+		(r) =>
+			r.id !== activeRoomId &&
+			r.harnesses.reduce((a, h) => a + (h.pendingNotifications ?? 0), 0) > 0,
+	);
+	if (otherAlertedRooms.length > 0) {
+		paletteItems.push({
+			id: "cmd:next-alerted-room",
+			label: `Jump to next alerted room (${otherAlertedRooms.length})`,
+			hint: `${modLabel} J`,
+			invoke: () => cycleAlertedRoom(1),
+		});
+		paletteItems.push({
+			id: "cmd:prev-alerted-room",
+			label: `Jump to previous alerted room (${otherAlertedRooms.length})`,
+			hint: `${modLabel} ⇧ J`,
+			invoke: () => cycleAlertedRoom(-1),
+		});
+	}
+	const alertedHarnessCount = activeRooms.reduce(
+		(a, r) => a + r.harnesses.filter((h) => (h.pendingNotifications ?? 0) > 0).length,
+		0,
+	);
+	if (alertedHarnessCount > 0) {
+		paletteItems.push({
+			id: "cmd:next-alerted-harness",
+			label: `Jump to next alerted harness (${alertedHarnessCount})`,
+			hint: `${modLabel} L`,
+			invoke: () => cycleAlertedHarness(1),
+		});
+		paletteItems.push({
+			id: "cmd:prev-alerted-harness",
+			label: `Jump to previous alerted harness (${alertedHarnessCount})`,
+			hint: `${modLabel} ⇧ L`,
+			invoke: () => cycleAlertedHarness(-1),
+		});
+	}
 
 	// L5c — toast stack rendered identically in both branches below
 	// (empty state and the normal app layout). Floats above
