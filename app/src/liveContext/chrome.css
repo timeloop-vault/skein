@@ -10,7 +10,10 @@
 	background: var(--bg-1);
 	color: var(--fg-0);
 	font-family: var(--sk-sans);
-	font-size: 12px;
+	/* #17: the right pane re-roots the em chain for everything inside it,
+	   so it must follow --cfs (a fixed px here froze the whole feed). All
+	   lc-* em sizes below are relative to this. */
+	font-size: var(--cfs, 12px);
 	display: flex;
 	flex-direction: column;
 	flex: 1;
@@ -33,14 +36,14 @@
 .lc-subtitle .glyph {
 	color: var(--accent);
 	font-family: var(--sk-mono);
-	font-size: 10px;
+	font-size: 0.83em;
 	letter-spacing: 0.04em;
 	text-transform: uppercase;
 	flex: 0 0 auto;
 }
 .lc-subtitle .text {
 	color: var(--fg-1);
-	font-size: 11.5px;
+	font-size: 0.96em;
 	line-height: 1.45;
 	flex: 1;
 	min-width: 0;
@@ -51,7 +54,7 @@
 .lc-subtitle .meta {
 	color: var(--fg-3);
 	font-family: var(--sk-mono);
-	font-size: 9.5px;
+	font-size: 0.79em;
 	flex: 0 0 auto;
 }
 .lc-subtitle.is-empty .text {
@@ -97,8 +100,8 @@
 	overflow: hidden;
 }
 .lc-card-head {
-	flex: 0 0 30px;
-	height: 30px;
+	flex: 0 0 calc(var(--cfs, 12px) * 2.5);
+	height: calc(var(--cfs, 12px) * 2.5);
 	padding: 0 12px;
 	display: flex;
 	align-items: center;
@@ -120,11 +123,11 @@
 	display: none;
 }
 .lc-card.collapsed {
-	flex: 0 0 30px !important;
+	flex: 0 0 calc(var(--cfs, 12px) * 2.5) !important;
 }
 .lc-card-head .label {
 	font-family: var(--sk-mono);
-	font-size: 9.5px;
+	font-size: 0.79em;
 	font-weight: 600;
 	letter-spacing: 0.08em;
 	text-transform: uppercase;
@@ -133,7 +136,7 @@
 .lc-card-head .meta {
 	margin-left: auto;
 	font-family: var(--sk-mono);
-	font-size: 10px;
+	font-size: 0.83em;
 	color: var(--fg-2);
 	display: flex;
 	gap: 12px;

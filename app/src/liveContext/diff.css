@@ -11,8 +11,8 @@
 	height: 100%;
 }
 .lc-diff-tabs {
-	flex: 0 0 28px;
-	height: 28px;
+	flex: 0 0 calc(var(--cfs, 12px) * 2.33);
+	height: calc(var(--cfs, 12px) * 2.33);
 	display: flex;
 	align-items: stretch;
 	border-bottom: 1px solid var(--line);
@@ -28,7 +28,7 @@
 	padding: 0 10px;
 	color: var(--fg-2);
 	font-family: var(--sk-mono);
-	font-size: 10.5px;
+	font-size: 0.875em;
 	cursor: pointer;
 	border: 0;
 	background: none;
@@ -42,11 +42,11 @@
 }
 .lc-diff-tab .delta-add {
 	color: var(--ok);
-	font-size: 9.5px;
+	font-size: 0.79em;
 }
 .lc-diff-tab .delta-del {
 	color: var(--err);
-	font-size: 9.5px;
+	font-size: 0.79em;
 }
 .lc-diff-tab.active {
 	color: var(--fg-0);

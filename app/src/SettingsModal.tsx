@@ -29,9 +29,14 @@ interface SettingsModalProps {
 	fontSize: number;
 	fontMin: number;
 	fontMax: number;
+	// #17: chrome font size — separate lever from the terminal font.
+	chromeFontSize: number;
+	chromeFontMin: number;
+	chromeFontMax: number;
 	onTheme: (v: Theme) => void;
 	onDensity: (v: Density) => void;
 	onFontSize: (v: number) => void;
+	onChromeFontSize: (v: number) => void;
 	// Notification toggles (#12 L5e). Each controls one surface
 	// independently; defaults are in App.tsx (in-app on, OS off).
 	notifyBadge: boolean;
@@ -57,9 +62,13 @@ export const SettingsModal = ({
 	fontSize,
 	fontMin,
 	fontMax,
+	chromeFontSize,
+	chromeFontMin,
+	chromeFontMax,
 	onTheme,
 	onDensity,
 	onFontSize,
+	onChromeFontSize,
 	notifyBadge,
 	notifyToast,
 	notifyUrgent,
@@ -198,6 +207,32 @@ export const SettingsModal = ({
 								className="sk-btn ghost"
 								onClick={() => onFontSize(Math.min(fontMax, fontSize + 1))}
 								disabled={fontSize >= fontMax}
+							>
+								+
+							</button>
+						</div>
+					</div>
+
+					<div className="sk-field">
+						<label>Chrome font size</label>
+						<div className="sk-help">
+							UI text — tabs, cards, the activity feed, the status bar. The terminal is unaffected.
+						</div>
+						<div className="sk-stepper">
+							<button
+								type="button"
+								className="sk-btn ghost"
+								onClick={() => onChromeFontSize(Math.max(chromeFontMin, chromeFontSize - 1))}
+								disabled={chromeFontSize <= chromeFontMin}
+							>
+								−
+							</button>
+							<span className="sk-stepper-value">{chromeFontSize} pt</span>
+							<button
+								type="button"
+								className="sk-btn ghost"
+								onClick={() => onChromeFontSize(Math.min(chromeFontMax, chromeFontSize + 1))}
+								disabled={chromeFontSize >= chromeFontMax}
 							>
 								+
 							</button>
