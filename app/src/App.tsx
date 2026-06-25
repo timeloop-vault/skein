@@ -2012,7 +2012,7 @@ export default function App() {
 					window.location.reload();
 				} else if (e.code === "KeyJ") {
 					cycleAlertedRoomRef.current(-1); // #67: prev alerted room
-				} else if (e.code === "Semicolon") {
+				} else if (e.code === "KeyL") {
 					cycleAlertedHarnessRef.current(-1); // #67: prev alerted harness
 				} else if (e.code === "Tab" || e.code === "ArrowLeft") {
 					cycleRoom(-1);
@@ -2045,7 +2045,7 @@ export default function App() {
 				case "KeyJ":
 					cycleAlertedRoomRef.current(1); // #67: next alerted room
 					break;
-				case "Semicolon":
+				case "KeyL":
 					cycleAlertedHarnessRef.current(1); // #67: next alerted harness
 					break;
 				case "Tab":
@@ -2443,13 +2443,13 @@ export default function App() {
 		paletteItems.push({
 			id: "cmd:next-alerted-harness",
 			label: `Jump to next alerted harness (${alertedHarnessCount})`,
-			hint: `${modLabel} ;`,
+			hint: `${modLabel} L`,
 			invoke: () => cycleAlertedHarness(1),
 		});
 		paletteItems.push({
 			id: "cmd:prev-alerted-harness",
 			label: `Jump to previous alerted harness (${alertedHarnessCount})`,
-			hint: `${modLabel} ⇧ ;`,
+			hint: `${modLabel} ⇧ L`,
 			invoke: () => cycleAlertedHarness(-1),
 		});
 	}
