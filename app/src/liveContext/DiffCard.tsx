@@ -139,7 +139,7 @@ export const DiffCardBody = ({
 							title={t.fullPath}
 							onClick={() => setManual(t.fullPath)}
 						>
-							<HChip kind={harnessKindOf(t.harnessId)} size={9} />
+							<HChip kind={harnessKindOf(t.harnessId)} />
 							<span>{t.file}</span>
 							{t.adds != null && <span className="delta-add">+{t.adds}</span>}
 							{t.dels != null && <span className="delta-del">−{t.dels}</span>}

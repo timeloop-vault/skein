@@ -43,7 +43,7 @@ export const PlanCardBody = ({
 				return (
 					<div className="lc-plan-group" key={g.harnessId}>
 						<div className="lc-plan-grouphead">
-							<HChip kind={harnessKindOf(g.harnessId)} size={10} />
+							<HChip kind={harnessKindOf(g.harnessId)} />
 							<span>{harnessNameOf(g.harnessId)}</span>
 							<span className="count">
 								{done}/{g.items.length}

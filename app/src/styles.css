@@ -36,6 +36,13 @@ body {
 	--warn: #d4a657;
 	--err: #c97163;
 	--waiting: #8a96c9;
+	/* #68 status palette — four separated hues, AA on --bg-0. Kept
+	   distinct from --ok/--warn/--err so diff/semantic colours are
+	   unaffected. The decisive move: waiting indigo → amber. */
+	--st-running: #6cb585;
+	--st-waiting: #e0ad48;
+	--st-idle: #82807a;
+	--st-error: #dd685a;
 	--diff-add: rgba(122, 163, 127, 0.18);
 	--diff-del: rgba(201, 113, 99, 0.16);
 	/* Live Context card surface (issue #80). */
@@ -57,6 +64,11 @@ body {
 	--warn: #a87a2c;
 	--err: #a64f3f;
 	--waiting: #5a6aa0;
+	/* #68 status palette (light). */
+	--st-running: #3f8a5a;
+	--st-waiting: #b07d1f;
+	--st-idle: #8a877e;
+	--st-error: #c0503f;
 	--diff-add: rgba(84, 127, 91, 0.14);
 	--diff-del: rgba(166, 79, 63, 0.12);
 	--bg-card: #ffffff;
@@ -66,16 +78,23 @@ body {
 	--row-h: 28px;
 	--pad-x: 12px;
 	--gap: 10px;
+	/* #68 indicator scale — one source of truth, density-aware, floored. */
+	--chip: 12px;
+	--dot: 7px;
 }
 .density-regular {
 	--row-h: 36px;
 	--pad-x: 14px;
 	--gap: 14px;
+	--chip: 13px;
+	--dot: 8px;
 }
 .density-comfy {
 	--row-h: 44px;
 	--pad-x: 18px;
 	--gap: 18px;
+	--chip: 15px;
+	--dot: 9px;
 }
 
 .sk-app {
@@ -362,10 +381,10 @@ body {
 }
 
 .tab-status {
-	width: 6px;
-	height: 6px;
+	width: var(--dot, 8px);
+	height: var(--dot, 8px);
 	border-radius: 50%;
-	flex: 0 0 6px;
+	flex: 0 0 var(--dot, 8px);
 }
 .tab-badge {
 	background: var(--accent);
@@ -396,7 +415,9 @@ body {
 	background: var(--bg-1);
 }
 
-/* Harness chips */
+/* Harness chips. #68: size driven by the density --chip token (one
+   scale, not five inline magic numbers), floored at 12px via the
+   density values. */
 .h-chip {
 	display: inline-flex;
 	align-items: center;
@@ -404,8 +425,21 @@ body {
 	font-family: var(--sk-mono);
 	font-weight: 700;
 	color: #fff;
-	border-radius: 3px;
+	width: var(--chip, 13px);
+	height: var(--chip, 13px);
+	font-size: calc(var(--chip, 13px) * 0.6);
+	border-radius: calc(var(--chip, 13px) / 4);
 	flex: 0 0 auto;
+}
+/* The two deliberate size exceptions, by context (not magic number):
+   the small harness glyphs under a room tab, and the big chip in the
+   harness pickers (add-harness picker + new-room kind cards). */
+.sk-tab .row-2 .h-chip {
+	--chip: calc(var(--dot) + 2px);
+}
+.sk-harness-card .h-chip,
+.sk-radio-card .h-chip {
+	--chip: 18px;
 }
 .h-claude {
 	background: #c96442;
@@ -420,14 +454,21 @@ body {
 	background: #8a7a4a;
 }
 
-/* Status dots */
+/* Status dots — #68: each state has a distinct hue AND a distinct
+   shape (carried entirely by box-shadow / border-radius, so the markup
+   is unchanged), so colour is never the only cue (colour-blind safety):
+   running → disc, waiting → target, idle → hollow ring, error/exited →
+   square ring. */
 .st-running {
-	background: var(--ok);
-	box-shadow: 0 0 6px var(--ok);
+	background: var(--st-running);
+	box-shadow: 0 0 6px color-mix(in srgb, var(--st-running) 70%, transparent);
 }
+/* waiting → amber "target": filled centre + a gap ring + an outer ring,
+   pulsing. The gap ring uses --bg-0 (the tab-strip / status-bar surface
+   these dots live on). */
 .st-waiting {
-	background: var(--waiting);
-	box-shadow: 0 0 6px var(--waiting);
+	background: var(--st-waiting);
+	box-shadow: 0 0 0 2px var(--bg-0), 0 0 0 3.5px var(--st-waiting);
 	animation: sk-pulse 1.6s ease-in-out infinite;
 }
 /* L2c-1: suppress the pulse on dots the user is *already looking at* —
@@ -442,16 +483,24 @@ body {
 .sk-statusbar > .seg:not(.sk-statusbar-urgent) .st-waiting {
 	animation: none;
 }
+/* #68: honour the OS reduced-motion setting (replaces the prototype's
+   manual toggle). */
+@media (prefers-reduced-motion: reduce) {
+	.st-waiting {
+		animation: none;
+	}
+}
+/* idle → hollow ring (was a near-invisible dark disc on --bg-0). */
 .st-idle {
-	background: var(--fg-3);
+	background: transparent;
+	box-shadow: inset 0 0 0 2px var(--st-idle);
 }
-.st-error {
-	background: var(--err);
-	box-shadow: 0 0 6px var(--err);
-}
+/* error / exited → square ring. */
+.st-error,
 .st-exited {
 	background: transparent;
-	border: 1px solid var(--fg-3);
+	border-radius: 2px;
+	box-shadow: inset 0 0 0 2px var(--st-error);
 }
 @keyframes sk-pulse {
 	0%,

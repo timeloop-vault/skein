@@ -88,7 +88,7 @@ export const Row = ({
 		style={onClick ? { cursor: "pointer" } : undefined}
 	>
 		<span className="time">{formatClock(timestampMs)}</span>
-		<span className="by">{harness && <HChip kind={harness} size={12} />}</span>
+		<span className="by">{harness && <HChip kind={harness} />}</span>
 		<span className="gist">
 			<span className="glyph" aria-hidden="true" style={GLYPH_STYLE}>
 				{glyph ?? GLYPH[kind] ?? "·"}

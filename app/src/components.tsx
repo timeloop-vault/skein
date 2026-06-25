@@ -1,6 +1,6 @@
 // Shared, low-level components used across the app.
 
-import type { CSSProperties, DragEvent } from "react";
+import type { DragEvent } from "react";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { Harness, HarnessKind, Room, Status } from "./types.ts";
 
@@ -23,23 +23,19 @@ export interface DragProps {
 	onDragEnd?: (e: DragEvent<HTMLDivElement>) => void;
 }
 
-export const HChip = ({ kind, size = 14 }: { kind: HarnessKind; size?: number }) => {
+// #68: size is owned by CSS (density --chip / --dot tokens + context
+// overrides in styles.css), not per-call-site numbers.
+export const HChip = ({ kind }: { kind: HarnessKind }) => {
 	const k = HARNESS_KINDS[kind];
-	const style: CSSProperties = {
-		width: size,
-		height: size,
-		fontSize: Math.round(size * 0.62),
-		borderRadius: Math.max(2, size / 4),
-	};
 	return (
-		<span className={`h-chip ${k.chip}`} style={style} title={k.name}>
+		<span className={`h-chip ${k.chip}`} title={k.name}>
 			{k.label}
 		</span>
 	);
 };
 
-export const StatusDot = ({ status, size = 6 }: { status: Status; size?: number }) => (
-	<span className={`tab-status st-${status}`} style={{ width: size, height: size }} />
+export const StatusDot = ({ status }: { status: Status }) => (
+	<span className={`tab-status st-${status}`} />
 );
 
 // ── Tabs / chrome ──────────────────────────────────────────────────
@@ -96,7 +92,7 @@ export const RoomTab = ({
 			)}
 			<span style={{ display: "flex", gap: 2 }}>
 				{r.harnesses.map((h) => (
-					<HChip key={h.id} kind={h.kind} size={9} />
+					<HChip key={h.id} kind={h.kind} />
 				))}
 			</span>
 		</div>
@@ -132,8 +128,8 @@ export const HarnessTab = ({
 		onDrop={onDrop}
 		onDragEnd={onDragEnd}
 	>
-		<StatusDot status={h.status} size={5} />
-		<HChip kind={h.kind} size={11} />
+		<StatusDot status={h.status} />
+		<HChip kind={h.kind} />
 		<span className="ht-name">{h.name}</span>
 		{closable && (
 			<span
@@ -158,7 +154,7 @@ export const HarnessPicker = ({ onPick }: { onPick: (kind: HarnessKind) => void 
 				(k) => (
 					<div key={k.id} className="sk-harness-card" onClick={() => onPick(k.id)}>
 						<div className="head">
-							<HChip kind={k.id} size={16} /> <span className="h-name">{k.name}</span>
+							<HChip kind={k.id} /> <span className="h-name">{k.name}</span>
 						</div>
 						<div className="h-desc">{k.desc}</div>
 					</div>
