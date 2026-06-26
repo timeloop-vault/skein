@@ -1161,6 +1161,10 @@ body {
 .sk-archived-row {
 	display: flex;
 	align-items: stretch;
+	/* #139: keep natural height — without this, a long list in the
+	   flex-column / max-height:50vh container shrinks every row to a
+	   sliver (clipped by overflow:hidden) instead of scrolling. */
+	flex-shrink: 0;
 	background: var(--bg-2);
 	border: 1px solid var(--line);
 	border-radius: 5px;
