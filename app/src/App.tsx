@@ -43,6 +43,7 @@ import {
 } from "./liveContext/index.ts";
 import { usePersistedState } from "./prefs.ts";
 import { isAppShortcut, isMac, modLabel } from "./shortcuts.ts";
+import { attachStatusPopover } from "./statusPopover.ts";
 import type { Density, Harness, HarnessKind, Room, Theme } from "./types.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
 
@@ -2107,6 +2108,10 @@ export default function App() {
 			void promise.then((un) => un());
 		};
 	}, []);
+
+	// #132: shared hover popover for status dots / harness chips (replaces
+	// the native title=). One delegated listener for the whole app.
+	useEffect(() => attachStatusPopover(), []);
 
 	// #120: the window has `dragDropEnabled: false` (so the in-webview
 	// harness-reorder DnD works, #26). The side effect is that a stray OS

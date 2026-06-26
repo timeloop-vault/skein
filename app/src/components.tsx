@@ -25,17 +25,21 @@ export interface DragProps {
 
 // #68: size is owned by CSS (density --chip / --dot tokens + context
 // overrides in styles.css), not per-call-site numbers.
+// #132: data-kind / data-status feed the shared hover popover
+// (statusPopover.ts), which replaces the native title= (slow, unstyled,
+// and it couldn't show state). aria-label keeps the info available to
+// screen readers.
 export const HChip = ({ kind }: { kind: HarnessKind }) => {
 	const k = HARNESS_KINDS[kind];
 	return (
-		<span className={`h-chip ${k.chip}`} title={k.name}>
+		<span className={`h-chip ${k.chip}`} data-kind={kind} aria-label={k.name}>
 			{k.label}
 		</span>
 	);
 };
 
 export const StatusDot = ({ status }: { status: Status }) => (
-	<span className={`tab-status st-${status}`} />
+	<span className={`tab-status st-${status}`} data-status={status} aria-label={status} />
 );
 
 // ── Tabs / chrome ──────────────────────────────────────────────────
@@ -61,7 +65,6 @@ export const RoomTab = ({
 	<div
 		className={`sk-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
 		onClick={onClick}
-		title={r.task}
 		draggable={draggable}
 		onDragStart={onDragStart}
 		onDragOver={onDragOver}
@@ -70,7 +73,12 @@ export const RoomTab = ({
 	>
 		<div className="row-1">
 			<StatusDot status={r.status} />
-			<span className="name">{r.name}</span>
+			{/* #132: task tooltip lives on the name, not the whole tab, so
+			    hovering a dot/chip shows only the status popover (not the
+			    native tooltip on top of it). */}
+			<span className="name" title={r.task}>
+				{r.name}
+			</span>
 			{r.badge > 0 && <span className="tab-badge">{r.badge}</span>}
 			<span
 				className="sk-tab-close"
