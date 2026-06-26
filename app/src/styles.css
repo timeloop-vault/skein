@@ -78,22 +78,25 @@ body {
 	--row-h: 28px;
 	--pad-x: 12px;
 	--gap: 10px;
-	/* #68 indicator scale — one source of truth, density-aware, floored. */
-	--chip: 12px;
+	/* #68/#137 indicator scale. Chips sit next to text labels, so they
+	   track the chrome font (--cfs) and Density just modulates the factor
+	   (factor = old-px ÷ 12, so the default look is unchanged). Status
+	   dots stay Density-only — they're abstract indicators, not text. */
+	--chip: calc(var(--cfs, 12px) * 1);
 	--dot: 7px;
 }
 .density-regular {
 	--row-h: 36px;
 	--pad-x: 14px;
 	--gap: 14px;
-	--chip: 13px;
+	--chip: calc(var(--cfs, 12px) * 1.0833);
 	--dot: 8px;
 }
 .density-comfy {
 	--row-h: 44px;
 	--pad-x: 18px;
 	--gap: 18px;
-	--chip: 15px;
+	--chip: calc(var(--cfs, 12px) * 1.25);
 	--dot: 9px;
 }
 
@@ -439,11 +442,14 @@ body {
    the small harness glyphs under a room tab, and the big chip in the
    harness pickers (add-harness picker + new-room kind cards). */
 .sk-tab .row-2 .h-chip {
-	--chip: calc(var(--dot) + 2px);
+	/* compact summary glyphs — smaller than a full chip but still track
+	   the chrome font (≈10px at the 12pt default). #137 */
+	--chip: calc(var(--cfs, 12px) * 0.83);
 }
 .sk-harness-card .h-chip,
 .sk-radio-card .h-chip {
-	--chip: 18px;
+	/* big picker chips (≈18px at 12pt). #137 */
+	--chip: calc(var(--cfs, 12px) * 1.5);
 }
 .h-claude {
 	background: #c96442;
