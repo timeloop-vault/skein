@@ -65,7 +65,6 @@ export const RoomTab = ({
 	<div
 		className={`sk-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
 		onClick={onClick}
-		title={r.task}
 		draggable={draggable}
 		onDragStart={onDragStart}
 		onDragOver={onDragOver}
@@ -74,7 +73,12 @@ export const RoomTab = ({
 	>
 		<div className="row-1">
 			<StatusDot status={r.status} />
-			<span className="name">{r.name}</span>
+			{/* #132: task tooltip lives on the name, not the whole tab, so
+			    hovering a dot/chip shows only the status popover (not the
+			    native tooltip on top of it). */}
+			<span className="name" title={r.task}>
+				{r.name}
+			</span>
 			{r.badge > 0 && <span className="tab-badge">{r.badge}</span>}
 			<span
 				className="sk-tab-close"
