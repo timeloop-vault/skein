@@ -29,10 +29,18 @@ export interface DragProps {
 // (statusPopover.ts), which replaces the native title= (slow, unstyled,
 // and it couldn't show state). aria-label keeps the info available to
 // screen readers.
-export const HChip = ({ kind }: { kind: HarnessKind }) => {
+export const HChip = ({ kind, harnessId }: { kind: HarnessKind; harnessId?: string }) => {
 	const k = HARNESS_KINDS[kind];
+	// #141: harnessId lets the popover read this harness's OWN live state
+	// (so a room-tab summary chip shows its real state, not the room
+	// aggregate). Omitted where there's no single harness behind the chip.
 	return (
-		<span className={`h-chip ${k.chip}`} data-kind={kind} aria-label={k.name}>
+		<span
+			className={`h-chip ${k.chip}`}
+			data-kind={kind}
+			data-harness-id={harnessId}
+			aria-label={k.name}
+		>
 			{k.label}
 		</span>
 	);
@@ -100,7 +108,7 @@ export const RoomTab = ({
 			)}
 			<span style={{ display: "flex", gap: 2 }}>
 				{r.harnesses.map((h) => (
-					<HChip key={h.id} kind={h.kind} />
+					<HChip key={h.id} kind={h.kind} harnessId={h.id} />
 				))}
 			</span>
 		</div>
@@ -137,7 +145,7 @@ export const HarnessTab = ({
 		onDragEnd={onDragEnd}
 	>
 		<StatusDot status={h.status} />
-		<HChip kind={h.kind} />
+		<HChip kind={h.kind} harnessId={h.id} />
 		<span className="ht-name">{h.name}</span>
 		{closable && (
 			<span

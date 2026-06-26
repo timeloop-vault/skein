@@ -12,10 +12,15 @@
 // `.sk-app` ancestor so it inherits the active theme tokens.
 
 import { HARNESS_KINDS } from "./data.tsx";
+import { activityToStatus, harnessActivity } from "./harnessActivity.ts";
 import type { HarnessKind } from "./types.ts";
 
 const TARGET_SEL = ".h-chip, .tab-status";
-const ROW_SEL = ".sk-harness-tab, .sk-tab, .lc-row, .sk-statusbar .seg";
+// Rows where a lone status dot describes the same harness as the row's
+// chip, so the dot can borrow that chip for its kind (harness tab, feed
+// row, status-bar seg). The room tab is excluded: its dot is the room
+// *aggregate* and the chip's state comes from the store, not the dot.
+const ROW_SEL = ".sk-harness-tab, .lc-row, .sk-statusbar .seg";
 const HOVER_DELAY_MS = 90;
 const EDGE = 8;
 
@@ -47,12 +52,18 @@ export function attachStatusPopover(): () => void {
 		if (!isChip && !isDot) return null;
 		let kind = isChip ? (el.dataset.kind ?? null) : null;
 		let status = isDot ? (el.dataset.status ?? null) : null;
-		const row = el.closest<HTMLElement>(ROW_SEL);
-		if (row) {
-			const chips = row.querySelectorAll<HTMLElement>(".h-chip");
-			const dots = row.querySelectorAll<HTMLElement>(".tab-status");
-			if (!kind && chips.length === 1) kind = chips[0]?.dataset.kind ?? null;
-			if (!status && dots.length === 1) status = dots[0]?.dataset.status ?? null;
+		// A chip knows its harness → read that harness's OWN live state from
+		// the store, so a room-tab summary chip shows its real state rather
+		// than borrowing the room's aggregate dot (#141).
+		if (isChip && el.dataset.harnessId) {
+			const a = harnessActivity.get(el.dataset.harnessId);
+			if (a) status = activityToStatus(a);
+		}
+		// A lone status dot borrows its row's chip for the kind (harness
+		// tab etc.); skipped for the room dot, which is an aggregate.
+		if (isDot && !kind) {
+			const chips = el.closest<HTMLElement>(ROW_SEL)?.querySelectorAll<HTMLElement>(".h-chip");
+			if (chips?.length === 1) kind = chips[0]?.dataset.kind ?? null;
 		}
 		return kind || status ? { kind, status } : null;
 	};
