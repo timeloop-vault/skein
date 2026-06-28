@@ -258,6 +258,35 @@ fn diff_modified_file_has_add_and_delete_lines() {
 }
 
 #[test]
+fn diff_strips_crlf_line_endings() {
+    // #147: libgit2 returns CRLF-terminated lines for files stored with
+    // CRLF (common on Windows). We trim the trailing `\r` along with the
+    // `\n` so a stray carriage return never leaks into the diff content
+    // the UI renders. Before the fix the content was "alpha\r".
+    let (_tmp, path) = init_repo();
+    fs::write(path.join("crlf.txt"), b"alpha\r\nbeta\r\n").unwrap();
+    let repo = Repo::open(&path).unwrap();
+    let diff = repo.diff_workdir().unwrap();
+    let f = diff
+        .iter()
+        .find(|f| f.path == "crlf.txt")
+        .expect("crlf.txt in diff");
+    let contents: Vec<&str> = f
+        .hunks
+        .iter()
+        .flat_map(|h| h.lines.iter())
+        .map(|l| l.content.as_str())
+        .collect();
+    assert!(
+        contents.iter().all(|c| !c.ends_with('\r')),
+        "diff line content must not retain a trailing CR, got: {contents:?}"
+    );
+    // The text itself is intact — only the CR/LF terminator is gone.
+    assert!(contents.contains(&"alpha"), "got: {contents:?}");
+    assert!(contents.contains(&"beta"), "got: {contents:?}");
+}
+
+#[test]
 fn diff_untracked_file_appears_as_all_add() {
     let (_tmp, path) = init_repo();
     fs::write(path.join("new.txt"), b"line one\nline two\n").unwrap();

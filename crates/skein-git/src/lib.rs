@@ -442,7 +442,7 @@ impl Repo {
                 let (hunk, line_count) = file_patch.hunk(h_idx)?;
                 let header = std::str::from_utf8(hunk.header())
                     .unwrap_or("")
-                    .trim_end_matches('\n')
+                    .trim_end_matches(['\r', '\n'])
                     .to_owned();
                 let mut lines = Vec::with_capacity(line_count);
                 for l_idx in 0..line_count {
@@ -458,7 +458,7 @@ impl Repo {
                     };
                     let content = std::str::from_utf8(line.content())
                         .unwrap_or("")
-                        .trim_end_matches('\n')
+                        .trim_end_matches(['\r', '\n'])
                         .to_owned();
                     lines.push(DiffLine {
                         kind: line_kind,
