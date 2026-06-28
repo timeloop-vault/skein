@@ -404,6 +404,13 @@ fn login_shell_path() -> Option<&'static str> {
 /// Idempotent: skips entries already present. Skips entries whose
 /// directory doesn't exist.
 fn augment_path(base: &str) -> String {
+    // `~/.local/bin` and `~/bin` are Unix conventions, and this builds a
+    // `:`-joined PATH — both wrong on Windows (which uses `;` and has no
+    // such convention). No-op there rather than mangle PATH (e.g. when
+    // Skein is launched from a shell that does set HOME, like Git Bash).
+    if cfg!(windows) {
+        return base.to_owned();
+    }
     let Ok(home) = std::env::var("HOME") else {
         return base.to_owned();
     };

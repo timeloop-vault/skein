@@ -583,13 +583,23 @@ fn default_shell() -> Vec<String> {
     }
 }
 
+/// User's home directory, cross-platform. Windows keeps it in
+/// `USERPROFILE`; Unix in `HOME`. `None` only in exotic environments
+/// where neither is set (some CI images / sandboxes). The single
+/// source of truth for "where does this tool keep its dotfiles" —
+/// reading `HOME` directly is wrong on Windows, where it's usually
+/// unset.
+pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
+    let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(key).map(std::path::PathBuf::from)
+}
+
 /// User's home directory as a path string. Used as the default cwd
 /// for newly-spawned harnesses until Phase 4 wires real worktrees.
 #[tauri::command]
 fn default_cwd() -> String {
-    let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-    std::env::var(key)
-        .ok()
+    home_dir()
+        .and_then(|p| p.to_str().map(str::to_owned))
         .or_else(|| {
             std::env::current_dir()
                 .ok()

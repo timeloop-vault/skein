@@ -88,23 +88,25 @@ impl ClaudeEventsError {
     }
 }
 
-/// Claude's path-encoding scheme: every `/` in the cwd becomes `-`.
+/// Claude's path-encoding scheme: each path separator in the cwd
+/// becomes `-`. On Unix that's just `/`; on Windows the backslash and
+/// the drive colon are encoded too (`C:\git\skein` → `C--git-skein`,
+/// `D:\` → `D--`, verified against real `~/.claude/projects` dirs).
 /// Documented and verified against 17 real project dirs in
 /// `docs/chapter-5-recon.md` §3. We use the encoded path to compute
 /// the JSONL file location directly — chapter 5 also pre-allocates
 /// the session uuid, so we never have to scan project dirs at
 /// attach time.
 fn encode_cwd(cwd: &str) -> String {
-    cwd.replace('/', "-")
+    cwd.replace(['/', '\\', ':'], "-")
 }
 
 /// `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`. Returns
-/// `None` when `HOME` isn't set (exotic environments) so the caller
-/// can no-op cleanly.
+/// `None` when the home dir can't be resolved (exotic environments)
+/// so the caller can no-op cleanly.
 fn session_jsonl_path(cwd: &str, session_id: &str) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
     Some(
-        PathBuf::from(home)
+        crate::home_dir()?
             .join(".claude")
             .join("projects")
             .join(encode_cwd(cwd))
@@ -1287,6 +1289,11 @@ mod tests {
         // Verified against real project dirs in chapter-5-recon §3.
         assert_eq!(encode_cwd("/Users/foo/bar"), "-Users-foo-bar");
         assert_eq!(encode_cwd("/foo-bar/baz"), "-foo-bar-baz");
+        // Windows: backslash separators and the drive colon also encode
+        // to `-`. Verified against real `~/.claude/projects` dirs (#145).
+        assert_eq!(encode_cwd("C:\\git\\skein"), "C--git-skein");
+        assert_eq!(encode_cwd("C:\\Users\\stefa"), "C--Users-stefa");
+        assert_eq!(encode_cwd("D:\\"), "D--");
     }
 
     // ── action persistence + backfill (issue #80) ────────────────
