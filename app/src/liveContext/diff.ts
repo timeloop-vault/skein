@@ -229,5 +229,13 @@ export function normalizeStructuredPatch(raw: unknown[]): DiffHunk[] {
 /// git paths are repo-relative; harness paths are absolute, so match by
 /// suffix (a leading "/" guards against partial-segment matches).
 export function matchGitFile(files: FileDiff[], fullPath: string): FileDiff | undefined {
-	return files.find((f) => fullPath === f.path || fullPath.endsWith(`/${f.path}`));
+	// Normalize separators before matching: git paths are forward-slash
+	// repo-relative, but on Windows the harness's absolute path uses
+	// backslashes, so the suffix match would never hit (#154).
+	const norm = (p: string) => p.replace(/\\/g, "/");
+	const full = norm(fullPath);
+	return files.find((f) => {
+		const fp = norm(f.path);
+		return full === fp || full.endsWith(`/${fp}`);
+	});
 }
