@@ -42,7 +42,7 @@ import {
 	parsePayload,
 } from "./liveContext/index.ts";
 import { usePersistedState } from "./prefs.ts";
-import { isAppShortcut, isMac, modLabel } from "./shortcuts.ts";
+import { hints, isMac, matchShortcut, modLabel } from "./shortcuts.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
 import type { Density, Harness, HarnessKind, Room, Theme } from "./types.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
@@ -811,23 +811,23 @@ const EmptyState = ({ onNew, archivedCount, onReopen }: EmptyStateProps) => (
 		)}
 		<div className="hint-list">
 			<div className="row">
-				<span className="kbd">{modLabel} N</span>
+				<span className="kbd">{hints.newRoom}</span>
 				<span>New room</span>
 			</div>
 			<div className="row">
-				<span className="kbd">{modLabel} ⇧ H</span>
+				<span className="kbd">{hints.addHarness}</span>
 				<span>Add harness to current room</span>
 			</div>
 			<div className="row">
-				<span className="kbd">{modLabel} Tab</span>
-				<span>Next room (⇧ for previous, 1-9 for nth)</span>
+				<span className="kbd">{hints.nextRoom}</span>
+				<span>{hints.roomNavDesc}</span>
 			</div>
 			<div className="row">
-				<span className="kbd">{modLabel} →</span>
-				<span>Next harness (⌘ ⇧ → for next room, ⌘ ← / ⌘ ⇧ ← for previous)</span>
+				<span className="kbd">{hints.nextHarness}</span>
+				<span>{hints.harnessNavDesc}</span>
 			</div>
 			<div className="row">
-				<span className="kbd">{modLabel} W</span>
+				<span className="kbd">{hints.closeRoom}</span>
 				<span>Close active room</span>
 			</div>
 		</div>
@@ -2024,73 +2024,68 @@ export default function App() {
 		};
 
 		const onKey = (e: KeyboardEvent) => {
-			if (!isAppShortcut(e)) return;
+			const match = matchShortcut(e);
+			if (!match) return;
 			e.preventDefault();
 
 			const active = activeRoomIdRef.current;
-
-			// Mod+Shift combos
-			if (e.shiftKey) {
-				if (e.code === "KeyH") {
+			switch (match.action) {
+				case "newRoom":
+					setShowNewRoom(true);
+					break;
+				case "closeRoom":
+					if (active) closeRoomRef.current(active);
+					break;
+				case "palette":
+					setShowPalette(true);
+					break;
+				case "settings":
+					setShowSettings(true);
+					break;
+				case "addHarness":
 					if (active) addHarnessRef.current(active);
-				} else if (e.code === "KeyR") {
+					break;
+				case "reloadWindow":
 					// #121: recover from a wedged webview (and the #120 black
 					// screen on older builds). Rust-side PTYs survive the
 					// reload; boot re-hydrates and resumes.
 					window.location.reload();
-				} else if (e.code === "KeyJ") {
-					cycleAlertedRoomRef.current(-1); // #67: prev alerted room
-				} else if (e.code === "KeyL") {
-					cycleAlertedHarnessRef.current(-1); // #67: prev alerted harness
-				} else if (e.code === "Tab" || e.code === "ArrowLeft") {
+					break;
+				case "nextRoom":
+					cycleRoom(1);
+					break;
+				case "prevRoom":
 					cycleRoom(-1);
-				} else if (e.code === "ArrowRight") {
-					cycleRoom(1);
-				}
-				return;
-			}
-
-			// Mod-only combos
-			switch (e.code) {
-				case "Equal":
-					setFontSize((s) => Math.min(FONT_MAX, s + 1));
 					break;
-				case "Minus":
-					setFontSize((s) => Math.max(FONT_MIN, s - 1));
-					break;
-				case "KeyN":
-					setShowNewRoom(true);
-					break;
-				case "KeyW":
-					if (active) closeRoomRef.current(active);
-					break;
-				case "KeyK":
-					setShowPalette(true);
-					break;
-				case "Comma":
-					setShowSettings(true);
-					break;
-				case "KeyJ":
-					cycleAlertedRoomRef.current(1); // #67: next alerted room
-					break;
-				case "KeyL":
-					cycleAlertedHarnessRef.current(1); // #67: next alerted harness
-					break;
-				case "Tab":
-					cycleRoom(1);
-					break;
-				case "ArrowLeft":
-					cycleHarness(-1);
-					break;
-				case "ArrowRight":
+				case "nextHarness":
 					cycleHarness(1);
 					break;
-				default:
-					if (/^Digit[1-9]$/.test(e.code)) {
-						const n = Number.parseInt(e.code.slice(5), 10) - 1;
-						const target = activeRoomsRef.current[n];
-						if (target) setActiveRoomId(target.id);
-					}
+				case "prevHarness":
+					cycleHarness(-1);
+					break;
+				case "nextAlertedRoom":
+					cycleAlertedRoomRef.current(1); // #67
+					break;
+				case "prevAlertedRoom":
+					cycleAlertedRoomRef.current(-1); // #67
+					break;
+				case "nextAlertedHarness":
+					cycleAlertedHarnessRef.current(1); // #67
+					break;
+				case "prevAlertedHarness":
+					cycleAlertedHarnessRef.current(-1); // #67
+					break;
+				case "fontInc":
+					setFontSize((s) => Math.min(FONT_MAX, s + 1));
+					break;
+				case "fontDec":
+					setFontSize((s) => Math.max(FONT_MIN, s - 1));
+					break;
+				case "jumpRoom": {
+					const target = activeRoomsRef.current[match.roomIndex ?? 0];
+					if (target) setActiveRoomId(target.id);
+					break;
+				}
 			}
 		};
 
@@ -2415,7 +2410,7 @@ export default function App() {
 	paletteItems.push({
 		id: "cmd:new-room",
 		label: "New room",
-		hint: `${modLabel} N`,
+		hint: hints.newRoom,
 		invoke: () => setShowNewRoom(true),
 	});
 	if (archivedRooms.length > 0) {
@@ -2429,13 +2424,13 @@ export default function App() {
 		paletteItems.push({
 			id: "cmd:add-harness",
 			label: "Add harness to active room",
-			hint: `${modLabel} ⇧ H`,
+			hint: hints.addHarness,
 			invoke: () => addHarness(activeRoomId),
 		});
 		paletteItems.push({
 			id: "cmd:close-room",
 			label: "Close active room",
-			hint: `${modLabel} W`,
+			hint: hints.closeRoom,
 			invoke: () => closeRoom(activeRoomId),
 		});
 	}
@@ -2447,7 +2442,7 @@ export default function App() {
 	paletteItems.push({
 		id: "cmd:reload-window",
 		label: "Reload window",
-		hint: `${modLabel} ⇧ R`,
+		hint: hints.reload,
 		invoke: () => window.location.reload(),
 	});
 	// #67: inbox navigation — only surfaced when something is actually
@@ -2461,13 +2456,13 @@ export default function App() {
 		paletteItems.push({
 			id: "cmd:next-alerted-room",
 			label: `Jump to next alerted room (${otherAlertedRooms.length})`,
-			hint: `${modLabel} J`,
+			hint: hints.nextAlertedRoom,
 			invoke: () => cycleAlertedRoom(1),
 		});
 		paletteItems.push({
 			id: "cmd:prev-alerted-room",
 			label: `Jump to previous alerted room (${otherAlertedRooms.length})`,
-			hint: `${modLabel} ⇧ J`,
+			hint: hints.prevAlertedRoom,
 			invoke: () => cycleAlertedRoom(-1),
 		});
 	}
@@ -2479,13 +2474,13 @@ export default function App() {
 		paletteItems.push({
 			id: "cmd:next-alerted-harness",
 			label: `Jump to next alerted harness (${alertedHarnessCount})`,
-			hint: `${modLabel} L`,
+			hint: hints.nextAlertedHarness,
 			invoke: () => cycleAlertedHarness(1),
 		});
 		paletteItems.push({
 			id: "cmd:prev-alerted-harness",
 			label: `Jump to previous alerted harness (${alertedHarnessCount})`,
-			hint: `${modLabel} ⇧ L`,
+			hint: hints.prevAlertedHarness,
 			invoke: () => cycleAlertedHarness(-1),
 		});
 	}
