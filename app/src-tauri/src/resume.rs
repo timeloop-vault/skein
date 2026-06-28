@@ -8,13 +8,12 @@ use std::path::PathBuf;
 
 use rusqlite::{Connection, OpenFlags};
 
-/// Path to opencode's on-disk session db. Returns `None` when `HOME`
-/// isn't set — exotic environments (some CI / sandboxes) — in which
-/// case the caller treats it the same as "db doesn't exist."
+/// Path to opencode's on-disk session db. Returns `None` when the home
+/// dir can't be resolved — exotic environments (some CI / sandboxes) —
+/// in which case the caller treats it the same as "db doesn't exist."
 pub(crate) fn opencode_db_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| {
-        PathBuf::from(home)
-            .join(".local")
+    crate::home_dir().map(|home| {
+        home.join(".local")
             .join("share")
             .join("opencode")
             .join("opencode.db")
@@ -83,10 +82,10 @@ pub fn opencode_session_exists(id: String) -> Result<bool, String> {
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub fn claude_session_exists(id: String) -> bool {
-    let Some(home) = std::env::var_os("HOME") else {
+    let Some(home) = crate::home_dir() else {
         return false;
     };
-    let projects_dir = PathBuf::from(home).join(".claude").join("projects");
+    let projects_dir = home.join(".claude").join("projects");
     let filename = format!("{id}.jsonl");
     let Ok(entries) = std::fs::read_dir(&projects_dir) else {
         return false;
