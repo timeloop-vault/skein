@@ -1,37 +1,49 @@
 // Centralized list of App-owned keyboard shortcuts.
 //
-// `matchShortcut` is the single source of truth: the window-level
-// keydown listener (App.tsx) dispatches on the action it returns, and
-// xterm's per-terminal custom key handler (LiveTerminal.tsx) uses
-// `isAppShortcut` (a thin wrapper) to decide whether to swallow the
-// key so the byte never reaches the PTY (otherwise Alt+W would also
-// delete-word in the shell, Alt+1..9 would echo, etc).
+// `matchShortcut` is the single source of truth: the window-level keydown
+// listener (App.tsx) dispatches on the action it returns, and xterm's
+// per-terminal handler (LiveTerminal.tsx) uses `isAppShortcut` (a thin
+// wrapper) to decide whether to swallow the key so the byte never reaches
+// the PTY (otherwise Alt+W would delete-word in the shell, Alt+1..9 would
+// echo, etc).
 //
-// Primary modifier:
-//   - macOS:        ⌘ (Cmd). Frees ⌃ for terminal control codes the
-//                   way Mac users expect (Terminal.app, iTerm, VS Code).
-//   - Windows/Linux: Alt. Sits where ⌘ does for finger parity (#151),
-//                   instead of a direct ⌘→Ctrl port that put everything
-//                   on the pinky and shadowed terminal control codes
-//                   (Ctrl+W/K/L/N). The mirror cost is that Alt+<letter>
-//                   now shadows the terminal's Meta keys — a deliberate
-//                   trade until user-customizable bindings (#150).
+// The bindings live in ONE platform-agnostic table (`BINDINGS`), written
+// in terms of *logical* modifiers. Only the per-OS `SCHEME` below changes
+// what those logical modifiers resolve to:
+//   - primary  — the main app modifier: ⌘ on macOS, Alt on Windows/Linux.
+//                ⌘ keeps ⌃ free for terminal control codes; Alt sits where
+//                ⌘ does for finger parity (#151) instead of a ⌘→Ctrl port
+//                that shadowed Ctrl+W/K/L/N.
+//   - roomAxis — the secondary modifier that selects room (vs harness)
+//                arrow nav: ⇧ on macOS, Ctrl on Windows/Linux.
+//   - tabRooms — whether Tab / Shift+Tab cycle rooms (off on Windows/Linux
+//                where Alt+Tab is OS-reserved).
 //
-// The two schemes diverge in structure, not just the modifier key, so
-// they're matched by separate per-platform functions below.
-//
-// e.code is layout-independent for letters/digits, so it works the same
-// on US, Swedish, German, etc.
+// e.code is layout-independent for letters/digits, so it works the same on
+// US, Swedish, German, etc.
 
 export const isMac =
 	typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("mac");
 
-// Secondary modifier for ROOM-navigation arrows on Windows/Linux
-// (harness arrows are plain Alt). Alt+Ctrl per the chosen scheme (#151).
-// Flip to "shift" if Alt+Ctrl+Arrow collides with AltGr (= Ctrl+Alt on
-// Swedish/European layouts) or the Intel GPU screen-rotate hotkey on
-// your machine — the hint labels track this constant automatically.
+// Secondary modifier for ROOM-navigation arrows on Windows/Linux (harness
+// arrows are plain Alt). Alt+Ctrl per the chosen scheme (#151). Flip to
+// "shift" if Alt+Ctrl+Arrow collides with AltGr (= Ctrl+Alt on Swedish/
+// European layouts) or the Intel GPU screen-rotate hotkey — SCHEME and the
+// hint labels both follow this constant automatically.
 const WIN_ROOM_ARROW_MOD: "ctrl" | "shift" = "ctrl";
+
+interface Scheme {
+	/** Main app modifier. */
+	primary: "meta" | "alt";
+	/** Secondary modifier that selects room (vs harness) arrow navigation. */
+	roomAxis: "ctrl" | "shift";
+	/** Whether Tab / Shift+Tab cycle rooms (Alt+Tab is OS-reserved on Win). */
+	tabRooms: boolean;
+}
+
+const SCHEME: Scheme = isMac
+	? { primary: "meta", roomAxis: "shift", tabRooms: true }
+	: { primary: "alt", roomAxis: WIN_ROOM_ARROW_MOD, tabRooms: false };
 
 /** Glyph for hint copy: "⌘" on macOS, "Alt" on Windows/Linux. */
 export const modLabel = isMac ? "⌘" : "Alt";
@@ -61,133 +73,77 @@ export interface ShortcutMatch {
 	roomIndex?: number;
 }
 
-const digitRoomIndex = (code: string): number | null =>
-	/^Digit[1-9]$/.test(code) ? Number.parseInt(code.slice(5), 10) - 1 : null;
-
-/** macOS scheme: ⌘ primary, ⇧ for the secondary (room) axis. Unchanged. */
-function matchMac(e: KeyboardEvent): ShortcutMatch | null {
-	if (!e.metaKey || e.ctrlKey || e.altKey) return null;
-
-	if (e.shiftKey) {
-		switch (e.code) {
-			case "KeyH":
-				return { action: "addHarness" };
-			case "KeyR":
-				return { action: "reloadWindow" };
-			case "KeyJ":
-				return { action: "prevAlertedRoom" };
-			case "KeyL":
-				return { action: "prevAlertedHarness" };
-			case "Tab":
-			case "ArrowLeft":
-				return { action: "prevRoom" };
-			case "ArrowRight":
-				return { action: "nextRoom" };
-			default:
-				return null;
-		}
-	}
-
-	switch (e.code) {
-		case "KeyN":
-			return { action: "newRoom" };
-		case "KeyW":
-			return { action: "closeRoom" };
-		case "KeyK":
-			return { action: "palette" };
-		case "Comma":
-			return { action: "settings" };
-		case "KeyJ":
-			return { action: "nextAlertedRoom" };
-		case "KeyL":
-			return { action: "nextAlertedHarness" };
-		case "Tab":
-			return { action: "nextRoom" };
-		case "ArrowLeft":
-			return { action: "prevHarness" };
-		case "ArrowRight":
-			return { action: "nextHarness" };
-		case "Equal":
-			return { action: "fontInc" };
-		case "Minus":
-			return { action: "fontDec" };
-		default: {
-			const idx = digitRoomIndex(e.code);
-			return idx === null ? null : { action: "jumpRoom", roomIndex: idx };
-		}
-	}
+// One binding. `primary` is always required; `shift` and `roomAxis` are
+// optional extra modifiers (roomAxis resolves to SCHEME.roomAxis's key).
+interface Binding {
+	code: string;
+	shift?: boolean;
+	roomAxis?: boolean;
+	action: ShortcutAction;
 }
 
-/**
- * Windows/Linux scheme: Alt primary. Harness arrows are plain Alt;
- * room arrows are Alt + the secondary modifier (`WIN_ROOM_ARROW_MOD`).
- * Alt+Tab is OS-reserved, so room cycling is arrows + Alt+digits only.
- */
-function matchWin(e: KeyboardEvent): ShortcutMatch | null {
-	if (!e.altKey || e.metaKey) return null;
+const BINDINGS: Binding[] = [
+	// Primary-only actions.
+	{ code: "KeyN", action: "newRoom" },
+	{ code: "KeyW", action: "closeRoom" },
+	{ code: "KeyK", action: "palette" },
+	{ code: "Comma", action: "settings" },
+	{ code: "KeyJ", action: "nextAlertedRoom" },
+	{ code: "KeyL", action: "nextAlertedHarness" },
+	{ code: "Equal", action: "fontInc" },
+	{ code: "Minus", action: "fontDec" },
+	// Primary + Shift.
+	{ code: "KeyH", shift: true, action: "addHarness" },
+	{ code: "KeyR", shift: true, action: "reloadWindow" },
+	{ code: "KeyJ", shift: true, action: "prevAlertedRoom" },
+	{ code: "KeyL", shift: true, action: "prevAlertedHarness" },
+	// Harness nav: primary + arrow.
+	{ code: "ArrowLeft", action: "prevHarness" },
+	{ code: "ArrowRight", action: "nextHarness" },
+	// Room nav: primary + roomAxis + arrow.
+	{ code: "ArrowLeft", roomAxis: true, action: "prevRoom" },
+	{ code: "ArrowRight", roomAxis: true, action: "nextRoom" },
+	// Room nav via Tab, where it's not OS-reserved.
+	...(SCHEME.tabRooms
+		? ([
+				{ code: "Tab", action: "nextRoom" },
+				{ code: "Tab", shift: true, action: "prevRoom" },
+			] as Binding[])
+		: []),
+];
 
-	// Room arrows live on the secondary axis.
-	const roomMod = WIN_ROOM_ARROW_MOD === "ctrl" ? e.ctrlKey : e.shiftKey;
-	const otherMod = WIN_ROOM_ARROW_MOD === "ctrl" ? e.shiftKey : e.ctrlKey;
-	if ((e.code === "ArrowLeft" || e.code === "ArrowRight") && roomMod && !otherMod) {
-		return { action: e.code === "ArrowLeft" ? "prevRoom" : "nextRoom" };
-	}
-	// Alt+Ctrl is otherwise unbound (reserved for the room axis above).
-	if (e.ctrlKey) return null;
-
-	if (e.shiftKey) {
-		switch (e.code) {
-			case "KeyH":
-				return { action: "addHarness" };
-			case "KeyR":
-				return { action: "reloadWindow" };
-			case "KeyJ":
-				return { action: "prevAlertedRoom" };
-			case "KeyL":
-				return { action: "prevAlertedHarness" };
-			default:
-				return null;
-		}
-	}
-
-	switch (e.code) {
-		case "KeyN":
-			return { action: "newRoom" };
-		case "KeyW":
-			return { action: "closeRoom" };
-		case "KeyK":
-			return { action: "palette" };
-		case "Comma":
-			return { action: "settings" };
-		case "KeyJ":
-			return { action: "nextAlertedRoom" };
-		case "KeyL":
-			return { action: "nextAlertedHarness" };
-		case "ArrowLeft":
-			return { action: "prevHarness" };
-		case "ArrowRight":
-			return { action: "nextHarness" };
-		case "Equal":
-			return { action: "fontInc" };
-		case "Minus":
-			return { action: "fontDec" };
-		default: {
-			const idx = digitRoomIndex(e.code);
-			return idx === null ? null : { action: "jumpRoom", roomIndex: idx };
-		}
-	}
-}
+/** Physical Shift state a binding requires (roomAxis folds in when it's ⇧). */
+const wantsShift = (b: Binding): boolean =>
+	(b.shift ?? false) || (!!b.roomAxis && SCHEME.roomAxis === "shift");
+/** Physical Ctrl state a binding requires (only when roomAxis is Ctrl). */
+const wantsCtrl = (b: Binding): boolean => !!b.roomAxis && SCHEME.roomAxis === "ctrl";
 
 /** The app action a keydown maps to, or `null` if it isn't a shortcut. */
-export const matchShortcut = (e: KeyboardEvent): ShortcutMatch | null =>
-	isMac ? matchMac(e) : matchWin(e);
+export const matchShortcut = (e: KeyboardEvent): ShortcutMatch | null => {
+	const primaryHeld = SCHEME.primary === "meta" ? e.metaKey : e.altKey;
+	const wrongPrimary = SCHEME.primary === "meta" ? e.altKey : e.metaKey;
+	if (!primaryHeld || wrongPrimary) return null;
+
+	// Jump to room N: primary + digit, no other modifiers.
+	if (!e.shiftKey && !e.ctrlKey) {
+		const digit = /^Digit([1-9])$/.exec(e.code);
+		if (digit?.[1]) return { action: "jumpRoom", roomIndex: Number(digit[1]) - 1 };
+	}
+
+	for (const b of BINDINGS) {
+		if (b.code === e.code && wantsShift(b) === e.shiftKey && wantsCtrl(b) === e.ctrlKey) {
+			return { action: b.action };
+		}
+	}
+	return null;
+};
 
 /** True when the event is a reserved app shortcut (xterm passthrough gate). */
 export const isAppShortcut = (e: KeyboardEvent): boolean => matchShortcut(e) !== null;
 
-// Human-readable hint glyphs, platform-aware. `roomSecGlyph` tracks
-// WIN_ROOM_ARROW_MOD so the room-nav hints stay correct if it's flipped.
-const roomSecGlyph = WIN_ROOM_ARROW_MOD === "ctrl" ? "Ctrl" : "⇧";
+// Human-readable hint glyphs, platform-aware — derived from the same SCHEME
+// so labels can't drift from the matcher.
+const roomSecGlyph = SCHEME.roomAxis === "ctrl" ? "Ctrl" : "⇧";
 
 export const hints = {
 	newRoom: `${modLabel} N`,
@@ -199,8 +155,8 @@ export const hints = {
 	nextAlertedHarness: `${modLabel} L`,
 	prevAlertedHarness: `${modLabel} ⇧ L`,
 	nextHarness: `${modLabel} →`,
-	nextRoom: isMac ? `${modLabel} Tab` : `${modLabel} ${roomSecGlyph} →`,
-	roomNavDesc: isMac
+	nextRoom: SCHEME.tabRooms ? `${modLabel} Tab` : `${modLabel} ${roomSecGlyph} →`,
+	roomNavDesc: SCHEME.tabRooms
 		? "Next room (⇧ for previous, 1-9 for nth)"
 		: `Next room (${modLabel} ${roomSecGlyph} ← previous, ${modLabel} 1-9 for nth)`,
 	harnessNavDesc: isMac
