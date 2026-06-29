@@ -1310,12 +1310,43 @@ export default function App() {
 		}
 	};
 
-	const reopenRoom = (id: string) => {
+	const reopenRoom = async (id: string) => {
+		// #153: re-mounting a room re-spawns its harnesses, so their cmds
+		// must be in resume form first. A harness created *this* session
+		// still carries its fresh-spawn cmd (`claude --session-id <uuid>`),
+		// and re-running that against an already-existing session makes
+		// Claude reject it with "Session ID is already in use". Mirror the
+		// boot resume path (the hydrate effect above): rewrite each cmd via
+		// resumeCmd — idempotent on cmds already in resume form — and
+		// pre-allocate fresh embedded-server ports for opencode harnesses.
+		const room = roomsRef.current.find((r) => r.id === id);
+		const portMap = new Map<string, number>();
+		if (room) {
+			await Promise.all(
+				room.harnesses
+					.filter((h) => h.kind === "opencode" && h.cmd)
+					.map(async (h) => {
+						try {
+							portMap.set(h.id, await invoke<number>("pick_free_port"));
+						} catch (err) {
+							console.warn(`[skein] pick_free_port failed for ${h.id} on reopen`, err);
+						}
+					}),
+			);
+			if (portMap.size > 0) {
+				setOpencodePorts((prev) => new Map([...prev, ...portMap]));
+			}
+		}
 		setRooms((prev) =>
 			prev.map((r) => {
 				if (r.id !== id) return r;
 				const { archived, ...rest } = r;
-				return rest;
+				return {
+					...rest,
+					harnesses: rest.harnesses.map((h) =>
+						h.cmd ? { ...h, cmd: resumeCmd(h, portMap.get(h.id)) } : h,
+					),
+				};
 			}),
 		);
 		setActiveRoomId(id);
