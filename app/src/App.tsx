@@ -1768,14 +1768,13 @@ export default function App() {
 			// gone" when they come back. Also skip when the badge
 			// surface is disabled in Settings (L5e).
 			//
-			// Coalesce window (#62/#64): a burst of badge-worthy
-			// transitions within BADGE_COALESCE_MS only bumps once, so a
-			// Claude JSONL replay or shell redraw-chatter can't pile up
-			// 31 phantom badges. The first badge on a clean harness
-			// (pending 0) always shows; genuine activity spaced past the
-			// window still increments. Record the time on every
-			// badge-worthy transition (skipped or not) so continuous
-			// sub-window chatter never crosses the window.
+			// pendingNotifications is a capped boolean (#159): 0 or 1, so
+			// no transition can push it past 1 (it previously accumulated
+			// unbounded — a room hit 38). The coalesce window (#62/#64)
+			// additionally skips redundant state updates when a burst of
+			// badge-worthy transitions lands within BADGE_COALESCE_MS.
+			// Record the time on every badge-worthy transition (skipped or
+			// not) so continuous sub-window chatter never re-triggers a set.
 			const nowMs = Date.now();
 			const curPending =
 				owningRoom?.harnesses.find((h) => h.id === harnessId)?.pendingNotifications ?? 0;
@@ -1789,9 +1788,7 @@ export default function App() {
 						return {
 							...r,
 							harnesses: r.harnesses.map((h) =>
-								h.id === harnessId
-									? { ...h, pendingNotifications: (h.pendingNotifications ?? 0) + 1 }
-									: h,
+								h.id === harnessId ? { ...h, pendingNotifications: 1 } : h,
 							),
 						};
 					}),
@@ -1880,9 +1877,7 @@ export default function App() {
 						return {
 							...r,
 							harnesses: r.harnesses.map((h) =>
-								h.id === a.harnessId
-									? { ...h, pendingNotifications: (h.pendingNotifications ?? 0) + 1 }
-									: h,
+								h.id === a.harnessId ? { ...h, pendingNotifications: 1 } : h,
 							),
 						};
 					}),

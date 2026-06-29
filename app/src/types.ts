@@ -33,12 +33,15 @@ export interface Harness {
 	// trick missed for shell harnesses (#53). Undefined = 0; needn't reset
 	// across restarts (it only has to *change* on respawn).
 	spawnGen?: number;
-	// Count of attention-worthy transitions (working → idle/exited)
-	// accumulated for this harness while it was *not* the harness
-	// the user was viewing. Cleared the moment the harness becomes
-	// the active harness in the active room. Room.badge is the sum
-	// across harnesses (derived at render time). Persisted to sqlite
-	// so badges survive a Skein restart — they represent "things
+	// Whether this harness has attention-worthy updates (working →
+	// idle/exited/waiting, or an API error) that happened while it was
+	// *not* the harness the user was viewing. Capped at 1 — a boolean
+	// "has unviewed updates", not a running count (#159): the magnitude
+	// was never used meaningfully and accumulated unbounded over a long
+	// session. Cleared the moment the harness becomes the active harness
+	// in the active room. Room.badge sums across harnesses (derived at
+	// render time) = number of harnesses needing attention. Persisted to
+	// sqlite so badges survive a Skein restart — they represent "things
 	// you haven't looked at yet", and a restart doesn't change that.
 	// Epic #50 L5a.
 	pendingNotifications?: number;
