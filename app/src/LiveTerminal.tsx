@@ -291,7 +291,22 @@ export const LiveTerminal = ({
 				: e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
 			if (copyCombo && e.code === "KeyC") {
 				const sel = term.getSelection();
-				if (sel) void writeText(sel);
+				if (sel) {
+					// #158: the write is async and WebView2's clipboard can
+					// reject (timing / secure-context); don't swallow it.
+					void writeText(sel).catch((err: unknown) => {
+						console.warn("[skein] clipboard copy failed:", err);
+					});
+				} else {
+					// Empty selection — or it didn't register. On an alt-screen
+					// TUI (Claude Code / opencode) xterm's selection can come
+					// back empty even when text looks selected; surface it so
+					// the failure is diagnosable rather than silent (#158).
+					const altScreen = term.buffer.active.type === "alternate";
+					console.warn(
+						`[skein] copy: nothing selected${altScreen ? " (alt-screen TUI — selection may be lossy)" : ""}`,
+					);
+				}
 				// Suppress xterm's default handling either way — sending the
 				// raw modifier byte sequence to the PTY is rarely useful.
 				return false;
