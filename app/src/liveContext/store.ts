@@ -47,10 +47,12 @@ export interface HarnessAction {
 export const ACTION_EVENT = "harness-action";
 
 /// Upper bound on the initial backfill load (newest-N by timestamp).
-/// Recon-scale rooms can have ≥6k rows; virtualization + a larger or
-/// paged load is deferred to D2g, so until then the backfill banner's
-/// window describes the newest 5000, not necessarily the room's start.
-const BACKFILL_LIMIT = 5000;
+/// Kept modest (#165): every active room's Live Context stays mounted,
+/// so loading thousands of rows per room costs memory, the feed
+/// transform, and a Virtuoso re-measure when a heavy room is switched
+/// to. 500 recent rows is plenty for "what's happening"; lazy-loading
+/// older history on scroll-up is the proper long-term fix (follow-up).
+const BACKFILL_LIMIT = 500;
 
 /// Insert `incoming` into `sorted` (ascending by id), skipping ids
 /// already present. Returns a new array; never mutates the input.
@@ -59,6 +61,14 @@ function mergeById(sorted: HarnessAction[], incoming: HarnessAction[]): HarnessA
 	const seen = new Set(sorted.map((a) => a.id));
 	const fresh = incoming.filter((a) => !seen.has(a.id));
 	if (fresh.length === 0) return sorted;
+	fresh.sort((a, b) => a.id - b.id);
+	// Fast path (#165): live rows arrive newest-last with monotonic ids,
+	// so when every fresh row sorts after the current tail we can append
+	// without re-sorting the whole array — the dominant cost for a long,
+	// actively-streaming feed.
+	const tail = sorted[sorted.length - 1];
+	const head = fresh[0];
+	if (head && (!tail || head.id > tail.id)) return [...sorted, ...fresh];
 	const merged = [...sorted, ...fresh];
 	merged.sort((a, b) => a.id - b.id);
 	return merged;
