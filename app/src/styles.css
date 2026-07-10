@@ -138,6 +138,71 @@ body {
 	flex: 1;
 	min-height: 0;
 }
+/* #167: boot-load failure card (autosave parked, retry offered) and
+   the quarantined-rows banner for partially-degraded loads. */
+.sk-boot-error {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.sk-boot-error-card {
+	background: var(--bg-1);
+	border: 1px solid var(--line-strong);
+	border-radius: 10px;
+	box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+	width: 480px;
+	max-width: 92vw;
+	padding: 20px 22px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.sk-boot-error-title {
+	font-weight: 600;
+	color: var(--err);
+}
+.sk-boot-error-msg {
+	font-family: var(--sk-mono);
+	font-size: 12px;
+	color: var(--fg-1);
+	word-break: break-word;
+}
+.sk-boot-error-hint {
+	font-size: 12px;
+	color: var(--fg-2);
+}
+.sk-boot-error-actions {
+	display: flex;
+	justify-content: flex-end;
+}
+.sk-quarantine-banner {
+	position: fixed;
+	top: 48px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 2000;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	background: var(--bg-1);
+	border: 1px solid var(--warn);
+	border-radius: 8px;
+	padding: 8px 12px;
+	font-size: 12px;
+	color: var(--fg-0);
+	max-width: min(560px, calc(100vw - 32px));
+	box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.sk-quarantine-banner-x {
+	cursor: pointer;
+	color: var(--fg-2);
+	padding: 0 2px;
+}
+.sk-quarantine-banner-x:hover {
+	color: var(--fg-0);
+}
 .sk-app[data-platform="mac"] .sk-titlebar {
 	padding-left: 80px;
 }

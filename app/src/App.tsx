@@ -1022,6 +1022,16 @@ const cmdForKind = (
 	}
 };
 
+/** Wire shape of `db_load_rooms` (#167): the rooms that parsed plus
+ *  any rows the backend quarantined instead of failing the load.
+ *  `backupRooms` arrives only when the live table was empty but the
+ *  skein.db.bak snapshot still holds rooms. */
+interface DbLoadOutcome {
+	rooms: Room[];
+	skipped: { id: string; error: string }[];
+	backupRooms?: number;
+}
+
 // Rewrite a stored harness into its "resume the previous conversation"
 // form, applied once at boot so a fresh PTY spawn transparently
 // re-attaches. Only matches harnesses whose cmd still looks like a
@@ -1173,7 +1183,23 @@ export default function App() {
 	// `loaded` stays false and the auto-save effect below stays parked —
 	// otherwise the empty initial state would clobber the DB before we read it.
 	const [loaded, setLoaded] = useState(false);
-	useEffect(() => {
+	// #167: the boot load failed wholesale (sqlite open/read error).
+	// While set, `loaded` stays false so the autosave stays parked —
+	// the empty in-memory state must never overwrite the unread DB —
+	// and the boot shell shows a retry surface instead of a blank pane.
+	const [loadFailed, setLoadFailed] = useState<string | null>(null);
+	// #167: rows the backend quarantined during an otherwise-good load.
+	const [quarantinedCount, setQuarantinedCount] = useState(0);
+	// #167: the live table was empty but skein.db.bak holds N rooms —
+	// a vanished/recreated db must not masquerade as a fresh install.
+	const [backupRoomCount, setBackupRoomCount] = useState<number | null>(null);
+	// #167: once any hydrate has succeeded, a late rejection from a
+	// concurrent sibling call (dev StrictMode double-mount) must not
+	// set loadFailed — that would park the autosave for the whole
+	// session with no visible surface (the retry card only renders
+	// pre-load).
+	const hydratedOnceRef = useRef(false);
+	const hydrateRooms = useCallback(() => {
 		// Chapter 5 phase 4: drop any stored sessionId that no longer
 		// exists on disk before resumeCmd uses it. claude --resume <id>
 		// or opencode --session <id> against a deleted conversation
@@ -1200,8 +1226,24 @@ export default function App() {
 			return true;
 		};
 
-		invoke<Room[]>("db_load_rooms")
-			.then(async (rows) => {
+		invoke<DbLoadOutcome>("db_load_rooms")
+			.then(async ({ rooms: rows, skipped, backupRooms }) => {
+				hydratedOnceRef.current = true;
+				// Clear any failure from a concurrent sibling call —
+				// success wins, and a stale loadFailed would silently
+				// park the autosave (#167 review).
+				setLoadFailed(null);
+				if (skipped.length > 0) {
+					console.warn(
+						`[skein] ${skipped.length} room row(s) failed to parse and were quarantined:`,
+						skipped,
+					);
+					setQuarantinedCount(skipped.length);
+				}
+				if (rows.length === 0 && backupRooms !== undefined && backupRooms > 0) {
+					console.warn(`[skein] rooms table is empty but skein.db.bak holds ${backupRooms}`);
+					setBackupRoomCount(backupRooms);
+				}
 				if (rows.length > 0) {
 					const verified = await Promise.all(
 						rows.map(async (s) => ({
@@ -1265,19 +1307,28 @@ export default function App() {
 			.catch((err: unknown) => {
 				const msg = err instanceof Error ? err.message : String(err);
 				console.error("[skein] db_load_rooms failed:", msg);
-				setLoaded(true);
+				if (hydratedOnceRef.current) return;
+				// #167: deliberately NOT setLoaded(true) here. Flipping
+				// `loaded` with the initial [] still in state arms the
+				// autosave, whose next write is DELETE FROM sessions —
+				// the boot-wipe chain this issue exists to break.
+				setLoadFailed(msg);
 			});
 	}, []);
+
+	useEffect(() => {
+		hydrateRooms();
+	}, [hydrateRooms]);
 
 	// Phase 3: any time `rooms` changes after the initial load, mirror
 	// the new state to sqlite. Wipe-and-insert is fine at prototype scale.
 	useEffect(() => {
-		if (!loaded) return;
+		if (!loaded || loadFailed !== null) return;
 		void invoke("db_save_rooms", { rooms }).catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.error("[skein] db_save_rooms failed:", msg);
 		});
-	}, [rooms, loaded]);
+	}, [rooms, loaded, loadFailed]);
 
 	const room = useMemo(() => rooms.find((r) => r.id === activeRoomId), [rooms, activeRoomId]);
 	const activeHarness = room?.harnesses.find((h) => h.id === room.activeHarnessId);
@@ -2529,6 +2580,49 @@ export default function App() {
 		</div>
 	);
 
+	// #167: some persisted rooms couldn't be parsed and were moved to
+	// the quarantine table. Everything else loaded — surface that
+	// instead of letting the shrunken room list masquerade as normal.
+	const quarantineBanner = quarantinedCount > 0 && (
+		<div className="sk-quarantine-banner">
+			<span>
+				{quarantinedCount === 1
+					? "1 saved room couldn't be read and was quarantined"
+					: `${quarantinedCount} saved rooms couldn't be read and were quarantined`}
+				{" — the rest loaded fine. The raw rows are preserved in skein.db "}
+				(sessions_quarantine).
+			</span>
+			<span
+				className="sk-quarantine-banner-x"
+				title="Dismiss"
+				onClick={() => setQuarantinedCount(0)}
+			>
+				×
+			</span>
+		</div>
+	);
+
+	// #167: the live rooms table came back empty but the backup next
+	// to it still holds rooms — say so instead of rendering first-run
+	// onboarding over recoverable data.
+	const backupBanner = backupRoomCount !== null && (
+		<div className="sk-quarantine-banner">
+			<span>
+				{`Your rooms database is empty, but a backup holding ${backupRoomCount} room${
+					backupRoomCount === 1 ? "" : "s"
+				} sits next to it as skein.db.bak. To restore: quit Skein, copy skein.db.bak over `}
+				skein.db, and delete skein.db-wal / skein.db-shm.
+			</span>
+			<span
+				className="sk-quarantine-banner-x"
+				title="Dismiss"
+				onClick={() => setBackupRoomCount(null)}
+			>
+				×
+			</span>
+		</div>
+	);
+
 	// Empty state — no *active* rooms. Archived rooms still in the list
 	// show via the reopen modal (linked from the empty state too).
 	// Pre-hydration: rooms haven't loaded from sqlite yet, so `activeRooms`
@@ -2544,7 +2638,37 @@ export default function App() {
 				style={{ ["--cfs" as string]: `${chromeFontPt}px` }}
 			>
 				<Titlebar {...titlebarProps} />
-				<div className="sk-boot" />
+				{loadFailed !== null ? (
+					// #167: the load failed wholesale. The autosave is
+					// parked (loaded stays false) so the DB is untouched;
+					// offer retry instead of silently starting empty.
+					<div className="sk-boot-error">
+						<div className="sk-boot-error-card">
+							<div className="sk-boot-error-title">Couldn't load your rooms</div>
+							<div className="sk-boot-error-msg">{loadFailed}</div>
+							<div className="sk-boot-error-hint">
+								No saved rooms have been deleted (unreadable rows may have been moved to the
+								sessions_quarantine table inside skein.db), and nothing will be saved until loading
+								succeeds. Last-known-good snapshots sit next to it as skein.db.bak and .bak.1 — if
+								you restore one manually, also delete skein.db-wal and skein.db-shm.
+							</div>
+							<div className="sk-boot-error-actions">
+								<button
+									type="button"
+									className="sk-btn primary"
+									onClick={() => {
+										setLoadFailed(null);
+										hydrateRooms();
+									}}
+								>
+									Retry
+								</button>
+							</div>
+						</div>
+					</div>
+				) : (
+					<div className="sk-boot" />
+				)}
 			</div>
 		);
 	}
@@ -2583,6 +2707,8 @@ export default function App() {
 					/>
 				)}
 				{toastStack}
+				{quarantineBanner}
+				{backupBanner}
 			</div>
 		);
 	}
@@ -2797,6 +2923,8 @@ export default function App() {
 				/>
 			)}
 			{toastStack}
+			{quarantineBanner}
+			{backupBanner}
 		</div>
 	);
 }

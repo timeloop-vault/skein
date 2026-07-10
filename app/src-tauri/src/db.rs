@@ -29,11 +29,12 @@
 //! discriminator and a JSON `payload`. Rationale and the v1 kind set
 //! are in `docs/live-context-recon.md` §4 and the design brief.
 
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OpenFlags, params};
 use serde::{Deserialize, Serialize};
 
 /// Mirrors the TS Harness interface. Field renames keep the wire format
@@ -152,6 +153,13 @@ pub mod action_kind {
 }
 
 /// Mirrors the TS Room interface.
+///
+/// Field policy (#167): every field added after v0.2.5 MUST carry
+/// `#[serde(default)]` (or live inside `Option`). A required field
+/// makes every previously-persisted blob unparseable, and an
+/// unparseable blob gets quarantined out of the live table on the
+/// next boot. Existing required fields stay required — a room
+/// missing `name` or `id` is corrupt, not old.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Room {
@@ -177,16 +185,72 @@ pub struct Room {
     pub archived: Option<i64>,
 }
 
+/// A `sessions` row whose JSON blob failed to parse at load time.
+/// The blob itself is preserved in `sessions_quarantine`; only the
+/// id + parse error travel to the frontend (issue #167).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedRoom {
+    pub id: String,
+    pub error: String,
+}
+
+/// What `load_all` hands back: the rooms that parsed, plus the rows
+/// that didn't (already moved to quarantine by the time this returns).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadOutcome {
+    pub rooms: Vec<Room>,
+    pub skipped: Vec<SkippedRoom>,
+    /// True when this call flipped the process's `loaded_ok` latch —
+    /// i.e. the first successful load. Internal signal for the backup
+    /// policy (refresh at most once per process, so a dev `StrictMode`
+    /// double-load can't sneak a backup in after a quarantine-marred
+    /// sibling call). Never serialized to the frontend.
+    #[serde(skip)]
+    pub first_load: bool,
+    /// Rooms sitting in the `.bak` snapshot. Populated by the command
+    /// layer only when the live table came back empty, so the
+    /// frontend can say "your db is empty but a backup exists"
+    /// instead of showing first-run onboarding over lost rooms.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub backup_rooms: Option<i64>,
+}
+
 pub struct Database {
     conn: Mutex<Connection>,
+    path: PathBuf,
+    /// Set once `load_all` has completed successfully in this process.
+    /// `save_all` refuses to commit an empty room list before that —
+    /// the frontend only legitimately saves `[]` after a good load
+    /// (issue #167: a failed boot load must never wipe the table).
+    loaded_ok: AtomicBool,
 }
 
 impl Database {
     pub fn open(path: &Path) -> Result<Self, String> {
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        // WAL keeps readers and the (single) writer from blocking each
+        // other and survives crash-mid-write without a hot journal;
+        // busy_timeout papers over transient contention instead of
+        // surfacing SQLITE_BUSY to the user. (#167 belt-and-braces;
+        // #178 tunes the rest of the write path.)
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(|e| e.to_string())?;
+        conn.busy_timeout(Duration::from_secs(5))
+            .map_err(|e| e.to_string())?;
+        // Fold any WAL left by an unclean previous exit back into the
+        // main file and truncate the sidecar. Keeps skein.db-wal
+        // near-empty at rest, so hand-restoring `.bak` over skein.db
+        // (or deleting skein.db alone) can't pair a stale hot WAL
+        // with the wrong database file (#167 review).
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|e| e.to_string())?;
         Self::init_schema(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
+            path: path.to_path_buf(),
+            loaded_ok: AtomicBool::new(false),
         })
     }
 
@@ -202,6 +266,21 @@ impl Database {
                 id TEXT PRIMARY KEY,
                 data TEXT NOT NULL,
                 created_at INTEGER NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Issue #167: rooms whose JSON blob no longer parses are moved
+        // here instead of aborting the whole load (or worse, being
+        // erased by the next save_all wipe). Plain `id` column — the
+        // same room id can land here more than once across versions.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS sessions_quarantine (
+                id TEXT NOT NULL,
+                data TEXT NOT NULL,
+                error TEXT NOT NULL,
+                quarantined_at INTEGER NOT NULL
             )",
             [],
         )
@@ -281,25 +360,85 @@ impl Database {
         Ok(())
     }
 
-    pub fn load_all(&self) -> Result<Vec<Room>, String> {
+    /// Load every room. A row whose blob fails to parse (serde drift
+    /// after a downgrade, corruption, a future required field) no
+    /// longer fails the whole load — it is moved to
+    /// `sessions_quarantine` and reported in `skipped`, and every
+    /// other room comes back intact (issue #167).
+    ///
+    /// sqlite-level errors (open/read failures) still fail wholesale;
+    /// the frontend parks its autosave on that path.
+    pub fn load_all(&self) -> Result<LoadOutcome, String> {
         let conn = self.conn.lock();
-        let mut stmt = conn
-            .prepare("SELECT data FROM sessions ORDER BY created_at, id")
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| e.to_string())?;
-        let mut out = Vec::new();
-        for row in rows {
-            let data = row.map_err(|e| e.to_string())?;
-            let r: Room = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-            out.push(r);
+        // Collect first, mutate after — deleting rows out from under
+        // an open SELECT cursor on the same table is undefined-ish
+        // in sqlite, and the table is a dozen rows.
+        let raw: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT id, data FROM sessions ORDER BY created_at, id")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        let mut rooms = Vec::new();
+        let mut skipped = Vec::new();
+        for (id, data) in raw {
+            match serde_json::from_str::<Room>(&data) {
+                Ok(r) => rooms.push(r),
+                Err(e) => {
+                    let error = e.to_string();
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+                    // Preserve the blob before dropping the live row —
+                    // the next save_all wipe-and-reinsert would erase
+                    // it otherwise. If the INSERT fails we abort the
+                    // load rather than lose the row.
+                    conn.execute(
+                        "INSERT INTO sessions_quarantine (id, data, error, quarantined_at) \
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![id, data, error, now_ms],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])
+                        .map_err(|e| e.to_string())?;
+                    skipped.push(SkippedRoom { id, error });
+                }
+            }
         }
-        Ok(out)
+        let first_load = self
+            .loaded_ok
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        Ok(LoadOutcome {
+            rooms,
+            skipped,
+            first_load,
+            backup_rooms: None,
+        })
     }
 
     pub fn save_all(&self, rooms: &[Room]) -> Result<(), String> {
         let mut conn = self.conn.lock();
+        // #167: an empty save before any successful load in this
+        // process is always a bug (the boot-wipe chain: load fails,
+        // frontend state is still [], autosave fires). A legitimate
+        // "user deleted the last room" save happens strictly after a
+        // good load, so it passes the loaded_ok gate.
+        if rooms.is_empty() && !self.loaded_ok.load(Ordering::Acquire) {
+            let existing: i64 = conn
+                .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+                .map_err(|e| e.to_string())?;
+            if existing > 0 {
+                return Err(format!(
+                    "refusing to overwrite {existing} persisted room(s) with an empty list \
+                     before a successful load (#167)"
+                ));
+            }
+        }
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM sessions", [])
             .map_err(|e| e.to_string())?;
@@ -319,6 +458,53 @@ impl Database {
         }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// Snapshot the whole DB to `<db>.bak` (issue #167). `VACUUM INTO`
+    /// gives a consistent single-file copy even under WAL, without the
+    /// rusqlite backup feature. The caller decides *when* — the policy
+    /// is "first clean, non-empty load of the process", so `.bak`
+    /// always holds a last-known-good state and is never overwritten
+    /// by a wipe or a quarantine-marred load.
+    ///
+    /// Write order matters (#167 review): the snapshot lands in a temp
+    /// file first and only replaces `.bak` once complete, so a failed
+    /// or interrupted VACUUM (disk full, crash) can't destroy the
+    /// previous good snapshot. The displaced `.bak` is kept one more
+    /// generation as `.bak.1` — the "rooms silently vanished, then one
+    /// clean boot refreshed the backup" sequence stays recoverable.
+    pub fn backup_last_known_good(&self) -> Result<PathBuf, String> {
+        let dest = self.path.with_extension("db.bak");
+        let prev = self.path.with_extension("db.bak.1");
+        let tmp = self.path.with_extension("db.bak.tmp");
+        let tmp_str = tmp
+            .to_str()
+            .ok_or_else(|| format!("backup path is not valid UTF-8: {}", tmp.display()))?;
+        if tmp.exists() {
+            std::fs::remove_file(&tmp).map_err(|e| e.to_string())?;
+        }
+        {
+            let conn = self.conn.lock();
+            conn.execute("VACUUM INTO ?1", params![tmp_str])
+                .map_err(|e| e.to_string())?;
+        }
+        if dest.exists() {
+            replace_file(&dest, &prev)?;
+        }
+        replace_file(&tmp, &dest)?;
+        Ok(dest)
+    }
+
+    /// Rooms stored in the `.bak` snapshot, or `None` when no readable
+    /// backup exists. Opens read-only so probing can't touch either
+    /// file. Used to warn when the live table is empty but a backup
+    /// holds rooms — a vanished/recreated skein.db otherwise looks
+    /// exactly like a fresh install (#167 review).
+    pub fn count_backup_rooms(&self) -> Option<i64> {
+        let bak = self.path.with_extension("db.bak");
+        let conn = Connection::open_with_flags(&bak, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+        conn.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .ok()
     }
 
     // ── harness event log (epic #50 L6) ──────────────────────────
@@ -516,6 +702,21 @@ impl Database {
     }
 }
 
+/// `rename` that also replaces an existing `to` on Windows, where
+/// std's rename refuses to overwrite. Callers only pass a complete
+/// file as `from`, so the remove-then-retry window never risks the
+/// last good copy.
+fn replace_file(from: &Path, to: &Path) -> Result<(), String> {
+    match std::fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        Err(_) if to.exists() => {
+            std::fs::remove_file(to).map_err(|e| e.to_string())?;
+            std::fs::rename(from, to).map_err(|e| e.to_string())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<HarnessEvent> {
     Ok(HarnessEvent {
         id: row.get(0)?,
@@ -551,6 +752,158 @@ mod tests {
         let path = dir.path().join("test.db");
         let db = Database::open(&path).unwrap();
         (dir, db)
+    }
+
+    fn room(id: &str) -> Room {
+        Room {
+            id: id.into(),
+            name: format!("room {id}"),
+            task: String::new(),
+            status: "idle".into(),
+            badge: 0,
+            harnesses: Vec::new(),
+            active_harness_id: String::new(),
+            cwd: None,
+            branch: None,
+            repo: None,
+            archived: None,
+        }
+    }
+
+    // ── room persistence (#167) ──────────────────────────────────
+
+    #[test]
+    fn rooms_round_trip_through_save_and_load() {
+        let (_dir, db) = fresh_db();
+        let mut r1 = room("r1");
+        r1.branch = Some("skein/r1".into());
+        r1.archived = Some(1_000);
+        db.save_all(&[r1, room("r2")]).unwrap();
+        let outcome = db.load_all().unwrap();
+        assert!(outcome.skipped.is_empty());
+        assert_eq!(outcome.rooms.len(), 2);
+        // created_at preserves insertion order across the round-trip.
+        assert_eq!(outcome.rooms[0].id, "r1");
+        assert_eq!(outcome.rooms[0].branch.as_deref(), Some("skein/r1"));
+        assert_eq!(outcome.rooms[0].archived, Some(1_000));
+        assert_eq!(outcome.rooms[1].id, "r2");
+    }
+
+    #[test]
+    fn load_all_quarantines_unparseable_rows_and_keeps_good_ones() {
+        let (_dir, db) = fresh_db();
+        db.save_all(&[room("good"), room("bad")]).unwrap();
+        db.conn
+            .lock()
+            .execute("UPDATE sessions SET data = 'not json' WHERE id = 'bad'", [])
+            .unwrap();
+        let outcome = db.load_all().unwrap();
+        assert_eq!(outcome.rooms.len(), 1);
+        assert_eq!(outcome.rooms[0].id, "good");
+        assert_eq!(outcome.skipped.len(), 1);
+        assert_eq!(outcome.skipped[0].id, "bad");
+        assert!(!outcome.skipped[0].error.is_empty());
+        // The blob is preserved in quarantine and gone from the live
+        // table, so the next save_all wipe can't destroy it.
+        let conn = db.conn.lock();
+        let blob: String = conn
+            .query_row(
+                "SELECT data FROM sessions_quarantine WHERE id = 'bad'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(blob, "not json");
+        let live: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(live, 1);
+    }
+
+    #[test]
+    fn save_all_empty_before_load_is_refused_when_rooms_exist() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        {
+            let db = Database::open(&path).unwrap();
+            db.save_all(&[room("r1")]).unwrap();
+        }
+        // Fresh open = fresh process: loaded_ok is false. This call is
+        // the exact #167 boot-wipe chain and must be refused.
+        let db = Database::open(&path).unwrap();
+        let err = db.save_all(&[]).unwrap_err();
+        assert!(err.contains("#167"), "unexpected error: {err}");
+        assert_eq!(db.load_all().unwrap().rooms.len(), 1);
+    }
+
+    #[test]
+    fn save_all_empty_after_successful_load_is_allowed() {
+        let (_dir, db) = fresh_db();
+        db.save_all(&[room("r1")]).unwrap();
+        let _ = db.load_all().unwrap();
+        // "User deleted the last room" — legitimate empty save.
+        db.save_all(&[]).unwrap();
+        assert!(db.load_all().unwrap().rooms.is_empty());
+    }
+
+    #[test]
+    fn first_load_is_flagged_only_once_per_process() {
+        let (_dir, db) = fresh_db();
+        assert!(db.load_all().unwrap().first_load);
+        assert!(!db.load_all().unwrap().first_load);
+    }
+
+    #[test]
+    fn backup_rotation_keeps_one_previous_generation() {
+        let (_dir, db) = fresh_db();
+        db.save_all(&[room("r1")]).unwrap();
+        let _ = db.load_all().unwrap();
+        db.backup_last_known_good().unwrap();
+        db.save_all(&[room("r1"), room("r2")]).unwrap();
+        let bak = db.backup_last_known_good().unwrap();
+        let prev = bak.with_extension("bak.1");
+        assert_eq!(
+            Database::open(&bak)
+                .unwrap()
+                .load_all()
+                .unwrap()
+                .rooms
+                .len(),
+            2
+        );
+        // The displaced snapshot survives one generation back.
+        assert_eq!(
+            Database::open(&prev)
+                .unwrap()
+                .load_all()
+                .unwrap()
+                .rooms
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn count_backup_rooms_reads_snapshot_or_none() {
+        let (_dir, db) = fresh_db();
+        assert!(db.count_backup_rooms().is_none());
+        db.save_all(&[room("r1")]).unwrap();
+        db.backup_last_known_good().unwrap();
+        assert_eq!(db.count_backup_rooms(), Some(1));
+    }
+
+    #[test]
+    fn backup_snapshot_survives_a_later_wipe() {
+        let (_dir, db) = fresh_db();
+        db.save_all(&[room("r1")]).unwrap();
+        let _ = db.backup_last_known_good().unwrap();
+        // Second call must overwrite, not fail (VACUUM INTO refuses
+        // to write over an existing file on its own).
+        let bak = db.backup_last_known_good().unwrap();
+        let _ = db.load_all().unwrap();
+        db.save_all(&[]).unwrap();
+        let restored = Database::open(&bak).unwrap();
+        assert_eq!(restored.load_all().unwrap().rooms.len(), 1);
     }
 
     #[test]

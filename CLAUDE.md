@@ -94,8 +94,11 @@ App data dirs on Windows:
 `%APPDATA%\com.timeloop-vault.skein\` (release),
 `%APPDATA%\com.timeloop-vault.skein.dev\` (dev),
 `%APPDATA%\com.timeloop-vault.skein.local\` (local release).
-Delete `skein.db` in any of them to reset persisted state for that
-profile.
+To reset persisted state for a profile, delete every `skein.db*`
+file in its dir — `skein.db`, the WAL sidecars `skein.db-wal` /
+`skein.db-shm`, and the `skein.db.bak` / `.bak.1` snapshots (#167).
+Deleting `skein.db` alone can pair a stale WAL with the fresh file
+and corrupt it.
 
 ## Conventions
 

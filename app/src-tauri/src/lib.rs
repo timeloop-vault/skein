@@ -24,7 +24,7 @@ use tauri::Manager;
 use tauri::ipc::Channel;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
-use crate::db::{Database, HarnessAction, HarnessEvent, Room};
+use crate::db::{Database, HarnessAction, HarnessEvent, LoadOutcome, Room};
 use crate::harness_events_claude::{ClaudeEvent, ClaudeEventsManager};
 use crate::harness_events_opencode::{OpencodeEvent, OpencodeEventsManager};
 use crate::pty::{PtyEvent, PtyManager};
@@ -608,12 +608,45 @@ fn default_cwd() -> String {
         .unwrap_or_else(|| ".".into())
 }
 
-/// Returns every room currently in the DB. The frontend calls this
-/// once at boot to hydrate state.
+/// Returns every room currently in the DB, plus any rows that failed
+/// to parse and were quarantined (#167). The frontend calls this once
+/// at boot to hydrate state.
+///
+/// A clean, non-empty load also refreshes the `skein.db.bak`
+/// last-known-good snapshot — on a helper thread so boot isn't taxed.
+/// Empty or quarantine-marred loads leave the previous snapshot alone.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-fn db_load_rooms(db: tauri::State<'_, Arc<Database>>) -> Result<Vec<Room>, String> {
-    db.load_all()
+fn db_load_rooms(db: tauri::State<'_, Arc<Database>>) -> Result<LoadOutcome, String> {
+    let mut outcome = db.load_all()?;
+    for s in &outcome.skipped {
+        tracing::warn!(
+            id = %s.id,
+            error = %s.error,
+            "quarantined unparseable room row (see sessions_quarantine)"
+        );
+    }
+    if outcome.rooms.is_empty() && outcome.skipped.is_empty() {
+        // A vanished/recreated skein.db parses as a clean fresh
+        // install. If a backup with rooms sits next to it, tell the
+        // frontend so the user isn't shown first-run onboarding over
+        // recoverable rooms.
+        outcome.backup_rooms = db.count_backup_rooms().filter(|n| *n > 0);
+        if let Some(n) = outcome.backup_rooms {
+            tracing::warn!("rooms table is empty but skein.db.bak holds {n} room(s)");
+        }
+    }
+    // Refresh the last-known-good snapshot at most once per process
+    // (first_load), and only for a clean, non-empty load — a marred
+    // or empty load must leave the previous generations alone.
+    if outcome.first_load && outcome.skipped.is_empty() && !outcome.rooms.is_empty() {
+        let db = Arc::clone(db.inner());
+        std::thread::spawn(move || match db.backup_last_known_good() {
+            Ok(dest) => tracing::info!("refreshed room backup at {}", dest.display()),
+            Err(e) => tracing::warn!("room backup failed: {e}"),
+        });
+    }
+    Ok(outcome)
 }
 
 /// Replaces the DB's room list wholesale. Called whenever the
