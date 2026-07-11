@@ -52,6 +52,7 @@ export type ShortcutAction =
 	| "newRoom"
 	| "closeRoom"
 	| "palette"
+	| "files"
 	| "settings"
 	| "addHarness"
 	| "reloadWindow"
@@ -87,6 +88,8 @@ const BINDINGS: Binding[] = [
 	{ code: "KeyN", action: "newRoom" },
 	{ code: "KeyW", action: "closeRoom" },
 	{ code: "KeyK", action: "palette" },
+	// E = explore. P stays free for #48's fuzzy quick-open later.
+	{ code: "KeyE", action: "files" },
 	{ code: "Comma", action: "settings" },
 	{ code: "KeyJ", action: "nextAlertedRoom" },
 	{ code: "KeyL", action: "nextAlertedHarness" },
@@ -147,6 +150,7 @@ const roomSecGlyph = SCHEME.roomAxis === "ctrl" ? "Ctrl" : "⇧";
 
 export const hints = {
 	newRoom: `${modLabel} N`,
+	files: `${modLabel} E`,
 	addHarness: `${modLabel} ⇧ H`,
 	closeRoom: `${modLabel} W`,
 	reload: `${modLabel} ⇧ R`,

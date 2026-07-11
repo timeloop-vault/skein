@@ -421,6 +421,35 @@ impl Database {
         })
     }
 
+    /// Cwds of every persisted room, active and archived — the scope
+    /// anchor for the fs preview commands and the asset protocol
+    /// (#49/#174: the webview may only read inside its rooms).
+    /// Parses only the `cwd` field out of each blob; rows that fail
+    /// even that are skipped here (`load_all` owns quarantine).
+    pub fn room_cwds(&self) -> Result<Vec<String>, String> {
+        #[derive(Deserialize)]
+        struct CwdOnly {
+            cwd: Option<String>,
+        }
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare("SELECT data FROM sessions")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            let data = row.map_err(|e| e.to_string())?;
+            if let Ok(parsed) = serde_json::from_str::<CwdOnly>(&data) {
+                if let Some(cwd) = parsed.cwd {
+                    out.push(cwd);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     pub fn save_all(&self, rooms: &[Room]) -> Result<(), String> {
         let mut conn = self.conn.lock();
         // #167: an empty save before any successful load in this

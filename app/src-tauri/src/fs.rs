@@ -1,14 +1,23 @@
-//! Filesystem helpers used by the file-browser pane (issue #7).
+//! Filesystem helpers used by the Files overlay (issue #7, revived
+//! for #49 stage 1).
 //!
-//! Two commands: `list_dir` (one level deep, just enough to render a
-//! directory listing) and `read_file_text` (read a small text file
-//! for inline preview). Symlinks are reported as `kind: "symlink"`
+//! `list_dir` lists one level deep — just enough to render a
+//! directory listing; `read_file_text` / `read_file_bytes` feed the
+//! preview providers. Symlinks are reported as `kind: "symlink"`
 //! and not followed — the consumer can choose to navigate into them
 //! by listing the link's target separately.
+//!
+//! Every command is scoped (#174): the requested path is
+//! canonicalized (so symlinks can't smuggle a target out) and must
+//! sit under one of the persisted rooms' cwds. Files outside every
+//! room are a later stage of #49 (explicit OS-picker grants).
 
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::Serialize;
+
+use crate::db::Database;
 
 const PREVIEW_MAX_BYTES: u64 = 256 * 1024;
 const BINARY_SNIFF_BYTES: usize = 2048;
@@ -48,14 +57,34 @@ pub struct FileBytesDto {
     pub truncated: bool,
 }
 
+/// Canonicalize `path` and require it to live under one of the
+/// persisted rooms' cwds. Canonicalizing both sides resolves
+/// symlinks before the prefix check, so a link inside a room can't
+/// escape it. Room cwds that no longer exist are skipped.
+pub(crate) fn ensure_room_scope(db: &Database, path: &str) -> Result<PathBuf, String> {
+    let canon = std::fs::canonicalize(path).map_err(|e| format!("{path}: {e}"))?;
+    for cwd in db.room_cwds()? {
+        if let Ok(root) = std::fs::canonicalize(&cwd) {
+            if canon.starts_with(&root) {
+                return Ok(canon);
+            }
+        }
+    }
+    Err("path is outside every room's folder".into())
+}
+
 /// One-level directory listing. Hidden entries (`.foo`) are included —
 /// the frontend filters by default but can opt-in. Common build /
 /// dependency dirs are *not* skipped here either; that's a UX call,
 /// not a filesystem call.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-pub fn list_dir(path: String) -> Result<Vec<DirEntryDto>, String> {
-    let read = std::fs::read_dir(Path::new(&path)).map_err(|e| format!("read_dir: {e}"))?;
+pub fn list_dir(
+    path: String,
+    db: tauri::State<'_, Arc<Database>>,
+) -> Result<Vec<DirEntryDto>, String> {
+    let canon = ensure_room_scope(&db, &path)?;
+    let read = std::fs::read_dir(&canon).map_err(|e| format!("read_dir: {e}"))?;
     let mut out = Vec::new();
     for entry in read {
         let Ok(entry) = entry else { continue };
@@ -94,9 +123,13 @@ pub fn list_dir(path: String) -> Result<Vec<DirEntryDto>, String> {
 /// file" and matches `git diff`'s behaviour).
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-pub fn read_file_text(path: String) -> Result<FilePreviewDto, String> {
+pub fn read_file_text(
+    path: String,
+    db: tauri::State<'_, Arc<Database>>,
+) -> Result<FilePreviewDto, String> {
     use std::io::Read;
-    let file = std::fs::File::open(Path::new(&path)).map_err(|e| format!("open: {e}"))?;
+    let canon = ensure_room_scope(&db, &path)?;
+    let file = std::fs::File::open(&canon).map_err(|e| format!("open: {e}"))?;
     let meta = file.metadata().map_err(|e| format!("metadata: {e}"))?;
     let total_size = meta.len();
     let truncated = total_size > PREVIEW_MAX_BYTES;
@@ -120,10 +153,14 @@ pub fn read_file_text(path: String) -> Result<FilePreviewDto, String> {
 /// renders accordingly.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-pub fn read_file_bytes(path: String) -> Result<FileBytesDto, String> {
+pub fn read_file_bytes(
+    path: String,
+    db: tauri::State<'_, Arc<Database>>,
+) -> Result<FileBytesDto, String> {
     use base64::Engine as _;
     use std::io::Read;
-    let mut file = std::fs::File::open(Path::new(&path)).map_err(|e| format!("open: {e}"))?;
+    let canon = ensure_room_scope(&db, &path)?;
+    let mut file = std::fs::File::open(&canon).map_err(|e| format!("open: {e}"))?;
     let meta = file.metadata().map_err(|e| format!("metadata: {e}"))?;
     let total_size = meta.len();
     let truncated = total_size > BYTES_PREVIEW_MAX;
@@ -137,4 +174,72 @@ pub fn read_file_bytes(path: String) -> Result<FileBytesDto, String> {
         base64: base64::engine::general_purpose::STANDARD.encode(&buf),
         truncated,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{Harness, Room};
+    use tempfile::TempDir;
+
+    fn db_with_room_at(cwd: &std::path::Path) -> (TempDir, Database) {
+        let db_dir = TempDir::new().unwrap();
+        let db = Database::open(&db_dir.path().join("test.db")).unwrap();
+        let room = Room {
+            id: "r1".into(),
+            name: "room".into(),
+            task: String::new(),
+            status: "idle".into(),
+            badge: 0,
+            harnesses: Vec::<Harness>::new(),
+            active_harness_id: String::new(),
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            branch: None,
+            repo: None,
+            archived: None,
+        };
+        db.save_all(&[room]).unwrap();
+        (db_dir, db)
+    }
+
+    #[test]
+    fn scope_allows_room_cwd_and_children() {
+        let room_dir = TempDir::new().unwrap();
+        let child = room_dir.path().join("sub");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(child.join("f.txt"), "hi").unwrap();
+        let (_db_dir, db) = db_with_room_at(room_dir.path());
+        assert!(ensure_room_scope(&db, room_dir.path().to_str().unwrap()).is_ok());
+        assert!(ensure_room_scope(&db, child.join("f.txt").to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn scope_rejects_paths_outside_every_room() {
+        let room_dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "no").unwrap();
+        let (_db_dir, db) = db_with_room_at(room_dir.path());
+        let err = ensure_room_scope(&db, outside.path().join("secret.txt").to_str().unwrap())
+            .unwrap_err();
+        assert!(err.contains("outside"), "unexpected error: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scope_rejects_symlink_escaping_the_room() {
+        let room_dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "no").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            room_dir.path().join("link.txt"),
+        )
+        .unwrap();
+        let (_db_dir, db) = db_with_room_at(room_dir.path());
+        // The link lives inside the room, but canonicalize resolves it
+        // to the outside target — must be rejected.
+        let err =
+            ensure_room_scope(&db, room_dir.path().join("link.txt").to_str().unwrap()).unwrap_err();
+        assert!(err.contains("outside"), "unexpected error: {err}");
+    }
 }

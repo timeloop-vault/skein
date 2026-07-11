@@ -203,6 +203,63 @@ body {
 .sk-quarantine-banner-x:hover {
 	color: var(--fg-0);
 }
+
+/* ── #49 stage 1: Files overlay (browse + view) ────────────────── */
+.sk-files-backdrop {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.45);
+	/* Below the modal layer (100): palette/settings opened while the
+	   Files overlay is up must stack visibly ON TOP of it, not focus
+	   an invisible input underneath. */
+	z-index: 90;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.sk-files-panel {
+	width: min(1100px, 92vw);
+	height: min(760px, 88vh);
+	background: var(--bg-1);
+	border: 1px solid var(--line-strong);
+	border-radius: 10px;
+	box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+	overflow: hidden;
+	display: flex;
+}
+.sk-find-bar {
+	position: sticky;
+	top: 0;
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	padding: 8px 0;
+	background: var(--bg-0);
+	border-bottom: 1px solid var(--line);
+	margin-bottom: 8px;
+}
+.sk-find-bar input {
+	background: var(--bg-1);
+	color: var(--fg-0);
+	border: 1px solid var(--line-strong);
+	border-radius: 6px;
+	padding: 3px 8px;
+	font: inherit;
+	width: 200px;
+}
+.sk-find-count {
+	color: var(--fg-2);
+	font-size: 10px;
+}
+mark.sk-find-hit {
+	background: color-mix(in srgb, var(--warn) 35%, transparent);
+	color: inherit;
+	border-radius: 2px;
+}
+mark.sk-find-hit.active {
+	background: var(--accent);
+	color: var(--bg-0);
+}
 .sk-app[data-platform="mac"] .sk-titlebar {
 	padding-left: 80px;
 }

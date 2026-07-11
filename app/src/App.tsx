@@ -21,6 +21,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
+import { FilesOverlay } from "./FilesOverlay.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
 import { SettingsModal } from "./SettingsModal.tsx";
@@ -1156,6 +1157,14 @@ export default function App() {
 	const [showPalette, setShowPalette] = useState(false);
 	const [showSettings, setShowSettings] = useState(false);
 	const [showReopen, setShowReopen] = useState(false);
+	// #49 stage 1: the Files browse+view overlay for the active room.
+	const [showFiles, setShowFiles] = useState(false);
+	// Drop the flag whenever the render guard fails (last room closed,
+	// or switched to a cwd-less room) so it can't linger armed.
+	const roomCwd = rooms.find((r) => r.id === activeRoomId)?.cwd;
+	useEffect(() => {
+		if (!roomCwd) setShowFiles(false);
+	}, [roomCwd]);
 
 	// Chapter 6 phase 2: split rooms into active (rendered as tabs) and
 	// archived (hidden, listed in the reopen modal). Tab strip, command
@@ -2116,6 +2125,15 @@ export default function App() {
 				case "palette":
 					setShowPalette(true);
 					break;
+				case "files": {
+					// Toggle so Mod+E both opens and closes. Gate on the
+					// same condition the render uses (room has a cwd) —
+					// a looser gate would arm an invisible overlay that
+					// pops open on a later room switch.
+					const activeRoom = roomsRef.current.find((r) => r.id === active);
+					if (activeRoom?.cwd) setShowFiles((v) => !v);
+					break;
+				}
 				case "settings":
 					setShowSettings(true);
 					break;
@@ -2490,6 +2508,14 @@ export default function App() {
 		hint: hints.newRoom,
 		invoke: () => setShowNewRoom(true),
 	});
+	if (room?.cwd) {
+		paletteItems.push({
+			id: "cmd:browse-files",
+			label: "Browse files",
+			hint: hints.files,
+			invoke: () => setShowFiles(true),
+		});
+	}
 	if (archivedRooms.length > 0) {
 		paletteItems.push({
 			id: "cmd:reopen-room",
@@ -2920,6 +2946,17 @@ export default function App() {
 					onDelete={deleteRoomForever}
 					onRestore={restoreRoom}
 					onClose={() => setShowReopen(false)}
+				/>
+			)}
+			{showFiles && room?.cwd && (
+				// Keyed by room so switching rooms while open resets the
+				// tree to the new room's cwd instead of carrying a stale
+				// subPath into it.
+				<FilesOverlay
+					key={room.id}
+					cwd={room.cwd}
+					suspended={showPalette || showSettings || showReopen || showNewRoom}
+					onClose={() => setShowFiles(false)}
 				/>
 			)}
 			{toastStack}
