@@ -37,9 +37,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --tests -- -D warnings
 
-  # --- Tauri shell crate: clippy (Linux only, fast).
+  # --- Tauri shell crate: clippy + unit tests (Linux only, fast).
   # The shell is excluded from the root workspace, so it needs its own
-  # invocation. webkit2gtk-4.1 + the GTK / X11 / Wayland headers are
+  # invocation — `cargo test --workspace` never reaches its ~100 unit
+  # tests (#168). webkit2gtk-4.1 + the GTK / X11 / Wayland headers are
   # required for the Tauri Rust crate to even compile on Linux.
   clippy-tauri:
     runs-on: ubuntu-22.04
@@ -83,6 +84,10 @@ jobs:
       - name: Clippy (tauri shell)
         working-directory: app/src-tauri
         run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test (tauri shell)
+        working-directory: app/src-tauri
+        run: cargo test
 
   # --- Frontend: biome + tsc ---
   lint-frontend:

@@ -108,9 +108,12 @@ and corrupt it.
 - **TS:** strict, `noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`. Biome with tabs + double quotes.
 - **Tests live with the code that owns them.**
-  `crates/skein-git/tests/` has 17 integration tests against tempfile
-  repos. Tauri side has no tests yet — its surface is mostly thin
-  command wrappers.
+  `crates/skein-git/tests/` has 18 integration tests against tempfile
+  repos. `app/src-tauri` has ~100 unit tests in-module (harness
+  JSONL/SSE parsers, db persistence). Both suites run in the
+  pre-commit hook and CI; note the tauri crate is excluded from the
+  workspace, so `cargo test --workspace` alone does NOT run its tests
+  — use `cargo test --manifest-path app/src-tauri/Cargo.toml` (#168).
 - **Phases drive the work.** `working-prototype-plan.md` and
   `chapter-2-plan.md` describe order; commit messages name the phase.
 - Things we've decided not to do *yet* live in
