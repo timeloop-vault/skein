@@ -1,9 +1,10 @@
-//! Skein — Tauri shell entrypoint.
+//! Skein — Tauri shell entrypoint: builder, managed state, and the
+//! command registry.
 //!
-//! Phase 1 wires PTY commands so the frontend can spawn a real
-//! interactive terminal inside the harness pane. Each spawn produces
-//! an id; subsequent writes/resizes/kills are keyed by it. Output
-//! streams back over a per-spawn `tauri::ipc::Channel<String>`.
+//! PTY commands let the frontend spawn a real interactive terminal
+//! inside the harness pane. Each spawn produces an id; subsequent
+//! writes/resizes/kills are keyed by it. Output streams back over a
+//! per-spawn `tauri::ipc::Channel<PtyEvent>` (tagged data/exit).
 
 mod db;
 mod fs;

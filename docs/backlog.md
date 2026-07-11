@@ -15,13 +15,6 @@ moves into an active phase, delete it here.
 - **Real onboarding tour** — chapter 1's tour was fixture-driven and
   got deleted in chapter 2 phase 1. A real "create your first room"
   walk-through is a separate product surface, not a fixture re-skin.
-- **Cross-harness activity feed** — the design has "h1b flagged X in
-  h1a's diff" rows. Requires understanding tool boundaries inside
-  opaque TUI output. Defer until we have a use case.
-- **Multi-git parent picker** — when a folder contains several child
-  repos, let the user pick which child to tie the room to. Chapter 6
-  phase 3 treats these as plain non-git cwd; this would add the
-  "pick a child or use the parent" picker on top.
 - **Worktree cleanup on archive** — closing a room (chapter 6 phase 2)
   doesn't `git worktree remove` the worktree dir. Add a "delete
   worktree on close" toggle when the surface justifies it.
@@ -37,8 +30,9 @@ moves into an active phase, delete it here.
 ## Infra
 
 - **Multi-window** — single window is fine for v0.
-- **Auto-updater, code signing, installers** — chapter 8 (was the
-  "B" of A→C→B; bumped after chapter 6 took the A slot).
+- **OS code signing** — chapter 8 shipped unsigned installers with a
+  Tauri-signed auto-updater; real Apple / Authenticode signing waits
+  until an audience justifies the certificate cost.
 
 ## Migration candidates
 

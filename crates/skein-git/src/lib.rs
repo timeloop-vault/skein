@@ -3,13 +3,11 @@
 // noise than signal at this size.
 #![allow(clippy::missing_errors_doc)]
 
-//! `skein-git` — typed wrapper around the git operations Skein needs.
-//!
-//! Phase 4 covers the worktree/branch surface used by the new-session
-//! flow. Phase 5 will extend this crate with `status` and `diff_workdir`
-//! for the live-diff watcher; those land here rather than in
-//! `app/src-tauri` so they stay testable in isolation, with no Tauri
-//! runtime in the way.
+//! `skein-git` — typed wrapper around the git operations Skein needs:
+//! the worktree/branch surface used by the new-room flow, plus
+//! `status` and `diff_workdir` for the live-diff watcher. Git logic
+//! lands here rather than in `app/src-tauri` so it stays testable in
+//! isolation, with no Tauri runtime in the way.
 //!
 //! All operations are synchronous and local. We deliberately disable
 //! git2's default `https`/`ssh` features at the workspace level — Skein
