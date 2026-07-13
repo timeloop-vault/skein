@@ -422,8 +422,8 @@ impl Database {
     }
 
     /// Cwds of every persisted room, active and archived — the scope
-    /// anchor for the fs preview commands and the asset protocol
-    /// (#49/#174: the webview may only read inside its rooms).
+    /// anchor for the fs commands (#49/#174: the webview may only
+    /// read inside its rooms).
     /// Parses only the `cwd` field out of each blob; rows that fail
     /// even that are skipped here (`load_all` owns quarantine).
     pub fn room_cwds(&self) -> Result<Vec<String>, String> {

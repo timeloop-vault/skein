@@ -237,7 +237,6 @@ pub fn run() {
             ping,
             fs::list_dir,
             fs::read_file_text,
-            fs::read_file_bytes,
             pty_spawn,
             pty_write,
             pty_resize,
@@ -616,39 +615,10 @@ fn default_cwd() -> String {
 /// A clean, non-empty load also refreshes the `skein.db.bak`
 /// last-known-good snapshot — on a helper thread so boot isn't taxed.
 /// Empty or quarantine-marred loads leave the previous snapshot alone.
-/// Grant the asset protocol read access to every persisted room's
-/// cwd (#49 stage 1: image previews stream over `asset:` instead of
-/// base64 IPC). Grants are additive for the process lifetime; the
-/// anchor is the same room list the fs commands scope against.
-fn sync_asset_scope(app: &tauri::AppHandle, db: &Database) {
-    match db.room_cwds() {
-        Ok(cwds) => {
-            let scope = app.asset_protocol_scope();
-            for cwd in cwds {
-                // Canonicalize before granting: the scope check
-                // canonicalizes the *request*, so a raw grant of a
-                // symlinked cwd (macOS /tmp -> /private/tmp) would
-                // silently under-grant and 403 every image preview.
-                let Ok(root) = std::fs::canonicalize(&cwd) else {
-                    continue; // room dir gone — nothing to grant
-                };
-                if let Err(e) = scope.allow_directory(&root, true) {
-                    tracing::warn!("asset scope allow failed for {cwd}: {e}");
-                }
-            }
-        }
-        Err(e) => tracing::warn!("asset scope sync failed: {e}"),
-    }
-}
-
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-fn db_load_rooms(
-    app: tauri::AppHandle,
-    db: tauri::State<'_, Arc<Database>>,
-) -> Result<LoadOutcome, String> {
+fn db_load_rooms(db: tauri::State<'_, Arc<Database>>) -> Result<LoadOutcome, String> {
     let mut outcome = db.load_all()?;
-    sync_asset_scope(&app, &db);
     for s in &outcome.skipped {
         tracing::warn!(
             id = %s.id,
@@ -684,13 +654,6 @@ fn db_load_rooms(
 /// prototype scale and avoids the bookkeeping of granular upserts.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-fn db_save_rooms(
-    rooms: Vec<Room>,
-    app: tauri::AppHandle,
-    db: tauri::State<'_, Arc<Database>>,
-) -> Result<(), String> {
-    db.save_all(&rooms)?;
-    // Newly created rooms become previewable immediately.
-    sync_asset_scope(&app, &db);
-    Ok(())
+fn db_save_rooms(rooms: Vec<Room>, db: tauri::State<'_, Arc<Database>>) -> Result<(), String> {
+    db.save_all(&rooms)
 }

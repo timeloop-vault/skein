@@ -1,12 +1,12 @@
-// Fallback text provider — handles whatever no specific provider
-// claimed. UTF-8 lossy decode happens in Rust (`read_file_text`),
-// then we render as monospace pre — plus find-in-file (#49 stage 1):
-// a search box above the content, case-insensitive plain-string
+// RawFileView — the raw text surface of the Files overlay (#49).
+// Monospace source text exactly as it is on disk (UTF-8 lossy decode
+// happens in Rust), plus find-in-file: case-insensitive plain-string
 // matches highlighted with <mark>, Enter / Shift+Enter cycling the
-// active match into view. Regex find waits for the stage-2 editor.
+// active match into view. No rendered previews by design — the
+// daily-driver want is VS Code-style raw view/edit; stage 2 swaps
+// this component for a real editor.
 
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { registerPreviewProvider } from "../registry.ts";
 
 interface Segment {
 	text: string;
@@ -54,7 +54,7 @@ const segment = (
 	return { parts, count, capped };
 };
 
-const TextPreview = ({ text, truncated }: { text: string; truncated: boolean }) => {
+export const RawFileView = ({ text, truncated }: { text: string; truncated: boolean }) => {
 	const [query, setQuery] = useState("");
 	const [active, setActive] = useState(0);
 	const activeRef = useRef<HTMLElement | null>(null);
@@ -136,16 +136,3 @@ const TextPreview = ({ text, truncated }: { text: string; truncated: boolean }) 
 		</>
 	);
 };
-
-registerPreviewProvider({
-	id: "text",
-	// `*` = catch-all fallback. Lower priority than every specific
-	// provider so it only fires when nothing else matched.
-	patterns: ["*"],
-	priority: 0,
-	needs: "text",
-	render: ({ text, truncated }) => {
-		if (text === undefined) return null;
-		return <TextPreview text={text} truncated={truncated} />;
-	},
-});

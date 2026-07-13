@@ -1,6 +1,6 @@
 // FilesOverlay — #49 stage 1: browse and view the room's files
 // without leaving Skein. A large overlay hosting the resurrected
-// FileTree (tree left, preview right). Read-only; the editor is
+// FileTree (tree left, raw view right). Read-only; the editor is
 // stage 2. Opened via Mod+E or the command palette; Esc / backdrop
 // click / Mod+E again close it.
 

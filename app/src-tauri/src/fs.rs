@@ -2,10 +2,10 @@
 //! for #49 stage 1).
 //!
 //! `list_dir` lists one level deep — just enough to render a
-//! directory listing; `read_file_text` / `read_file_bytes` feed the
-//! preview providers. Symlinks are reported as `kind: "symlink"`
-//! and not followed — the consumer can choose to navigate into them
-//! by listing the link's target separately.
+//! directory listing; `read_file_text` feeds the raw file view.
+//! Symlinks are reported as `kind: "symlink"` and not followed — the
+//! consumer can choose to navigate into them by listing the link's
+//! target separately.
 //!
 //! Every command is scoped (#174): the requested path is
 //! canonicalized (so symlinks can't smuggle a target out) and must
@@ -19,13 +19,8 @@ use serde::Serialize;
 
 use crate::db::Database;
 
-const PREVIEW_MAX_BYTES: u64 = 256 * 1024;
+const TEXT_MAX_BYTES: u64 = 256 * 1024;
 const BINARY_SNIFF_BYTES: usize = 2048;
-/// Cap for the byte-returning preview path (`read_file_bytes`).
-/// Larger than the text cap because images are routinely >256 KB,
-/// but bounded so we don't blow up the IPC channel on accidental
-/// 100 MB previews.
-const BYTES_PREVIEW_MAX: u64 = 5 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
 pub struct DirEntryDto {
@@ -41,19 +36,10 @@ pub struct DirEntryDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub struct FilePreviewDto {
+pub struct FileTextDto {
     pub content: String,
-    /// True when the file was longer than `PREVIEW_MAX_BYTES` and we
+    /// True when the file was longer than `TEXT_MAX_BYTES` and we
     /// truncated. UI shows a banner.
-    pub truncated: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub struct FileBytesDto {
-    /// Base64-encoded file contents. Frontend wraps in a data URL for
-    /// `<img src=…>` (or hex-decodes for the hex viewer, etc.).
-    pub base64: String,
     pub truncated: bool,
 }
 
@@ -117,7 +103,7 @@ pub fn list_dir(
     Ok(out)
 }
 
-/// Read up to `PREVIEW_MAX_BYTES` of `path` as text. Returns
+/// Read up to `TEXT_MAX_BYTES` of `path` as text. Returns
 /// `Err("binary")` when the leading sniff window contains a NUL byte
 /// (cheap heuristic — robust enough for "is this a JPEG or a Rust
 /// file" and matches `git diff`'s behaviour).
@@ -126,14 +112,14 @@ pub fn list_dir(
 pub fn read_file_text(
     path: String,
     db: tauri::State<'_, Arc<Database>>,
-) -> Result<FilePreviewDto, String> {
+) -> Result<FileTextDto, String> {
     use std::io::Read;
     let canon = ensure_room_scope(&db, &path)?;
     let file = std::fs::File::open(&canon).map_err(|e| format!("open: {e}"))?;
     let meta = file.metadata().map_err(|e| format!("metadata: {e}"))?;
     let total_size = meta.len();
-    let truncated = total_size > PREVIEW_MAX_BYTES;
-    let read_size = total_size.min(PREVIEW_MAX_BYTES);
+    let truncated = total_size > TEXT_MAX_BYTES;
+    let read_size = total_size.min(TEXT_MAX_BYTES);
     let mut buf = Vec::with_capacity(usize::try_from(read_size).unwrap_or(0));
     file.take(read_size)
         .read_to_end(&mut buf)
@@ -141,37 +127,8 @@ pub fn read_file_text(
     if buf.iter().take(BINARY_SNIFF_BYTES).any(|&b| b == 0) {
         return Err("binary".into());
     }
-    Ok(FilePreviewDto {
+    Ok(FileTextDto {
         content: String::from_utf8_lossy(&buf).into_owned(),
-        truncated,
-    })
-}
-
-/// Read up to `BYTES_PREVIEW_MAX` of `path` and return as base64.
-/// Used by preview providers that need raw bytes (images, archives,
-/// hex viewer). The frontend wraps in `data:<mime>;base64,…` and
-/// renders accordingly.
-#[allow(clippy::needless_pass_by_value)]
-#[tauri::command]
-pub fn read_file_bytes(
-    path: String,
-    db: tauri::State<'_, Arc<Database>>,
-) -> Result<FileBytesDto, String> {
-    use base64::Engine as _;
-    use std::io::Read;
-    let canon = ensure_room_scope(&db, &path)?;
-    let mut file = std::fs::File::open(&canon).map_err(|e| format!("open: {e}"))?;
-    let meta = file.metadata().map_err(|e| format!("metadata: {e}"))?;
-    let total_size = meta.len();
-    let truncated = total_size > BYTES_PREVIEW_MAX;
-    let read_size = total_size.min(BYTES_PREVIEW_MAX);
-    let mut buf = Vec::with_capacity(usize::try_from(read_size).unwrap_or(0));
-    (&mut file)
-        .take(read_size)
-        .read_to_end(&mut buf)
-        .map_err(|e| format!("read: {e}"))?;
-    Ok(FileBytesDto {
-        base64: base64::engine::general_purpose::STANDARD.encode(&buf),
         truncated,
     })
 }

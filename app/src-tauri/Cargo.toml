@@ -22,7 +22,7 @@ devtools = ["tauri/devtools"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-updater = "2"
@@ -58,7 +58,6 @@ skein-git = { path = "../../crates/skein-git" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
-base64 = "0.22"
 
 # `tauri-plugin-notifications` (Choochmeque fork) ships three mutually
 # exclusive cfg branches for its Notifications struct:

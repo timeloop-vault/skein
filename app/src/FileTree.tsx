@@ -4,18 +4,24 @@
 //
 // One-level directory listing rooted at the room's cwd, navigable
 // in-place: click a dir to descend, click a breadcrumb segment to go
-// back up, click a file to preview it on the right. Sorted by mtime
-// descending so the things the agent just wrote bubble to the top.
+// back up, click a file to see its raw text on the right. Sorted by
+// mtime descending so the things the agent just wrote bubble to the
+// top.
+//
+// The right side is deliberately a RAW view (no rendered markdown,
+// no image/hex providers — stripped 2026-07-13 per daily-driver
+// feedback): the want is VS Code-style raw view/edit, and stage 2
+// replaces RawFileView with a real editor.
 //
 // We deliberately do *not* recurse upfront — `node_modules`-heavy
 // projects would spend tens of seconds enumerating tens of thousands
 // of files. Step-by-step navigation keeps each refresh cheap.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RawFileView } from "./RawFileView.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { usePersistedState } from "./prefs.ts";
-import { findPreviewProviders } from "./preview/index.ts";
 
 interface DirEntryDto {
 	name: string;
@@ -26,11 +32,6 @@ interface DirEntryDto {
 
 interface TextDto {
 	content: string;
-	truncated: boolean;
-}
-
-interface BytesDto {
-	base64: string;
 	truncated: boolean;
 }
 
@@ -65,10 +66,10 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 	const [subPath, setSubPath] = useState<string>("");
 	const [entries, setEntries] = useState<DirEntryDto[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	// Selected file (relative to current subPath) for preview.
+	// Selected file (relative to current subPath) for the raw view.
 	const [selectedFile, setSelectedFile] = useState<string | null>(null);
-	const [previewBody, setPreviewBody] = useState<ReactNode | null>(null);
-	const [previewError, setPreviewError] = useState<string | null>(null);
+	const [fileText, setFileText] = useState<TextDto | null>(null);
+	const [fileNote, setFileNote] = useState<string | null>(null);
 
 	const currentDir = useMemo(() => joinPath(cwd, subPath), [cwd, subPath]);
 
@@ -107,8 +108,8 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 	// `src/` doesn't carry meaning when we navigate to `tests/`.
 	useEffect(() => {
 		setSelectedFile(null);
-		setPreviewBody(null);
-		setPreviewError(null);
+		setFileText(null);
+		setFileNote(null);
 		void refresh();
 	}, [refresh]);
 
@@ -147,65 +148,25 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 
 	useEffect(() => {
 		if (!selectedFile) {
-			setPreviewBody(null);
-			setPreviewError(null);
+			setFileText(null);
+			setFileNote(null);
 			return;
 		}
-		setPreviewBody(null);
-		setPreviewError(null);
+		setFileText(null);
+		setFileNote(null);
 		const fullPath = joinPath(currentDir, selectedFile);
-		const providers = findPreviewProviders(fullPath);
-		if (providers.length === 0) {
-			setPreviewError("no preview provider matched");
-			return;
-		}
 		let cancelled = false;
-		const load = async () => {
-			// Walk providers in priority order. A provider opts out by
-			// returning `null` from render, or by having its underlying
-			// fetch fail with the conventional `"binary"` error
-			// (`read_file_text` does this for files with NULs in the
-			// sniff window — the signal hex provider is waiting for).
-			let lastError: string | null = null;
-			for (const provider of providers) {
+		invoke<TextDto>("read_file_text", { path: fullPath })
+			.then((dto) => {
+				if (!cancelled) setFileText(dto);
+			})
+			.catch((err: unknown) => {
 				if (cancelled) return;
-				try {
-					let body: ReactNode | null = null;
-					if (provider.needs === "text") {
-						const dto = await invoke<TextDto>("read_file_text", { path: fullPath });
-						if (cancelled) return;
-						body = provider.render({
-							path: fullPath,
-							text: dto.content,
-							truncated: dto.truncated,
-						});
-					} else if (provider.needs === "bytes") {
-						const dto = await invoke<BytesDto>("read_file_bytes", { path: fullPath });
-						if (cancelled) return;
-						body = provider.render({
-							path: fullPath,
-							bytesBase64: dto.base64,
-							truncated: dto.truncated,
-						});
-					} else {
-						// "path" providers do their own io (asset protocol).
-						body = provider.render({ path: fullPath, truncated: false });
-					}
-					if (body !== null) {
-						setPreviewBody(body);
-						return;
-					}
-				} catch (err: unknown) {
-					const msg = err instanceof Error ? err.message : String(err);
-					// "binary" is the expected fall-through signal —
-					// don't surface it unless every provider failed.
-					lastError = msg;
-				}
-			}
-			if (cancelled) return;
-			setPreviewError(lastError ?? "no preview provider could render this file");
-		};
-		void load();
+				const msg = err instanceof Error ? err.message : String(err);
+				// `read_file_text` returns the conventional "binary"
+				// error when the sniff window contains NULs.
+				setFileNote(msg === "binary" ? "binary file — no text view" : `cannot open: ${msg}`);
+			});
 		return () => {
 			cancelled = true;
 		};
@@ -230,7 +191,7 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 		// Symlinks are display-only for v1 — too easy to escape the cwd.
 	};
 
-	// Overlay layout is tree LEFT / preview RIGHT (the old right-pane
+	// Overlay layout is tree LEFT / raw view RIGHT (the old right-pane
 	// incarnation stacked them vertically).
 	const [treeWidth, setTreeWidth] = usePersistedState<number>("filesTreeWidth", 280);
 
@@ -304,7 +265,7 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 		</div>
 	);
 
-	const previewEl = (
+	const viewerEl = (
 		<div
 			style={{
 				flex: 1,
@@ -320,16 +281,18 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 		>
 			{!selectedFile && (
 				<div style={{ color: "var(--fg-3)", padding: "24px 0", textAlign: "center" }}>
-					select a file to preview
+					select a file to view
 				</div>
 			)}
-			{selectedFile && previewError && (
-				<div style={{ color: "var(--fg-3)", paddingTop: 10 }}>cannot preview: {previewError}</div>
+			{selectedFile && fileNote && (
+				<div style={{ color: "var(--fg-3)", paddingTop: 10 }}>{fileNote}</div>
 			)}
-			{selectedFile && !previewError && previewBody === null && (
+			{selectedFile && !fileNote && fileText === null && (
 				<div style={{ color: "var(--fg-3)", paddingTop: 10 }}>loading…</div>
 			)}
-			{selectedFile && previewBody}
+			{selectedFile && fileText !== null && (
+				<RawFileView text={fileText.content} truncated={fileText.truncated} />
+			)}
 		</div>
 	);
 
@@ -393,7 +356,7 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 				minFirst={180}
 				minSecond={260}
 				first={listEl}
-				second={previewEl}
+				second={viewerEl}
 			/>
 		</div>
 	);
