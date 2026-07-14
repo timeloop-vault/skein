@@ -21,7 +21,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
-import { FilesOverlay } from "./FilesOverlay.tsx";
+import { FilesBody } from "./FilesBody.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
 import { SettingsModal } from "./SettingsModal.tsx";
@@ -358,83 +358,118 @@ const HarnessColumn = ({
 	onHarnessCmdChange,
 	opencodePorts,
 	onOpencodeSessionCaptured,
-}: HarnessColumnProps) => (
-	<div className="sk-harness-col">
-		<div className="sk-harness-tabs">
-			{room.harnesses.map((h) => (
-				<LiveHarnessTab
-					key={h.id}
-					h={h}
-					active={h.id === room.activeHarnessId}
-					closable={room.harnesses.length > 1}
-					onClick={() => onSwitchHarness(room.id, h.id)}
-					onClose={() => onCloseHarness(room.id, h.id)}
-					draggable
-					dragging={harnessDrag.draggedHarnessId === h.id}
-					dropSide={harnessDrag.dropTargetHarnessId === h.id ? harnessDrag.dropSide : null}
-					onDragStart={(e) => harnessDrag.onDragStart(e, room.id, h.id)}
-					onDragOver={(e) => harnessDrag.onDragOver(e, room.id, h.id)}
-					onDrop={(e) => harnessDrag.onDrop(e, room.id, h.id)}
-					onDragEnd={harnessDrag.onDragEnd}
-				/>
-			))}
-			<div className="sk-harness-add" onClick={() => onAddHarness(room.id)}>
-				+ harness
-			</div>
-			<div className="sk-harness-meta">
-				<span>{room.branch ? `${room.repo} · ${room.branch}` : (room.cwd ?? "")}</span>
-			</div>
-		</div>
+}: HarnessColumnProps) => {
+	const tablistRef = useRef<HTMLDivElement | null>(null);
 
-		{/*
-		 * Mount every harness in this room at once; hide the
-		 * inactive ones via display:none so xterm scrollback,
-		 * cursor position, and PTY state survive harness-tab
-		 * switches inside the room.
-		 *
-		 * Issue #25: when the picker is up we *also* hide every
-		 * harness pane rather than unmounting them — unmounting
-		 * fires LiveTerminal's cleanup, which pty_kills the PTY,
-		 * which kills the live Claude conversation we're trying
-		 * to add a sibling to. The picker takes the flex space
-		 * while present; harness panes survive untouched.
-		 */}
-		{showPicker && <HarnessPicker onPick={onPick} />}
-		{room.harnesses.map((h) => {
-			// "Visible" = user can see and interact with this terminal:
-			// room is active, no picker shadowing it, and this is the
-			// room's active harness. Drives the focus effect in
-			// LiveTerminal (#22).
-			const visible = roomActive && !showPicker && h.id === room.activeHarnessId;
-			return (
-				<div
-					key={h.id}
-					style={{
-						display: visible ? "flex" : "none",
-						flexDirection: "column",
-						flex: 1,
-						minHeight: 0,
-						// Pair with `.sk-harness-col`'s overflow:hidden — stops
-						// xterm's canvas from pushing this wrapper taller when
-						// the terminal font grows (#16).
-						overflow: "hidden",
-					}}
-				>
-					<HarnessBody
-						harness={h}
-						fontSize={fontSize}
-						defaultShell={defaultShell}
-						visible={visible}
-						onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
-						roomId={room.id}
-						opencodePort={opencodePorts.get(h.id)}
-						onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
-					/>
+	// The tab list scrolls; the active tab follows. scrollLeft only —
+	// scrollIntoView would also scroll ancestors (design README).
+	// offsetLeft is tablist-relative because .sk-harness-tablist is
+	// position:relative (the tabs' offsetParent) — without that the
+	// values are body-relative and the follow lands ~7px off.
+	// Deps include the harness list + roomActive so closing a tab to
+	// the left of the active one, or re-showing a hidden room (which
+	// can reset the scrollport), re-follows.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: room.harnesses is a deliberate trigger — tab removals shift offsets without changing the active id
+	useEffect(() => {
+		if (!roomActive) return;
+		const list = tablistRef.current;
+		if (!list) return;
+		const el = list.querySelector<HTMLElement>(`[data-htab="${CSS.escape(room.activeHarnessId)}"]`);
+		if (!el) return;
+		if (el.offsetLeft < list.scrollLeft) {
+			list.scrollLeft = el.offsetLeft;
+		} else if (el.offsetLeft + el.offsetWidth > list.scrollLeft + list.clientWidth) {
+			list.scrollLeft = el.offsetLeft + el.offsetWidth - list.clientWidth;
+		}
+	}, [room.activeHarnessId, room.harnesses, roomActive]);
+
+	return (
+		<div className="sk-harness-col">
+			<div className="sk-harness-tabs">
+				{/* Scrollable list + PINNED add button: without the split, a
+				    room with many harnesses pushed `+ harness` off-screen at
+				    laptop width (design README — the pinning is load-bearing). */}
+				<div className="sk-harness-tablist" ref={tablistRef}>
+					{room.harnesses.map((h) => (
+						<LiveHarnessTab
+							key={h.id}
+							h={h}
+							active={h.id === room.activeHarnessId}
+							closable={room.harnesses.length > 1}
+							onClick={() => onSwitchHarness(room.id, h.id)}
+							onClose={() => onCloseHarness(room.id, h.id)}
+							draggable
+							dragging={harnessDrag.draggedHarnessId === h.id}
+							dropSide={harnessDrag.dropTargetHarnessId === h.id ? harnessDrag.dropSide : null}
+							onDragStart={(e) => harnessDrag.onDragStart(e, room.id, h.id)}
+							onDragOver={(e) => harnessDrag.onDragOver(e, room.id, h.id)}
+							onDrop={(e) => harnessDrag.onDrop(e, room.id, h.id)}
+							onDragEnd={harnessDrag.onDragEnd}
+						/>
+					))}
 				</div>
-			);
-		})}
-	</div>
-);
+				<div className="sk-harness-add" onClick={() => onAddHarness(room.id)}>
+					+ harness
+				</div>
+				<div className="sk-harness-meta">
+					<span>{room.branch ? `${room.repo} · ${room.branch}` : (room.cwd ?? "")}</span>
+				</div>
+			</div>
+
+			{/*
+			 * Mount every harness in this room at once; hide the
+			 * inactive ones via display:none so xterm scrollback,
+			 * cursor position, and PTY state survive harness-tab
+			 * switches inside the room.
+			 *
+			 * Issue #25: when the picker is up we *also* hide every
+			 * harness pane rather than unmounting them — unmounting
+			 * fires LiveTerminal's cleanup, which pty_kills the PTY,
+			 * which kills the live Claude conversation we're trying
+			 * to add a sibling to. The picker takes the flex space
+			 * while present; harness panes survive untouched.
+			 */}
+			{showPicker && <HarnessPicker onPick={onPick} />}
+			{room.harnesses.map((h) => {
+				// "Visible" = user can see and interact with this body:
+				// room is active, no picker shadowing it, and this is the
+				// room's active harness. Drives the focus effect in
+				// LiveTerminal (#22).
+				const visible = roomActive && !showPicker && h.id === room.activeHarnessId;
+				return (
+					<div
+						key={h.id}
+						style={{
+							display: visible ? "flex" : "none",
+							flexDirection: "column",
+							flex: 1,
+							minHeight: 0,
+							// Pair with `.sk-harness-col`'s overflow:hidden — stops
+							// xterm's canvas from pushing this wrapper taller when
+							// the terminal font grows (#16).
+							overflow: "hidden",
+						}}
+					>
+						{HARNESS_KINDS[h.kind].capabilities.pty ? (
+							<HarnessBody
+								harness={h}
+								fontSize={fontSize}
+								defaultShell={defaultShell}
+								visible={visible}
+								onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
+								roomId={room.id}
+								opencodePort={opencodePorts.get(h.id)}
+								onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
+							/>
+						) : (
+							<FilesBody cwd={h.cwd ?? room.cwd ?? ""} visible={visible} />
+						)}
+					</div>
+				);
+			})}
+		</div>
+	);
+};
 
 // xterm font size range. Outside this band the terminal looks either
 // unreadable (sub-12) or comically large (above 18) on a 1320x820 window.
@@ -1020,6 +1055,12 @@ const cmdForKind = (
 			return ["gh", "copilot", "suggest"];
 		case "byoh":
 			return fallbackShell.length > 0 ? fallbackShell : ["pwsh.exe"];
+		case "files":
+			// Unreachable: `files` has no process (capabilities.pty is
+			// false, so creation paths never call cmdForKind for it).
+			// The empty argv is a type-totality placeholder, and
+			// HarnessBody wouldn't spawn an empty cmd anyway.
+			return [];
 	}
 };
 
@@ -1059,6 +1100,10 @@ interface DbLoadOutcome {
 // and (c) cmds already in --session/--continue form.
 const resumeCmd = (h: Harness, opencodePort?: number): string[] => {
 	const cmd = h.cmd ?? [];
+	// Capability gate first (#184): kinds without a resume concept
+	// (copilot, shell, files) pass through untouched — the per-kind
+	// rewrite logic below only ever sees resumable kinds.
+	if (!HARNESS_KINDS[h.kind].capabilities.resume) return cmd;
 	if (h.kind === "claude") {
 		const isFreshClaude =
 			(cmd.length === 1 && cmd[0] === "claude") ||
@@ -1157,14 +1202,10 @@ export default function App() {
 	const [showPalette, setShowPalette] = useState(false);
 	const [showSettings, setShowSettings] = useState(false);
 	const [showReopen, setShowReopen] = useState(false);
-	// #49 stage 1: the Files browse+view overlay for the active room.
-	const [showFiles, setShowFiles] = useState(false);
-	// Drop the flag whenever the render guard fails (last room closed,
-	// or switched to a cwd-less room) so it can't linger armed.
-	const roomCwd = rooms.find((r) => r.id === activeRoomId)?.cwd;
-	useEffect(() => {
-		if (!roomCwd) setShowFiles(false);
-	}, [roomCwd]);
+	// #49 phase A: per room, the last PTY harness the user was on
+	// before Mod+E jumped to a Files harness — so Mod+E toggles back
+	// to where they came from, not just "the first terminal".
+	const lastPtyHarnessRef = useRef(new Map<string, string>());
 
 	// Chapter 6 phase 2: split rooms into active (rendered as tabs) and
 	// archived (hidden, listed in the reopen modal). Tab strip, command
@@ -1698,6 +1739,12 @@ export default function App() {
 	cycleAlertedRoomRef.current = cycleAlertedRoom;
 	const cycleAlertedHarnessRef = useRef(cycleAlertedHarness);
 	cycleAlertedHarnessRef.current = cycleAlertedHarness;
+	// toggleFilesHarness is defined later (it depends on the harness
+	// creation path); the ref is declared here with the others and
+	// assigned down there.
+	const toggleFilesRef = useRef<() => void>(() => {});
+	// Rooms with a files-harness creation in flight (Mod+E latch).
+	const creatingFilesRef = useRef(new Set<string>());
 	const roomsRef = useRef(rooms);
 	roomsRef.current = rooms;
 	// Keyboard nav (Mod+Tab, Mod+1..9) keys off active rooms only —
@@ -1845,13 +1892,15 @@ export default function App() {
 			const isViewedHarness = Boolean(activeRoom && activeRoom.activeHarnessId === harnessId);
 			const isWindowFocused = windowFocusedRef.current;
 			const owningRoom = roomsRef.current.find((r) => r.harnesses.some((h) => h.id === harnessId));
-			// #127: shell (byoh) harnesses aren't agents — an idle/exited
-			// shell is just a prompt sitting there (or an `exit` you typed),
-			// never notification-worthy, and L2a idle-timeout / prompt-redraw
+			// #127: shells aren't agents — an idle/exited shell is just a
+			// prompt sitting there (or an `exit` you typed), never
+			// notification-worthy, and L2a idle-timeout / prompt-redraw
 			// chatter made them pop up spuriously. Suppress every surface
-			// (badge / toast / OS) for them; the status dot still reflects
-			// running/idle. Agents (claude/opencode) notify as before.
-			if (owningRoom?.harnesses.find((h) => h.id === harnessId)?.kind === "byoh") return;
+			// (badge / toast / OS) for kinds without the notify capability
+			// (byoh, files); the status dot still reflects running/idle.
+			// Agents (claude/opencode/copilot) notify as before.
+			const kind = owningRoom?.harnesses.find((h) => h.id === harnessId)?.kind;
+			if (kind && !HARNESS_KINDS[kind].capabilities.notify) return;
 			// Badge: skip when the user is staring at this exact
 			// harness — the tab dot color change tells them what
 			// happened. If they alt+tabbed away, though, bump
@@ -2125,15 +2174,11 @@ export default function App() {
 				case "palette":
 					setShowPalette(true);
 					break;
-				case "files": {
-					// Toggle so Mod+E both opens and closes. Gate on the
-					// same condition the render uses (room has a cwd) —
-					// a looser gate would arm an invisible overlay that
-					// pops open on a later room switch.
-					const activeRoom = roomsRef.current.find((r) => r.id === active);
-					if (activeRoom?.cwd) setShowFiles((v) => !v);
+				case "files":
+					// #49 phase A: jump to (or create) the room's Files
+					// harness, or bounce back to the last terminal.
+					toggleFilesRef.current();
 					break;
-				}
 				case "settings":
 					setShowSettings(true);
 					break;
@@ -2312,11 +2357,14 @@ export default function App() {
 		);
 	};
 
-	const pickHarness = async (kind: HarnessKind) => {
-		const targetRoomId = showPicker;
-		if (!targetRoomId) return;
-		const targetRoom = rooms.find((r) => r.id === targetRoomId);
+	// #49 phase A: harness creation, callable from both the + harness
+	// menu (pickHarness) and the Mod+E files jump. Kind-specific setup
+	// branches on capabilities — `files` is a surface, not a process:
+	// no session id, no port, no cmd, and it starts (and stays) idle.
+	const createHarnessInRoom = async (targetRoomId: string, kind: HarnessKind) => {
+		const targetRoom = roomsRef.current.find((r) => r.id === targetRoomId);
 		if (!targetRoom) return;
+		const caps = HARNESS_KINDS[kind].capabilities;
 		const id = newId("h");
 		const cwd = targetRoom.cwd ?? defaultCwd;
 		// Phase 2a: pre-allocate Claude's conversation id so the harness
@@ -2339,26 +2387,27 @@ export default function App() {
 				console.warn("[skein] pick_free_port failed; falling back to L2a:", err);
 			}
 		}
-		const cmd = cmdForKind(kind, defaultShell, sessionId, opencodePort);
+		const cmd = caps.pty ? cmdForKind(kind, defaultShell, sessionId, opencodePort) : undefined;
 		setRooms((prev) =>
 			prev.map((r) => {
 				if (r.id !== targetRoomId) return r;
 				const newH: Harness = {
 					id,
 					kind,
-					name: `${HARNESS_KINDS[kind].label}-${r.harnesses.length + 1}`,
-					status: "running",
-					model: kind === "copilot" ? "gpt-5" : "sonnet-4.5",
+					// The ◇ label makes a poor name stem — files harnesses
+					// read better as "files-2" than "◇-2".
+					name: `${kind === "files" ? "files" : HARNESS_KINDS[kind].label}-${r.harnesses.length + 1}`,
+					status: caps.pty ? "running" : "idle",
+					model: caps.pty ? (kind === "copilot" ? "gpt-5" : "sonnet-4.5") : "",
 					tokens: "0",
-					live: true,
-					cmd,
+					...(caps.pty ? { live: true } : {}),
+					...(cmd ? { cmd } : {}),
 					cwd,
 					...(sessionId ? { sessionId } : {}),
 				};
 				return { ...r, harnesses: [...r.harnesses, newH], activeHarnessId: id };
 			}),
 		);
-		setShowPicker(null);
 		// Phase 2b: kick off async capture for opencode harnesses. The
 		// snapshot has to happen *before* opencode writes its session
 		// row, which it doesn't do until LiveTerminal mounts and spawns
@@ -2377,6 +2426,55 @@ export default function App() {
 			});
 		}
 	};
+
+	const pickHarness = (kind: HarnessKind) => {
+		const targetRoomId = showPicker;
+		setShowPicker(null);
+		if (!targetRoomId) return;
+		void createHarnessInRoom(targetRoomId, kind);
+	};
+
+	// #49 phase A: Mod+E = jump to the room's Files harness (creating
+	// one if none exists — decided on the epic) ⇄ back to the PTY
+	// harness the user came from. Reads through refs so the []-dep'd
+	// keydown dispatcher can call it.
+	const toggleFilesHarness = () => {
+		const rid = activeRoomIdRef.current;
+		if (!rid) return;
+		const r = roomsRef.current.find((x) => x.id === rid);
+		if (!r) return;
+		// The picker pane hides every body — a jump would succeed
+		// invisibly behind it. Dismiss it so the result is seen.
+		setShowPicker(null);
+		const activeH = r.harnesses.find((h) => h.id === r.activeHarnessId);
+		if (activeH && !HARNESS_KINDS[activeH.kind].capabilities.pty) {
+			// On a Files harness: bounce back to where the user came
+			// from (falls back to the room's first PTY harness when the
+			// remembered one is gone or the jump was never recorded).
+			// Deliberately not gated on cwd — bouncing out never needs one.
+			const backId = lastPtyHarnessRef.current.get(rid);
+			const back =
+				(backId ? r.harnesses.find((h) => h.id === backId) : undefined) ??
+				r.harnesses.find((h) => HARNESS_KINDS[h.kind].capabilities.pty);
+			if (back) switchHarnessInRoom(rid, back.id);
+			return;
+		}
+		if (!r.cwd) return; // creating/jumping to Files needs a folder
+		if (activeH) lastPtyHarnessRef.current.set(rid, activeH.id);
+		const files = r.harnesses.find((h) => !HARNESS_KINDS[h.kind].capabilities.pty);
+		if (files) {
+			switchHarnessInRoom(rid, files.id);
+			return;
+		}
+		// Synchronous latch: Mod+E key-repeats faster than a React
+		// commit under load — without it a held key creates duplicates.
+		if (creatingFilesRef.current.has(rid)) return;
+		creatingFilesRef.current.add(rid);
+		void createHarnessInRoom(rid, "files").finally(() => {
+			creatingFilesRef.current.delete(rid);
+		});
+	};
+	toggleFilesRef.current = toggleFilesHarness;
 
 	const createRoom = async ({ cwd, task, harness, branch }: CreateRoomArgs) => {
 		const sid = newId("s");
@@ -2408,11 +2506,15 @@ export default function App() {
 		// Repo / branch are only set for git-backed rooms (chapter 6
 		// phase 3). For non-git rooms the tab subtext shows just the
 		// folder name and LiveStatus is replaced by a placeholder.
+		const startCaps = HARNESS_KINDS[harness].capabilities;
 		const newRoom: Room = {
 			id: sid,
 			name: `local · ${folderName}`,
 			task,
-			status: "running",
+			// A files-only room has nothing running — and since a files
+			// harness never registers activity, the aggregate can't
+			// correct a wrong persisted "running" later.
+			status: startCaps.pty ? "running" : "idle",
 			badge: 0,
 			cwd,
 			...(branch ? { branch, repo: folderName } : {}),
@@ -2421,11 +2523,13 @@ export default function App() {
 					id: hid,
 					kind: harness,
 					name: "main",
-					status: "running",
-					model: harness === "copilot" ? "gpt-5" : "sonnet-4.5",
+					status: startCaps.pty ? "running" : "idle",
+					model: startCaps.pty ? (harness === "copilot" ? "gpt-5" : "sonnet-4.5") : "",
 					tokens: "0",
-					live: true,
-					cmd: cmdForKind(harness, defaultShell, sessionId, opencodePort),
+					...(startCaps.pty ? { live: true } : {}),
+					...(startCaps.pty
+						? { cmd: cmdForKind(harness, defaultShell, sessionId, opencodePort) }
+						: {}),
 					cwd,
 					...(sessionId ? { sessionId } : {}),
 				},
@@ -2511,9 +2615,9 @@ export default function App() {
 	if (room?.cwd) {
 		paletteItems.push({
 			id: "cmd:browse-files",
-			label: "Browse files",
+			label: "Files harness",
 			hint: hints.files,
-			invoke: () => setShowFiles(true),
+			invoke: () => toggleFilesRef.current(),
 		});
 	}
 	if (archivedRooms.length > 0) {
@@ -2862,6 +2966,12 @@ export default function App() {
 					<HChip kind={activeHarness.kind} />
 					<span>{HARNESS_KINDS[activeHarness.kind].name}</span>
 				</span>
+				{/* #49 phase A: name the keyboard holder. Bodies are
+				    mutually exclusive, so this is purely informative —
+				    but "who has the keyboard" should never need guessing. */}
+				<span className="seg" title="Keyboard input goes to the active body">
+					⌨ {HARNESS_KINDS[activeHarness.kind].capabilities.pty ? "terminal" : "editor"}
+				</span>
 				<LiveStatusBarChip harness={activeHarness} />
 				{(() => {
 					// Prefer the live branch (updated on every watcher tick) but
@@ -2946,17 +3056,6 @@ export default function App() {
 					onDelete={deleteRoomForever}
 					onRestore={restoreRoom}
 					onClose={() => setShowReopen(false)}
-				/>
-			)}
-			{showFiles && room?.cwd && (
-				// Keyed by room so switching rooms while open resets the
-				// tree to the new room's cwd instead of carrying a stale
-				// subPath into it.
-				<FilesOverlay
-					key={room.id}
-					cwd={room.cwd}
-					suspended={showPalette || showSettings || showReopen || showNewRoom}
-					onClose={() => setShowFiles(false)}
 				/>
 			)}
 			{toastStack}

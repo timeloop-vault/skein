@@ -137,6 +137,7 @@ export const HarnessTab = ({
 } & DragProps) => (
 	<div
 		className={`sk-harness-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
+		data-htab={h.id}
 		onClick={onClick}
 		draggable={draggable}
 		onDragStart={onDragStart}
@@ -161,6 +162,11 @@ export const HarnessTab = ({
 	</div>
 );
 
+// The full-pane harness picker: `+ harness` swaps the body slot for
+// this card grid until a kind is picked. (The files-pillar design
+// proposed an anchored dropdown here instead; the owner prefers the
+// pane — 2026-07-14.) Iterating the registry means new kinds (Files)
+// appear as cards automatically.
 export const HarnessPicker = ({ onPick }: { onPick: (kind: HarnessKind) => void }) => (
 	<div className="sk-empty-harness">
 		<h3>Add a harness</h3>

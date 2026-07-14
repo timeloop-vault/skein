@@ -204,28 +204,83 @@ body {
 	color: var(--fg-0);
 }
 
-/* ── #49 stage 1: Files overlay (browse + view) ────────────────── */
-.sk-files-backdrop {
-	position: fixed;
-	inset: 0;
-	background: rgba(0, 0, 0, 0.45);
-	/* Below the modal layer (100): palette/settings opened while the
-	   Files overlay is up must stack visibly ON TOP of it, not focus
-	   an invisible input underneath. */
-	z-index: 90;
+/* ── #49: Files harness (browse + view in the body slot) ───────── */
+.sk-files-nocwd {
+	flex: 1;
 	display: flex;
 	align-items: center;
 	justify-content: center;
+	color: var(--fg-3);
+	font-family: var(--sk-mono);
+	font-size: 11px;
 }
-.sk-files-panel {
-	width: min(1100px, 92vw);
-	height: min(760px, 88vh);
-	background: var(--bg-1);
-	border: 1px solid var(--line-strong);
-	border-radius: 10px;
-	box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
-	overflow: hidden;
+/* The ◇ chip: Files isn't a process, so no coloured process chip —
+   an accent glyph on a transparent ground (design handover §2). */
+.h-chip.h-files {
+	background: transparent;
+	color: var(--accent);
+}
+.sk-empty-harness {
+	flex: 1;
 	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	padding: 40px;
+	gap: 24px;
+}
+.sk-empty-harness h3 {
+	font-size: calc(var(--cfs) * 1.1667);
+	font-weight: 500;
+	color: var(--fg-0);
+	margin: 0;
+	font-family: var(--sk-mono);
+	letter-spacing: -0.01em;
+}
+.sk-empty-harness p {
+	color: var(--fg-2);
+	font-size: calc(var(--cfs) * 1);
+	max-width: 360px;
+	text-align: center;
+	margin: 0;
+	line-height: 1.6;
+}
+.sk-harness-grid {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 8px;
+	width: 320px;
+}
+.sk-harness-card {
+	padding: 14px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--bg-1);
+	cursor: pointer;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	transition: border-color 0.12s, background 0.12s;
+}
+.sk-harness-card:hover {
+	border-color: var(--line-strong);
+	background: var(--bg-2);
+}
+.sk-harness-card .head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.sk-harness-card .h-name {
+	font-size: calc(var(--cfs) * 1);
+	font-weight: 500;
+	color: var(--fg-0);
+}
+.sk-harness-card .h-desc {
+	font-size: calc(var(--cfs) * 0.875);
+	color: var(--fg-2);
+	line-height: 1.5;
+	font-family: var(--sk-mono);
 }
 .sk-find-bar {
 	position: sticky;
@@ -682,6 +737,28 @@ mark.sk-find-hit.active {
 	background: var(--bg-1);
 	border-bottom: 1px solid var(--line);
 }
+/* #49 phase A: the tab list scrolls; `+ harness` stays pinned after
+   it (many-harness rooms used to push the button off-screen at
+   laptop width — the pinning is load-bearing, design README). */
+.sk-harness-tablist {
+	/* position:relative makes this the tabs' offsetParent, so the
+	   scroll-follow effect's offsetLeft math is tablist-relative. */
+	position: relative;
+	display: flex;
+	align-items: stretch;
+	gap: 2px;
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow-x: auto;
+	scrollbar-width: none;
+	/* Let the active tab's seam-hiding ::after (bottom: -1px) escape
+	   the scrollport so it still paints over the row's border. */
+	margin-bottom: -1px;
+	padding-bottom: 1px;
+}
+.sk-harness-tablist::-webkit-scrollbar {
+	display: none;
+}
 .sk-harness-tab {
 	display: flex;
 	align-items: center;
@@ -1009,68 +1086,6 @@ mark.sk-find-hit.active {
 }
 
 /* Empty harness picker */
-.sk-empty-harness {
-	flex: 1;
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	padding: 40px;
-	gap: 24px;
-}
-.sk-empty-harness h3 {
-	font-size: calc(var(--cfs) * 1.1667);
-	font-weight: 500;
-	color: var(--fg-0);
-	margin: 0;
-	font-family: var(--sk-mono);
-	letter-spacing: -0.01em;
-}
-.sk-empty-harness p {
-	color: var(--fg-2);
-	font-size: calc(var(--cfs) * 1);
-	max-width: 360px;
-	text-align: center;
-	margin: 0;
-	line-height: 1.6;
-}
-.sk-harness-grid {
-	display: grid;
-	grid-template-columns: repeat(2, 1fr);
-	gap: 8px;
-	width: 320px;
-}
-.sk-harness-card {
-	padding: 14px;
-	border: 1px solid var(--line);
-	border-radius: 6px;
-	background: var(--bg-1);
-	cursor: pointer;
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	transition: border-color 0.12s, background 0.12s;
-}
-.sk-harness-card:hover {
-	border-color: var(--line-strong);
-	background: var(--bg-2);
-}
-.sk-harness-card .head {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-}
-.sk-harness-card .h-name {
-	font-size: calc(var(--cfs) * 1);
-	font-weight: 500;
-	color: var(--fg-0);
-}
-.sk-harness-card .h-desc {
-	font-size: calc(var(--cfs) * 0.875);
-	color: var(--fg-2);
-	line-height: 1.5;
-	font-family: var(--sk-mono);
-}
 
 /* New session modal */
 .sk-modal-bg {

@@ -1,6 +1,7 @@
-// FileTree — the browse+view surface of the Files overlay (#49
-// stage 1; originally issue #7, deleted in the Live Context rework
-// and resurrected from e8ecbab^).
+// FileTree — the browse+view surface of a `files` harness body (#49;
+// originally issue #7, deleted in the Live Context rework,
+// resurrected from e8ecbab^ as an overlay in stage 1, then moved
+// into the harness body slot in phase A).
 //
 // One-level directory listing rooted at the room's cwd, navigable
 // in-place: click a dir to descend, click a breadcrumb segment to go
@@ -37,6 +38,10 @@ interface TextDto {
 
 interface FileTreeProps {
 	cwd: string;
+	/** False while this body is hidden (inactive harness tab / room).
+	 *  Hidden trees run no watcher and fetch nothing — a user with N
+	 *  files harnesses must not pay N recursive watchers at boot. */
+	visible: boolean;
 }
 
 const DIR_GLYPH = "▸";
@@ -60,7 +65,7 @@ const formatSize = (bytes: number): string => {
 	return `${(bytes / (1024 * 1024)).toFixed(1)}M`;
 };
 
-export const FileTree = ({ cwd }: FileTreeProps) => {
+export const FileTree = ({ cwd, visible }: FileTreeProps) => {
 	// `subPath` is the path *relative* to cwd that we're currently
 	// listing. Starts at "" (the cwd itself).
 	const [subPath, setSubPath] = useState<string>("");
@@ -77,6 +82,8 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 	// resolving after a fast one for the current directory and
 	// clobbering it (breadcrumb back-out during a big listing).
 	const refreshSeq = useRef(0);
+	const visibleRef = useRef(visible);
+	visibleRef.current = visible;
 
 	const refresh = useCallback(async () => {
 		const seq = ++refreshSeq.current;
@@ -106,17 +113,28 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 
 	// Reset selection when the directory changes — a file selected in
 	// `src/` doesn't carry meaning when we navigate to `tests/`.
+	// Fetching is skipped while hidden (navigation only happens while
+	// visible anyway; the boot-time mount of a hidden files harness
+	// must not fan out list_dir calls).
 	useEffect(() => {
 		setSelectedFile(null);
 		setFileText(null);
 		setFileNote(null);
-		void refresh();
+		if (visibleRef.current) void refresh();
 	}, [refresh]);
+
+	// The watcher below is off while hidden, so refresh on every
+	// show — the listing may be stale from agent activity meanwhile.
+	useEffect(() => {
+		if (visible) void refresh();
+	}, [visible, refresh]);
 
 	// Watch the *current* subdirectory so the listing reflects what
 	// the agent (or anyone else) is doing in real time. Re-runs on
-	// every navigation since the watched path changes.
+	// every navigation since the watched path changes — and only runs
+	// while this body is visible.
 	useEffect(() => {
+		if (!visible) return;
 		const channel = new Channel<null>();
 		channel.onmessage = () => {
 			void refresh();
@@ -144,7 +162,7 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 				void invoke("git_watch_stop", { id: watchId });
 			}
 		};
-	}, [currentDir, refresh]);
+	}, [currentDir, refresh, visible]);
 
 	useEffect(() => {
 		if (!selectedFile) {
@@ -347,7 +365,6 @@ export const FileTree = ({ cwd }: FileTreeProps) => {
 						</span>
 					</span>
 				))}
-				<span style={{ marginLeft: "auto", color: "var(--fg-3)" }}>Esc to close</span>
 			</div>
 			<Splitter
 				direction="row"

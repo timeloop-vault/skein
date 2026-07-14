@@ -6,7 +6,11 @@
 // Harness as `sessionId`, which is the only meaning of "session" in
 // Skein's vocabulary now.
 
-export type HarnessKind = "claude" | "opencode" | "copilot" | "byoh";
+// `files` (#49 phase A) is the first non-process kind: a browse/edit
+// surface living in the harness body slot. Kind-specific behaviour
+// should branch on `HARNESS_KINDS[kind].capabilities`, not on kind
+// string comparisons.
+export type HarnessKind = "claude" | "opencode" | "copilot" | "byoh" | "files";
 
 export type Status = "running" | "waiting" | "idle" | "error" | "exited";
 
