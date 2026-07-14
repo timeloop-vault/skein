@@ -62,43 +62,43 @@ function RoomTabs() {
   );
 }
 
-// ── "+ harness" menu (portalled so the column's overflow can't clip it) ──────
-const HARNESS_KINDS = [
-  { kind: "claude",   chip: "CC", cls: "h-claude",   label: "Claude Code" },
-  { kind: "opencode", chip: "oc", cls: "h-opencode", label: "opencode" },
-  { kind: "byoh",     chip: "sh", cls: "h-byoh",     label: "shell" },
+// ── "+ harness" — the shipped plain button, untouched. It opens the in-pane
+//    harness PICKER (a card grid), exactly as in Skein Prototype. Files is one
+//    more card in that grid — not a dropdown, not a direct add.
+function AddHarness({ onAdd }) {
+  return <div className="sk-harness-add" title="add a harness" onClick={() => onAdd()}>+ harness</div>;
+}
+
+// The kinds offered by the picker. First four are the shipped agent kinds
+// (verbatim names/descriptions from Skein Prototype); Files is the new one.
+const PICKER_KINDS = [
+  { kind: "claude",   chip: "CC", cls: "h-claude",   name: "Claude Code", desc: "Anthropic. Direct API." },
+  { kind: "opencode", chip: "oc", cls: "h-opencode", name: "opencode",    desc: "Local server, OSS." },
+  { kind: "copilot",  chip: "gh", cls: "h-copilot",  name: "Copilot CLI", desc: "GitHub entitlement." },
+  { kind: "byoh",     chip: "sk", cls: "h-byoh",     name: "Skein BYOH",  desc: "Built-in agent loop." },
+  { kind: "files",    glyph: "◇",                    name: "Files",       desc: "Browse + edit the worktree." },
 ];
-function AddHarnessMenu({ onAdd }) {
-  const [open, setOpen] = useStateShell(false);
-  const [pos, setPos] = useStateShell(null);
-  const btnRef = useRefShell();
-  const openMenu = () => {
-    const r = btnRef.current.getBoundingClientRect();
-    setPos({ x: r.left, y: r.bottom + 5 });
-    setOpen(true);
-  };
+
+// In-pane picker shown in the harness column body when + harness is clicked.
+function HarnessPicker({ onPick }) {
   return (
-    <>
-      <div ref={btnRef} className="sk-harness-add" onClick={openMenu}>+ harness</div>
-      {open && pos && ReactDOM.createPortal(
-        <div className="shm-scrim" onMouseDown={() => setOpen(false)}>
-          <div className="sk-harness-menu" style={{ left: pos.x, top: pos.y }} onMouseDown={(e) => e.stopPropagation()}>
-            <div className="shm-cap">Add to this room</div>
-            {HARNESS_KINDS.map((k) => (
-              <div key={k.kind} className="shm-item" onClick={() => { onAdd(k.kind); setOpen(false); }}>
-                <span className={"chip " + k.cls} data-kind={k.kind}>{k.chip}</span>
-                <span>{k.label}</span>
-              </div>
-            ))}
-            <div className="shm-sep"></div>
-            <div className="shm-item" onClick={() => { onAdd("files"); setOpen(false); }}>
-              <span className="shm-glyph">◇</span>
-              <span>Files</span>
-              <span className="shm-tag">editor</span>
+    <div className="sk-empty-harness">
+      <h3>Add a harness</h3>
+      <p>Pick an agent for this workspace. All harnesses see the same worktree.</p>
+      <div className="sk-harness-grid">
+        {PICKER_KINDS.map((k) => (
+          <div key={k.kind} className="sk-harness-card" onClick={() => onPick(k.kind)}>
+            <div className="head">
+              {k.glyph
+                ? <span className="hp-glyph">{k.glyph}</span>
+                : <span className={"chip " + k.cls} data-kind={k.kind}>{k.chip}</span>}
+              <span className="h-name">{k.name}</span>
             </div>
+            <div className="h-desc">{k.desc}</div>
           </div>
-        </div>, document.body)}
-    </>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -135,7 +135,7 @@ function HarnessTabs({ harnesses, active, onSelect, onClose, onAdd, agentEditing
       })}
         <div className="sk-harness-meta"><span>skein · main</span></div>
       </div>
-      <AddHarnessMenu onAdd={onAdd} />
+      <AddHarness onAdd={onAdd} />
     </div>
   );
 }
@@ -304,5 +304,5 @@ function StatusBar({ focusLabel }) {
 }
 
 Object.assign(window, {
-  TitleBar, RoomTabs, HarnessTabs, TerminalBody, TerminalFoot, ShellBody, LiveContext, StatusBar,
+  TitleBar, RoomTabs, HarnessTabs, HarnessPicker, TerminalBody, TerminalFoot, ShellBody, LiveContext, StatusBar,
 });

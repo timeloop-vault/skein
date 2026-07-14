@@ -72,7 +72,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		label: "◇",
 		name: "Files",
 		chip: "h-files",
-		desc: "Browse & edit the room's files.",
+		desc: "Browse + edit the worktree.",
 		capabilities: { pty: false, resume: false, notify: false },
 	},
 };

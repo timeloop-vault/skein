@@ -92,11 +92,18 @@ Occupies the harness column body (the slot a terminal would fill). Two regions:
 - Cross-harness nudge: when an agent edits a file open in a Files harness you are
   **not** viewing, that tab shows a pulsing accent live-pip.
 
-### Component: `+ harness` menu (portalled)
-- Items: `Claude Code · opencode · shell · — · Files` (Files tagged "editor"). Selecting
-  Files creates a Files harness and focuses it. Must be portalled to `document.body`
-  (fixed-position via the button's `getBoundingClientRect`) so the column's
-  `overflow:hidden` can't clip it.
+### Component: `+ harness` (existing button + existing picker — **do not redesign**)
+- `+ harness` stays the **plain button it has always been**
+  (`<div class="sk-harness-add">+ harness</div>`). Clicking it opens the **existing
+  in-pane harness picker** — the `.sk-empty-harness` card grid (`.sk-harness-grid` /
+  `.sk-harness-card`) shown in the harness column body, headed "Add a harness" /
+  "Pick an agent for this workspace. All harnesses see the same worktree."
+- **Files is simply one more card in that existing grid**, alongside Claude Code /
+  opencode / Copilot CLI / Skein BYOH. Do **not** turn `+ harness` into a dropdown,
+  and do **not** build a new picker — add a `files` entry to the existing
+  `HARNESS_KINDS`/picker. The Files card uses a `◇` glyph (not a coloured chip) and
+  a short desc ("Browse + edit the worktree."); clicking it creates a Files harness
+  and focuses it.
 
 ### Component: Live Context (existing, unchanged placement) — Full ⇄ Peek
 - Stays on the right. **Full** = the card stack (Diff / Plan / Activity). **Peek** =

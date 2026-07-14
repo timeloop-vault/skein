@@ -25,8 +25,9 @@ function Director(props) {
       </div>
       <div className="fpc-body">
         <div className="fpc-model">
-          <b>Files is a harness.</b> Add it from <span className="kbdlike">+ harness</span> like a
-          shell — open as many as you like. Only one harness body shows at a time.
+          <b>Files is a harness.</b> Click <span className="kbdlike">+ harness</span> →
+          pick the <b>Files</b> card, same as choosing a shell. Open as many as you like;
+          only one harness body shows at a time.
         </div>
         <div className="fpc-sec">
           <span className="lab">Screen width</span>
@@ -89,6 +90,7 @@ function App() {
   const [dirty, setDirty] = useState(() => new Set());
   const [override, setOverride] = useState({});
   const [quick, setQuick] = useState(false);
+  const [picker, setPicker] = useState(false);
   const [agentEditing, setAgentEditing] = useState(false);
   const [streamCount, setStreamCount] = useState(0);
 
@@ -106,19 +108,23 @@ function App() {
   // ── harness ops ──
   const selectHarness = useCallback((id) => {
     setActive(id);
+    setPicker(false);
     const h = hRef.current.find((x) => x.id === id);
     if (h && h.kind !== "files") lastPtyRef.current = id;
     setQuick(false);
   }, []);
   const addHarness = useCallback((kind) => {
     const id = "h" + (++idRef.current);
-    const name = kind === "files" ? "Files" : kind === "claude" ? "Claude Code" : kind === "opencode" ? "opencode" : "shell";
-    setHarnesses((hs) => [...hs, { id, kind, name, state: kind === "claude" ? "running" : "idle" }]);
+    const name = kind === "files" ? "Files" : kind === "claude" ? "Claude Code" : kind === "opencode" ? "opencode" : kind === "copilot" ? "Copilot CLI" : "shell";
+    const st = kind === "claude" || kind === "copilot" ? "running" : "idle";
+    setHarnesses((hs) => [...hs, { id, kind, name, state: st }]);
     if (kind === "files") setFilesState((fs) => ({ ...fs, [id]: { buffers: [], active: null } }));
     else lastPtyRef.current = id;
     setActive(id);
     return id;
   }, []);
+  const openPicker = useCallback(() => setPicker(true), []);
+  const pickHarness = useCallback((kind) => { setPicker(false); addHarness(kind); }, [addHarness]);
   const closeHarness = useCallback((id) => {
     setHarnesses((hs) => {
       const idx = hs.findIndex((h) => h.id === id);
@@ -259,13 +265,15 @@ function App() {
             <div className="sk-harness-col">
               <window.HarnessTabs
                 harnesses={harnesses} active={active}
-                onSelect={selectHarness} onClose={closeHarness} onAdd={addHarness}
+                onSelect={selectHarness} onClose={closeHarness} onAdd={openPicker}
                 agentEditing={agentEditing} filesState={filesState} agentPath={AGENT_PATH} />
-              {activeIsFiles
-                ? <window.FileSurface {...surfaceProps} />
-                : activeH && activeH.kind === "claude"
-                  ? <><window.TerminalBody /><window.TerminalFoot /></>
-                  : <window.ShellBody name={activeH ? activeH.name : "shell"} />}
+              {picker
+                ? <window.HarnessPicker onPick={pickHarness} />
+                : activeIsFiles
+                  ? <window.FileSurface {...surfaceProps} />
+                  : activeH && activeH.kind === "claude"
+                    ? <><window.TerminalBody /><window.TerminalFoot /></>
+                    : <window.ShellBody name={activeH ? activeH.name : "shell"} />}
             </div>
             <div className="sk-splitter-x"></div>
             {lc}

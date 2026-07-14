@@ -4,8 +4,9 @@ Companion to:
 - `uploads/files-pillar-design-brief.md` (issue #49, stage 2 — the questions this resolves)
 - `Files Pillar Prototype.html` (interactive prototype; a right-side **director
   rail** drives the demo and is NOT part of the product)
-- `fp-shell.jsx` — Skein chrome (titlebar, room tabs, **harness tab row + add
-  menu**, terminal/shell bodies, Live Context stack, status bar)
+- `fp-shell.jsx` — Skein chrome (titlebar, room tabs, **harness tab row + the plain
+  `+ harness` button + the in-pane harness picker**, terminal/shell bodies, Live
+  Context stack, status bar)
 - `fp-surface.jsx` — the file surface (tree, buffer tabs, editor, find, the live
   change split, quick-open)
 - `fp-app.jsx` — harness model, per-Files-harness buffer state, keyboard, scenario
@@ -49,9 +50,11 @@ Peek on laptop), with the terminal one tab-click away.
 
 ## 1 · Definition of done
 
-1. A new harness kind **`files`** exists. `+ harness` offers Claude Code /
-   opencode / shell / **Files**. Adding Files creates a Files harness tab and
-   focuses it. Multiple Files harnesses per room are allowed.
+1. A new harness kind **`files`** exists, added as **one more card in the existing
+   in-pane harness picker** (`+ harness` → pick "Files"). The `+ harness` button and
+   picker are otherwise unchanged — do not turn it into a dropdown or build a new
+   picker. Picking Files creates a Files harness tab and focuses it. Multiple Files
+   harnesses per room are allowed.
 2. A Files harness body renders: **persistent tree** (left) + **buffer tab row +
    editor** (right). It occupies the harness column body — the same slot a
    terminal would.
@@ -86,17 +89,20 @@ harness introduces **no new colours**: dirs use `▸/▾`, the Files tab/kind us
 isn't a process kind), agent-touched files a `●` pip, the incoming-edit side the
 accent, diff tint reuses `--diff-add / --diff-del`. Lift the file-surface + harness
 CSS verbatim from `Files Pillar Prototype.html` (`.fp-surface`, `.fp-tree`,
-`.fp-buftabs`, `.fp-code`, `.ed-split`, `.ed-changebar`, `.fp-qo-*`,
-`.sk-harness-menu`, `.lc-peek`).
+`.buftabs`, `.fp-code`, `.ed-split`, `.ed-changebar`, `.fp-qo-*`, `.lc-peek`).
 
 ---
 
 ## 3 · The harness model, in detail (Q1)
 
 ### 3.1 Adding / switching / closing
-- `+ harness` → menu `Claude Code · opencode · shell · — · Files`. Selecting Files
-  creates a `files` harness and focuses it (an empty one shows the editor empty
-  state + a `⌘P to jump` hint).
+- **`+ harness` is unchanged** — the plain button that opens the existing **in-pane
+  harness picker** (the `.sk-empty-harness` card grid: "Add a harness" / "Pick an
+  agent for this workspace…"). Files becomes **one more card** in that existing grid,
+  alongside Claude Code / opencode / Copilot CLI / Skein BYOH — exactly like picking
+  a shell. We do **not** turn `+ harness` into a dropdown, and we do **not** build a
+  new picker; add a `files` entry to the existing `HARNESS_KINDS`. Picking Files
+  creates a `files` harness and focuses it (empty → editor empty state + `⌘P to jump`).
 - A Files tab looks like other harness tabs: state dot + `◇` glyph + name + ×.
 - Closing the tab closes that Files harness (prompt if it has dirty buffers — §8).
 
@@ -203,7 +209,7 @@ harness tab is active." Keep it *visible* anyway:
 
 | Trigger | Result | Stage |
 |---|---|---|
-| `+ harness → Files` | new Files harness, focused | now |
+| `+ harness` → pick **Files** card | new Files harness, focused | now |
 | `Mod+E` | jump to a Files harness (create if none) ⇄ back to last terminal | now |
 | `Mod+P` | fuzzy quick-open → buffer in a Files harness | now (#48) |
 | click a Diff tab | open that file in a Files harness | now |
@@ -248,7 +254,8 @@ incoming pane can stream.
 
 ## 13 · State variations to verify (map to the prototype)
 
-- **Add Files harness** from `+ harness`; empty state shows `⌘P to jump`.
+- **`+ harness` → picker**: the card grid shows Claude Code / opencode / Copilot /
+  Skein BYOH / **Files**; picking Files creates a Files harness (empty → `⌘P to jump`).
 - **Multiple Files harnesses** coexist, independent buffers.
 - **Files harness active:** tree + buffer tabs + editor; touched-file pip.
 - **Agent edits your open file, you're on that Files harness:** live split.
