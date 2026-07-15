@@ -735,10 +735,13 @@ impl Database {
 /// std's rename refuses to overwrite. Callers only pass a complete
 /// file as `from`, so the remove-then-retry window never risks the
 /// last good copy.
-fn replace_file(from: &Path, to: &Path) -> Result<(), String> {
+pub(crate) fn replace_file(from: &Path, to: &Path) -> Result<(), String> {
     match std::fs::rename(from, to) {
         Ok(()) => Ok(()),
-        Err(_) if to.exists() => {
+        // Only when the source still exists: if a concurrent caller
+        // already consumed `from`, removing `to` here would delete the
+        // freshly-written target (#185 review).
+        Err(_) if to.exists() && from.exists() => {
             std::fs::remove_file(to).map_err(|e| e.to_string())?;
             std::fs::rename(from, to).map_err(|e| e.to_string())
         }

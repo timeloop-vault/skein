@@ -28,6 +28,7 @@ import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { HChip, HarnessPicker, HarnessTab, RoomTab, StatusDot } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
+import { filesRegistry } from "./filesRegistry.ts";
 import {
 	activityToStatus,
 	effectiveStatus,
@@ -464,7 +465,7 @@ const HarnessColumn = ({
 								onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
 							/>
 						) : (
-							<FilesBody cwd={h.cwd ?? room.cwd ?? ""} visible={visible} />
+							<FilesBody harnessId={h.id} cwd={h.cwd ?? room.cwd ?? ""} visible={visible} />
 						)}
 					</div>
 				);
@@ -1399,7 +1400,15 @@ export default function App() {
 		// but the user shouldn't have to discover that). Tauri's
 		// plugin-dialog gives us a native confirm; window.confirm is
 		// silently no-op'd in WebKit without a host-side handler.
-		const ok = await confirm("Close this room? Any running harnesses will be killed.", {
+		// #185: name unsaved editor buffers — archived rooms come back,
+		// unsaved buffer text doesn't.
+		const target = roomsRef.current.find((r) => r.id === id);
+		const dirty = filesRegistry.anyDirty(target?.harnesses.map((h) => h.id) ?? []);
+		const msg =
+			dirty.length > 0
+				? `Close this room? Any running harnesses will be killed and ${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${dirty.join(", ")}) discarded.`
+				: "Close this room? Any running harnesses will be killed.";
+		const ok = await confirm(msg, {
 			title: "Skein",
 			kind: "warning",
 		});
@@ -1552,16 +1561,29 @@ export default function App() {
 	};
 
 	const closeHarness = (roomId: string, harnessId: string) => {
-		setRooms((prev) =>
-			prev.map((r) => {
-				if (r.id !== roomId) return r;
-				const remaining = r.harnesses.filter((h) => h.id !== harnessId);
-				if (remaining.length === 0) return r;
-				const first = remaining[0];
-				if (!first) return r;
-				return { ...r, harnesses: remaining, activeHarnessId: first.id };
-			}),
-		);
+		const proceed = () =>
+			setRooms((prev) =>
+				prev.map((r) => {
+					if (r.id !== roomId) return r;
+					const remaining = r.harnesses.filter((h) => h.id !== harnessId);
+					if (remaining.length === 0) return r;
+					const first = remaining[0];
+					if (!first) return r;
+					return { ...r, harnesses: remaining, activeHarnessId: first.id };
+				}),
+			);
+		// #185: a files harness may hold unsaved buffers (memory-only).
+		const dirty = filesRegistry.dirtyNames(harnessId);
+		if (dirty.length > 0) {
+			void confirm(
+				`${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${dirty.join(", ")}) will be discarded. Close anyway?`,
+				{ title: "Unsaved changes", kind: "warning" },
+			).then((ok) => {
+				if (ok) proceed();
+			});
+			return;
+		}
+		proceed();
 	};
 
 	// When a harness's child exits and the user picks the shell-fallback
@@ -1587,6 +1609,46 @@ export default function App() {
 
 	// #189: clicking + harness again toggles the picker closed.
 	const addHarness = (roomId: string) => setShowPicker((cur) => (cur === roomId ? null : roomId));
+
+	// #185: every quit path runs through this — window close button
+	// (onCloseRequested) and the macOS Cmd+Q menu item, which lib.rs
+	// deliberately routes here as skein://quit-requested because the
+	// predefined quit item would terminate: without any prompt.
+	// destroy() bypasses onCloseRequested, so confirming quits for
+	// real; the ref guard stops stacked prompts when close is clicked
+	// twice.
+	const quitPromptOpenRef = useRef(false);
+	useEffect(() => {
+		const confirmQuit = async (): Promise<boolean> => {
+			const dirty = filesRegistry.anyDirty();
+			if (dirty.length === 0) return true;
+			if (quitPromptOpenRef.current) return false;
+			quitPromptOpenRef.current = true;
+			try {
+				const shown = dirty.slice(0, 5).join(", ") + (dirty.length > 5 ? ", …" : "");
+				return await confirm(
+					`${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${shown}) will be discarded. Quit anyway?`,
+					{ title: "Unsaved changes", kind: "warning" },
+				);
+			} finally {
+				quitPromptOpenRef.current = false;
+			}
+		};
+		const unClose = getCurrentWindow().onCloseRequested(async (event) => {
+			if (filesRegistry.anyDirty().length === 0) return;
+			event.preventDefault();
+			if (await confirmQuit()) void getCurrentWindow().destroy();
+		});
+		const unQuit = listen("skein://quit-requested", () => {
+			void confirmQuit().then((ok) => {
+				if (ok) void getCurrentWindow().destroy();
+			});
+		});
+		return () => {
+			void unClose.then((f) => f());
+			void unQuit.then((f) => f());
+		};
+	}, []);
 
 	// #189: Esc dismisses the picker. The picker hides every body, so
 	// the (display:none'd) xterm can't swallow the key — a plain window
@@ -2177,6 +2239,12 @@ export default function App() {
 		};
 
 		const onKey = (e: KeyboardEvent) => {
+			// #185: the CodeMirror editor claims chords like Mod+Arrow
+			// (line start/end) with preventDefault; a claimed key must
+			// not ALSO drive app navigation. xterm never preventDefaults
+			// app shortcuts (the isAppShortcut gate returns them to us),
+			// so terminal-originated chords still arrive here unclaimed.
+			if (e.defaultPrevented) return;
 			const match = matchShortcut(e);
 			if (!match) return;
 			e.preventDefault();

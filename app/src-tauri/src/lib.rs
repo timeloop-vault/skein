@@ -89,6 +89,10 @@ pub fn run() {
                 use tauri::Emitter;
                 let _ = app.emit("skein://open-settings", ());
             }
+            if event.id() == "quit" {
+                use tauri::Emitter;
+                let _ = app.emit("skein://quit-requested", ());
+            }
         })
         .setup(|app| {
             // Daily-rotating file log in the OS-conventional app log dir,
@@ -203,6 +207,16 @@ pub fn run() {
                     .accelerator("CmdOrCtrl+,")
                     .build(app)?;
 
+                // #185: NOT the predefined quit item — that fires
+                // NSApp terminate: directly, bypassing the webview's
+                // close-requested hook and the unsaved-editor-buffer
+                // prompt. This routes Cmd+Q through the frontend,
+                // which confirms and then destroys the window.
+                let quit = MenuItemBuilder::new(format!("Quit {product_name}"))
+                    .id("quit")
+                    .accelerator("CmdOrCtrl+Q")
+                    .build(app)?;
+
                 let app_menu = SubmenuBuilder::new(app, &product_name)
                     .about(Some(about))
                     .separator()
@@ -212,7 +226,7 @@ pub fn run() {
                     .hide_others()
                     .show_all()
                     .separator()
-                    .quit()
+                    .item(&quit)
                     .build()?;
 
                 let edit_menu = SubmenuBuilder::new(app, "Edit")
@@ -237,6 +251,7 @@ pub fn run() {
             ping,
             fs::list_dir,
             fs::read_file_text,
+            fs::write_file_text,
             pty_spawn,
             pty_write,
             pty_resize,
