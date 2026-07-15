@@ -167,8 +167,18 @@ export const HarnessTab = ({
 // proposed an anchored dropdown here instead; the owner prefers the
 // pane — 2026-07-14.) Iterating the registry means new kinds (Files)
 // appear as cards automatically.
-export const HarnessPicker = ({ onPick }: { onPick: (kind: HarnessKind) => void }) => (
+export const HarnessPicker = ({
+	onPick,
+	onCancel,
+}: {
+	onPick: (kind: HarnessKind) => void;
+	onCancel: () => void;
+}) => (
 	<div className="sk-empty-harness">
+		{/* #189: the picker needs a way out that isn't picking. */}
+		<span className="sk-empty-harness-x" title="Cancel (Esc)" onClick={onCancel}>
+			×
+		</span>
 		<h3>Add a harness</h3>
 		<p>Pick an agent for this workspace. All harnesses see the same worktree.</p>
 		<div className="sk-harness-grid">

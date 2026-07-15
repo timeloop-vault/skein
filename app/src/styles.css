@@ -228,6 +228,20 @@ body {
 	justify-content: center;
 	padding: 40px;
 	gap: 24px;
+	/* #189: anchor for the cancel ×. */
+	position: relative;
+}
+.sk-empty-harness-x {
+	position: absolute;
+	top: 10px;
+	right: 14px;
+	font-size: 1.3em;
+	color: var(--fg-3);
+	cursor: pointer;
+	padding: 2px 6px;
+}
+.sk-empty-harness-x:hover {
+	color: var(--fg-0);
 }
 .sk-empty-harness h3 {
 	font-size: calc(var(--cfs) * 1.1667);

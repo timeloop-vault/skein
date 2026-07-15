@@ -332,6 +332,7 @@ interface HarnessColumnProps {
 	harnessDrag: HarnessDrag;
 	onPick: (kind: HarnessKind) => void;
 	onAddHarness: (roomId: string) => void;
+	onCancelPick: () => void;
 	onSwitchHarness: (roomId: string, harnessId: string) => void;
 	onCloseHarness: (roomId: string, harnessId: string) => void;
 	onHarnessCmdChange: (roomId: string, harnessId: string, cmd: string[]) => void;
@@ -353,6 +354,7 @@ const HarnessColumn = ({
 	harnessDrag,
 	onPick,
 	onAddHarness,
+	onCancelPick,
 	onSwitchHarness,
 	onCloseHarness,
 	onHarnessCmdChange,
@@ -429,7 +431,7 @@ const HarnessColumn = ({
 			 * to add a sibling to. The picker takes the flex space
 			 * while present; harness panes survive untouched.
 			 */}
-			{showPicker && <HarnessPicker onPick={onPick} />}
+			{showPicker && <HarnessPicker onPick={onPick} onCancel={onCancelPick} />}
 			{room.harnesses.map((h) => {
 				// "Visible" = user can see and interact with this body:
 				// room is active, no picker shadowing it, and this is the
@@ -1583,7 +1585,23 @@ export default function App() {
 		);
 	};
 
-	const addHarness = (roomId: string) => setShowPicker(roomId);
+	// #189: clicking + harness again toggles the picker closed.
+	const addHarness = (roomId: string) => setShowPicker((cur) => (cur === roomId ? null : roomId));
+
+	// #189: Esc dismisses the picker. The picker hides every body, so
+	// the (display:none'd) xterm can't swallow the key — a plain window
+	// listener receives it.
+	useEffect(() => {
+		if (!showPicker) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") {
+				e.preventDefault();
+				setShowPicker(null);
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [showPicker]);
 
 	// Issue #26: drag-and-drop reorder helpers. ID-based to keep the
 	// active-room and active-harness pointers correct after the move —
@@ -2923,6 +2941,7 @@ export default function App() {
 							}}
 							onPick={pickHarness}
 							onAddHarness={addHarness}
+							onCancelPick={() => setShowPicker(null)}
 							onSwitchHarness={switchHarnessInRoom}
 							onCloseHarness={closeHarness}
 							onHarnessCmdChange={updateHarnessCmd}
