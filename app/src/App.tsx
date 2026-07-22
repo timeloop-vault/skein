@@ -1635,14 +1635,28 @@ export default function App() {
 			}
 		};
 		const unClose = getCurrentWindow().onCloseRequested(async (event) => {
-			if (filesRegistry.anyDirty().length === 0) return;
-			event.preventDefault();
-			if (await confirmQuit()) void getCurrentWindow().destroy();
+			// Fail OPEN: any throw in here must still end in the window
+			// closing — 0.2.6 shipped unclosable when the wrapper's
+			// destroy was capability-denied (#196). Losing unsaved text
+			// beats an app you cannot exit.
+			try {
+				if (filesRegistry.anyDirty().length === 0) return;
+				event.preventDefault();
+				if (await confirmQuit()) void getCurrentWindow().destroy();
+			} catch (err) {
+				console.error("[skein] close-requested handler failed; closing anyway:", err);
+				void getCurrentWindow().destroy();
+			}
 		});
 		const unQuit = listen("skein://quit-requested", () => {
-			void confirmQuit().then((ok) => {
-				if (ok) void getCurrentWindow().destroy();
-			});
+			void confirmQuit()
+				.then((ok) => {
+					if (ok) void getCurrentWindow().destroy();
+				})
+				.catch((err: unknown) => {
+					console.error("[skein] quit handler failed; closing anyway:", err);
+					void getCurrentWindow().destroy();
+				});
 		});
 		return () => {
 			void unClose.then((f) => f());

@@ -672,3 +672,18 @@ fn db_load_rooms(db: tauri::State<'_, Arc<Database>>) -> Result<LoadOutcome, Str
 fn db_save_rooms(rooms: Vec<Room>, db: tauri::State<'_, Arc<Database>>) -> Result<(), String> {
     db.save_all(&rooms)
 }
+
+#[cfg(test)]
+mod tests {
+    /// #196 regression pin: with an onCloseRequested handler
+    /// registered, Tauri's JS wrapper closes the window via
+    /// `destroy()` — if the capability file stops granting it, every
+    /// close path (close button, Cmd+Q) silently dies. 0.2.6 shipped
+    /// that way; never again.
+    #[test]
+    fn close_paths_keep_their_window_capabilities() {
+        let caps = include_str!("../capabilities/default.json");
+        assert!(caps.contains("core:window:allow-close"));
+        assert!(caps.contains("core:window:allow-destroy"));
+    }
+}
