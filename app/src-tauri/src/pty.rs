@@ -14,6 +14,7 @@
 //! gets us the exit signal regardless.
 
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -25,6 +26,8 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::Serialize;
+
+use crate::spawn_env;
 
 /// Events the PTY reader thread streams to the frontend. Tagged so the
 /// JS side can branch on `kind`: `data` chunks become terminal output,
@@ -286,47 +289,55 @@ impl PtyManager {
     }
 }
 
-/// PATH from the user's login + interactive shell. Cached on first call.
+/// The `PATH` additions Skein applies on top of whatever the shell or
+/// the OS reported.
+///
+/// `~/.local/bin` is the de-facto install location for `pip install
+/// --user`, `pipx`, `uv tool` and Claude Code's own installer, and — as
+/// verified on this machine — it is routinely absent from the rc chain,
+/// because it is normally put there by something further up (a display
+/// manager, VS Code's terminal integration) that a Finder-launched
+/// bundle never sees. `~/bin` is the same story for hand-rolled scripts.
+///
+/// Issue #3 replaces this constant with a user-editable list; these stay
+/// as the defaults.
+fn default_path_prepend() -> Vec<String> {
+    vec!["~/.local/bin".to_owned(), "~/bin".to_owned()]
+}
+
+/// `PATH` from the user's login + interactive shell. Cached on first call.
 ///
 /// `Some` on macOS / Linux when the shell prints something usable.
-/// Always `None` on Windows (different launch model — Explorer-launched
-/// apps already inherit the user's PATH from the registry, no fix
-/// needed).
+/// Always `None` on Windows, where `portable-pty` already merges the
+/// live `HKLM` + `HKCU` registry `PATH` for us and there is no login
+/// shell to ask.
 ///
-/// This is the "Finder/Dock launches my .app with PATH=`/usr/bin:/bin`"
-/// fix. The user's `.zshrc` typically prepends Homebrew, nvm, pyenv,
-/// `~/.local/bin`, etc. — none of which a Finder launch inherits. We
-/// invoke the shell as `-il` (interactive + login) so every rc /
-/// profile gets sourced, then read `$PATH`. Does cost a shell startup
-/// once per Skein run (~50–200 ms), only on the first PTY spawn.
+/// This is the "Finder/Dock launches my .app with `PATH=/usr/bin:/bin`"
+/// fix. The user's rc files typically prepend Homebrew, nvm, pyenv etc.
+/// — none of which a Finder launch inherits. We invoke the shell so
+/// every rc / profile gets sourced, then read `$PATH` back through a
+/// sentinel (the shell may print startup noise to stdout first).
 ///
-/// Two subtleties:
-///
-/// 1. `$SHELL` is *not* set in a Finder-launched .app's environment.
-///    We can't rely on it to find the user's preferred shell. Falling
-///    back to `/bin/bash` (the previous version of this) reads bash
-///    rc files only — which a zsh user has empty, so the user's PATH
-///    customizations from `.zshrc` are never sourced. Default to
-///    `/bin/zsh` on macOS instead (the OS default since Catalina);
-///    `/bin/bash` on Linux remains the right baseline.
-/// 2. The shell may print startup noise to stdout (nvm messages,
-///    `brew shellenv` echoes, etc.) before our `echo $PATH` line.
-///    Wrap the value in a sentinel so we extract just the PATH and
-///    not whatever else happened to land in stdout first.
-#[cfg(not(target_os = "windows"))]
-const PATH_PROBE_START: &str = "___SKEIN_PATH_BEGIN___";
-#[cfg(not(target_os = "windows"))]
-const PATH_PROBE_END: &str = "___SKEIN_PATH_END___";
-
+/// Costs one shell startup per Skein run (~20-30 ms measured), on the
+/// first PTY spawn.
 #[cfg(not(target_os = "windows"))]
 fn login_shell_path() -> Option<&'static str> {
     static CACHE: OnceLock<Option<String>> = OnceLock::new();
     CACHE.get_or_init(probe_login_shell_path).as_deref()
 }
 
+/// The shell to ask for a `PATH`.
+///
+/// `$SHELL` *is* present in a Finder-launched bundle (verified with
+/// `ps eww` on a running Skein.app: `PATH=/usr/bin:/bin:/usr/sbin:/sbin`,
+/// `SHELL=/bin/zsh`) — it is only `PATH` that launchd strips. The
+/// fallback therefore almost never fires; when it does, `/bin/zsh` is
+/// right on macOS (the OS default since Catalina) and `/bin/bash` on
+/// Linux. Falling back to `/bin/bash` on macOS reads bash rc files that
+/// a zsh user has never written.
 #[cfg(not(target_os = "windows"))]
-fn probe_login_shell_path() -> Option<String> {
-    let shell = std::env::var("SHELL")
+fn probe_shell() -> String {
+    std::env::var("SHELL")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| {
@@ -335,12 +346,22 @@ fn probe_login_shell_path() -> Option<String> {
             } else {
                 "/bin/bash".into()
             }
-        });
+        })
+}
 
-    let probe = format!(r#"printf '%s%s%s' '{PATH_PROBE_START}' "$PATH" '{PATH_PROBE_END}'"#);
+#[cfg(not(target_os = "windows"))]
+fn probe_login_shell_path() -> Option<String> {
+    let shell = probe_shell();
+    // An unknown shell (nu, xonsh, elvish) gets no probe rather than an
+    // argv we know it will reject — see `spawn_env::probe_args`.
+    let Some(args) = spawn_env::probe_args(&shell) else {
+        tracing::info!(shell = %shell, "login_shell_path: unsupported shell, skipping probe");
+        return None;
+    };
 
     let output = match std::process::Command::new(&shell)
-        .args(["-ilc", &probe])
+        .args(args)
+        .arg(spawn_env::PROBE_SCRIPT)
         .output()
     {
         Ok(o) => o,
@@ -360,20 +381,10 @@ fn probe_login_shell_path() -> Option<String> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let extracted = stdout
-        .find(PATH_PROBE_START)
-        .and_then(|s| {
-            let after = &stdout[s + PATH_PROBE_START.len()..];
-            after.find(PATH_PROBE_END).map(|e| after[..e].to_owned())
-        })
-        .filter(|p| !p.is_empty());
+    let extracted = spawn_env::extract_probe_path(&stdout);
 
     if let Some(ref path) = extracted {
-        tracing::info!(
-            shell = %shell,
-            path = %path,
-            "login_shell_path: captured user PATH"
-        );
+        tracing::info!(shell = %shell, path = %path, "login_shell_path: captured user PATH");
     } else {
         tracing::warn!(
             shell = %shell,
@@ -389,47 +400,16 @@ fn login_shell_path() -> Option<&'static str> {
     None
 }
 
-/// Prepend conventional Unix bin locations to a PATH so user-installed
-/// CLIs are findable even when the user's shell rc files don't add
-/// them.
+/// Prepend Skein's `PATH` additions to `base`.
 ///
-/// `~/.local/bin` is the de-facto standard install location for `pip
-/// install --user`, `pipx`, `uv tool`, claude's installer, etc. Many
-/// shell configurations rely on it being already in `PATH` (set by
-/// `~/.zprofile`, VS Code's terminal-integrated env, or similar) and
-/// don't add it themselves — which means a Finder-launched `.app`
-/// gets a `PATH` that lacks it. `~/bin` is the same story for hand-
-/// rolled scripts.
-///
-/// Idempotent: skips entries already present. Skips entries whose
-/// directory doesn't exist.
-fn augment_path(base: &str) -> String {
-    // `~/.local/bin` and `~/bin` are Unix conventions, and this builds a
-    // `:`-joined PATH — both wrong on Windows (which uses `;` and has no
-    // such convention). No-op there rather than mangle PATH (e.g. when
-    // Skein is launched from a shell that does set HOME, like Git Bash).
-    if cfg!(windows) {
-        return base.to_owned();
-    }
-    let Ok(home) = std::env::var("HOME") else {
-        return base.to_owned();
-    };
-    let candidates = [format!("{home}/.local/bin"), format!("{home}/bin")];
-    let mut existing: Vec<&str> = base.split(':').collect();
-    let mut prepended: Vec<String> = Vec::new();
-    for c in &candidates {
-        if !std::path::Path::new(c).is_dir() {
-            continue;
-        }
-        if existing.contains(&c.as_str()) {
-            continue;
-        }
-        prepended.push(c.clone());
-    }
-    if prepended.is_empty() {
-        return base.to_owned();
-    }
-    let prepended_str = prepended.join(":");
-    existing.insert(0, &prepended_str);
-    existing.join(":")
+/// Idempotent, drops entries whose directory doesn't exist, and never
+/// replaces what `base` already had — see `spawn_env::merge_path`.
+fn augment_path(base: &str) -> OsString {
+    spawn_env::merge_path(
+        OsStr::new(base),
+        &default_path_prepend(),
+        crate::home_dir().as_deref(),
+        &|k| std::env::var(k).ok(),
+        &|p| p.is_dir(),
+    )
 }

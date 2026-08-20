@@ -16,6 +16,7 @@ mod harness_events_claude;
 mod harness_events_opencode;
 mod pty;
 mod resume;
+mod spawn_env;
 mod watcher;
 
 use std::path::Path;
