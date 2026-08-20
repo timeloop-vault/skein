@@ -16,6 +16,8 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::spawn_settings::CaptureMode;
 
 /// Sentinel wrapping the probe's `PATH` payload. A login+interactive
@@ -49,8 +51,11 @@ pub(crate) fn probe_args(shell: &str, mode: CaptureMode) -> Option<&'static [&'s
         return None;
     }
     let name = Path::new(shell).file_name()?.to_str()?;
-    // Strip a trailing version suffix the way `bash5` / `zsh-5.9` appear
-    // on some distros; the base name is what identifies the dialect.
+    // Take the part before any version separator, so `zsh-5.9` and
+    // `bash-5.2` still identify as zsh and bash. A suffix with no
+    // separator (`bash5`) is not handled and falls through to `None`,
+    // which is the safe direction: no probe, inherited PATH, additions
+    // still applied.
     let base = name.split(['-', '.']).next().unwrap_or(name);
     match base {
         // Verified: accept `-l`/`-i`/`-c` and print a colon-joined PATH.
@@ -208,59 +213,123 @@ fn dedupe_key(path: &Path) -> String {
     }
 }
 
+/// Why one of the user's `PATH` additions didn't make it in.
+///
+/// Reported rather than silently swallowed: "I added a directory and
+/// nothing happened" is the exact confusion this whole feature exists
+/// to end, and a dropped entry with no explanation reproduces it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DropReason {
+    /// References a variable that isn't set, or a `~user` form.
+    Unresolved,
+    /// Relative. A relative entry — `.` above all — makes an agent run
+    /// whatever happens to be in the working directory.
+    NotAbsolute,
+    /// Contains a character that can't appear in a single `PATH` entry.
+    Separator,
+    /// The directory doesn't exist.
+    Missing,
+    /// Already on the `PATH`.
+    Duplicate,
+}
+
+/// The outcome of building a child's `PATH`.
+pub(crate) struct MergedPath {
+    pub path: OsString,
+    /// Additions that actually made it in, expanded, in order.
+    pub added: Vec<String>,
+    /// Additions that didn't, paired with why. The entry text is the
+    /// user's original spelling so the UI can point at the right row.
+    pub dropped: Vec<(String, DropReason)>,
+}
+
 /// Build the child's `PATH`: the user's additions first, then `base`.
 ///
-/// - Additions are expanded, dropped when the directory doesn't exist,
-///   and deduped against `base` and each other (first occurrence wins,
-///   so the user's stated order is preserved).
-/// - Empty entries in `base` are dropped. An empty `PATH` element means
-///   *the current directory* on Unix — inherited into an agent harness
-///   that runs whatever it finds, that is a real hazard, and it is
-///   exactly what a naive split of an empty `PATH` produces.
+/// - Additions are expanded, required to be absolute, dropped when the
+///   directory doesn't exist, and deduped against `base` and each other
+///   (first occurrence wins, so the user's stated order is preserved).
+/// - `base` is deduped too. Real shells hand back `PATH`s with repeated
+///   entries — this machine's own has two — and every duplicate is a
+///   wasted `stat` on every command lookup for the life of the harness.
+/// - Empty and relative entries are dropped from *both* sides. An empty
+///   `PATH` element means *the current directory* on Unix; inherited
+///   into an agent harness that runs what it finds, that is a real
+///   hazard, and `.` spelled out is the same hazard.
 /// - Prepend-only by design (issue #3): we never replace what the shell
-///   or the OS reported, because a mistyped replacement is an
-///   unrecoverable-from-inside-the-app state.
+///   or the OS reported, because a mistyped replacement is a state you
+///   cannot recover from inside the app.
 pub(crate) fn merge_path(
     base: &OsStr,
     prepends: &[String],
     home: Option<&Path>,
     lookup: &dyn Fn(&str) -> Option<String>,
     dir_exists: &dyn Fn(&Path) -> bool,
-) -> OsString {
-    let existing: Vec<PathBuf> = std::env::split_paths(base)
-        .filter(|p| !p.as_os_str().is_empty())
-        .collect();
-    let mut seen: Vec<String> = existing.iter().map(|p| dedupe_key(p)).collect();
-
-    let mut ordered: Vec<PathBuf> = Vec::with_capacity(existing.len() + prepends.len());
-    for entry in prepends {
-        let Some(expanded) = expand_entry(entry, home, lookup) else {
-            continue;
-        };
-        let path = PathBuf::from(&expanded);
-        // `join_paths` rejects an entry containing the separator (and a
-        // quote on Windows). Filtering here keeps the join infallible in
-        // practice instead of silently discarding the whole merge.
-        if expanded.contains(PATH_ENTRY_FORBIDDEN) {
+) -> MergedPath {
+    let mut seen: Vec<String> = Vec::new();
+    let mut existing: Vec<PathBuf> = Vec::new();
+    for entry in std::env::split_paths(base) {
+        if entry.as_os_str().is_empty() || !entry.is_absolute() {
             continue;
         }
-        if !dir_exists(&path) {
-            continue;
-        }
-        let key = dedupe_key(&path);
+        let key = dedupe_key(&entry);
         if seen.contains(&key) {
             continue;
         }
         seen.push(key);
+        existing.push(entry);
+    }
+
+    let mut added: Vec<String> = Vec::new();
+    let mut dropped: Vec<(String, DropReason)> = Vec::new();
+    let mut ordered: Vec<PathBuf> = Vec::with_capacity(existing.len() + prepends.len());
+
+    for entry in prepends {
+        let original = entry.clone();
+        let Some(expanded) = expand_entry(entry, home, lookup) else {
+            dropped.push((original, DropReason::Unresolved));
+            continue;
+        };
+        // `join_paths` rejects an entry containing the separator, which
+        // would fail the whole merge rather than this one entry.
+        if expanded.contains(PATH_ENTRY_FORBIDDEN) {
+            dropped.push((original, DropReason::Separator));
+            continue;
+        }
+        let path = PathBuf::from(&expanded);
+        if !path.is_absolute() {
+            dropped.push((original, DropReason::NotAbsolute));
+            continue;
+        }
+        if !dir_exists(&path) {
+            dropped.push((original, DropReason::Missing));
+            continue;
+        }
+        let key = dedupe_key(&path);
+        if seen.contains(&key) {
+            dropped.push((original, DropReason::Duplicate));
+            continue;
+        }
+        seen.push(key);
+        added.push(expanded);
         ordered.push(path);
     }
     ordered.extend(existing);
 
-    std::env::join_paths(&ordered).unwrap_or_else(|_| base.to_owned())
+    let path = std::env::join_paths(&ordered).unwrap_or_else(|_| base.to_owned());
+    MergedPath {
+        path,
+        added,
+        dropped,
+    }
 }
 
-/// Characters that cannot appear inside a single `PATH` entry —
-/// `join_paths` rejects them, which would fail the whole merge.
+/// Characters Skein refuses inside a single `PATH` entry.
+///
+/// On Unix `join_paths` errors on `:`, so this is forced. On Windows it
+/// errors only on `"` and would *quote* an entry containing `;` — we
+/// drop those anyway, because a quoted `PATH` element is fragile for
+/// whatever child has to re-split it.
 #[cfg(windows)]
 const PATH_ENTRY_FORBIDDEN: &[char] = &[';', '"'];
 #[cfg(not(windows))]
@@ -342,7 +411,6 @@ pub(crate) const HOST_TERMINAL_ENV_PREFIXES: &[&str] = &[
     "KITTY_",
     "KONSOLE_",
     "LC_TERMINAL",
-    "MSYS",
     "VSCODE_",
     "VTE_",
     "WEZTERM_",
@@ -353,10 +421,11 @@ pub(crate) const HOST_TERMINAL_ENV_PREFIXES: &[&str] = &[
 /// Never stripped, whatever the lists above say. Each entry is here
 /// because removing it breaks something real.
 pub(crate) const HOST_TERMINAL_ENV_KEEP: &[&str] = &[
-    // The agent's ssh identity. On a Finder-launched macOS bundle this is
-    // the *only* variable launchd contributes beyond PATH/HOME/SHELL, and
-    // dropping it breaks every `git push` over ssh. A reference PTY test
-    // harness can afford to strip it; a production IDE cannot.
+    // The agent's ssh identity: the one variable a Finder-launched macOS
+    // bundle inherits that a harness genuinely depends on (launchd also
+    // supplies USER/LOGNAME/TMPDIR/XPC_*/__CF*, none of which matter
+    // here). Dropping it breaks every `git push` over ssh. A reference
+    // PTY test harness can afford to strip it; a production IDE cannot.
     "SSH_AUTH_SOCK",
     // Claude Code on native Windows requires Git Bash and finds it here.
     // No current rule matches it; this is a guard against someone later
@@ -405,6 +474,15 @@ mod tests {
         std::env::split_paths(joined)
             .map(|p| p.to_string_lossy().into_owned())
             .collect()
+    }
+
+    /// The resolved PATH of a merge, as comparable pieces.
+    fn merged_parts(m: &MergedPath) -> Vec<String> {
+        parts(&m.path)
+    }
+
+    fn reasons(m: &MergedPath) -> Vec<(String, DropReason)> {
+        m.dropped.clone()
     }
 
     fn join(entries: &[&str]) -> OsString {
@@ -641,7 +719,7 @@ mod tests {
             &exists,
         );
         assert_eq!(
-            parts(&out),
+            merged_parts(&out),
             vec![
                 "/home/tester/.local/bin",
                 "/home/tester/bin",
@@ -662,7 +740,10 @@ mod tests {
             &no_vars,
             &exists,
         );
-        assert_eq!(parts(&out), vec!["/home/tester/.local/bin", "/usr/bin"]);
+        assert_eq!(
+            merged_parts(&out),
+            vec!["/home/tester/.local/bin", "/usr/bin"]
+        );
     }
 
     #[test]
@@ -671,8 +752,8 @@ mod tests {
         let prepends = vec!["~/.local/bin".to_owned(), "~/bin".to_owned()];
         let exists = |_: &Path| true;
         let once = merge_path(&base, &prepends, Some(&home()), &no_vars, &exists);
-        let twice = merge_path(&once, &prepends, Some(&home()), &no_vars, &exists);
-        assert_eq!(parts(&once), parts(&twice));
+        let twice = merge_path(&once.path, &prepends, Some(&home()), &no_vars, &exists);
+        assert_eq!(merged_parts(&once), merged_parts(&twice));
     }
 
     #[test]
@@ -685,7 +766,7 @@ mod tests {
             &no_vars,
             &|_| true,
         );
-        assert_eq!(parts(&out), vec!["/usr/bin", "/home/tester/bin/"]);
+        assert_eq!(merged_parts(&out), vec!["/usr/bin", "/home/tester/bin/"]);
     }
 
     #[test]
@@ -701,12 +782,12 @@ mod tests {
             &no_vars,
             &|_| true,
         );
-        assert_eq!(parts(&out), vec!["/home/tester/bin"]);
-        assert!(!parts(&out).iter().any(String::is_empty));
+        assert_eq!(merged_parts(&out), vec!["/home/tester/bin"]);
+        assert!(!merged_parts(&out).iter().any(String::is_empty));
 
         let with_hole = join(&["/usr/bin", "", "/bin"]);
         let out = merge_path(&with_hole, &[], Some(&home()), &no_vars, &|_| true);
-        assert!(!parts(&out).iter().any(String::is_empty));
+        assert!(!merged_parts(&out).iter().any(String::is_empty));
     }
 
     #[test]
@@ -720,14 +801,103 @@ mod tests {
         };
         let base = join(&["/usr/bin"]);
         let out = merge_path(&base, &[sneaky], Some(&home()), &no_vars, &|_| true);
-        assert_eq!(parts(&out), vec!["/usr/bin"]);
+        assert_eq!(merged_parts(&out), vec!["/usr/bin"]);
+    }
+
+    #[test]
+    fn merge_path_refuses_relative_additions() {
+        // Same hazard as an empty entry, and this is the side the user
+        // controls *and* the side that goes first: a `.` here makes
+        // every agent command prefer whatever is in the worktree.
+        let base = join(&["/usr/bin"]);
+        let out = merge_path(
+            &base,
+            &[".".into(), "..".into(), "bin".into()],
+            Some(&home()),
+            &no_vars,
+            &|_| true,
+        );
+        assert_eq!(merged_parts(&out), vec!["/usr/bin"]);
+        assert_eq!(
+            reasons(&out),
+            vec![
+                (".".to_owned(), DropReason::NotAbsolute),
+                ("..".to_owned(), DropReason::NotAbsolute),
+                ("bin".to_owned(), DropReason::NotAbsolute),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_path_reports_why_each_addition_was_dropped() {
+        // "I added a directory and nothing happened" is the confusion
+        // the whole settings panel exists to end, so every skip has to
+        // be attributable to a reason the UI can show.
+        let base = join(&["/usr/bin", "/home/tester/bin"]);
+        let sep = if cfg!(windows) { "/a;/b" } else { "/a:/b" };
+        let out = merge_path(
+            &base,
+            &[
+                "$NOPE/bin".into(),
+                sep.to_owned(),
+                "/does/not/exist".into(),
+                "~/bin".into(),
+            ],
+            Some(&home()),
+            &no_vars,
+            &|p| p != Path::new("/does/not/exist"),
+        );
+        assert_eq!(
+            reasons(&out),
+            vec![
+                ("$NOPE/bin".to_owned(), DropReason::Unresolved),
+                (sep.to_owned(), DropReason::Separator),
+                ("/does/not/exist".to_owned(), DropReason::Missing),
+                ("~/bin".to_owned(), DropReason::Duplicate),
+            ]
+        );
+        assert!(out.added.is_empty());
+    }
+
+    #[test]
+    fn merge_path_dedupes_the_base_too() {
+        // Real shells hand back PATHs with repeated entries — this
+        // machine's own does — and each duplicate is a wasted stat on
+        // every command lookup for the life of the harness.
+        let base = join(&["/usr/bin", "/bin", "/usr/bin", "/bin/"]);
+        let out = merge_path(&base, &[], Some(&home()), &no_vars, &|_| true);
+        assert_eq!(merged_parts(&out), vec!["/usr/bin", "/bin"]);
+    }
+
+    #[test]
+    fn merge_path_drops_relative_entries_from_the_base() {
+        let base = join(&["/usr/bin", ".", "relative/dir"]);
+        let out = merge_path(&base, &[], Some(&home()), &no_vars, &|_| true);
+        assert_eq!(merged_parts(&out), vec!["/usr/bin"]);
+    }
+
+    #[test]
+    fn merge_path_reports_what_it_accepted() {
+        let base = join(&["/usr/bin"]);
+        let out = merge_path(
+            &base,
+            &["~/.local/bin".into(), "/does/not/exist".into()],
+            Some(&home()),
+            &no_vars,
+            &|p| p != Path::new("/does/not/exist"),
+        );
+        // `added` must reflect the merge's own filters, not a
+        // re-expansion of the raw list — the preview labels PATH rows
+        // from it, and crediting Skein for an entry it dropped would
+        // make the panel disagree with reality.
+        assert_eq!(out.added, vec!["/home/tester/.local/bin".to_owned()]);
     }
 
     #[test]
     fn merge_path_with_no_additions_returns_the_base_unchanged() {
         let base = join(&["/usr/bin", "/bin"]);
         let out = merge_path(&base, &[], Some(&home()), &no_vars, &|_| true);
-        assert_eq!(parts(&out), parts(&base));
+        assert_eq!(merged_parts(&out), parts(&base));
     }
 
     // ── host-terminal identity ────────────────────────────────────

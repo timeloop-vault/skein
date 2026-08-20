@@ -134,12 +134,36 @@ impl SpawnSettings {
         if shell.is_empty() {
             return None;
         }
-        if Path::new(shell).is_file() {
+        if is_runnable(Path::new(shell)) {
             Some(shell)
         } else {
-            tracing::warn!(shell = %shell, "spawn settings: configured shell is not a file, ignoring");
+            tracing::warn!(
+                shell = %shell,
+                "spawn settings: configured shell is not a runnable file, ignoring"
+            );
             None
         }
+    }
+}
+
+/// A file that exists *and* can be executed.
+///
+/// The executable bit matters: a spawn resolves the program with
+/// `access(X_OK)`, so a readable-but-not-executable path would pass an
+/// `is_file` check here and then fail at spawn time with a much less
+/// obvious error.
+fn is_runnable(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        true
     }
 }
 

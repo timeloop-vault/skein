@@ -13,13 +13,17 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
-import type { CaptureMode, EnvPreview, EnvVar, SpawnSettings } from "./types.ts";
+import type { CaptureMode, DropReason, EnvPreview, EnvVar, SpawnSettings } from "./types.ts";
 
 interface SpawnEnvPanelProps {
 	settings: SpawnSettings | null;
 	degraded: string | null;
 	settingsPath: string;
 	onSave: (next: SpawnSettings) => Promise<void>;
+	/** Lets the modal refuse to close over unsaved edits — this is the
+	 *  only save-required form in Settings; everything else applies
+	 *  instantly, so dismissing used to be lossless. */
+	onDirtyChange: (dirty: boolean) => void;
 }
 
 const CAPTURE_OPTIONS: { value: CaptureMode; label: string; desc: string }[] = [
@@ -43,11 +47,21 @@ const CAPTURE_OPTIONS: { value: CaptureMode; label: string; desc: string }[] = [
 const PROBE_TONE: Record<string, "ok" | "warn" | "err" | "muted"> = {
 	captured: "ok",
 	pending: "muted",
+	// A deliberate setting, not a failure — see ProbeFailure::Disabled.
+	disabled: "muted",
 	not_applicable: "muted",
 	unsupported_shell: "warn",
 	timeout: "err",
 	spawn_failed: "err",
 	no_payload: "warn",
+};
+
+const DROP_REASON: Record<DropReason, string> = {
+	unresolved: "unset variable",
+	not_absolute: "not an absolute path",
+	separator: "contains a path separator",
+	missing: "directory not found",
+	duplicate: "already on PATH",
 };
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -253,6 +267,9 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 
 	const probeTone = preview ? (PROBE_TONE[preview.probe.state] ?? "muted") : "muted";
 	const missingPrograms = preview?.programs.filter((p) => p.resolved === null) ?? [];
+	// Windows has no login shell to ask, so the capture controls do
+	// nothing there and the shell setting only feeds new Shell harnesses.
+	const canProbe = preview?.probe.state !== "not_applicable";
 
 	return (
 		<div className="sk-env">
@@ -272,6 +289,7 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 						? {
 								captured: `PATH captured from ${preview.probe.shell} in ${preview.probe.elapsedMs} ms`,
 								pending: "Asking your shell…",
+								disabled: "PATH capture is turned off",
 								not_applicable: "Using the live Windows registry PATH",
 								unsupported_shell: "No PATH capture for this shell",
 								timeout: "Your shell did not answer in time",
@@ -325,6 +343,29 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 				</div>
 			</div>
 
+			{preview && preview.droppedAdditions.length > 0 && (
+				<div className="sk-env-banner sk-env-warn">
+					Skipped:{" "}
+					{preview.droppedAdditions
+						.map((d) => `${d.entry} (${DROP_REASON[d.reason] ?? d.reason})`)
+						.join(", ")}
+				</div>
+			)}
+
+			{preview?.shellRejected && (
+				<div className="sk-env-banner sk-env-warn">
+					<code>{preview.shellRejected}</code> isn't a runnable file, so it's being ignored — Skein
+					is using <code>{preview.shell}</code>.
+				</div>
+			)}
+
+			{preview && preview.ignoredEnvKeys.length > 0 && (
+				<div className="sk-env-banner sk-env-warn">
+					Skein sets these itself, so your values are ignored: {preview.ignoredEnvKeys.join(", ")}.
+					Use “Additional directories” to change PATH.
+				</div>
+			)}
+
 			<div className="sk-field">
 				<label>Additional directories</label>
 				<div className="sk-help">
@@ -346,6 +387,7 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 				<select
 					className="sk-select"
 					value={draft.capture}
+					disabled={!canProbe}
 					onChange={(e) => setDraft({ ...draft, capture: e.target.value as CaptureMode })}
 				>
 					{CAPTURE_OPTIONS.map((o) => (
@@ -355,7 +397,9 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 					))}
 				</select>
 				<div className="sk-help">
-					{CAPTURE_OPTIONS.find((o) => o.value === draft.capture)?.desc}
+					{canProbe
+						? CAPTURE_OPTIONS.find((o) => o.value === draft.capture)?.desc
+						: "Windows has no login shell to ask. Skein re-reads your system and user PATH from the registry on every spawn — so a PATH you just changed takes effect without a reboot — and unions it with the environment Skein was launched with."}
 				</div>
 			</div>
 
@@ -369,10 +413,13 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 					onChange={(e) => setDraft({ ...draft, shell: e.target.value })}
 				/>
 				<div className="sk-help">
-					Absolute path to a shell binary — a path, not a command line. Used both to ask for your
-					PATH and for new Shell harnesses. Applies to new Shell harnesses and to the
-					Enter-for-shell prompt on any harness that has exited; existing harnesses keep the shell
-					they were created with. A path that isn't a real file is ignored rather than saved.
+					Absolute path to a shell binary — a path, not a command line.{" "}
+					{canProbe
+						? "Used both to ask for your PATH and for new Shell harnesses."
+						: "Used for new Shell harnesses."}{" "}
+					Takes effect for new Shell harnesses and for the Enter-for-shell prompt on any harness
+					that has exited; existing harnesses keep the shell they were created with. A path that
+					isn't a runnable file is saved but ignored, and flagged above.
 				</div>
 			</div>
 

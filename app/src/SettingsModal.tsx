@@ -93,16 +93,34 @@ export const SettingsModal = ({
 }: SettingsModalProps) => {
 	useFocusRestore();
 
+	// The environment panel is the only save-required form in Settings —
+	// every other control applies on change, so dismissing the modal used
+	// to be lossless. Escape and backdrop-click would otherwise discard a
+	// half-typed PATH with no warning. First attempt warns; a second one
+	// discards, so the modal never becomes a trap.
+	const [envDirty, setEnvDirty] = useState(false);
+	const [envWarned, setEnvWarned] = useState(false);
+	useEffect(() => {
+		if (!envDirty) setEnvWarned(false);
+	}, [envDirty]);
+	const closeGuarded = useCallback(() => {
+		if (envDirty && !envWarned) {
+			setEnvWarned(true);
+			return;
+		}
+		onClose();
+	}, [envDirty, envWarned, onClose]);
+
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
 				e.preventDefault();
-				onClose();
+				closeGuarded();
 			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [onClose]);
+	}, [closeGuarded]);
 
 	// Updater UI: pulled into the modal so the user can check + install
 	// updates from a discoverable surface. Tauri's updater plugin
@@ -157,7 +175,7 @@ export const SettingsModal = ({
 	}, []);
 
 	return (
-		<div className="sk-modal-bg" onClick={onClose}>
+		<div className="sk-modal-bg" onClick={closeGuarded}>
 			<div className="sk-modal" onClick={(e) => e.stopPropagation()}>
 				<div className="sk-modal-head">
 					<h2>Settings</h2>
@@ -320,11 +338,18 @@ export const SettingsModal = ({
 
 					<div className="sk-field">
 						<label>Shell &amp; environment</label>
+						{envWarned && (
+							<div className="sk-env-banner sk-env-warn">
+								You have unsaved environment changes. Save or revert them, or press Escape again to
+								discard.
+							</div>
+						)}
 						<SpawnEnvPanel
 							settings={spawnSettings}
 							degraded={spawnDegraded}
 							settingsPath={spawnSettingsPath}
 							onSave={onSpawnSettings}
+							onDirtyChange={setEnvDirty}
 						/>
 					</div>
 

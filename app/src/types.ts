@@ -119,6 +119,7 @@ export interface ProbeReport {
 	state:
 		| "pending"
 		| "captured"
+		| "disabled"
 		| "not_applicable"
 		| "unsupported_shell"
 		| "timeout"
@@ -135,6 +136,14 @@ export interface ProgramReport {
 	resolved: string | null;
 }
 
+/** Why one of the user's PATH additions didn't make it in. */
+export type DropReason = "unresolved" | "not_absolute" | "separator" | "missing" | "duplicate";
+
+export interface DroppedAddition {
+	entry: string;
+	reason: DropReason;
+}
+
 /** The environment a harness would get if it spawned right now. */
 export interface EnvPreview {
 	shell: string;
@@ -143,5 +152,11 @@ export interface EnvPreview {
 	programs: ProgramReport[];
 	stripped: string[];
 	extraEnvKeys: string[];
+	/** Additions that were skipped, with the reason. */
+	droppedAdditions: DroppedAddition[];
+	/** Extra-env keys Skein owns and therefore refused. */
+	ignoredEnvKeys: string[];
+	/** Set when a shell is configured but isn't a runnable file. */
+	shellRejected: string | null;
 	launchContext: "bundled" | "terminal";
 }

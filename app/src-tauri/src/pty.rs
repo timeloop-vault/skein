@@ -139,7 +139,7 @@ impl PtyManager {
         }
         builder.cwd(cwd);
 
-        let applied = apply_env(&mut builder, settings);
+        let applied = apply_env(&mut builder, settings, probe_result());
         tracing::info!(
             id = %id,
             probe = %applied.probe.describe(),
@@ -300,14 +300,33 @@ pub(crate) struct AppliedEnv {
     pub shell: String,
     /// The expanded additions that actually made it in, in order.
     pub added: Vec<String>,
+    /// The additions that didn't, and why.
+    pub dropped: Vec<(String, spawn_env::DropReason)>,
+    /// Extra-env keys Skein refused because it owns them itself.
+    pub ignored_env_keys: Vec<String>,
 }
+
+/// Environment variables the user cannot set through "extra environment
+/// variables", because Skein writes them after that layer and would
+/// silently win.
+///
+/// `PATH` is the one that matters: allowing it would mean the resolved
+/// PATH the preview shows, the program-resolution check, and the spawn
+/// log all describe a value the child never receives. The other three
+/// are ours by design — `TERM`/`COLORTERM` describe how xterm.js
+/// renders, and `SHELL` has to agree with the shell we actually probed.
+pub(crate) const RESERVED_ENV_KEYS: &[&str] = &["PATH", "TERM", "COLORTERM", "SHELL"];
 
 /// Apply Skein's environment policy to a `CommandBuilder`.
 ///
 /// Shared verbatim by `spawn` and by the Settings preview, so "what the
 /// preview shows is what the child gets" is a property of the code
 /// rather than a claim in a doc comment.
-fn apply_env(builder: &mut CommandBuilder, settings: &SpawnSettings) -> AppliedEnv {
+fn apply_env(
+    builder: &mut CommandBuilder,
+    settings: &SpawnSettings,
+    probe: ProbeOutcome,
+) -> AppliedEnv {
     // `CommandBuilder::new` already seeds the child env from this
     // process's environment — and on Windows it additionally merges the
     // *live* `HKLM` + `HKCU` registry PATH, i.e. the user's current
@@ -345,36 +364,38 @@ fn apply_env(builder: &mut CommandBuilder, settings: &SpawnSettings) -> AppliedE
     // probe's success path, which is what the code did before, meant a
     // probe failure silently took `~/.local/bin` with it, and that is
     // where `claude` itself is installed.
-    let probe = probe_result();
-    let base: OsString = builder
-        .get_env("PATH")
-        .map(OsString::from)
-        .unwrap_or_default();
-    let probed = probe.path().map_or(base, OsString::from);
+    let probed = probe
+        .path()
+        .map_or_else(|| base_path(builder), OsString::from);
     let home = crate::home_dir();
     let lookup = |k: &str| std::env::var(k).ok();
     let dir_exists = |p: &Path| p.is_dir();
-    let path = spawn_env::merge_path(
+    let merged = spawn_env::merge_path(
         &probed,
         &settings.path_prepend,
         home.as_deref(),
         &lookup,
         &dir_exists,
     );
-    let added: Vec<String> = settings
-        .path_prepend
-        .iter()
-        .filter_map(|e| spawn_env::expand_entry(e, home.as_deref(), &lookup))
-        .collect();
-    builder.env("PATH", &path);
+    builder.env("PATH", &merged.path);
 
     // The user's own KEY=VALUE additions, last of the inherited layers
     // so they win over anything the base env carried, but before the
     // TERM/COLORTERM force below, which is ours to own.
+    let mut ignored_env_keys = Vec::new();
     for var in &settings.extra_env {
-        if !var.key.trim().is_empty() {
-            builder.env(var.key.trim(), &var.value);
+        let key = var.key.trim();
+        if key.is_empty() {
+            continue;
         }
+        if RESERVED_ENV_KEYS
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case(key))
+        {
+            ignored_env_keys.push(key.to_owned());
+            continue;
+        }
+        builder.env(key, &var.value);
     }
 
     // Unix only: portable-pty otherwise fills SHELL from the passwd
@@ -394,11 +415,49 @@ fn apply_env(builder: &mut CommandBuilder, settings: &SpawnSettings) -> AppliedE
     builder.env("COLORTERM", "truecolor");
 
     AppliedEnv {
-        path,
+        path: merged.path,
         stripped,
         probe,
         shell,
-        added,
+        added: merged.added,
+        dropped: merged.dropped,
+        ignored_env_keys,
+    }
+}
+
+/// The `PATH` to build on, before the probe and the user's additions.
+///
+/// On Unix this is simply the inherited `PATH`, which is what
+/// `CommandBuilder::new` seeded from `vars_os()`.
+///
+/// Windows needs a union. `portable-pty` *replaces* the inherited
+/// `PATH` with a live `HKLM` + `HKCU` registry read — a real win,
+/// because the registry is the user's current `PATH` while the inherited
+/// block can be an arbitrarily stale snapshot of Explorer's. But it is a
+/// replacement, not a merge, so taking it alone loses everything a
+/// launching shell added *in-process*: a Developer Command Prompt's MSVC
+/// toolchain, an activated venv or conda env, `npm run`'s
+/// `node_modules\.bin`. Those used to survive via the env-forward loop.
+/// Registry first (it is the more current answer), inherited appended;
+/// `merge_path` dedupes.
+fn base_path(builder: &CommandBuilder) -> OsString {
+    let from_builder = builder.get_env("PATH").map(OsString::from);
+    #[cfg(not(target_os = "windows"))]
+    {
+        from_builder.unwrap_or_default()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let inherited = std::env::var_os("PATH");
+        match (from_builder, inherited) {
+            (Some(registry), Some(inherited)) => {
+                let mut joined = registry;
+                joined.push(";");
+                joined.push(inherited);
+                joined
+            }
+            (some, None) | (None, some) => some.unwrap_or_default(),
+        }
     }
 }
 
@@ -436,6 +495,10 @@ pub(crate) enum ProbeFailure {
     /// registry PATH merge instead. Only ever constructed there.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     NotApplicable,
+    /// The user chose "don't ask a shell". Distinct from
+    /// `UnsupportedShell` so the UI can report a deliberate setting as a
+    /// setting rather than as a shell-compatibility failure.
+    Disabled,
     /// We have no verified flag set for this shell (nu, xonsh, elvish).
     UnsupportedShell,
     /// The shell didn't finish inside `PROBE_DEADLINE` and was killed.
@@ -503,6 +566,16 @@ fn set_probe(outcome: ProbeOutcome) {
 /// and completes in tens of milliseconds, long before the webview has
 /// hydrated rooms and asked for a PTY. The bound exists so that the
 /// pathological case costs 6 s once instead of freezing the app forever.
+/// Read the probe result without waiting. Used by anything that must
+/// not block the main thread; callers have to handle `Pending`.
+fn probe_snapshot() -> ProbeOutcome {
+    PROBE
+        .0
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
 fn probe_result() -> ProbeOutcome {
     let (lock, cv) = &*PROBE;
     if !PROBE_STARTED.load(Ordering::Acquire) {
@@ -525,6 +598,7 @@ fn probe_result() -> ProbeOutcome {
 /// survives long enough to be worth reading in a post-mortem.
 pub(crate) fn prewarm_probe(data_dir: PathBuf, settings: SpawnSettings) {
     PROBE_STARTED.store(true, Ordering::Release);
+    sweep_spool_files(&data_dir);
     #[cfg(target_os = "windows")]
     {
         let _ = (data_dir, settings);
@@ -555,6 +629,29 @@ pub(crate) fn prewarm_probe(data_dir: PathBuf, settings: SpawnSettings) {
 pub(crate) fn reprobe(data_dir: PathBuf, settings: SpawnSettings) {
     set_probe(ProbeOutcome::Pending);
     prewarm_probe(data_dir, settings);
+}
+
+/// Remove spool files an earlier run left behind.
+///
+/// `run_probe` unlinks its own file, but the probe thread is detached
+/// and never joined — quitting Skein mid-probe, or a panic between
+/// create and unlink, orphans one permanently. The names carry a uuid,
+/// so they would accumulate rather than being reused.
+fn sweep_spool_files(data_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(data_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let is_spool = name.starts_with("probe-")
+            && Path::new(name)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("out"));
+        if is_spool {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// The shell to ask for a `PATH`.
@@ -605,6 +702,15 @@ fn run_probe(shell: &str, mode: CaptureMode, deadline: Duration, data_dir: &Path
 
     let started = Instant::now();
     let ms = |t: Instant| u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+    if mode == CaptureMode::None {
+        tracing::info!("probe: capture disabled by setting, using inherited PATH");
+        return ProbeOutcome::Failed {
+            reason: ProbeFailure::Disabled,
+            shell: shell.to_owned(),
+            elapsed_ms: 0,
+        };
+    }
 
     let Some(args) = spawn_env::probe_args(shell, mode) else {
         tracing::info!(
@@ -986,13 +1092,137 @@ mod tests {
     }
 
     #[test]
+    fn an_extra_env_named_path_cannot_shadow_the_merged_path() {
+        // CommandBuilder::env is a map insert, so an extra variable
+        // called PATH applied after the merge would silently win — and
+        // the preview, the program-resolution check and the spawn log
+        // would all still describe the merged value the child never got.
+        let settings = SpawnSettings {
+            extra_env: vec![crate::spawn_settings::EnvVar {
+                key: "PATH".to_owned(),
+                value: "/hijacked".to_owned(),
+            }],
+            ..SpawnSettings::default()
+        };
+        let cmd = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "printf '<%s>' \"$PATH\"".to_owned(),
+        ];
+        let raw = capture_pty(&cmd, &settings);
+        assert!(!raw.contains("<hijacked>"), "got {raw:?}");
+        assert!(!raw.contains("<{}>"), "got {raw:?}");
+
+        let preview = env_preview(&settings);
+        assert_eq!(preview.ignored_env_keys, vec!["PATH".to_owned()]);
+    }
+
+    #[test]
+    fn skein_owned_variables_cannot_be_overridden_by_extra_env() {
+        let settings = SpawnSettings {
+            extra_env: RESERVED_ENV_KEYS
+                .iter()
+                .map(|k| crate::spawn_settings::EnvVar {
+                    key: (*k).to_owned(),
+                    value: "nope".to_owned(),
+                })
+                .collect(),
+            ..SpawnSettings::default()
+        };
+        let cmd = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "printf '<%s>' \"$TERM\"".to_owned(),
+        ];
+        assert!(capture_pty(&cmd, &settings).contains("<xterm-256color>"));
+        assert_eq!(
+            env_preview(&settings).ignored_env_keys.len(),
+            RESERVED_ENV_KEYS.len()
+        );
+    }
+
+    #[test]
+    fn disabling_capture_is_reported_as_a_setting_not_a_shell_failure() {
+        // Selecting "don't ask a shell" used to surface as
+        // `unsupported_shell`, telling the user their deliberate choice
+        // was a compatibility problem and pointing at a fix that was
+        // already in place.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shell = fake_shell(dir.path(), "zsh", PAYLOAD);
+        let outcome = run_probe(
+            shell.to_str().expect("utf-8 path"),
+            CaptureMode::None,
+            Duration::from_secs(5),
+            dir.path(),
+        );
+        assert!(
+            matches!(
+                outcome,
+                ProbeOutcome::Failed {
+                    reason: ProbeFailure::Disabled,
+                    ..
+                }
+            ),
+            "got {outcome:?}"
+        );
+        let settings = SpawnSettings {
+            capture: CaptureMode::None,
+            ..SpawnSettings::default()
+        };
+        assert_eq!(describe_probe(&outcome, &settings).state, "disabled");
+    }
+
+    #[test]
+    fn a_dropped_addition_is_reported_with_its_reason() {
+        let settings = SpawnSettings {
+            path_prepend: vec!["/definitely/not/here".to_owned()],
+            ..SpawnSettings::default()
+        };
+        let preview = env_preview(&settings);
+        assert_eq!(preview.dropped_additions.len(), 1);
+        assert_eq!(preview.dropped_additions[0].entry, "/definitely/not/here");
+    }
+
+    #[test]
+    fn a_broken_shell_setting_is_surfaced_rather_than_silently_ignored() {
+        let settings = SpawnSettings {
+            shell: Some("/no/such/shell".to_owned()),
+            ..SpawnSettings::default()
+        };
+        assert_eq!(
+            env_preview(&settings).shell_rejected.as_deref(),
+            Some("/no/such/shell")
+        );
+        // A good one produces no warning.
+        let ok = SpawnSettings {
+            shell: Some("/bin/sh".to_owned()),
+            ..SpawnSettings::default()
+        };
+        assert_eq!(env_preview(&ok).shell_rejected, None);
+    }
+
+    #[test]
+    fn a_non_executable_file_does_not_count_as_a_resolved_program() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("faketool");
+        std::fs::write(&path, "not executable").expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        let as_path = OsString::from(dir.path());
+        assert_eq!(resolve_program("faketool", &as_path), None);
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        assert!(resolve_program("faketool", &as_path).is_some());
+    }
+
+    #[test]
     fn stripping_can_be_turned_off() {
         let settings = SpawnSettings {
             strip_host_env: false,
             ..SpawnSettings::default()
         };
         let mut builder = CommandBuilder::new("skein-preview");
-        let applied = apply_env(&mut builder, &settings);
+        let applied = apply_env(&mut builder, &settings, probe_snapshot());
         assert!(applied.stripped.is_empty());
     }
 
@@ -1018,7 +1248,7 @@ mod tests {
             &|_| true,
         );
         assert_eq!(
-            std::env::split_paths(&merged)
+            std::env::split_paths(&merged.path)
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect::<Vec<_>>(),
             vec!["/home/tester/.local/bin", "/usr/bin", "/bin"]
@@ -1042,8 +1272,9 @@ pub enum PathSource {
     Added,
     /// From the login-shell probe.
     Shell,
-    /// From the environment Skein itself was launched with (on Windows,
-    /// merged with the live registry `PATH`).
+    /// From the environment Skein itself was launched with — on
+    /// Windows, unioned with the live registry `PATH`, which
+    /// `portable-pty` supplies in place of the inherited one.
     Inherited,
 }
 
@@ -1077,6 +1308,14 @@ pub struct ProgramReport {
     pub resolved: Option<String>,
 }
 
+/// One of the user's additions that didn't make it onto `PATH`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DroppedAddition {
+    pub entry: String,
+    pub reason: spawn_env::DropReason,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvPreview {
@@ -1086,6 +1325,16 @@ pub struct EnvPreview {
     pub programs: Vec<ProgramReport>,
     pub stripped: Vec<String>,
     pub extra_env_keys: Vec<String>,
+    /// Additions that were skipped, with the reason — otherwise "I added
+    /// a directory and nothing happened" is unanswerable, which is the
+    /// confusion this panel exists to end.
+    pub dropped_additions: Vec<DroppedAddition>,
+    /// Extra-env keys Skein owns and therefore refused.
+    pub ignored_env_keys: Vec<String>,
+    /// Set when a shell is configured but isn't a runnable file, so the
+    /// panel can say the value is being ignored instead of leaving the
+    /// user staring at a field that looks accepted.
+    pub shell_rejected: Option<String>,
     /// `bundled` when Skein was launched from Finder/Explorer/Dock,
     /// `terminal` when it inherited a terminal's environment. The
     /// difference is the whole reason PATH bugs survive testing: from a
@@ -1131,6 +1380,12 @@ fn describe_probe(outcome: &ProbeOutcome, settings: &SpawnSettings) -> ProbeRepo
             elapsed_ms,
         } => {
             let (state, message) = match reason {
+                ProbeFailure::Disabled => (
+                    "disabled",
+                    "PATH capture is turned off. Harnesses get the environment Skein was \
+                     launched with, plus your additions below."
+                        .to_owned(),
+                ),
                 ProbeFailure::NotApplicable => (
                     "not_applicable",
                     "Windows has no login shell to ask. Skein uses the live registry PATH \
@@ -1182,6 +1437,10 @@ fn describe_probe(outcome: &ProbeOutcome, settings: &SpawnSettings) -> ProbeRepo
 /// also joins the cwd first, and on Windows it takes no cwd at all and
 /// degrades to returning the bare name on failure. We only want the
 /// honest "is this on PATH" answer.
+///
+/// The executable-bit check on Unix matters — `portable-pty` uses
+/// `access(X_OK)`, so a present-but-non-executable file would report as
+/// resolved here while the spawn refuses it.
 fn resolve_program(name: &str, path: &OsStr) -> Option<String> {
     let exts: Vec<String> = if cfg!(windows) {
         std::env::var("PATHEXT")
@@ -1198,17 +1457,32 @@ fn resolve_program(name: &str, path: &OsStr) -> Option<String> {
             continue;
         }
         let direct = dir.join(name);
-        if direct.is_file() {
+        if is_executable(&direct) {
             return Some(direct.display().to_string());
         }
         for ext in &exts {
             let candidate = dir.join(format!("{name}{ext}"));
-            if candidate.is_file() {
+            if is_executable(&candidate) {
                 return Some(candidate.display().to_string());
             }
         }
     }
     None
+}
+
+fn is_executable(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 /// Build the environment a harness would get right now, without spawning
@@ -1217,7 +1491,11 @@ pub(crate) fn env_preview(settings: &SpawnSettings) -> EnvPreview {
     // The program name doesn't affect `get_base_env`, and we never spawn
     // this builder — we only read the environment back off it.
     let mut builder = CommandBuilder::new("skein-preview");
-    let applied = apply_env(&mut builder, settings);
+    // The *non-waiting* read on purpose: `spawn_env_preview` is a sync
+    // Tauri command, so waiting here would block the event loop for up
+    // to `PROBE_WAIT`, and the panel already knows how to follow a
+    // `pending` state until it settles.
+    let applied = apply_env(&mut builder, settings, probe_snapshot());
 
     let added: Vec<String> = applied.added;
     let from_shell = applied.probe.path().is_some();
@@ -1247,6 +1525,13 @@ pub(crate) fn env_preview(settings: &SpawnSettings) -> EnvPreview {
         })
         .collect();
 
+    let shell_rejected = settings
+        .shell
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && settings.valid_shell().is_none())
+        .map(ToOwned::to_owned);
+
     EnvPreview {
         probe: describe_probe(&applied.probe, settings),
         shell: applied.shell,
@@ -1259,6 +1544,13 @@ pub(crate) fn env_preview(settings: &SpawnSettings) -> EnvPreview {
             .map(|v| v.key.trim().to_owned())
             .filter(|k| !k.is_empty())
             .collect(),
+        dropped_additions: applied
+            .dropped
+            .into_iter()
+            .map(|(entry, reason)| DroppedAddition { entry, reason })
+            .collect(),
+        ignored_env_keys: applied.ignored_env_keys,
+        shell_rejected,
         launch_context: launch_context(),
     }
 }
