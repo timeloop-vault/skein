@@ -213,6 +213,25 @@ fn dedupe_key(path: &Path) -> String {
     }
 }
 
+/// Concatenate two `PATH` values, first then second.
+///
+/// Split-and-rejoin rather than a hand-written separator so it is
+/// correct on every platform, and so it compiles and is tested
+/// everywhere even though only Windows needs it. `merge_path` dedupes
+/// afterwards, so overlap between the two is free.
+pub(crate) fn concat_paths(first: Option<OsString>, second: Option<OsString>) -> OsString {
+    match (first, second) {
+        (Some(a), Some(b)) => {
+            let joined = std::env::split_paths(&a).chain(std::env::split_paths(&b));
+            // Only fails if an entry contains the separator, which
+            // cannot happen for values that came *from* a PATH.
+            std::env::join_paths(joined).unwrap_or(a)
+        }
+        (Some(v), None) | (None, Some(v)) => v,
+        (None, None) => OsString::new(),
+    }
+}
+
 /// Why one of the user's `PATH` additions didn't make it in.
 ///
 /// Reported rather than silently swallowed: "I added a directory and
@@ -802,6 +821,31 @@ mod tests {
         let base = join(&["/usr/bin"]);
         let out = merge_path(&base, &[sneaky], Some(&home()), &no_vars, &|_| true);
         assert_eq!(merged_parts(&out), vec!["/usr/bin"]);
+    }
+
+    #[test]
+    fn concat_paths_joins_with_the_platform_separator() {
+        // Compiled and exercised on every platform even though only the
+        // Windows branch calls it — a cfg'd union would be verifiable
+        // only on the machine that can't easily run these tests.
+        let a = join(&["/one", "/two"]);
+        let b = join(&["/three"]);
+        assert_eq!(
+            parts(&concat_paths(Some(a.clone()), Some(b.clone()))),
+            vec!["/one", "/two", "/three"]
+        );
+        assert_eq!(
+            parts(&concat_paths(Some(a.clone()), None)),
+            vec!["/one", "/two"]
+        );
+        assert_eq!(parts(&concat_paths(None, Some(b))), vec!["/three"]);
+        assert_eq!(concat_paths(None, None), OsString::new());
+        // Overlap is left to merge_path's dedupe, not silently dropped
+        // here, so the two responsibilities stay separable.
+        assert_eq!(
+            parts(&concat_paths(Some(a.clone()), Some(a))),
+            vec!["/one", "/two", "/one", "/two"]
+        );
     }
 
     #[test]

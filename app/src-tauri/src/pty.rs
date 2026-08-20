@@ -442,22 +442,13 @@ fn apply_env(
 /// `merge_path` dedupes.
 fn base_path(builder: &CommandBuilder) -> OsString {
     let from_builder = builder.get_env("PATH").map(OsString::from);
-    #[cfg(not(target_os = "windows"))]
-    {
+    // `cfg!` rather than `#[cfg]` so both arms type-check on every
+    // platform: the Windows arm is the one that cannot be compiled on
+    // the machine this is usually developed on.
+    if cfg!(windows) {
+        spawn_env::concat_paths(from_builder, std::env::var_os("PATH"))
+    } else {
         from_builder.unwrap_or_default()
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let inherited = std::env::var_os("PATH");
-        match (from_builder, inherited) {
-            (Some(registry), Some(inherited)) => {
-                let mut joined = registry;
-                joined.push(";");
-                joined.push(inherited);
-                joined
-            }
-            (some, None) | (None, some) => some.unwrap_or_default(),
-        }
     }
 }
 
