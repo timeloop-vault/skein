@@ -258,6 +258,135 @@ const PATH_ENTRY_FORBIDDEN: &[char] = &[';', '"'];
 #[cfg(not(windows))]
 const PATH_ENTRY_FORBIDDEN: &[char] = &[':'];
 
+// ── Host-terminal identity (issue #192) ────────────────────────────
+//
+// Skein forwards the environment it was launched with. When Skein is
+// itself started from tmux, VS Code's terminal, iTerm or Windows
+// Terminal, those markers reach claude / opencode / copilot — and every
+// one of them sniffs the terminal. The child then adopts the *host*
+// terminal's key, clipboard and rendering quirks instead of xterm.js's.
+//
+// The dangerous direction here is over-stripping, not under-stripping:
+// removing something the agent needs fails silently and looks like a
+// bug somewhere else entirely. So `KEEP` is checked first and wins over
+// both the exact list and the prefixes, and prefixes are only used for
+// families that are unambiguously one vendor's namespace.
+
+/// Exact variable names to drop. Sorted; one comment per group.
+pub(crate) const HOST_TERMINAL_ENV_VARS: &[&str] = &[
+    // Generic terminal identification.
+    "COLORFGBG",
+    "TERMINAL_EMULATOR",
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+    "TERM_SESSION_ID",
+    // Multiplexers. `STY` is GNU screen; `TMUX_PANE` addresses a pane
+    // that doesn't exist from the child's point of view.
+    "STY",
+    "TMUX",
+    "TMUX_PANE",
+    // Editors that host a terminal and expect to be talked back to.
+    "EMACS",
+    "INSIDE_EMACS",
+    "NVIM",
+    "NVIM_LISTEN_ADDRESS",
+    "NVIM_LOG_FILE",
+    // Credential helpers wired to a host-process IPC socket. `GIT_ASKPASS`
+    // is the highest-value entry in this whole list: VS Code points it at
+    // a Node shim unreachable from a Skein PTY, so a `git push` that needs
+    // credentials hangs the agent with no tty prompt to fall back to.
+    "GIT_ASKPASS",
+    "SSH_ASKPASS",
+    "SSH_ASKPASS_REQUIRE",
+    // Inbound-SSH session identity. NOT `SSH_AUTH_SOCK` — see `KEEP`.
+    "SSH_CLIENT",
+    "SSH_CONNECTION",
+    "SSH_TTY",
+    // Terminal geometry. Stale values make a TUI lay out for the wrong
+    // size before its first resize event lands.
+    "COLUMNS",
+    "LINES",
+    // Desktop launch handoff tokens — single-use, and already consumed.
+    "DESKTOP_STARTUP_ID",
+    "XDG_ACTIVATION_TOKEN",
+    // Claude Code's own session markers. A nested `claude` must not think
+    // it is the outer one. `CLAUDE_CODE_GIT_BASH_PATH` is deliberately
+    // absent — see `KEEP`.
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_SSE_PORT",
+    // Windows / MSYS shell identity.
+    "MSYSTEM",
+    "PROMPT",
+    "WSLENV",
+];
+
+/// Vendor namespaces where every member is host-terminal identity.
+/// Used only where the prefix cannot plausibly collide with something
+/// the agent needs.
+pub(crate) const HOST_TERMINAL_ENV_PREFIXES: &[&str] = &[
+    "ALACRITTY_",
+    "ANSICON",
+    "CONEMU",
+    "GHOSTTY_",
+    "GNOME_TERMINAL_",
+    "ITERM_",
+    "KITTY_",
+    "KONSOLE_",
+    "LC_TERMINAL",
+    "MSYS",
+    "VSCODE_",
+    "VTE_",
+    "WEZTERM_",
+    "WT_",
+    "ZELLIJ",
+];
+
+/// Never stripped, whatever the lists above say. Each entry is here
+/// because removing it breaks something real.
+pub(crate) const HOST_TERMINAL_ENV_KEEP: &[&str] = &[
+    // The agent's ssh identity. On a Finder-launched macOS bundle this is
+    // the *only* variable launchd contributes beyond PATH/HOME/SHELL, and
+    // dropping it breaks every `git push` over ssh. A reference PTY test
+    // harness can afford to strip it; a production IDE cannot.
+    "SSH_AUTH_SOCK",
+    // Claude Code on native Windows requires Git Bash and finds it here.
+    // No current rule matches it; this is a guard against someone later
+    // "tidying" the three `CLAUDE_CODE_*` names above into a prefix.
+    "CLAUDE_CODE_GIT_BASH_PATH",
+    // Colour preference is user intent, not host identity.
+    "CLICOLOR",
+    "CLICOLOR_FORCE",
+    "FORCE_COLOR",
+    "NO_COLOR",
+    // Terminal capability databases — about what the child can render,
+    // not who launched it.
+    "TERMINFO",
+    "TERMINFO_DIRS",
+];
+
+/// Whether `key` is host-terminal identity that must not reach a
+/// harness. Case-insensitive: Windows environment keys are, and
+/// `portable-pty` lowercases them there anyway.
+pub(crate) fn is_host_terminal_var(key: &str) -> bool {
+    if HOST_TERMINAL_ENV_KEEP
+        .iter()
+        .any(|k| k.eq_ignore_ascii_case(key))
+    {
+        return false;
+    }
+    if HOST_TERMINAL_ENV_VARS
+        .iter()
+        .any(|k| k.eq_ignore_ascii_case(key))
+    {
+        return true;
+    }
+    let upper = key.to_ascii_uppercase();
+    HOST_TERMINAL_ENV_PREFIXES
+        .iter()
+        .any(|p| upper.starts_with(p))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,5 +695,96 @@ mod tests {
         let base = join(&["/usr/bin", "/bin"]);
         let out = merge_path(&base, &[], Some(&home()), &no_vars, &|_| true);
         assert_eq!(parts(&out), parts(&base));
+    }
+
+    // ── host-terminal identity ────────────────────────────────────
+
+    #[test]
+    fn every_listed_host_terminal_var_is_stripped() {
+        for key in HOST_TERMINAL_ENV_VARS {
+            assert!(is_host_terminal_var(key), "{key} should be stripped");
+        }
+    }
+
+    #[test]
+    fn the_keep_list_always_survives() {
+        // The single most important assertion in this module. A careless
+        // `SSH_*` prefix rule would eat the agent's ssh-agent socket and
+        // break `git push` in a way that looks like a git bug.
+        for key in HOST_TERMINAL_ENV_KEEP {
+            assert!(!is_host_terminal_var(key), "{key} must be kept");
+        }
+    }
+
+    #[test]
+    fn variables_the_harness_depends_on_are_untouched() {
+        for key in [
+            "PATH",
+            "HOME",
+            "USERPROFILE",
+            "SHELL",
+            "USER",
+            "LANG",
+            "LC_ALL",
+            "TMPDIR",
+            "XDG_RUNTIME_DIR",
+            "ANTHROPIC_API_KEY",
+            "GITHUB_TOKEN",
+            "NVM_DIR",
+            "JAVA_HOME",
+            "SSH_AUTH_SOCK",
+            "CLAUDE_CODE_GIT_BASH_PATH",
+        ] {
+            assert!(!is_host_terminal_var(key), "{key} must be kept");
+        }
+    }
+
+    #[test]
+    fn vendor_prefixes_match_their_families() {
+        for key in [
+            "KITTY_WINDOW_ID",
+            "WEZTERM_PANE",
+            "WEZTERM_UNIX_SOCKET",
+            "ALACRITTY_SOCKET",
+            "GHOSTTY_RESOURCES_DIR",
+            "VSCODE_INJECTION",
+            "VSCODE_GIT_IPC_HANDLE",
+            "WT_SESSION",
+            "ZELLIJ_SESSION_NAME",
+            "ITERM_PROFILE",
+            "LC_TERMINAL_VERSION",
+            "VTE_VERSION",
+            "KONSOLE_VERSION",
+            "GNOME_TERMINAL_SCREEN",
+            "MSYSTEM",
+            "ANSICON_DEF",
+        ] {
+            assert!(is_host_terminal_var(key), "{key} should be stripped");
+        }
+    }
+
+    #[test]
+    fn matching_is_case_insensitive() {
+        // Windows environment keys are case-insensitive, and portable-pty
+        // lowercases them in its own map.
+        assert!(is_host_terminal_var("tmux"));
+        assert!(is_host_terminal_var("Term_Program"));
+        assert!(is_host_terminal_var("wt_session"));
+        assert!(!is_host_terminal_var("ssh_auth_sock"));
+    }
+
+    #[test]
+    fn the_lists_contain_no_duplicates() {
+        for list in [
+            HOST_TERMINAL_ENV_VARS,
+            HOST_TERMINAL_ENV_PREFIXES,
+            HOST_TERMINAL_ENV_KEEP,
+        ] {
+            let mut seen: Vec<String> = list.iter().map(|k| k.to_ascii_uppercase()).collect();
+            seen.sort_unstable();
+            let before = seen.len();
+            seen.dedup();
+            assert_eq!(before, seen.len(), "duplicate entry in {list:?}");
+        }
     }
 }

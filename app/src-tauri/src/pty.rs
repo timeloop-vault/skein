@@ -14,14 +14,12 @@
 //! gets us the exit signal regardless.
 
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::path::Path;
-use std::sync::Arc;
-#[cfg(not(target_os = "windows"))]
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, LazyLock, Mutex as StdMutex, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -126,22 +124,74 @@ impl PtyManager {
         }
         builder.cwd(cwd);
 
-        // Forward the user's environment so spawned CLIs find their
-        // auth tokens, PATH entries, locale, etc. We override TERM and
-        // COLORTERM unconditionally — those are about how we render,
-        // not about what the user has configured.
-        for (k, v) in std::env::vars() {
-            builder.env(k, v);
+        // `CommandBuilder::new` already seeds the child env from this
+        // process's environment — and on Windows it additionally merges
+        // the *live* `HKLM` + `HKCU` registry PATH, i.e. the user's
+        // current PATH rather than whatever stale block Skein happened
+        // to inherit at launch. We used to copy `std::env::vars()` over
+        // the top of that, which on Windows overwrote the registry
+        // merge with the stale value (portable-pty lowercases env keys
+        // there, so our `PATH` collided with its `Path`) — the one
+        // platform where nothing else compensated. There is nothing to
+        // re-copy: let the base env stand and override only what we own.
+
+        // #192: strip host-terminal identity. Skein inherits markers
+        // like TERM_PROGRAM / TMUX / VSCODE_* when it is itself launched
+        // from a terminal, and the agent CLIs sniff them — adopting the
+        // *host* terminal's key and clipboard quirks instead of
+        // xterm.js's. `iter_full_env_as_str` borrows the builder, so
+        // collect the keys before removing any.
+        let doomed: Vec<String> = builder
+            .iter_full_env_as_str()
+            .map(|(k, _)| k.to_owned())
+            .filter(|k| spawn_env::is_host_terminal_var(k))
+            .collect();
+        for key in &doomed {
+            builder.env_remove(key);
         }
-        // GUI-launched .app bundles on macOS / Linux inherit a stripped
-        // PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) — not the user's shell
-        // PATH. So `claude`, `opencode`, Homebrew binaries, etc. aren't
-        // found. Read PATH from a login + interactive shell once and
-        // use it for every spawn. No-op on Windows (different launch
-        // model, no equivalent issue).
-        if let Some(path) = login_shell_path() {
-            builder.env("PATH", augment_path(path));
-        }
+
+        // PATH: the login-shell probe when we have one, otherwise the
+        // inherited/registry PATH — and Skein's additions on top either
+        // way. Applying the additions only on the probe's success path
+        // (which is what the code did before) meant a probe failure
+        // silently took `~/.local/bin` with it, and on this machine
+        // that is where `claude` itself lives.
+        let probe = probe_result();
+        let base: OsString = builder
+            .get_env("PATH")
+            .map(OsString::from)
+            .unwrap_or_default();
+        let probed = probe.path().map_or(base, OsString::from);
+        let resolved_path = spawn_env::merge_path(
+            &probed,
+            &default_path_prepend(),
+            crate::home_dir().as_deref(),
+            &|k| std::env::var(k).ok(),
+            &|p| p.is_dir(),
+        );
+        // The resolved PATH was previously observable nowhere: the old
+        // log line printed the *probe's* output, i.e. the value before
+        // Skein's own additions, so "what did this harness actually
+        // get" could not be answered from the logs at all.
+        tracing::info!(
+            id = %id,
+            probe = %probe.describe(),
+            stripped = doomed.len(),
+            path = %resolved_path.to_string_lossy(),
+            "pty_spawn resolved environment"
+        );
+        builder.env("PATH", resolved_path);
+
+        // Unix only: portable-pty otherwise fills SHELL from the passwd
+        // database, which can disagree with the shell we actually probed
+        // and with the one a shell harness runs. Windows has no
+        // meaningful $SHELL, and setting one confuses Git-Bash-aware
+        // tools that read it.
+        #[cfg(not(target_os = "windows"))]
+        builder.env("SHELL", probe_shell());
+
+        // TERM / COLORTERM are about how *we* render, not about what the
+        // user configured, so they are forced last and unconditionally.
         builder.env("TERM", "xterm-256color");
         builder.env("COLORTERM", "truecolor");
 
@@ -293,50 +343,171 @@ impl PtyManager {
 /// the OS reported.
 ///
 /// `~/.local/bin` is the de-facto install location for `pip install
-/// --user`, `pipx`, `uv tool` and Claude Code's own installer, and — as
-/// verified on this machine — it is routinely absent from the rc chain,
+/// --user`, `pipx`, `uv tool` and Claude Code's own installer — and, as
+/// verified on this machine, it is routinely absent from the rc chain,
 /// because it is normally put there by something further up (a display
 /// manager, VS Code's terminal integration) that a Finder-launched
 /// bundle never sees. `~/bin` is the same story for hand-rolled scripts.
 ///
-/// Issue #3 replaces this constant with a user-editable list; these stay
-/// as the defaults.
+/// Windows gets the same `~/.local/bin` because that is where Claude
+/// Code's native Windows installer puts `claude.exe`. It deliberately
+/// does *not* get `%LOCALAPPDATA%\Microsoft\WindowsApps`: that is
+/// already in the registry PATH, and it holds the Store execution-alias
+/// stubs — prepending it would put the stub `python.exe` (which opens
+/// the Microsoft Store) ahead of a real Python for every harness.
+///
+/// Issue #3 replaces this with a user-editable list; these stay as the
+/// defaults.
 fn default_path_prepend() -> Vec<String> {
-    vec!["~/.local/bin".to_owned(), "~/bin".to_owned()]
+    if cfg!(windows) {
+        vec![r"%USERPROFILE%\.local\bin".to_owned()]
+    } else {
+        vec!["~/.local/bin".to_owned(), "~/bin".to_owned()]
+    }
 }
 
-/// `PATH` from the user's login + interactive shell. Cached on first call.
+/// How long the probe shell may run before we kill it.
 ///
-/// `Some` on macOS / Linux when the shell prints something usable.
-/// Always `None` on Windows, where `portable-pty` already merges the
-/// live `HKLM` + `HKCU` registry `PATH` for us and there is no login
-/// shell to ask.
+/// Healthy cost measured on this machine is 20-30 ms; 5 s is a hang, not
+/// a slow machine.
+const PROBE_DEADLINE: Duration = Duration::from_secs(5);
+
+/// How long a spawn will wait for a probe that hasn't finished yet.
+/// Strictly longer than `PROBE_DEADLINE` so the probe thread always
+/// reaches a terminal state first and this bound never actually binds.
+const PROBE_WAIT: Duration = Duration::from_secs(6);
+
+/// What the login-shell probe found, if anything.
+#[derive(Debug, Clone)]
+pub(crate) enum ProbeOutcome {
+    /// Still running (or never started).
+    Pending,
+    Captured {
+        path: String,
+        shell: String,
+        elapsed_ms: u64,
+    },
+    Failed {
+        reason: ProbeFailure,
+        shell: String,
+        elapsed_ms: u64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProbeFailure {
+    /// No probe on this platform — Windows uses portable-pty's live
+    /// registry PATH merge instead. Only ever constructed there.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    NotApplicable,
+    /// We have no verified flag set for this shell (nu, xonsh, elvish).
+    UnsupportedShell,
+    /// The shell didn't finish inside `PROBE_DEADLINE` and was killed.
+    Timeout,
+    /// The shell couldn't be started at all.
+    SpawnFailed,
+    /// The shell ran but printed no usable payload.
+    NoPayload,
+}
+
+impl ProbeOutcome {
+    /// One-line state for the spawn log, so a "command not found" in a
+    /// harness can be traced to the probe without a rebuild.
+    fn describe(&self) -> String {
+        match self {
+            Self::Pending => "pending".to_owned(),
+            Self::Captured {
+                shell, elapsed_ms, ..
+            } => format!("captured from {shell} in {elapsed_ms} ms"),
+            Self::Failed {
+                reason,
+                shell,
+                elapsed_ms,
+            } => format!("failed ({reason:?}) shell={shell} after {elapsed_ms} ms"),
+        }
+    }
+
+    pub(crate) fn path(&self) -> Option<&str> {
+        match self {
+            Self::Captured { path, .. } => Some(path),
+            _ => None,
+        }
+    }
+}
+
+/// The probe runs once per process, off the main thread, and every spawn
+/// reads the result.
 ///
-/// This is the "Finder/Dock launches my .app with `PATH=/usr/bin:/bin`"
-/// fix. The user's rc files typically prepend Homebrew, nvm, pyenv etc.
-/// — none of which a Finder launch inherits. We invoke the shell so
-/// every rc / profile gets sourced, then read `$PATH` back through a
-/// sentinel (the shell may print startup noise to stdout first).
+/// A `OnceLock` was wrong here for two reasons: it evaluated the probe
+/// lazily *inside* the first spawn — which is a sync Tauri command, so a
+/// hanging rc file froze the whole app's event loop with no timeout —
+/// and it cannot be re-run, which the Settings "re-probe" action needs.
+static PROBE: LazyLock<(StdMutex<ProbeOutcome>, Condvar)> =
+    LazyLock::new(|| (StdMutex::new(ProbeOutcome::Pending), Condvar::new()));
+
+fn set_probe(outcome: ProbeOutcome) {
+    let (lock, cv) = &*PROBE;
+    // A poisoned lock here means a previous probe panicked; the value is
+    // still structurally fine and losing the PATH is worse than the
+    // panic was.
+    let mut guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
+    *guard = outcome;
+    cv.notify_all();
+}
+
+/// Read the probe result, waiting only if it is still in flight.
 ///
-/// Costs one shell startup per Skein run (~20-30 ms measured), on the
-/// first PTY spawn.
-#[cfg(not(target_os = "windows"))]
-fn login_shell_path() -> Option<&'static str> {
-    static CACHE: OnceLock<Option<String>> = OnceLock::new();
-    CACHE.get_or_init(probe_login_shell_path).as_deref()
+/// In practice this never waits: the probe is kicked off during `setup()`
+/// and completes in tens of milliseconds, long before the webview has
+/// hydrated rooms and asked for a PTY. The bound exists so that the
+/// pathological case costs 6 s once instead of freezing the app forever.
+fn probe_result() -> ProbeOutcome {
+    let (lock, cv) = &*PROBE;
+    let guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
+    let (guard, timed_out) = cv
+        .wait_timeout_while(guard, PROBE_WAIT, |o| matches!(o, ProbeOutcome::Pending))
+        .unwrap_or_else(PoisonError::into_inner);
+    if timed_out.timed_out() {
+        tracing::warn!("probe_result: gave up waiting for the login-shell probe");
+    }
+    guard.clone()
+}
+
+/// Start the login-shell probe on a helper thread.
+///
+/// Called from `setup()`. `data_dir` is where the probe's stdout is
+/// spooled — a file we own rather than a world-writable temp dir, and it
+/// survives long enough to be worth reading in a post-mortem.
+pub(crate) fn prewarm_probe(data_dir: PathBuf) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = data_dir;
+        set_probe(ProbeOutcome::Failed {
+            reason: ProbeFailure::NotApplicable,
+            shell: String::new(),
+            elapsed_ms: 0,
+        });
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        thread::spawn(move || {
+            let shell = probe_shell();
+            set_probe(run_probe(&shell, PROBE_DEADLINE, &data_dir));
+        });
+    }
 }
 
 /// The shell to ask for a `PATH`.
 ///
-/// `$SHELL` *is* present in a Finder-launched bundle (verified with
-/// `ps eww` on a running Skein.app: `PATH=/usr/bin:/bin:/usr/sbin:/sbin`,
-/// `SHELL=/bin/zsh`) — it is only `PATH` that launchd strips. The
+/// `$SHELL` *is* present in a Finder-launched bundle — verified with
+/// `ps eww` against a running Skein.app: `PATH` is stripped to
+/// `/usr/bin:/bin:/usr/sbin:/sbin`, but `SHELL=/bin/zsh` is there. The
 /// fallback therefore almost never fires; when it does, `/bin/zsh` is
-/// right on macOS (the OS default since Catalina) and `/bin/bash` on
-/// Linux. Falling back to `/bin/bash` on macOS reads bash rc files that
-/// a zsh user has never written.
+/// right on macOS (the OS default since Catalina). Falling back to
+/// `/bin/bash` there — which is what this used to do — reads bash rc
+/// files that a zsh user has never written.
 #[cfg(not(target_os = "windows"))]
-fn probe_shell() -> String {
+pub(crate) fn probe_shell() -> String {
     std::env::var("SHELL")
         .ok()
         .filter(|s| !s.is_empty())
@@ -349,67 +520,312 @@ fn probe_shell() -> String {
         })
 }
 
+/// Ask a login + interactive shell what `PATH` it ends up with.
+///
+/// Two things here are load-bearing and easy to "simplify" wrongly:
+///
+/// 1. **stdout goes to a file, not a pipe.** `Command::output()` drains
+///    both pipes to EOF *before* reaping the child, so an rc file that
+///    backgrounds anything (`ssh-agent`, `gpg-agent`, a `mise`/`direnv`
+///    daemon, `tmux new-session -d`) leaves a grandchild holding the
+///    write end and EOF never comes — the read blocks forever even
+///    though the shell itself exited. Reproduced: an rc file containing
+///    `( sleep 45 ) &` hangs the pipe form indefinitely and completes
+///    the file form in 0.02 s. A timeout alone does *not* fix this,
+///    because killing the shell doesn't close a grandchild's fd.
+/// 2. **Parse first, judge exit status second.** `bash -l -i -c` prints
+///    "no job control in this shell" and can exit non-zero while having
+///    produced a perfectly good payload. The old code rejected those.
 #[cfg(not(target_os = "windows"))]
-fn probe_login_shell_path() -> Option<String> {
-    let shell = probe_shell();
-    // An unknown shell (nu, xonsh, elvish) gets no probe rather than an
-    // argv we know it will reject — see `spawn_env::probe_args`.
-    let Some(args) = spawn_env::probe_args(&shell) else {
-        tracing::info!(shell = %shell, "login_shell_path: unsupported shell, skipping probe");
-        return None;
+fn run_probe(shell: &str, deadline: Duration, data_dir: &Path) -> ProbeOutcome {
+    use std::process::{Command, Stdio};
+
+    let started = Instant::now();
+    let ms = |t: Instant| u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+    let Some(args) = spawn_env::probe_args(shell) else {
+        tracing::info!(shell = %shell, "probe: unsupported shell, using inherited PATH");
+        return ProbeOutcome::Failed {
+            reason: ProbeFailure::UnsupportedShell,
+            shell: shell.to_owned(),
+            elapsed_ms: ms(started),
+        };
     };
 
-    let output = match std::process::Command::new(&shell)
-        .args(args)
-        .arg(spawn_env::PROBE_SCRIPT)
-        .output()
-    {
-        Ok(o) => o,
+    let out_path = data_dir.join(format!("probe-{}.out", uuid::Uuid::new_v4()));
+    let spooled = match std::fs::File::create(&out_path) {
+        Ok(f) => f,
         Err(e) => {
-            tracing::warn!(shell = %shell, error = %e, "login_shell_path: spawn failed");
-            return None;
+            tracing::warn!(path = %out_path.display(), error = %e, "probe: cannot spool stdout");
+            return ProbeOutcome::Failed {
+                reason: ProbeFailure::SpawnFailed,
+                shell: shell.to_owned(),
+                elapsed_ms: ms(started),
+            };
         }
     };
-    if !output.status.success() {
-        tracing::warn!(
-            shell = %shell,
-            status = ?output.status,
-            stderr = %String::from_utf8_lossy(&output.stderr),
-            "login_shell_path: shell exited non-zero"
-        );
-        return None;
+
+    let mut cmd = Command::new(shell);
+    cmd.args(args)
+        .arg(spawn_env::PROBE_SCRIPT)
+        .stdin(Stdio::null())
+        .stdout(spooled)
+        .stderr(Stdio::null());
+    // rc files branch on these ("am I inside tmux / VS Code?"), so the
+    // probe must see the same environment a harness will.
+    for (key, _) in std::env::vars_os() {
+        if spawn_env::is_host_terminal_var(&key.to_string_lossy()) {
+            cmd.env_remove(&key);
+        }
+    }
+    // A documented escape hatch: `[[ -n $SKEIN_PROBE ]] && return` at the
+    // top of an rc file makes the probe cheap without affecting the
+    // user's real shells.
+    cmd.env("SKEIN_PROBE", "1");
+    cmd.env("DISABLE_AUTO_UPDATE", "true");
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(shell = %shell, error = %e, "probe: spawn failed");
+            let _ = std::fs::remove_file(&out_path);
+            return ProbeOutcome::Failed {
+                reason: ProbeFailure::SpawnFailed,
+                shell: shell.to_owned(),
+                elapsed_ms: ms(started),
+            };
+        }
+    };
+
+    let mut killed = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if started.elapsed() >= deadline {
+                    tracing::warn!(shell = %shell, "probe: deadline exceeded, killing shell");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    killed = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(e) => {
+                tracing::warn!(shell = %shell, error = %e, "probe: wait failed");
+                break;
+            }
+        }
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let extracted = spawn_env::extract_probe_path(&stdout);
+    let stdout = std::fs::read_to_string(&out_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&out_path);
+    let elapsed_ms = ms(started);
 
-    if let Some(ref path) = extracted {
-        tracing::info!(shell = %shell, path = %path, "login_shell_path: captured user PATH");
+    if let Some(path) = spawn_env::extract_probe_path(&stdout) {
+        tracing::info!(shell = %shell, elapsed_ms, path = %path, "probe: captured user PATH");
+        return ProbeOutcome::Captured {
+            path,
+            shell: shell.to_owned(),
+            elapsed_ms,
+        };
+    }
+
+    let reason = if killed {
+        ProbeFailure::Timeout
     } else {
-        tracing::warn!(
-            shell = %shell,
-            raw_stdout = %stdout,
-            "login_shell_path: failed to extract PATH from shell output"
+        ProbeFailure::NoPayload
+    };
+    tracing::warn!(
+        shell = %shell,
+        elapsed_ms,
+        ?reason,
+        raw_stdout = %stdout,
+        "probe: no usable PATH; falling back to the inherited PATH plus additions"
+    );
+    ProbeOutcome::Failed {
+        reason,
+        shell: shell.to_owned(),
+        elapsed_ms,
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    /// Write an executable stand-in shell. `probe_args` dispatches on the
+    /// file name, so naming the script `bash` makes `run_probe` drive it
+    /// exactly as it would drive a real one — which lets us pin the
+    /// behaviour that matters without depending on the developer's own
+    /// rc files.
+    fn fake_shell(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        let mut f = std::fs::File::create(&path).expect("create fake shell");
+        write!(f, "#!/bin/sh\n{body}\n").expect("write fake shell");
+        drop(f);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake shell");
+        path
+    }
+
+    const PAYLOAD: &str =
+        "printf '%s%s%s' '___SKEIN_PATH_BEGIN___' '/probe/bin:/usr/bin' '___SKEIN_PATH_END___'";
+
+    #[test]
+    fn probe_survives_an_rc_file_that_backgrounds_a_daemon() {
+        // The bug this whole rewrite exists for. `Command::output()`
+        // drains stdout to EOF before reaping, so a grandchild holding
+        // the write end blocks the read forever even though the shell
+        // itself exited immediately. Measured: the pipe form hangs past
+        // 8 s here, the spooled-file form returns in ~0.02 s.
+        //
+        // `sleep 45` outlives the 5 s deadline by design — if this test
+        // ever starts taking 5 s, the file redirection has regressed
+        // into a pipe.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shell = fake_shell(dir.path(), "bash", &format!("( sleep 45 ) &\n{PAYLOAD}"));
+
+        let started = Instant::now();
+        let outcome = run_probe(
+            shell.to_str().expect("utf-8 path"),
+            Duration::from_secs(5),
+            dir.path(),
+        );
+
+        assert_eq!(outcome.path(), Some("/probe/bin:/usr/bin"));
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "probe waited on the backgrounded grandchild ({:?})",
+            started.elapsed()
         );
     }
-    extracted
-}
 
-#[cfg(target_os = "windows")]
-fn login_shell_path() -> Option<&'static str> {
-    None
-}
+    #[test]
+    fn probe_kills_a_shell_that_overruns_the_deadline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shell = fake_shell(dir.path(), "zsh", "sleep 30");
 
-/// Prepend Skein's `PATH` additions to `base`.
-///
-/// Idempotent, drops entries whose directory doesn't exist, and never
-/// replaces what `base` already had — see `spawn_env::merge_path`.
-fn augment_path(base: &str) -> OsString {
-    spawn_env::merge_path(
-        OsStr::new(base),
-        &default_path_prepend(),
-        crate::home_dir().as_deref(),
-        &|k| std::env::var(k).ok(),
-        &|p| p.is_dir(),
-    )
+        let started = Instant::now();
+        let outcome = run_probe(
+            shell.to_str().expect("utf-8 path"),
+            Duration::from_millis(300),
+            dir.path(),
+        );
+
+        assert!(
+            matches!(
+                outcome,
+                ProbeOutcome::Failed {
+                    reason: ProbeFailure::Timeout,
+                    ..
+                }
+            ),
+            "expected a timeout, got {outcome:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn probe_accepts_a_good_payload_from_a_shell_that_exits_non_zero() {
+        // `bash -l -i -c` prints "no job control in this shell" and can
+        // exit non-zero while having produced a perfectly usable PATH.
+        // The old code threw those away.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shell = fake_shell(dir.path(), "bash", &format!("{PAYLOAD}\nexit 3"));
+
+        let outcome = run_probe(
+            shell.to_str().expect("utf-8 path"),
+            Duration::from_secs(5),
+            dir.path(),
+        );
+        assert_eq!(outcome.path(), Some("/probe/bin:/usr/bin"));
+    }
+
+    #[test]
+    fn probe_reports_no_payload_rather_than_inventing_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shell = fake_shell(dir.path(), "bash", "echo 'welcome to your shell'");
+
+        let outcome = run_probe(
+            shell.to_str().expect("utf-8 path"),
+            Duration::from_secs(5),
+            dir.path(),
+        );
+        assert!(matches!(
+            outcome,
+            ProbeOutcome::Failed {
+                reason: ProbeFailure::NoPayload,
+                ..
+            }
+        ));
+        assert_eq!(outcome.path(), None);
+    }
+
+    #[test]
+    fn probe_skips_shells_it_cannot_drive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shell = fake_shell(dir.path(), "nu", PAYLOAD);
+
+        let outcome = run_probe(
+            shell.to_str().expect("utf-8 path"),
+            Duration::from_secs(5),
+            dir.path(),
+        );
+        assert!(matches!(
+            outcome,
+            ProbeOutcome::Failed {
+                reason: ProbeFailure::UnsupportedShell,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn probe_leaves_no_spool_files_behind() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shell = fake_shell(dir.path(), "bash", PAYLOAD);
+        run_probe(
+            shell.to_str().expect("utf-8 path"),
+            Duration::from_secs(5),
+            dir.path(),
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read tempdir")
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("probe-"))
+            .collect();
+        assert!(leftovers.is_empty(), "spool files left: {leftovers:?}");
+    }
+
+    #[test]
+    fn path_additions_survive_a_failed_probe() {
+        // The live one-condition-away outage: `augment_path` used to sit
+        // inside `if let Some(path) = login_shell_path()`, so any probe
+        // failure silently dropped `~/.local/bin` — which on this
+        // machine is where `claude` itself lives.
+        let failed = ProbeOutcome::Failed {
+            reason: ProbeFailure::Timeout,
+            shell: "/bin/zsh".to_owned(),
+            elapsed_ms: 5000,
+        };
+        let base = OsString::from("/usr/bin:/bin");
+        let probed = failed.path().map_or(base, OsString::from);
+        let home = PathBuf::from("/home/tester");
+        let merged = spawn_env::merge_path(
+            &probed,
+            &["~/.local/bin".to_owned()],
+            Some(&home),
+            &|_| None,
+            &|_| true,
+        );
+        assert_eq!(
+            std::env::split_paths(&merged)
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec!["/home/tester/.local/bin", "/usr/bin", "/bin"]
+        );
+    }
 }

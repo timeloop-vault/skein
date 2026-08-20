@@ -132,6 +132,15 @@ pub fn run() {
             // misleading "DB open failed" before they've created anything.
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+
+            // Ask the user's login shell for its PATH now, on a helper
+            // thread, so the answer is already waiting when the first
+            // harness spawns. This used to happen lazily inside the
+            // first `pty_spawn` — a sync command, therefore the main
+            // thread — with no timeout, so an rc file that blocked took
+            // the whole app's event loop with it (#177).
+            crate::pty::prewarm_probe(data_dir.clone());
+
             let db_path = data_dir.join("skein.db");
             let db = Database::open(&db_path).map_err(|e| {
                 Box::<dyn std::error::Error>::from(format!("opening {}: {e}", db_path.display()))
@@ -583,9 +592,19 @@ fn db_recent_harness_actions_by_room_and_kind(
 /// On Windows we prefer `pwsh.exe` (`PowerShell` 7) when it's on PATH —
 /// it has better ANSI/UTF-8 handling — and fall back to `powershell.exe`
 /// (`PowerShell` 5.1, which ships with every modern Windows install).
+///
+/// On Unix this delegates to the same resolution the `PATH` probe uses,
+/// so a harness shell and the shell we asked for a `PATH` can never
+/// disagree. It previously had its own copy that fell back to
+/// `/bin/bash` when `$SHELL` was unset — the fix for that landed in the
+/// probe in 2026-05 and was never applied here, leaving a bundled-app
+/// shell harness reading `~/.bash_profile`. On a machine whose Homebrew
+/// setup lives in `~/.zprofile` (the default `brew shellenv` install),
+/// that yields a shell with no `/opt/homebrew/bin` at all.
 #[tauri::command]
 fn default_shell() -> Vec<String> {
-    if cfg!(windows) {
+    #[cfg(windows)]
+    {
         let pwsh_on_path = std::env::var_os("PATH")
             .is_some_and(|p| std::env::split_paths(&p).any(|dir| dir.join("pwsh.exe").is_file()));
         if pwsh_on_path {
@@ -593,9 +612,10 @@ fn default_shell() -> Vec<String> {
         } else {
             vec!["powershell.exe".into()]
         }
-    } else {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-        vec![shell]
+    }
+    #[cfg(not(windows))]
+    {
+        vec![crate::pty::probe_shell()]
     }
 }
 
