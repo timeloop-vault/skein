@@ -46,7 +46,15 @@ import {
 import { usePersistedState } from "./prefs.ts";
 import { hints, isMac, matchShortcut, modLabel } from "./shortcuts.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
-import type { Density, Harness, HarnessKind, Room, Theme } from "./types.ts";
+import type {
+	Density,
+	Harness,
+	HarnessKind,
+	Room,
+	SpawnSettings,
+	SpawnSettingsPayload,
+	Theme,
+} from "./types.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
 
 // ── Toasts (in-app notifications, L5c) ─────────────────────────────
@@ -1230,6 +1238,24 @@ export default function App() {
 	useEffect(() => {
 		void invoke<string[]>("default_shell").then(setDefaultShell);
 		void invoke<string>("default_cwd").then(setDefaultCwd);
+	}, []);
+
+	// Shell / PATH environment (#72, #3, #1). Owned by Rust — the spawn
+	// path reads it and the shell probe runs during setup(), before this
+	// webview exists — so App.tsx only mirrors it for the Settings UI
+	// and never feeds it back into a spawn.
+	const [spawnEnv, setSpawnEnv] = useState<SpawnSettingsPayload | null>(null);
+	useEffect(() => {
+		void invoke<SpawnSettingsPayload>("spawn_settings_load").then(setSpawnEnv);
+	}, []);
+	const saveSpawnSettings = useCallback(async (next: SpawnSettings) => {
+		const payload = await invoke<SpawnSettingsPayload>("spawn_settings_save", {
+			settings: next,
+		});
+		setSpawnEnv(payload);
+		// The shell may have changed, and `defaultShell` is what new
+		// Shell harnesses and the Enter-for-shell prompt spawn.
+		setDefaultShell(await invoke<string[]>("default_shell"));
 	}, []);
 
 	// Phase 3: hydrate rooms from sqlite on boot. Until that round-trips,
@@ -2674,6 +2700,10 @@ export default function App() {
 		onNotifyToast: setNotifyToast,
 		onNotifyUrgent: setNotifyUrgent,
 		onNotifyOs: setNotifyOs,
+		spawnSettings: spawnEnv?.settings ?? null,
+		spawnDegraded: spawnEnv?.degraded ?? null,
+		spawnSettingsPath: spawnEnv?.settingsPath ?? "",
+		onSpawnSettings: saveSpawnSettings,
 		onClose: () => setShowSettings(false),
 	};
 

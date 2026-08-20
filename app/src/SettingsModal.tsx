@@ -11,7 +11,8 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { check } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useState } from "react";
-import type { Density, Theme } from "./types.ts";
+import { SpawnEnvPanel } from "./SpawnEnvPanel.tsx";
+import type { Density, SpawnSettings, Theme } from "./types.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
 
 type UpdateState =
@@ -47,6 +48,13 @@ interface SettingsModalProps {
 	onNotifyToast: (v: boolean) => void;
 	onNotifyUrgent: (v: boolean) => void;
 	onNotifyOs: (v: boolean) => void;
+	// Shell / PATH environment (#72, #3, #1). These come from Rust, not
+	// localStorage — the spawn path reads them and the shell probe runs
+	// before a webview exists. `null` while the first load is in flight.
+	spawnSettings: SpawnSettings | null;
+	spawnDegraded: string | null;
+	spawnSettingsPath: string;
+	onSpawnSettings: (next: SpawnSettings) => Promise<void>;
 	onClose: () => void;
 }
 
@@ -77,6 +85,10 @@ export const SettingsModal = ({
 	onNotifyToast,
 	onNotifyUrgent,
 	onNotifyOs,
+	spawnSettings,
+	spawnDegraded,
+	spawnSettingsPath,
+	onSpawnSettings,
 	onClose,
 }: SettingsModalProps) => {
 	useFocusRestore();
@@ -149,7 +161,9 @@ export const SettingsModal = ({
 			<div className="sk-modal" onClick={(e) => e.stopPropagation()}>
 				<div className="sk-modal-head">
 					<h2>Settings</h2>
-					<div className="sub">Appearance and terminal preferences. Persisted across restarts.</div>
+					<div className="sub">
+						Appearance, environment and terminal preferences. Persisted across restarts.
+					</div>
 				</div>
 				<div className="sk-modal-body">
 					<div className="sk-field">
@@ -302,6 +316,16 @@ export const SettingsModal = ({
 								</span>
 							</label>
 						</div>
+					</div>
+
+					<div className="sk-field">
+						<label>Shell &amp; environment</label>
+						<SpawnEnvPanel
+							settings={spawnSettings}
+							degraded={spawnDegraded}
+							settingsPath={spawnSettingsPath}
+							onSave={onSpawnSettings}
+						/>
 					</div>
 
 					<div className="sk-field">

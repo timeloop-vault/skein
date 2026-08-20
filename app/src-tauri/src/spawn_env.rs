@@ -16,6 +16,8 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use crate::spawn_settings::CaptureMode;
+
 /// Sentinel wrapping the probe's `PATH` payload. A login+interactive
 /// shell prints startup noise to stdout (nvm banners, `brew shellenv`
 /// echoes, motd), so the value has to be delimited rather than assumed
@@ -30,10 +32,9 @@ pub(crate) const PATH_PROBE_END: &str = "___SKEIN_PATH_END___";
 pub(crate) const PROBE_SCRIPT: &str =
     "printf '%s%s%s' '___SKEIN_PATH_BEGIN___' \"$PATH\" '___SKEIN_PATH_END___'";
 
-/// Flags that make a given shell source its full rc chain and then run
-/// one command. `None` means "we don't know how to drive this shell" —
-/// the caller must skip the probe entirely rather than emit an argv that
-/// is guaranteed to fail.
+/// Flags that make a given shell source its rc chain and then run one
+/// command. `None` means "we can't drive this shell" — the caller must
+/// skip the probe rather than emit an argv that is guaranteed to fail.
 ///
 /// Deliberately *separate* arguments, never the bundled `-ilc`: tcsh
 /// parses `-ilc` as one unknown option and dies with a usage message
@@ -43,20 +44,27 @@ pub(crate) const PROBE_SCRIPT: &str =
 /// Only shells verified by hand on a real machine are listed. Anything
 /// else falls through to `None`, which is safe: the caller keeps the
 /// inherited `PATH` and still applies the user's additions.
-pub(crate) fn probe_args(shell: &str) -> Option<&'static [&'static str]> {
+pub(crate) fn probe_args(shell: &str, mode: CaptureMode) -> Option<&'static [&'static str]> {
+    if mode == CaptureMode::None {
+        return None;
+    }
     let name = Path::new(shell).file_name()?.to_str()?;
-    // Strip a trailing version suffix the way `bash5`/`zsh-5.9` appear
+    // Strip a trailing version suffix the way `bash5` / `zsh-5.9` appear
     // on some distros; the base name is what identifies the dialect.
     let base = name.split(['-', '.']).next().unwrap_or(name);
     match base {
-        // Verified: accept `-l -i -c` and print a colon-joined PATH.
+        // Verified: accept `-l`/`-i`/`-c` and print a colon-joined PATH.
         // fish is included on purpose — its path-flagged variables join
         // with ':' in a quoted expansion, so the sentinel payload parses
         // exactly like a POSIX shell's.
-        "sh" | "bash" | "zsh" | "ksh" | "dash" | "fish" => Some(&["-l", "-i", "-c"]),
-        // Verified: reject `-l` alongside `-c`, accept `-i -c`. Note
-        // this means `.login` is never sourced, which is where csh users
-        // conventionally set `path` — csh is un-broken here, not fixed.
+        "sh" | "bash" | "zsh" | "ksh" | "dash" | "fish" => Some(match mode {
+            CaptureMode::Login => &["-l", "-c"],
+            _ => &["-l", "-i", "-c"],
+        }),
+        // Verified: reject `-l` alongside `-c`, accept `-i -c`. So csh
+        // gets the same argv in both modes, and `.login` — where csh
+        // users conventionally set `path` — is never sourced. csh is
+        // un-broken here, not fixed.
         "csh" | "tcsh" => Some(&["-i", "-c"]),
         // nu / xonsh / elvish / pwsh: no compatible flag set, or no
         // `$PATH` string to print. Skip rather than guess.
@@ -426,14 +434,25 @@ mod tests {
             "/bin/dash",
             "/opt/homebrew/bin/fish",
         ] {
-            assert_eq!(probe_args(shell), Some(&["-l", "-i", "-c"][..]), "{shell}");
+            assert_eq!(
+                probe_args(shell, CaptureMode::LoginInteractive),
+                Some(&["-l", "-i", "-c"][..]),
+                "{shell}"
+            );
+            assert_eq!(
+                probe_args(shell, CaptureMode::Login),
+                Some(&["-l", "-c"][..]),
+                "{shell}"
+            );
         }
     }
 
     #[test]
     fn probe_args_csh_family_drops_the_login_flag() {
         for shell in ["/bin/csh", "/bin/tcsh"] {
-            assert_eq!(probe_args(shell), Some(&["-i", "-c"][..]), "{shell}");
+            for mode in [CaptureMode::LoginInteractive, CaptureMode::Login] {
+                assert_eq!(probe_args(shell, mode), Some(&["-i", "-c"][..]), "{shell}");
+            }
         }
     }
 
@@ -447,20 +466,34 @@ mod tests {
             "powershell.exe",
             "",
         ] {
-            assert_eq!(probe_args(shell), None, "{shell}");
+            assert_eq!(
+                probe_args(shell, CaptureMode::LoginInteractive),
+                None,
+                "{shell}"
+            );
         }
     }
 
     #[test]
     fn probe_args_tolerates_versioned_names() {
+        let m = CaptureMode::LoginInteractive;
         assert_eq!(
-            probe_args("/usr/bin/bash-5.2"),
+            probe_args("/usr/bin/bash-5.2", m),
             Some(&["-l", "-i", "-c"][..])
         );
         assert_eq!(
-            probe_args("/usr/bin/zsh-5.9"),
+            probe_args("/usr/bin/zsh-5.9", m),
             Some(&["-l", "-i", "-c"][..])
         );
+    }
+
+    #[test]
+    fn capture_mode_none_skips_every_shell() {
+        // The escape hatch: "don't ask a shell at all". It has to hold
+        // even for shells we know how to drive.
+        for shell in ["/bin/zsh", "/bin/bash", "/bin/tcsh"] {
+            assert_eq!(probe_args(shell, CaptureMode::None), None, "{shell}");
+        }
     }
 
     // ── extract_probe_path ────────────────────────────────────────

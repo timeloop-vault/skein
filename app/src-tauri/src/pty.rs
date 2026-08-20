@@ -14,9 +14,10 @@
 //! gets us the exit signal regardless.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex as StdMutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -26,6 +27,7 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 use serde::Serialize;
 
 use crate::spawn_env;
+use crate::spawn_settings::{CaptureMode, SpawnSettings};
 
 /// Events the PTY reader thread streams to the frontend. Tagged so the
 /// JS side can branch on `kind`: `data` chunks become terminal output,
@@ -68,6 +70,18 @@ struct Pty {
     killer: Box<dyn ChildKiller + Send + Sync>,
 }
 
+/// One spawn's inputs. A struct rather than six positional parameters
+/// because `cmd`/`cwd` and `rows`/`cols` are trivially swappable at a
+/// call site and the compiler would not notice.
+pub struct SpawnRequest<'a> {
+    pub id: String,
+    pub cmd: &'a [String],
+    pub cwd: &'a Path,
+    pub rows: u16,
+    pub cols: u16,
+    pub settings: &'a SpawnSettings,
+}
+
 #[derive(Default)]
 pub struct PtyManager {
     inner: Mutex<HashMap<String, Pty>>,
@@ -78,24 +92,25 @@ impl PtyManager {
         Self::default()
     }
 
-    /// Spawn `cmd` (argv-style) inside `cwd` with the given terminal
-    /// dimensions. `on_event` is called from the reader and waiter
-    /// threads — once per output chunk and once on child exit. Must be
-    /// `Send + Sync` because both threads share access via an `Arc`.
+    /// Spawn `req.cmd` (argv-style) inside `req.cwd` with the given
+    /// terminal dimensions. `on_event` is called from the reader and
+    /// waiter threads — once per output chunk and once on child exit.
+    /// Must be `Send + Sync` because both threads share access via an
+    /// `Arc`.
     ///
-    /// Returns the id you should pass to `write` / `resize` / `kill`.
-    pub fn spawn<F>(
-        &self,
-        id: String,
-        cmd: &[String],
-        cwd: &Path,
-        rows: u16,
-        cols: u16,
-        on_event: F,
-    ) -> Result<(), PtyError>
+    /// The id in `req` is what you pass to `write` / `resize` / `kill`.
+    pub fn spawn<F>(&self, req: SpawnRequest<'_>, on_event: F) -> Result<(), PtyError>
     where
         F: Fn(PtyEvent) + Send + Sync + 'static,
     {
+        let SpawnRequest {
+            id,
+            cmd,
+            cwd,
+            rows,
+            cols,
+            settings,
+        } = req;
         let Some((program, args)) = cmd.split_first() else {
             return Err(PtyError("pty_spawn: empty cmd".into()));
         };
@@ -124,76 +139,14 @@ impl PtyManager {
         }
         builder.cwd(cwd);
 
-        // `CommandBuilder::new` already seeds the child env from this
-        // process's environment — and on Windows it additionally merges
-        // the *live* `HKLM` + `HKCU` registry PATH, i.e. the user's
-        // current PATH rather than whatever stale block Skein happened
-        // to inherit at launch. We used to copy `std::env::vars()` over
-        // the top of that, which on Windows overwrote the registry
-        // merge with the stale value (portable-pty lowercases env keys
-        // there, so our `PATH` collided with its `Path`) — the one
-        // platform where nothing else compensated. There is nothing to
-        // re-copy: let the base env stand and override only what we own.
-
-        // #192: strip host-terminal identity. Skein inherits markers
-        // like TERM_PROGRAM / TMUX / VSCODE_* when it is itself launched
-        // from a terminal, and the agent CLIs sniff them — adopting the
-        // *host* terminal's key and clipboard quirks instead of
-        // xterm.js's. `iter_full_env_as_str` borrows the builder, so
-        // collect the keys before removing any.
-        let doomed: Vec<String> = builder
-            .iter_full_env_as_str()
-            .map(|(k, _)| k.to_owned())
-            .filter(|k| spawn_env::is_host_terminal_var(k))
-            .collect();
-        for key in &doomed {
-            builder.env_remove(key);
-        }
-
-        // PATH: the login-shell probe when we have one, otherwise the
-        // inherited/registry PATH — and Skein's additions on top either
-        // way. Applying the additions only on the probe's success path
-        // (which is what the code did before) meant a probe failure
-        // silently took `~/.local/bin` with it, and on this machine
-        // that is where `claude` itself lives.
-        let probe = probe_result();
-        let base: OsString = builder
-            .get_env("PATH")
-            .map(OsString::from)
-            .unwrap_or_default();
-        let probed = probe.path().map_or(base, OsString::from);
-        let resolved_path = spawn_env::merge_path(
-            &probed,
-            &default_path_prepend(),
-            crate::home_dir().as_deref(),
-            &|k| std::env::var(k).ok(),
-            &|p| p.is_dir(),
-        );
-        // The resolved PATH was previously observable nowhere: the old
-        // log line printed the *probe's* output, i.e. the value before
-        // Skein's own additions, so "what did this harness actually
-        // get" could not be answered from the logs at all.
+        let applied = apply_env(&mut builder, settings);
         tracing::info!(
             id = %id,
-            probe = %probe.describe(),
-            stripped = doomed.len(),
-            path = %resolved_path.to_string_lossy(),
+            probe = %applied.probe.describe(),
+            stripped = applied.stripped.len(),
+            path = %applied.path.to_string_lossy(),
             "pty_spawn resolved environment"
         );
-        builder.env("PATH", resolved_path);
-
-        // Unix only: portable-pty otherwise fills SHELL from the passwd
-        // database, which can disagree with the shell we actually probed
-        // and with the one a shell harness runs. Windows has no
-        // meaningful $SHELL, and setting one confuses Git-Bash-aware
-        // tools that read it.
-        #[cfg(not(target_os = "windows"))]
-        builder.env("SHELL", probe_shell());
-
-        // TERM / COLORTERM are about how *we* render, not about what the
-        // user configured, so they are forced last and unconditionally.
-        builder.env("TERM", "xterm-256color");
-        builder.env("COLORTERM", "truecolor");
 
         let mut child = pair.slave.spawn_command(builder).map_err(|e| {
             tracing::error!(id = %id, cmd = ?cmd, error = %e, "pty_spawn child spawn failed");
@@ -339,30 +292,113 @@ impl PtyManager {
     }
 }
 
-/// The `PATH` additions Skein applies on top of whatever the shell or
-/// the OS reported.
+/// What `apply_env` did, for logging and for the Settings preview.
+pub(crate) struct AppliedEnv {
+    pub path: OsString,
+    pub stripped: Vec<String>,
+    pub probe: ProbeOutcome,
+    pub shell: String,
+    /// The expanded additions that actually made it in, in order.
+    pub added: Vec<String>,
+}
+
+/// Apply Skein's environment policy to a `CommandBuilder`.
 ///
-/// `~/.local/bin` is the de-facto install location for `pip install
-/// --user`, `pipx`, `uv tool` and Claude Code's own installer — and, as
-/// verified on this machine, it is routinely absent from the rc chain,
-/// because it is normally put there by something further up (a display
-/// manager, VS Code's terminal integration) that a Finder-launched
-/// bundle never sees. `~/bin` is the same story for hand-rolled scripts.
-///
-/// Windows gets the same `~/.local/bin` because that is where Claude
-/// Code's native Windows installer puts `claude.exe`. It deliberately
-/// does *not* get `%LOCALAPPDATA%\Microsoft\WindowsApps`: that is
-/// already in the registry PATH, and it holds the Store execution-alias
-/// stubs — prepending it would put the stub `python.exe` (which opens
-/// the Microsoft Store) ahead of a real Python for every harness.
-///
-/// Issue #3 replaces this with a user-editable list; these stay as the
-/// defaults.
-fn default_path_prepend() -> Vec<String> {
-    if cfg!(windows) {
-        vec![r"%USERPROFILE%\.local\bin".to_owned()]
+/// Shared verbatim by `spawn` and by the Settings preview, so "what the
+/// preview shows is what the child gets" is a property of the code
+/// rather than a claim in a doc comment.
+fn apply_env(builder: &mut CommandBuilder, settings: &SpawnSettings) -> AppliedEnv {
+    // `CommandBuilder::new` already seeds the child env from this
+    // process's environment — and on Windows it additionally merges the
+    // *live* `HKLM` + `HKCU` registry PATH, i.e. the user's current
+    // PATH rather than whatever stale block Skein happened to inherit at
+    // launch. We used to copy `std::env::vars()` over the top of that,
+    // which on Windows overwrote the registry merge with the stale value
+    // (portable-pty lowercases env keys there, so our `PATH` collided
+    // with its `Path`) — the one platform where nothing else
+    // compensated. There is nothing to re-copy: let the base env stand
+    // and override only what we own.
+
+    // #192: strip host-terminal identity. Skein inherits markers like
+    // TERM_PROGRAM / TMUX / VSCODE_* when it is itself launched from a
+    // terminal, and the agent CLIs sniff them — adopting the *host*
+    // terminal's key and clipboard quirks instead of xterm.js's.
+    // `iter_full_env_as_str` borrows the builder, so collect the keys
+    // before removing any.
+    let mut stripped: Vec<String> = if settings.strip_host_env {
+        builder
+            .iter_full_env_as_str()
+            .map(|(k, _)| k.to_owned())
+            .filter(|k| spawn_env::is_host_terminal_var(k))
+            .collect()
     } else {
-        vec!["~/.local/bin".to_owned(), "~/bin".to_owned()]
+        Vec::new()
+    };
+    stripped.sort_unstable();
+    for key in &stripped {
+        builder.env_remove(key);
+    }
+
+    // PATH: the login-shell probe when we have one, otherwise the
+    // inherited (on Windows, registry-merged) PATH — and the user's
+    // additions on top either way. Applying additions only on the
+    // probe's success path, which is what the code did before, meant a
+    // probe failure silently took `~/.local/bin` with it, and that is
+    // where `claude` itself is installed.
+    let probe = probe_result();
+    let base: OsString = builder
+        .get_env("PATH")
+        .map(OsString::from)
+        .unwrap_or_default();
+    let probed = probe.path().map_or(base, OsString::from);
+    let home = crate::home_dir();
+    let lookup = |k: &str| std::env::var(k).ok();
+    let dir_exists = |p: &Path| p.is_dir();
+    let path = spawn_env::merge_path(
+        &probed,
+        &settings.path_prepend,
+        home.as_deref(),
+        &lookup,
+        &dir_exists,
+    );
+    let added: Vec<String> = settings
+        .path_prepend
+        .iter()
+        .filter_map(|e| spawn_env::expand_entry(e, home.as_deref(), &lookup))
+        .collect();
+    builder.env("PATH", &path);
+
+    // The user's own KEY=VALUE additions, last of the inherited layers
+    // so they win over anything the base env carried, but before the
+    // TERM/COLORTERM force below, which is ours to own.
+    for var in &settings.extra_env {
+        if !var.key.trim().is_empty() {
+            builder.env(var.key.trim(), &var.value);
+        }
+    }
+
+    // Unix only: portable-pty otherwise fills SHELL from the passwd
+    // database, which can disagree with the shell we actually probed and
+    // with the one a shell harness runs. Windows has no meaningful
+    // $SHELL, and setting one confuses Git-Bash-aware tools that read it.
+    #[cfg(not(target_os = "windows"))]
+    let shell = probe_shell(settings);
+    #[cfg(target_os = "windows")]
+    let shell = settings.valid_shell().unwrap_or_default().to_owned();
+    #[cfg(not(target_os = "windows"))]
+    builder.env("SHELL", &shell);
+
+    // TERM / COLORTERM are about how *we* render, not about what the
+    // user configured, so they are forced last and unconditionally.
+    builder.env("TERM", "xterm-256color");
+    builder.env("COLORTERM", "truecolor");
+
+    AppliedEnv {
+        path,
+        stripped,
+        probe,
+        shell,
+        added,
     }
 }
 
@@ -445,6 +481,12 @@ impl ProbeOutcome {
 static PROBE: LazyLock<(StdMutex<ProbeOutcome>, Condvar)> =
     LazyLock::new(|| (StdMutex::new(ProbeOutcome::Pending), Condvar::new()));
 
+/// Whether a probe was ever kicked off. Without this, a build that never
+/// calls `prewarm_probe` — a unit test, or a future entry point that
+/// forgets — would make every single spawn sit out the full wait for an
+/// answer that is never coming.
+static PROBE_STARTED: AtomicBool = AtomicBool::new(false);
+
 fn set_probe(outcome: ProbeOutcome) {
     let (lock, cv) = &*PROBE;
     // A poisoned lock here means a previous probe panicked; the value is
@@ -463,6 +505,9 @@ fn set_probe(outcome: ProbeOutcome) {
 /// pathological case costs 6 s once instead of freezing the app forever.
 fn probe_result() -> ProbeOutcome {
     let (lock, cv) = &*PROBE;
+    if !PROBE_STARTED.load(Ordering::Acquire) {
+        return lock.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    }
     let guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
     let (guard, timed_out) = cv
         .wait_timeout_while(guard, PROBE_WAIT, |o| matches!(o, ProbeOutcome::Pending))
@@ -478,10 +523,11 @@ fn probe_result() -> ProbeOutcome {
 /// Called from `setup()`. `data_dir` is where the probe's stdout is
 /// spooled — a file we own rather than a world-writable temp dir, and it
 /// survives long enough to be worth reading in a post-mortem.
-pub(crate) fn prewarm_probe(data_dir: PathBuf) {
+pub(crate) fn prewarm_probe(data_dir: PathBuf, settings: SpawnSettings) {
+    PROBE_STARTED.store(true, Ordering::Release);
     #[cfg(target_os = "windows")]
     {
-        let _ = data_dir;
+        let _ = (data_dir, settings);
         set_probe(ProbeOutcome::Failed {
             reason: ProbeFailure::NotApplicable,
             shell: String::new(),
@@ -491,10 +537,24 @@ pub(crate) fn prewarm_probe(data_dir: PathBuf) {
     #[cfg(not(target_os = "windows"))]
     {
         thread::spawn(move || {
-            let shell = probe_shell();
-            set_probe(run_probe(&shell, PROBE_DEADLINE, &data_dir));
+            let shell = probe_shell(&settings);
+            set_probe(run_probe(
+                &shell,
+                settings.capture,
+                PROBE_DEADLINE,
+                &data_dir,
+            ));
         });
     }
+}
+
+/// Re-run the probe after a settings change (the "Re-probe" action).
+///
+/// Resets to `Pending` first so a spawn racing the change waits for the
+/// new answer rather than using the old shell's `PATH`.
+pub(crate) fn reprobe(data_dir: PathBuf, settings: SpawnSettings) {
+    set_probe(ProbeOutcome::Pending);
+    prewarm_probe(data_dir, settings);
 }
 
 /// The shell to ask for a `PATH`.
@@ -507,7 +567,10 @@ pub(crate) fn prewarm_probe(data_dir: PathBuf) {
 /// `/bin/bash` there — which is what this used to do — reads bash rc
 /// files that a zsh user has never written.
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn probe_shell() -> String {
+pub(crate) fn probe_shell(settings: &SpawnSettings) -> String {
+    if let Some(configured) = settings.valid_shell() {
+        return configured.to_owned();
+    }
     std::env::var("SHELL")
         .ok()
         .filter(|s| !s.is_empty())
@@ -537,14 +600,18 @@ pub(crate) fn probe_shell() -> String {
 ///    "no job control in this shell" and can exit non-zero while having
 ///    produced a perfectly good payload. The old code rejected those.
 #[cfg(not(target_os = "windows"))]
-fn run_probe(shell: &str, deadline: Duration, data_dir: &Path) -> ProbeOutcome {
+fn run_probe(shell: &str, mode: CaptureMode, deadline: Duration, data_dir: &Path) -> ProbeOutcome {
     use std::process::{Command, Stdio};
 
     let started = Instant::now();
     let ms = |t: Instant| u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-    let Some(args) = spawn_env::probe_args(shell) else {
-        tracing::info!(shell = %shell, "probe: unsupported shell, using inherited PATH");
+    let Some(args) = spawn_env::probe_args(shell, mode) else {
+        tracing::info!(
+            shell = %shell,
+            ?mode,
+            "probe: no probe for this shell/mode, using inherited PATH"
+        );
         return ProbeOutcome::Failed {
             reason: ProbeFailure::UnsupportedShell,
             shell: shell.to_owned(),
@@ -690,6 +757,7 @@ mod tests {
         let started = Instant::now();
         let outcome = run_probe(
             shell.to_str().expect("utf-8 path"),
+            CaptureMode::LoginInteractive,
             Duration::from_secs(5),
             dir.path(),
         );
@@ -710,6 +778,7 @@ mod tests {
         let started = Instant::now();
         let outcome = run_probe(
             shell.to_str().expect("utf-8 path"),
+            CaptureMode::LoginInteractive,
             Duration::from_millis(300),
             dir.path(),
         );
@@ -737,6 +806,7 @@ mod tests {
 
         let outcome = run_probe(
             shell.to_str().expect("utf-8 path"),
+            CaptureMode::LoginInteractive,
             Duration::from_secs(5),
             dir.path(),
         );
@@ -750,6 +820,7 @@ mod tests {
 
         let outcome = run_probe(
             shell.to_str().expect("utf-8 path"),
+            CaptureMode::LoginInteractive,
             Duration::from_secs(5),
             dir.path(),
         );
@@ -770,6 +841,7 @@ mod tests {
 
         let outcome = run_probe(
             shell.to_str().expect("utf-8 path"),
+            CaptureMode::LoginInteractive,
             Duration::from_secs(5),
             dir.path(),
         );
@@ -788,6 +860,7 @@ mod tests {
         let shell = fake_shell(dir.path(), "bash", PAYLOAD);
         run_probe(
             shell.to_str().expect("utf-8 path"),
+            CaptureMode::LoginInteractive,
             Duration::from_secs(5),
             dir.path(),
         );
@@ -798,6 +871,129 @@ mod tests {
             .filter(|n| n.starts_with("probe-"))
             .collect();
         assert!(leftovers.is_empty(), "spool files left: {leftovers:?}");
+    }
+
+    /// Run a real PTY to completion and return everything it wrote.
+    fn capture_pty(cmd: &[String], settings: &SpawnSettings) -> String {
+        use std::sync::mpsc;
+
+        let manager = PtyManager::new();
+        let out = Arc::new(StdMutex::new(String::new()));
+        let (done_tx, done_rx) = mpsc::channel();
+        let sink = Arc::clone(&out);
+        manager
+            .spawn(
+                SpawnRequest {
+                    id: "test".to_owned(),
+                    cmd,
+                    cwd: Path::new("/"),
+                    rows: 24,
+                    cols: 80,
+                    settings,
+                },
+                move |event| match event {
+                    PtyEvent::Data { chunk } => {
+                        sink.lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .push_str(&chunk);
+                    }
+                    PtyEvent::Exit { .. } => {
+                        let _ = done_tx.send(());
+                    }
+                },
+            )
+            .expect("spawn");
+        done_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("child exited");
+        let text = out.lock().unwrap_or_else(PoisonError::into_inner);
+        text.clone()
+    }
+
+    #[test]
+    fn the_preview_matches_what_a_real_child_receives() {
+        // The guarantee the Settings panel rests on. Both paths go
+        // through `apply_env`, and this pins that they stay that way —
+        // a preview that drifts from reality is worse than no preview,
+        // because it turns a debuggable problem into a lie.
+        let settings = SpawnSettings::default();
+        let preview = env_preview(&settings);
+
+        let cmd = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "printf '<%s>' \"$PATH\"".to_owned(),
+        ];
+        let raw = capture_pty(&cmd, &settings);
+        let actual = raw
+            .split_once('<')
+            .and_then(|(_, r)| r.rsplit_once('>'))
+            .map(|(v, _)| v.replace(['\r', '\n'], ""))
+            .expect("child printed a delimited PATH");
+
+        let previewed: Vec<String> = preview.path.iter().map(|e| e.entry.clone()).collect();
+        let received: Vec<String> = actual.split(':').map(ToOwned::to_owned).collect();
+        assert_eq!(previewed, received);
+    }
+
+    #[test]
+    fn host_terminal_vars_do_not_reach_the_child_but_the_keep_list_does() {
+        // Both halves in one assertion on purpose: over-stripping is the
+        // dangerous direction, and a test that only checked the removal
+        // would happily pass while eating the agent's ssh-agent socket.
+        let settings = SpawnSettings::default();
+        let cmd = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "printf '<%s|%s|%s>' \"${TMUX:-none}\" \"${TERM:-none}\" \"${PATH:+set}\"".to_owned(),
+        ];
+        let raw = capture_pty(&cmd, &settings);
+        let body = raw
+            .split_once('<')
+            .and_then(|(_, r)| r.rsplit_once('>'))
+            .map(|(v, _)| v.replace(['\r', '\n'], ""))
+            .expect("child printed the delimited probe");
+        let fields: Vec<&str> = body.split('|').collect();
+        assert_eq!(
+            fields.first().copied(),
+            Some("none"),
+            "TMUX must be stripped"
+        );
+        assert_eq!(
+            fields.get(1).copied(),
+            Some("xterm-256color"),
+            "TERM is ours to force"
+        );
+        assert_eq!(fields.get(2).copied(), Some("set"), "PATH must survive");
+    }
+
+    #[test]
+    fn extra_env_reaches_the_child() {
+        let settings = SpawnSettings {
+            extra_env: vec![crate::spawn_settings::EnvVar {
+                key: "SKEIN_EXTRA_ENV_TEST".to_owned(),
+                value: "hello".to_owned(),
+            }],
+            ..SpawnSettings::default()
+        };
+        let cmd = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "printf '<%s>' \"${SKEIN_EXTRA_ENV_TEST:-missing}\"".to_owned(),
+        ];
+        let raw = capture_pty(&cmd, &settings);
+        assert!(raw.contains("<hello>"), "got {raw:?}");
+    }
+
+    #[test]
+    fn stripping_can_be_turned_off() {
+        let settings = SpawnSettings {
+            strip_host_env: false,
+            ..SpawnSettings::default()
+        };
+        let mut builder = CommandBuilder::new("skein-preview");
+        let applied = apply_env(&mut builder, &settings);
+        assert!(applied.stripped.is_empty());
     }
 
     #[test]
@@ -828,4 +1024,252 @@ mod tests {
             vec!["/home/tester/.local/bin", "/usr/bin", "/bin"]
         );
     }
+}
+
+// ── Settings preview (#72) ─────────────────────────────────────────
+//
+// The resolved harness environment used to be visible nowhere: the only
+// record was a log line carrying the *probe's* output, i.e. the value
+// before Skein's own additions, in a daily-rotating file. That opacity
+// is why #72 reads as "a noticeably shorter PATH" rather than naming a
+// missing directory — you cannot debug what you cannot see.
+
+/// Where one `PATH` entry came from.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathSource {
+    /// From the user's "additional directories" list.
+    Added,
+    /// From the login-shell probe.
+    Shell,
+    /// From the environment Skein itself was launched with (on Windows,
+    /// merged with the live registry `PATH`).
+    Inherited,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathEntryReport {
+    pub entry: String,
+    /// `false` renders greyed — a directory that isn't there is the
+    /// single most common reason a `PATH` addition "doesn't work".
+    pub exists: bool,
+    pub source: PathSource,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeReport {
+    /// `pending` | `captured` | `not_applicable` | `unsupported_shell`
+    /// | `timeout` | `spawn_failed` | `no_payload`
+    pub state: String,
+    pub shell: String,
+    pub elapsed_ms: u64,
+    pub argv: Vec<String>,
+    /// Plain-language explanation when the state isn't `captured`.
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramReport {
+    pub name: String,
+    pub resolved: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvPreview {
+    pub shell: String,
+    pub probe: ProbeReport,
+    pub path: Vec<PathEntryReport>,
+    pub programs: Vec<ProgramReport>,
+    pub stripped: Vec<String>,
+    pub extra_env_keys: Vec<String>,
+    /// `bundled` when Skein was launched from Finder/Explorer/Dock,
+    /// `terminal` when it inherited a terminal's environment. The
+    /// difference is the whole reason PATH bugs survive testing: from a
+    /// terminal the rc chain prepends to an already-rich `PATH`, so the
+    /// bug is invisible in exactly the profile developers run.
+    pub launch_context: String,
+}
+
+/// The binaries whose absence actually breaks a room.
+const PROGRAMS_OF_INTEREST: &[&str] = &["claude", "opencode", "gh", "git"];
+
+fn describe_probe(outcome: &ProbeOutcome, settings: &SpawnSettings) -> ProbeReport {
+    let argv = |shell: &str| {
+        spawn_env::probe_args(shell, settings.capture)
+            .map(|a| {
+                let mut v = vec![shell.to_owned()];
+                v.extend(a.iter().map(|s| (*s).to_owned()));
+                v.push(spawn_env::PROBE_SCRIPT.to_owned());
+                v
+            })
+            .unwrap_or_default()
+    };
+    match outcome {
+        ProbeOutcome::Pending => ProbeReport {
+            state: "pending".into(),
+            shell: String::new(),
+            elapsed_ms: 0,
+            argv: Vec::new(),
+            message: Some("Still asking your shell for its PATH.".into()),
+        },
+        ProbeOutcome::Captured {
+            shell, elapsed_ms, ..
+        } => ProbeReport {
+            state: "captured".into(),
+            shell: shell.clone(),
+            elapsed_ms: *elapsed_ms,
+            argv: argv(shell),
+            message: None,
+        },
+        ProbeOutcome::Failed {
+            reason,
+            shell,
+            elapsed_ms,
+        } => {
+            let (state, message) = match reason {
+                ProbeFailure::NotApplicable => (
+                    "not_applicable",
+                    "Windows has no login shell to ask. Skein uses the live registry PATH \
+                     (system + user, re-read on every spawn) plus your additions below."
+                        .to_owned(),
+                ),
+                ProbeFailure::UnsupportedShell => (
+                    "unsupported_shell",
+                    format!(
+                        "Skein has no verified way to ask {shell} for its PATH, so it uses the \
+                         environment it was launched with plus your additions. Set a shell below \
+                         (zsh, bash, fish, sh, ksh, dash, csh and tcsh all work) if you want a \
+                         capture."
+                    ),
+                ),
+                ProbeFailure::Timeout => (
+                    "timeout",
+                    format!(
+                        "{shell} did not finish within 5 s and was stopped. Something in your \
+                         startup files is blocking. Skein is using the environment it was \
+                         launched with plus your additions."
+                    ),
+                ),
+                ProbeFailure::SpawnFailed => {
+                    ("spawn_failed", format!("Skein could not start {shell}."))
+                }
+                ProbeFailure::NoPayload => (
+                    "no_payload",
+                    format!(
+                        "{shell} ran but printed no PATH Skein could read. Check the log for its \
+                         raw output."
+                    ),
+                ),
+            };
+            ProbeReport {
+                state: state.to_owned(),
+                shell: shell.clone(),
+                elapsed_ms: *elapsed_ms,
+                argv: argv(shell),
+                message: Some(message),
+            }
+        }
+    }
+}
+
+/// Find `name` on `path`, the way the OS will.
+///
+/// Deliberately *not* `portable-pty`'s `search_path`: on Unix that one
+/// also joins the cwd first, and on Windows it takes no cwd at all and
+/// degrades to returning the bare name on failure. We only want the
+/// honest "is this on PATH" answer.
+fn resolve_program(name: &str, path: &OsStr) -> Option<String> {
+    let exts: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned())
+            .split(';')
+            .filter(|e| !e.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for dir in std::env::split_paths(path) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let direct = dir.join(name);
+        if direct.is_file() {
+            return Some(direct.display().to_string());
+        }
+        for ext in &exts {
+            let candidate = dir.join(format!("{name}{ext}"));
+            if candidate.is_file() {
+                return Some(candidate.display().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Build the environment a harness would get right now, without spawning
+/// anything.
+pub(crate) fn env_preview(settings: &SpawnSettings) -> EnvPreview {
+    // The program name doesn't affect `get_base_env`, and we never spawn
+    // this builder — we only read the environment back off it.
+    let mut builder = CommandBuilder::new("skein-preview");
+    let applied = apply_env(&mut builder, settings);
+
+    let added: Vec<String> = applied.added;
+    let from_shell = applied.probe.path().is_some();
+    let path = std::env::split_paths(&applied.path)
+        .map(|p| {
+            let entry = p.display().to_string();
+            let source = if added.iter().any(|a| Path::new(a) == p) {
+                PathSource::Added
+            } else if from_shell {
+                PathSource::Shell
+            } else {
+                PathSource::Inherited
+            };
+            PathEntryReport {
+                exists: p.is_dir(),
+                entry,
+                source,
+            }
+        })
+        .collect();
+
+    let programs = PROGRAMS_OF_INTEREST
+        .iter()
+        .map(|name| ProgramReport {
+            name: (*name).to_owned(),
+            resolved: resolve_program(name, &applied.path),
+        })
+        .collect();
+
+    EnvPreview {
+        probe: describe_probe(&applied.probe, settings),
+        shell: applied.shell,
+        path,
+        programs,
+        stripped: applied.stripped,
+        extra_env_keys: settings
+            .extra_env
+            .iter()
+            .map(|v| v.key.trim().to_owned())
+            .filter(|k| !k.is_empty())
+            .collect(),
+        launch_context: launch_context(),
+    }
+}
+
+/// Whether Skein inherited a terminal's environment or a stripped
+/// GUI-launch one. Read from the *process* environment, deliberately
+/// before any stripping, because it is diagnostic rather than inherited.
+fn launch_context() -> String {
+    let from_terminal = std::env::var_os("TERM_PROGRAM").is_some()
+        || std::env::var_os("TMUX").is_some()
+        || std::env::var_os("VSCODE_INJECTION").is_some()
+        || std::env::var_os("WT_SESSION").is_some();
+    if from_terminal { "terminal" } else { "bundled" }.to_owned()
 }
