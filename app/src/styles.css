@@ -1891,3 +1891,178 @@ body {
 		transform: translateX(0);
 	}
 }
+
+/* ── Settings → Shell & environment (#72, #3, #1) ────────────────── */
+
+.sk-env {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+.sk-env-banner {
+	padding: 8px 10px;
+	border-radius: 4px;
+	border: 1px solid var(--line);
+	font-size: calc(var(--cfs) * 0.9167);
+	line-height: 1.5;
+}
+.sk-env-banner.sk-env-err {
+	border-color: var(--err);
+	color: var(--err);
+}
+.sk-env-banner.sk-env-warn {
+	border-color: var(--warn);
+	color: var(--warn);
+}
+.sk-env-status {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	font-size: calc(var(--cfs) * 0.9167);
+}
+.sk-env-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex: 0 0 auto;
+	background: var(--fg-3);
+}
+.sk-env-dot.sk-env-ok {
+	background: var(--ok);
+}
+.sk-env-dot.sk-env-warn {
+	background: var(--warn);
+}
+.sk-env-dot.sk-env-err {
+	background: var(--err);
+}
+.sk-env-status-text {
+	color: var(--fg-0);
+}
+.sk-env-launch {
+	color: var(--fg-2);
+	margin-left: auto;
+}
+
+/* The resolved PATH. Long entries scroll inside their own box rather
+   than widening the modal. */
+.sk-env-path {
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	background: var(--bg-2);
+	max-height: 220px;
+	overflow: auto;
+}
+.sk-env-path-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 8px;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.875);
+	white-space: nowrap;
+}
+.sk-env-path-row + .sk-env-path-row {
+	border-top: 1px solid var(--line);
+}
+.sk-env-path-row.sk-env-missing .sk-env-path-entry {
+	color: var(--fg-3);
+	text-decoration: line-through;
+}
+.sk-env-badge {
+	flex: 0 0 auto;
+	min-width: 62px;
+	text-align: center;
+	padding: 1px 5px;
+	border-radius: 3px;
+	font-size: calc(var(--cfs) * 0.75);
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	border: 1px solid var(--line-strong);
+	color: var(--fg-2);
+}
+.sk-env-badge-added {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+.sk-env-path-entry {
+	color: var(--fg-0);
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.sk-env-note {
+	color: var(--fg-2);
+	font-size: calc(var(--cfs) * 0.875);
+}
+
+.sk-env-programs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 16px;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.875);
+}
+.sk-env-program {
+	display: flex;
+	gap: 6px;
+	min-width: 0;
+}
+.sk-env-program-name {
+	color: var(--fg-2);
+}
+.sk-env-program-ok {
+	color: var(--fg-0);
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.sk-env-program-missing {
+	color: var(--err);
+}
+
+/* Editable string / KEY=VALUE lists. First list-shaped control in the
+   settings modal — nothing existing was reusable. */
+.sk-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.sk-list-row {
+	display: flex;
+	gap: 6px;
+	align-items: stretch;
+}
+.sk-list-row .sk-input {
+	flex: 1;
+	min-width: 0;
+	padding: 5px 8px;
+}
+.sk-list-row .sk-env-key {
+	flex: 0 0 34%;
+}
+.sk-list-btn {
+	flex: 0 0 auto;
+	padding: 4px 9px;
+}
+.sk-list-btn:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+.sk-list-add {
+	align-self: flex-start;
+}
+
+.sk-env-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.sk-env-file {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.8333);
+	color: var(--fg-3);
+	word-break: break-all;
+}

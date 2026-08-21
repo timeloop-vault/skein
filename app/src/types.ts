@@ -74,3 +74,89 @@ export interface Room {
 
 export type Theme = "dark" | "light";
 export type Density = "compact" | "regular" | "comfy";
+
+// ── Spawn environment (issues #72, #3, #1) ─────────────────────────
+//
+// Mirrors `app/src-tauri/src/spawn_settings.rs`. Unlike every other
+// Skein setting these do NOT live in localStorage: Rust reads them at
+// spawn time and kicks off the shell probe during setup(), before a
+// webview exists to be asked. See the module doc comment for why.
+
+/** How hard Skein works to reproduce the user's interactive environment. */
+export type CaptureMode = "login-interactive" | "login" | "none";
+
+export interface EnvVar {
+	key: string;
+	value: string;
+}
+
+export interface SpawnSettings {
+	schema: number;
+	/** Absolute path to a shell binary. `null` = resolve from `$SHELL`. */
+	shell: string | null;
+	capture: CaptureMode;
+	pathPrepend: string[];
+	extraEnv: EnvVar[];
+	stripHostEnv: boolean;
+}
+
+export interface SpawnSettingsPayload {
+	settings: SpawnSettings;
+	/** Set when the settings file exists but couldn't be used. */
+	degraded: string | null;
+	settingsPath: string;
+}
+
+export type PathSource = "added" | "shell" | "inherited";
+
+export interface PathEntryReport {
+	entry: string;
+	exists: boolean;
+	source: PathSource;
+}
+
+export interface ProbeReport {
+	state:
+		| "pending"
+		| "captured"
+		| "disabled"
+		| "not_applicable"
+		| "unsupported_shell"
+		| "timeout"
+		| "spawn_failed"
+		| "no_payload";
+	shell: string;
+	elapsedMs: number;
+	argv: string[];
+	message: string | null;
+}
+
+export interface ProgramReport {
+	name: string;
+	resolved: string | null;
+}
+
+/** Why one of the user's PATH additions didn't make it in. */
+export type DropReason = "unresolved" | "not_absolute" | "separator" | "missing" | "duplicate";
+
+export interface DroppedAddition {
+	entry: string;
+	reason: DropReason;
+}
+
+/** The environment a harness would get if it spawned right now. */
+export interface EnvPreview {
+	shell: string;
+	probe: ProbeReport;
+	path: PathEntryReport[];
+	programs: ProgramReport[];
+	stripped: string[];
+	extraEnvKeys: string[];
+	/** Additions that were skipped, with the reason. */
+	droppedAdditions: DroppedAddition[];
+	/** Extra-env keys Skein owns and therefore refused. */
+	ignoredEnvKeys: string[];
+	/** Set when a shell is configured but isn't a runnable file. */
+	shellRejected: string | null;
+	launchContext: "bundled" | "terminal";
+}

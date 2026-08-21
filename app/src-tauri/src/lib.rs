@@ -16,6 +16,8 @@ mod harness_events_claude;
 mod harness_events_opencode;
 mod pty;
 mod resume;
+mod spawn_env;
+mod spawn_settings;
 mod watcher;
 
 use std::path::Path;
@@ -29,6 +31,7 @@ use crate::db::{Database, HarnessAction, HarnessEvent, LoadOutcome, Room};
 use crate::harness_events_claude::{ClaudeEvent, ClaudeEventsManager};
 use crate::harness_events_opencode::{OpencodeEvent, OpencodeEventsManager};
 use crate::pty::{PtyEvent, PtyManager};
+use crate::spawn_settings::SpawnSettings;
 use crate::watcher::WatcherManager;
 
 /// Hold the non-blocking tracing-appender guard for the lifetime of
@@ -38,6 +41,29 @@ use crate::watcher::WatcherManager;
 /// only its `Drop` matters.
 #[allow(dead_code)]
 struct LogGuard(tracing_appender::non_blocking::WorkerGuard);
+
+/// Everything the spawn path needs to know that isn't per-spawn: the
+/// user's environment settings and where they live on disk.
+///
+/// Held as Tauri managed state rather than passed from the frontend
+/// because the probe is kicked off during `setup()`, before a webview
+/// exists to be asked — and because a frontend-push design would race
+/// room hydration and lose *silently*, spawning harnesses with the
+/// wrong environment. See `spawn_settings`.
+pub(crate) struct SpawnEnvState {
+    data_dir: std::path::PathBuf,
+    settings: parking_lot::RwLock<SpawnSettings>,
+    /// Set when the settings file existed but couldn't be used, so the
+    /// UI can say "your edits aren't in effect" instead of quietly
+    /// showing defaults.
+    degraded: parking_lot::RwLock<Option<String>>,
+}
+
+impl SpawnEnvState {
+    pub(crate) fn snapshot(&self) -> SpawnSettings {
+        self.settings.read().clone()
+    }
+}
 
 /// Install rustls's default crypto provider so reqwest doesn't panic
 /// with "No provider set" on the first `Client::builder().build()`.
@@ -131,6 +157,29 @@ pub fn run() {
             // misleading "DB open failed" before they've created anything.
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+
+            // Environment settings must be readable before the first
+            // spawn, and the probe needs the configured shell, so both
+            // happen here rather than being pushed in from the frontend.
+            let (spawn_settings, spawn_degraded) = crate::spawn_settings::load(&data_dir);
+            if let Some(ref problem) = spawn_degraded {
+                tracing::warn!(problem, "spawn settings degraded");
+            }
+
+            // Ask the user's login shell for its PATH now, on a helper
+            // thread, so the answer is already waiting when the first
+            // harness spawns. This used to happen lazily inside the
+            // first `pty_spawn` — a sync command, therefore the main
+            // thread — with no timeout, so an rc file that blocked took
+            // the whole app's event loop with it (#177).
+            crate::pty::prewarm_probe(data_dir.clone(), spawn_settings.clone());
+
+            app.manage(SpawnEnvState {
+                data_dir: data_dir.clone(),
+                settings: parking_lot::RwLock::new(spawn_settings),
+                degraded: parking_lot::RwLock::new(spawn_degraded),
+            });
+
             let db_path = data_dir.join("skein.db");
             let db = Database::open(&db_path).map_err(|e| {
                 Box::<dyn std::error::Error>::from(format!("opening {}: {e}", db_path.display()))
@@ -257,6 +306,10 @@ pub fn run() {
             pty_resize,
             pty_kill,
             default_shell,
+            spawn_settings_load,
+            spawn_settings_save,
+            spawn_env_preview,
+            spawn_env_reprobe,
             default_cwd,
             db_load_rooms,
             db_save_rooms,
@@ -311,15 +364,20 @@ fn pty_spawn(
     cols: u16,
     on_event: Channel<PtyEvent>,
     manager: tauri::State<'_, PtyManager>,
+    spawn_env: tauri::State<'_, SpawnEnvState>,
 ) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
+    let settings = spawn_env.snapshot();
     manager
         .spawn(
-            id.clone(),
-            &cmd,
-            Path::new(&cwd),
-            rows,
-            cols,
+            crate::pty::SpawnRequest {
+                id: id.clone(),
+                cmd: &cmd,
+                cwd: Path::new(&cwd),
+                rows,
+                cols,
+                settings: &settings,
+            },
             move |event| {
                 // Channel send only fails if the frontend dropped the
                 // channel; nothing useful we can do at that point.
@@ -575,6 +633,75 @@ fn db_recent_harness_actions_by_room_and_kind(
     db.recent_harness_actions_by_room_and_kind(&room_id, &kind, since_ms, limit)
 }
 
+/// Wire shape for the Settings "Shell & environment" section.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpawnSettingsPayload {
+    settings: SpawnSettings,
+    /// Non-null when the settings file exists but couldn't be used.
+    degraded: Option<String>,
+    /// Shown in the UI so the file can be hand-edited or backed up.
+    settings_path: String,
+}
+
+fn spawn_settings_payload(state: &SpawnEnvState) -> SpawnSettingsPayload {
+    SpawnSettingsPayload {
+        settings: state.snapshot(),
+        degraded: state.degraded.read().clone(),
+        settings_path: crate::spawn_settings::file_path(&state.data_dir)
+            .display()
+            .to_string(),
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn spawn_settings_load(spawn_env: tauri::State<'_, SpawnEnvState>) -> SpawnSettingsPayload {
+    spawn_settings_payload(&spawn_env)
+}
+
+/// Persist the environment settings and immediately re-probe.
+///
+/// Re-probing here rather than lazily matters: the shell the user just
+/// picked is the shell whose `PATH` the next harness should get, and a
+/// spawn racing the save would otherwise keep the old shell's answer for
+/// the rest of the process's life.
+///
+/// Note the two different lifetimes, which the UI states explicitly:
+/// `PATH` additions and the captured environment apply to the *next
+/// spawn of any harness*, whereas the shell is baked into `Harness.cmd`
+/// when a shell harness is created and persisted from there — so
+/// existing harnesses are never rewritten behind the user's back.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn spawn_settings_save(
+    settings: SpawnSettings,
+    spawn_env: tauri::State<'_, SpawnEnvState>,
+) -> Result<SpawnSettingsPayload, String> {
+    crate::spawn_settings::save(&spawn_env.data_dir, &settings)?;
+    *spawn_env.settings.write() = settings.clone();
+    // A successful save replaces whatever was unreadable before.
+    *spawn_env.degraded.write() = None;
+    crate::pty::reprobe(spawn_env.data_dir.clone(), settings);
+    Ok(spawn_settings_payload(&spawn_env))
+}
+
+/// The environment a harness would get if it spawned right now.
+///
+/// Built by the *same* code the spawn path runs, so the panel can't
+/// drift from reality.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn spawn_env_preview(spawn_env: tauri::State<'_, SpawnEnvState>) -> crate::pty::EnvPreview {
+    crate::pty::env_preview(&spawn_env.snapshot())
+}
+
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn spawn_env_reprobe(spawn_env: tauri::State<'_, SpawnEnvState>) {
+    crate::pty::reprobe(spawn_env.data_dir.clone(), spawn_env.snapshot());
+}
+
 /// argv for the user's default interactive shell on this platform. Used
 /// as the fallback when the new-harness picker doesn't have a more
 /// specific binary in mind.
@@ -582,9 +709,23 @@ fn db_recent_harness_actions_by_room_and_kind(
 /// On Windows we prefer `pwsh.exe` (`PowerShell` 7) when it's on PATH —
 /// it has better ANSI/UTF-8 handling — and fall back to `powershell.exe`
 /// (`PowerShell` 5.1, which ships with every modern Windows install).
+///
+/// On Unix this delegates to the same resolution the `PATH` probe uses,
+/// so a harness shell and the shell we asked for a `PATH` can never
+/// disagree. It previously had its own copy that fell back to
+/// `/bin/bash` when `$SHELL` was unset — the fix for that landed in the
+/// probe in 2026-05 and was never applied here, leaving a bundled-app
+/// shell harness reading `~/.bash_profile`. On a machine whose Homebrew
+/// setup lives in `~/.zprofile` (the default `brew shellenv` install),
+/// that yields a shell with no `/opt/homebrew/bin` at all.
+#[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-fn default_shell() -> Vec<String> {
-    if cfg!(windows) {
+fn default_shell(spawn_env: tauri::State<'_, SpawnEnvState>) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        if let Some(shell) = spawn_env.snapshot().valid_shell() {
+            return vec![shell.to_owned()];
+        }
         let pwsh_on_path = std::env::var_os("PATH")
             .is_some_and(|p| std::env::split_paths(&p).any(|dir| dir.join("pwsh.exe").is_file()));
         if pwsh_on_path {
@@ -592,9 +733,13 @@ fn default_shell() -> Vec<String> {
         } else {
             vec!["powershell.exe".into()]
         }
-    } else {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-        vec![shell]
+    }
+    #[cfg(not(windows))]
+    {
+        // `probe_shell` already prefers the configured shell, so a
+        // harness shell and the shell we asked for a PATH can never
+        // disagree.
+        vec![crate::pty::probe_shell(&spawn_env.snapshot())]
     }
 }
 
