@@ -29,6 +29,8 @@
 //! - `api_error` — system subtype `api_error`.
 //! - `turn_cost` — terminal assistant row (`end_turn` / `stop_sequence`
 //!   / `max_tokens`); payload carries the row's `message.usage` + model.
+//! - `cost_state` — `cost-state` row: the session's cumulative cost /
+//!   token / line totals. A snapshot, not an event — newest wins.
 //! - `permission_mode` — `permission-mode` row.
 //! - `ai_title` — `ai-title` row (Claude's auto-generated session title).
 //! - `bridge_status` — `bridge-session` row (Remote Control bridge id).
@@ -136,6 +138,7 @@ impl ActionExtractor {
             "ai-title" => extract_ai_title(value, self.last_ts_ms, &mut out),
             "bridge-session" => extract_bridge_session(value, self.last_ts_ms, &mut out),
             "last-prompt" => extract_user_prompt(value, self.last_ts_ms, &mut out),
+            "cost-state" => extract_cost_state(value, self.last_ts_ms, &mut out),
             // Row types we deliberately don't surface:
             // - `file-history-snapshot`: Claude's internal undo
             //   bookkeeping (a `trackedFileBackups` map rewritten
@@ -569,6 +572,41 @@ fn extract_ai_title(value: &Value, last_ts_ms: i64, out: &mut Vec<ExtractedActio
         kind: action_kind::AI_TITLE,
         timestamp_ms: last_ts_ms,
         payload: payload.to_string(),
+        source: None,
+    });
+}
+
+/// Claude's cumulative session roll-up (`cost-state`, new in 2.1.246).
+///
+/// Not a feed event — it is a *snapshot*, rewritten a handful of times
+/// per session, each row superseding the last. Consumers take the
+/// newest and ignore the rest; summing them would multiply the total.
+///
+/// This is the only place Claude tells us what a session actually cost.
+/// The per-turn `turn_cost` rows carry token usage and a model name but
+/// no money (#91), so a Claude room's session cost has read `$0.00`
+/// since the card shipped — the alternative was a hand-maintained price
+/// table that would rot on every pricing change. `totalCostUSD` and the
+/// per-model `costUSD` breakdown come straight from upstream instead.
+///
+/// Like the other metadata rows, `cost-state` carries no `timestamp`,
+/// so it inherits the last one seen.
+fn extract_cost_state(value: &Value, last_ts_ms: i64, out: &mut Vec<ExtractedAction>) {
+    let payload = json!({
+        "total_cost_usd": value.get("totalCostUSD").cloned().unwrap_or(Value::Null),
+        "model_usage": value.get("modelUsage").cloned().unwrap_or(Value::Null),
+        "total_lines_added": value.get("totalLinesAdded").cloned().unwrap_or(Value::Null),
+        "total_lines_removed": value.get("totalLinesRemoved").cloned().unwrap_or(Value::Null),
+        "total_duration_ms": value.get("totalDuration").cloned().unwrap_or(Value::Null),
+        "total_api_duration_ms": value.get("totalAPIDuration").cloned().unwrap_or(Value::Null),
+        "total_tool_duration_ms": value.get("totalToolDuration").cloned().unwrap_or(Value::Null),
+        "start_time_ms": value.get("startTime").cloned().unwrap_or(Value::Null),
+    });
+    out.push(ExtractedAction {
+        kind: action_kind::COST_STATE,
+        timestamp_ms: last_ts_ms,
+        payload: payload.to_string(),
+        // No uuid on these rows.
         source: None,
     });
 }
@@ -1458,6 +1496,94 @@ mod tests {
         assert_eq!(a.kind, action_kind::BRIDGE_STATUS);
         let payload: Value = serde_json::from_str(&a.payload).unwrap();
         assert_eq!(payload["bridge_session_id"], "cse_01ABC");
+    }
+
+    /// Shape taken verbatim from a real 2.1.263 `cost-state` row.
+    #[test]
+    fn cost_state_emits_session_totals_with_carry_forward_ts() {
+        let mut x = ActionExtractor::new();
+        ingest_one(
+            &mut x,
+            json!({
+                "type": "system", "subtype": "turn_duration",
+                "uuid": "u1",
+                "timestamp": "2026-05-15T21:16:22.572Z",
+                "durationMs": 100, "messageCount": 1,
+            }),
+        );
+        let actions = ingest_one(
+            &mut x,
+            json!({
+                "type": "cost-state",
+                "sessionId": "s1",
+                "totalCostUSD": 154.266_434_75,
+                "totalAPIDuration": 20_196_313,
+                "totalToolDuration": 1_920_542,
+                "totalLinesAdded": 1273,
+                "totalLinesRemoved": 41,
+                "totalDuration": 190_980_216,
+                "startTime": 1_788_371_932_507i64,
+                "modelUsage": {
+                    "claude-fable-5-1": {
+                        "inputTokens": 74395, "outputTokens": 1_517_947,
+                        "costUSD": 150.483_92,
+                    },
+                },
+            }),
+        );
+        assert_eq!(actions.len(), 1);
+        let a = &actions[0];
+        assert_eq!(a.kind, action_kind::COST_STATE);
+        // No uuid on the row, and no timestamp — it inherits the last.
+        assert_eq!(a.source, None);
+        assert_eq!(a.timestamp_ms, 1_778_879_782_572);
+        let payload: Value = serde_json::from_str(&a.payload).unwrap();
+        assert_eq!(payload["total_cost_usd"], 154.266_434_75);
+        assert_eq!(payload["total_lines_added"], 1273);
+        assert_eq!(payload["total_lines_removed"], 41);
+        assert_eq!(payload["total_duration_ms"], 190_980_216);
+        assert_eq!(payload["start_time_ms"], 1_788_371_932_507i64);
+        assert_eq!(
+            payload["model_usage"]["claude-fable-5-1"]["costUSD"],
+            150.483_92
+        );
+    }
+
+    /// Snapshots supersede rather than accumulate, so a later row must
+    /// stand on its own — a consumer that took the newest and a
+    /// consumer that summed would otherwise disagree.
+    #[test]
+    fn each_cost_state_row_carries_the_running_total() {
+        let mut x = ActionExtractor::new();
+        let first = ingest_one(
+            &mut x,
+            json!({"type": "cost-state", "sessionId": "s1", "totalCostUSD": 1.5}),
+        );
+        let second = ingest_one(
+            &mut x,
+            json!({"type": "cost-state", "sessionId": "s1", "totalCostUSD": 4.25}),
+        );
+        let usd = |a: &[ExtractedAction]| -> f64 {
+            serde_json::from_str::<Value>(&a[0].payload).unwrap()["total_cost_usd"]
+                .as_f64()
+                .unwrap()
+        };
+        assert!((usd(&first) - 1.5).abs() < f64::EPSILON);
+        assert!((usd(&second) - 4.25).abs() < f64::EPSILON);
+    }
+
+    /// A row missing every optional field must still produce a row
+    /// rather than panicking or being dropped — the frontend already
+    /// treats each field as optional.
+    #[test]
+    fn cost_state_tolerates_a_field_less_row() {
+        let mut x = ActionExtractor::new();
+        let actions = ingest_one(&mut x, json!({"type": "cost-state", "sessionId": "s1"}));
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].kind, action_kind::COST_STATE);
+        let payload: Value = serde_json::from_str(&actions[0].payload).unwrap();
+        assert!(payload["total_cost_usd"].is_null());
+        assert!(payload["model_usage"].is_null());
     }
 
     #[test]
