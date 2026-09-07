@@ -146,7 +146,28 @@ impl PtyManager {
         }
         builder.cwd(cwd);
 
-        let applied = apply_env(&mut builder, settings, probe_result());
+        let mut applied = apply_env(&mut builder, settings, probe_result());
+
+        // #207: `portable-pty` resolves the program itself, and on
+        // Windows it prefers an extensionless `dir\name` over every
+        // PATHEXT candidate — for an npm-installed harness that is the
+        // `#!/bin/sh` shim, which `CreateProcessW` rejects outright.
+        // Redo the lookup our way against the `PATH` the child will
+        // actually get, then re-apply the environment to the rebuilt
+        // command so the two can't drift. The probe is reused rather
+        // than re-read: it is the same spawn, and `probe_result` can
+        // block.
+        if let Some(exe) = windows_resolved_program(program, &applied.path) {
+            tracing::info!(id = %id, program, exe = %exe, "pty_spawn resolved program");
+            let mut rebuilt = CommandBuilder::new(&exe);
+            for arg in args {
+                rebuilt.arg(arg);
+            }
+            rebuilt.cwd(cwd);
+            applied = apply_env(&mut rebuilt, settings, applied.probe.clone());
+            builder = rebuilt;
+        }
+
         tracing::info!(
             id = %id,
             probe = %applied.probe.describe(),
@@ -1453,7 +1474,24 @@ fn describe_probe(outcome: &ProbeOutcome, settings: &SpawnSettings) -> ProbeRepo
 /// `access(X_OK)`, so a present-but-non-executable file would report as
 /// resolved here while the spawn refuses it.
 fn resolve_program(name: &str, path: &OsStr) -> Option<String> {
-    let exts: Vec<String> = if cfg!(windows) {
+    let exts = path_exts();
+    // #207: on Windows an extensionless `dir\name` is only a candidate
+    // when the caller already spelled an executable extension
+    // (`powershell.exe`), never as a bare fallback. `npm i -g` writes
+    // three shims per binary — `opencode` (a `#!/bin/sh` script),
+    // `opencode.cmd` and `opencode.ps1` — and cmd.exe runs the second,
+    // never the first. `portable-pty` tries the extensionless file
+    // first, which is how the sh script reached `CreateProcessW` and
+    // came back as "%1 is not a valid Win32 application".
+    let lower = name.to_ascii_lowercase();
+    let bare_ok = !cfg!(windows) || exts.iter().any(|e| lower.ends_with(e.as_str()));
+    resolve_program_in(name, path, &exts, bare_ok)
+}
+
+/// The executable extensions to try per `PATH` directory, in `PATHEXT`
+/// order. Empty off Windows, where the concept doesn't exist.
+fn path_exts() -> Vec<String> {
+    if cfg!(windows) {
         std::env::var("PATHEXT")
             .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned())
             .split(';')
@@ -1462,23 +1500,57 @@ fn resolve_program(name: &str, path: &OsStr) -> Option<String> {
             .collect()
     } else {
         Vec::new()
-    };
+    }
+}
+
+/// The lookup itself, with the platform decisions already made so it
+/// can be exercised from either OS.
+fn resolve_program_in(name: &str, path: &OsStr, exts: &[String], bare_ok: bool) -> Option<String> {
     for dir in std::env::split_paths(path) {
         if dir.as_os_str().is_empty() {
             continue;
         }
-        let direct = dir.join(name);
-        if is_executable(&direct) {
-            return Some(direct.display().to_string());
-        }
-        for ext in &exts {
+        for ext in exts {
             let candidate = dir.join(format!("{name}{ext}"));
             if is_executable(&candidate) {
                 return Some(candidate.display().to_string());
             }
         }
+        let direct = dir.join(name);
+        if bare_ok && is_executable(&direct) {
+            return Some(direct.display().to_string());
+        }
     }
     None
+}
+
+/// The absolute program to hand `CommandBuilder` in place of the
+/// caller's bare name, or `None` to leave `portable-pty`'s own
+/// resolution alone.
+///
+/// `None` off Windows, where portable-pty's lookup already matches the
+/// OS's, and `None` when `program` isn't on `PATH` at all — the honest
+/// failure there is portable-pty's, which names the program.
+///
+/// A `program` that already carries a directory needs no help: the
+/// caller pointed at a specific file, and `PATH` order is not ours to
+/// second-guess.
+///
+/// The resolved file may well be a `.cmd` — that is what `npm i -g`
+/// installs — and needs no interpreter wrapper: `CreateProcessW` falls
+/// back to the command interpreter for a batch extension it
+/// recognises. Only the extensionless `#!/bin/sh` sibling has no such
+/// fallback, and that is the one that dies as "%1 is not a valid Win32
+/// application".
+fn windows_resolved_program(program: &str, path: &OsStr) -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let is_path_like = program.contains('/') || program.contains('\\') || program.contains(':');
+    if is_path_like {
+        return None;
+    }
+    resolve_program(program, path)
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -1575,4 +1647,108 @@ fn launch_context() -> String {
         || std::env::var_os("VSCODE_INJECTION").is_some()
         || std::env::var_os("WT_SESSION").is_some();
     if from_terminal { "terminal" } else { "bundled" }.to_owned()
+}
+
+// Deliberately not inside the `#[cfg(all(test, unix))]` module above:
+// #207 is a Windows bug, and a Windows bug guarded by Unix-only tests
+// is how it shipped. Everything here runs on both.
+#[cfg(test)]
+mod launch_tests {
+    use super::{resolve_program_in, windows_resolved_program};
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    /// PATHEXT as Windows hands it to us, lowercased the way
+    /// `path_exts` does.
+    fn exts() -> Vec<String> {
+        [".com", ".exe", ".bat", ".cmd"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect()
+    }
+
+    fn touch_exe(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, "shim").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        path
+    }
+
+    #[test]
+    fn the_npm_sh_shim_never_wins_over_the_cmd_shim() {
+        // The exact layout `npm i -g opencode-ai` leaves behind.
+        let dir = tempfile::tempdir().expect("tempdir");
+        touch_exe(dir.path(), "opencode");
+        let shim = touch_exe(dir.path(), "opencode.cmd");
+        touch_exe(dir.path(), "opencode.ps1");
+        let path = OsString::from(dir.path());
+        assert_eq!(
+            resolve_program_in("opencode", &path, &exts(), false).as_deref(),
+            Some(shim.display().to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn an_extensionless_program_is_unresolvable_when_bare_names_are_off() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        touch_exe(dir.path(), "opencode");
+        let path = OsString::from(dir.path());
+        assert_eq!(resolve_program_in("opencode", &path, &exts(), false), None);
+        // Unix passes `bare_ok = true`, and there the same file resolves.
+        assert!(resolve_program_in("opencode", &path, &exts(), true).is_some());
+    }
+
+    #[test]
+    fn a_program_spelled_with_its_extension_still_resolves() {
+        // `powershell.exe` would otherwise only ever be probed as
+        // `powershell.exe.com`, `powershell.exe.exe`, …
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exe = touch_exe(dir.path(), "powershell.exe");
+        let path = OsString::from(dir.path());
+        assert_eq!(
+            resolve_program_in("powershell.exe", &path, &exts(), true).as_deref(),
+            Some(exe.display().to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn earlier_path_dirs_still_win() {
+        let first = tempfile::tempdir().expect("tempdir");
+        let second = tempfile::tempdir().expect("tempdir");
+        let wanted = touch_exe(first.path(), "gh.exe");
+        touch_exe(second.path(), "gh.exe");
+        let path = std::env::join_paths([first.path(), second.path()]).expect("join");
+        assert_eq!(
+            resolve_program_in("gh", &path, &exts(), false).as_deref(),
+            Some(wanted.display().to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn a_program_that_already_names_a_file_is_left_alone() {
+        // Not ours to re-resolve — and off Windows nothing is, so this
+        // holds on both.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = OsString::from(dir.path());
+        for spelled in [
+            r"C:\npm\opencode.cmd",
+            "./opencode",
+            "/usr/local/bin/opencode",
+        ] {
+            assert_eq!(windows_resolved_program(spelled, &path), None);
+        }
+    }
+
+    #[test]
+    fn an_unresolvable_program_defers_to_portable_pty() {
+        // Better a spawn error naming `nosuchtool` than a rewrite to
+        // something we guessed at.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = OsString::from(dir.path());
+        assert_eq!(windows_resolved_program("nosuchtool", &path), None);
+    }
 }
