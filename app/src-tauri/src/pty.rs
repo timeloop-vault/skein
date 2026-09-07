@@ -20,14 +20,21 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex as StdMutex, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// Probe timing only. The probe thread is compiled out on Windows
+// (`prewarm_probe`), so the import would be unused there.
+#[cfg(not(target_os = "windows"))]
+use std::time::Instant;
 
 use parking_lot::Mutex;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::Serialize;
 
 use crate::spawn_env;
-use crate::spawn_settings::{CaptureMode, SpawnSettings};
+use crate::spawn_settings::SpawnSettings;
+// Only the probe reads the capture mode — see the `Instant` note above.
+#[cfg(not(target_os = "windows"))]
+use crate::spawn_settings::CaptureMode;
 
 /// Events the PTY reader thread streams to the frontend. Tagged so the
 /// JS side can branch on `kind`: `data` chunks become terminal output,
@@ -456,6 +463,12 @@ fn base_path(builder: &CommandBuilder) -> OsString {
 ///
 /// Healthy cost measured on this machine is 20-30 ms; 5 s is a hang, not
 /// a slow machine.
+///
+/// Windows never starts a probe (`prewarm_probe` takes the
+/// `NotApplicable` branch), so this is unreachable there rather than
+/// wrong — the mirror of the `allow` on `ProbeFailure::NotApplicable`,
+/// which is unreachable everywhere else.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 const PROBE_DEADLINE: Duration = Duration::from_secs(5);
 
 /// How long a spawn will wait for a probe that hasn't finished yet.
@@ -468,6 +481,9 @@ const PROBE_WAIT: Duration = Duration::from_secs(6);
 pub(crate) enum ProbeOutcome {
     /// Still running (or never started).
     Pending,
+    /// Only the probe constructs this, so it is unreachable on Windows
+    /// (see `PROBE_DEADLINE`).
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     Captured {
         path: String,
         shell: String,
@@ -480,6 +496,10 @@ pub(crate) enum ProbeOutcome {
     },
 }
 
+/// Every variant but `NotApplicable` is produced by the probe, which
+/// Windows never runs (see `PROBE_DEADLINE`) — hence the blanket
+/// `allow` there, and the inverted one on `NotApplicable` below.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProbeFailure {
     /// No probe on this platform — Windows uses portable-pty's live
