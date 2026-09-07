@@ -24,7 +24,12 @@ use crate::spawn_settings::CaptureMode;
 /// shell prints startup noise to stdout (nvm banners, `brew shellenv`
 /// echoes, motd), so the value has to be delimited rather than assumed
 /// to be the whole of stdout.
+///
+/// Windows never runs the probe (`pty::prewarm_probe`), so outside the
+/// test build these are unreachable there — not unused.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub(crate) const PATH_PROBE_START: &str = "___SKEIN_PATH_BEGIN___";
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub(crate) const PATH_PROBE_END: &str = "___SKEIN_PATH_END___";
 
 /// The one-liner the probe shell runs. `printf` rather than `echo`
@@ -83,6 +88,10 @@ pub(crate) fn probe_args(shell: &str, mode: CaptureMode) -> Option<&'static [&'s
 /// killed-on-deadline shell leaves behind. Returning `None` rather than
 /// a best-effort prefix matters: a truncated `PATH` that still parses
 /// would silently drop the tail of the user's entries.
+///
+/// Unreachable on Windows outside the test build — see
+/// `PATH_PROBE_START`.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub(crate) fn extract_probe_path(stdout: &str) -> Option<String> {
     let start = stdout.find(PATH_PROBE_START)? + PATH_PROBE_START.len();
     let rest = &stdout[start..];
@@ -725,8 +734,19 @@ mod tests {
     }
 
     // ── merge_path ────────────────────────────────────────────────
+    //
+    // Split by platform (#202). `merge_path` is platform-generic —
+    // `split_paths`/`join_paths` for the separator, a cfg'd
+    // `PATH_ENTRY_FORBIDDEN` — but its *fixtures* cannot be: `/usr/bin`
+    // is not absolute on Windows (an absolute path there needs a prefix,
+    // not just a root), so a Unix-shaped base is entirely discarded and
+    // the assertions would be wrong to pass. The cases below are the
+    // Unix half; `windows_merge_path` mirrors each one, and anything
+    // genuinely platform-neutral (`merge_path_is_idempotent`,
+    // `concat_paths_joins_with_the_platform_separator`) stays ungated.
 
     #[test]
+    #[cfg(unix)]
     fn merge_path_prepends_existing_directories_in_order() {
         let base = join(&["/usr/bin", "/bin"]);
         let exists = |p: &Path| p.starts_with("/home/tester");
@@ -749,6 +769,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn merge_path_skips_directories_that_do_not_exist() {
         let base = join(&["/usr/bin"]);
         let exists = |p: &Path| p != Path::new("/home/tester/bin");
@@ -776,6 +797,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn merge_path_collapses_duplicates_including_trailing_separators() {
         let base = join(&["/usr/bin", "/home/tester/bin/"]);
         let out = merge_path(
@@ -789,6 +811,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn merge_path_never_emits_an_empty_entry() {
         // An empty PATH element means *the current directory* on Unix.
         // Inherited into an agent harness that runs what it finds, that
@@ -810,14 +833,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn merge_path_rejects_an_entry_containing_the_separator() {
         // Must be dropped whole, never split into two entries — and it
         // must not fail the merge for everything else.
-        let sneaky = if cfg!(windows) {
-            "/a;/b".to_owned()
-        } else {
-            "/a:/b".to_owned()
-        };
+        let sneaky = "/a:/b".to_owned();
         let base = join(&["/usr/bin"]);
         let out = merge_path(&base, &[sneaky], Some(&home()), &no_vars, &|_| true);
         assert_eq!(merged_parts(&out), vec!["/usr/bin"]);
@@ -849,6 +869,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn merge_path_refuses_relative_additions() {
         // Same hazard as an empty entry, and this is the side the user
         // controls *and* the side that goes first: a `.` here makes
@@ -873,12 +894,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn merge_path_reports_why_each_addition_was_dropped() {
         // "I added a directory and nothing happened" is the confusion
         // the whole settings panel exists to end, so every skip has to
         // be attributable to a reason the UI can show.
         let base = join(&["/usr/bin", "/home/tester/bin"]);
-        let sep = if cfg!(windows) { "/a;/b" } else { "/a:/b" };
+        let sep = "/a:/b";
         let out = merge_path(
             &base,
             &[
@@ -904,6 +926,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn merge_path_dedupes_the_base_too() {
         // Real shells hand back PATHs with repeated entries — this
         // machine's own does — and each duplicate is a wasted stat on
@@ -914,6 +937,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn merge_path_drops_relative_entries_from_the_base() {
         let base = join(&["/usr/bin", ".", "relative/dir"]);
         let out = merge_path(&base, &[], Some(&home()), &no_vars, &|_| true);
@@ -921,6 +945,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn merge_path_reports_what_it_accepted() {
         let base = join(&["/usr/bin"]);
         let out = merge_path(
@@ -938,10 +963,267 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn merge_path_with_no_additions_returns_the_base_unchanged() {
         let base = join(&["/usr/bin", "/bin"]);
         let out = merge_path(&base, &[], Some(&home()), &no_vars, &|_| true);
         assert_eq!(merged_parts(&out), parts(&base));
+    }
+
+    /// The Windows half of the `merge_path` cases above (#202).
+    ///
+    /// Same behaviours, Windows-shaped fixtures: `C:\…` bases, `;` as
+    /// the forbidden in-entry separator, `\` as the trailing separator
+    /// that must collapse. Two cases have no Unix counterpart because
+    /// the behaviour only exists here — case-insensitive dedupe and
+    /// `%VAR%` expansion — and one Unix case (the empty PATH element
+    /// meaning "current directory") is asserted for the same reason it
+    /// is there: an inherited empty entry is a real hazard for a harness
+    /// that runs what it finds.
+    #[cfg(windows)]
+    mod windows_merge_path {
+        use super::{DropReason, Path, PathBuf, join, merge_path, merged_parts, no_vars, reasons};
+        use std::ffi::OsStr;
+
+        /// A Windows `HOME` for `~` expansion. `merge_path` only ever
+        /// reads it as a prefix, so it needs to exist as a path shape,
+        /// not on disk.
+        fn home() -> PathBuf {
+            PathBuf::from(r"C:\Users\tester")
+        }
+
+        #[test]
+        fn prepends_existing_directories_in_order() {
+            let base = join(&[r"C:\Windows\System32", r"C:\Windows"]);
+            let exists = |p: &Path| p.starts_with(r"C:\Users\tester");
+            let out = merge_path(
+                &base,
+                &[r"~\.local\bin".into(), r"~\bin".into()],
+                Some(&home()),
+                &no_vars,
+                &exists,
+            );
+            assert_eq!(
+                merged_parts(&out),
+                vec![
+                    r"C:\Users\tester\.local\bin",
+                    r"C:\Users\tester\bin",
+                    r"C:\Windows\System32",
+                    r"C:\Windows",
+                ]
+            );
+        }
+
+        #[test]
+        fn skips_directories_that_do_not_exist() {
+            let base = join(&[r"C:\Windows\System32"]);
+            let exists = |p: &Path| p != Path::new(r"C:\Users\tester\bin");
+            let out = merge_path(
+                &base,
+                &[r"~\.local\bin".into(), r"~\bin".into()],
+                Some(&home()),
+                &no_vars,
+                &exists,
+            );
+            assert_eq!(
+                merged_parts(&out),
+                vec![r"C:\Users\tester\.local\bin", r"C:\Windows\System32"]
+            );
+        }
+
+        #[test]
+        fn collapses_duplicates_including_trailing_separators() {
+            let base = join(&[r"C:\Windows\System32", r"C:\Users\tester\bin\"]);
+            let out = merge_path(
+                &base,
+                &[r"~\bin".into(), r"~\bin".into()],
+                Some(&home()),
+                &no_vars,
+                &|_| true,
+            );
+            assert_eq!(
+                merged_parts(&out),
+                vec![r"C:\Windows\System32", r"C:\Users\tester\bin\"]
+            );
+        }
+
+        /// Windows-only: `dedupe_key` lowercases, so entries differing
+        /// only in case are the same directory and must collapse.
+        /// Getting this wrong costs a redundant stat on every command
+        /// lookup for the life of the harness.
+        #[test]
+        fn dedupes_case_insensitively() {
+            let base = join(&[
+                r"C:\Windows\System32",
+                r"c:\windows\system32\",
+                r"C:\Windows",
+            ]);
+            let out = merge_path(&base, &[], Some(&home()), &no_vars, &|_| true);
+            assert_eq!(
+                merged_parts(&out),
+                vec![r"C:\Windows\System32", r"C:\Windows"]
+            );
+        }
+
+        #[test]
+        fn never_emits_an_empty_entry() {
+            let out = merge_path(
+                OsStr::new(""),
+                &[r"~\bin".into()],
+                Some(&home()),
+                &no_vars,
+                &|_| true,
+            );
+            assert_eq!(merged_parts(&out), vec![r"C:\Users\tester\bin"]);
+            assert!(!merged_parts(&out).iter().any(String::is_empty));
+
+            let with_hole = join(&[r"C:\Windows\System32", "", r"C:\Windows"]);
+            let out = merge_path(&with_hole, &[], Some(&home()), &no_vars, &|_| true);
+            assert!(!merged_parts(&out).iter().any(String::is_empty));
+        }
+
+        /// `;` is the Windows separator, so an entry containing one must
+        /// be dropped whole rather than split into two — and must not
+        /// take the rest of the merge down with it.
+        #[test]
+        fn rejects_an_entry_containing_the_separator() {
+            let base = join(&[r"C:\Windows\System32"]);
+            let out = merge_path(
+                &base,
+                &[r"C:\a;C:\b".to_owned()],
+                Some(&home()),
+                &no_vars,
+                &|_| true,
+            );
+            assert_eq!(merged_parts(&out), vec![r"C:\Windows\System32"]);
+        }
+
+        #[test]
+        fn refuses_relative_additions() {
+            let base = join(&[r"C:\Windows\System32"]);
+            let out = merge_path(
+                &base,
+                &[
+                    ".".into(),
+                    "..".into(),
+                    "bin".into(),
+                    r"\rooted-no-prefix".into(),
+                ],
+                Some(&home()),
+                &no_vars,
+                &|_| true,
+            );
+            assert_eq!(merged_parts(&out), vec![r"C:\Windows\System32"]);
+            assert_eq!(
+                reasons(&out),
+                vec![
+                    (".".to_owned(), DropReason::NotAbsolute),
+                    ("..".to_owned(), DropReason::NotAbsolute),
+                    ("bin".to_owned(), DropReason::NotAbsolute),
+                    // Root without a drive prefix is *not* absolute on
+                    // Windows — the case that makes the Unix fixtures
+                    // collapse to nothing here.
+                    (r"\rooted-no-prefix".to_owned(), DropReason::NotAbsolute),
+                ]
+            );
+        }
+
+        #[test]
+        fn reports_why_each_addition_was_dropped() {
+            let base = join(&[r"C:\Windows\System32", r"C:\Users\tester\bin"]);
+            let out = merge_path(
+                &base,
+                &[
+                    r"%NOPE%\bin".into(),
+                    r"C:\a;C:\b".into(),
+                    r"C:\does\not\exist".into(),
+                    r"~\bin".into(),
+                ],
+                Some(&home()),
+                &no_vars,
+                &|p| p != Path::new(r"C:\does\not\exist"),
+            );
+            assert_eq!(
+                reasons(&out),
+                vec![
+                    (r"%NOPE%\bin".to_owned(), DropReason::Unresolved),
+                    (r"C:\a;C:\b".to_owned(), DropReason::Separator),
+                    (r"C:\does\not\exist".to_owned(), DropReason::Missing),
+                    (r"~\bin".to_owned(), DropReason::Duplicate),
+                ]
+            );
+            assert!(out.added.is_empty());
+        }
+
+        /// Windows-only: `%VAR%` is the native form, and an addition
+        /// that resolves through it must be credited like any other.
+        #[test]
+        fn expands_percent_vars_in_additions() {
+            let base = join(&[r"C:\Windows\System32"]);
+            let lookup = |name: &str| {
+                (name == "LOCALAPPDATA").then(|| r"C:\Users\tester\AppData\Local".to_owned())
+            };
+            let out = merge_path(
+                &base,
+                &[r"%LOCALAPPDATA%\Programs\bin".into()],
+                Some(&home()),
+                &lookup,
+                &|_| true,
+            );
+            assert_eq!(
+                out.added,
+                vec![r"C:\Users\tester\AppData\Local\Programs\bin".to_owned()]
+            );
+            assert_eq!(
+                merged_parts(&out),
+                vec![
+                    r"C:\Users\tester\AppData\Local\Programs\bin",
+                    r"C:\Windows\System32",
+                ]
+            );
+        }
+
+        #[test]
+        fn dedupes_the_base_too() {
+            let base = join(&[
+                r"C:\Windows\System32",
+                r"C:\Windows",
+                r"C:\Windows\System32",
+                r"C:\Windows\",
+            ]);
+            let out = merge_path(&base, &[], Some(&home()), &no_vars, &|_| true);
+            assert_eq!(
+                merged_parts(&out),
+                vec![r"C:\Windows\System32", r"C:\Windows"]
+            );
+        }
+
+        #[test]
+        fn drops_relative_entries_from_the_base() {
+            let base = join(&[r"C:\Windows\System32", ".", r"relative\dir"]);
+            let out = merge_path(&base, &[], Some(&home()), &no_vars, &|_| true);
+            assert_eq!(merged_parts(&out), vec![r"C:\Windows\System32"]);
+        }
+
+        #[test]
+        fn reports_what_it_accepted() {
+            let base = join(&[r"C:\Windows\System32"]);
+            let out = merge_path(
+                &base,
+                &[r"~\.local\bin".into(), r"C:\does\not\exist".into()],
+                Some(&home()),
+                &no_vars,
+                &|p| p != Path::new(r"C:\does\not\exist"),
+            );
+            assert_eq!(out.added, vec![r"C:\Users\tester\.local\bin".to_owned()]);
+        }
+
+        #[test]
+        fn with_no_additions_returns_the_base_unchanged() {
+            let base = join(&[r"C:\Windows\System32", r"C:\Windows"]);
+            let out = merge_path(&base, &[], Some(&home()), &no_vars, &|_| true);
+            assert_eq!(merged_parts(&out), super::parts(&base));
+        }
     }
 
     // ── host-terminal identity ────────────────────────────────────
