@@ -96,6 +96,8 @@ App.tsx split, #116 harness-adapter consolidation, #49 files pillar,
     │   └── design/                  # Design handoff bundles (read-only reference)
     ├── scripts/local-bundle.sh      # macOS bundled-.app smoke test (NOTE: uses the RELEASE
     │                                #   identifier, unlike tauri:build:local)
+    ├── .claude/skills/              # git-workflow (branches + commits),
+    │                                #   pr-workflow (PRs, stacks, gh traps)
     ├── .githooks/pre-commit         # The de facto gate (CI is manual-trigger only)
     └── .github/workflows/           # ci.yml (workflow_dispatch only), release.yml (tag-driven
                                      #   3-OS matrix + updater latest.json)
@@ -208,6 +210,15 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   plan docs are history, not instructions. Parked ideas live in
   [`docs/backlog.md`](docs/backlog.md) — read it before adding to any
   plan; things there move to GitHub issues when they become real.
+- **Branch, commit and PR conventions live in `.claude/skills/`** —
+  `git-workflow` (branch naming, commit subject/body, trailers,
+  staging hazards) and `pr-workflow` (PR body shape, stacked PRs, the
+  post-squash-merge rebase). Read the relevant one before committing or
+  opening a PR rather than reconstructing the format from `git log`.
+  Two traps they exist to prevent: `gh` has no `--body @-` (that
+  silently sets the body to the literal string `@-` — use
+  `--body-file -` and verify), and a squash-merge orphans every
+  stacked branch below it.
 - **Keyboard shortcuts** only via the `BINDINGS` table in
   `shortcuts.ts`; prefer letters/digits (Swedish layout — AltGr =
   Ctrl+Alt collides with punctuation chords) and agree bindings with
