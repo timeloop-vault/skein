@@ -144,6 +144,7 @@ pub mod action_kind {
     pub const TURN_DURATION: &str = "turn_duration";
     pub const API_ERROR: &str = "api_error";
     pub const TURN_COST: &str = "turn_cost";
+    pub const COST_STATE: &str = "cost_state";
     pub const PERMISSION_MODE: &str = "permission_mode";
     pub const AI_TITLE: &str = "ai_title";
     pub const BRIDGE_STATUS: &str = "bridge_status";

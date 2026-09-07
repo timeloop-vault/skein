@@ -21,6 +21,7 @@ import type { Harness, HarnessKind } from "../types.ts";
 import { ActivityCardBody, IDLE_AFTER_MS, useIdleBasis } from "./ActivityCard.tsx";
 import { type CardLayout, CardStack, DEFAULT_LAYOUT } from "./CardStack.tsx";
 import { DiffCardBody } from "./DiffCard.tsx";
+import { SessionTotals, sessionTotals } from "./feedItems.tsx";
 import "./chrome.css";
 import { PlanCardBody } from "./PlanCard.tsx";
 import { RoomSubtitle } from "./RoomSubtitle.tsx";
@@ -110,6 +111,9 @@ export const LiveContext = memo(function LiveContext({
 	// plan.ts). Drives both the Plan card body and its header tally.
 	const planGroups: PlanGroup[] = useMemo(() => reducePlan(actions), [actions]);
 	const planTally = useMemo(() => planTotals(planGroups), [planGroups]);
+	// Head totals are independent of the per-turn hair-line toggle — the
+	// session's cost is a fact about the room, not a display preference.
+	const totals = useMemo(() => sessionTotals(actions), [actions]);
 
 	// Keep the status-bar branch live (issue #18). Bind this room's id to
 	// App's shared callback; the watcher holds it in a ref (deps [cwd]) so
@@ -200,6 +204,7 @@ export const LiveContext = memo(function LiveContext({
 						meta: (
 							<>
 								<span>{actions.length} events</span>
+								<SessionTotals usd={totals.usd} tokens={totals.tokens} />
 								{idleFor && <span className="idle-for">· idle {idleFor}</span>}
 								{/* The whole card head is the collapse click target, so
 								    the toggle must not let its click bubble. */}
