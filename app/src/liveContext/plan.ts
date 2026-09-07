@@ -1,19 +1,22 @@
 // Plan-state reducer for the Plan card — issue #80 D4.
 //
 // The Plan card shows CURRENT plan state per harness, not a feed, so the
-// `plan_change` rows must be folded down. The two harnesses diverge (see
+// `plan_change` rows must be folded down. Two shapes exist (see
 // docs/live-context-d2-buildmap.md):
 //
-//   - opencode (`todowrite`) emits a FULL todo list every time
-//     (`plan_item.op === "write"`, `plan_item.items` = the whole list) —
-//     latest snapshot wins, earlier rows are discarded.
-//   - Claude (`TaskCreate`/`TaskUpdate`) emits incremental deltas keyed
-//     by `plan_item.id`: a create carries the subject + initial status,
-//     an update carries only a `status_change.{from,to}` — so the
-//     subject must be carried forward from the create.
+//   - SNAPSHOT (`plan_item.op === "write"`, `plan_item.items` = the whole
+//     list) — latest wins, earlier rows discarded. opencode's `todowrite`
+//     and Claude's `TodoWrite` both send this.
+//   - DELTA — Claude's `TaskCreate`/`TaskUpdate`, keyed by `plan_item.id`:
+//     a create carries the subject + initial status, an update carries
+//     only a `status_change.{from,to}`, so the subject must be carried
+//     forward from the create.
 //
-// A given harness only ever uses one style, so we detect per harness by
-// whether any of its rows is an `op:"write"`.
+// The shape is a property of the tool, not the harness, so we detect it
+// per harness from the rows themselves: any `op:"write"` present means
+// snapshot. A harness that switched tools mid-history therefore lands on
+// its latest snapshot and ignores the older deltas, which is the right
+// answer — the snapshot is the whole list.
 
 import { type Payload, obj, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
@@ -89,8 +92,10 @@ function inferNow(items: PlanItem[]): void {
 	}
 }
 
-/// Fold opencode's latest full snapshot into display items.
-function opencodeItems(lastWrite: Payload, harnessId: string): PlanItem[] {
+/// Fold the latest full snapshot into display items. `priority` is
+/// opencode-only; Claude's `TodoWrite` items carry `content` + `status`
+/// and no priority, which reads as "no pill" rather than a wrong one.
+function snapshotItems(lastWrite: Payload, harnessId: string): PlanItem[] {
 	const pi = obj(lastWrite.plan_item);
 	const raw = pi && Array.isArray(pi.items) ? pi.items : [];
 	const items: PlanItem[] = [];
@@ -112,10 +117,11 @@ function opencodeItems(lastWrite: Payload, harnessId: string): PlanItem[] {
 	return items;
 }
 
-/// Fold Claude's create/update deltas, keyed by plan_item.id, preserving
-/// creation order. Update rows carry no subject, so it's carried forward
-/// from the create; status comes from `status_change.to`.
-function claudeItems(rows: HarnessAction[], harnessId: string): PlanItem[] {
+/// Fold Claude's `TaskCreate`/`TaskUpdate` deltas, keyed by
+/// plan_item.id, preserving creation order. Update rows carry no
+/// subject, so it's carried forward from the create; status comes from
+/// `status_change.to`.
+function deltaItems(rows: HarnessAction[], harnessId: string): PlanItem[] {
 	const byId = new Map<string, { subject: string; status: string }>();
 	const order: string[] = [];
 	for (const row of rows) {
@@ -170,13 +176,13 @@ export function reducePlan(actions: HarnessAction[]): PlanGroup[] {
 	for (const harnessId of order) {
 		const rows = rowsByHarness.get(harnessId);
 		if (!rows || rows.length === 0) continue;
-		// opencode if any row is a full-list write; else Claude deltas.
+		// Snapshot if any row is a full-list write; else Claude deltas.
 		let lastWrite: Payload | undefined;
 		for (const row of rows) {
 			const p = parsePayload(row.payload);
 			if (str(obj(p.plan_item)?.op) === "write") lastWrite = p;
 		}
-		const items = lastWrite ? opencodeItems(lastWrite, harnessId) : claudeItems(rows, harnessId);
+		const items = lastWrite ? snapshotItems(lastWrite, harnessId) : deltaItems(rows, harnessId);
 		if (items.length > 0) groups.push({ harnessId, items });
 	}
 	return groups;

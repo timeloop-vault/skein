@@ -14,8 +14,10 @@
 //! see `docs/live-context-design-brief.md` and the recon):
 //!
 //! - `tool_call` — every `tool_use` block whose name isn't claimed below.
-//! - `plan_change` — `TaskCreate` / `TaskUpdate` (the user's plan mutates
-//!   here; read-only TaskList/Get fall into `tool_call`).
+//! - `plan_change` — `TaskCreate` / `TaskUpdate` / `TodoWrite` (the
+//!   user's plan mutates here; read-only TaskList/Get fall into
+//!   `tool_call`). The first two emit incremental deltas, `TodoWrite`
+//!   a full snapshot — see `extract_plan_item`.
 //! - `patch` — `Edit` / `Write` / `MultiEdit` (file modifications;
 //!   Read/Grep/Glob are still `tool_call`).
 //! - `pr_link` — row type `pr-link`.
@@ -332,7 +334,7 @@ fn build_tool_action(
 fn classify_tool(name: &str) -> &'static str {
     match name {
         "Edit" | "Write" | "MultiEdit" => action_kind::PATCH,
-        "TaskCreate" | "TaskUpdate" => action_kind::PLAN_CHANGE,
+        "TaskCreate" | "TaskUpdate" | "TodoWrite" => action_kind::PLAN_CHANGE,
         _ => action_kind::TOOL_CALL,
     }
 }
@@ -384,9 +386,15 @@ fn extract_patch_info(result: &Value) -> Option<Value> {
     }))
 }
 
-/// Pull a normalized plan item out of `TaskCreate` / `TaskUpdate`. Plan
-/// card reads this field directly; Activity card uses the parent
-/// payload's tool/input/result for full detail.
+/// Pull a normalized plan item out of `TaskCreate` / `TaskUpdate` /
+/// `TodoWrite`. Plan card reads this field directly; Activity card uses
+/// the parent payload's tool/input/result for full detail.
+///
+/// Two shapes, because the tools differ: `TaskCreate`/`TaskUpdate` are
+/// incremental deltas keyed by task id, `TodoWrite` is a full snapshot
+/// of the whole list. `plan.ts` already reduces both (the snapshot path
+/// exists for opencode's `todowrite`), so `TodoWrite` reuses that
+/// `op: "write"` + `items` shape verbatim rather than inventing a third.
 fn extract_plan_item(name: &str, input: &Value, result: &Value) -> Option<Value> {
     match name {
         "TaskCreate" => Some(json!({
@@ -410,6 +418,21 @@ fn extract_plan_item(name: &str, input: &Value, result: &Value) -> Option<Value>
                 "id": task_id,
                 "updated_fields": updated_fields,
                 "status_change": status_change,
+            }))
+        }
+        // The result's `newTodos` is the list as actually applied;
+        // the input's `todos` is what was asked for. Prefer the
+        // former, fall back to the latter (older result shapes, or a
+        // row whose tool_result never landed).
+        "TodoWrite" => {
+            let todos = result
+                .get("newTodos")
+                .and_then(Value::as_array)
+                .or_else(|| input.get("todos").and_then(Value::as_array))?;
+            Some(json!({
+                "op": "write",
+                "count": todos.len(),
+                "items": todos,
             }))
         }
         _ => None,
@@ -877,6 +900,115 @@ mod tests {
         assert_eq!(payload["plan_item"]["op"], "update");
         assert_eq!(payload["plan_item"]["status_change"]["from"], "pending");
         assert_eq!(payload["plan_item"]["status_change"]["to"], "in_progress");
+    }
+
+    /// `TodoWrite` is the full-snapshot plan tool. It must land in the
+    /// same `op: "write"` + `items` shape opencode's `todowrite` uses,
+    /// because `plan.ts` picks its reducer off that discriminator.
+    #[test]
+    fn todo_write_emits_full_snapshot_plan_item() {
+        let mut x = ActionExtractor::new();
+        ingest_one(
+            &mut x,
+            json!({
+                "type": "assistant",
+                "uuid": "a1",
+                "timestamp": "2026-05-15T21:16:22.572Z",
+                "message": {"content": [{
+                    "type": "tool_use", "id": "toolu_tw", "name": "TodoWrite",
+                    "input": {"todos": [
+                        {"content": "First", "status": "completed",
+                         "activeForm": "Doing first"},
+                        {"content": "Second", "status": "in_progress",
+                         "activeForm": "Doing second"},
+                    ]},
+                }]},
+            }),
+        );
+        let actions = ingest_one(
+            &mut x,
+            json!({
+                "type": "user",
+                "timestamp": "2026-05-15T21:16:23.000Z",
+                "toolUseResult": {
+                    "oldTodos": [],
+                    "newTodos": [
+                        {"content": "First", "status": "completed",
+                         "activeForm": "Doing first"},
+                        {"content": "Second", "status": "in_progress",
+                         "activeForm": "Doing second"},
+                        {"content": "Third", "status": "pending",
+                         "activeForm": "Doing third"},
+                    ],
+                },
+                "message": {"content": [{
+                    "type": "tool_result", "tool_use_id": "toolu_tw",
+                    "content": "ok", "is_error": false
+                }]},
+            }),
+        );
+        assert_eq!(actions.len(), 1);
+        let a = &actions[0];
+        assert_eq!(a.kind, action_kind::PLAN_CHANGE);
+        let payload: Value = serde_json::from_str(&a.payload).unwrap();
+        assert_eq!(payload["plan_item"]["op"], "write");
+        // `newTodos` (as applied) wins over the input's `todos`.
+        assert_eq!(payload["plan_item"]["count"], 3);
+        assert_eq!(payload["plan_item"]["items"][2]["content"], "Third");
+        assert_eq!(payload["plan_item"]["items"][1]["status"], "in_progress");
+    }
+
+    /// Result shapes without `newTodos` (and rows whose `tool_result`
+    /// never landed a list) still produce a usable snapshot from the
+    /// tool input.
+    #[test]
+    fn todo_write_falls_back_to_input_todos() {
+        let mut x = ActionExtractor::new();
+        ingest_one(
+            &mut x,
+            json!({
+                "type": "assistant",
+                "uuid": "a1",
+                "timestamp": "2026-05-15T21:16:22.572Z",
+                "message": {"content": [{
+                    "type": "tool_use", "id": "toolu_tw", "name": "TodoWrite",
+                    "input": {"todos": [
+                        {"content": "Only", "status": "pending",
+                         "activeForm": "Doing only"},
+                    ]},
+                }]},
+            }),
+        );
+        let actions = ingest_one(
+            &mut x,
+            json!({
+                "type": "user",
+                "timestamp": "2026-05-15T21:16:23.000Z",
+                "toolUseResult": {"ok": true},
+                "message": {"content": [{
+                    "type": "tool_result", "tool_use_id": "toolu_tw",
+                    "content": "ok", "is_error": false
+                }]},
+            }),
+        );
+        assert_eq!(actions.len(), 1);
+        let payload: Value = serde_json::from_str(&actions[0].payload).unwrap();
+        assert_eq!(payload["plan_item"]["op"], "write");
+        assert_eq!(payload["plan_item"]["count"], 1);
+        assert_eq!(payload["plan_item"]["items"][0]["content"], "Only");
+    }
+
+    /// Read-only task tools stay `tool_call` — they mutate nothing, so
+    /// letting them through would put empty rows in the Plan card.
+    #[test]
+    fn read_only_task_tools_are_not_plan_changes() {
+        for name in ["TaskList", "TaskGet", "TaskOutput", "TaskStop"] {
+            assert_eq!(
+                classify_tool(name),
+                action_kind::TOOL_CALL,
+                "{name} should classify as tool_call"
+            );
+        }
     }
 
     #[test]
