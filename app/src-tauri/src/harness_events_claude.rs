@@ -88,30 +88,16 @@ impl ClaudeEventsError {
     }
 }
 
-/// Claude's path-encoding scheme: each path separator in the cwd
-/// becomes `-`. On Unix that's just `/`; on Windows the backslash and
-/// the drive colon are encoded too (`C:\git\skein` → `C--git-skein`,
-/// `D:\` → `D--`, verified against real `~/.claude/projects` dirs).
-/// Documented and verified against 17 real project dirs in
-/// `docs/chapter-5-recon.md` §3. We use the encoded path to compute
-/// the JSONL file location directly — chapter 5 also pre-allocates
-/// the session uuid, so we never have to scan project dirs at
-/// attach time.
-fn encode_cwd(cwd: &str) -> String {
-    cwd.replace(['/', '\\', ':'], "-")
-}
-
-/// `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`. Returns
-/// `None` when the home dir can't be resolved (exotic environments)
-/// so the caller can no-op cleanly.
+/// `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`. The encoding
+/// and layout live in `skein-harness` (#209); chapter 5 pre-allocates
+/// the session uuid, so we compute the path directly instead of
+/// scanning project dirs. `None` when the home dir can't be resolved
+/// (exotic environments) so the caller can no-op cleanly.
 fn session_jsonl_path(cwd: &str, session_id: &str) -> Option<PathBuf> {
-    Some(
-        crate::home_dir()?
-            .join(".claude")
-            .join("projects")
-            .join(encode_cwd(cwd))
-            .join(format!("{session_id}.jsonl")),
-    )
+    let home = crate::home_dir()?;
+    Some(skein_harness::claude::session_jsonl_path(
+        &home, cwd, session_id,
+    ))
 }
 
 /// Per-harness adapter handle. Only role is to keep the debouncer
@@ -593,11 +579,7 @@ fn determine_initial_state(content: &str) -> Option<ClaudeEvent> {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
             continue;
         };
-        if value
-            .get("isSidechain")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-        {
+        if skein_harness::claude::is_sidechain(&value) {
             continue;
         }
         let Some(ty) = value.get("type").and_then(serde_json::Value::as_str) else {
@@ -657,11 +639,7 @@ fn parse_value(value: &serde_json::Value, in_assistant_turn: &mut bool) -> Optio
     // Sub-agent rows carry isSidechain=true. The main session is
     // what reflects the user-facing harness state; sub-agents are
     // their own internal flow and shouldn't drive the dot.
-    if value
-        .get("isSidechain")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
+    if skein_harness::claude::is_sidechain(value) {
         // Reset the turn flag if a sub-agent interrupts so the next
         // main-session assistant row starts a fresh turn.
         *in_assistant_turn = false;
@@ -1282,18 +1260,6 @@ mod tests {
             matches!(result, Some(ClaudeEvent::AwaitingPrompt)),
             "main session's end_turn must win over sub-agent rows, got {result:?}"
         );
-    }
-
-    #[test]
-    fn encode_cwd_matches_claude_scheme() {
-        // Verified against real project dirs in chapter-5-recon §3.
-        assert_eq!(encode_cwd("/Users/foo/bar"), "-Users-foo-bar");
-        assert_eq!(encode_cwd("/foo-bar/baz"), "-foo-bar-baz");
-        // Windows: backslash separators and the drive colon also encode
-        // to `-`. Verified against real `~/.claude/projects` dirs (#145).
-        assert_eq!(encode_cwd("C:\\git\\skein"), "C--git-skein");
-        assert_eq!(encode_cwd("C:\\Users\\stefa"), "C--Users-stefa");
-        assert_eq!(encode_cwd("D:\\"), "D--");
     }
 
     // ── action persistence + backfill (issue #80) ────────────────

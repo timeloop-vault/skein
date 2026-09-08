@@ -111,11 +111,7 @@ impl ActionExtractor {
         // Sub-agent rows have their own dedicated session log — the
         // main session's events drive the main-session activity feed
         // only, so isSidechain=true rows are skipped at this layer.
-        if value
-            .get("isSidechain")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        if skein_harness::claude::is_sidechain(value) {
             return out;
         }
         // Track the most recent real timestamp for timestamp-less
@@ -645,67 +641,13 @@ fn extract_user_prompt(value: &Value, last_ts_ms: i64, out: &mut Vec<ExtractedAc
     });
 }
 
-/// Pull the row's `timestamp` field (ISO 8601) and convert to epoch
-/// ms. Fall back to 0 when missing / malformed — the row still gets
+/// The row's `timestamp` (ISO 8601) as epoch ms, via `skein-harness`.
+/// Falls back to 0 when missing / malformed — the row still gets
 /// persisted, just without a real time, so it'll sort to the bottom
 /// of newest-first queries (where the user can see it and notice
 /// something's off).
 fn parse_timestamp_ms(value: &Value) -> i64 {
-    value
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(parse_iso8601_ms)
-        .unwrap_or(0)
-}
-
-/// Minimal ISO 8601 → epoch ms. Claude writes timestamps as
-/// `"2026-05-15T21:16:22.572Z"`. We avoid pulling chrono just for
-/// this — the surface is narrow and stable.
-#[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
-fn parse_iso8601_ms(s: &str) -> Option<i64> {
-    // Format: YYYY-MM-DDTHH:MM:SS[.fff]Z
-    let bytes = s.as_bytes();
-    if bytes.len() < 20 || bytes[10] != b'T' || *bytes.last().unwrap_or(&b'_') != b'Z' {
-        return None;
-    }
-    let year: i64 = s.get(0..4)?.parse().ok()?;
-    let month: i64 = s.get(5..7)?.parse().ok()?;
-    let day: i64 = s.get(8..10)?.parse().ok()?;
-    let hour: i64 = s.get(11..13)?.parse().ok()?;
-    let minute: i64 = s.get(14..16)?.parse().ok()?;
-    let second: i64 = s.get(17..19)?.parse().ok()?;
-    let millis: i64 = if bytes.get(19) == Some(&b'.') {
-        // Up to 3 fractional digits, zero-padded on the right.
-        let frac_end = s.len() - 1; // strip trailing Z
-        let frac = s.get(20..frac_end)?;
-        let mut padded = String::with_capacity(3);
-        padded.push_str(frac);
-        while padded.len() < 3 {
-            padded.push('0');
-        }
-        padded.get(..3)?.parse().ok()?
-    } else {
-        0
-    };
-    Some(
-        days_from_civil(year, month, day) * 86_400_000
-            + hour * 3_600_000
-            + minute * 60_000
-            + second * 1_000
-            + millis,
-    )
-}
-
-/// Howard Hinnant's date algorithm — days since 1970-01-01 (Unix
-/// epoch). Exact for proleptic Gregorian, valid for any year in the
-/// i64 range. We use it instead of pulling chrono.
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
+    skein_harness::claude::timestamp_ms(value).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -718,12 +660,8 @@ mod tests {
         extractor.ingest(&value)
     }
 
-    // ── timestamp parser ─────────────────────────────────────────
-
-    #[test]
-    fn parses_iso8601_with_millis() {
-        assert_eq!(parse_iso8601_ms("2026-05-15T21:16:22.572Z"), Some(ts_572()));
-    }
+    // ISO-8601 parsing itself is tested in skein-harness (#209); the
+    // extractor tests only need one known epoch value.
 
     fn ts_572() -> i64 {
         // 2026-05-15T21:16:22.572Z = 20588 days since 1970-01-01
@@ -731,21 +669,6 @@ mod tests {
         // + 21*3600000 + 16*60000 + 22*1000 + 572 = 76_582_572
         //   total = 1_778_879_782_572 ms
         1_778_879_782_572
-    }
-
-    #[test]
-    fn parses_iso8601_without_millis() {
-        // Trailing seconds, no fractional component.
-        let with = parse_iso8601_ms("2026-05-15T21:16:22.000Z").unwrap();
-        let without = parse_iso8601_ms("2026-05-15T21:16:22Z").unwrap();
-        assert_eq!(with, without);
-    }
-
-    #[test]
-    fn rejects_invalid_timestamp_returns_none() {
-        assert_eq!(parse_iso8601_ms("not a timestamp"), None);
-        assert_eq!(parse_iso8601_ms("2026-05-15"), None);
-        assert_eq!(parse_iso8601_ms(""), None);
     }
 
     // ── tool join (the headline) ─────────────────────────────────

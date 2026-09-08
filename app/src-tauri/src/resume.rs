@@ -1,54 +1,46 @@
 //! Chapter 5 — transparent harness resume.
 //!
-//! Query helpers against the underlying tools' on-disk session storage
-//! so Skein can capture and validate session ids. See
-//! `docs/chapter-5-recon.md` for the storage layouts.
+//! Tauri commands that probe the underlying tools' on-disk session
+//! storage so Skein can capture and validate session ids. The
+//! storage layouts and queries themselves live in `skein-harness`
+//! (#209); this module is the command boundary, collapsing errors to
+//! `String` and treating "no home dir" / "no db" as empty.
 
 use std::path::PathBuf;
 
-use rusqlite::{Connection, OpenFlags};
+use skein_harness::{claude, opencode};
 
 /// Path to opencode's on-disk session db. Returns `None` when the home
 /// dir can't be resolved — exotic environments (some CI / sandboxes) —
 /// in which case the caller treats it the same as "db doesn't exist."
 pub(crate) fn opencode_db_path() -> Option<PathBuf> {
-    crate::home_dir().map(|home| {
-        home.join(".local")
-            .join("share")
-            .join("opencode")
-            .join("opencode.db")
-    })
+    crate::home_dir().map(|home| opencode::db_path(&home))
+}
+
+/// Open opencode's db read-only, or `None` when it isn't there (the
+/// user has never run opencode) or `HOME` isn't set.
+fn open_opencode_db() -> Result<Option<rusqlite::Connection>, String> {
+    let Some(db_path) = opencode_db_path() else {
+        return Ok(None);
+    };
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    opencode::open_read_only(&db_path)
+        .map(Some)
+        .map_err(|e| format!("open opencode.db: {e}"))
 }
 
 /// IDs of all non-archived opencode sessions whose `directory` matches
-/// `cwd`, newest first. Empty vec when the db doesn't exist (user has
-/// never run opencode) or `HOME` isn't set.
-///
-/// Opens the db read-only so this command never contends with opencode
-/// itself for the writer lock.
+/// `cwd`, newest first. Empty vec when the db doesn't exist or `HOME`
+/// isn't set.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub fn opencode_list_sessions(cwd: String) -> Result<Vec<String>, String> {
-    let Some(db_path) = opencode_db_path() else {
+    let Some(conn) = open_opencode_db()? else {
         return Ok(Vec::new());
     };
-    if !db_path.exists() {
-        return Ok(Vec::new());
-    }
-    let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| format!("open opencode.db: {e}"))?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT id FROM session \
-             WHERE directory = ?1 AND time_archived IS NULL \
-             ORDER BY time_created DESC",
-        )
-        .map_err(|e| format!("prepare: {e}"))?;
-    let rows = stmt
-        .query_map([&cwd], |row| row.get::<_, String>(0))
-        .map_err(|e| format!("query: {e}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("row: {e}"))
+    opencode::session_ids_for_directory(&conn, &cwd).map_err(|e| format!("query: {e}"))
 }
 
 /// Phase 4: does the opencode session row for `id` still exist (and
@@ -57,44 +49,17 @@ pub fn opencode_list_sessions(cwd: String) -> Result<Vec<String>, String> {
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub fn opencode_session_exists(id: String) -> Result<bool, String> {
-    let Some(db_path) = opencode_db_path() else {
+    let Some(conn) = open_opencode_db()? else {
         return Ok(false);
     };
-    if !db_path.exists() {
-        return Ok(false);
-    }
-    let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| format!("open opencode.db: {e}"))?;
-    let mut stmt = conn
-        .prepare("SELECT 1 FROM session WHERE id = ?1 AND time_archived IS NULL LIMIT 1")
-        .map_err(|e| format!("prepare: {e}"))?;
-    stmt.exists([&id]).map_err(|e| format!("exists: {e}"))
+    opencode::session_exists(&conn, &id).map_err(|e| format!("exists: {e}"))
 }
 
-/// Phase 4: does Claude still have a session file for this id?
-///
-/// Walks `~/.claude/projects/*/` looking for `<id>.jsonl`. We don't
-/// recompute the `<encoded-cwd>` directory ourselves — Claude's
-/// path-encoding scheme is lossy (recon §3) and a glob over the
-/// project dirs is robust against future encoding changes. The 17 or
-/// so project dirs on a typical machine make this a sub-millisecond
-/// scan; even at 200+ dirs it's still trivial.
+/// Phase 4: does Claude still have a session file for this id? Scans
+/// every project dir rather than recomputing the lossy cwd encoding —
+/// see `skein_harness::claude::session_exists`.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub fn claude_session_exists(id: String) -> bool {
-    let Some(home) = crate::home_dir() else {
-        return false;
-    };
-    let projects_dir = home.join(".claude").join("projects");
-    let filename = format!("{id}.jsonl");
-    let Ok(entries) = std::fs::read_dir(&projects_dir) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && path.join(&filename).exists() {
-            return true;
-        }
-    }
-    false
+    crate::home_dir().is_some_and(|home| claude::session_exists(&home, &id))
 }

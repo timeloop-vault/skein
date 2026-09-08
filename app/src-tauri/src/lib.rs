@@ -750,8 +750,7 @@ fn default_shell(spawn_env: tauri::State<'_, SpawnEnvState>) -> Vec<String> {
 /// reading `HOME` directly is wrong on Windows, where it's usually
 /// unset.
 pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
-    let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-    std::env::var_os(key).map(std::path::PathBuf::from)
+    skein_harness::home_dir()
 }
 
 /// User's home directory as a path string. Used as the default cwd

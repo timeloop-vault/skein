@@ -300,6 +300,19 @@ impl Repo {
         &self.workdir
     }
 
+    /// Is this reported path actually a directory on disk?
+    ///
+    /// libgit2 sees a Windows junction (and a symlink to a directory)
+    /// as a file-like entry, so a directory-only ignore rule —
+    /// `node_modules/`, the one every Skein worktree leans on — never
+    /// matches it and the whole tree surfaces as a single untracked
+    /// entry whose "content" cannot be read. git itself ignores these,
+    /// so we drop them too. Everything git legitimately reports is a
+    /// file, so this never hides a real change.
+    fn is_dir_entry(&self, path: &str) -> bool {
+        !path.is_empty() && self.workdir.join(path).is_dir()
+    }
+
     /// Enumerate every changed path in the worktree relative to HEAD.
     ///
     /// Untracked files are included (recursing into untracked
@@ -323,6 +336,9 @@ impl Repo {
                 Some(p) => p.to_owned(),
                 None => continue, // non-UTF-8 path — skip rather than surface
             };
+            if self.is_dir_entry(&path) {
+                continue;
+            }
             let s = entry.status();
 
             // Index-side (staged) view. The order of these checks
@@ -424,7 +440,26 @@ impl Repo {
                 .unwrap_or_default();
             let kind = delta_to_status_kind(delta.status());
 
-            let patch_opt = Patch::from_diff(&diff, i)?;
+            // A directory masquerading as a file-like entry (see
+            // `is_dir_entry`) has no readable content — libgit2 fails
+            // the patch with "requested file is a directory".
+            if self.is_dir_entry(&path) {
+                continue;
+            }
+
+            // One delta libgit2 can't build a patch for must not take
+            // the whole worktree diff down with it: surface the file
+            // without hunks and keep going. A card showing every other
+            // change beats an empty card (#217).
+            let Ok(patch_opt) = Patch::from_diff(&diff, i) else {
+                files.push(FileDiff {
+                    path,
+                    kind,
+                    hunks: Vec::new(),
+                    binary: false,
+                });
+                continue;
+            };
             let Some(file_patch) = patch_opt else {
                 files.push(FileDiff {
                     path,

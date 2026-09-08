@@ -1,0 +1,19 @@
+[package]
+name = "skein-harness"
+version = "0.1.0"
+description = "Reads the session data AI coding harnesses keep on disk — Claude Code JSONL transcripts and the opencode SQLite db: paths, rows, token usage, cost."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

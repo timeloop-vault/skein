@@ -34,6 +34,10 @@ App.tsx split, #116 harness-adapter consolidation, #49 files pillar,
 ## Layout
 
     skein/
+    ├── crates/skein-harness/        # Tauri-free reader for the harnesses' own stores (#209):
+    │   └── src/{claude,opencode}.rs #   Claude JSONL paths/rows/usage/cost-state + subagent
+    │                                #   discovery; opencode.db sessions/tree/assistant messages.
+    │                                #   Shared with the standalone cost tooling — parser fixes go HERE
     ├── crates/skein-git/            # Pure-Rust libgit2 wrapper. Tauri-free, sync, local-only
     │   └── src/lib.rs               # Repo: open, branches, head_branch, add_worktree,
     │                                #   list/remove_worktree, status, diff_workdir;
