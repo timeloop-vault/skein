@@ -1,0 +1,764 @@
+/* Review surface (#212, epic #52 sub-issue B).
+
+   One column, because the pane shares the window with the harness
+   terminal and the point is reading the diff while the agent is still
+   visible. Everything stacks: header, files, the open file's diff,
+   review-level comments at the bottom.
+
+   Diff line rendering deliberately mirrors .lc-line from the Diff card
+   it replaces — same gutter widths, same add/del washes — so the
+   surface reads as the same tool rather than a second one. Syntax
+   highlighting stays parked (docs/backlog.md). */
+
+.rv {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bg-3) transparent;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs, 12px) * 0.9167);
+}
+
+/* ── header ──────────────────────────────────────────────────────── */
+
+.rv-head {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	background: var(--bg-card);
+	border-bottom: 1px solid var(--line);
+	padding: 4px 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+.rv-head-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	min-height: 20px;
+}
+.rv-base {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+}
+.rv-base-label,
+.rv-nonrepo {
+	color: var(--fg-3);
+	font-size: 0.85em;
+}
+.rv-select {
+	background: var(--bg-2);
+	color: var(--fg-1);
+	border: 1px solid var(--line-strong);
+	border-radius: 3px;
+	font-family: var(--sk-mono);
+	font-size: 0.9em;
+	padding: 1px 4px;
+	max-width: 180px;
+}
+.rv-counts {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--fg-3);
+	font-size: 0.85em;
+	white-space: nowrap;
+	overflow: hidden;
+}
+.rv-branch {
+	color: var(--fg-1);
+}
+.rv-scopes {
+	display: flex;
+	gap: 2px;
+}
+.rv-scope {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	background: none;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	color: var(--fg-2);
+	font-family: var(--sk-mono);
+	font-size: 0.9em;
+	padding: 2px 8px;
+	cursor: pointer;
+}
+.rv-scope:hover {
+	color: var(--fg-1);
+}
+.rv-scope.on {
+	color: var(--fg-0);
+	border-bottom-color: var(--accent);
+}
+.rv-head-right {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.rv-unresolved {
+	color: var(--warn);
+	font-size: 0.85em;
+}
+
+.delta-add {
+	color: var(--ok);
+}
+.delta-del {
+	color: var(--err);
+}
+
+.rv-err {
+	background: color-mix(in srgb, var(--err) 12%, transparent);
+	border-bottom: 1px solid color-mix(in srgb, var(--err) 30%, transparent);
+	color: var(--err);
+	padding: 3px 8px;
+	font-size: 0.85em;
+}
+.rv-note {
+	color: var(--fg-3);
+	font-size: 0.85em;
+	padding: 3px 8px;
+}
+.rv-backlink {
+	align-self: flex-start;
+	background: none;
+	border: 0;
+	color: var(--fg-2);
+	font-family: var(--sk-mono);
+	font-size: 0.85em;
+	cursor: pointer;
+	padding: 3px 8px;
+}
+.rv-backlink:hover {
+	color: var(--accent);
+}
+
+/* ── collapsible sections ────────────────────────────────────────── */
+
+.rv-section {
+	border-bottom: 1px solid var(--line);
+}
+.rv-section-bar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding-right: 8px;
+}
+.rv-filter {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+}
+.rv-chip {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	border: 1px solid transparent;
+	border-radius: 3px;
+	background: none;
+	color: var(--fg-3);
+	font-family: var(--sk-mono);
+	font-size: 0.8em;
+	padding: 0 4px;
+	cursor: pointer;
+}
+.rv-chip:hover {
+	color: var(--fg-1);
+}
+.rv-chip.on {
+	border-color: var(--line-strong);
+	color: var(--fg-0);
+	background: var(--bg-3);
+}
+.rv-section-head {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	background: none;
+	border: 0;
+	color: var(--fg-2);
+	font-family: var(--sk-mono);
+	font-size: 0.85em;
+	padding: 3px 8px;
+	cursor: pointer;
+	text-align: left;
+}
+.rv-section-head:hover {
+	color: var(--fg-1);
+}
+.rv-section-head .chev {
+	color: var(--fg-3);
+}
+.rv-section-count {
+	color: var(--fg-3);
+}
+
+/* ── file list ───────────────────────────────────────────────────── */
+
+.rv-files {
+	display: flex;
+	flex-direction: column;
+	max-height: 34vh;
+	overflow-y: auto;
+	scrollbar-width: thin;
+}
+.rv-file {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 0 8px 0 6px;
+	min-height: 20px;
+}
+.rv-file:hover {
+	background: var(--bg-2);
+}
+.rv-file.active {
+	background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+/* A reviewed file recedes but never disappears — it is still part of
+   the change, and hiding it would make the list lie about the size. */
+.rv-file.viewed .rv-file-main {
+	opacity: 0.55;
+}
+.rv-viewed {
+	flex: 0 0 auto;
+	margin: 0;
+	accent-color: var(--accent);
+	cursor: pointer;
+}
+.rv-file-main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	background: none;
+	border: 0;
+	color: var(--fg-1);
+	font-family: var(--sk-mono);
+	font-size: 0.92em;
+	padding: 0;
+	cursor: pointer;
+	text-align: left;
+}
+.rv-change {
+	flex: 0 0 10px;
+	color: var(--fg-3);
+	font-size: 0.85em;
+}
+.rv-change.added,
+.rv-change.untracked {
+	color: var(--ok);
+}
+.rv-change.deleted {
+	color: var(--err);
+}
+.rv-change.renamed,
+.rv-change.typechange {
+	color: var(--warn);
+}
+.rv-file-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	direction: rtl;
+	text-align: left;
+}
+.rv-file-dir {
+	color: var(--fg-3);
+}
+/* "Changed since you last looked" — the D1 multi-round signal. */
+.rv-since {
+	flex: 0 0 6px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--warn);
+}
+.rv-pendingdot {
+	flex: 0 0 5px;
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: var(--accent);
+	opacity: 0.8;
+}
+.rv-badge {
+	flex: 0 0 auto;
+	border-radius: 7px;
+	background: var(--bg-3);
+	color: var(--fg-2);
+	font-size: 0.75em;
+	padding: 0 5px;
+	line-height: 1.5;
+}
+.rv-badge.open {
+	background: color-mix(in srgb, var(--warn) 25%, transparent);
+	color: var(--warn);
+}
+.rv-binary {
+	color: var(--fg-3);
+	font-size: 0.8em;
+}
+
+/* ── the open file's bar ─────────────────────────────────────────── */
+
+.rv-filebar {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 8px;
+	background: var(--bg-2);
+	border-bottom: 1px solid var(--line);
+}
+.rv-filebar-path {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	direction: rtl;
+	text-align: left;
+	color: var(--fg-1);
+	font-size: 0.9em;
+}
+
+/* ── diff body ───────────────────────────────────────────────────── */
+
+.rv-body {
+	flex: 1;
+	min-height: 0;
+	line-height: 1.55;
+	padding: 4px 0;
+}
+.rv-hunk-sep {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 8px;
+	color: var(--fg-3);
+	font-size: 0.8em;
+	background: color-mix(in srgb, var(--line) 50%, transparent);
+}
+.rv-hunk-range {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.rv-line {
+	display: flex;
+	padding: 0 8px 0 0;
+	min-height: 17px;
+	position: relative;
+}
+.rv-line.add {
+	background: var(--diff-add);
+}
+.rv-line.del {
+	background: var(--diff-del);
+}
+/* Lines currently gathered into a pending comment anchor. */
+.rv-line.picked {
+	background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.rv-line .gutter {
+	flex: 0 0 74px;
+	display: flex;
+	align-items: center;
+	color: var(--fg-3);
+	font-size: 0.85em;
+	user-select: none;
+}
+.rv-line .gutter .ln {
+	flex: 1;
+	text-align: right;
+	padding: 0 4px;
+}
+/* The comment affordance. Hidden until the row is hovered so twenty
+   plus-signs do not compete with the code for attention. */
+.rv-add {
+	flex: 0 0 16px;
+	visibility: hidden;
+	background: var(--accent);
+	color: var(--bg-0);
+	border: 0;
+	border-radius: 3px;
+	font-size: 0.85em;
+	line-height: 1.2;
+	margin: 0 2px;
+	cursor: pointer;
+	padding: 0;
+}
+.rv-line:hover .rv-add,
+.rv-line.picked .rv-add {
+	visibility: visible;
+}
+.rv-line .marker {
+	flex: 0 0 14px;
+	text-align: center;
+	color: var(--fg-3);
+}
+.rv-line.add .marker {
+	color: var(--ok);
+}
+.rv-line.del .marker {
+	color: var(--err);
+}
+.rv-line .src {
+	white-space: pre;
+	min-width: 0;
+}
+
+/* ── verbs (#211, now living in the pending scope) ───────────────── */
+
+.rv-verbs {
+	display: flex;
+	gap: 2px;
+}
+.rv-act {
+	background: none;
+	border: 1px solid transparent;
+	border-radius: 3px;
+	color: var(--fg-3);
+	font-family: var(--sk-mono);
+	font-size: 0.9em;
+	padding: 0 5px;
+	cursor: pointer;
+}
+.rv-act:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+/* Never the same colour: ✓ reads as "done with this", ↶ as "undo
+   this", and the two are not symmetric operations. */
+.rv-act.accept:hover:not(:disabled) {
+	color: var(--ok);
+	border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+.rv-act.reject:hover:not(:disabled) {
+	color: var(--err);
+	border-color: color-mix(in srgb, var(--err) 40%, transparent);
+}
+.rv-act.all {
+	color: var(--fg-2);
+	border-color: var(--line-strong);
+	font-size: 0.85em;
+}
+.rv-act.all:hover:not(:disabled) {
+	color: var(--ok);
+}
+
+/* ── threads ─────────────────────────────────────────────────────── */
+
+.rv-inline {
+	padding: 4px 8px 4px 74px;
+}
+.rv-orphans,
+.rv-review-threads {
+	padding: 6px 8px;
+	border-bottom: 1px solid var(--line);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	align-items: flex-start;
+}
+.rv-review-threads {
+	border-bottom: 0;
+	border-top: 1px solid var(--line);
+}
+.rv-thread {
+	width: 100%;
+	border: 1px solid var(--line-strong);
+	border-left: 2px solid var(--accent);
+	border-radius: 4px;
+	background: var(--bg-2);
+	padding: 4px 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.rv-thread.resolved {
+	border-left-color: var(--ok);
+	opacity: 0.7;
+}
+.rv-thread.outdated {
+	border-left-color: var(--warn);
+}
+.rv-thread-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 0.85em;
+	color: var(--fg-3);
+}
+.rv-chev {
+	background: none;
+	border: 0;
+	color: var(--fg-3);
+	cursor: pointer;
+	padding: 0;
+	font-size: 0.9em;
+}
+.rv-thread-title {
+	flex: 1;
+}
+.rv-thread-actions,
+.rv-comment-actions {
+	display: flex;
+	gap: 6px;
+}
+.rv-linkbtn {
+	background: none;
+	border: 0;
+	color: var(--fg-3);
+	font-family: var(--sk-mono);
+	font-size: 0.85em;
+	cursor: pointer;
+	padding: 0;
+}
+.rv-linkbtn:hover:not(:disabled) {
+	color: var(--accent);
+}
+.rv-linkbtn:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.rv-reply-open {
+	align-self: flex-start;
+}
+
+.rv-comment {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.rv-comment-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 0.8em;
+	color: var(--fg-3);
+}
+.rv-author {
+	color: var(--fg-1);
+}
+.rv-author.agent {
+	color: var(--accent);
+}
+.rv-comment-actions {
+	margin-left: auto;
+}
+.rv-comment-body {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	color: var(--fg-0);
+	font-size: 0.95em;
+}
+
+/* An anchor that no longer matches. Loud enough to be believed: a
+   comment silently sitting on the wrong code is the failure the whole
+   anchoring model exists to prevent (D6). */
+.rv-outdated {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	font-size: 0.85em;
+	color: var(--warn);
+}
+.rv-outdated-tag {
+	align-self: flex-start;
+	border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+	border-radius: 3px;
+	padding: 0 4px;
+	font-size: 0.9em;
+}
+.rv-anchor {
+	margin: 0;
+	padding: 3px 6px;
+	background: var(--bg-0);
+	border-radius: 3px;
+	color: var(--fg-2);
+	white-space: pre;
+	overflow-x: auto;
+	scrollbar-width: thin;
+	font-size: 0.95em;
+}
+
+.rv-newthread {
+	width: 100%;
+	border: 1px solid var(--accent);
+	border-radius: 4px;
+	background: var(--bg-2);
+	padding: 4px 6px;
+}
+.rv-newthread-head {
+	display: flex;
+	gap: 8px;
+	font-size: 0.8em;
+	color: var(--fg-3);
+	padding-bottom: 3px;
+}
+.rv-side {
+	color: var(--fg-3);
+}
+
+/* ── composer ────────────────────────────────────────────────────── */
+
+.rv-composer {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	width: 100%;
+}
+.rv-composer-input {
+	width: 100%;
+	box-sizing: border-box;
+	resize: vertical;
+	background: var(--bg-0);
+	color: var(--fg-0);
+	border: 1px solid var(--line-strong);
+	border-radius: 3px;
+	font-family: var(--sk-mono);
+	font-size: 0.95em;
+	padding: 4px 6px;
+}
+.rv-composer-input:focus {
+	outline: 1px solid var(--accent);
+	border-color: var(--accent);
+}
+.rv-composer-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	justify-content: flex-end;
+}
+.rv-hint {
+	margin-right: auto;
+	color: var(--fg-3);
+	font-size: 0.78em;
+}
+.rv-btn {
+	background: var(--bg-3);
+	color: var(--fg-1);
+	border: 1px solid var(--line-strong);
+	border-radius: 3px;
+	font-family: var(--sk-mono);
+	font-size: 0.85em;
+	padding: 2px 8px;
+	cursor: pointer;
+}
+.rv-btn:hover:not(:disabled) {
+	color: var(--fg-0);
+}
+.rv-btn.primary {
+	background: var(--accent);
+	color: var(--bg-0);
+	border-color: var(--accent);
+}
+.rv-btn:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+/* ── commits ─────────────────────────────────────────────────────── */
+
+.rv-commits {
+	display: flex;
+	flex-direction: column;
+}
+.rv-commit {
+	border-bottom: 1px solid var(--line);
+}
+.rv-commit.active {
+	background: var(--bg-2);
+}
+.rv-commit-main {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	background: none;
+	border: 0;
+	color: var(--fg-1);
+	font-family: var(--sk-mono);
+	font-size: 0.92em;
+	padding: 3px 8px;
+	cursor: pointer;
+	text-align: left;
+}
+.rv-commit-main:hover {
+	background: var(--bg-2);
+}
+.rv-sha {
+	flex: 0 0 auto;
+	color: var(--accent);
+	font-size: 0.9em;
+}
+.rv-commit-summary {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.rv-merge {
+	color: var(--fg-3);
+	font-size: 0.78em;
+	border: 1px solid var(--line-strong);
+	border-radius: 3px;
+	padding: 0 3px;
+}
+.rv-time {
+	color: var(--fg-3);
+	font-size: 0.8em;
+	white-space: nowrap;
+}
+.rv-commit-detail {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 4px 8px 8px 8px;
+}
+.rv-commit-body {
+	margin: 0;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	color: var(--fg-2);
+	font-size: 0.9em;
+}
+.rv-commit-author {
+	color: var(--fg-3);
+	font-size: 0.8em;
+}
+
+/* ── empty ───────────────────────────────────────────────────────── */
+
+.rv-empty {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	min-height: 80px;
+	padding: 16px 24px;
+	color: var(--fg-3);
+	font-size: 0.9em;
+	line-height: 1.5;
+}

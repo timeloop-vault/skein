@@ -1,15 +1,18 @@
 // Live Context — right-pane card stack (issue #80).
 //
-// Replaces the old Status/Files tabbed pane. A vertical stack of three
-// resizable cards — Diff, Plan, Activity — that render what every agent
-// in the room is doing, sourced from the `harness_actions` table via
+// Replaces the old Status/Files tabbed pane. A vertical stack of
+// resizable cards — Plan and Activity — that render what every agent in
+// the room is doing, sourced from the `harness_actions` table via
 // `useRoomActions`.
 //
+// It was three cards until #212: the Diff card became the review pane,
+// the right pane grew tabs, and epic #52 got the one diff renderer it
+// asked for instead of two that disagreed.
+//
 // Card-stack chrome (collapse, drag-resize, per-room layout persistence)
-// plus the room subtitle. The three card bodies are their own modules:
+// plus the room subtitle. Both card bodies are their own modules:
 //   - Activity (D2): rows + burst-collapse + auto-tail, virtualized (D2g)
 //   - Plan (D4): per-harness plan reduced from plan_change rows
-//   - Diff (D3): hand-rolled worktree/harness diff + auto-focus + flicker
 // The sub-agent inspector is deferred to a backend follow-up (#91).
 //
 // Spec: docs/live-context-handover.md. Visual reference:
@@ -19,8 +22,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { usePersistedState } from "../prefs.ts";
 import type { Harness, HarnessKind } from "../types.ts";
 import { ActivityCardBody, IDLE_AFTER_MS, useIdleBasis } from "./ActivityCard.tsx";
-import { type CardLayout, CardStack, DEFAULT_LAYOUT } from "./CardStack.tsx";
-import { DiffCardBody } from "./DiffCard.tsx";
+import { type CardLayout, CardStack, defaultLayout, normalizeLayout } from "./CardStack.tsx";
 import { SessionTotals, sessionTotals } from "./feedItems.tsx";
 import "./chrome.css";
 import { PlanCardBody } from "./PlanCard.tsx";
@@ -36,9 +38,6 @@ interface LiveContextProps {
 	 *  `HarnessKind` for its chip (the action store carries ids, chips
 	 *  render by kind). */
 	harnesses: Harness[];
-	/** The harness the user is currently chatting with (the room's active
-	 *  tab). The Diff card auto-focuses its latest file edit (§5.1). */
-	focusedHarnessId: string | undefined;
 	/** True iff this room is the active one (its `.sk-right` is
 	 *  display:flex, not none). The Activity card needs it to re-pin its
 	 *  auto-tail when shown — a hidden card can't measure scroll. */
@@ -58,8 +57,12 @@ interface LiveContextProps {
 	 * roomId so App can pass one stable callback to every room (needed for
 	 * the memo below to skip non-switching rooms).
 	 */
-	onBranchChange?: (roomId: string, branch: string | null) => void;
+	onBranchChange?: ((roomId: string, branch: string | null) => void) | undefined;
 }
+
+/// How many cards the stack holds: Plan, Activity. The Diff card moved
+/// into the review pane in #212 (epic #52: one diff renderer, not two).
+const CARD_COUNT = 2;
 
 /// Idle-duration display: "14m" under an hour, "2h 14m" past it — the
 /// §10 long-quiet artboard's format. Minute floor; never sub-minute
@@ -79,17 +82,21 @@ export const LiveContext = memo(function LiveContext({
 	roomId,
 	cwd,
 	harnesses,
-	focusedHarnessId,
 	visible,
 	showTurnCosts,
 	onToggleTurnCosts,
 	onBranchChange,
 }: LiveContextProps) {
 	const { actions, liveIds } = useRoomActions(roomId);
-	const [layout, setLayout] = usePersistedState<CardLayout>(
+	// Two cards since #212 took the Diff card into the review pane.
+	// Layouts persisted when there were three are reconciled rather than
+	// discarded — losing a user's pane sizes over a refactor is a small
+	// betrayal, and normalizeLayout costs nothing.
+	const [stored, setLayout] = usePersistedState<CardLayout>(
 		`liveContext:layout:${roomId}`,
-		DEFAULT_LAYOUT,
+		defaultLayout(CARD_COUNT),
 	);
+	const layout = useMemo(() => normalizeLayout(stored, CARD_COUNT), [stored]);
 
 	// Resolve harnessId → kind for row chips. Unknown ids (a harness
 	// closed since the action was logged) fall back to "byoh" so the
@@ -117,8 +124,8 @@ export const LiveContext = memo(function LiveContext({
 
 	// Keep the status-bar branch live (issue #18). Bind this room's id to
 	// App's shared callback; the watcher holds it in a ref (deps [cwd]) so
-	// this per-render closure never re-subscribes it. (The Diff card runs
-	// its own git_diff watcher; this stays for the status-bar branch.)
+	// this per-render closure never re-subscribes it. (The review pane runs
+	// its own worktree watcher; this stays for the status-bar branch.)
 	const onBranch = useCallback(
 		(branch: string | null) => onBranchChange?.(roomId, branch),
 		[onBranchChange, roomId],
@@ -143,9 +150,10 @@ export const LiveContext = memo(function LiveContext({
 	const toggleCollapse = useCallback(
 		(i: number) => {
 			setLayout((prev) => {
-				const collapsed = [...prev.collapsed] as [boolean, boolean, boolean];
+				const fitted = normalizeLayout(prev, CARD_COUNT);
+				const collapsed = [...fitted.collapsed];
 				collapsed[i] = !collapsed[i];
-				return { ...prev, collapsed };
+				return { ...fitted, collapsed };
 			});
 		},
 		[setLayout],
@@ -159,29 +167,6 @@ export const LiveContext = memo(function LiveContext({
 				onLayoutChange={setLayout}
 				onToggleCollapse={toggleCollapse}
 				cards={[
-					{
-						label: "Diff",
-						meta: (
-							<>
-								<span>
-									<span className="pulse" /> auto-follow
-								</span>
-								{focusedHarnessId && (
-									<span className="diff-focused">· focused: {harnessKindOf(focusedHarnessId)}</span>
-								)}
-							</>
-						),
-						body: (
-							<DiffCardBody
-								roomId={roomId}
-								cwd={cwd}
-								actions={actions}
-								harnessKindOf={harnessKindOf}
-								focusedHarnessId={focusedHarnessId}
-								visible={visible}
-							/>
-						),
-					},
 					{
 						label: "Plan",
 						meta: (
@@ -233,7 +218,7 @@ export const LiveContext = memo(function LiveContext({
 								// effects the same way — otherwise rows arriving while
 								// collapsed replay their slide-in en masse on expand, and
 								// the auto-tail never re-pins.
-								visible={visible && !layout.collapsed[2]}
+								visible={visible && !layout.collapsed[1]}
 								showTurnCosts={showTurnCosts}
 							/>
 						),

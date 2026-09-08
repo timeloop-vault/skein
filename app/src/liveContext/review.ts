@@ -1,10 +1,12 @@
-// Review baseline — the Diff card's data layer (issue #211, epic #52 D3/D4).
+// Review baseline — accept, reject, and harness attribution (issue #211,
+// epic #52 D3/D4).
 //
-// The card used to derive its tabs from every `patch` row the room had
-// ever seen, so nothing ever cleared. It now renders the *pending*
-// diff: the backend holds a persisted baseline per file (the content
-// the user last reviewed) and reports what has changed since. A tab
-// disappears when, and only when, the file is reviewed.
+// The Diff card that owned this data layer became the review pane in
+// #212; what survived the move is the part that is about the baseline
+// rather than about the card. The backend holds a persisted baseline
+// per file (the content the user last reviewed) and reports what has
+// changed since, and a file stops being pending when, and only when, it
+// is reviewed.
 //
 // Two asymmetric verbs, mirroring `crates/skein-review`:
 //   accept — advances the baseline, never touches disk
@@ -50,9 +52,6 @@ export interface PendingFile {
 	hunks: ReviewHunk[];
 	touchedMs: number;
 }
-
-export const fetchPending = (roomId: string, cwd: string): Promise<PendingFile[]> =>
-	invoke<PendingFile[]>("review_pending", { roomId, cwd });
 
 /// Advance the baseline. `path` undefined accepts every pending file in
 /// the room; `hunks` empty accepts the whole file. Never writes to disk.
@@ -140,7 +139,10 @@ function touchRanges(payload: ReturnType<typeof parsePayload>): Array<[number, n
 /// Getting this wrong costs a mislabelled chip, never a wrong diff.
 export function attributeHunks(
 	actions: HarnessAction[],
-	file: PendingFile,
+	/** Structural rather than `PendingFile`: the review pane (#212)
+	 *  attributes hunks for a file it assembled from its own DTO, and
+	 *  only these three fields were ever read. */
+	file: Pick<PendingFile, "path" | "hunks" | "harnessId">,
 ): Array<string | undefined> {
 	const touches: Touch[] = [];
 	for (const a of actions) {
@@ -164,11 +166,4 @@ export function attributeHunks(
 		}
 		return file.harnessId;
 	});
-}
-
-/// Every harness that owns a pending file, in tab order — the filter row.
-export function contributingHarnesses(files: PendingFile[]): string[] {
-	const seen: string[] = [];
-	for (const f of files) if (!seen.includes(f.harnessId)) seen.push(f.harnessId);
-	return seen;
 }

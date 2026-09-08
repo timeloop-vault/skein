@@ -120,6 +120,12 @@ pub struct ReviewFileDto {
     /// Also has uncommitted changes pending review (#211). Only
     /// meaningful in [`Scope::Branch`].
     pub has_pending: bool,
+    /// Last harness to write this file, when Skein knows. A chip, never
+    /// a partition (D4) — and `None` rather than a guess for a file git
+    /// found but no harness reported, which is the majority of a
+    /// committed range and every case #221 is about.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harness_id: Option<String>,
 }
 
 /// The review header: what is being reviewed, and what of it is left.
@@ -612,6 +618,15 @@ fn scope_impl(
     let viewed: HashMap<String, String> = db.review_viewed_for_room(room_id)?.into_iter().collect();
     let pending = pending_impl(db, room_id, cwd)?;
     let pending_paths: Vec<String> = pending.iter().map(|p| p.path.clone()).collect();
+    // Attribution comes from the baselines rather than from the pending
+    // set, so a file the agent wrote and then committed keeps its chip
+    // instead of losing it at the moment it stops being pending.
+    let harness_of: HashMap<String, String> = db
+        .review_baselines_for_room(room_id)?
+        .into_iter()
+        .filter(|b| !b.harness_id.is_empty())
+        .map(|b| (b.path, b.harness_id))
+        .collect();
 
     let unresolved_count = threads.iter().filter(|t| t.resolved_ms.is_none()).count();
     let review_threads: Vec<ThreadDto> = threads
@@ -716,6 +731,7 @@ fn scope_impl(
                     thread_count: threads,
                     unresolved_count: unresolved,
                     has_pending: pending_paths.contains(&path),
+                    harness_id: harness_of.get(&path).cloned(),
                     path,
                 }
             })
@@ -775,6 +791,7 @@ fn pending_files(
                 thread_count: threads,
                 unresolved_count: unresolved,
                 has_pending: true,
+                harness_id: (!p.harness_id.is_empty()).then(|| p.harness_id.clone()),
             }
         })
         .collect()

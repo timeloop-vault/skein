@@ -1,0 +1,50 @@
+/* Right-pane tab strip (#212).
+
+   Two panes today — Live Context and Review — hidden with display:none
+   rather than unmounted, so switching costs nothing and neither pane
+   loses its scroll position or its subscriptions. */
+
+.sk-rp {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+}
+
+.sk-rp-tabs {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: stretch;
+	gap: 1px;
+	padding: 0 6px;
+	border-bottom: 1px solid var(--line);
+	background: var(--bg-1);
+}
+
+.sk-rp-tab {
+	background: none;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	margin-bottom: -1px;
+	color: var(--fg-2);
+	font-family: var(--sk-sans);
+	font-size: calc(var(--cfs, 12px) * 0.85);
+	letter-spacing: 0.02em;
+	padding: 4px 10px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.sk-rp-tab:hover {
+	color: var(--fg-1);
+}
+.sk-rp-tab.active {
+	color: var(--fg-0);
+	border-bottom-color: var(--accent);
+}
+
+.sk-rp-body {
+	flex: 1;
+	min-height: 0;
+	flex-direction: column;
+}

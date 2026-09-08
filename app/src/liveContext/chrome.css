@@ -2,7 +2,7 @@
    The pane shell, room subtitle, card stack + dividers, card head/body,
    and the empty state — used by all three cards (Diff/Plan/Activity), so
    imported once by LiveContext.tsx. Activity-feed styles live in
-   activity.css; D3/D4 will add diff.css / plan.css alongside. Tokens
+   activity.css. (diff.css went with the Diff card in #212.) Tokens
    (--bg-*, --fg-*, --accent, …) inherit from the .sk-dark / .sk-light
    ancestor. Lifted from the design canvas. */
 

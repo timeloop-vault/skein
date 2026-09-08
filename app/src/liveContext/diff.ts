@@ -1,8 +1,7 @@
 // Diff rendering shapes, and the two harness patch-payload parsers.
 //
-// The Diff card's data now comes from the review baseline
-// (`review.ts` / `useReviewPending.ts`, issue #211) rather than from
-// git or from accumulated patch rows. What is left here is:
+// The review surface owns diffing now (`app/src/review/`, issue #212);
+// the Diff card and its baseline hook are gone. What is left here is:
 //
 //   • the rendered line/hunk shape, which the backend's
 //     `skein-review::Hunk` serializes into unchanged, and
