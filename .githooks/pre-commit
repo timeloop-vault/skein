@@ -6,7 +6,9 @@ set -e
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
 echo "=== pre-commit: cargo fmt (workspace) ==="
-cargo fmt --check --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1 || {
+# --all: with a virtual root manifest and more than one member, plain
+# `cargo fmt` fails with "Failed to find targets" (#209 added the 2nd crate).
+cargo fmt --all --check --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1 || {
     echo "ERROR: cargo fmt check failed in workspace. Run 'cargo fmt' and re-stage."
     exit 1
 }
