@@ -19,6 +19,10 @@ use std::path::{Path, PathBuf};
 use git2::{BranchType, DiffOptions, Patch, Repository, Status, StatusOptions, WorktreeAddOptions};
 use thiserror::Error;
 
+mod range;
+
+pub use range::{CommitInfo, MAX_RANGE_COMMITS};
+
 #[derive(Debug, Error)]
 pub enum GitError {
     #[error("path does not exist: {0}")]
@@ -450,7 +454,20 @@ impl Repo {
         let diff = self
             .repo
             .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts))?;
+        self.collect_file_diffs(&diff)
+    }
 
+    /// Walk a prepared `git2::Diff` into [`FileDiff`]s.
+    ///
+    /// Split out of [`Repo::diff_workdir`] for #212: the review surface
+    /// diffs tree-against-tree (one commit) and tree-against-worktree
+    /// (the whole branch), and all three want identical hunk shapes so
+    /// one renderer serves them. Every quirk handled here — the
+    /// directory-masquerading-as-a-file skip, the per-delta patch
+    /// failure that must not sink the whole diff (#217), binary deltas
+    /// surfaced without hunks — was learned on the worktree path and
+    /// applies just as much to a commit range.
+    pub(crate) fn collect_file_diffs(&self, diff: &git2::Diff<'_>) -> Result<Vec<FileDiff>> {
         let mut files: Vec<FileDiff> = Vec::new();
         let n_deltas = diff.deltas().len();
         for i in 0..n_deltas {
@@ -479,7 +496,7 @@ impl Repo {
             // the whole worktree diff down with it: surface the file
             // without hunks and keep going. A card showing every other
             // change beats an empty card (#217).
-            let Ok(patch_opt) = Patch::from_diff(&diff, i) else {
+            let Ok(patch_opt) = Patch::from_diff(diff, i) else {
                 files.push(FileDiff {
                     path,
                     kind,
