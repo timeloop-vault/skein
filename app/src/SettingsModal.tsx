@@ -9,6 +9,7 @@
 // dumb component that takes values + setters.
 
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { check } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useState } from "react";
 import { SpawnEnvPanel } from "./SpawnEnvPanel.tsx";
@@ -23,6 +24,13 @@ type UpdateState =
 	| { status: "downloading"; downloaded: number; total: number | undefined }
 	| { status: "ready" }
 	| { status: "error"; message: string };
+
+/// Mirror of `agent_api::state::AgentApiStatus` (#213).
+interface AgentApiStatus {
+	/** The bound port, or null when the listener never came up. */
+	port: number | null;
+	error: string | null;
+}
 
 interface SettingsModalProps {
 	theme: Theme;
@@ -129,6 +137,19 @@ export const SettingsModal = ({
 	const [version, setVersion] = useState<string>("");
 	useEffect(() => {
 		void getVersion().then(setVersion);
+	}, []);
+
+	// #213: whether the agent-facing review API came up. Shown because
+	// the alternative is an agent whose review tools silently do not
+	// exist, which looks like a broken harness rather than a bound port
+	// that never bound (#176).
+	const [agentApi, setAgentApi] = useState<AgentApiStatus | undefined>(undefined);
+	useEffect(() => {
+		void invoke<AgentApiStatus>("agent_api_status")
+			.then(setAgentApi)
+			.catch((err: unknown) => {
+				setAgentApi({ port: null, error: err instanceof Error ? err.message : String(err) });
+			});
 	}, []);
 
 	const [update, setUpdate] = useState<UpdateState>({ status: "idle" });
@@ -402,6 +423,18 @@ export const SettingsModal = ({
 							{update.status === "error" && (
 								<div className="sk-update-msg err">Update failed: {update.message}</div>
 							)}
+							{agentApi &&
+								(agentApi.port != null ? (
+									<div className="sk-update-msg">
+										Agent review API on 127.0.0.1:{agentApi.port} — harnesses get{" "}
+										<code>SKEIN_REVIEW_URL</code> and <code>SKEIN_REVIEW_TOKEN</code>.
+									</div>
+								) : (
+									<div className="sk-update-msg err">
+										Agent review API is down: {agentApi.error ?? "unknown reason"}. Agents in this
+										session cannot read review comments.
+									</div>
+								))}
 						</div>
 					</div>
 				</div>

@@ -142,7 +142,7 @@ const CommentBody = ({
 		<div className="rv-comment">
 			<div className="rv-comment-head">
 				<span className={`rv-author${isAgent ? " agent" : ""}`}>
-					{isAgent ? (comment.authorId ?? "agent") : "you"}
+					{isAgent ? (comment.authorLabel ?? "agent") : "you"}
 				</span>
 				<span className="rv-time">{ago(comment.createdMs)}</span>
 				{comment.updatedMs > comment.createdMs && <span className="rv-time">· edited</span>}
@@ -186,6 +186,27 @@ const PlacementNote = ({ thread }: { thread: ReviewThread }) => {
 			{thread.anchorLines.length > 0 && (
 				<pre className="rv-anchor">{thread.anchorLines.join("\n")}</pre>
 			)}
+		</div>
+	);
+};
+
+/// The agent's "I handled this" claim (#213).
+///
+/// Rendered above the conversation and *beside* the resolve control,
+/// never instead of it: the whole point of D8 withholding resolve from
+/// the agent is that a claim still has to be read before the thread
+/// closes.
+const AddressedNote = ({ thread }: { thread: ReviewThread }) => {
+	const a = thread.addressed;
+	if (!a) return null;
+	return (
+		<div className="rv-addressed">
+			<span className="rv-addressed-tag">addressed</span>
+			<span>
+				{a.by}
+				{a.commitSha ? ` · ${a.commitSha.slice(0, 7)}` : ""}
+				{a.note ? ` · ${a.note}` : ""}
+			</span>
 		</div>
 	);
 };
@@ -246,6 +267,7 @@ export const ThreadView = ({
 			{open && (
 				<>
 					<PlacementNote thread={thread} />
+					<AddressedNote thread={thread} />
 					{thread.comments.map((c) => (
 						<CommentBody
 							key={c.id}

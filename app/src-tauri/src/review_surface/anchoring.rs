@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use skein_git::Repo;
 use skein_review::{Anchor, FileState, Placement, Reanchorer, Side};
 
-use super::dto::{CommentDto, ThreadDto};
+use super::dto::{AddressedDto, CommentDto, ThreadDto};
 use super::{Scope, thread_scope};
 use crate::db::{Database, ReviewThreadRow};
 use crate::review::abs_path;
@@ -219,6 +219,9 @@ pub(super) fn to_thread_dto(
         outdated,
         confidence,
         resolved_ms: t.resolved_ms,
+        // Stamped afterwards by `apply_addressed` — see there for why
+        // it is not this function's business.
+        addressed: None,
         created_ms: t.created_ms,
         updated_ms: t.updated_ms,
     }
@@ -229,11 +232,77 @@ pub(super) fn comments_by_thread(
     db: &Database,
     room_id: &str,
 ) -> Result<HashMap<String, Vec<CommentDto>>, String> {
+    let labels = harness_labels(db, room_id)?;
     let mut map: HashMap<String, Vec<CommentDto>> = HashMap::new();
     for c in db.review_comments_for_room(room_id)? {
-        map.entry(c.thread_id.clone()).or_default().push(c.into());
+        let mut dto = CommentDto::from(c);
+        if dto.author_kind == "agent" {
+            dto.author_label = dto
+                .author_id
+                .as_ref()
+                .and_then(|id| labels.get(id).cloned());
+        }
+        map.entry(dto.thread_id.clone()).or_default().push(dto);
     }
     Ok(map)
+}
+
+/// Harness id → the byline the pane prints for it (#213).
+///
+/// Resolved at read time rather than stored on the comment, so renaming
+/// a harness renames its past replies too — the alternative is a row
+/// full of ids nobody recognises once the harness is gone.
+fn harness_labels(db: &Database, room_id: &str) -> Result<HashMap<String, String>, String> {
+    Ok(db
+        .room_by_id(room_id)?
+        .map(|r| {
+            r.harnesses
+                .into_iter()
+                .map(|h| (h.id, format!("{} · {}", h.kind, h.name)))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// Every standing "addressed" claim in the room, keyed by thread.
+pub(super) fn addressed_by_thread(
+    db: &Database,
+    room_id: &str,
+) -> Result<HashMap<String, AddressedDto>, String> {
+    let labels = harness_labels(db, room_id)?;
+    Ok(db
+        .addressed_for_room(room_id)?
+        .into_iter()
+        .map(|a| {
+            (
+                a.thread_id,
+                AddressedDto {
+                    commit_sha: a.commit_sha,
+                    by: labels
+                        .get(&a.harness_id)
+                        .cloned()
+                        .unwrap_or_else(|| "agent".to_owned()),
+                    note: a.note,
+                    addressed_ms: a.addressed_ms,
+                },
+            )
+        })
+        .collect())
+}
+
+/// Stamp the claims onto threads that have one.
+///
+/// Applied after the fact rather than threaded through
+/// [`to_thread_dto`]: whether a thread is addressed has nothing to do
+/// with where it sits, and mixing the two would put a database read in
+/// the middle of the anchoring path.
+pub(super) fn apply_addressed(
+    threads: &mut [ThreadDto],
+    addressed: &HashMap<String, AddressedDto>,
+) {
+    for t in threads.iter_mut() {
+        t.addressed = addressed.get(&t.id).cloned();
+    }
 }
 
 #[cfg(test)]

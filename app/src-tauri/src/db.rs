@@ -470,6 +470,65 @@ impl Database {
         )
         .map_err(|e| e.to_string())?;
 
+        // Issue #213 (epic #52 D8): which review comments an agent has
+        // said it handled, and with what commit.
+        //
+        // A sibling table rather than columns on `review_threads`,
+        // because there is no migration machinery here — every table
+        // above is `CREATE TABLE IF NOT EXISTS`, so a new *column* on a
+        // table that already exists in a live db would simply never
+        // appear. The same reasoning `review_baselines` and
+        // `review_settings` followed.
+        //
+        // `commit_sha` is nullable on purpose: an agent that has
+        // addressed a comment but not yet committed should still be
+        // able to say so, and a claim with no sha is more useful than
+        // no claim.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS review_addressed (
+                thread_id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                commit_sha TEXT,
+                harness_id TEXT NOT NULL,
+                note TEXT,
+                addressed_ms INTEGER NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_review_addressed_room \
+             ON review_addressed(room_id)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Issue #213: the per-room bearer token the agent API
+        // authenticates with. The token *is* the room scope — no
+        // request carries a room id, so a token can only ever reach the
+        // room it was minted for.
+        //
+        // Rotation revokes rather than deletes: a stale token has to be
+        // distinguishable from one that never existed, so a harness
+        // still holding an old one gets "revoked" instead of the
+        // indistinguishable "unknown".
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_tokens (
+                token TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                created_ms INTEGER NOT NULL,
+                revoked_ms INTEGER
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_tokens_room \
+             ON agent_tokens(room_id)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
         // The per-room base ref. A sibling table rather than a Room
         // field for the same reason as the baselines: #167's field
         // policy, and no reason to rewrite it on every autosave.
@@ -1090,6 +1149,18 @@ impl Database {
             params![c.thread_id, c.updated_ms],
         )
         .map_err(|e| e.to_string())?;
+        // A human coming back to the thread withdraws any standing
+        // "addressed" claim (#213). The agent said it was handled; the
+        // user is still talking, so it evidently is not — and a stale
+        // badge over live feedback is the sort of quiet lie that makes
+        // the whole marker untrustworthy.
+        if c.author_kind == "user" {
+            conn.execute(
+                "DELETE FROM review_addressed WHERE thread_id = ?1",
+                params![c.thread_id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -1202,6 +1273,156 @@ impl Database {
         )
         .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    // ── the agent API (issue #213) ────────────────────────────────
+
+    /// One room by id, or `None` when no such row exists.
+    ///
+    /// The agent API's only way into a room: a request carries a token
+    /// and nothing else, so everything else it needs — the worktree,
+    /// whether the room is archived, which harnesses are in it — comes
+    /// from here.
+    ///
+    /// A blob that fails to parse is an error rather than a `None`.
+    /// `load_all` owns quarantine; pretending the room is absent would
+    /// turn a corrupt row into a plain 404 and hide it (#176).
+    pub fn room_by_id(&self, room_id: &str) -> Result<Option<Room>, String> {
+        let conn = self.conn.lock();
+        let data: Option<String> = conn
+            .query_row(
+                "SELECT data FROM sessions WHERE id = ?1",
+                params![room_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some(data) = data else {
+            return Ok(None);
+        };
+        serde_json::from_str::<Room>(&data)
+            .map(Some)
+            .map_err(|e| format!("room {room_id} is stored unparseably: {e}"))
+    }
+
+    /// The room's live bearer token, minting one the first time it is
+    /// asked for. Idempotent: called on every harness spawn.
+    pub fn ensure_room_token(&self, room_id: &str, now_ms: i64) -> Result<String, String> {
+        let conn = self.conn.lock();
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT token FROM agent_tokens \
+                 WHERE room_id = ?1 AND revoked_ms IS NULL \
+                 ORDER BY created_ms DESC LIMIT 1",
+                params![room_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some(token) = existing {
+            return Ok(token);
+        }
+        // 256 bits from two v4 UUIDs rather than a `rand` dependency:
+        // uuid already sources them from the OS CSPRNG, and this is the
+        // only place in the tree that needs unguessable bytes.
+        let token = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        conn.execute(
+            "INSERT INTO agent_tokens (token, room_id, created_ms, revoked_ms) \
+             VALUES (?1, ?2, ?3, NULL)",
+            params![token, room_id, now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(token)
+    }
+
+    /// Revoke live tokens — one room's, or every room's when `room_id`
+    /// is `None`. Returns how many were revoked.
+    ///
+    /// Called with `None` on every boot. A token's lifetime is the
+    /// lifetime of the Skein process that handed it out: PTYs die with
+    /// the app, so nothing legitimate is still holding one, and a token
+    /// that leaked into an old transcript or log stops working the next
+    /// time Skein starts.
+    pub fn revoke_agent_tokens(&self, room_id: Option<&str>, now_ms: i64) -> Result<usize, String> {
+        let conn = self.conn.lock();
+        match room_id {
+            Some(id) => conn.execute(
+                "UPDATE agent_tokens SET revoked_ms = ?2 \
+                 WHERE room_id = ?1 AND revoked_ms IS NULL",
+                params![id, now_ms],
+            ),
+            None => conn.execute(
+                "UPDATE agent_tokens SET revoked_ms = ?1 WHERE revoked_ms IS NULL",
+                params![now_ms],
+            ),
+        }
+        .map_err(|e| e.to_string())
+    }
+
+    /// Resolve a bearer token. The three outcomes are deliberately
+    /// distinct — "revoked" and "never existed" mean different things
+    /// to whoever is holding it.
+    pub fn room_for_token(&self, token: &str) -> Result<TokenLookup, String> {
+        let conn = self.conn.lock();
+        let row: Option<(String, Option<i64>)> = conn
+            .query_row(
+                "SELECT room_id, revoked_ms FROM agent_tokens WHERE token = ?1",
+                params![token],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        Ok(match row {
+            None => TokenLookup::Unknown,
+            Some((_, Some(_))) => TokenLookup::Revoked,
+            Some((room_id, None)) => TokenLookup::Active { room_id },
+        })
+    }
+
+    /// Record (or overwrite) an agent's claim that a thread is handled.
+    pub fn set_thread_addressed(
+        &self,
+        room_id: &str,
+        row: &ReviewAddressedRow,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO review_addressed \
+             (thread_id, room_id, commit_sha, harness_id, note, addressed_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT(thread_id) DO UPDATE SET \
+               commit_sha = excluded.commit_sha, harness_id = excluded.harness_id, \
+               note = excluded.note, addressed_ms = excluded.addressed_ms",
+            params![
+                row.thread_id,
+                room_id,
+                row.commit_sha,
+                row.harness_id,
+                row.note,
+                row.addressed_ms,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn addressed_for_room(&self, room_id: &str) -> Result<Vec<ReviewAddressedRow>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT thread_id, commit_sha, harness_id, note, addressed_ms \
+                 FROM review_addressed WHERE room_id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![room_id], row_to_addressed)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     // ── viewed markers and settings (issue #212) ──────────────────
@@ -1351,6 +1572,44 @@ fn row_to_comment(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewCommentRow>
         created_ms: row.get(6)?,
         updated_ms: row.get(7)?,
     })
+}
+
+/// One row of `review_addressed` (issue #213) — an agent's claim that
+/// a comment has been dealt with, and what did it.
+///
+/// Not a resolution. Resolve stays human-only (D8), so this is the
+/// agent's half of the handshake: it says "done, here is the sha", and
+/// the user still decides whether the thread closes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewAddressedRow {
+    pub thread_id: String,
+    pub commit_sha: Option<String>,
+    /// Which harness made the claim.
+    pub harness_id: String,
+    pub note: Option<String>,
+    pub addressed_ms: i64,
+}
+
+fn row_to_addressed(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewAddressedRow> {
+    Ok(ReviewAddressedRow {
+        thread_id: row.get(0)?,
+        commit_sha: row.get(1)?,
+        harness_id: row.get(2)?,
+        note: row.get(3)?,
+        addressed_ms: row.get(4)?,
+    })
+}
+
+/// What a bearer token resolved to (issue #213).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenLookup {
+    /// No such token was ever minted.
+    Unknown,
+    /// Minted, then rotated out from under the holder.
+    Revoked,
+    Active {
+        room_id: String,
+    },
 }
 
 /// One row of `review_baselines` (issue #211). `content` is `Some`

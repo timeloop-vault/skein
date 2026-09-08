@@ -590,6 +590,26 @@
 	padding: 0 4px;
 	font-size: 0.9em;
 }
+/* The agent's "addressed" claim (#213). Deliberately quieter than
+   .rv-outdated: it is a note from the author, not a warning, and it
+   must not read as though the thread were closed — only the reviewer's
+   resolve does that. */
+.rv-addressed {
+	display: flex;
+	align-items: baseline;
+	gap: 5px;
+	font-size: 0.85em;
+	color: var(--fg-2);
+}
+.rv-addressed-tag {
+	border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+	border-radius: 3px;
+	padding: 0 4px;
+	color: var(--ok);
+	font-size: 0.9em;
+	white-space: nowrap;
+}
+
 .rv-anchor {
 	margin: 0;
 	padding: 3px 6px;

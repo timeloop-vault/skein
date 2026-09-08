@@ -54,6 +54,13 @@ futures-util = { version = "0.3", default-features = false }
 # `install_rustls_provider()`. We pick ring over aws-lc-rs because
 # ring is already in the lockfile via other transitive deps.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# The agent-facing review API + MCP endpoint (#213). Skein is a
+# long-running desktop app, so the server lives *inside* it and the
+# harnesses reach it over 127.0.0.1 — a stdio MCP server would be a
+# fresh process per harness with no route back to the running app.
+# axum rides the hyper 1 / http 1 / tower stack reqwest already locks,
+# so the real cost is the router, not the transport.
+axum = "0.8"
 skein-git = { path = "../../crates/skein-git" }
 skein-harness = { path = "../../crates/skein-harness" }
 skein-review = { path = "../../crates/skein-review" }

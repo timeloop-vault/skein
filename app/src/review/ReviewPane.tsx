@@ -16,9 +16,16 @@
 // #52: one diff renderer, three scopes. Accept and reject move here,
 // into the pending scope, which is the only scope they can act on.
 //
-// Sub-issue C (#213) gives the agent read/reply access to these
-// comments over an API; nothing here assumes a human author beyond the
-// `authorKind` the backend already records (D7).
+// Sub-issue C (#213) has landed: an agent reads and answers these
+// comments over the MCP endpoint in `agent_api/`. Two consequences
+// visible here — a comment can be authored by a harness (rendered with
+// its byline), and a thread can carry the agent's "addressed" claim,
+// which sits *beside* the resolve control rather than replacing it.
+// Resolve stays the reviewer's, and the API has no verb for it (D8).
+//
+// It also means this pane can change while nobody touches a file, so
+// `useAgentWrites` listens for the backend's `skein://review-changed`
+// alongside the worktree watcher.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { HChip } from "../components.tsx";
@@ -44,7 +51,12 @@ import {
 	setBaseRef,
 	unplacedThreads,
 } from "./api.ts";
-import { useReviewFile, useReviewScope, useWorktreeWatcher } from "./useReviewData.ts";
+import {
+	useAgentWrites,
+	useReviewFile,
+	useReviewScope,
+	useWorktreeWatcher,
+} from "./useReviewData.ts";
 import "./review.css";
 
 const SCOPES: Array<{ id: ReviewScope; label: string; title: string }> = [
@@ -103,6 +115,7 @@ export const ReviewPane = ({
 		bump();
 	}, [refreshScope, bump]);
 	useWorktreeWatcher(cwd, visible, refreshAll);
+	useAgentWrites(roomId, visible, refreshAll);
 
 	const { file, error: fileError } = useReviewFile(
 		roomId,

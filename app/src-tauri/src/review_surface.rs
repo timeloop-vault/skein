@@ -49,7 +49,11 @@ mod anchoring;
 pub mod commands;
 mod dto;
 mod git;
-mod query;
+// `pub(crate)` for the agent API (#213): an agent asking "what is this
+// comment about" must get the same re-anchored thread and the same
+// hunks the pane renders, which means calling the same two functions
+// rather than growing a second, quietly divergent implementation.
+pub(crate) mod query;
 mod write;
 
 /// Which view of the room's work the caller wants.

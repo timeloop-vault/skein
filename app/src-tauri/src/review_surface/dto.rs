@@ -113,6 +113,13 @@ pub struct CommentDto {
     pub author_kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author_id: Option<String>,
+    /// The agent's byline — "claude · main" — resolved from the room's
+    /// harness list (#213). `author_id` is a harness id, which is not
+    /// something to show a reader; this is. `None` when the harness has
+    /// since been removed, in which case the pane falls back to the
+    /// generic "agent" rather than printing a uuid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_label: Option<String>,
     pub body: String,
     pub created_ms: i64,
     pub updated_ms: i64,
@@ -125,11 +132,29 @@ impl From<ReviewCommentRow> for CommentDto {
             thread_id: c.thread_id,
             author_kind: c.author_kind,
             author_id: c.author_id,
+            author_label: None,
             body: c.body,
             created_ms: c.created_ms,
             updated_ms: c.updated_ms,
         }
     }
+}
+
+/// An agent's claim that a thread has been handled (#213).
+///
+/// Deliberately not a resolution — the pane renders it beside the
+/// resolve control rather than instead of it, because the reviewer
+/// closing the thread is the gate the whole loop exists for.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressedDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_sha: Option<String>,
+    /// Harness byline, as in [`CommentDto::author_label`].
+    pub by: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub addressed_ms: i64,
 }
 
 /// One thread, with its anchor recomputed for right now.
@@ -165,6 +190,9 @@ pub struct ThreadDto {
     pub confidence: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_ms: Option<i64>,
+    /// Set when an agent has said it handled this (#213).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub addressed: Option<AddressedDto>,
     pub created_ms: i64,
     pub updated_ms: i64,
     pub comments: Vec<CommentDto>,
