@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 /// Mirrors the TS Harness interface. Field renames keep the wire format
@@ -379,6 +379,105 @@ impl Database {
                 captured_ms INTEGER NOT NULL,
                 touched_ms INTEGER NOT NULL,
                 PRIMARY KEY (room_id, path)
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Issue #212 (epic #52 D5/D6/D7): review comments.
+        //
+        // A **thread** carries the anchor — where in the review it is
+        // attached — and **comments** carry the words. Splitting them
+        // is what makes D5's "flat comments with replies" a shape
+        // rather than a convention: a reply is another row on the same
+        // thread, and there is nowhere for a nested thread to go.
+        //
+        // `anchor_lines` is the text the comment was written against,
+        // JSON-encoded. It is the anchor itself, not a cache of it
+        // (#212 D6) — line numbers move, and a thread that cannot be
+        // re-matched is rendered against these lines rather than
+        // against whatever now occupies its old coordinates.
+        //
+        // Nothing here has a foreign key, matching `review_baselines`:
+        // closing a room archives it rather than deleting it, so there
+        // is no cascade to model, and a thread that outlives its file
+        // is exactly the outdated case the model is built to show.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS review_threads (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                file_path TEXT,
+                commit_sha TEXT,
+                side TEXT,
+                line_start INTEGER,
+                line_end INTEGER,
+                anchor_hash TEXT,
+                anchor_lines TEXT,
+                resolved_ms INTEGER,
+                created_ms INTEGER NOT NULL,
+                updated_ms INTEGER NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_review_threads_room \
+             ON review_threads(room_id, created_ms)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // `author_kind` / `author_id` exist from this first migration
+        // even though v1 is human-only (D7). Sub-issue #213 lets the
+        // agent reply; carrying the columns now makes that a row-level
+        // change instead of a migration against live data.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS review_comments (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                room_id TEXT NOT NULL,
+                author_kind TEXT NOT NULL,
+                author_id TEXT,
+                body TEXT NOT NULL,
+                created_ms INTEGER NOT NULL,
+                updated_ms INTEGER NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_review_comments_thread \
+             ON review_comments(thread_id, created_ms)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Which files the user has marked as looked at, and what they
+        // looked at. Storing the *content hash* rather than a flag is
+        // what gives #212 its "changes since I last looked": the mark
+        // survives a refresh and lapses by itself the moment the agent
+        // touches the file again.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS review_viewed (
+                room_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                viewed_ms INTEGER NOT NULL,
+                PRIMARY KEY (room_id, path)
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // The per-room base ref. A sibling table rather than a Room
+        // field for the same reason as the baselines: #167's field
+        // policy, and no reason to rewrite it on every autosave.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS review_settings (
+                room_id TEXT PRIMARY KEY,
+                base_ref TEXT NOT NULL,
+                updated_ms INTEGER NOT NULL
             )",
             [],
         )
@@ -874,6 +973,384 @@ impl Database {
             None => Ok(None),
         }
     }
+
+    // ── review comments (issue #212) ──────────────────────────────
+
+    /// Create a thread. The caller has already minted the id, so the
+    /// same value can be used for the thread's first comment without a
+    /// round trip.
+    pub fn insert_review_thread(&self, t: &ReviewThreadRow) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO review_threads \
+             (id, room_id, scope, file_path, commit_sha, side, line_start, line_end, \
+              anchor_hash, anchor_lines, resolved_ms, created_ms, updated_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                t.id,
+                t.room_id,
+                t.scope,
+                t.file_path,
+                t.commit_sha,
+                t.side,
+                t.line_start,
+                t.line_end,
+                t.anchor_hash,
+                t.anchor_lines,
+                t.resolved_ms,
+                t.created_ms,
+                t.updated_ms,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Every thread in the room, oldest first.
+    ///
+    /// The whole room in one query on purpose: the pane re-anchors all
+    /// of them on every refresh, and per-file queries would turn one
+    /// refresh into a query per changed file.
+    pub fn review_threads_for_room(&self, room_id: &str) -> Result<Vec<ReviewThreadRow>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, room_id, scope, file_path, commit_sha, side, line_start, line_end, \
+                        anchor_hash, anchor_lines, resolved_ms, created_ms, updated_ms \
+                 FROM review_threads WHERE room_id = ?1 ORDER BY created_ms, id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![room_id], row_to_thread)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// One thread, or `None` when it has been deleted.
+    pub fn review_thread(&self, thread_id: &str) -> Result<Option<ReviewThreadRow>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, room_id, scope, file_path, commit_sha, side, line_start, line_end, \
+                        anchor_hash, anchor_lines, resolved_ms, created_ms, updated_ms \
+                 FROM review_threads WHERE id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![thread_id], row_to_thread)
+            .map_err(|e| e.to_string())?;
+        match rows.next() {
+            Some(r) => r.map(Some).map_err(|e| e.to_string()),
+            None => Ok(None),
+        }
+    }
+
+    /// Every comment in the room, oldest first — the sibling bulk read
+    /// to [`Database::review_threads_for_room`].
+    pub fn review_comments_for_room(&self, room_id: &str) -> Result<Vec<ReviewCommentRow>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, thread_id, room_id, author_kind, author_id, body, \
+                        created_ms, updated_ms \
+                 FROM review_comments WHERE room_id = ?1 ORDER BY created_ms, id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![room_id], row_to_comment)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn insert_review_comment(&self, c: &ReviewCommentRow) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO review_comments \
+             (id, thread_id, room_id, author_kind, author_id, body, created_ms, updated_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                c.id,
+                c.thread_id,
+                c.room_id,
+                c.author_kind,
+                c.author_id,
+                c.body,
+                c.created_ms,
+                c.updated_ms,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        // Keep the thread's own timestamp meaningful — a reply is
+        // activity on the thread, and the pane sorts unresolved threads
+        // by it.
+        conn.execute(
+            "UPDATE review_threads SET updated_ms = ?2 WHERE id = ?1",
+            params![c.thread_id, c.updated_ms],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Edit a comment's text. Returns `false` when the comment is gone.
+    pub fn update_review_comment(
+        &self,
+        comment_id: &str,
+        body: &str,
+        now_ms: i64,
+    ) -> Result<bool, String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE review_comments SET body = ?2, updated_ms = ?3 WHERE id = ?1",
+            params![comment_id, body, now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(conn.changes() > 0)
+    }
+
+    /// Delete one comment, and the thread with it when it was the last
+    /// one. Returns the thread id if the whole thread went.
+    ///
+    /// An empty thread is not a thread — leaving one behind would put
+    /// an anchor marker in the gutter with nothing to read under it.
+    pub fn delete_review_comment(&self, comment_id: &str) -> Result<Option<String>, String> {
+        let conn = self.conn.lock();
+        let thread_id: Option<String> = conn
+            .query_row(
+                "SELECT thread_id FROM review_comments WHERE id = ?1",
+                params![comment_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some(thread_id) = thread_id else {
+            return Ok(None);
+        };
+        conn.execute(
+            "DELETE FROM review_comments WHERE id = ?1",
+            params![comment_id],
+        )
+        .map_err(|e| e.to_string())?;
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM review_comments WHERE thread_id = ?1",
+                params![thread_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if remaining == 0 {
+            conn.execute(
+                "DELETE FROM review_threads WHERE id = ?1",
+                params![thread_id],
+            )
+            .map_err(|e| e.to_string())?;
+            return Ok(Some(thread_id));
+        }
+        Ok(None)
+    }
+
+    /// Delete a thread and every comment on it.
+    pub fn delete_review_thread(&self, thread_id: &str) -> Result<bool, String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "DELETE FROM review_comments WHERE thread_id = ?1",
+            params![thread_id],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM review_threads WHERE id = ?1",
+            params![thread_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(conn.changes() > 0)
+    }
+
+    /// Resolve (`Some(ts)`) or reopen (`None`) a thread.
+    pub fn set_review_thread_resolved(
+        &self,
+        thread_id: &str,
+        resolved_ms: Option<i64>,
+        now_ms: i64,
+    ) -> Result<bool, String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE review_threads SET resolved_ms = ?2, updated_ms = ?3 WHERE id = ?1",
+            params![thread_id, resolved_ms, now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(conn.changes() > 0)
+    }
+
+    /// Re-record a thread's anchor after a successful re-match.
+    ///
+    /// Without this a thread would re-derive its position from
+    /// ever-staler coordinates: each round of agent edits would search
+    /// from where the comment was *originally* written rather than from
+    /// where it was last seen, and the distance tie-break would decay
+    /// into noise.
+    pub fn update_review_thread_anchor(
+        &self,
+        thread_id: &str,
+        line_start: i64,
+        line_end: i64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE review_threads SET line_start = ?2, line_end = ?3 WHERE id = ?1",
+            params![thread_id, line_start, line_end],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // ── viewed markers and settings (issue #212) ──────────────────
+
+    /// Mark `path` as looked at, at the content it currently holds.
+    pub fn set_review_viewed(
+        &self,
+        room_id: &str,
+        path: &str,
+        content_hash: &str,
+        now_ms: i64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO review_viewed (room_id, path, content_hash, viewed_ms) \
+             VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(room_id, path) DO UPDATE SET \
+               content_hash = excluded.content_hash, viewed_ms = excluded.viewed_ms",
+            params![room_id, path, content_hash, now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Un-mark `path`.
+    pub fn clear_review_viewed(&self, room_id: &str, path: &str) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "DELETE FROM review_viewed WHERE room_id = ?1 AND path = ?2",
+            params![room_id, path],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Every viewed marker in the room, as `(path, content_hash)`.
+    pub fn review_viewed_for_room(&self, room_id: &str) -> Result<Vec<(String, String)>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare("SELECT path, content_hash FROM review_viewed WHERE room_id = ?1")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![room_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// The room's chosen base ref, or `None` when it has never been set
+    /// and the caller should fall back to the repo's own default.
+    pub fn review_base_ref(&self, room_id: &str) -> Result<Option<String>, String> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT base_ref FROM review_settings WHERE room_id = ?1",
+            params![room_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub fn set_review_base_ref(
+        &self,
+        room_id: &str,
+        base_ref: &str,
+        now_ms: i64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO review_settings (room_id, base_ref, updated_ms) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(room_id) DO UPDATE SET \
+               base_ref = excluded.base_ref, updated_ms = excluded.updated_ms",
+            params![room_id, base_ref, now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+/// One row of `review_threads` (issue #212).
+///
+/// The anchor fields are all `Option` because the scope decides which
+/// apply: a review-level thread has none of them, a file thread has
+/// `file_path`, and only a line thread carries a side and a range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewThreadRow {
+    pub id: String,
+    pub room_id: String,
+    /// `review` | `commit` | `file` | `line` (D5).
+    pub scope: String,
+    pub file_path: Option<String>,
+    pub commit_sha: Option<String>,
+    /// `old` | `new` — which side of the diff a line thread hangs on.
+    pub side: Option<String>,
+    pub line_start: Option<i64>,
+    pub line_end: Option<i64>,
+    pub anchor_hash: Option<String>,
+    /// JSON array of the lines the comment was written against.
+    pub anchor_lines: Option<String>,
+    pub resolved_ms: Option<i64>,
+    pub created_ms: i64,
+    pub updated_ms: i64,
+}
+
+/// One row of `review_comments` (issue #212).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewCommentRow {
+    pub id: String,
+    pub thread_id: String,
+    pub room_id: String,
+    /// `user` | `agent` (D7). v1 only ever writes `user`; #213 adds the
+    /// other without touching the schema.
+    pub author_kind: String,
+    /// Harness id when `author_kind == "agent"`.
+    pub author_id: Option<String>,
+    pub body: String,
+    pub created_ms: i64,
+    pub updated_ms: i64,
+}
+
+fn row_to_thread(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewThreadRow> {
+    Ok(ReviewThreadRow {
+        id: row.get(0)?,
+        room_id: row.get(1)?,
+        scope: row.get(2)?,
+        file_path: row.get(3)?,
+        commit_sha: row.get(4)?,
+        side: row.get(5)?,
+        line_start: row.get(6)?,
+        line_end: row.get(7)?,
+        anchor_hash: row.get(8)?,
+        anchor_lines: row.get(9)?,
+        resolved_ms: row.get(10)?,
+        created_ms: row.get(11)?,
+        updated_ms: row.get(12)?,
+    })
+}
+
+fn row_to_comment(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewCommentRow> {
+    Ok(ReviewCommentRow {
+        id: row.get(0)?,
+        thread_id: row.get(1)?,
+        room_id: row.get(2)?,
+        author_kind: row.get(3)?,
+        author_id: row.get(4)?,
+        body: row.get(5)?,
+        created_ms: row.get(6)?,
+        updated_ms: row.get(7)?,
+    })
 }
 
 /// One row of `review_baselines` (issue #211). `content` is `Some`
@@ -1547,5 +2024,277 @@ mod review_baseline_tests {
                 .as_deref(),
             Some(content)
         );
+    }
+}
+
+#[cfg(test)]
+mod review_comment_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn fresh() -> (TempDir, Database) {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        (dir, db)
+    }
+
+    fn line_thread(id: &str, path: &str, start: i64, end: i64) -> ReviewThreadRow {
+        ReviewThreadRow {
+            id: id.into(),
+            room_id: "r1".into(),
+            scope: "line".into(),
+            file_path: Some(path.into()),
+            commit_sha: None,
+            side: Some("new".into()),
+            line_start: Some(start),
+            line_end: Some(end),
+            anchor_hash: Some("deadbeef".into()),
+            anchor_lines: Some(r#"["let x = 1;"]"#.into()),
+            resolved_ms: None,
+            created_ms: 100,
+            updated_ms: 100,
+        }
+    }
+
+    fn comment(id: &str, thread_id: &str, body: &str, ms: i64) -> ReviewCommentRow {
+        ReviewCommentRow {
+            id: id.into(),
+            thread_id: thread_id.into(),
+            room_id: "r1".into(),
+            author_kind: "user".into(),
+            author_id: None,
+            body: body.into(),
+            created_ms: ms,
+            updated_ms: ms,
+        }
+    }
+
+    #[test]
+    fn a_thread_round_trips_with_its_anchor_intact() {
+        let (_d, db) = fresh();
+        let t = line_thread("t1", "src/a.rs", 12, 14);
+        db.insert_review_thread(&t).unwrap();
+        assert_eq!(db.review_thread("t1").unwrap().as_ref(), Some(&t));
+        assert_eq!(db.review_threads_for_room("r1").unwrap(), vec![t]);
+        // Another room's review is not this one's.
+        assert!(db.review_threads_for_room("r2").unwrap().is_empty());
+    }
+
+    #[test]
+    fn replies_are_rows_on_the_same_thread_in_order() {
+        // D5: flat comments with replies. A reply has nowhere to nest.
+        let (_d, db) = fresh();
+        db.insert_review_thread(&line_thread("t1", "a.rs", 1, 1))
+            .unwrap();
+        db.insert_review_comment(&comment("c1", "t1", "why this?", 100))
+            .unwrap();
+        db.insert_review_comment(&comment("c2", "t1", "because X", 200))
+            .unwrap();
+        let all = db.review_comments_for_room("r1").unwrap();
+        let bodies: Vec<&str> = all.iter().map(|c| c.body.as_str()).collect();
+        assert_eq!(bodies, vec!["why this?", "because X"]);
+    }
+
+    #[test]
+    fn a_comment_carries_its_author_from_the_first_migration() {
+        // v1 only writes `user`, but #213's agent replies must be a row
+        // change and not a migration (D7).
+        let (_d, db) = fresh();
+        db.insert_review_thread(&line_thread("t1", "a.rs", 1, 1))
+            .unwrap();
+        let mut agent = comment("c1", "t1", "addressed in 9531fc3", 100);
+        agent.author_kind = "agent".into();
+        agent.author_id = Some("h-claude-1".into());
+        db.insert_review_comment(&agent).unwrap();
+        let back = &db.review_comments_for_room("r1").unwrap()[0];
+        assert_eq!(back.author_kind, "agent");
+        assert_eq!(back.author_id.as_deref(), Some("h-claude-1"));
+    }
+
+    #[test]
+    fn a_reply_bumps_the_thread_but_not_its_creation_time() {
+        let (_d, db) = fresh();
+        db.insert_review_thread(&line_thread("t1", "a.rs", 1, 1))
+            .unwrap();
+        db.insert_review_comment(&comment("c1", "t1", "first", 500))
+            .unwrap();
+        let t = db.review_thread("t1").unwrap().unwrap();
+        assert_eq!(t.created_ms, 100);
+        assert_eq!(t.updated_ms, 500);
+    }
+
+    #[test]
+    fn deleting_the_last_comment_takes_the_thread_with_it() {
+        // An empty thread would leave an anchor marker in the gutter
+        // with nothing to read under it.
+        let (_d, db) = fresh();
+        db.insert_review_thread(&line_thread("t1", "a.rs", 1, 1))
+            .unwrap();
+        db.insert_review_comment(&comment("c1", "t1", "one", 100))
+            .unwrap();
+        db.insert_review_comment(&comment("c2", "t1", "two", 200))
+            .unwrap();
+
+        assert_eq!(db.delete_review_comment("c2").unwrap(), None);
+        assert!(db.review_thread("t1").unwrap().is_some());
+
+        assert_eq!(
+            db.delete_review_comment("c1").unwrap().as_deref(),
+            Some("t1")
+        );
+        assert!(db.review_thread("t1").unwrap().is_none());
+    }
+
+    #[test]
+    fn deleting_a_comment_that_is_already_gone_is_not_an_error() {
+        let (_d, db) = fresh();
+        assert_eq!(db.delete_review_comment("nope").unwrap(), None);
+    }
+
+    #[test]
+    fn deleting_a_thread_takes_every_comment_on_it() {
+        let (_d, db) = fresh();
+        db.insert_review_thread(&line_thread("t1", "a.rs", 1, 1))
+            .unwrap();
+        db.insert_review_comment(&comment("c1", "t1", "one", 100))
+            .unwrap();
+        db.insert_review_comment(&comment("c2", "t1", "two", 200))
+            .unwrap();
+        assert!(db.delete_review_thread("t1").unwrap());
+        assert!(db.review_comments_for_room("r1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn resolve_and_reopen_are_both_reachable() {
+        let (_d, db) = fresh();
+        db.insert_review_thread(&line_thread("t1", "a.rs", 1, 1))
+            .unwrap();
+        assert!(db.set_review_thread_resolved("t1", Some(900), 900).unwrap());
+        assert_eq!(
+            db.review_thread("t1").unwrap().unwrap().resolved_ms,
+            Some(900)
+        );
+        assert!(db.set_review_thread_resolved("t1", None, 950).unwrap());
+        assert_eq!(db.review_thread("t1").unwrap().unwrap().resolved_ms, None);
+        // A thread that no longer exists reports that rather than lying.
+        assert!(!db.set_review_thread_resolved("gone", Some(1), 1).unwrap());
+    }
+
+    #[test]
+    fn editing_a_comment_reports_whether_it_landed() {
+        let (_d, db) = fresh();
+        db.insert_review_thread(&line_thread("t1", "a.rs", 1, 1))
+            .unwrap();
+        db.insert_review_comment(&comment("c1", "t1", "typo", 100))
+            .unwrap();
+        assert!(db.update_review_comment("c1", "fixed", 300).unwrap());
+        let back = &db.review_comments_for_room("r1").unwrap()[0];
+        assert_eq!(back.body, "fixed");
+        assert_eq!(back.updated_ms, 300);
+        assert_eq!(back.created_ms, 100, "creation time is not an edit time");
+        assert!(!db.update_review_comment("gone", "x", 1).unwrap());
+    }
+
+    #[test]
+    fn re_anchoring_stores_the_new_coordinates() {
+        // A thread must search from where it was last seen, not from
+        // where it was first written, or the distance tie-break decays
+        // into noise over a multi-round review.
+        let (_d, db) = fresh();
+        db.insert_review_thread(&line_thread("t1", "a.rs", 12, 14))
+            .unwrap();
+        db.update_review_thread_anchor("t1", 40, 42).unwrap();
+        let t = db.review_thread("t1").unwrap().unwrap();
+        assert_eq!((t.line_start, t.line_end), (Some(40), Some(42)));
+        assert_eq!(
+            t.anchor_lines.as_deref(),
+            Some(r#"["let x = 1;"]"#),
+            "the anchor text itself never moves — only its coordinates"
+        );
+    }
+
+    #[test]
+    fn a_review_level_thread_carries_no_anchor_at_all() {
+        let (_d, db) = fresh();
+        let t = ReviewThreadRow {
+            id: "t1".into(),
+            room_id: "r1".into(),
+            scope: "review".into(),
+            file_path: None,
+            commit_sha: None,
+            side: None,
+            line_start: None,
+            line_end: None,
+            anchor_hash: None,
+            anchor_lines: None,
+            resolved_ms: None,
+            created_ms: 1,
+            updated_ms: 1,
+        };
+        db.insert_review_thread(&t).unwrap();
+        assert_eq!(db.review_thread("t1").unwrap(), Some(t));
+    }
+
+    #[test]
+    fn threads_and_comments_survive_reopening_the_database() {
+        // Persistence is the point: a review that evaporates on restart
+        // is worse than none, because the user believes it is recorded.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        {
+            let db = Database::open(&path).unwrap();
+            db.insert_review_thread(&line_thread("t1", "a.rs", 3, 3))
+                .unwrap();
+            db.insert_review_comment(&comment("c1", "t1", "rename this", 100))
+                .unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        assert_eq!(db.review_threads_for_room("r1").unwrap().len(), 1);
+        assert_eq!(
+            db.review_comments_for_room("r1").unwrap()[0].body,
+            "rename this"
+        );
+    }
+
+    // ── viewed markers ────────────────────────────────────────────
+
+    #[test]
+    fn a_viewed_marker_records_what_was_looked_at_not_merely_that_it_was() {
+        let (_d, db) = fresh();
+        db.set_review_viewed("r1", "a.rs", "hash-v1", 100).unwrap();
+        assert_eq!(
+            db.review_viewed_for_room("r1").unwrap(),
+            vec![("a.rs".to_string(), "hash-v1".to_string())]
+        );
+        // Looking again at newer content replaces the mark.
+        db.set_review_viewed("r1", "a.rs", "hash-v2", 200).unwrap();
+        assert_eq!(
+            db.review_viewed_for_room("r1").unwrap(),
+            vec![("a.rs".to_string(), "hash-v2".to_string())]
+        );
+        db.clear_review_viewed("r1", "a.rs").unwrap();
+        assert!(db.review_viewed_for_room("r1").unwrap().is_empty());
+    }
+
+    // ── base ref ──────────────────────────────────────────────────
+
+    #[test]
+    fn the_base_ref_is_unset_until_chosen_and_then_sticks() {
+        let (_d, db) = fresh();
+        assert_eq!(
+            db.review_base_ref("r1").unwrap(),
+            None,
+            "unset means fall back to the repo own guess"
+        );
+        db.set_review_base_ref("r1", "main", 100).unwrap();
+        assert_eq!(db.review_base_ref("r1").unwrap().as_deref(), Some("main"));
+        // A stacked branch points at the branch below it.
+        db.set_review_base_ref("r1", "feat/211-review-baseline", 200)
+            .unwrap();
+        assert_eq!(
+            db.review_base_ref("r1").unwrap().as_deref(),
+            Some("feat/211-review-baseline")
+        );
+        assert_eq!(db.review_base_ref("r2").unwrap(), None);
     }
 }
