@@ -55,6 +55,7 @@ futures-util = { version = "0.3", default-features = false }
 # ring is already in the lockfile via other transitive deps.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 skein-git = { path = "../../crates/skein-git" }
+skein-harness = { path = "../../crates/skein-harness" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"

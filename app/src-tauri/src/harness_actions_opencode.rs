@@ -323,9 +323,7 @@ pub fn backfill_from_db(
     if !db_path.exists() {
         return 0;
     }
-    let Ok(conn) =
-        rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-    else {
+    let Ok(conn) = skein_harness::opencode::open_read_only(&db_path) else {
         return 0;
     };
 
