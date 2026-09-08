@@ -1,26 +1,48 @@
-// Card stack — the three resizable, collapsible cards. Shared chrome;
+// Card stack — the resizable, collapsible cards. Shared chrome;
 // bespoke bodies passed in by the parent. Drag-resize redistributes
 // flex weight between adjacent cards (min 8% each, handover §8);
 // collapse forces a card to its head height. The parent persists the
 // layout per room.
+//
+// The arity is dynamic rather than a fixed tuple. It was [Diff, Plan,
+// Activity] until #212 moved the diff into the review pane, and paying
+// for that with a tuple rewrite — plus a migration for every persisted
+// three-element layout — taught the lesson once. `normalizeLayout`
+// reconciles whatever localStorage holds with however many cards the
+// caller passes today.
 
 import { Fragment, type ReactNode, useRef } from "react";
 
-/// Per-room card layout: flex weights + collapsed flags, indices
-/// [diff, plan, activity]. Persisted to localStorage keyed by room.
+/// Per-room card layout: flex weights + collapsed flags, positional
+/// against the `cards` array. Persisted to localStorage keyed by room.
 export interface CardLayout {
-	weights: [number, number, number];
-	collapsed: [boolean, boolean, boolean];
+	weights: number[];
+	collapsed: boolean[];
 }
-
-export const DEFAULT_LAYOUT: CardLayout = {
-	weights: [1, 1, 1],
-	collapsed: [false, false, false],
-};
 
 /// Minimum flex weight per card while dragging — 8% of the total
 /// (handover §8) so a card can't be dragged to nothing.
 const MIN_WEIGHT_FRACTION = 0.08;
+
+/// Fit a stored layout to `count` cards: pad with even weights, drop
+/// the tail, and repair a blob that is not the right shape at all.
+///
+/// A stored layout is user data from an older version, so it is treated
+/// like one (#167's field policy in spirit): never trusted for its
+/// length, never thrown away for being the wrong one.
+export function normalizeLayout(layout: CardLayout | undefined, count: number): CardLayout {
+	const weights = Array.from({ length: count }, (_, i) => {
+		const w = layout?.weights?.[i];
+		return typeof w === "number" && Number.isFinite(w) && w > 0 ? w : 1;
+	});
+	const collapsed = Array.from({ length: count }, (_, i) => layout?.collapsed?.[i] === true);
+	return { weights, collapsed };
+}
+
+export const defaultLayout = (count: number): CardLayout => ({
+	weights: Array.from({ length: count }, () => 1),
+	collapsed: Array.from({ length: count }, () => false),
+});
 
 export interface CardDef {
 	label: string;
@@ -32,11 +54,12 @@ interface CardStackProps {
 	layout: CardLayout;
 	onLayoutChange: (next: CardLayout) => void;
 	onToggleCollapse: (i: number) => void;
-	cards: [CardDef, CardDef, CardDef];
+	cards: CardDef[];
 }
 
 export const CardStack = ({ layout, onLayoutChange, onToggleCollapse, cards }: CardStackProps) => {
 	const stackRef = useRef<HTMLDivElement>(null);
+	const fitted = normalizeLayout(layout, cards.length);
 
 	// Drag a divider between card `i` and `i+1`: move flex weight from
 	// one to the other, proportional to the pointer's vertical travel
@@ -48,24 +71,23 @@ export const CardStack = ({ layout, onLayoutChange, onToggleCollapse, cards }: C
 		const height = stack.getBoundingClientRect().height;
 		if (height <= 0) return;
 		const startY = e.clientY;
-		const startWeights = [...layout.weights] as [number, number, number];
-		const sum = startWeights[0] + startWeights[1] + startWeights[2];
+		const startWeights = [...fitted.weights];
+		const sum = startWeights.reduce((a, b) => a + b, 0);
 		const minW = sum * MIN_WEIGHT_FRACTION;
-		// The two cards either side of this divider. Captured up front
-		// so the move handler does no tuple-by-variable indexing.
+		// The two cards either side of this divider.
 		const wA = startWeights[i] ?? 0;
 		const wB = startWeights[i + 1] ?? 0;
 
-		let latest = layout;
+		let latest = fitted;
 		const onMove = (ev: PointerEvent) => {
 			const deltaPx = ev.clientY - startY;
 			let deltaW = (deltaPx / height) * sum;
 			// Clamp so neither adjacent card drops below the minimum.
 			deltaW = Math.max(minW - wA, Math.min(deltaW, wB - minW));
-			const weights = [...startWeights] as [number, number, number];
+			const weights = [...startWeights];
 			weights[i] = wA + deltaW;
 			weights[i + 1] = wB - deltaW;
-			latest = { ...layout, weights };
+			latest = { ...fitted, weights };
 			onLayoutChange(latest);
 		};
 		const onUp = () => {
@@ -82,8 +104,8 @@ export const CardStack = ({ layout, onLayoutChange, onToggleCollapse, cards }: C
 			{cards.map((card, i) => (
 				<Fragment key={card.label}>
 					<div
-						className={`lc-card ${layout.collapsed[i] ? "collapsed" : ""}`}
-						style={{ flex: layout.weights[i] }}
+						className={`lc-card ${fitted.collapsed[i] ? "collapsed" : ""}`}
+						style={{ flex: fitted.weights[i] }}
 					>
 						<div className="lc-card-head" onClick={() => onToggleCollapse(i)}>
 							<span className="chev">▾</span>

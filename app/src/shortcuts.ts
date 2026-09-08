@@ -53,6 +53,7 @@ export type ShortcutAction =
 	| "closeRoom"
 	| "palette"
 	| "files"
+	| "review"
 	| "settings"
 	| "addHarness"
 	| "reloadWindow"
@@ -90,6 +91,9 @@ const BINDINGS: Binding[] = [
 	{ code: "KeyK", action: "palette" },
 	// E = explore. P stays free for #48's fuzzy quick-open later.
 	{ code: "KeyE", action: "files" },
+	// R = review (#212). Mod+⇧+R is reloadWindow, so the bare chord was
+	// free; agreed with Stefan before wiring, per the CLAUDE.md rule.
+	{ code: "KeyR", action: "review" },
 	{ code: "Comma", action: "settings" },
 	{ code: "KeyJ", action: "nextAlertedRoom" },
 	{ code: "KeyL", action: "nextAlertedHarness" },
@@ -151,6 +155,7 @@ const roomSecGlyph = SCHEME.roomAxis === "ctrl" ? "Ctrl" : "⇧";
 export const hints = {
 	newRoom: `${modLabel} N`,
 	files: `${modLabel} E`,
+	review: `${modLabel} R`,
 	addHarness: `${modLabel} ⇧ H`,
 	closeRoom: `${modLabel} W`,
 	reload: `${modLabel} ⇧ R`,

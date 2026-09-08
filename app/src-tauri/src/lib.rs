@@ -17,6 +17,7 @@ mod harness_events_opencode;
 mod pty;
 mod resume;
 mod review;
+mod review_surface;
 mod spawn_env;
 mod spawn_settings;
 mod watcher;
@@ -341,6 +342,16 @@ pub fn run() {
             review::review_pending,
             review::review_accept,
             review::review_reject,
+            review_surface::commands::review_scope,
+            review_surface::commands::review_file,
+            review_surface::commands::review_add_thread,
+            review_surface::commands::review_reply,
+            review_surface::commands::review_edit_comment,
+            review_surface::commands::review_delete_comment,
+            review_surface::commands::review_delete_thread,
+            review_surface::commands::review_resolve_thread,
+            review_surface::commands::review_mark_viewed,
+            review_surface::commands::review_set_base,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

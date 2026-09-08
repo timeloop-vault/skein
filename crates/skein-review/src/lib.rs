@@ -38,17 +38,30 @@
 //! exact structural match before touching anything; no match means the
 //! file moved under the user and the call fails with
 //! [`ReviewError::Stale`] rather than applying something they did not
-//! see. Stable ids across recomputes are a comment-anchoring problem
-//! (#52 D6), not an accept/reject one.
+//! see.
+//!
+//! # Comment anchoring
+//!
+//! Review threads have the opposite requirement — they must survive a
+//! recompute rather than refuse one — so they do not use hunk identity
+//! at all. [`anchor`] anchors a thread on the *text* it was written
+//! against and re-matches it on every refresh, placing it exactly,
+//! placing it with a visible warning, or marking it outdated. Never
+//! moving it silently and never dropping it is the whole contract
+//! (#212, epic #52 D6).
 
 // As in skein-git and skein-harness: the error enum is the
 // documentation. Every fallible entry point here has its failure modes
 // named in its own type.
 #![allow(clippy::missing_errors_doc)]
 
+mod anchor;
 mod content;
 mod hunks;
 
+pub use anchor::{
+    Anchor, MIN_CONFIDENCE, Placement, Reanchorer, Side, capture_lines, hash_lines, reanchor,
+};
 pub use content::{
     FileState, MAX_FILE_BYTES, classify_bytes, content_hash, decode, encode, read_state,
     remove_file, write_text,

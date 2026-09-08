@@ -24,6 +24,7 @@ import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
 import { FilesBody } from "./FilesBody.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
+import { RightPane, type RightPaneTab } from "./RightPane.tsx";
 import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { HChip, HarnessPicker, HarnessTab, RoomTab, StatusDot } from "./components.tsx";
@@ -39,7 +40,6 @@ import {
 import {
 	ACTION_EVENT,
 	type HarnessAction,
-	LiveContext,
 	apiErrorToastText,
 	parsePayload,
 } from "./liveContext/index.ts";
@@ -1154,6 +1154,15 @@ export default function App() {
 	// Off by default; toggled from the Activity card head. App-owned so
 	// every room's mounted LiveContext sees the same value.
 	const [showTurnCosts, setShowTurnCosts] = usePersistedState<boolean>("showTurnCosts", false);
+	// Which right-pane tab each room is showing (#212). Per room rather
+	// than global: a room mid-task wants the activity feed and a room
+	// whose agent has just finished wants the review, and that is a
+	// property of the room, not of the user. One map rather than a key
+	// per room so App can flip the active room's tab from Mod+R.
+	const [rightPaneTabs, setRightPaneTabs] = usePersistedState<Record<string, RightPaneTab>>(
+		"rightPaneTabs",
+		{},
+	);
 	// Width of the harness column in px. Right pane absorbs the remainder
 	// via flex:1. Splitter clamps against window size at drag time.
 	const [harnessColWidth, setHarnessColWidth] = usePersistedState<number>("harnessColWidth", 640);
@@ -1183,6 +1192,12 @@ export default function App() {
 	// room would reconcile its whole feed. setShowTurnCosts is stable;
 	// onBranchChange takes the roomId so one callback serves all rooms.
 	const handleToggleTurnCosts = useCallback(() => setShowTurnCosts((v) => !v), [setShowTurnCosts]);
+	const setRightPaneTab = useCallback(
+		(roomId: string, tab: RightPaneTab) => {
+			setRightPaneTabs((prev) => (prev[roomId] === tab ? prev : { ...prev, [roomId]: tab }));
+		},
+		[setRightPaneTabs],
+	);
 	const handleBranchChange = useCallback((roomId: string, branch: string | null) => {
 		setLiveBranches((prev) => (prev[roomId] === branch ? prev : { ...prev, [roomId]: branch }));
 	}, []);
@@ -1863,6 +1878,17 @@ export default function App() {
 	// creation path); the ref is declared here with the others and
 	// assigned down there.
 	const toggleFilesRef = useRef<() => void>(() => {});
+	// Mod+R (#212). Unlike Mod+E this needs nothing created — the review
+	// pane is always mounted — so it is assigned here rather than later.
+	// Reassigned every render so it closes over the current active room.
+	const toggleReviewRef = useRef<() => void>(() => {});
+	toggleReviewRef.current = () => {
+		if (!activeRoomId) return;
+		setRightPaneTab(
+			activeRoomId,
+			(rightPaneTabs[activeRoomId] ?? "context") === "review" ? "context" : "review",
+		);
+	};
 	// Rooms with a files-harness creation in flight (Mod+E latch).
 	const creatingFilesRef = useRef(new Set<string>());
 	const roomsRef = useRef(rooms);
@@ -2304,6 +2330,12 @@ export default function App() {
 					// #49 phase A: jump to (or create) the room's Files
 					// harness, or bounce back to the last terminal.
 					toggleFilesRef.current();
+					break;
+				case "review":
+					// #212: flip the active room's right pane to Review, and
+					// back again — the same there-and-back shape as Mod+E,
+					// so the chord is a toggle rather than a one-way door.
+					toggleReviewRef.current();
 					break;
 				case "settings":
 					setShowSettings(true);
@@ -2749,6 +2781,12 @@ export default function App() {
 			hint: hints.files,
 			invoke: () => toggleFilesRef.current(),
 		});
+		paletteItems.push({
+			id: "cmd:review",
+			label: "Review this branch",
+			hint: hints.review,
+			invoke: () => toggleReviewRef.current(),
+		});
 	}
 	if (archivedRooms.length > 0) {
 		paletteItems.push({
@@ -3072,20 +3110,24 @@ export default function App() {
 							display: r.id === activeRoomId ? "flex" : "none",
 						}}
 					>
-						{/* The right pane is the Live Context card stack (issue #80):
-						    Diff / Plan / Activity, sourced from harness_actions. It
-						    also keeps the status-bar branch live via a lightweight
-						    git watcher (issue #18), the role LiveStatus used to own. */}
+						{/* The right pane is two tabs (#212): Live Context — the
+						    Plan / Activity card stack sourced from harness_actions
+						    (issue #80) — and Review, the branch-vs-base diff and
+						    comment surface that replaced the Diff card. Live
+						    Context also keeps the status-bar branch fresh via a
+						    lightweight git watcher (issue #18), the role LiveStatus
+						    used to own. */}
 						{r.cwd ? (
-							<LiveContext
+							<RightPane
 								roomId={r.id}
 								cwd={r.cwd}
 								harnesses={r.harnesses}
-								focusedHarnessId={r.activeHarnessId}
 								visible={r.id === activeRoomId}
 								showTurnCosts={showTurnCosts}
 								onToggleTurnCosts={handleToggleTurnCosts}
 								onBranchChange={handleBranchChange}
+								tab={rightPaneTabs[r.id] ?? "context"}
+								onTabChange={(tab) => setRightPaneTab(r.id, tab)}
 							/>
 						) : null}
 					</div>

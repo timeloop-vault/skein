@@ -97,7 +97,7 @@ fn strip_root<'a>(abs: &'a str, root: &str) -> Option<&'a str> {
 
 /// Absolute on-disk path for a key. Only ever called with a key
 /// [`relative_key`] produced, so it cannot escape the worktree.
-fn abs_path(cwd: &str, key: &str) -> PathBuf {
+pub(crate) fn abs_path(cwd: &str, key: &str) -> PathBuf {
     let mut p = PathBuf::from(cwd);
     for seg in key.split('/') {
         p.push(seg);
@@ -107,7 +107,7 @@ fn abs_path(cwd: &str, key: &str) -> PathBuf {
 
 // ── capture ───────────────────────────────────────────────────────
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
@@ -252,7 +252,11 @@ fn blocked_reason(state: &FileState) -> Option<&'static str> {
     }
 }
 
-fn pending_impl(db: &Database, room_id: &str, cwd: &str) -> Result<Vec<PendingFileDto>, String> {
+pub(crate) fn pending_impl(
+    db: &Database,
+    room_id: &str,
+    cwd: &str,
+) -> Result<Vec<PendingFileDto>, String> {
     let mut out = Vec::new();
     for b in db.review_baselines_for_room(room_id)? {
         let base = skein_review::decode(&b.kind, b.content.as_deref());
