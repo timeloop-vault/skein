@@ -329,3 +329,106 @@ fn diff_deleted_file_appears_as_all_delete() {
         .count();
     assert!(delete_count >= 1, "expected ≥1 delete line");
 }
+
+/// Link `link` (relative to `root`) to the directory `target`, the way
+/// a Skein worktree gets its `node_modules`: a junction on Windows
+/// (`mklink /J` needs no elevation, unlike a real symlink) and a
+/// symlink elsewhere. `false` when the platform refuses — the caller
+/// then skips rather than fails, so a locked-down CI box still runs
+/// the rest of the suite.
+fn link_dir(root: &Path, link: &str, target: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(root.join(link))
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, root.join(link)).is_ok()
+    }
+}
+
+/// A repo whose `.gitignore` excludes `node_modules/` and which has a
+/// directory link by that name, mirroring the real worktree layout.
+/// `None` when the platform won't make the link.
+fn repo_with_node_modules_link() -> Option<(TempDir, std::path::PathBuf)> {
+    let (tmp, path) = init_repo();
+    fs::write(path.join(".gitignore"), b"node_modules/\n").unwrap();
+    let target = path.join("real_modules");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("index.js"), b"module.exports = 1;\n").unwrap();
+    if !link_dir(&path, "node_modules", &target) {
+        return None;
+    }
+    Some((tmp, path))
+}
+
+#[test]
+fn diff_ignores_directory_link_and_still_reports_real_changes() {
+    // Regression (#217): libgit2 reads a junction / dir symlink
+    // as a file-like entry, so `node_modules/` doesn't match it, it
+    // lands in the diff as untracked, and building its patch fails with
+    // "requested file is a directory" — which used to abort the whole
+    // call and leave the Diff card empty.
+    let Some((_tmp, path)) = repo_with_node_modules_link() else {
+        return;
+    };
+    fs::write(path.join("new.txt"), b"line one\nline two\n").unwrap();
+
+    let repo = Repo::open(&path).unwrap();
+    let diff = repo
+        .diff_workdir()
+        .expect("a directory link must not fail the diff");
+
+    assert!(
+        diff.iter().any(|f| f.path == "new.txt"),
+        "the real new file must still be reported, got: {:?}",
+        diff.iter().map(|f| &f.path).collect::<Vec<_>>()
+    );
+    assert!(
+        !diff.iter().any(|f| f.path == "node_modules"),
+        "the directory link must not appear as a changed file"
+    );
+}
+
+#[test]
+fn status_ignores_directory_link() {
+    let Some((_tmp, path)) = repo_with_node_modules_link() else {
+        return;
+    };
+    let repo = Repo::open(&path).unwrap();
+    let status = repo.status().unwrap();
+    assert!(
+        !status.iter().any(|e| e.path == "node_modules"),
+        "got: {:?}",
+        status.iter().map(|e| &e.path).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn diff_inside_linked_worktree_reports_untracked_file() {
+    // Every Skein room is a linked worktree, but until now nothing
+    // exercised the diff from inside one.
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    let wt = propose_worktree_path(&path, "diff-in-worktree");
+    repo.add_worktree("diff-in-worktree", "main", &wt).unwrap();
+
+    fs::write(wt.join("inside.txt"), b"alpha\nbeta\n").unwrap();
+    let wt_repo = Repo::open(&wt).unwrap();
+    let diff = wt_repo.diff_workdir().unwrap();
+    let f = diff
+        .iter()
+        .find(|f| f.path == "inside.txt")
+        .expect("inside.txt");
+    assert_eq!(f.kind, StatusKind::Untracked);
+    assert!(!f.hunks.is_empty(), "expected hunk content for a new file");
+}
