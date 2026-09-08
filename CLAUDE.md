@@ -2,18 +2,32 @@
 
 Skein is a prototype IDE for driving AI coding agents, built around the
 design in `docs/design/`. A **room** (top-level tab) is a task backed by
-its own git worktree; each room owns N **harnesses** — AI coding CLIs
-(Claude Code, opencode, a stub gh-copilot, or a plain shell) running in
-real PTYs, all sharing the room's worktree. "Session" in Skein
-vocabulary means only one thing: the harness tool's own conversation id
-(`Harness.sessionId`), used to resume conversations across restarts.
+its own git worktree; each room owns N **harnesses**, all sharing the
+room's worktree. Most harness kinds are AI coding CLIs in real PTYs
+(Claude Code, opencode, a stub gh-copilot, a plain shell); `files` is
+the exception — a **non-PTY** harness (#184) that browses and edits the
+worktree. That is why `HARNESS_KINDS` carries a capability model
+(`pty` / `resume` / `notify`) instead of assuming a terminal.
+"Session" in Skein vocabulary means only one thing: the harness tool's
+own conversation id (`Harness.sessionId`), used to resume conversations
+across restarts.
 
 Skein is daily-driven on macOS and Windows via auto-updating v0.2.x
-releases. The original 8-chapter build plan is complete; work is now
-driven by GitHub issues. The de facto roadmap is
-`docs/audit-2026-07-03.md` §5 (order of attack) — headline arcs: #19
-App.tsx split, #116 harness-adapter consolidation, #49 files pillar,
-#52/#106 review surface, #76 cross-room view.
+releases; **v0.2.9 is the latest**. The original 8-chapter build plan is
+complete; work is now driven by GitHub issues.
+
+**Roadmap.** `docs/audit-2026-07-03.md` §5 remains the structural
+backlog — #19 App.tsx split, #116 harness-adapter consolidation, #76
+cross-room view. It predates two things, so read it with these
+corrections:
+
+- **Review surface: #52 is the source of truth**, not the audit. It is
+  now an epic with the decisions recorded (scope, diff lifetime,
+  anchoring, the agent API) and five sub-issues, #211–#215. **Start at
+  #211** — it is dependency-free and fixes the diff pane. #106 was
+  rescoped out from under it and is now just a Diff-card issue.
+- **Files pillar (#49) is half-shipped:** A (#184) and B (#185) landed;
+  C (#186) and D (#187) are open.
 
 ## Stack
 
@@ -22,14 +36,21 @@ App.tsx split, #116 harness-adapter consolidation, #49 files pillar,
   plugin is skipped in macOS debug builds — its Swift bridge needs a
   real .app bundle)
 - **React 18 + strict TypeScript** UI (Vite); xterm.js for terminals,
-  react-virtuoso for the activity feed
+  react-virtuoso for the activity feed, CodeMirror 6 for the file
+  editor (#185)
+- **Two Rust workspace crates** — `skein-git`, `skein-harness` — plus
+  `app/src-tauri`, which is deliberately **excluded** from the
+  workspace. Every cargo command therefore needs running twice; see
+  Conventions
 - **Biome** lint + format (frontend), **clippy pedantic** `-D warnings`
   (Rust)
 - Pre-commit hook in `.githooks/pre-commit` (activate:
   `git config core.hooksPath .githooks`) runs, in order: cargo fmt,
   clippy, and tests for BOTH the workspace and `app/src-tauri`
   (excluded from the workspace — `cargo test --workspace` does NOT
-  reach its ~100 unit tests; #168), then tsc and biome.
+  reach its ~160 unit tests; #168), then tsc and biome. Note the
+  workspace fmt needs `--all`: with two members, plain `cargo fmt`
+  fails with "Failed to find targets" (#209).
 
 ## Layout
 
@@ -42,10 +63,11 @@ App.tsx split, #116 harness-adapter consolidation, #49 files pillar,
     │   └── src/lib.rs               # Repo: open, branches, head_branch, add_worktree,
     │                                #   list/remove_worktree, status, diff_workdir;
     │                                #   propose_worktree_path → sibling dir <repo>-wt/<slug>.
-    │                                #   No clone/fetch/push/commit yet (#182 adds writes)
+    │                                #   No clone/fetch/push/commit yet (#182, #214 add
+    │                                #   writes — and #214 argues for the git CLI, not libgit2)
     ├── app/
     │   ├── src/                     # React + TS UI
-    │   │   ├── App.tsx              # The single React tree (~2.9k LOC hotspot; #19 tracks
+    │   │   ├── App.tsx              # The single React tree (~3.2k LOC hotspot; #19 tracks
     │   │   │                        #   the split): rooms/harness tabs, boot resume,
     │   │   │                        #   notifications, palette items, DnD, keydown dispatch
     │   │   ├── LiveTerminal.tsx     # xterm.js ↔ PTY binding; spawns/kills on (cmd, spawnGen)
@@ -55,25 +77,35 @@ App.tsx split, #116 harness-adapter consolidation, #49 files pillar,
     │   │   │                        #   patterns + L2c authoritative adapters
     │   │   ├── harnessEvents.ts     # L2c translators: ClaudeEvent/OpencodeEvent → phase calls
     │   │   ├── harnessPatterns.ts   # L2b fallback regexes (copilot/shell waiting prompts)
-    │   │   ├── data.tsx             # HARNESS_KINDS registry (chip/label per kind) — small
-    │   │   │                        #   but load-bearing
+    │   │   ├── data.tsx             # HARNESS_KINDS registry: chip/label/desc + the
+    │   │   │                        #   capability model (pty/resume/notify, #184) — small
+    │   │   │                        #   but load-bearing. HARNESS_ORDER lives here too
     │   │   ├── types.ts             # Room / Harness / Status vocabulary
     │   │   ├── components.tsx       # Shared atoms (HChip, StatusDot, tabs, picker)
     │   │   ├── shortcuts.ts         # ALL keyboard shortcuts: one platform-agnostic BINDINGS
     │   │   │                        #   table (#151); LiveTerminal swallows via isAppShortcut
     │   │   ├── SettingsModal.tsx    # Settings + in-app updater UI
     │   │   ├── ReopenRoomModal.tsx  # Archived-rooms browser (close = archive, never delete)
+    │   │   ├── FilesBody.tsx        # Files pillar B (#185): CodeMirror 6 buffers, save +
+    │   │   │   FileTree.tsx         #   write; editor.ts = CM setup; FileTree = dir listing;
+    │   │   │   editor.ts            #   filesRegistry = per-harness dirty-buffer registry
+    │   │   │   filesRegistry.ts     #   EVERY destroy path (close harness/room/window) must
+    │   │   │                        #   consult it — unsaved text lives only in memory
+    │   │   ├── SpawnEnvPanel.tsx    # Settings UI for the harness spawn environment (#197)
     │   │   ├── CommandPalette.tsx / statusPopover.ts / Splitter.tsx /
     │   │   │   useFocusRestore.ts / prefs.ts (localStorage UI prefs) / styles.css
     │   │   └── liveContext/         # Right-pane card stack (issue #80): store.ts (backfill
-    │   │                            #   500 + live tail of harness-action events),
+    │   │                            #   500 + live tail of harness-action events, room-scoped),
     │   │                            #   LiveContext.tsx + CardStack (chrome, per-room layout),
-    │   │                            #   ActivityCard/feedItems/rows/toolRows (feed),
-    │   │                            #   PlanCard/plan.ts (todo reducer), DiffCard/diff.ts +
-    │   │                            #   useWorktreeDiff (git diff w/ harness-patch fallback),
-    │   │                            #   payload.ts (all payload-shape divergence lives here)
+    │   │                            #   ActivityCard/feedItems/rows/toolRows/Row/ResultPreview
+    │   │                            #   (feed), RoomSubtitle, PlanCard/plan.ts (todo reducer;
+    │   │                            #   merges all harnesses — bug #216), DiffCard/diff.ts +
+    │   │                            #   useWorktreeDiff (git diff w/ harness-patch fallback;
+    │   │                            #   deriveTabs is all-time = no episode boundary, #211),
+    │   │                            #   useGitBranchWatcher, payload.ts (all payload-shape
+    │   │                            #   divergence lives here)
     │   └── src-tauri/               # Tauri Rust shell
-    │       ├── src/lib.rs           # Builder + 36-command registry; tracing → daily-rotating
+    │       ├── src/lib.rs           # Builder + 40-command registry; tracing → daily-rotating
     │       │                        #   file in app_log_dir() + stderr (RUST_LOG overrides)
     │       ├── src/pty.rs           # PtyManager (portable-pty); 2 threads per spawn (reader +
     │       │                        #   waiter — the waiter is load-bearing on Windows ConPTY)
@@ -82,8 +114,13 @@ App.tsx split, #116 harness-adapter consolidation, #49 files pillar,
     │       ├── src/db.rs            # rusqlite: rooms (table `sessions` — legacy name),
     │       │                        #   harness_events, harness_actions, sessions_quarantine;
     │       │                        #   WAL + .bak/.bak.1 snapshots (#167)
-    │       ├── src/fs.rs            # dir listing + file previews (currently no frontend callers;
-    │       │                        #   #49 revives, #174 scopes)
+    │       ├── src/fs.rs            # list_dir + read/write_file_text — LIVE, called by
+    │       │                        #   FileTree/FilesBody since #185. write returns an mtime
+    │       │                        #   token for staleness. #174 still wants CSP + scoping
+    │       ├── src/spawn_env.rs     # PATH/env merge for harness PTYs (#72, #192, #197, #207):
+    │       │                        #   login-shell probe, host-terminal identity stripping,
+    │       │                        #   PATHEXT resolution before portable-pty. 50 unit tests
+    │       ├── src/spawn_settings.rs # Persisted user overrides for the above
     │       ├── src/resume.rs        # session-existence probes against the tools' own stores
     │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1)
     │       ├── src/harness_events_opencode.rs  # SSE client → OpencodeEvent (L2c-2)
@@ -91,8 +128,12 @@ App.tsx split, #116 harness-adapter consolidation, #49 files pillar,
     │       ├── src/harness_actions_opencode.rs # SSE/opencode.db → harness_actions rows (#80)
     │       └── src/harness_action_event.rs     # "harness-action" live broadcast (live rows only)
     ├── docs/
-    │   ├── audit-2026-07-03.md      # Full-codebase audit; §5 = the current roadmap
+    │   ├── audit-2026-07-03.md      # Full-codebase audit; §5 = structural backlog. Predates
+    │   │                            #   the #52 review decisions — see Roadmap above
     │   ├── backlog.md               # Parked ideas (read before adding to any plan)
+    │   ├── grok-build-recon-*.md    # Recon of grok-build: reference designs for the review
+    │   │                            #   surface (§3 xai-hunk-tracker) + git writes (§6)
+    │   ├── files-pillar-design-brief.md  # Design brief behind #49 / #184 / #185
     │   ├── live-context-*.md        # Live Context specs — authority chain in "Design refs" below
     │   ├── working-prototype-plan.md, chapter-*-plan.md, *-recon.md, epic-50-*
     │   │                            # HISTORICAL records of shipped chapters 1–8 + epic #50.
@@ -144,9 +185,22 @@ App.tsx split, #116 harness-adapter consolidation, #49 files pillar,
   phase store (single state machine; transitions are logged to
   `harness_events` and drive badges/toasts/OS notifications), and
   (b) action extraction → `harness_actions` rows in sqlite + a global
-  `"harness-action"` Tauri event for live rows only. The Live Context
-  store backfills the newest 500 rows per room and appends live ones;
-  Diff/Plan/Activity cards all render from that one array.
+  `"harness-action"` Tauri event for live rows only. **Where the store
+  paths and row shapes live: `crates/skein-harness` (#209)** — parser
+  fixes go there, not in the adapters, so the app and any standalone
+  cost tooling stay in sync.
+  The Live Context store backfills the newest 500 rows per room and
+  appends live ones; Diff/Plan/Activity cards all render from that one
+  array. Two known consequences of it being **room**-scoped: the Plan
+  card merges every harness in the room into one incoherent list
+  (#216), and the Diff card's tabs are all-time with no episode
+  boundary, so nothing ever clears (#211).
+- **Files** (#185): `FileTree` lists via `list_dir`, `FilesBody` reads
+  via `read_file_text` and saves via `write_file_text`, which
+  round-trips an mtime token to detect a stale write. Buffer text
+  lives **only in memory** until saved, so every destroy path — close
+  harness, close room, close window — must consult `filesRegistry`
+  and prompt.
 - **Git ops** go through `crates/skein-git`;
   `app/src-tauri/src/git.rs` is a thin DTO layer. Anything richer
   than DTO glue belongs in the crate, where it's testable.
@@ -204,11 +258,17 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   it from `app/` (`cd app && npx biome check .`), never from the repo
   root with a path argument.
 - **Tests live with the code that owns them.**
-  `crates/skein-git/tests/` has 18 integration tests against tempfile
-  repos. `app/src-tauri` has ~100 in-module unit tests (harness
-  JSONL/SSE parsers, db persistence). Both run in the hook and CI;
-  remember `cargo test --workspace` alone does NOT cover the tauri
-  crate (#168). The frontend has no test infra yet — #169 tracks it.
+  `crates/skein-git/tests/` has 21 integration tests against tempfile
+  repos; `crates/skein-harness` has ~25 in-module tests;
+  `app/src-tauri` has ~190 in-module unit tests in source, of which
+  ~160 run on any one platform — 159 on Windows; the rest are
+  `cfg`-gated per OS (#202) (spawn-env merging, harness JSONL/SSE
+  parsers, db persistence, pty). All run in the hook
+  and CI, but **`cargo test --workspace` does NOT reach the tauri
+  crate** — it is excluded from the workspace (#168), so the hook runs
+  it via a second `--manifest-path`. Same for fmt and clippy. The
+  frontend still has no test infra — #169 tracks it, and it matters:
+  nearly every shipped regression has lived there.
 - **Issues drive the work.** Commit messages name the issue
   (`fix(#158): …`). The chapter/phase system ended with chapter 8;
   plan docs are history, not instructions. Parked ideas live in
@@ -228,22 +288,31 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   Ctrl+Alt collides with punctuation chords) and agree bindings with
   Stefan before committing (#150 tracks user rebinding).
 
-## Current state (2026-07)
+## Current state (2026-09)
 
 Chapters 1–8 all shipped: real PTYs and worktrees, sqlite-persisted
 rooms with archive/reopen, harness conversation resume across
 restarts, the Live Context right pane (activity/plan/diff cards fed
 by harness telemetry), notifications (badge/toast/OS), Windows +
 Linux support, keyboard-driven navigation, and distribution with
-in-app auto-update. v0.2.5 is the latest release.
+in-app auto-update. **v0.2.9 is the latest release.**
 
-A full-codebase audit (2026-07-03) produced the current roadmap —
-read `docs/audit-2026-07-03.md` §5 before picking up work. Landed
-since: #167 (boot-wipe data-loss fix + persistence hardening), #168
-(test gates). The known-weak spots it names: App.tsx size/duplication
-(#19), the duplicated Claude/opencode adapter pairs (#116), heavy
-sync Tauri commands on the main thread (#171/#172/#178/#179), and
-silent failure surfacing (#176).
+Landed since the 2026-07-03 audit: #167 (boot-wipe data-loss fix +
+persistence hardening), #168 (test gates), #173 (this file's last
+rewrite), Files pillar A + B (#184, #185 — the `files` harness kind
+and a CodeMirror editor), spawn-environment work (#192, #197, #207),
+authoritative session cost (#199), #209 (the `skein-harness` crate
+extraction), and a run of Windows daily-driver fixes
+(#200/#201/#202/#207/#217).
+
+Known-weak spots, still open: App.tsx size and duplication (#19 — now
+~3.2k LOC), the duplicated Claude/opencode adapter pairs (#116), heavy
+sync Tauri commands on the main thread (#171/#172/#178/#179), silent
+failure surfacing (#176), and no frontend tests (#169).
+
+The **review surface (#52)** is the current headline feature arc; its
+decisions are recorded in the epic and #211 is the entry point. Do not
+plan review work off the audit — it predates those decisions.
 
 ## Design references
 
