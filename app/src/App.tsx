@@ -36,6 +36,7 @@ import {
 	useHarnessActivity,
 	useRoomActivity,
 } from "./harnessActivity.ts";
+import { cmdForKind, unarchiveRoomTransform, withResumeCmds } from "./harnessCmd.ts";
 import {
 	ACTION_EVENT,
 	type HarnessAction,
@@ -1036,45 +1037,6 @@ const captureOpencodeSessionId = async (
 	console.warn(`[skein] opencode capture timed out for ${cwd}`);
 };
 
-// Phase 2a: when sessionId is provided (always set by callers for
-// Claude, never for other kinds), pre-allocate Claude's conversation
-// id via --session-id <uuid>. Storing the same id on the harness
-// record lets phase 3 resume directly with no picker.
-//
-// Epic #50 L2c-2: opencode embeds an HTTP server. Skein allocates a
-// free port up front and passes `--port <N> --hostname 127.0.0.1` so
-// the L2c-2 SSE adapter knows where to subscribe. The port is fresh
-// per spawn (not persisted) — callers must pass one in for opencode.
-const cmdForKind = (
-	kind: HarnessKind,
-	fallbackShell: string[],
-	sessionId?: string,
-	opencodePort?: number,
-): string[] => {
-	switch (kind) {
-		case "claude":
-			return sessionId ? ["claude", "--session-id", sessionId] : ["claude"];
-		case "opencode": {
-			// Default port=0 lets opencode pick; that defeats the whole
-			// adapter, so require an allocated port. If a caller forgot,
-			// fall back to bare opencode and the adapter just won't
-			// attach — same behaviour as pre-L2c-2.
-			if (opencodePort === undefined) return ["opencode"];
-			return ["opencode", "--port", String(opencodePort), "--hostname", "127.0.0.1"];
-		}
-		case "copilot":
-			return ["gh", "copilot", "suggest"];
-		case "byoh":
-			return fallbackShell.length > 0 ? fallbackShell : ["pwsh.exe"];
-		case "files":
-			// Unreachable: `files` has no process (capabilities.pty is
-			// false, so creation paths never call cmdForKind for it).
-			// The empty argv is a type-totality placeholder, and
-			// HarnessBody wouldn't spawn an empty cmd anyway.
-			return [];
-	}
-};
-
 /** Wire shape of `db_load_rooms` (#167): the rooms that parsed plus
  *  any rows the backend quarantined instead of failing the load.
  *  `backupRooms` arrives only when the live table was empty but the
@@ -1084,56 +1046,6 @@ interface DbLoadOutcome {
 	skipped: { id: string; error: string }[];
 	backupRooms?: number;
 }
-
-// Rewrite a stored harness into its "resume the previous conversation"
-// form, applied once at boot so a fresh PTY spawn transparently
-// re-attaches. Only matches harnesses whose cmd still looks like a
-// freshly-spawned Claude / opencode launch — anything customized
-// (shell-swapped via chapter 2's onCmdChange, user-edited extra args,
-// or already in resume form from a previous Skein boot) passes through
-// unchanged.
-//
-// Three sources of session ids feed in:
-//   1. harness.sessionId set by phase 2a (Claude pre-allocate).
-//   2. harness.sessionId set by phase 2b (opencode capture-after-spawn).
-//   3. None — legacy harness created before chapter 5, or capture
-//      timed out. We fall back to chapter 2 phase 5a's behaviour:
-//      Claude shows its picker, opencode resumes most-recent-in-cwd.
-//
-// gh copilot has no resume mode; shells start fresh; both pass through.
-//
-// Epic #50 L2c-2: opencode resume always injects a fresh port. The
-// old port from sqlite is dead — the previous Skein run released it
-// when the harness exited. We "fresh-form" check is liberal: any
-// opencode cmd that hasn't been shell-swapped (cmd[0] === "opencode")
-// gets the resume rewrite. That covers (a) legacy `["opencode"]`
-// records from pre-L2c-2, (b) cmds with --port from a previous boot,
-// and (c) cmds already in --session/--continue form.
-const resumeCmd = (h: Harness, opencodePort?: number): string[] => {
-	const cmd = h.cmd ?? [];
-	// Capability gate first (#184): kinds without a resume concept
-	// (copilot, shell, files) pass through untouched — the per-kind
-	// rewrite logic below only ever sees resumable kinds.
-	if (!HARNESS_KINDS[h.kind].capabilities.resume) return cmd;
-	if (h.kind === "claude") {
-		const isFreshClaude =
-			(cmd.length === 1 && cmd[0] === "claude") ||
-			(cmd.length === 3 && cmd[0] === "claude" && cmd[1] === "--session-id");
-		if (isFreshClaude) {
-			return h.sessionId ? ["claude", "--resume", h.sessionId] : ["claude", "--resume"];
-		}
-	}
-	if (h.kind === "opencode" && cmd[0] === "opencode") {
-		const args = ["opencode"];
-		if (opencodePort !== undefined) {
-			args.push("--port", String(opencodePort), "--hostname", "127.0.0.1");
-		}
-		if (h.sessionId) args.push("--session", h.sessionId);
-		else args.push("--continue");
-		return args;
-	}
-	return cmd;
-};
 
 export default function App() {
 	const [theme, setTheme] = usePersistedState<Theme>("theme", "dark");
@@ -1369,12 +1281,7 @@ export default function App() {
 					// Rewrite each harness's cmd to its resume form before
 					// mounting, so the PTY spawn re-attaches to the prior
 					// conversation instead of starting fresh.
-					const withResume = verified.map((r) => ({
-						...r,
-						harnesses: r.harnesses.map((h) =>
-							h.cmd ? { ...h, cmd: resumeCmd(h, portMap.get(h.id)) } : h,
-						),
-					}));
+					const withResume = verified.map((r) => withResumeCmds(r, portMap));
 					setRooms(withResume);
 					// Pick the first *active* room; archived ones aren't
 					// supposed to be the boot-time selection.
@@ -1448,46 +1355,67 @@ export default function App() {
 		}
 	};
 
-	const reopenRoom = async (id: string) => {
-		// #153: re-mounting a room re-spawns its harnesses, so their cmds
-		// must be in resume form first. A harness created *this* session
-		// still carries its fresh-spawn cmd (`claude --session-id <uuid>`),
-		// and re-running that against an already-existing session makes
-		// Claude reject it with "Session ID is already in use". Mirror the
-		// boot resume path (the hydrate effect above): rewrite each cmd via
-		// resumeCmd — idempotent on cmds already in resume form — and
-		// pre-allocate fresh embedded-server ports for opencode harnesses.
-		const room = roomsRef.current.find((r) => r.id === id);
+	// Fresh embedded-server ports for every opencode harness in a room
+	// about to be (re)mounted. The ports from sqlite are dead — the run
+	// that bound them released them on exit — and resumeCmd needs the
+	// new ones to bake into the argv. Allocation failure is survivable:
+	// that harness resumes without --port and its L2c-2 SSE adapter
+	// simply doesn't attach.
+	const allocateOpencodePorts = useCallback(async (room: Room | undefined) => {
 		const portMap = new Map<string, number>();
-		if (room) {
-			await Promise.all(
-				room.harnesses
-					.filter((h) => h.kind === "opencode" && h.cmd)
-					.map(async (h) => {
-						try {
-							portMap.set(h.id, await invoke<number>("pick_free_port"));
-						} catch (err) {
-							console.warn(`[skein] pick_free_port failed for ${h.id} on reopen`, err);
-						}
-					}),
-			);
-			if (portMap.size > 0) {
-				setOpencodePorts((prev) => new Map([...prev, ...portMap]));
-			}
-		}
-		setRooms((prev) =>
-			prev.map((r) => {
-				if (r.id !== id) return r;
-				const { archived, ...rest } = r;
-				return {
-					...rest,
-					harnesses: rest.harnesses.map((h) =>
-						h.cmd ? { ...h, cmd: resumeCmd(h, portMap.get(h.id)) } : h,
-					),
-				};
-			}),
+		if (!room) return portMap;
+		await Promise.all(
+			room.harnesses
+				.filter((h) => h.kind === "opencode" && h.cmd)
+				.map(async (h) => {
+					try {
+						portMap.set(h.id, await invoke<number>("pick_free_port"));
+					} catch (err) {
+						console.warn(`[skein] pick_free_port failed for ${h.id} on unarchive`, err);
+					}
+				}),
 		);
-		setActiveRoomId(id);
+		if (portMap.size > 0) {
+			setOpencodePorts((prev) => new Map([...prev, ...portMap]));
+		}
+		return portMap;
+	}, []);
+
+	// #153 / #170: un-archiving a room re-mounts it, which re-spawns
+	// every harness, so their cmds must be in resume form *before* the
+	// state change lands. A harness created this session still carries
+	// its fresh-spawn cmd (`claude --session-id <uuid>`); re-running that
+	// against an existing session makes Claude reject it with "Session ID
+	// is already in use".
+	//
+	// This is the single un-archive path. #153 fixed the reopen modal,
+	// #170 was the OS-notification click doing the same job with the
+	// resume half missing — every future caller gets both halves by
+	// construction.
+	const unarchiveRoom = useCallback(
+		async (id: string) => {
+			const room = roomsRef.current.find((r) => r.id === id);
+			// Already active: it's mounted and running, so rewriting its
+			// cmds would change LiveTerminal's mountKey and kill a live
+			// harness. Just focus it.
+			if (!room?.archived) {
+				setActiveRoomId(id);
+				return;
+			}
+			const portMap = await allocateOpencodePorts(room);
+			setRooms((prev) => prev.map((r) => (r.id === id ? unarchiveRoomTransform(r, portMap) : r)));
+			setActiveRoomId(id);
+		},
+		[allocateOpencodePorts],
+	);
+	// The OS-notification listener is []-keyed (re-registering it on
+	// every render would leak native listeners), so it reaches the
+	// current unarchiveRoom through a ref rather than closing over it.
+	const unarchiveRoomRef = useRef(unarchiveRoom);
+	unarchiveRoomRef.current = unarchiveRoom;
+
+	const reopenRoom = async (id: string) => {
+		await unarchiveRoom(id);
 		setShowReopen(false);
 	};
 
@@ -2416,17 +2344,13 @@ export default function App() {
 			const { roomId, harnessId } = target;
 			const room = roomsRef.current.find((r) => r.id === roomId);
 			if (!room) return; // closed-and-deleted since the banner fired
-			// Reopen it if it was archived in the meantime, so it's reachable.
-			if (room.archived) {
-				setRooms((prev) =>
-					prev.map((r) => {
-						if (r.id !== roomId) return r;
-						const { archived, ...rest } = r;
-						return rest;
-					}),
-				);
-			}
-			setActiveRoomId(roomId);
+			// #170: un-archive it if it was archived in the meantime, so
+			// it's reachable. This used to strip `archived` inline and stop
+			// there — no resume rewrite, no fresh opencode port — so the
+			// remount respawned the stored fresh-form cmd and Claude died
+			// with "Session ID is already in use". unarchiveRoom does both
+			// halves (and focuses the room, archived or not).
+			void unarchiveRoomRef.current(roomId);
 			// Inline the harness switch (rather than calling
 			// switchHarnessInRoom) so this startup effect depends only on
 			// stable setters and stays []-keyed — otherwise it would

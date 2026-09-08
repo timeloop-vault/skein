@@ -48,7 +48,7 @@ corrections:
   `git config core.hooksPath .githooks`) runs, in order: cargo fmt,
   clippy, and tests for BOTH the workspace and `app/src-tauri`
   (excluded from the workspace — `cargo test --workspace` does NOT
-  reach its ~160 unit tests; #168), then tsc and biome. Note the
+  reach its ~160 unit tests; #168), then tsc, vitest and biome. Note the
   workspace fmt needs `--all`: with two members, plain `cargo fmt`
   fails with "Failed to find targets" (#209).
 
@@ -75,6 +75,11 @@ corrections:
     │   │   ├── harnessActivity.ts   # Source of truth for harness phase (spawning/running/
     │   │   │                        #   idle/waiting/exited); L2a idle heuristic + L2b
     │   │   │                        #   patterns + L2c authoritative adapters
+    │   │   ├── harnessCmd.ts        # Harness argv: cmdForKind (fresh spawn) + resumeCmd /
+    │   │   │                        #   withResumeCmds / unarchiveRoomTransform. Rebuilt from
+    │   │   │                        #   the harness RECORD, never by matching the previous
+    │   │   │                        #   argv — that pattern-matching was #153/#170. Add a
+    │   │   │                        #   spawn flag here and resume keeps working
     │   │   ├── harnessEvents.ts     # L2c translators: ClaudeEvent/OpencodeEvent → phase calls
     │   │   ├── harnessPatterns.ts   # L2b fallback regexes (copilot/shell waiting prompts)
     │   │   ├── data.tsx             # HARNESS_KINDS registry: chip/label/desc + the
@@ -267,8 +272,12 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   and CI, but **`cargo test --workspace` does NOT reach the tauri
   crate** — it is excluded from the workspace (#168), so the hook runs
   it via a second `--manifest-path`. Same for fmt and clippy. The
-  frontend still has no test infra — #169 tracks it, and it matters:
-  nearly every shipped regression has lived there.
+  frontend has vitest as of #170 (`cd app && npm test`, in the hook and
+  CI) but only `harnessCmd.test.ts` uses it so far — #169 stays open for
+  the rest, and it matters: nearly every shipped regression has lived
+  there. New suites are `src/**/*.test.ts`, node environment, no DOM;
+  pure modules are the cheap wins, so prefer extracting logic out of
+  App.tsx over reaching for jsdom.
 - **Issues drive the work.** Commit messages name the issue
   (`fix(#158): …`). The chapter/phase system ended with chapter 8;
   plan docs are history, not instructions. Parked ideas live in
@@ -308,7 +317,8 @@ extraction), and a run of Windows daily-driver fixes
 Known-weak spots, still open: App.tsx size and duplication (#19 — now
 ~3.2k LOC), the duplicated Claude/opencode adapter pairs (#116), heavy
 sync Tauri commands on the main thread (#171/#172/#178/#179), silent
-failure surfacing (#176), and no frontend tests (#169).
+failure surfacing (#176), and frontend test coverage that is one file
+deep (#169 — vitest itself landed with #170).
 
 The **review surface (#52)** is the current headline feature arc; its
 decisions are recorded in the epic and #211 is the entry point. Do not

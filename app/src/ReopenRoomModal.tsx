@@ -2,9 +2,11 @@
 //
 // closeRoom (App.tsx) no longer deletes; it sets `archived = Date.now()`.
 // This modal lists those archived rooms so a closed room can come back.
-// Clicking a row clears the archived flag and switches the active room
-// to it; the boot-time resume flow at App.tsx already handles re-spawning
-// PTYs with their captured sessionIds, so the conversations come back too.
+// Clicking a row calls App's `unarchiveRoom`, which clears the archived
+// flag *and* rewrites every harness cmd into resume form before the
+// remount respawns it. Both halves matter: the boot-time resume flow
+// does not run again here, and assuming it did is what shipped #153 and
+// then #170.
 //
 // #89: once you've daily-driven Skein for a while the list outgrows the
 // screen and there's no way to prune it. So this now has a filter box, a
