@@ -1686,6 +1686,79 @@ fn launch_context() -> String {
 // Deliberately not inside the `#[cfg(all(test, unix))]` module above:
 // #207 is a Windows bug, and a Windows bug guarded by Unix-only tests
 // is how it shipped. Everything here runs on both.
+/// The #213 spawn environment. Its own module because it must run on
+/// Windows too — that is the daily-driver platform, and the variables
+/// below are the only thing that gets a harness to the review at all.
+#[cfg(test)]
+mod agent_env_tests {
+    use super::{HarnessIdentity, apply_env, probe_snapshot};
+    use crate::spawn_settings::SpawnSettings;
+    use portable_pty::CommandBuilder;
+    use std::collections::HashMap;
+
+    #[test]
+    fn a_harness_is_told_where_its_rooms_review_lives() {
+        // #213's whole delivery mechanism. Both harnesses expand
+        // ${VAR} in their MCP config, so if these four are missing the
+        // agent has no review tools at all — and nothing else in the
+        // spawn path would notice.
+        let settings = SpawnSettings::default();
+        let identity = HarnessIdentity {
+            url: "http://127.0.0.1:51234/mcp".to_owned(),
+            token: "deadbeef".to_owned(),
+            room_id: "s_7f2".to_owned(),
+            harness_id: "h_a91".to_owned(),
+        };
+        let mut builder = CommandBuilder::new("skein-preview");
+        apply_env(&mut builder, &settings, probe_snapshot(), Some(&identity));
+        let env: HashMap<String, String> = builder
+            .iter_full_env_as_str()
+            .map(|(k, v)| (k.to_uppercase(), v.to_owned()))
+            .collect();
+        assert_eq!(
+            env.get("SKEIN_REVIEW_URL").map(String::as_str),
+            Some("http://127.0.0.1:51234/mcp")
+        );
+        assert_eq!(
+            env.get("SKEIN_REVIEW_TOKEN").map(String::as_str),
+            Some("deadbeef")
+        );
+        assert_eq!(env.get("SKEIN_ROOM_ID").map(String::as_str), Some("s_7f2"));
+        assert_eq!(
+            env.get("SKEIN_HARNESS_ID").map(String::as_str),
+            Some("h_a91")
+        );
+
+        // And without an identity — the settings preview, or a boot
+        // where the server never bound — nothing is set at all, rather
+        // than four variables pointing at a dead port.
+        let mut bare = CommandBuilder::new("skein-preview");
+        apply_env(&mut bare, &settings, probe_snapshot(), None);
+        assert!(
+            !bare
+                .iter_full_env_as_str()
+                .any(|(k, _)| k.to_uppercase().starts_with("SKEIN_REVIEW"))
+        );
+    }
+
+    #[test]
+    fn the_review_variables_cannot_be_pinned_by_hand() {
+        // Setting SKEIN_REVIEW_TOKEN in the user's extra env would point
+        // one harness at another room's review. It is refused out loud
+        // rather than silently overwritten below.
+        let settings = SpawnSettings {
+            extra_env: vec![crate::spawn_settings::EnvVar {
+                key: "SKEIN_REVIEW_TOKEN".to_owned(),
+                value: "somebody-elses".to_owned(),
+            }],
+            ..SpawnSettings::default()
+        };
+        let mut builder = CommandBuilder::new("skein-preview");
+        let applied = apply_env(&mut builder, &settings, probe_snapshot(), None);
+        assert_eq!(applied.ignored_env_keys, vec!["SKEIN_REVIEW_TOKEN"]);
+    }
+}
+
 #[cfg(test)]
 mod launch_tests {
     use super::{resolve_program_in, windows_resolved_program};

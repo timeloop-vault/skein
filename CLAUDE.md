@@ -360,8 +360,8 @@ stderr; `RUST_LOG` overrides the default `info` filter.
 - **Tests live with the code that owns them.**
   `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `crates/skein-review` has 45; `app/src-tauri` has ~280 in-module unit
-  tests in source, of which ~245 run on any one platform — 242 on
+  `crates/skein-review` has 45; `app/src-tauri` has ~285 in-module unit
+  tests in source, of which ~245 run on any one platform — 244 on
   Windows; the rest are
   `cfg`-gated per OS (#202) (spawn-env merging, harness JSONL/SSE
   parsers, db persistence, pty). All run in the hook
