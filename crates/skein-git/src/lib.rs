@@ -300,6 +300,34 @@ impl Repo {
         &self.workdir
     }
 
+    /// The content of `relpath` (repo-relative, forward slashes) as of
+    /// HEAD, or `None` when HEAD has no such entry.
+    ///
+    /// This is where a review baseline comes from (#211): the first
+    /// time a harness touches a file we snapshot what was committed, so
+    /// the change stays reviewable *after* the agent commits it — which
+    /// is exactly the workflow #52 is built around. It reads HEAD rather
+    /// than the working tree on purpose: by the time Skein sees the
+    /// harness's patch row the edit is already on disk.
+    ///
+    /// `None` covers every "git cannot tell us" case uniformly — an
+    /// unborn HEAD (no commits yet), a path git has never tracked, and
+    /// a tree entry that is not a blob (a submodule, a directory). The
+    /// caller treats all of them as "the file did not exist at
+    /// baseline", which over-reports rather than silently absorbing a
+    /// change.
+    pub fn head_blob(&self, relpath: &str) -> Result<Option<Vec<u8>>> {
+        let Ok(head) = self.repo.head() else {
+            return Ok(None); // unborn HEAD — a repo with no commits
+        };
+        let tree = head.peel_to_tree()?;
+        let Ok(entry) = tree.get_path(Path::new(relpath)) else {
+            return Ok(None); // not tracked at HEAD
+        };
+        let object = entry.to_object(&self.repo)?;
+        Ok(object.as_blob().map(|b| b.content().to_vec()))
+    }
+
     /// Is this reported path actually a directory on disk?
     ///
     /// libgit2 sees a Windows junction (and a symlink to a directory)

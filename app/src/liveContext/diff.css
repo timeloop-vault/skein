@@ -126,3 +126,100 @@
 	min-width: 0;
 }
 /* Diff body empty / binary states reuse the shared .lc-empty chrome. */
+
+/* ── review verbs (#211) ─────────────────────────────────────────────
+   Accept advances the baseline (nothing is written); reject restores
+   the baseline on disk. The asymmetry is why they never share a colour:
+   ✓ reads as "done with this", ↶ as "undo this". */
+.lc-diff-toolbar {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 2px 8px;
+	border-bottom: 1px solid var(--line);
+	min-height: calc(var(--cfs, 12px) * 1.75);
+}
+.lc-diff-filter,
+.lc-diff-toolbar-right {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+.lc-diff-chip {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	border: 1px solid transparent;
+	border-radius: 3px;
+	background: none;
+	color: var(--fg-3);
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.7917);
+	padding: 0 4px;
+	cursor: pointer;
+}
+.lc-diff-chip:hover {
+	color: var(--fg-1);
+}
+.lc-diff-chip.on {
+	border-color: var(--accent);
+	color: var(--fg-0);
+}
+.lc-diff-verbs {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	margin-left: auto;
+}
+.lc-diff-act {
+	border: 0;
+	background: none;
+	cursor: pointer;
+	color: var(--fg-3);
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.8333);
+	line-height: 1;
+	padding: 2px 5px;
+	border-radius: 3px;
+}
+.lc-diff-act:hover:not(:disabled) {
+	background: var(--bg-3);
+}
+.lc-diff-act.accept:hover:not(:disabled) {
+	color: var(--ok);
+}
+.lc-diff-act.reject:hover:not(:disabled) {
+	color: var(--err);
+}
+.lc-diff-act.all {
+	color: var(--fg-2);
+	white-space: nowrap;
+}
+.lc-diff-act:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+/* The hunk header now carries a chip and the two verbs, so it needs to
+   lay out as a row rather than a bare label. */
+.lc-diff-hunk-sep {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.lc-diff-hunk-range {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* A failed accept/reject says so. A review pane that silently shows
+   nothing is indistinguishable from one with nothing to show (#176). */
+.lc-diff-err {
+	flex: 0 0 auto;
+	padding: 3px 10px;
+	color: var(--err);
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.7917);
+	border-bottom: 1px solid var(--line);
+}

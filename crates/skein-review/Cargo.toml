@@ -1,0 +1,18 @@
+[package]
+name = "skein-review"
+version = "0.1.0"
+description = "Baseline review model for Skein — pending hunks against a reviewed baseline, with accept (advance) and reject (restore)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+similar = "2"
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

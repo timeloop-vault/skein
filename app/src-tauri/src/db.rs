@@ -358,6 +358,32 @@ impl Database {
         )
         .map_err(|e| e.to_string())?;
 
+        // Issue #211 (epic #52 D3): the review baseline — the content
+        // of each touched file as the user last reviewed it. A sibling
+        // table rather than a field on the Room blob: #167's field
+        // policy means a new Room field has to be `serde(default)` or
+        // `Option`, and a per-file content snapshot has no business
+        // being rewritten wholesale on every autosave.
+        //
+        // `content` is NULL unless `kind = 'text'` — the other kinds
+        // (missing / binary / toolarge / symlink / unreadable) record
+        // *why* there is nothing to diff, so the pane can say so
+        // instead of silently dropping the file.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS review_baselines (
+                room_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                content TEXT,
+                harness_id TEXT NOT NULL,
+                captured_ms INTEGER NOT NULL,
+                touched_ms INTEGER NOT NULL,
+                PRIMARY KEY (room_id, path)
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
         Ok(())
     }
 
@@ -730,6 +756,148 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
     }
+
+    // ── review baselines (issue #211) ─────────────────────────────
+
+    /// Capture a baseline for `path` only if this room has never seen
+    /// it. Returns `true` when a row was created.
+    ///
+    /// "Only if absent" is the whole episode boundary: the first time a
+    /// harness touches a file we snapshot what the user had already
+    /// accepted (or what was committed), and every subsequent edit
+    /// diffs against that same snapshot until they review it. A second
+    /// capture would move the baseline behind the user's back and make
+    /// their pending change disappear.
+    pub fn insert_review_baseline_if_absent(
+        &self,
+        room_id: &str,
+        path: &str,
+        kind: &str,
+        content: Option<&str>,
+        harness_id: &str,
+        now_ms: i64,
+    ) -> Result<bool, String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT OR IGNORE INTO review_baselines \
+             (room_id, path, kind, content, harness_id, captured_ms, touched_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![room_id, path, kind, content, harness_id, now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(conn.changes() > 0)
+    }
+
+    /// Record that `harness_id` wrote `path` again. Attribution only —
+    /// the baseline content is untouched (D4: harness is a chip, not a
+    /// scope).
+    pub fn touch_review_baseline(
+        &self,
+        room_id: &str,
+        path: &str,
+        harness_id: &str,
+        now_ms: i64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE review_baselines SET harness_id = ?3, touched_ms = ?4 \
+             WHERE room_id = ?1 AND path = ?2",
+            params![room_id, path, harness_id, now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Move the baseline forward — what "accept" does. The working
+    /// tree is not this function's business and is never touched.
+    ///
+    /// An upsert rather than an update so a missing row can never make
+    /// an accept a silent no-op; in practice accept always runs against
+    /// a path that already has a baseline, and `harness_id` is
+    /// deliberately absent from the conflict clause so advancing the
+    /// baseline does not erase who last wrote the file.
+    pub fn advance_review_baseline(
+        &self,
+        room_id: &str,
+        path: &str,
+        kind: &str,
+        content: Option<&str>,
+        now_ms: i64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO review_baselines \
+             (room_id, path, kind, content, harness_id, captured_ms, touched_ms) \
+             VALUES (?1, ?2, ?3, ?4, '', ?5, ?5) \
+             ON CONFLICT(room_id, path) DO UPDATE SET \
+               kind = excluded.kind, content = excluded.content, captured_ms = excluded.captured_ms",
+            params![room_id, path, kind, content, now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Every baseline the room holds, path-ordered for stable tabs.
+    pub fn review_baselines_for_room(&self, room_id: &str) -> Result<Vec<ReviewBaseline>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT path, kind, content, harness_id, captured_ms, touched_ms \
+                 FROM review_baselines WHERE room_id = ?1 ORDER BY path",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![room_id], row_to_baseline)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// One baseline, or `None` when the room has never seen the path.
+    pub fn review_baseline(
+        &self,
+        room_id: &str,
+        path: &str,
+    ) -> Result<Option<ReviewBaseline>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT path, kind, content, harness_id, captured_ms, touched_ms \
+                 FROM review_baselines WHERE room_id = ?1 AND path = ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![room_id, path], row_to_baseline)
+            .map_err(|e| e.to_string())?;
+        match rows.next() {
+            Some(r) => r.map(Some).map_err(|e| e.to_string()),
+            None => Ok(None),
+        }
+    }
+}
+
+/// One row of `review_baselines` (issue #211). `content` is `Some`
+/// only when `kind == "text"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewBaseline {
+    pub path: String,
+    pub kind: String,
+    pub content: Option<String>,
+    /// Last harness to write this path — the Diff card's chip (D4).
+    pub harness_id: String,
+    pub captured_ms: i64,
+    pub touched_ms: i64,
+}
+
+fn row_to_baseline(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewBaseline> {
+    Ok(ReviewBaseline {
+        path: row.get(0)?,
+        kind: row.get(1)?,
+        content: row.get(2)?,
+        harness_id: row.get(3)?,
+        captured_ms: row.get(4)?,
+        touched_ms: row.get(5)?,
+    })
 }
 
 /// `rename` that also replaces an existing `to` on Windows, where
@@ -1242,5 +1410,142 @@ mod tests {
         assert_eq!(action_kind::USER_PROMPT, "user_prompt");
         assert_eq!(action_kind::COMPACTION, "compaction");
         assert_eq!(action_kind::REASONING, "reasoning");
+    }
+}
+
+#[cfg(test)]
+mod review_baseline_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn fresh() -> (TempDir, Database) {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        (dir, db)
+    }
+
+    #[test]
+    fn first_touch_captures_and_a_second_touch_does_not_move_the_baseline() {
+        let (_d, db) = fresh();
+        assert!(
+            db.insert_review_baseline_if_absent("r1", "src/a.rs", "text", Some("v1\n"), "h1", 100)
+                .unwrap()
+        );
+        // The agent writes again. Re-capturing here would silently
+        // absorb the pending change — the exact failure #211 names.
+        assert!(
+            !db.insert_review_baseline_if_absent("r1", "src/a.rs", "text", Some("v2\n"), "h2", 200)
+                .unwrap()
+        );
+        let b = db.review_baseline("r1", "src/a.rs").unwrap().unwrap();
+        assert_eq!(b.content.as_deref(), Some("v1\n"));
+    }
+
+    #[test]
+    fn touch_updates_attribution_only() {
+        let (_d, db) = fresh();
+        db.insert_review_baseline_if_absent("r1", "a.rs", "text", Some("v1\n"), "h1", 100)
+            .unwrap();
+        db.touch_review_baseline("r1", "a.rs", "h2", 250).unwrap();
+        let b = db.review_baseline("r1", "a.rs").unwrap().unwrap();
+        assert_eq!(b.harness_id, "h2");
+        assert_eq!(b.touched_ms, 250);
+        assert_eq!(b.captured_ms, 100);
+        assert_eq!(b.content.as_deref(), Some("v1\n"));
+    }
+
+    #[test]
+    fn advance_moves_content_but_keeps_attribution() {
+        let (_d, db) = fresh();
+        db.insert_review_baseline_if_absent("r1", "a.rs", "text", Some("v1\n"), "h1", 100)
+            .unwrap();
+        db.advance_review_baseline("r1", "a.rs", "text", Some("v2\n"), 300)
+            .unwrap();
+        let b = db.review_baseline("r1", "a.rs").unwrap().unwrap();
+        assert_eq!(b.content.as_deref(), Some("v2\n"));
+        assert_eq!(b.harness_id, "h1", "accept must not erase who wrote it");
+        assert_eq!(b.captured_ms, 300);
+    }
+
+    #[test]
+    fn baselines_are_scoped_per_room_and_path_ordered() {
+        let (_d, db) = fresh();
+        db.insert_review_baseline_if_absent("r1", "z.rs", "text", Some("z"), "h1", 1)
+            .unwrap();
+        db.insert_review_baseline_if_absent("r1", "a.rs", "text", Some("a"), "h1", 1)
+            .unwrap();
+        db.insert_review_baseline_if_absent("r2", "other.rs", "text", Some("o"), "h9", 1)
+            .unwrap();
+
+        let r1 = db.review_baselines_for_room("r1").unwrap();
+        assert_eq!(
+            r1.iter().map(|b| b.path.as_str()).collect::<Vec<_>>(),
+            ["a.rs", "z.rs"]
+        );
+        assert_eq!(db.review_baselines_for_room("r2").unwrap().len(), 1);
+        assert!(db.review_baseline("r2", "a.rs").unwrap().is_none());
+    }
+
+    #[test]
+    fn non_text_kinds_round_trip_with_a_null_content() {
+        let (_d, db) = fresh();
+        db.insert_review_baseline_if_absent("r1", "logo.png", "binary", None, "h1", 1)
+            .unwrap();
+        db.insert_review_baseline_if_absent("r1", "new.rs", "missing", None, "h1", 1)
+            .unwrap();
+        let b = db.review_baseline("r1", "logo.png").unwrap().unwrap();
+        assert_eq!(b.kind, "binary");
+        assert_eq!(b.content, None);
+        assert_eq!(
+            db.review_baseline("r1", "new.rs").unwrap().unwrap().kind,
+            "missing"
+        );
+    }
+
+    #[test]
+    fn baselines_survive_a_restart() {
+        // #211's mandatory property: an empty tracker after a reload
+        // makes pending hunks "silently disappear — the user sees their
+        // changes auto-applied".
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        {
+            let db = Database::open(&path).unwrap();
+            db.insert_review_baseline_if_absent("r1", "src/a.rs", "text", Some("v1\n"), "h1", 100)
+                .unwrap();
+            db.insert_review_baseline_if_absent(
+                "r1",
+                "src/b.rs",
+                "text",
+                Some("keep\n"),
+                "h2",
+                110,
+            )
+            .unwrap();
+            db.advance_review_baseline("r1", "src/b.rs", "text", Some("accepted\n"), 200)
+                .unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        let rows = db.review_baselines_for_room("r1").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].content.as_deref(), Some("v1\n"));
+        assert_eq!(rows[0].harness_id, "h1");
+        assert_eq!(rows[1].content.as_deref(), Some("accepted\n"));
+    }
+
+    #[test]
+    fn crlf_and_unicode_content_survives_the_round_trip() {
+        let (_d, db) = fresh();
+        let content = "line\r\nnäst\r\n🧵 skein\r\n";
+        db.insert_review_baseline_if_absent("r1", "a.rs", "text", Some(content), "h1", 1)
+            .unwrap();
+        assert_eq!(
+            db.review_baseline("r1", "a.rs")
+                .unwrap()
+                .unwrap()
+                .content
+                .as_deref(),
+            Some(content)
+        );
     }
 }

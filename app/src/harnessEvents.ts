@@ -137,6 +137,8 @@ export type OpencodeEvent =
 	| { kind: "session_end" };
 
 /// Subscribe an opencode harness to its embedded-server SSE stream
+/// `cwd` is the room worktree — the backend needs it to capture a
+/// review baseline for each file the harness writes (#211).
 /// on `127.0.0.1:<port>`. Synchronously marks the activity store as
 /// authoritative-source (same dance as Claude — see comment in
 /// `attachClaudeEvents`). Returns an unsubscribe.
@@ -154,6 +156,7 @@ export type OpencodeEvent =
 export function attachOpencodeEvents(
 	harnessId: string,
 	roomId: string,
+	cwd: string,
 	port: number,
 	sessionId: string | undefined,
 	onSessionCaptured: ((sessionId: string) => void) | undefined,
@@ -169,6 +172,7 @@ export function attachOpencodeEvents(
 	void invoke("opencode_events_attach", {
 		harnessId,
 		roomId,
+		cwd,
 		port,
 		sessionId: sessionId ?? null,
 		onEvent: channel,

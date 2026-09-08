@@ -139,6 +139,7 @@ impl OpencodeEventsManager {
         &self,
         harness_id: String,
         room_id: String,
+        cwd: String,
         port: u16,
         session_id: Option<String>,
         on_event: F,
@@ -173,7 +174,7 @@ impl OpencodeEventsManager {
         let hid = harness_id.clone();
         let rid = room_id;
         let handle = tokio::spawn(async move {
-            run_adapter(port, cancel_for_task, on_event, db, app, hid, rid).await;
+            run_adapter(port, cancel_for_task, on_event, db, app, hid, rid, cwd).await;
         });
         self.inner.lock().insert(
             harness_id,
@@ -202,6 +203,7 @@ async fn run_adapter(
     app: Option<tauri::AppHandle>,
     harness_id: String,
     room_id: String,
+    cwd: String,
 ) {
     let url = format!("http://127.0.0.1:{port}/event");
     let client = match reqwest::Client::builder()
@@ -237,6 +239,7 @@ async fn run_adapter(
             app.as_ref(),
             &harness_id,
             &room_id,
+            &cwd,
         );
         tokio::select! {
             biased;
@@ -302,6 +305,7 @@ async fn stream_events(
     app: Option<&tauri::AppHandle>,
     harness_id: &str,
     room_id: &str,
+    cwd: &str,
 ) -> Result<(), reqwest::Error> {
     use futures_util::StreamExt;
 
@@ -345,7 +349,7 @@ async fn stream_events(
                 };
                 let chunk = chunk?;
                 buf.extend_from_slice(&chunk);
-                process_buffer(&mut buf, on_event, db, app, harness_id, room_id);
+                process_buffer(&mut buf, on_event, db, app, harness_id, room_id, cwd);
             }
         }
     }
@@ -362,6 +366,7 @@ fn process_buffer(
     app: Option<&tauri::AppHandle>,
     harness_id: &str,
     room_id: &str,
+    cwd: &str,
 ) {
     loop {
         let Some(sep) = find_double_newline(buf) else {
@@ -400,6 +405,18 @@ fn process_buffer(
                     action.source.as_deref(),
                 ) {
                     Ok(id) => {
+                        // SSE rows are live by definition; the DB
+                        // backfill path deliberately does not capture
+                        // baselines (see review.rs).
+                        if action.kind == crate::db::action_kind::PATCH {
+                            crate::review::note_patch(
+                                db,
+                                room_id,
+                                cwd,
+                                harness_id,
+                                &action.payload,
+                            );
+                        }
                         if let Some(app) = app {
                             crate::harness_action_event::emit(
                                 app,
@@ -516,7 +533,7 @@ mod tests {
         let mut buf = Vec::new();
         for (i, chunk) in input.iter().enumerate() {
             buf.extend_from_slice(&frame_each(i, chunk));
-            process_buffer(&mut buf, &cb, &db, None, "h-test", "r-test");
+            process_buffer(&mut buf, &cb, &db, None, "h-test", "r-test", "");
         }
         let mut out = Vec::new();
         while let Ok(e) = rx.try_recv() {
@@ -626,11 +643,11 @@ mod tests {
         buf.extend_from_slice(
             br#"data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"#,
         );
-        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test");
+        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "");
         assert!(rx.try_recv().is_err(), "partial frame must not emit");
         buf.extend_from_slice(br#""idle"}}}"#);
         buf.extend_from_slice(b"\n\n");
-        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test");
+        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "");
         let mut out: Vec<OpencodeEvent> = Vec::new();
         while let Ok(e) = rx.try_recv() {
             out.push(e);
@@ -656,7 +673,7 @@ mod tests {
         let cb = move |e: OpencodeEvent| {
             tx.send(e).unwrap();
         };
-        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test");
+        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "");
         let mut out = Vec::new();
         while let Ok(e) = rx.try_recv() {
             out.push(e);
@@ -679,7 +696,7 @@ mod tests {
         let cb = move |e: OpencodeEvent| {
             tx.send(e).unwrap();
         };
-        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test");
+        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "");
         let mut out: Vec<OpencodeEvent> = Vec::new();
         while let Ok(e) = rx.try_recv() {
             out.push(e);

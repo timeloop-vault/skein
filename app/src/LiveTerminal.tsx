@@ -434,6 +434,7 @@ export const LiveTerminal = ({
 					detachOpencodeAdapter = attachOpencodeEvents(
 						harnessId,
 						roomId,
+						cwd,
 						opencodePort,
 						sessionId,
 						onSessionCaptured,

@@ -173,6 +173,7 @@ export const LiveContext = memo(function LiveContext({
 						),
 						body: (
 							<DiffCardBody
+								roomId={roomId}
 								cwd={cwd}
 								actions={actions}
 								harnessKindOf={harnessKindOf}
