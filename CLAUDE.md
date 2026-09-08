@@ -23,9 +23,11 @@ corrections:
 
 - **Review surface: #52 is the source of truth**, not the audit. It is
   now an epic with the decisions recorded (scope, diff lifetime,
-  anchoring, the agent API) and five sub-issues, #211–#215. **#211
-  landed** — the diff pane now has a baseline; **#212 is next**. #106
-  was rescoped out from under it and is now just a Diff-card issue.
+  anchoring, the agent API) and five sub-issues, #211–#215. **#211 and
+  #212 landed** — the diff has a baseline, and the review pane is the
+  right pane's second tab; **#213 (the agent API + MCP server) is
+  next**. #106 was rescoped out from under it and, now that the Diff
+  card is gone, is a review-pane issue.
 - **Files pillar (#49) is half-shipped:** A (#184) and B (#185) landed;
   C (#186) and D (#187) are open.
 
@@ -66,13 +68,17 @@ corrections:
     │                                #   propose_worktree_path → sibling dir <repo>-wt/<slug>.
     │                                #   No clone/fetch/push/commit yet (#182, #214 add
     │                                #   writes — and #214 argues for the git CLI, not libgit2)
-    ├── crates/skein-review/         # The baseline review model (#211, epic #52 D3/D4).
-    │   └── src/{content,hunks}.rs   #   Tauri-free and pure: classify what is on disk
-    │                                #   (text/binary/toolarge/symlink/unreadable), diff
+    ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
+    │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
+    │             anchor}.rs         #   (text/binary/toolarge/symlink/unreadable), diff
     │                                #   baseline→worktree into hunks, and the two asymmetric
     │                                #   splices — accept (baseline moves, disk untouched) and
     │                                #   reject (disk moves, baseline untouched). Byte-exact:
-    │                                #   both splice line slices that keep their terminators
+    │                                #   both splice line slices that keep their terminators.
+    │                                #   anchor: comment re-anchoring — anchor on the TEXT, not
+    │                                #   the line number; three tiers (exact/exact-elsewhere/
+    │                                #   max-overlap) then outdated. Never silently moves or
+    │                                #   drops a comment; 22 table tests, no repo needed
     ├── app/
     │   ├── src/                     # React + TS UI
     │   │   ├── App.tsx              # The single React tree (~3.2k LOC hotspot; #19 tracks
@@ -107,15 +113,24 @@ corrections:
     │   │                            #   LiveContext.tsx + CardStack (chrome, per-room layout),
     │   │                            #   ActivityCard/feedItems/rows/toolRows/Row/ResultPreview
     │   │                            #   (feed), RoomSubtitle, PlanCard/plan.ts (todo reducer;
-    │   │                            #   merges all harnesses — bug #216), DiffCard +
-    │   │                            #   review.ts/useReviewPending (the pending review vs the
-    │   │                            #   persisted baseline, w/ accept/reject and per-hunk
-    │   │                            #   harness chips, #211; diff.ts is now only the render
-    │   │                            #   shape + the two harness patch parsers),
+    │   │                            #   merges all harnesses — bug #216),
     │   │                            #   useGitBranchWatcher, payload.ts (all payload-shape
-    │   │                            #   divergence lives here)
+    │   │                            #   divergence lives here). review.ts survives the Diff
+    │   │                            #   card: accept/reject + attributeHunks (#211 D4).
+    │   │                            #   diff.ts is only the render shape + the two harness
+    │   │                            #   patch parsers
+    │   │   ├── RightPane.tsx        # The right pane's tab strip (#212): Live Context ⇄ Review.
+    │   │   │                        #   Both stay mounted (display:none), Mod+R toggles. The
+    │   │   │                        #   named seam movable panes will need
+    │   │   └── review/              # The review surface (#212, epic #52 B). api.ts (DTO mirror
+    │   │                            #   of review_surface.rs + invoke wrappers), ReviewPane
+    │   │                            #   (header/base picker/scope switch/orchestration),
+    │   │                            #   FileList, CommitList, DiffBody (one unified-diff
+    │   │                            #   renderer for all three scopes, hover-to-comment,
+    │   │                            #   shift-click to extend), Thread (threads + composer),
+    │   │                            #   useReviewData (scope/file fetch + worktree watcher)
     │   └── src-tauri/               # Tauri Rust shell
-    │       ├── src/lib.rs           # Builder + 43-command registry; tracing → daily-rotating
+    │       ├── src/lib.rs           # Builder + 53-command registry; tracing → daily-rotating
     │       │                        #   file in app_log_dir() + stderr (RUST_LOG overrides)
     │       ├── src/pty.rs           # PtyManager (portable-pty); 2 threads per spawn (reader +
     │       │                        #   waiter — the waiter is load-bearing on Windows ConPTY)
@@ -133,9 +148,13 @@ corrections:
     │       │                        #   PATHEXT resolution before portable-pty. 50 unit tests
     │       ├── src/spawn_settings.rs # Persisted user overrides for the above
     │       ├── src/resume.rs        # session-existence probes against the tools' own stores
-    │       ├── src/review.rs        # Baseline capture + the three review commands (#211).
+    │       ├── src/review.rs        # Baseline capture + the three baseline commands (#211).
     │       │                        #   Captures from the HEAD blob the moment a LIVE patch
     │       │                        #   row lands — never on backfill, where HEAD has moved
+    │       ├── src/review_surface.rs # The review the user reads (#212): scope (branch /
+    │       │                        #   commit / pending), per-file diff, and the nine
+    │       │                        #   thread+comment commands. Re-anchors every thread on
+    │       │                        #   file open and writes the new position back
     │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1)
     │       ├── src/harness_events_opencode.rs  # SSE client → OpencodeEvent (L2c-2)
     │       ├── src/harness_actions_claude.rs   # JSONL → harness_actions rows (#80)
@@ -213,12 +232,31 @@ corrections:
   captured from the git HEAD blob at the moment a **live** `patch` row
   is recorded — backfill deliberately does not capture, because
   replaying history is exactly when HEAD has already moved past the
-  edit. The Diff card renders `baseline → worktree`, so a tab clears
-  when the file is reviewed and *not* when the agent commits. Accept
-  advances the baseline and writes nothing; reject writes the file back
-  and moves nothing. A file the harness only *created* untracked reads
-  as fully added on first touch — over-reporting is the safe direction,
-  and one accept settles it.
+  edit. The review pane's **pending** scope renders `baseline →
+  worktree`, so a file clears when it is reviewed and *not* when the
+  agent commits. Accept advances the baseline and writes nothing;
+  reject writes the file back and moves nothing. A file the harness
+  only *created* untracked reads as fully added on first touch —
+  over-reporting is the safe direction, and one accept settles it.
+  (Discovery is still patch-row-driven, which is the hole #221 names.)
+- **The review surface** (#212, epic #52 D1/D5/D6/D7): the right pane's
+  second tab. Three scopes over one renderer — **branch**
+  (`merge-base(HEAD, base) → working tree`, the default and the only
+  view that counts committed and uncommitted work together),
+  **commit** (one commit vs its first parent), **pending** (the
+  baseline model above, and the only scope with accept/reject). Base
+  ref is guessed per repo and overridden per room in
+  `review_settings`. Comments live in `review_threads` +
+  `review_comments`, carry an `author` from the first migration (D7)
+  so #213's agent replies are a row change and not a migration, and
+  **anchor on the text they were written against, never on a line
+  number**. Every thread re-anchors on file open and the new position
+  is written back; one that cannot be placed renders above the diff
+  against its original code. **Never silently moved, never silently
+  dropped** — that is the whole contract, and the matcher lives in
+  `crates/skein-review/src/anchor.rs` where it is testable without a
+  repo. `review_viewed` stores the *content hash* the user looked at,
+  which is what makes "changed since I last looked" fall out for free.
 - **Files** (#185): `FileTree` lists via `list_dir`, `FilesBody` reads
   via `read_file_text` and saves via `write_file_text`, which
   round-trips an mtime token to detect a stale write. Buffer text
@@ -282,10 +320,10 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   it from `app/` (`cd app && npx biome check .`), never from the repo
   root with a path argument.
 - **Tests live with the code that owns them.**
-  `crates/skein-git/tests/` has 25 integration tests against tempfile
+  `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `crates/skein-review` has 22; `app/src-tauri` has ~220 in-module unit
-  tests in source, of which ~190 run on any one platform — 189 on
+  `crates/skein-review` has 45; `app/src-tauri` has ~250 in-module unit
+  tests in source, of which ~215 run on any one platform — 214 on
   Windows; the rest are
   `cfg`-gated per OS (#202) (spawn-env merging, harness JSONL/SSE
   parsers, db persistence, pty). All run in the hook
@@ -329,7 +367,7 @@ and a CodeMirror editor), spawn-environment work (#192, #197, #207),
 authoritative session cost (#199), #209 (the `skein-harness` crate
 extraction), and a run of Windows daily-driver fixes
 (#200/#201/#202/#207/#217). #211 (the review baseline — the
-Diff card finally clears) opens the #52 arc.
+diff finally clears) and #212 (the review pane) open the #52 arc.
 
 Known-weak spots, still open: App.tsx size and duplication (#19 — now
 ~3.2k LOC), the duplicated Claude/opencode adapter pairs (#116), heavy
@@ -337,9 +375,11 @@ sync Tauri commands on the main thread (#171/#172/#178/#179), silent
 failure surfacing (#176), and no frontend tests (#169).
 
 The **review surface (#52)** is the current headline feature arc; its
-decisions are recorded in the epic. #211 (baseline model) has landed;
-#212 (diff + comments) is the next entry point. Do not plan review work
-off the audit — it predates those decisions.
+decisions are recorded in the epic. #211 (baseline model) and #212
+(the review pane — branch-vs-base diff, comments, anchoring) have
+landed; #213 (the review API + MCP server, which is what finally lets
+the agent *read* the comments) is the next entry point. Do not plan
+review work off the audit — it predates those decisions.
 
 ## Design references
 
