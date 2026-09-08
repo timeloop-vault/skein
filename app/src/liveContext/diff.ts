@@ -1,20 +1,21 @@
-// Diff card data layer — issue #80 D3.
+// Diff rendering shapes, and the two harness patch-payload parsers.
 //
-// The card is harness-first like Plan/Activity: its tabs, active file,
-// and flicker all derive from the room's `patch` rows (what the agents
-// touched), NOT from git. The diff *body* prefers the live worktree diff
-// (git_diff — cumulative vs HEAD, structured) and falls back to the
-// harness's own reported patch when git can't show the file (no repo, a
-// gitignored path, or a file git doesn't list) — so the body is never
-// blank for something an agent demonstrably edited. Both sources
-// normalise to one shape so a single renderer handles them.
+// The Diff card's data now comes from the review baseline
+// (`review.ts` / `useReviewPending.ts`, issue #211) rather than from
+// git or from accumulated patch rows. What is left here is:
+//
+//   • the rendered line/hunk shape, which the backend's
+//     `skein-review::Hunk` serializes into unchanged, and
+//   • the two parsers that turn a harness's *own* reported patch into
+//     that shape. Those are no longer a diff source — the baseline
+//     model covers gitignored and non-repo paths directly — but they
+//     are still how a `patch` row's line ranges are recovered for
+//     per-hunk harness attribution (D4). See `review.ts`.
 
-import { basename } from "./Row.tsx";
-import { type Payload, num, obj, parsePayload, str } from "./payload.ts";
-import type { HarnessAction } from "./store.ts";
+import { num, obj, str } from "./payload.ts";
 
-/// One diff line. Mirrors the Rust `DiffLineDto` (git.rs) so a git
-/// FileDiff drops in unchanged; harness-patch parsing produces the same.
+/// One diff line. Mirrors the Rust `HunkLine` (skein-review) and
+/// `DiffLineDto` (git.rs) — one renderer handles both.
 export interface DiffLine {
 	kind: "context" | "add" | "delete";
 	content: string;
@@ -24,134 +25,6 @@ export interface DiffLine {
 export interface DiffHunk {
 	header: string;
 	lines: DiffLine[];
-}
-/// Matches the `git_diff` command's `FileDiffDto`.
-export interface FileDiff {
-	path: string;
-	kind: string;
-	binary: boolean;
-	hunks: DiffHunk[];
-}
-
-/// A diff tab — one per file an agent touched this session.
-export interface DiffTab {
-	/** Full path as the harness reported it (for git matching + title). */
-	fullPath: string;
-	/** Display label (last path segment). */
-	file: string;
-	/** Harness whose latest edit owns this tab (drives the chip). */
-	harnessId: string;
-	/** Cumulative additions/deletions across this file's patch rows;
-	 *  undefined when no row carried patch_info. */
-	adds: number | undefined;
-	dels: number | undefined;
-}
-
-/// A patch row that names a single edited file. Excludes the opencode
-/// multi-file commit snapshot ({files, hash} — no tool, no patch_info)
-/// and errored patches.
-interface PatchInfo {
-	fullPath: string;
-	harnessId: string;
-	adds: number | undefined;
-	dels: number | undefined;
-	payload: Payload;
-}
-
-function patchInfo(a: HarnessAction): PatchInfo | undefined {
-	if (a.kind !== "patch") return undefined;
-	const p = parsePayload(a.payload);
-	if (p.is_error === true) return undefined;
-	// A real single-file edit carries an edit/write/multiedit tool. The
-	// opencode multi-file commit snapshot ({files, hash}) has no tool —
-	// exclude it so it doesn't own a tab or shadow the file's real edit
-	// in the harness-patch fallback.
-	const tool = (str(p.tool) ?? "").toLowerCase();
-	if (tool !== "edit" && tool !== "write" && tool !== "multiedit") return undefined;
-	const files = Array.isArray(p.files) ? p.files : [];
-	const file = str(files[0]) ?? str(obj(p.input)?.filePath) ?? str(obj(p.input)?.file_path);
-	if (!file) return undefined;
-	const pi = obj(p.patch_info);
-	return {
-		fullPath: file,
-		harnessId: a.harnessId,
-		adds: pi ? num(pi.additions) : undefined,
-		dels: pi ? num(pi.deletions) : undefined,
-		payload: p,
-	};
-}
-
-/// The set of diff tabs, in most-recently-touched-last order, each
-/// carrying the harness of its latest edit and summed deltas. Derived
-/// purely from the feed (display-ordered actions in, see orderForDisplay).
-export function deriveTabs(actions: HarnessAction[]): DiffTab[] {
-	const byPath = new Map<string, DiffTab>();
-	for (const a of actions) {
-		const pi = patchInfo(a);
-		if (!pi) continue;
-		const existing = byPath.get(pi.fullPath);
-		const addDelta = (base: number | undefined, d: number | undefined) =>
-			d == null ? base : (base ?? 0) + d;
-		if (existing) {
-			existing.adds = addDelta(existing.adds, pi.adds);
-			existing.dels = addDelta(existing.dels, pi.dels);
-			existing.harnessId = pi.harnessId; // latest edit owns the chip
-			// Re-order to most-recent-last.
-			byPath.delete(pi.fullPath);
-			byPath.set(pi.fullPath, existing);
-		} else {
-			byPath.set(pi.fullPath, {
-				fullPath: pi.fullPath,
-				file: basename(pi.fullPath),
-				harnessId: pi.harnessId,
-				adds: pi.adds,
-				dels: pi.dels,
-			});
-		}
-	}
-	return [...byPath.values()];
-}
-
-/// The file the Diff card should auto-focus: the focused harness's most
-/// recent edit. Falls back to the latest edit by *any* harness when the
-/// focused one hasn't touched anything (so the card isn't empty just
-/// because you're chatting with a harness that hasn't edited yet).
-export function autoFocusFile(
-	actions: HarnessAction[],
-	focusedHarnessId: string | undefined,
-): string | undefined {
-	let latestAny: string | undefined;
-	let latestFocused: string | undefined;
-	for (const a of actions) {
-		const pi = patchInfo(a);
-		if (!pi) continue;
-		latestAny = pi.fullPath;
-		if (focusedHarnessId && pi.harnessId === focusedHarnessId) latestFocused = pi.fullPath;
-	}
-	return latestFocused ?? latestAny;
-}
-
-/// The harness's own reported diff for a file's latest patch row, as the
-/// normalised hunk shape — the body fallback when git has nothing.
-/// opencode carries a unified-diff string (`patch_info.diff`); Claude a
-/// `structured_patch` array of hunks.
-export function harnessPatchHunks(
-	actions: HarnessAction[],
-	fullPath: string,
-): DiffHunk[] | undefined {
-	let latest: Payload | undefined;
-	for (const a of actions) {
-		const pi = patchInfo(a);
-		if (pi && pi.fullPath === fullPath) latest = pi.payload;
-	}
-	if (!latest) return undefined;
-	const pinfo = obj(latest.patch_info);
-	if (!pinfo) return undefined;
-	const diffStr = str(pinfo.diff);
-	if (diffStr) return parseUnifiedDiff(diffStr);
-	if (Array.isArray(pinfo.structured_patch))
-		return normalizeStructuredPatch(pinfo.structured_patch);
-	return undefined;
 }
 
 /// Parse the start line numbers from a `@@ -a,b +c,d @@` hunk header.
@@ -223,19 +96,4 @@ export function normalizeStructuredPatch(raw: unknown[]): DiffHunk[] {
 		hunks.push({ header: `@@ -${oldStart} +${newStart} @@`, lines });
 	}
 	return hunks;
-}
-
-/// Find the git worktree diff for `fullPath` among `git_diff`'s results.
-/// git paths are repo-relative; harness paths are absolute, so match by
-/// suffix (a leading "/" guards against partial-segment matches).
-export function matchGitFile(files: FileDiff[], fullPath: string): FileDiff | undefined {
-	// Normalize separators before matching: git paths are forward-slash
-	// repo-relative, but on Windows the harness's absolute path uses
-	// backslashes, so the suffix match would never hit (#154).
-	const norm = (p: string) => p.replace(/\\/g, "/");
-	const full = norm(fullPath);
-	return files.find((f) => {
-		const fp = norm(f.path);
-		return full === fp || full.endsWith(`/${fp}`);
-	});
 }

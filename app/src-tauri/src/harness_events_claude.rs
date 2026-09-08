@@ -142,6 +142,10 @@ struct ActionPersistence {
     db: Arc<Database>,
     harness_id: String,
     room_id: String,
+    /// The room worktree, so a live patch row can capture a review
+    /// baseline for the file it names (#211). Empty for tests that
+    /// only care about phase events.
+    cwd: String,
     /// Frontend emitter for live rows. `None` in tests. Backfill never
     /// emits (the frontend loads history via its initial query); only
     /// the live tail broadcasts. Issue #80 D1.
@@ -209,6 +213,7 @@ impl ClaudeEventsManager {
             db: Arc::clone(&self.db),
             harness_id: harness_id.clone(),
             room_id,
+            cwd: cwd.to_string(),
             app: self.app.clone(),
         });
         self.attach_at(harness_id, path, on_event, persistence)
@@ -515,6 +520,18 @@ fn persist_extracted(
         ) {
             Ok(id) => {
                 if emit {
+                    // Live only. Capturing a baseline while replaying
+                    // history would read a HEAD that has already moved
+                    // past the edit — see review.rs's module docs.
+                    if action.kind == crate::db::action_kind::PATCH {
+                        crate::review::note_patch(
+                            &ap.db,
+                            &ap.room_id,
+                            &ap.cwd,
+                            &ap.harness_id,
+                            &action.payload,
+                        );
+                    }
                     if let Some(app) = &ap.app {
                         crate::harness_action_event::emit(
                             app,
@@ -1281,6 +1298,8 @@ mod tests {
             db,
             harness_id: harness_id.into(),
             room_id: room_id.into(),
+            // Phase/action tests only; note_patch no-ops on an empty cwd.
+            cwd: String::new(),
             app: None,
         });
         manager

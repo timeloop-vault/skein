@@ -23,9 +23,9 @@ corrections:
 
 - **Review surface: #52 is the source of truth**, not the audit. It is
   now an epic with the decisions recorded (scope, diff lifetime,
-  anchoring, the agent API) and five sub-issues, #211–#215. **Start at
-  #211** — it is dependency-free and fixes the diff pane. #106 was
-  rescoped out from under it and is now just a Diff-card issue.
+  anchoring, the agent API) and five sub-issues, #211–#215. **#211
+  landed** — the diff pane now has a baseline; **#212 is next**. #106
+  was rescoped out from under it and is now just a Diff-card issue.
 - **Files pillar (#49) is half-shipped:** A (#184) and B (#185) landed;
   C (#186) and D (#187) are open.
 
@@ -38,10 +38,10 @@ corrections:
 - **React 18 + strict TypeScript** UI (Vite); xterm.js for terminals,
   react-virtuoso for the activity feed, CodeMirror 6 for the file
   editor (#185)
-- **Two Rust workspace crates** — `skein-git`, `skein-harness` — plus
-  `app/src-tauri`, which is deliberately **excluded** from the
-  workspace. Every cargo command therefore needs running twice; see
-  Conventions
+- **Three Rust workspace crates** — `skein-git`, `skein-harness`,
+  `skein-review` — plus `app/src-tauri`, which is deliberately
+  **excluded** from the workspace. Every cargo command therefore needs
+  running twice; see Conventions
 - **Biome** lint + format (frontend), **clippy pedantic** `-D warnings`
   (Rust)
 - Pre-commit hook in `.githooks/pre-commit` (activate:
@@ -61,10 +61,18 @@ corrections:
     │                                #   Shared with the standalone cost tooling — parser fixes go HERE
     ├── crates/skein-git/            # Pure-Rust libgit2 wrapper. Tauri-free, sync, local-only
     │   └── src/lib.rs               # Repo: open, branches, head_branch, add_worktree,
-    │                                #   list/remove_worktree, status, diff_workdir;
+    │                                #   list/remove_worktree, status, diff_workdir, head_blob
+    │                                #   (the review baseline's source, #211);
     │                                #   propose_worktree_path → sibling dir <repo>-wt/<slug>.
     │                                #   No clone/fetch/push/commit yet (#182, #214 add
     │                                #   writes — and #214 argues for the git CLI, not libgit2)
+    ├── crates/skein-review/         # The baseline review model (#211, epic #52 D3/D4).
+    │   └── src/{content,hunks}.rs   #   Tauri-free and pure: classify what is on disk
+    │                                #   (text/binary/toolarge/symlink/unreadable), diff
+    │                                #   baseline→worktree into hunks, and the two asymmetric
+    │                                #   splices — accept (baseline moves, disk untouched) and
+    │                                #   reject (disk moves, baseline untouched). Byte-exact:
+    │                                #   both splice line slices that keep their terminators
     ├── app/
     │   ├── src/                     # React + TS UI
     │   │   ├── App.tsx              # The single React tree (~3.2k LOC hotspot; #19 tracks
@@ -99,20 +107,23 @@ corrections:
     │   │                            #   LiveContext.tsx + CardStack (chrome, per-room layout),
     │   │                            #   ActivityCard/feedItems/rows/toolRows/Row/ResultPreview
     │   │                            #   (feed), RoomSubtitle, PlanCard/plan.ts (todo reducer;
-    │   │                            #   merges all harnesses — bug #216), DiffCard/diff.ts +
-    │   │                            #   useWorktreeDiff (git diff w/ harness-patch fallback;
-    │   │                            #   deriveTabs is all-time = no episode boundary, #211),
+    │   │                            #   merges all harnesses — bug #216), DiffCard +
+    │   │                            #   review.ts/useReviewPending (the pending review vs the
+    │   │                            #   persisted baseline, w/ accept/reject and per-hunk
+    │   │                            #   harness chips, #211; diff.ts is now only the render
+    │   │                            #   shape + the two harness patch parsers),
     │   │                            #   useGitBranchWatcher, payload.ts (all payload-shape
     │   │                            #   divergence lives here)
     │   └── src-tauri/               # Tauri Rust shell
-    │       ├── src/lib.rs           # Builder + 40-command registry; tracing → daily-rotating
+    │       ├── src/lib.rs           # Builder + 43-command registry; tracing → daily-rotating
     │       │                        #   file in app_log_dir() + stderr (RUST_LOG overrides)
     │       ├── src/pty.rs           # PtyManager (portable-pty); 2 threads per spawn (reader +
     │       │                        #   waiter — the waiter is load-bearing on Windows ConPTY)
     │       ├── src/git.rs           # DTO wrappers around skein-git; GitError → String
     │       ├── src/watcher.rs       # notify-debouncer-mini, 200 ms, .git/ deliberately unfiltered
     │       ├── src/db.rs            # rusqlite: rooms (table `sessions` — legacy name),
-    │       │                        #   harness_events, harness_actions, sessions_quarantine;
+    │       │                        #   harness_events, harness_actions, review_baselines (#211),
+    │       │                        #   sessions_quarantine;
     │       │                        #   WAL + .bak/.bak.1 snapshots (#167)
     │       ├── src/fs.rs            # list_dir + read/write_file_text — LIVE, called by
     │       │                        #   FileTree/FilesBody since #185. write returns an mtime
@@ -122,6 +133,9 @@ corrections:
     │       │                        #   PATHEXT resolution before portable-pty. 50 unit tests
     │       ├── src/spawn_settings.rs # Persisted user overrides for the above
     │       ├── src/resume.rs        # session-existence probes against the tools' own stores
+    │       ├── src/review.rs        # Baseline capture + the three review commands (#211).
+    │       │                        #   Captures from the HEAD blob the moment a LIVE patch
+    │       │                        #   row lands — never on backfill, where HEAD has moved
     │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1)
     │       ├── src/harness_events_opencode.rs  # SSE client → OpencodeEvent (L2c-2)
     │       ├── src/harness_actions_claude.rs   # JSONL → harness_actions rows (#80)
@@ -191,10 +205,20 @@ corrections:
   cost tooling stay in sync.
   The Live Context store backfills the newest 500 rows per room and
   appends live ones; Diff/Plan/Activity cards all render from that one
-  array. Two known consequences of it being **room**-scoped: the Plan
+  array. One known consequence of it being **room**-scoped: the Plan
   card merges every harness in the room into one incoherent list
-  (#216), and the Diff card's tabs are all-time with no episode
-  boundary, so nothing ever clears (#211).
+  (#216).
+- **Review baselines** (#211, epic #52 D3/D4): a `review_baselines`
+  row per (room, file) holds the content the user last reviewed. It is
+  captured from the git HEAD blob at the moment a **live** `patch` row
+  is recorded — backfill deliberately does not capture, because
+  replaying history is exactly when HEAD has already moved past the
+  edit. The Diff card renders `baseline → worktree`, so a tab clears
+  when the file is reviewed and *not* when the agent commits. Accept
+  advances the baseline and writes nothing; reject writes the file back
+  and moves nothing. A file the harness only *created* untracked reads
+  as fully added on first touch — over-reporting is the safe direction,
+  and one accept settles it.
 - **Files** (#185): `FileTree` lists via `list_dir`, `FilesBody` reads
   via `read_file_text` and saves via `write_file_text`, which
   round-trips an mtime token to detect a stale write. Buffer text
@@ -258,10 +282,11 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   it from `app/` (`cd app && npx biome check .`), never from the repo
   root with a path argument.
 - **Tests live with the code that owns them.**
-  `crates/skein-git/tests/` has 21 integration tests against tempfile
+  `crates/skein-git/tests/` has 25 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `app/src-tauri` has ~190 in-module unit tests in source, of which
-  ~160 run on any one platform — 159 on Windows; the rest are
+  `crates/skein-review` has 22; `app/src-tauri` has ~220 in-module unit
+  tests in source, of which ~190 run on any one platform — 189 on
+  Windows; the rest are
   `cfg`-gated per OS (#202) (spawn-env merging, harness JSONL/SSE
   parsers, db persistence, pty). All run in the hook
   and CI, but **`cargo test --workspace` does NOT reach the tauri
@@ -303,7 +328,8 @@ rewrite), Files pillar A + B (#184, #185 — the `files` harness kind
 and a CodeMirror editor), spawn-environment work (#192, #197, #207),
 authoritative session cost (#199), #209 (the `skein-harness` crate
 extraction), and a run of Windows daily-driver fixes
-(#200/#201/#202/#207/#217).
+(#200/#201/#202/#207/#217). #211 (the review baseline — the
+Diff card finally clears) opens the #52 arc.
 
 Known-weak spots, still open: App.tsx size and duplication (#19 — now
 ~3.2k LOC), the duplicated Claude/opencode adapter pairs (#116), heavy
@@ -311,8 +337,9 @@ sync Tauri commands on the main thread (#171/#172/#178/#179), silent
 failure surfacing (#176), and no frontend tests (#169).
 
 The **review surface (#52)** is the current headline feature arc; its
-decisions are recorded in the epic and #211 is the entry point. Do not
-plan review work off the audit — it predates those decisions.
+decisions are recorded in the epic. #211 (baseline model) has landed;
+#212 (diff + comments) is the next entry point. Do not plan review work
+off the audit — it predates those decisions.
 
 ## Design references
 

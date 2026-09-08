@@ -16,6 +16,7 @@ mod harness_events_claude;
 mod harness_events_opencode;
 mod pty;
 mod resume;
+mod review;
 mod spawn_env;
 mod spawn_settings;
 mod watcher;
@@ -337,6 +338,9 @@ pub fn run() {
             db_recent_harness_actions_by_harness,
             db_recent_harness_actions_by_room,
             db_recent_harness_actions_by_room_and_kind,
+            review::review_pending,
+            review::review_accept,
+            review::review_reject,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -489,12 +493,13 @@ fn claude_events_detach(harness_id: String, manager: tauri::State<'_, ClaudeEven
 async fn opencode_events_attach(
     harness_id: String,
     room_id: String,
+    cwd: String,
     port: u16,
     session_id: Option<String>,
     on_event: Channel<OpencodeEvent>,
     manager: tauri::State<'_, OpencodeEventsManager>,
 ) -> Result<(), String> {
-    manager.attach(harness_id, room_id, port, session_id, move |event| {
+    manager.attach(harness_id, room_id, cwd, port, session_id, move |event| {
         let _ = on_event.send(event);
     });
     Ok(())
