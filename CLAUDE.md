@@ -151,10 +151,15 @@ corrections:
     │       ├── src/review.rs        # Baseline capture + the three baseline commands (#211).
     │       │                        #   Captures from the HEAD blob the moment a LIVE patch
     │       │                        #   row lands — never on backfill, where HEAD has moved
-    │       ├── src/review_surface.rs # The review the user reads (#212): scope (branch /
-    │       │                        #   commit / pending), per-file diff, and the nine
-    │       │                        #   thread+comment commands. Re-anchors every thread on
-    │       │                        #   file open and writes the new position back
+    │       ├── src/review_surface/  # The review the user reads (#212): scope (branch /
+    │       │   {dto,git,anchoring,  #   commit / pending), per-file diff, and the nine
+    │       │    query,write,        #   thread+comment commands. Split by the question a
+    │       │    commands}.rs        #   reader has, not by layer — dto = what the frontend
+    │       │                        #   receives, git = what the scope covers, anchoring =
+    │       │                        #   where a thread sits NOW (re-matched on every file
+    │       │                        #   open, new position written back, anchor text never),
+    │       │                        #   query/write = the command logic, commands = the
+    │       │                        #   Tauri boundary and nothing else
     │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1)
     │       ├── src/harness_events_opencode.rs  # SSE client → OpencodeEvent (L2c-2)
     │       ├── src/harness_actions_claude.rs   # JSONL → harness_actions rows (#80)
