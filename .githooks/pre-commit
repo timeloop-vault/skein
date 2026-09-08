@@ -54,6 +54,14 @@ npx tsc --noEmit 2>&1 || {
     exit 1
 }
 
+echo "=== pre-commit: vitest ==="
+# Frontend unit tests (#169). The frontend is where nearly every shipped
+# regression has lived, and it had no gate at all until now.
+npx vitest run 2>&1 || {
+    echo "ERROR: frontend tests failed. Fix them before committing."
+    exit 1
+}
+
 echo "=== pre-commit: biome ==="
 npx biome check . 2>&1 || {
     echo "ERROR: Biome errors. Run 'npx biome check --write --unsafe .' in app/ and re-stage."

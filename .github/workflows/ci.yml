@@ -112,6 +112,10 @@ jobs:
         working-directory: app
         run: npx tsc --noEmit
 
+      - name: Frontend tests
+        working-directory: app
+        run: npx vitest run
+
   # --- App build check per platform ---
   # Uses `cargo check` rather than full `tauri build` to keep the matrix
   # under a few minutes. The release workflow does the actual bundling.
