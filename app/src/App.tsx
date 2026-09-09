@@ -48,7 +48,9 @@ import {
 	EMPTY_NEW_ROOM_MEMORY,
 	type FolderDefaults,
 	type NewRoomMemory,
+	type RecentFolder,
 	defaultsFor,
+	recentFolders,
 	rememberFolder,
 	usePersistedState,
 } from "./prefs.ts";
@@ -552,6 +554,7 @@ const NewRoomDialog = ({
 	defaultCwd,
 	initialCwd,
 	initialDefaults,
+	recent,
 	onRemember,
 	onCommit,
 	onCancel,
@@ -561,6 +564,8 @@ const NewRoomDialog = ({
 	initialCwd: string;
 	/** Per-folder defaults for `initialCwd`, when we have seen it before. */
 	initialDefaults: FolderDefaults | undefined;
+	/** Known folders, MRU-first, for the Folder dropdown (#233). */
+	recent: RecentFolder[];
 	/** Called with the folder and its defaults after a room is created. */
 	onRemember: (folder: string, defaults: Omit<FolderDefaults, "lastUsed">) => void;
 	onCommit: (args: CreateRoomArgs) => void;
@@ -583,6 +588,41 @@ const NewRoomDialog = ({
 	// survives revalidation instead of flashing once and vanishing.
 	// Cleared whenever the user picks or types a folder themselves.
 	const [resolvedFromWorktree, setResolvedFromWorktree] = useState(false);
+	// Recent-folders dropdown (#233).
+	const [showRecent, setShowRecent] = useState(false);
+	const recentRef = useRef<HTMLDivElement | null>(null);
+
+	// Close the dropdown on any pointer press outside it. Bound on
+	// mousedown rather than click so it closes before the press lands on
+	// whatever is underneath, and only while open so the listener is not
+	// carried by every dialog that never opens it.
+	useEffect(() => {
+		if (!showRecent) return undefined;
+		const onDown = (e: MouseEvent) => {
+			if (!recentRef.current?.contains(e.target as Node)) setShowRecent(false);
+		};
+		document.addEventListener("mousedown", onDown);
+		return () => document.removeEventListener("mousedown", onDown);
+	}, [showRecent]);
+
+	const pickRecent = (r: RecentFolder) => {
+		// Goes through the same state the text field and Browse… write, so
+		// validation, worktree resolution and the `missing` check all run
+		// exactly as they would for a hand-typed path.
+		setResolvedFromWorktree(false);
+		setCwd(r.folder);
+		// Picking from the list is an explicit "take me to that folder", so
+		// its remembered defaults come along — otherwise per-folder memory
+		// would apply on open but not on switch, which is the whole point
+		// of the dropdown. Typing or browsing deliberately does not do
+		// this: silently changing the harness under someone mid-edit is a
+		// surprise, and neither gesture names a folder we already know.
+		setHarness(r.defaults.harness);
+		setBranchMode(r.defaults.branchMode);
+		// The validation effect drops this again if the branch is gone.
+		setBaseBranch(r.defaults.baseBranch);
+		setShowRecent(false);
+	};
 
 	// Validate the picked folder + load branches. Debounced so typing in
 	// the path field doesn't fire one round-trip per keystroke.
@@ -792,20 +832,70 @@ const NewRoomDialog = ({
 
 					<div className="sk-field">
 						<label>Folder</label>
-						<div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+						{/* The row is the menu's positioning context, so the dropdown
+						    spans the whole field rather than hanging off the caret —
+						    a menu only as wide as its trigger squeezed the paths it
+						    exists to show (#233). */}
+						<div
+							className="sk-folder-row"
+							ref={recentRef}
+							onKeyDown={(e) => {
+								// On the row, not the caret: once the menu is open focus
+								// is on one of its rows, and Escape has to close it from
+								// there too.
+								if (e.key === "Escape" && showRecent) {
+									e.stopPropagation();
+									setShowRecent(false);
+								}
+							}}
+						>
 							<input
 								className="sk-input"
 								style={{ flex: 1 }}
 								placeholder="Pick a folder…"
 								value={cwd}
+								// The menu overlays the status blurb, so it gets out of
+								// the way the moment the field is being used directly.
+								onFocus={() => setShowRecent(false)}
 								onChange={(e) => {
 									setResolvedFromWorktree(false);
 									setCwd(e.target.value);
 								}}
 							/>
+							{recent.length > 0 && (
+								<button
+									className="sk-btn"
+									type="button"
+									aria-haspopup="menu"
+									aria-expanded={showRecent}
+									title="Recent folders"
+									onClick={() => setShowRecent((v) => !v)}
+								>
+									▾
+								</button>
+							)}
 							<button className="sk-btn" onClick={browse} type="button">
 								Browse…
 							</button>
+							{showRecent && (
+								<div className="sk-recent-menu" role="menu">
+									{recent.map((r) => (
+										<button
+											key={r.folder}
+											className="sk-recent-row"
+											role="menuitem"
+											type="button"
+											title={r.folder}
+											onClick={() => pickRecent(r)}
+										>
+											<span className="path">{r.folder}</span>
+											{r.defaults.baseBranch && (
+												<span className="branch">{r.defaults.baseBranch}</span>
+											)}
+										</button>
+									))}
+								</div>
+							)}
 						</div>
 						{statusBlurb && (
 							<div style={{ fontFamily: "var(--sk-mono)", fontSize: 10.5, marginTop: 2 }}>
@@ -1965,6 +2055,7 @@ export default function App() {
 		},
 		[setNewRoomMemory],
 	);
+	const recentRoomFolders = useMemo(() => recentFolders(newRoomMemory), [newRoomMemory]);
 	// L5e — notification toggles read inside the transition listener
 	// (mounted once with empty deps); refs let preference toggles
 	// take effect without re-subscribing.
@@ -3052,6 +3143,7 @@ export default function App() {
 						defaultCwd={defaultCwd}
 						initialCwd={newRoomSeed.cwd}
 						initialDefaults={newRoomSeed.defaults}
+						recent={recentRoomFolders}
 						onRemember={rememberRoomFolder}
 						onCommit={createRoom}
 						onCancel={() => setShowNewRoom(false)}
@@ -3284,6 +3376,7 @@ export default function App() {
 					defaultCwd={defaultCwd}
 					initialCwd={newRoomSeed.cwd}
 					initialDefaults={newRoomSeed.defaults}
+					recent={recentRoomFolders}
 					onRemember={rememberRoomFolder}
 					onCommit={createRoom}
 					onCancel={() => setShowNewRoom(false)}
