@@ -1,0 +1,14 @@
+{
+	"$schema": "https://opencode.ai/config.json",
+	"mcp": {
+		"skein-review": {
+			"type": "remote",
+			"url": "{env:SKEIN_REVIEW_URL}",
+			"enabled": true,
+			"headers": {
+				"Authorization": "Bearer {env:SKEIN_REVIEW_TOKEN}",
+				"X-Skein-Harness": "{env:SKEIN_HARNESS_ID}"
+			}
+		}
+	}
+}

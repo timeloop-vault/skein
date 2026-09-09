@@ -98,6 +98,11 @@ export interface SpawnSettings {
 	pathPrepend: string[];
 	extraEnv: EnvVar[];
 	stripHostEnv: boolean;
+	/** Hand Claude Code the shipped Skein plugin, which registers the
+	 *  review MCP server (#215). */
+	injectClaudePlugin: boolean;
+	/** Point opencode at the shipped config, same server (#215). */
+	injectOpencodeConfig: boolean;
 }
 
 export interface SpawnSettingsPayload {
@@ -159,4 +164,21 @@ export interface EnvPreview {
 	/** Set when a shell is configured but isn't a runnable file. */
 	shellRejected: string | null;
 	launchContext: "bundled" | "terminal";
+}
+
+/** What Skein injects so an agent CLI can reach the review API, and
+ *  where the shipped bundle resolved to (#215). Both mechanisms are
+ *  additive — they never replace the user's own plugins or config —
+ *  but the panel shows them anyway, with a switch. */
+export interface HarnessConfigStatus {
+	/** Absolute path to the Claude Code plugin directory, or `null`
+	 *  when the bundle didn't resolve. */
+	claudePlugin: string | null;
+	opencodeConfig: string | null;
+	/** Why either is missing. */
+	error: string | null;
+	/** The flag Skein appends, so the panel shows the argument itself
+	 *  rather than describing it. */
+	claudeFlag: string;
+	opencodeVar: string;
 }

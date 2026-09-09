@@ -82,6 +82,14 @@ pub struct SpawnSettings {
     pub extra_env: Vec<EnvVar>,
     /// Strip host-terminal identity variables (#192).
     pub strip_host_env: bool,
+    /// Hand Claude Code the shipped Skein plugin, which registers the
+    /// review MCP server (#215). Two flags rather than one because the
+    /// escape hatch has to be per-harness: turning the opencode side
+    /// off is how a user reclaims `OPENCODE_CONFIG` for their own file,
+    /// and that must not cost them the Claude Code side.
+    pub inject_claude_plugin: bool,
+    /// Point opencode at the shipped config, same server (#215).
+    pub inject_opencode_config: bool,
 }
 
 impl Default for SpawnSettings {
@@ -93,6 +101,8 @@ impl Default for SpawnSettings {
             path_prepend: default_path_prepend(),
             extra_env: Vec::new(),
             strip_host_env: true,
+            inject_claude_plugin: true,
+            inject_opencode_config: true,
         }
     }
 }

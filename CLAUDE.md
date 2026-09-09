@@ -23,14 +23,13 @@ corrections:
 
 - **Review surface: #52 is the source of truth**, not the audit. It is
   now an epic with the decisions recorded (scope, diff lifetime,
-  anchoring, the agent API) and five sub-issues, #211–#215. **#211,
-  #212, #213 and #214 landed** — the diff has a baseline, the review
-  pane is the right pane's second tab, the agent reads and answers
-  comments over an MCP endpoint (`docs/agent-api.md`), and the reviewer
-  signs off. **#215 (Claude Code plugin packaging + opencode config
-  injection) is the only one left**, and until it lands the MCP config
-  is written by hand per that doc. #106 was rescoped out from under it
-  and, now that the Diff card is gone, is a review-pane issue.
+  anchoring, the agent API) and five sub-issues, #211–#215. **All five
+  landed** — the diff has a baseline, the review pane is the right
+  pane's second tab, the agent reads and answers comments over an MCP
+  endpoint (`docs/agent-api.md`), the reviewer signs off, and #215
+  wires each harness to that endpoint at spawn with nothing written
+  into the worktree. #106 was rescoped out from under it and, now that
+  the Diff card is gone, is a review-pane issue.
 - **D9 was corrected on 2026-09-09; the epic records it.** #214 was
   going to make Skein merge the branch and open the PR. That shipped in
   #229 and was reverted unmerged: it picked a merge strategy and a
@@ -157,7 +156,7 @@ corrections:
     │   │                            #   sign-off control, three states — none/approved/
     │   │                            #   lapsed. Skein records the approval; the AGENT lands)
     │   └── src-tauri/               # Tauri Rust shell
-    │       ├── src/lib.rs           # Builder + 56-command registry; tracing → daily-rotating
+    │       ├── src/lib.rs           # Builder + 57-command registry; tracing → daily-rotating
     │       │                        #   file in app_log_dir() + stderr (RUST_LOG overrides)
     │       ├── src/pty.rs           # PtyManager (portable-pty); 2 threads per spawn (reader +
     │       │                        #   waiter — the waiter is load-bearing on Windows ConPTY)
@@ -174,6 +173,17 @@ corrections:
     │       │                        #   login-shell probe, host-terminal identity stripping,
     │       │                        #   PATHEXT resolution before portable-pty. 50 unit tests
     │       ├── src/spawn_settings.rs # Persisted user overrides for the above
+    │       ├── src/harness_config.rs # What Skein injects at spawn so an agent CLI finds the
+    │       │                        #   #213 review API (#215): `--plugin-dir` for Claude Code,
+    │       │                        #   OPENCODE_CONFIG for opencode, both session-scoped and
+    │       │                        #   ADDITIVE — the user's own plugins and config are
+    │       │                        #   untouched, and NOTHING is written into the worktree.
+    │       │                        #   No bound endpoint = no injection, or the config would
+    │       │                        #   interpolate a variable that isn't set
+    │       ├── harness-config/      # The bundle those two point at, shipped as a Tauri
+    │       │   claude-plugin/       #   resource (see tauri.conf.json `resources`):
+    │       │   opencode/            #   .claude-plugin/plugin.json + .mcp.json + a lazily
+    │       │                        #   loaded skein-review SKILL.md; opencode.json
     │       ├── src/resume.rs        # session-existence probes against the tools' own stores
     │       ├── src/review.rs        # Baseline capture + the three baseline commands (#211).
     │       │                        #   Captures from the HEAD blob the moment a LIVE patch
@@ -208,7 +218,7 @@ corrections:
     │   ├── audit-2026-07-03.md      # Full-codebase audit; §5 = structural backlog. Predates
     │   │                            #   the #52 review decisions — see Roadmap above
     │   ├── agent-api.md             # The #213 agent API: verbs, headers, error codes, and
-    │   │                            #   the hand-written MCP config to use until #215
+    │   │                            #   how #215 gets it in front of each harness
     │   ├── backlog.md               # Parked ideas (read before adding to any plan)
     │   ├── grok-build-recon-*.md    # Recon of grok-build: reference designs for the review
     │   │                            #   surface (§3 xai-hunk-tracker) + git writes (§6)
@@ -320,6 +330,21 @@ corrections:
   only sqlite, so no watcher would otherwise fire. Verbs reuse
   `review_surface::query::file_impl` rather than re-anchoring
   themselves. Full contract: `docs/agent-api.md`.
+- **Harness config injection** (#215, epic #52 E): the variables above
+  are useless until the CLI knows there is a server at that address, so
+  `pty_spawn` also appends `--plugin-dir <resources>/harness-config/`
+  `claude-plugin` for Claude Code and sets `OPENCODE_CONFIG` for
+  opencode. Both are **session-scoped and additive** — installed plugins
+  and the user's own config still load, and a repo's `opencode.json`
+  still beats Skein's — and **nothing is written into the worktree**, so
+  there is no file in the review's own diff, no MCP trust prompt, and
+  nothing left pointing at a dead port once a room is archived. The
+  spawn path passes the harness *kind*, not a guess from `cmd`: the two
+  disagree the moment "press Enter for shell" rewrites an argv, and
+  `--plugin-dir` on a shell would break the spawn. Settings → Shell &
+  environment shows what is injected and switches either off; turning
+  the opencode one off is how `OPENCODE_CONFIG` becomes the user's
+  again, which is why that key is reserved only *while* being injected.
 - **The sign-off** (#214, epic #52 D9 as corrected): a `review_signoff`
   row per room — the reviewer's approval, and **the only thing in Skein
   an agent treats as permission**. The whole design is the `head_sha`
@@ -480,12 +505,12 @@ The **review surface (#52)** is the current headline feature arc; its
 decisions are recorded in the epic. #211 (baseline model), #212 (the
 review pane — branch-vs-base diff, comments, anchoring), #213 (the
 review API + MCP server, which is what finally lets the agent *read*
-the comments) and #214 (the reviewer's sign-off, which is what lets it
-know when the human is *done*) have landed; **#215** — harness config
-injection, so the MCP server is wired up without a hand-written
-`.mcp.json` — is all that remains. Do not plan review work off the
-audit: it predates these decisions, and D9 in particular was corrected
-after #229 shipped and was reverted.
+the comments), #214 (the reviewer's sign-off, which is what lets it
+know when the human is *done*) and #215 (config injection, so the
+tools are simply there) have all landed. The arc is complete; what
+remains is #238, the nudge that tells an idle agent to go look. Do not
+plan review work off the audit: it predates these decisions, and D9 in
+particular was corrected after #229 shipped and was reverted.
 
 ## Design references
 

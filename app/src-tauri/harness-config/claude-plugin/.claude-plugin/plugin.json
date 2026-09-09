@@ -1,0 +1,8 @@
+{
+	"name": "skein",
+	"description": "Skein's review surface for the room this harness is running in — read the reviewer's comments on your work, answer them, and record what you did about them.",
+	"version": "0.1.0",
+	"author": {
+		"name": "Skein"
+	}
+}

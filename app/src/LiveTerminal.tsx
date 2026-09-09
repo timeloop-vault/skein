@@ -416,6 +416,14 @@ export const LiveTerminal = ({
 					// agent" — a room can have several.
 					roomId,
 					harnessId,
+					// #215: which agent CLI this is, so the backend can
+					// append `--plugin-dir` / set `OPENCODE_CONFIG` and
+					// the review tools are there without the user
+					// configuring anything. Sent as the harness *kind*
+					// rather than inferred from `cmd`, because the two
+					// legitimately disagree once the user has swapped a
+					// command (the post-exit "Enter for shell" path).
+					kind: harnessKind,
 					onEvent: channel,
 				});
 				if (cancelled) {

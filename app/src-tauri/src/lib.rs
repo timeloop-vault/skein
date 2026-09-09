@@ -13,6 +13,7 @@ mod git;
 mod harness_action_event;
 mod harness_actions_claude;
 mod harness_actions_opencode;
+mod harness_config;
 mod harness_events_claude;
 mod harness_events_opencode;
 mod pty;
@@ -182,6 +183,23 @@ pub fn run() {
                 settings: parking_lot::RwLock::new(spawn_settings),
                 degraded: parking_lot::RwLock::new(spawn_degraded),
             });
+
+            // #215: the shipped Claude Code plugin and opencode config
+            // that teach the agent CLIs about the review API. Resolved
+            // once — the resource directory does not move while the app
+            // runs — and never fatal: a bundle that failed to package
+            // costs the agent its review tools, which the Settings pane
+            // reports rather than leaving as a mystery (#176).
+            let harness_config = match app.path().resource_dir() {
+                Ok(dir) => crate::harness_config::HarnessConfig::resolve(&dir),
+                Err(e) => {
+                    tracing::error!(error = %e, "harness config: no resource dir");
+                    crate::harness_config::HarnessConfig::unavailable(&format!(
+                        "resource directory unavailable: {e}"
+                    ))
+                }
+            };
+            app.manage(harness_config);
 
             let db_path = data_dir.join("skein.db");
             let db = Database::open(&db_path).map_err(|e| {
@@ -366,6 +384,7 @@ pub fn run() {
             spawn_settings_save,
             spawn_env_preview,
             spawn_env_reprobe,
+            harness_config_status,
             default_cwd,
             db_load_rooms,
             db_save_rooms,
@@ -427,6 +446,11 @@ fn ping(message: String) -> String {
 ///
 /// `cmd` is argv-style: the first element is the program, the rest are
 /// arguments. Empty `cmd` is rejected. `cwd` must exist.
+///
+/// `kind` is the harness kind, which decides what #215 injects so the
+/// agent can reach the review API. It is passed separately from `cmd`
+/// because the two can legitimately disagree — the user can swap a
+/// harness's command without changing what the harness is.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 #[tauri::command]
 fn pty_spawn(
@@ -436,11 +460,13 @@ fn pty_spawn(
     cols: u16,
     room_id: String,
     harness_id: String,
+    kind: String,
     on_event: Channel<PtyEvent>,
     manager: tauri::State<'_, PtyManager>,
     spawn_env: tauri::State<'_, SpawnEnvState>,
     db: tauri::State<'_, Arc<Database>>,
     endpoint: tauri::State<'_, crate::agent_api::state::AgentApiEndpoint>,
+    harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
 ) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let settings = spawn_env.snapshot();
@@ -472,6 +498,8 @@ fn pty_spawn(
                 cols,
                 settings: &settings,
                 agent: agent.as_ref(),
+                kind: &kind,
+                harness_config: Some(&harness_config),
             },
             move |event| {
                 // Channel send only fails if the frontend dropped the
@@ -790,6 +818,18 @@ fn spawn_settings_save(
 #[tauri::command]
 fn spawn_env_preview(spawn_env: tauri::State<'_, SpawnEnvState>) -> crate::pty::EnvPreview {
     crate::pty::env_preview(&spawn_env.snapshot())
+}
+
+/// What Skein injects into each agent CLI so it can reach the review
+/// API, and where the shipped bundle resolved to (#215 E3). Read by the
+/// spawn-environment panel — the injection is additive, but the user
+/// still gets to see it and switch it off.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+fn harness_config_status(
+    harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
+) -> crate::harness_config::HarnessConfigStatus {
+    harness_config.status()
 }
 
 #[allow(clippy::needless_pass_by_value)]
