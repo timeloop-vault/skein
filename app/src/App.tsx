@@ -44,7 +44,14 @@ import {
 	apiErrorToastText,
 	parsePayload,
 } from "./liveContext/index.ts";
-import { usePersistedState } from "./prefs.ts";
+import {
+	EMPTY_NEW_ROOM_MEMORY,
+	type FolderDefaults,
+	type NewRoomMemory,
+	defaultsFor,
+	rememberFolder,
+	usePersistedState,
+} from "./prefs.ts";
 import { hints, isMac, matchShortcut, modLabel } from "./shortcuts.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
 import type {
@@ -518,33 +525,75 @@ interface CreateRoomArgs {
 	branch?: string;
 }
 
+// What `git_inspect_folder` answers, mirroring `FolderInfoDto` in
+// `app/src-tauri/src/git.rs`.
+interface FolderInfoDto {
+	exists: boolean;
+	isRepo: boolean;
+	root: string;
+	resolvedFromWorktree: boolean;
+	branches: BranchInfoDto[];
+	head: string | null;
+}
+
+// `missing` is not cosmetic (#226): a path that does not exist used to
+// land on `not-a-repo`, which is a *submittable* state ("harnesses run
+// in this folder as-is"). That was harmless while the field started
+// blank; with a remembered folder prefilled, one stale path plus one
+// Enter would create a room whose cwd does not exist.
 type RepoStatus =
 	| { kind: "empty" }
 	| { kind: "checking" }
 	| { kind: "valid"; branches: BranchInfoDto[]; head: string | null }
-	| { kind: "not-a-repo" };
+	| { kind: "not-a-repo" }
+	| { kind: "missing" };
 
 const NewRoomDialog = ({
 	defaultCwd,
+	initialCwd,
+	initialDefaults,
+	onRemember,
 	onCommit,
 	onCancel,
 }: {
 	defaultCwd: string;
+	/** Folder to open with — the active room's, or the last one used (#226). */
+	initialCwd: string;
+	/** Per-folder defaults for `initialCwd`, when we have seen it before. */
+	initialDefaults: FolderDefaults | undefined;
+	/** Called with the folder and its defaults after a room is created. */
+	onRemember: (folder: string, defaults: Omit<FolderDefaults, "lastUsed">) => void;
 	onCommit: (args: CreateRoomArgs) => void;
 	onCancel: () => void;
 }) => {
 	useFocusRestore();
-	const [cwd, setCwd] = useState<string>("");
+	const [cwd, setCwd] = useState<string>(initialCwd);
 	const [task, setTask] = useState("");
-	const [harness, setHarness] = useState<HarnessKind>("claude");
-	const [branchMode, setBranchMode] = useState<"worktree" | "current">("worktree");
-	const [baseBranch, setBaseBranch] = useState<string>("");
+	const [harness, setHarness] = useState<HarnessKind>(initialDefaults?.harness ?? "claude");
+	const [branchMode, setBranchMode] = useState<"worktree" | "current">(
+		initialDefaults?.branchMode ?? "worktree",
+	);
+	const [baseBranch, setBaseBranch] = useState<string>(initialDefaults?.baseBranch ?? "");
 	const [repoStatus, setRepoStatus] = useState<RepoStatus>({ kind: "empty" });
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// Sticky, and deliberately not part of `repoStatus`: resolving a
+	// worktree rewrites `cwd`, which re-runs the validation effect, and
+	// that second pass sees an ordinary repo. Kept out here the note
+	// survives revalidation instead of flashing once and vanishing.
+	// Cleared whenever the user picks or types a folder themselves.
+	const [resolvedFromWorktree, setResolvedFromWorktree] = useState(false);
 
 	// Validate the picked folder + load branches. Debounced so typing in
 	// the path field doesn't fire one round-trip per keystroke.
+	//
+	// #181: `cancelled` lives in the effect body, not inside the timeout
+	// callback, so the effect's own cleanup can actually set it. In the
+	// previous shape the cleanup was returned from the timeout callback,
+	// where nothing ever called it — harmless while the field started
+	// blank (the effect never fired on open), but a prefilled field fires
+	// it immediately, so a slow response for the remembered path could
+	// land *after* the user typed a different one and overwrite it.
 	useEffect(() => {
 		setError(null);
 		if (!cwd) {
@@ -552,22 +601,37 @@ const NewRoomDialog = ({
 			return undefined;
 		}
 		setRepoStatus({ kind: "checking" });
+		let cancelled = false;
 		const handle = window.setTimeout(() => {
-			let cancelled = false;
-			(async () => {
+			void (async () => {
 				try {
-					const isRepo = await invoke<boolean>("git_is_repo", { path: cwd });
+					const info = await invoke<FolderInfoDto>("git_inspect_folder", { path: cwd });
 					if (cancelled) return;
-					if (!isRepo) {
+					if (!info.exists) {
+						setRepoStatus({ kind: "missing" });
+						return;
+					}
+					if (!info.isRepo) {
 						setRepoStatus({ kind: "not-a-repo" });
 						return;
 					}
-					const branches = await invoke<BranchInfoDto[]>("git_branches", { path: cwd });
-					if (cancelled) return;
-					const head = branches.find((b) => b.isHead)?.name ?? null;
-					setRepoStatus({ kind: "valid", branches, head });
-					// Default base branch to HEAD on first valid load.
-					setBaseBranch((prev) => prev || head || branches[0]?.name || "");
+					// A worktree resolves to the repo it was added from —
+					// otherwise we would stack a worktree on a worktree, which
+					// is one misclick away given the `-wt` sibling dir (#226).
+					if (info.resolvedFromWorktree) {
+						setResolvedFromWorktree(true);
+						setCwd(info.root);
+					}
+					setRepoStatus({ kind: "valid", branches: info.branches, head: info.head });
+					// Default base branch to HEAD on first valid load. A
+					// remembered branch survives only if the repo still has
+					// it — otherwise the <select> would sit on a value with
+					// no matching <option>, render blank, and submit it.
+					setBaseBranch((prev) => {
+						const remembered = info.branches.some((b) => b.name === prev);
+						if (prev && remembered) return prev;
+						return info.head || info.branches[0]?.name || "";
+					});
 				} catch (err: unknown) {
 					if (cancelled) return;
 					const msg = err instanceof Error ? err.message : String(err);
@@ -575,11 +639,11 @@ const NewRoomDialog = ({
 					setRepoStatus({ kind: "not-a-repo" });
 				}
 			})();
-			return () => {
-				cancelled = true;
-			};
 		}, 200);
-		return () => window.clearTimeout(handle);
+		return () => {
+			cancelled = true;
+			window.clearTimeout(handle);
+		};
 	}, [cwd]);
 
 	const slug =
@@ -592,6 +656,8 @@ const NewRoomDialog = ({
 	const proposedBranch = `skein/${slug}`;
 
 	const isRepo = repoStatus.kind === "valid";
+	// `missing` is deliberately excluded: a folder that isn't there is the
+	// one unresolved state that must block submission (#226).
 	const folderResolved = repoStatus.kind === "valid" || repoStatus.kind === "not-a-repo";
 	// Submit is fine for both git-backed and plain folders. The branch /
 	// worktree picker only gates submission when the folder *is* a repo.
@@ -610,6 +676,7 @@ const NewRoomDialog = ({
 			...(start ? { defaultPath: start } : {}),
 		});
 		if (typeof picked === "string") {
+			setResolvedFromWorktree(false);
 			setCwd(picked);
 		}
 	};
@@ -618,10 +685,17 @@ const NewRoomDialog = ({
 		if (!canCreate) return;
 		setBusy(true);
 		setError(null);
+		// Called only on a path that genuinely created the room — a create
+		// that throws must not teach the dialog anything.
+		const remember = (base: string) => onRemember(cwd, { baseBranch: base, harness, branchMode });
 		try {
 			if (!isRepo) {
 				// Non-git folder — no worktree, no branch. cwd is the
-				// picked folder verbatim.
+				// picked folder verbatim, and it is remembered like any
+				// other folder (#231), with an empty base branch: there is
+				// no branch to carry forward, but the folder itself and the
+				// starting harness are worth exactly as much here.
+				remember("");
 				onCommit({
 					cwd,
 					task: task.trim(),
@@ -640,6 +714,7 @@ const NewRoomDialog = ({
 					baseBranch,
 					worktreePath,
 				});
+				remember(baseBranch);
 				onCommit({
 					cwd: wt.path,
 					task: task.trim(),
@@ -647,6 +722,7 @@ const NewRoomDialog = ({
 					branch: proposedBranch,
 				});
 			} else {
+				remember(baseBranch);
 				onCommit({
 					cwd,
 					task: task.trim(),
@@ -668,9 +744,14 @@ const NewRoomDialog = ({
 			case "checking":
 				return <span style={{ color: "var(--fg-3)" }}>checking…</span>;
 			case "valid":
+				// The worktree's *name* is deliberately not repeated here: the
+				// blurb slot is ~82 characters wide and a real branch name eats
+				// most of it, and the user just browsed there anyway. The only
+				// thing they need told is that the field moved.
 				return (
 					<span style={{ color: "var(--ok)" }}>
 						✓ git repo{repoStatus.head ? ` (HEAD: ${repoStatus.head})` : ""}
+						{resolvedFromWorktree ? " · resolved from a worktree" : ""}
 					</span>
 				);
 			case "not-a-repo":
@@ -679,6 +760,8 @@ const NewRoomDialog = ({
 						not a git repo — harnesses run in this folder as-is.
 					</span>
 				);
+			case "missing":
+				return <span style={{ color: "var(--err)" }}>folder not found — pick another.</span>;
 		}
 	})();
 
@@ -715,7 +798,10 @@ const NewRoomDialog = ({
 								style={{ flex: 1 }}
 								placeholder="Pick a folder…"
 								value={cwd}
-								onChange={(e) => setCwd(e.target.value)}
+								onChange={(e) => {
+									setResolvedFromWorktree(false);
+									setCwd(e.target.value);
+								}}
 							/>
 							<button className="sk-btn" onClick={browse} type="button">
 								Browse…
@@ -1828,6 +1914,57 @@ export default function App() {
 	activeRoomsRef.current = activeRooms;
 	const activeRoomIdRef = useRef(activeRoomId);
 	activeRoomIdRef.current = activeRoomId;
+
+	// ── New Room memory (#226, #231) ───────────────────────────────
+	//
+	// Opening the dialog is async because the seed has to be resolved
+	// first: the active room's `cwd` may be a *worktree* path, and the
+	// defaults are keyed on the folder it resolves to. Resolving here
+	// rather than inside the dialog means the fields are already right
+	// on the first paint — no blank frame, no jump.
+	const [newRoomMemory, setNewRoomMemory] = usePersistedState<NewRoomMemory>(
+		"newRoomMemory",
+		EMPTY_NEW_ROOM_MEMORY,
+	);
+	const newRoomMemoryRef = useRef(newRoomMemory);
+	newRoomMemoryRef.current = newRoomMemory;
+	const [newRoomSeed, setNewRoomSeed] = useState<{
+		cwd: string;
+		defaults: FolderDefaults | undefined;
+	}>({ cwd: "", defaults: undefined });
+
+	const openNewRoom = useCallback(async () => {
+		const memory = newRoomMemoryRef.current;
+		// The room you are in is the strongest signal of where you mean
+		// to work; the last folder used is the fallback when no room is
+		// open. A git room contributes its repo root — every room in a
+		// repo then shares one entry — and a plain folder contributes
+		// itself (#231): "another room in the folder I am in" is the same
+		// journey either way, and dropping the non-git case made those
+		// rooms prefill nothing, or worse, an unrelated repo.
+		const active = roomsRef.current.find((r) => r.id === activeRoomIdRef.current);
+		let seed = memory.last ?? "";
+		if (active?.cwd) {
+			try {
+				const info = await invoke<FolderInfoDto>("git_inspect_folder", {
+					path: active.cwd,
+				});
+				if (info.exists) seed = info.isRepo ? info.root : active.cwd;
+			} catch {
+				// Resolution is a convenience, never a gate — fall back to
+				// the remembered folder and let the dialog validate it.
+			}
+		}
+		setNewRoomSeed({ cwd: seed, defaults: defaultsFor(memory, seed) });
+		setShowNewRoom(true);
+	}, []);
+
+	const rememberRoomFolder = useCallback(
+		(folder: string, defaults: Omit<FolderDefaults, "lastUsed">) => {
+			setNewRoomMemory((prev) => rememberFolder(prev, folder, defaults));
+		},
+		[setNewRoomMemory],
+	);
 	// L5e — notification toggles read inside the transition listener
 	// (mounted once with empty deps); refs let preference toggles
 	// take effect without re-subscribing.
@@ -2246,7 +2383,7 @@ export default function App() {
 			const active = activeRoomIdRef.current;
 			switch (match.action) {
 				case "newRoom":
-					setShowNewRoom(true);
+					void openNewRoom();
 					break;
 				case "closeRoom":
 					if (active) closeRoomRef.current(active);
@@ -2317,7 +2454,9 @@ export default function App() {
 
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [setFontSize]);
+		// `openNewRoom` is a stable useCallback([]) — listed to satisfy
+		// exhaustive-deps, and it never causes a re-subscribe.
+	}, [setFontSize, openNewRoom]);
 
 	// Phase 4: listen for the macOS app menu's Preferences… item.
 	// lib.rs's on_menu_event emits skein://open-settings when the user
@@ -2696,7 +2835,7 @@ export default function App() {
 		id: "cmd:new-room",
 		label: "New room",
 		hint: hints.newRoom,
-		invoke: () => setShowNewRoom(true),
+		invoke: () => void openNewRoom(),
 	});
 	if (room?.cwd) {
 		paletteItems.push({
@@ -2904,13 +3043,16 @@ export default function App() {
 			>
 				<Titlebar {...titlebarProps} />
 				<EmptyState
-					onNew={() => setShowNewRoom(true)}
+					onNew={() => void openNewRoom()}
 					archivedCount={archivedRooms.length}
 					onReopen={() => setShowReopen(true)}
 				/>
 				{showNewRoom && (
 					<NewRoomDialog
 						defaultCwd={defaultCwd}
+						initialCwd={newRoomSeed.cwd}
+						initialDefaults={newRoomSeed.defaults}
+						onRemember={rememberRoomFolder}
 						onCommit={createRoom}
 						onCancel={() => setShowNewRoom(false)}
 					/>
@@ -2970,7 +3112,7 @@ export default function App() {
 						/>
 					);
 				})}
-				<div className="sk-tab-newbtn" onClick={() => setShowNewRoom(true)} title="New room">
+				<div className="sk-tab-newbtn" onClick={() => void openNewRoom()} title="New room">
 					+
 				</div>
 			</div>
@@ -3140,6 +3282,9 @@ export default function App() {
 			{showNewRoom && (
 				<NewRoomDialog
 					defaultCwd={defaultCwd}
+					initialCwd={newRoomSeed.cwd}
+					initialDefaults={newRoomSeed.defaults}
+					onRemember={rememberRoomFolder}
 					onCommit={createRoom}
 					onCancel={() => setShowNewRoom(false)}
 				/>
