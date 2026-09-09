@@ -30,6 +30,7 @@ use parking_lot::Mutex;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::Serialize;
 
+use crate::agent_api::state::HarnessIdentity;
 use crate::spawn_env;
 use crate::spawn_settings::SpawnSettings;
 // Only the probe reads the capture mode — see the `Instant` note above.
@@ -87,6 +88,10 @@ pub struct SpawnRequest<'a> {
     pub rows: u16,
     pub cols: u16,
     pub settings: &'a SpawnSettings,
+    /// How this harness reaches its room's review (#213). `None` when
+    /// the agent API failed to bind — better no variables at all than
+    /// four pointing at a dead port.
+    pub agent: Option<&'a HarnessIdentity>,
 }
 
 #[derive(Default)]
@@ -117,6 +122,7 @@ impl PtyManager {
             rows,
             cols,
             settings,
+            agent,
         } = req;
         let Some((program, args)) = cmd.split_first() else {
             return Err(PtyError("pty_spawn: empty cmd".into()));
@@ -146,7 +152,7 @@ impl PtyManager {
         }
         builder.cwd(cwd);
 
-        let mut applied = apply_env(&mut builder, settings, probe_result());
+        let mut applied = apply_env(&mut builder, settings, probe_result(), agent);
 
         // #207: `portable-pty` resolves the program itself, and on
         // Windows it prefers an extensionless `dir\name` over every
@@ -164,7 +170,7 @@ impl PtyManager {
                 rebuilt.arg(arg);
             }
             rebuilt.cwd(cwd);
-            applied = apply_env(&mut rebuilt, settings, applied.probe.clone());
+            applied = apply_env(&mut rebuilt, settings, applied.probe.clone(), agent);
             builder = rebuilt;
         }
 
@@ -343,7 +349,19 @@ pub(crate) struct AppliedEnv {
 /// log all describe a value the child never receives. The other three
 /// are ours by design — `TERM`/`COLORTERM` describe how xterm.js
 /// renders, and `SHELL` has to agree with the shell we actually probed.
-pub(crate) const RESERVED_ENV_KEYS: &[&str] = &["PATH", "TERM", "COLORTERM", "SHELL"];
+pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
+    "PATH",
+    "TERM",
+    "COLORTERM",
+    "SHELL",
+    // #213: the room's review endpoint and its bearer token. Letting a
+    // user pin these by hand would point one harness at another room's
+    // review — the one thing the token model exists to prevent.
+    "SKEIN_REVIEW_URL",
+    "SKEIN_REVIEW_TOKEN",
+    "SKEIN_ROOM_ID",
+    "SKEIN_HARNESS_ID",
+];
 
 /// Apply Skein's environment policy to a `CommandBuilder`.
 ///
@@ -354,6 +372,7 @@ fn apply_env(
     builder: &mut CommandBuilder,
     settings: &SpawnSettings,
     probe: ProbeOutcome,
+    agent: Option<&HarnessIdentity>,
 ) -> AppliedEnv {
     // `CommandBuilder::new` already seeds the child env from this
     // process's environment — and on Windows it additionally merges the
@@ -441,6 +460,21 @@ fn apply_env(
     // user configured, so they are forced last and unconditionally.
     builder.env("TERM", "xterm-256color");
     builder.env("COLORTERM", "truecolor");
+
+    // #213: how this harness reaches its room's review. After the
+    // host-terminal strip and after the user's extra env, because these
+    // are Skein's to own — they are also in `RESERVED_ENV_KEYS`, so a
+    // user who sets one by hand is told it was ignored rather than
+    // having it silently overwritten here.
+    //
+    // Both harnesses expand `${VAR}` inside their MCP config, so the
+    // URL never has to be a number anyone agreed on in advance.
+    if let Some(agent) = agent {
+        builder.env("SKEIN_REVIEW_URL", &agent.url);
+        builder.env("SKEIN_REVIEW_TOKEN", &agent.token);
+        builder.env("SKEIN_ROOM_ID", &agent.room_id);
+        builder.env("SKEIN_HARNESS_ID", &agent.harness_id);
+    }
 
     AppliedEnv {
         path: merged.path,
@@ -1254,7 +1288,7 @@ mod tests {
             ..SpawnSettings::default()
         };
         let mut builder = CommandBuilder::new("skein-preview");
-        let applied = apply_env(&mut builder, &settings, probe_snapshot());
+        let applied = apply_env(&mut builder, &settings, probe_snapshot(), None);
         assert!(applied.stripped.is_empty());
     }
 
@@ -1578,7 +1612,7 @@ pub(crate) fn env_preview(settings: &SpawnSettings) -> EnvPreview {
     // Tauri command, so waiting here would block the event loop for up
     // to `PROBE_WAIT`, and the panel already knows how to follow a
     // `pending` state until it settles.
-    let applied = apply_env(&mut builder, settings, probe_snapshot());
+    let applied = apply_env(&mut builder, settings, probe_snapshot(), None);
 
     let added: Vec<String> = applied.added;
     let from_shell = applied.probe.path().is_some();
@@ -1652,6 +1686,79 @@ fn launch_context() -> String {
 // Deliberately not inside the `#[cfg(all(test, unix))]` module above:
 // #207 is a Windows bug, and a Windows bug guarded by Unix-only tests
 // is how it shipped. Everything here runs on both.
+/// The #213 spawn environment. Its own module because it must run on
+/// Windows too — that is the daily-driver platform, and the variables
+/// below are the only thing that gets a harness to the review at all.
+#[cfg(test)]
+mod agent_env_tests {
+    use super::{HarnessIdentity, apply_env, probe_snapshot};
+    use crate::spawn_settings::SpawnSettings;
+    use portable_pty::CommandBuilder;
+    use std::collections::HashMap;
+
+    #[test]
+    fn a_harness_is_told_where_its_rooms_review_lives() {
+        // #213's whole delivery mechanism. Both harnesses expand
+        // ${VAR} in their MCP config, so if these four are missing the
+        // agent has no review tools at all — and nothing else in the
+        // spawn path would notice.
+        let settings = SpawnSettings::default();
+        let identity = HarnessIdentity {
+            url: "http://127.0.0.1:51234/mcp".to_owned(),
+            token: "deadbeef".to_owned(),
+            room_id: "s_7f2".to_owned(),
+            harness_id: "h_a91".to_owned(),
+        };
+        let mut builder = CommandBuilder::new("skein-preview");
+        apply_env(&mut builder, &settings, probe_snapshot(), Some(&identity));
+        let env: HashMap<String, String> = builder
+            .iter_full_env_as_str()
+            .map(|(k, v)| (k.to_uppercase(), v.to_owned()))
+            .collect();
+        assert_eq!(
+            env.get("SKEIN_REVIEW_URL").map(String::as_str),
+            Some("http://127.0.0.1:51234/mcp")
+        );
+        assert_eq!(
+            env.get("SKEIN_REVIEW_TOKEN").map(String::as_str),
+            Some("deadbeef")
+        );
+        assert_eq!(env.get("SKEIN_ROOM_ID").map(String::as_str), Some("s_7f2"));
+        assert_eq!(
+            env.get("SKEIN_HARNESS_ID").map(String::as_str),
+            Some("h_a91")
+        );
+
+        // And without an identity — the settings preview, or a boot
+        // where the server never bound — nothing is set at all, rather
+        // than four variables pointing at a dead port.
+        let mut bare = CommandBuilder::new("skein-preview");
+        apply_env(&mut bare, &settings, probe_snapshot(), None);
+        assert!(
+            !bare
+                .iter_full_env_as_str()
+                .any(|(k, _)| k.to_uppercase().starts_with("SKEIN_REVIEW"))
+        );
+    }
+
+    #[test]
+    fn the_review_variables_cannot_be_pinned_by_hand() {
+        // Setting SKEIN_REVIEW_TOKEN in the user's extra env would point
+        // one harness at another room's review. It is refused out loud
+        // rather than silently overwritten below.
+        let settings = SpawnSettings {
+            extra_env: vec![crate::spawn_settings::EnvVar {
+                key: "SKEIN_REVIEW_TOKEN".to_owned(),
+                value: "somebody-elses".to_owned(),
+            }],
+            ..SpawnSettings::default()
+        };
+        let mut builder = CommandBuilder::new("skein-preview");
+        let applied = apply_env(&mut builder, &settings, probe_snapshot(), None);
+        assert_eq!(applied.ignored_env_keys, vec!["SKEIN_REVIEW_TOKEN"]);
+    }
+}
+
 #[cfg(test)]
 mod launch_tests {
     use super::{resolve_program_in, windows_resolved_program};

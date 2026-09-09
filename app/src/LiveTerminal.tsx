@@ -408,6 +408,14 @@ export const LiveTerminal = ({
 					cwd,
 					rows: term.rows,
 					cols: term.cols,
+					// #213: the backend mints the room's review token and
+					// puts SKEIN_REVIEW_URL / _TOKEN / SKEIN_ROOM_ID /
+					// SKEIN_HARNESS_ID into the child's environment. The
+					// harness id is what makes an agent's reply
+					// attributable to one harness rather than to "an
+					// agent" — a room can have several.
+					roomId,
+					harnessId,
 					onEvent: channel,
 				});
 				if (cancelled) {

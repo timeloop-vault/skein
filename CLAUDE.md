@@ -23,11 +23,14 @@ corrections:
 
 - **Review surface: #52 is the source of truth**, not the audit. It is
   now an epic with the decisions recorded (scope, diff lifetime,
-  anchoring, the agent API) and five sub-issues, #211–#215. **#211 and
-  #212 landed** — the diff has a baseline, and the review pane is the
-  right pane's second tab; **#213 (the agent API + MCP server) is
-  next**. #106 was rescoped out from under it and, now that the Diff
-  card is gone, is a review-pane issue.
+  anchoring, the agent API) and five sub-issues, #211–#215. **#211,
+  #212 and #213 landed** — the diff has a baseline, the review pane is
+  the right pane's second tab, and the agent reads and answers comments
+  over an MCP endpoint (`docs/agent-api.md`). **#215 (Claude Code
+  plugin packaging + opencode config injection) is next**, and until it
+  lands the MCP config is written by hand per that doc. #106 was
+  rescoped out from under it and, now that the Diff card is gone, is a
+  review-pane issue.
 - **Files pillar (#49) is half-shipped:** A (#184) and B (#185) landed;
   C (#186) and D (#187) are open.
 
@@ -44,6 +47,9 @@ corrections:
   `skein-review` — plus `app/src-tauri`, which is deliberately
   **excluded** from the workspace. Every cargo command therefore needs
   running twice; see Conventions
+- **axum** on the tokio runtime Tauri already runs, for the localhost
+  agent API + MCP endpoint (#213) — the hyper/http/tower stack under it
+  was already locked via reqwest
 - **Biome** lint + format (frontend), **clippy pedantic** `-D warnings`
   (Rust)
 - Pre-commit hook in `.githooks/pre-commit` (activate:
@@ -130,7 +136,7 @@ corrections:
     │   │                            #   shift-click to extend), Thread (threads + composer),
     │   │                            #   useReviewData (scope/file fetch + worktree watcher)
     │   └── src-tauri/               # Tauri Rust shell
-    │       ├── src/lib.rs           # Builder + 53-command registry; tracing → daily-rotating
+    │       ├── src/lib.rs           # Builder + 54-command registry; tracing → daily-rotating
     │       │                        #   file in app_log_dir() + stderr (RUST_LOG overrides)
     │       ├── src/pty.rs           # PtyManager (portable-pty); 2 threads per spawn (reader +
     │       │                        #   waiter — the waiter is load-bearing on Windows ConPTY)
@@ -160,6 +166,14 @@ corrections:
     │       │                        #   open, new position written back, anchor text never),
     │       │                        #   query/write = the command logic, commands = the
     │       │                        #   Tauri boundary and nothing else
+    │       ├── src/agent_api/       # The agent-facing review API (#213, epic #52 D8):
+    │       │   {state,auth,verbs,   #   an axum server on 127.0.0.1:<ephemeral> inside the
+    │       │    mcp,http,commands,  #   Tauri process, exposed as MCP over HTTP so Claude
+    │       │    tests}.rs           #   Code and opencode both consume it. verbs = the five
+    │       │                        #   agent verbs (list/get_comment/get_diff/reply/
+    │       │                        #   mark_addressed) — and NO resolve, which is refused
+    │       │                        #   by name; auth = the per-room bearer token, which IS
+    │       │                        #   the scope. See docs/agent-api.md
     │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1)
     │       ├── src/harness_events_opencode.rs  # SSE client → OpencodeEvent (L2c-2)
     │       ├── src/harness_actions_claude.rs   # JSONL → harness_actions rows (#80)
@@ -168,6 +182,8 @@ corrections:
     ├── docs/
     │   ├── audit-2026-07-03.md      # Full-codebase audit; §5 = structural backlog. Predates
     │   │                            #   the #52 review decisions — see Roadmap above
+    │   ├── agent-api.md             # The #213 agent API: verbs, headers, error codes, and
+    │   │                            #   the hand-written MCP config to use until #215
     │   ├── backlog.md               # Parked ideas (read before adding to any plan)
     │   ├── grok-build-recon-*.md    # Recon of grok-build: reference designs for the review
     │   │                            #   surface (§3 xai-hunk-tracker) + git writes (§6)
@@ -262,6 +278,23 @@ corrections:
   `crates/skein-review/src/anchor.rs` where it is testable without a
   repo. `review_viewed` stores the *content hash* the user looked at,
   which is what makes "changed since I last looked" fall out for free.
+- **The agent API** (#213, epic #52 D8): an axum server bound to
+  `127.0.0.1:0` in `setup()`, serving `/mcp` (MCP streamable HTTP —
+  what the harnesses talk to) and a plain-JSON `/api/*` mirror of the
+  same verbs. `pty_spawn` mints (or reuses) the room's bearer token and
+  puts `SKEIN_REVIEW_URL` / `SKEIN_REVIEW_TOKEN` / `SKEIN_ROOM_ID` /
+  `SKEIN_HARNESS_ID` into every harness's environment; both harnesses
+  expand `${VAR}` in their MCP config, so the ephemeral port never has
+  to be agreed in advance. **The token is the scope** — no request names
+  a room — and `X-Skein-Harness` is attribution only, never authority.
+  Tokens are revoked wholesale on every boot: PTYs die with the app, so
+  a token that leaked into an old log stops working. The agent gets
+  read, `reply` and `mark_addressed`; **`resolve` is refused by name**,
+  because an agent that can close its own comments removes the loop's
+  only gate. Writes emit `skein://review-changed` — a comment touches
+  only sqlite, so no watcher would otherwise fire. Verbs reuse
+  `review_surface::query::file_impl` rather than re-anchoring
+  themselves. Full contract: `docs/agent-api.md`.
 - **Files** (#185): `FileTree` lists via `list_dir`, `FilesBody` reads
   via `read_file_text` and saves via `write_file_text`, which
   round-trips an mtime token to detect a stale write. Buffer text
@@ -327,8 +360,8 @@ stderr; `RUST_LOG` overrides the default `info` filter.
 - **Tests live with the code that owns them.**
   `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `crates/skein-review` has 45; `app/src-tauri` has ~250 in-module unit
-  tests in source, of which ~215 run on any one platform — 214 on
+  `crates/skein-review` has 45; `app/src-tauri` has ~285 in-module unit
+  tests in source, of which ~245 run on any one platform — 244 on
   Windows; the rest are
   `cfg`-gated per OS (#202) (spawn-env merging, harness JSONL/SSE
   parsers, db persistence, pty). All run in the hook
@@ -372,7 +405,8 @@ and a CodeMirror editor), spawn-environment work (#192, #197, #207),
 authoritative session cost (#199), #209 (the `skein-harness` crate
 extraction), and a run of Windows daily-driver fixes
 (#200/#201/#202/#207/#217). #211 (the review baseline — the
-diff finally clears) and #212 (the review pane) open the #52 arc.
+diff finally clears), #212 (the review pane) and #213 (the agent API +
+MCP server) open the #52 arc.
 
 Known-weak spots, still open: App.tsx size and duplication (#19 — now
 ~3.2k LOC), the duplicated Claude/opencode adapter pairs (#116), heavy
@@ -380,11 +414,13 @@ sync Tauri commands on the main thread (#171/#172/#178/#179), silent
 failure surfacing (#176), and no frontend tests (#169).
 
 The **review surface (#52)** is the current headline feature arc; its
-decisions are recorded in the epic. #211 (baseline model) and #212
-(the review pane — branch-vs-base diff, comments, anchoring) have
-landed; #213 (the review API + MCP server, which is what finally lets
-the agent *read* the comments) is the next entry point. Do not plan
-review work off the audit — it predates those decisions.
+decisions are recorded in the epic. #211 (baseline model), #212 (the
+review pane — branch-vs-base diff, comments, anchoring) and #213 (the
+review API + MCP server, which is what finally lets the agent *read*
+the comments) have landed; #215 (harness config injection, so the MCP
+server is wired up without a hand-written `.mcp.json`) and #214 (the
+land actions) are what remain. Do not plan review work off the audit —
+it predates those decisions.
 
 ## Design references
 

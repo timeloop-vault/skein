@@ -14,6 +14,7 @@
 // work on it, and those mean opposite things.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type ReviewFileDetail,
@@ -62,6 +63,31 @@ export function useWorktreeWatcher(cwd: string, enabled: boolean, onTick: () => 
 			if (watchId) void invoke("git_watch_stop", { id: watchId });
 		};
 	}, [cwd, enabled]);
+}
+
+/// Re-fetch when an agent writes to this room's review (#213).
+///
+/// The sibling of `useWorktreeWatcher`, and needed for the same reason
+/// `refresh()` is: an agent replying through the MCP endpoint touches
+/// sqlite and nothing else, so no filesystem event fires and the pane
+/// would sit there quietly out of date while the user watched it.
+export function useAgentWrites(roomId: string, enabled: boolean, onChange: () => void) {
+	const cb = useRef(onChange);
+	cb.current = onChange;
+
+	useEffect(() => {
+		if (!enabled || !roomId) return;
+		let cancelled = false;
+		const unlisten = listen<{ roomId: string }>("skein://review-changed", (event) => {
+			if (event.payload.roomId === roomId) cb.current();
+		});
+		return () => {
+			cancelled = true;
+			void unlisten.then((off) => {
+				if (cancelled) off();
+			});
+		};
+	}, [roomId, enabled]);
 }
 
 export function useReviewScope(

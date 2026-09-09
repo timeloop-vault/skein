@@ -6,6 +6,7 @@
 //! writes/resizes/kills are keyed by it. Output streams back over a
 //! per-spawn `tauri::ipc::Channel<PtyEvent>` (tagged data/exit).
 
+mod agent_api;
 mod db;
 mod fs;
 mod git;
@@ -74,7 +75,7 @@ impl SpawnEnvState {
 /// one eagerly even when we only ever use plain HTTP (the L2c-2
 /// opencode adapter talks to 127.0.0.1). Idempotent: `install_default`
 /// returns Err on the second call, which we ignore.
-fn install_rustls_provider() {
+pub(crate) fn install_rustls_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
@@ -187,6 +188,16 @@ pub fn run() {
                 Box::<dyn std::error::Error>::from(format!("opening {}: {e}", db_path.display()))
             })?;
             let db = Arc::new(db);
+
+            // #213: a review token lives no longer than the process
+            // that handed it out. Every PTY died with the last Skein,
+            // so nothing legitimate still holds one — and a token that
+            // ended up in a transcript or a log stops working here.
+            match db.revoke_agent_tokens(None, crate::review::now_ms()) {
+                Ok(n) if n > 0 => tracing::info!(count = n, "agent api: revoked stale room tokens"),
+                Ok(_) => {}
+                Err(e) => tracing::error!(error = %e, "agent api: revoking stale tokens failed"),
+            }
             app.manage(PtyManager::new());
             app.manage(WatcherManager::new());
             app.manage(ClaudeEventsManager::new(
@@ -197,6 +208,49 @@ pub fn run() {
                 Arc::clone(&db),
                 app.handle().clone(),
             ));
+
+            // The agent-facing review API (#213). Bound with the std
+            // listener so a failure is known *here*, synchronously, and
+            // can be recorded — an async bind inside the spawned task
+            // would fail into a log line nobody reads and leave the
+            // settings pane claiming a port that never existed.
+            //
+            // 127.0.0.1 only, and an ephemeral port: the URL reaches
+            // the harnesses through SKEIN_REVIEW_URL at spawn time, so
+            // nothing has to agree on a number in advance.
+            let endpoint = match std::net::TcpListener::bind(("127.0.0.1", 0))
+                .and_then(|l| {
+                    let port = l.local_addr()?.port();
+                    l.set_nonblocking(true)?;
+                    Ok((l, port))
+                }) {
+                Ok((listener, port)) => {
+                    let state = Arc::new(crate::agent_api::AgentApiState::new(
+                        Arc::clone(&db),
+                        app.handle().clone(),
+                    ));
+                    tauri::async_runtime::spawn(async move {
+                        match tokio::net::TcpListener::from_std(listener) {
+                            Ok(listener) => crate::agent_api::http::serve(listener, state).await,
+                            Err(e) => {
+                                tracing::error!(error = %e, "agent api: adopting listener failed");
+                            }
+                        }
+                    });
+                    tracing::info!(port, "agent api listening on 127.0.0.1");
+                    crate::agent_api::state::AgentApiEndpoint::bound(port)
+                }
+                Err(e) => {
+                    // Not fatal: Skein is perfectly usable without the
+                    // agent API. But it must be *visible* — an agent
+                    // whose tools silently do not exist is the worst of
+                    // both worlds (#176).
+                    tracing::error!(error = %e, "agent api: bind failed; agents cannot reach the review");
+                    crate::agent_api::state::AgentApiEndpoint::failed(e.to_string())
+                }
+            };
+            app.manage(endpoint);
+
             app.manage(db);
 
             // Resolve the product name from the merged tauri config —
@@ -352,6 +406,7 @@ pub fn run() {
             review_surface::commands::review_resolve_thread,
             review_surface::commands::review_mark_viewed,
             review_surface::commands::review_set_base,
+            agent_api::commands::agent_api_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -370,19 +425,41 @@ fn ping(message: String) -> String {
 ///
 /// `cmd` is argv-style: the first element is the program, the rest are
 /// arguments. Empty `cmd` is rejected. `cwd` must exist.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 #[tauri::command]
 fn pty_spawn(
     cmd: Vec<String>,
     cwd: String,
     rows: u16,
     cols: u16,
+    room_id: String,
+    harness_id: String,
     on_event: Channel<PtyEvent>,
     manager: tauri::State<'_, PtyManager>,
     spawn_env: tauri::State<'_, SpawnEnvState>,
+    db: tauri::State<'_, Arc<Database>>,
+    endpoint: tauri::State<'_, crate::agent_api::state::AgentApiEndpoint>,
 ) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let settings = spawn_env.snapshot();
+    // #213: mint (or reuse) the room's review token and hand the
+    // harness its endpoint. A failure here is not a reason to refuse
+    // the spawn — the terminal still works, the agent simply has no
+    // review tools — but it is logged rather than swallowed (#176).
+    let agent = endpoint.mcp_url().and_then(|url| {
+        match db.ensure_room_token(&room_id, crate::review::now_ms()) {
+            Ok(token) => Some(crate::agent_api::state::HarnessIdentity {
+                url,
+                token,
+                room_id: room_id.clone(),
+                harness_id: harness_id.clone(),
+            }),
+            Err(e) => {
+                tracing::error!(room_id, error = %e, "agent api: minting a room token failed");
+                None
+            }
+        }
+    });
     manager
         .spawn(
             crate::pty::SpawnRequest {
@@ -392,6 +469,7 @@ fn pty_spawn(
                 rows,
                 cols,
                 settings: &settings,
+                agent: agent.as_ref(),
             },
             move |event| {
                 // Channel send only fails if the frontend dropped the

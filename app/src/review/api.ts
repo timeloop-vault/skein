@@ -32,13 +32,26 @@ export type Placement = "unmoved" | "moved" | "shifted" | "outdated";
 export interface ReviewComment {
 	id: string;
 	threadId: string;
-	/** `user` today; #213 starts writing `agent`. */
+	/** `agent` is written by the review API (#213). */
 	authorKind: "user" | "agent";
 	/** Harness id when `authorKind === "agent"`. */
 	authorId?: string;
+	/** The agent's byline — "claude · main". Resolved backend-side from
+	 *  the room's harness list; absent once that harness is gone. */
+	authorLabel?: string;
 	body: string;
 	createdMs: number;
 	updatedMs: number;
+}
+
+/** An agent's claim that a thread is handled (#213). Not a resolution:
+ *  the reviewer still closes the thread. */
+export interface ReviewAddressed {
+	commitSha?: string;
+	/** Harness byline, or "agent". */
+	by: string;
+	note?: string;
+	addressedMs: number;
 }
 
 export interface ReviewThread {
@@ -59,6 +72,8 @@ export interface ReviewThread {
 	outdated: boolean;
 	confidence?: number;
 	resolvedMs?: number;
+	/** Set when an agent has said it handled this (#213). */
+	addressed?: ReviewAddressed;
 	createdMs: number;
 	updatedMs: number;
 	comments: ReviewComment[];

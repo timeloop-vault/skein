@@ -13,7 +13,8 @@ use skein_git::Repo;
 use skein_review::Placement;
 
 use super::anchoring::{
-    PlaceCtx, comments_by_thread, parse_anchor_lines, place_threads, to_thread_dto,
+    PlaceCtx, addressed_by_thread, apply_addressed, comments_by_thread, parse_anchor_lines,
+    place_threads, to_thread_dto,
 };
 use super::dto::{CommitDto, FileDetailDto, ReviewFileDto, ReviewScopeDto, ThreadDto};
 use super::git::{
@@ -24,7 +25,7 @@ use crate::db::{Database, ReviewThreadRow};
 use crate::review::{pending_impl, relative_key};
 
 #[allow(clippy::too_many_lines)]
-pub(super) fn scope_impl(
+pub(crate) fn scope_impl(
     db: &Database,
     room_id: &str,
     cwd: &str,
@@ -47,7 +48,8 @@ pub(super) fn scope_impl(
         .collect();
 
     let unresolved_count = threads.iter().filter(|t| t.resolved_ms.is_none()).count();
-    let review_threads: Vec<ThreadDto> = threads
+    let addressed = addressed_by_thread(db, room_id)?;
+    let mut review_threads: Vec<ThreadDto> = threads
         .iter()
         .filter(|t| t.scope == thread_scope::REVIEW)
         .cloned()
@@ -56,6 +58,7 @@ pub(super) fn scope_impl(
             to_thread_dto(t, lines, Placement::Outdated, &comments)
         })
         .collect();
+    apply_addressed(&mut review_threads, &addressed);
 
     // Per-file thread tallies, keyed the same way the file list is.
     let mut per_file: HashMap<String, (usize, usize)> = HashMap::new();
@@ -215,7 +218,7 @@ fn pending_files(
         .collect()
 }
 
-pub(super) fn file_impl(
+pub(crate) fn file_impl(
     db: &Database,
     room_id: &str,
     cwd: &str,
@@ -232,6 +235,7 @@ pub(super) fn file_impl(
         .collect();
 
     let repo = Repo::open(Path::new(cwd)).ok();
+    let addressed = addressed_by_thread(db, room_id)?;
 
     // Pending keeps #211's own diff: baseline → disk, which git cannot
     // see and which carries the accept/reject verbs.
@@ -239,7 +243,8 @@ pub(super) fn file_impl(
         let pending = pending_impl(db, room_id, cwd)?;
         let found = pending.into_iter().find(|p| p.path == key);
         let ctx = PlaceCtx::new(repo.as_ref(), cwd, None, scope, None);
-        let threads = place_threads(db, &ctx, &key, file_threads, &comments);
+        let mut threads = place_threads(db, &ctx, &key, file_threads, &comments);
+        apply_addressed(&mut threads, &addressed);
         return Ok(match found {
             Some(p) => FileDetailDto {
                 name: p.name,
@@ -276,7 +281,8 @@ pub(super) fn file_impl(
         scope,
         commit_sha,
     );
-    let threads = place_threads(db, &ctx, &key, file_threads, &comments);
+    let mut threads = place_threads(db, &ctx, &key, file_threads, &comments);
+    apply_addressed(&mut threads, &addressed);
 
     let hash = file_hash(cwd, &key, scope, commit_sha, repo_ref);
     Ok(match found {
