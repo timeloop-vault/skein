@@ -44,10 +44,11 @@ import {
 	parsePayload,
 } from "./liveContext/index.ts";
 import {
-	EMPTY_REPO_MEMORY,
-	type RepoDefaults,
-	type RepoMemory,
-	rememberRepo,
+	EMPTY_NEW_ROOM_MEMORY,
+	type FolderDefaults,
+	type NewRoomMemory,
+	defaultsFor,
+	rememberFolder,
 	usePersistedState,
 } from "./prefs.ts";
 import { hints, isMac, matchShortcut, modLabel } from "./shortcuts.ts";
@@ -555,12 +556,12 @@ const NewRoomDialog = ({
 	onCancel,
 }: {
 	defaultCwd: string;
-	/** Repo root to open with, from the active room or the last one used (#226). */
+	/** Folder to open with — the active room's, or the last one used (#226). */
 	initialCwd: string;
-	/** Per-repo defaults for `initialCwd`, when we have seen it before. */
-	initialDefaults: RepoDefaults | undefined;
-	/** Called with the repo root and its defaults after a room is created. */
-	onRemember: (root: string, defaults: Omit<RepoDefaults, "lastUsed">) => void;
+	/** Per-folder defaults for `initialCwd`, when we have seen it before. */
+	initialDefaults: FolderDefaults | undefined;
+	/** Called with the folder and its defaults after a room is created. */
+	onRemember: (folder: string, defaults: Omit<FolderDefaults, "lastUsed">) => void;
 	onCommit: (args: CreateRoomArgs) => void;
 	onCancel: () => void;
 }) => {
@@ -683,12 +684,17 @@ const NewRoomDialog = ({
 		if (!canCreate) return;
 		setBusy(true);
 		setError(null);
+		// Called only on a path that genuinely created the room — a create
+		// that throws must not teach the dialog anything.
+		const remember = (base: string) => onRemember(cwd, { baseBranch: base, harness, branchMode });
 		try {
 			if (!isRepo) {
 				// Non-git folder — no worktree, no branch. cwd is the
-				// picked folder verbatim. Not remembered: the memory is
-				// keyed on repo roots, and a plain folder has no base
-				// branch to carry forward.
+				// picked folder verbatim, and it is remembered like any
+				// other folder (#231), with an empty base branch: there is
+				// no branch to carry forward, but the folder itself and the
+				// starting harness are worth exactly as much here.
+				remember("");
 				onCommit({
 					cwd,
 					task: task.trim(),
@@ -696,9 +702,6 @@ const NewRoomDialog = ({
 				});
 				return;
 			}
-			// Only reached once the room is genuinely created below — a
-			// create that throws must not teach the dialog anything.
-			const remember = () => onRemember(cwd, { baseBranch, harness, branchMode });
 			if (branchMode === "worktree") {
 				const worktreePath = await invoke<string>("git_propose_worktree_path", {
 					repoPath: cwd,
@@ -710,7 +713,7 @@ const NewRoomDialog = ({
 					baseBranch,
 					worktreePath,
 				});
-				remember();
+				remember(baseBranch);
 				onCommit({
 					cwd: wt.path,
 					task: task.trim(),
@@ -718,7 +721,7 @@ const NewRoomDialog = ({
 					branch: proposedBranch,
 				});
 			} else {
-				remember();
+				remember(baseBranch);
 				onCommit({
 					cwd,
 					task: task.trim(),
@@ -1984,50 +1987,55 @@ export default function App() {
 	const activeRoomIdRef = useRef(activeRoomId);
 	activeRoomIdRef.current = activeRoomId;
 
-	// ── New Room memory (#226) ─────────────────────────────────────
+	// ── New Room memory (#226, #231) ───────────────────────────────
 	//
 	// Opening the dialog is async because the seed has to be resolved
-	// first: the active room's `cwd` is a *worktree* path, and the
-	// defaults are keyed on the repo root it came from. Resolving here
+	// first: the active room's `cwd` may be a *worktree* path, and the
+	// defaults are keyed on the folder it resolves to. Resolving here
 	// rather than inside the dialog means the fields are already right
 	// on the first paint — no blank frame, no jump.
-	const [repoMemory, setRepoMemory] = usePersistedState<RepoMemory>(
-		"repoMemory",
-		EMPTY_REPO_MEMORY,
+	const [newRoomMemory, setNewRoomMemory] = usePersistedState<NewRoomMemory>(
+		"newRoomMemory",
+		EMPTY_NEW_ROOM_MEMORY,
 	);
-	const repoMemoryRef = useRef(repoMemory);
-	repoMemoryRef.current = repoMemory;
+	const newRoomMemoryRef = useRef(newRoomMemory);
+	newRoomMemoryRef.current = newRoomMemory;
 	const [newRoomSeed, setNewRoomSeed] = useState<{
 		cwd: string;
-		defaults: RepoDefaults | undefined;
+		defaults: FolderDefaults | undefined;
 	}>({ cwd: "", defaults: undefined });
 
 	const openNewRoom = useCallback(async () => {
-		const memory = repoMemoryRef.current;
-		// The room you are in is the strongest signal of which repo you
-		// mean; the last one used is the fallback when no room is open.
+		const memory = newRoomMemoryRef.current;
+		// The room you are in is the strongest signal of where you mean
+		// to work; the last folder used is the fallback when no room is
+		// open. A git room contributes its repo root — every room in a
+		// repo then shares one entry — and a plain folder contributes
+		// itself (#231): "another room in the folder I am in" is the same
+		// journey either way, and dropping the non-git case made those
+		// rooms prefill nothing, or worse, an unrelated repo.
 		const active = roomsRef.current.find((r) => r.id === activeRoomIdRef.current);
-		let root = memory.last ?? "";
+		let seed = memory.last ?? "";
 		if (active?.cwd) {
 			try {
 				const info = await invoke<FolderInfoDto>("git_inspect_folder", {
 					path: active.cwd,
 				});
-				if (info.exists && info.isRepo) root = info.root;
+				if (info.exists) seed = info.isRepo ? info.root : active.cwd;
 			} catch {
 				// Resolution is a convenience, never a gate — fall back to
-				// the remembered root and let the dialog validate it.
+				// the remembered folder and let the dialog validate it.
 			}
 		}
-		setNewRoomSeed({ cwd: root, defaults: root ? memory.repos[root] : undefined });
+		setNewRoomSeed({ cwd: seed, defaults: defaultsFor(memory, seed) });
 		setShowNewRoom(true);
 	}, []);
 
-	const rememberRoomRepo = useCallback(
-		(root: string, defaults: Omit<RepoDefaults, "lastUsed">) => {
-			setRepoMemory((prev) => rememberRepo(prev, root, defaults));
+	const rememberRoomFolder = useCallback(
+		(folder: string, defaults: Omit<FolderDefaults, "lastUsed">) => {
+			setNewRoomMemory((prev) => rememberFolder(prev, folder, defaults));
 		},
-		[setRepoMemory],
+		[setNewRoomMemory],
 	);
 	// L5e — notification toggles read inside the transition listener
 	// (mounted once with empty deps); refs let preference toggles
@@ -3120,7 +3128,7 @@ export default function App() {
 						defaultCwd={defaultCwd}
 						initialCwd={newRoomSeed.cwd}
 						initialDefaults={newRoomSeed.defaults}
-						onRemember={rememberRoomRepo}
+						onRemember={rememberRoomFolder}
 						onCommit={createRoom}
 						onCancel={() => setShowNewRoom(false)}
 					/>
@@ -3352,7 +3360,7 @@ export default function App() {
 					defaultCwd={defaultCwd}
 					initialCwd={newRoomSeed.cwd}
 					initialDefaults={newRoomSeed.defaults}
-					onRemember={rememberRoomRepo}
+					onRemember={rememberRoomFolder}
 					onCommit={createRoom}
 					onCancel={() => setShowNewRoom(false)}
 				/>
