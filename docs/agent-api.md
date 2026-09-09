@@ -118,21 +118,59 @@ control, never instead of it. A later comment *from the reviewer* clears
 the claim automatically: if they are still talking, it evidently is not
 settled.
 
-## The one thing it will not do
+### `review_status`
 
-There is no `resolve`, and there never will be one here. An agent that
-can close its own comments removes the only gate in the loop, and the
-reviewer would find "resolved" threads they never read.
+No arguments. Whether the reviewer has **signed off** (#214) — the gate
+to read before merging, pushing, or opening a pull request.
 
-It is refused three ways, on purpose:
+```json
+{
+  "approved": false,
+  "stale": true,
+  "approved_sha": "4196f17e…",
+  "head_sha": "2bcae5a1…",
+  "commits_since_signoff": 2,
+  "unresolved_count": 1,
+  "unaddressed_count": 0,
+  "guidance": "The reviewer approved an earlier commit, and HEAD has moved since…"
+}
+```
+
+`approved` is the only field a decision should read, and it is true
+**only when the sign-off names the commit HEAD points at now**. A
+sign-off approves a commit, not a room: an agent that commits after
+being approved invalidates its own clearance, which is `stale`. That is
+the honest outcome — an approval silently stretching over code nobody
+read would be worse than no approval.
+
+`guidance` says the same thing in words, because a model reading
+`approved: false, stale: true` otherwise has to infer why.
+
+**Skein does not land the branch.** It never merges, pushes, or opens a
+pull request: which strategy, which forge, and what a PR body looks like
+are things this repository already says — in `.claude/skills/`, in
+`CLAUDE.md` — and the agent reads them. Skein owns the one fact that
+lives nowhere else, which is whether the human said yes.
+
+## The two things it will not do
+
+There is no `resolve` and no `approve`, and there never will be here.
+An agent that can close its own comments removes the only gate in the
+loop; one that can sign off its own work removes it a level higher. In
+both cases the reviewer would find their approval on code they never
+read.
+
+Each is refused three ways, on purpose:
 
 - absent from `tools/list`;
 - refused **by name** in `tools/call` — `resolve`, `resolve_thread`,
-  `close_thread`, `mark_resolved` and friends all come back with a
-  reason. A model told a tool is merely *missing* goes looking for
-  another way in; a model told *whose decision it is* stops.
-- `POST /api/comments/{id}/resolve` exists and answers `403`, so the
-  answer reads as design rather than as "not implemented yet".
+  `close_thread`, `mark_resolved`, and `approve`, `sign_off`,
+  `mark_approved` and friends all come back with a reason. A model told
+  a tool is merely *missing* goes looking for another way in; a model
+  told *whose decision it is* stops.
+- `POST /api/comments/{id}/resolve` and `POST /api/status` exist and
+  answer `403`, so the answer reads as design rather than as "not
+  implemented yet".
 
 ## Errors
 
@@ -142,7 +180,7 @@ Loud, and distinguishable (#176):
 | :-- | :-- |
 | `400` | malformed JSON, or an `MCP-Protocol-Version` we do not speak |
 | `401` | no bearer token, or one that was never minted |
-| `403` | a revoked token, a non-localhost `Origin`, or `resolve` |
+| `403` | a revoked token, a non-localhost `Origin`, or `resolve` / `approve` |
 | `404` | the token's room is gone |
 | `405` | `GET`/`DELETE /mcp` — no stream, no sessions |
 | `410` | the room was archived while the agent held the review open |
@@ -219,10 +257,11 @@ Settings → About shows the bound port, or says why there is none.
 | :-- | :-- |
 | `agent_api/state.rs` | shared state, the `skein://review-changed` event, `HarnessIdentity` |
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
-| `agent_api/verbs.rs` | the five verbs — the whole testable core |
-| `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve refusal |
+| `agent_api/verbs.rs` | the six verbs — the whole testable core |
+| `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve and approve refusals |
 | `agent_api/http.rs` | the routes |
-| `agent_api/tests.rs` | scoping, the resolve prohibition, lifecycle, real HTTP |
+| `agent_api/tests.rs` | scoping, both prohibitions, lifecycle, real HTTP |
+| `review_surface/signoff.rs` | the sign-off itself, and the staleness rule (#214) |
 
 Anchoring is **not** reimplemented here: `get_comment` and `get_diff`
 call `review_surface::query::file_impl`, the same function the pane

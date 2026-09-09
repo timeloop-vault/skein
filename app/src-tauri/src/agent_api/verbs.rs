@@ -239,6 +239,34 @@ pub struct AddressedOut {
     pub note_to_agent: &'static str,
 }
 
+/// The sign-off, as the agent reads it (#214).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct StatusOut {
+    /// The reviewer approved, and HEAD is still what they approved.
+    /// The only field a "may I land?" decision should read.
+    pub approved: bool,
+    /// An approval exists but HEAD has moved past it.
+    pub stale: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approved_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approved_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commits_since_signoff: Option<usize>,
+    pub unresolved_count: usize,
+    /// Unresolved threads this agent has not yet claimed to have
+    /// handled — its own remaining work.
+    pub unaddressed_count: usize,
+    /// The flags, in words. A model deciding from `approved: false,
+    /// stale: true` has to infer the reason; this states it.
+    pub guidance: &'static str,
+}
+
 // ── the verbs ─────────────────────────────────────────────────────
 
 /// Every comment on this room's review.
@@ -441,6 +469,53 @@ pub fn mark_addressed(
         thread_id: row.id,
         commit_sha: args.commit_sha.clone(),
         note_to_agent: "marked as addressed — only the reviewer can resolve the thread",
+    })
+}
+
+/// Whether the reviewer has signed off — the gate before landing.
+///
+/// The one verb whose answer is not about comments. #213 let an agent
+/// read the reviewer's feedback; this is what lets it ask whether the
+/// reviewer is *finished*, so it can land the branch the way this
+/// repository lands branches rather than waiting to be told.
+///
+/// `approved` is deliberately the only field a decision should read.
+/// The rest is context for the message the agent writes afterwards.
+pub fn review_status(db: &Database, caller: &Caller) -> VerbResult<StatusOut> {
+    let Some(cwd) = caller.cwd.as_deref() else {
+        return Err(VerbError::Unavailable(
+            "this room has no worktree, so there is nothing to sign off on".into(),
+        ));
+    };
+    let s = crate::review_surface::signoff::status_impl(db, &caller.room_id, cwd)
+        .map_err(VerbError::Internal)?;
+
+    // Said in words, not just flags. A model reading `approved: false,
+    // stale: true` has to infer why; this tells it, in the same place
+    // it is deciding.
+    let guidance = if s.approved {
+        "The reviewer has approved this exact commit. You may land the branch \
+         however this repository lands branches."
+    } else if s.stale {
+        "The reviewer approved an earlier commit, and HEAD has moved since. \
+         That approval does not cover the new work — do not land. Tell the \
+         reviewer what changed and ask them to look again."
+    } else {
+        "The reviewer has not signed off. Do not land the branch. Address the \
+         outstanding comments and wait."
+    };
+
+    Ok(StatusOut {
+        approved: s.approved,
+        stale: s.stale,
+        approved_sha: s.approved_sha,
+        head_sha: s.head_sha,
+        approved_ms: s.approved_ms,
+        note: s.note,
+        commits_since_signoff: s.commits_since,
+        unresolved_count: s.unresolved_count,
+        unaddressed_count: s.unaddressed_count,
+        guidance,
     })
 }
 

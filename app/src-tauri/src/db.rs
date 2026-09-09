@@ -503,6 +503,33 @@ impl Database {
         )
         .map_err(|e| e.to_string())?;
 
+        // Issue #214 (epic #52 D9, as corrected): the reviewer's
+        // sign-off. One row per room, because a room is one review
+        // (D1); no row means not approved.
+        //
+        // `head_sha` is the point of the table. A sign-off approves a
+        // *state of the code*, not a room — so it records what HEAD was
+        // when it was granted, and anything reading it compares that to
+        // HEAD now. An agent that commits after being approved makes
+        // the approval stale, which is visible, rather than silently
+        // extending it over code nobody looked at. Same trick
+        // `review_viewed` plays one level down with its content hash.
+        //
+        // A sibling table for the reason all the others are: there is
+        // no migration machinery here, so a new *column* on an existing
+        // table would never appear in a live database.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS review_signoff (
+                room_id TEXT PRIMARY KEY,
+                head_sha TEXT NOT NULL,
+                base_ref TEXT,
+                note TEXT,
+                approved_ms INTEGER NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
         // Issue #213: the per-room bearer token the agent API
         // authenticates with. The token *is* the room scope — no
         // request carries a room id, so a token can only ever reach the
@@ -1500,6 +1527,80 @@ impl Database {
         .map_err(|e| e.to_string())?;
         Ok(())
     }
+
+    // ── the reviewer's sign-off (#214) ────────────────────────────
+
+    /// The room's sign-off, or `None` if the reviewer has not approved.
+    ///
+    /// Whether it is still *current* is not answered here: that needs
+    /// HEAD, which is git's to say. `review_surface::signoff` compares
+    /// the two.
+    pub fn review_signoff(&self, room_id: &str) -> Result<Option<ReviewSignoffRow>, String> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT room_id, head_sha, base_ref, note, approved_ms \
+             FROM review_signoff WHERE room_id = ?1",
+            params![room_id],
+            |row| {
+                Ok(ReviewSignoffRow {
+                    room_id: row.get(0)?,
+                    head_sha: row.get(1)?,
+                    base_ref: row.get(2)?,
+                    note: row.get(3)?,
+                    approved_ms: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    /// Approve, or re-approve at a new HEAD. Replaces any prior row —
+    /// a room has one sign-off, and the newest is the only one that
+    /// means anything.
+    pub fn set_review_signoff(
+        &self,
+        room_id: &str,
+        head_sha: &str,
+        base_ref: Option<&str>,
+        note: Option<&str>,
+        now_ms: i64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO review_signoff (room_id, head_sha, base_ref, note, approved_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(room_id) DO UPDATE SET \
+               head_sha = excluded.head_sha, base_ref = excluded.base_ref, \
+               note = excluded.note, approved_ms = excluded.approved_ms",
+            params![room_id, head_sha, base_ref, note, now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Withdraw the sign-off. Deleting rather than flagging: "was
+    /// approved once, at some sha, then withdrawn" is not a state
+    /// anything acts on, and keeping it would invite something to.
+    pub fn clear_review_signoff(&self, room_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "DELETE FROM review_signoff WHERE room_id = ?1",
+            params![room_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+/// A row of `review_signoff` — the reviewer said yes to `head_sha`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewSignoffRow {
+    pub room_id: String,
+    pub head_sha: String,
+    pub base_ref: Option<String>,
+    pub note: Option<String>,
+    pub approved_ms: i64,
 }
 
 /// One row of `review_threads` (issue #212).

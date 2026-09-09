@@ -36,6 +36,12 @@ import type { HarnessKind } from "../types.ts";
 import { CommitList } from "./CommitList.tsx";
 import { DiffBody, type LineSelection, type ThreadHandlers } from "./DiffBody.tsx";
 import { FileList } from "./FileList.tsx";
+import {
+	SignoffConfirm,
+	SignoffControl,
+	type SignoffIntent,
+	SignoffNotice,
+} from "./SignoffControl.tsx";
 import { Composer, ThreadView } from "./Thread.tsx";
 import {
 	type ReviewFile,
@@ -55,6 +61,7 @@ import {
 	useAgentWrites,
 	useReviewFile,
 	useReviewScope,
+	useSignoff,
 	useWorktreeWatcher,
 } from "./useReviewData.ts";
 import "./review.css";
@@ -99,6 +106,10 @@ export const ReviewPane = ({
 	const [reviewComposerOpen, setReviewComposerOpen] = useState(false);
 	const [fileComposerOpen, setFileComposerOpen] = useState(false);
 	const [harnessFilter, setHarnessFilter] = useState<string | undefined>(undefined);
+	// Which sign-off confirmation is open. Here rather than in the
+	// control, because the button is in the header and its confirmation
+	// renders below it.
+	const [signoffIntent, setSignoffIntent] = useState<SignoffIntent | undefined>(undefined);
 
 	const effectiveCommit = scope === "commit" ? commitSha : undefined;
 	const {
@@ -116,6 +127,17 @@ export const ReviewPane = ({
 	}, [refreshScope, bump]);
 	useWorktreeWatcher(cwd, visible, refreshAll);
 	useAgentWrites(roomId, visible, refreshAll);
+
+	// #214: the reviewer's sign-off. Keyed off the same nonce as
+	// everything else, which is what makes it lapse on its own — a
+	// commit refreshes the pane, and the refresh is when the approval
+	// stops matching HEAD.
+	const {
+		status: signoff,
+		error: signoffError,
+		busy: signoffBusy,
+		set: setSignoffState,
+	} = useSignoff(roomId, cwd, visible, nonce);
 
 	const { file, error: fileError } = useReviewFile(
 		roomId,
@@ -302,6 +324,16 @@ export const ReviewPane = ({
 							✓ all
 						</button>
 					)}
+					{/* #214: the terminal act of a review. Not a merge and not
+					    a push — Skein does neither. This records that the
+					    reviewer approved this commit, which is what the agent
+					    checks before landing the branch its own way. */}
+					<SignoffControl
+						status={signoff}
+						busy={signoffBusy}
+						pending={signoffIntent}
+						onRequest={setSignoffIntent}
+					/>
 				</span>
 			</div>
 		</div>
@@ -374,9 +406,27 @@ export const ReviewPane = ({
 		<div className="rv">
 			{header}
 
-			{(actionError ?? error ?? fileError ?? data?.error) && (
-				<div className="rv-err">{actionError ?? error ?? fileError ?? data?.error}</div>
+			{(actionError ?? error ?? fileError ?? signoffError ?? data?.error) && (
+				<div className="rv-err">
+					{actionError ?? error ?? fileError ?? signoffError ?? data?.error}
+				</div>
 			)}
+
+			{/* A lapsed sign-off is the one state the reviewer has to see
+			    rather than hover over: their approval stopped covering the
+			    branch the moment the agent committed again. */}
+			<SignoffNotice status={signoff} />
+
+			<SignoffConfirm
+				status={signoff}
+				pending={signoffIntent}
+				busy={signoffBusy}
+				onConfirm={(approved) => {
+					setSignoffState(approved);
+					setSignoffIntent(undefined);
+				}}
+				onCancel={() => setSignoffIntent(undefined)}
+			/>
 
 			{scope === "commit" && commitSha && (
 				<button type="button" className="rv-backlink" onClick={() => setCommitSha(undefined)}>

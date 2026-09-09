@@ -782,3 +782,114 @@
 	font-size: 0.9em;
 	line-height: 1.5;
 }
+
+/* ── the reviewer's sign-off (#214, epic #52 D9 as corrected) ─────── */
+
+/* Three states, three colours, because they are three different
+   answers: nothing yet, approved, and approved-but-no-longer-of-this.
+   The lapsed one borrows the warning colour deliberately — it is the
+   state that looks like approval and is not. */
+.rv-signoff {
+	flex: 0 0 auto;
+	background: none;
+	border: 1px solid var(--line-strong);
+	border-radius: 3px;
+	color: var(--fg-2);
+	font-family: var(--sk-mono);
+	font-size: 0.85em;
+	padding: 0 6px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.rv-signoff:hover:not(:disabled) {
+	color: var(--ok);
+	border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+.rv-signoff:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.rv-signoff.approved {
+	color: var(--ok);
+	border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+	background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.rv-signoff.approved:hover:not(:disabled) {
+	color: var(--fg-2);
+	border-color: var(--line-strong);
+	background: none;
+}
+.rv-signoff.stale {
+	color: var(--warn);
+	border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+	background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.rv-signoff.stale:hover:not(:disabled) {
+	color: var(--warn);
+	border-color: color-mix(in srgb, var(--warn) 70%, transparent);
+}
+
+/* Not a tooltip: an approval that stopped applying has to be readable
+   without hovering the thing that stopped applying. */
+.rv-signoff-notice {
+	background: color-mix(in srgb, var(--warn) 12%, transparent);
+	border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+	color: var(--warn);
+	padding: 3px 8px;
+	font-size: 0.85em;
+}
+
+/* The confirmation, inline under the header rather than a native OS
+   message box. `plugin-dialog`'s confirm is right for closing a room —
+   PTYs die, unsaved buffers go — and wrong for this: signing off is
+   small, in-pane, and one click to undo, so a Win32 dialog over a dark
+   app is a bigger interruption than the action deserves. */
+.rv-signoff-confirm {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 6px 8px;
+	background: var(--bg-2);
+	border-bottom: 1px solid var(--line-strong);
+}
+.rv-signoff-ask {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+	flex: 1 1 240px;
+}
+.rv-signoff-ask .q {
+	color: var(--fg-1);
+}
+.rv-signoff-ask .detail {
+	color: var(--fg-3);
+	font-size: 0.85em;
+	line-height: 1.45;
+}
+.rv-signoff-ask .warn {
+	color: var(--warn);
+	font-size: 0.85em;
+}
+.rv-signoff-buttons {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 0 auto;
+}
+/* The pane is monospace; the shared button atom is not, and a sans
+   button in a mono row reads as a foreign control. */
+.rv-signoff-buttons .sk-btn {
+	font-family: var(--sk-mono);
+	font-size: 0.9em;
+	padding: 3px 9px;
+}
+
+/* The button stays visibly held down while its confirmation is open,
+   so the row below is anchored to something. */
+.rv-signoff.armed {
+	background: var(--bg-3);
+	color: var(--fg-1);
+}

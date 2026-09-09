@@ -24,13 +24,23 @@ corrections:
 - **Review surface: #52 is the source of truth**, not the audit. It is
   now an epic with the decisions recorded (scope, diff lifetime,
   anchoring, the agent API) and five sub-issues, #211–#215. **#211,
-  #212 and #213 landed** — the diff has a baseline, the review pane is
-  the right pane's second tab, and the agent reads and answers comments
-  over an MCP endpoint (`docs/agent-api.md`). **#215 (Claude Code
-  plugin packaging + opencode config injection) is next**, and until it
-  lands the MCP config is written by hand per that doc. #106 was
-  rescoped out from under it and, now that the Diff card is gone, is a
-  review-pane issue.
+  #212, #213 and #214 landed** — the diff has a baseline, the review
+  pane is the right pane's second tab, the agent reads and answers
+  comments over an MCP endpoint (`docs/agent-api.md`), and the reviewer
+  signs off. **#215 (Claude Code plugin packaging + opencode config
+  injection) is the only one left**, and until it lands the MCP config
+  is written by hand per that doc. #106 was rescoped out from under it
+  and, now that the Diff card is gone, is a review-pane issue.
+- **D9 was corrected on 2026-09-09; the epic records it.** #214 was
+  going to make Skein merge the branch and open the PR. That shipped in
+  #229 and was reverted unmerged: it picked a merge strategy and a
+  forge the repository had already picked differently, and the agent
+  lands branches better by reading `.claude/skills/pr-workflow`. So
+  **Skein performs no git mutations at all**, and #214 is the
+  **sign-off** — the one fact that lives nowhere else. #182 (a manual
+  stage & commit pane) was closed not planned the same day, so nothing
+  on the roadmap needs git writes; a tested layer for them survives
+  unshipped in `2bcae5a` on `feat/214-land-actions`.
 - **Files pillar (#49) is half-shipped:** A (#184) and B (#185) landed;
   C (#186) and D (#187) are open.
 
@@ -72,8 +82,11 @@ corrections:
     │                                #   list/remove_worktree, status, diff_workdir, head_blob
     │                                #   (the review baseline's source, #211);
     │                                #   propose_worktree_path → sibling dir <repo>-wt/<slug>.
-    │                                #   No clone/fetch/push/commit yet (#182, #214 add
-    │                                #   writes — and #214 argues for the git CLI, not libgit2)
+    │                                #   READS ONLY, deliberately: Skein performs no git
+    │                                #   mutations (D9 corrected, #182 closed not planned).
+    │                                #   A tested git-CLI write layer sits unshipped in
+    │                                #   2bcae5a on feat/214-land-actions — lift it, don't
+    │                                #   rewrite it, if an issue ever needs writes
     ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
     │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
     │             anchor}.rs         #   (text/binary/toolarge/symlink/unreadable), diff
@@ -139,9 +152,12 @@ corrections:
     │   │                            #   FileList, CommitList, DiffBody (one unified-diff
     │   │                            #   renderer for all three scopes, hover-to-comment,
     │   │                            #   shift-click to extend), Thread (threads + composer),
-    │   │                            #   useReviewData (scope/file fetch + worktree watcher)
+    │   │                            #   useReviewData (scope/file fetch + worktree watcher +
+    │   │                            #   useSignoff), signoff.ts + SignoffControl (#214: the
+    │   │                            #   sign-off control, three states — none/approved/
+    │   │                            #   lapsed. Skein records the approval; the AGENT lands)
     │   └── src-tauri/               # Tauri Rust shell
-    │       ├── src/lib.rs           # Builder + 54-command registry; tracing → daily-rotating
+    │       ├── src/lib.rs           # Builder + 56-command registry; tracing → daily-rotating
     │       │                        #   file in app_log_dir() + stderr (RUST_LOG overrides)
     │       ├── src/pty.rs           # PtyManager (portable-pty); 2 threads per spawn (reader +
     │       │                        #   waiter — the waiter is load-bearing on Windows ConPTY)
@@ -170,15 +186,19 @@ corrections:
     │       │                        #   where a thread sits NOW (re-matched on every file
     │       │                        #   open, new position written back, anchor text never),
     │       │                        #   query/write = the command logic, commands = the
-    │       │                        #   Tauri boundary and nothing else
+    │       │                        #   Tauri boundary and nothing else.
+    │       │   + signoff.rs         #   signoff = has the reviewer approved (#214), keyed to
+    │       │                        #   the head_sha it approved — a later commit makes it
+    │       │                        #   STALE rather than silently covering unread work
     │       ├── src/agent_api/       # The agent-facing review API (#213, epic #52 D8):
     │       │   {state,auth,verbs,   #   an axum server on 127.0.0.1:<ephemeral> inside the
     │       │    mcp,http,commands,  #   Tauri process, exposed as MCP over HTTP so Claude
-    │       │    tests}.rs           #   Code and opencode both consume it. verbs = the five
+    │       │    tests}.rs           #   Code and opencode both consume it. verbs = the six
     │       │                        #   agent verbs (list/get_comment/get_diff/reply/
-    │       │                        #   mark_addressed) — and NO resolve, which is refused
-    │       │                        #   by name; auth = the per-room bearer token, which IS
-    │       │                        #   the scope. See docs/agent-api.md
+    │       │                        #   mark_addressed/review_status) — and NO resolve and
+    │       │                        #   NO approve, both refused BY NAME; auth = the
+    │       │                        #   per-room bearer token, which IS the scope.
+    │       │                        #   See docs/agent-api.md
     │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1)
     │       ├── src/harness_events_opencode.rs  # SSE client → OpencodeEvent (L2c-2)
     │       ├── src/harness_actions_claude.rs   # JSONL → harness_actions rows (#80)
@@ -300,6 +320,23 @@ corrections:
   only sqlite, so no watcher would otherwise fire. Verbs reuse
   `review_surface::query::file_impl` rather than re-anchoring
   themselves. Full contract: `docs/agent-api.md`.
+- **The sign-off** (#214, epic #52 D9 as corrected): a `review_signoff`
+  row per room — the reviewer's approval, and **the only thing in Skein
+  an agent treats as permission**. The whole design is the `head_sha`
+  column: an approval names the commit it was granted against, so a
+  later commit makes it read **stale** rather than silently stretching
+  over code nobody reviewed. Same trick `review_viewed` plays one level
+  down with its content hash. Unresolved threads never block a
+  sign-off; the counts ride along so the reviewer decides in view of
+  them. The agent reads it through `review_status` and **cannot grant
+  one** — `approve`/`sign_off`/`mark_approved` are refused by name
+  beside `resolve`, for the same reason.
+  **Skein performs no git mutations.** It does not merge, push, or open
+  pull requests: which strategy, which forge, what a PR body looks like
+  are all things the repo already states in `.claude/skills/` and
+  `CLAUDE.md`, and the agent reads them. Skein owns the one fact that
+  lives nowhere else. (#229 tried the other way and was reverted; see
+  the Roadmap note.)
 - **Files** (#185): `FileTree` lists via `list_dir`, `FilesBody` reads
   via `read_file_text` and saves via `write_file_text`, which
   round-trips an mtime token to detect a stale write. Buffer text
@@ -374,11 +411,27 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   crate** — it is excluded from the workspace (#168), so the hook runs
   it via a second `--manifest-path`. Same for fmt and clippy. The
   frontend has vitest as of #170 (`cd app && npm test`, in the hook and
-  CI) but only `harnessCmd.test.ts` uses it so far — #169 stays open for
-  the rest, and it matters: nearly every shipped regression has lived
-  there. New suites are `src/**/*.test.ts`, node environment, no DOM;
+  CI); `harnessCmd.test.ts` and `review/signoff.test.ts` use it so far —
+  #169 stays open for the rest, and it matters: nearly every shipped
+  regression has lived there. New suites are `src/**/*.test.ts`, node environment, no DOM;
   pure modules are the cheap wins, so prefer extracting logic out of
   App.tsx over reaching for jsdom.
+- **Never spawn a bare `git` in a test.** Build fixture repos with
+  `git2`, which takes the path as an argument — the way `review.rs`,
+  `review_surface/signoff.rs` and `agent_api/tests.rs` all do. **Git
+  exports `GIT_DIR` (and `GIT_INDEX_FILE`) to every hook it runs**, so
+  a test spawned from the pre-commit gate inherits them and a
+  `Command::new("git")` in a `TempDir` silently operates on *this
+  repository* instead: `git init` re-initialises it and sets
+  `core.bare = true` on the config every worktree shares — which reads
+  from outside like the `.git` folder vanished — `git config` writes
+  test identity into it, and `git commit` commits the work in progress
+  onto the branch under test. All three happened on 2026-09-09. Any
+  future code that does spawn git, in tests or in production, must
+  `env_remove` `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
+  `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE` and `GIT_PREFIX`
+  first; `2bcae5a` on `feat/214-land-actions` has that, tested.
 - **Issues drive the work.** Commit messages name the issue
   (`fix(#158): …`). The chapter/phase system ended with chapter 8;
   plan docs are history, not instructions. Parked ideas live in
@@ -425,12 +478,14 @@ deep (#169 — vitest itself landed with #170).
 
 The **review surface (#52)** is the current headline feature arc; its
 decisions are recorded in the epic. #211 (baseline model), #212 (the
-review pane — branch-vs-base diff, comments, anchoring) and #213 (the
+review pane — branch-vs-base diff, comments, anchoring), #213 (the
 review API + MCP server, which is what finally lets the agent *read*
-the comments) have landed; #215 (harness config injection, so the MCP
-server is wired up without a hand-written `.mcp.json`) and #214 (the
-land actions) are what remain. Do not plan review work off the audit —
-it predates those decisions.
+the comments) and #214 (the reviewer's sign-off, which is what lets it
+know when the human is *done*) have landed; **#215** — harness config
+injection, so the MCP server is wired up without a hand-written
+`.mcp.json` — is all that remains. Do not plan review work off the
+audit: it predates these decisions, and D9 in particular was corrected
+after #229 shipped and was reverted.
 
 ## Design references
 

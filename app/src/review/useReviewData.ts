@@ -23,6 +23,7 @@ import {
 	fetchFile,
 	fetchScope,
 } from "./api.ts";
+import { type SignoffStatus, fetchSignoff, setSignoff } from "./signoff.ts";
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -185,4 +186,63 @@ export function useReviewFile(
 	}, [roomId, cwd, path, scope, commitSha, enabled, nonce]);
 
 	return { file, error, loading };
+}
+
+/// The room's sign-off (#214), and the two ways to change it.
+///
+/// A hook rather than state inside the control, because two places
+/// render it: the header button and the lapsed-sign-off notice in the
+/// body. A lapsed sign-off is the one state the reviewer has to
+/// notice, and a tooltip on a button is not noticing.
+///
+/// `nonce` is the whole staleness mechanism from this side: a commit
+/// is what makes a sign-off lapse, and the pane already bumps the
+/// nonce on every refresh, so the control cannot go on claiming
+/// clearance after the agent has moved HEAD.
+export function useSignoff(
+	roomId: string,
+	cwd: string,
+	enabled: boolean,
+	nonce: number,
+): {
+	status: SignoffStatus | undefined;
+	error: string | undefined;
+	busy: boolean;
+	set: (approved: boolean, note?: string) => void;
+} {
+	const [status, setStatus] = useState<SignoffStatus | undefined>(undefined);
+	const [error, setError] = useState<string | undefined>(undefined);
+	const [busy, setBusy] = useState(false);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: nonce is the trigger — a commit is what makes a sign-off lapse, and nothing else in this dependency list moves when HEAD does
+	useEffect(() => {
+		if (!enabled || !roomId || !cwd) return;
+		let cancelled = false;
+		fetchSignoff(roomId, cwd)
+			.then((next) => {
+				if (cancelled) return;
+				setStatus(next);
+				setError(undefined);
+			})
+			.catch((err: unknown) => {
+				if (!cancelled) setError(message(err));
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [roomId, cwd, enabled, nonce]);
+
+	const set = useCallback(
+		(approved: boolean, note?: string) => {
+			setBusy(true);
+			setError(undefined);
+			setSignoff(roomId, cwd, approved, note)
+				.then(setStatus)
+				.catch((err: unknown) => setError(message(err)))
+				.finally(() => setBusy(false));
+		},
+		[roomId, cwd],
+	);
+
+	return { status, error, busy, set };
 }
