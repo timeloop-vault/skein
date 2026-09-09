@@ -334,10 +334,10 @@ fn a_missing_thread_and_someone_elses_thread_are_the_same_answer() {
     assert!(matches!(theirs, VerbError::NotFound(_)));
 }
 
-// ── the resolve prohibition ───────────────────────────────────────
+// ── the two prohibitions ──────────────────────────────────────────
 
 #[test]
-fn the_tool_list_offers_five_verbs_and_nothing_that_resolves() {
+fn the_tool_list_offers_six_verbs_and_nothing_that_resolves_or_approves() {
     let names: Vec<String> = mcp::tool_specs()
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_owned())
@@ -349,13 +349,148 @@ fn the_tool_list_offers_five_verbs_and_nothing_that_resolves() {
             "get_comment",
             "get_diff",
             "reply",
-            "mark_addressed"
+            "mark_addressed",
+            // #214: reading the sign-off. There is no verb that writes
+            // one, and the list is where that starts being true.
+            "review_status",
         ]
     );
     assert!(
         !names.iter().any(|n| n.contains("resolve")),
         "resolve is the reviewer's, and D8 keeps it that way"
     );
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.contains("approve") || n.contains("sign")),
+        "signing off is the reviewer's — an agent that approves itself is no gate"
+    );
+}
+
+#[test]
+fn approving_is_refused_by_name_and_nothing_is_signed_off() {
+    // The gate has to be refused the way `resolve` is: a model told a
+    // tool is merely missing goes looking for another way in, so the
+    // answer is a reason rather than "unknown tool".
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+
+    for name in [
+        "approve",
+        "sign_off",
+        "signoff",
+        "approve_review",
+        "mark_approved",
+        "mcp__skein__approve",
+    ] {
+        let err = mcp::call_tool(&f.db, &caller, name, &serde_json::json!({}))
+            .expect_err("an agent must not be able to approve its own work");
+        assert!(
+            matches!(&err, VerbError::Refused(m) if m.contains("reviewer")),
+            "{name} gave {err:?}"
+        );
+    }
+    assert_eq!(
+        f.db.review_signoff("r1").unwrap(),
+        None,
+        "nothing was written"
+    );
+}
+
+#[test]
+fn review_status_carries_the_signoff_and_its_staleness_to_the_agent() {
+    // The verb exists so the agent can gate landing on it, so the
+    // answer has to survive the round trip through MCP — including the
+    // stale case, which is the one that must never read as approved.
+    let f = fixture();
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cwd = tmp.path().to_str().unwrap().to_owned();
+    git_repo_with_commit(tmp.path());
+
+    let mut r = room("r1", vec![harness("h1", "claude", "main")]);
+    r.cwd = Some(cwd.clone());
+    save(&f.db, &[r]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let call = |db: &Database| {
+        mcp::call_tool(db, &caller, "review_status", &serde_json::json!({})).unwrap()
+    };
+
+    let before = call(&f.db);
+    assert_eq!(before["approved"], serde_json::json!(false));
+    assert_eq!(before["stale"], serde_json::json!(false));
+    assert!(
+        before["guidance"]
+            .as_str()
+            .unwrap()
+            .contains("not signed off"),
+        "{before}"
+    );
+
+    crate::review_surface::signoff::set_impl(&f.db, "r1", &cwd, true, None, 1_000).unwrap();
+    let approved = call(&f.db);
+    assert_eq!(approved["approved"], serde_json::json!(true));
+    assert!(
+        approved["guidance"].as_str().unwrap().contains("may land"),
+        "{approved}"
+    );
+
+    // The agent commits. Its own clearance has to lapse.
+    commit_file(tmp.path(), "b.txt", "more\n", "feat: more");
+    let after = call(&f.db);
+    assert_eq!(after["approved"], serde_json::json!(false));
+    assert_eq!(after["stale"], serde_json::json!(true));
+    assert!(
+        after["guidance"].as_str().unwrap().contains("do not land"),
+        "{after}"
+    );
+    assert_ne!(after["approved_sha"], after["head_sha"]);
+}
+
+#[test]
+fn a_room_with_no_worktree_says_so_rather_than_answering_unapproved() {
+    // "Not approved" and "there is nothing here to approve" are
+    // different answers, and an agent acting on the first would wait
+    // forever for a sign-off nobody can grant.
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let err = verbs::review_status(&f.db, &caller).unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Unavailable(m) if m.contains("no worktree")),
+        "got {err:?}"
+    );
+}
+
+/// A repository with one commit.
+///
+/// **git2, never a spawned `git`.** The pre-commit hook runs these
+/// tests with `GIT_DIR` exported, and a spawned git inherits it: `git
+/// init` reinitialises Skein's own repository, `git config` writes to
+/// its config, and `git commit` commits into the branch under test.
+/// That is not hypothetical — it happened once while writing this file.
+fn git_repo_with_commit(dir: &std::path::Path) {
+    git2::Repository::init(dir).unwrap();
+    commit_file(dir, "a.txt", "one\n", "init");
+}
+
+fn commit_file(dir: &std::path::Path, name: &str, body: &str, msg: &str) {
+    std::fs::write(dir.join(name), body).unwrap();
+    let repo = git2::Repository::open(dir).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new(name)).unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let sig = git2::Signature::now("t", "t@example.com").unwrap();
+    let parents = repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_commit().ok())
+        .map(|c| vec![c])
+        .unwrap_or_default();
+    let refs: Vec<&git2::Commit> = parents.iter().collect();
+    repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &refs)
+        .unwrap();
 }
 
 #[test]

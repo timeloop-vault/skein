@@ -30,6 +30,7 @@
 //! | [`git`] | what does this scope actually cover, and what did git say |
 //! | [`anchoring`] | where does this thread sit now |
 //! | [`query`] | the two read commands' logic |
+//! | [`signoff`] | has the reviewer approved this, and does it still hold |
 //! | [`write`] | opening a thread, which is where an anchor is captured |
 //! | [`commands`] | the Tauri boundary, and nothing else |
 //!
@@ -54,6 +55,10 @@ mod git;
 // hunks the pane renders, which means calling the same two functions
 // rather than growing a second, quietly divergent implementation.
 pub(crate) mod query;
+// `pub(crate)` for the agent API (#213): "has the reviewer approved?"
+// must be answered by one function, or the pane and the agent will
+// eventually disagree about whether the gate is open.
+pub(crate) mod signoff;
 mod write;
 
 /// Which view of the room's work the caller wants.

@@ -406,6 +406,8 @@ pub fn run() {
             review_surface::commands::review_resolve_thread,
             review_surface::commands::review_mark_viewed,
             review_surface::commands::review_set_base,
+            review_surface::commands::review_signoff_status,
+            review_surface::commands::review_set_signoff,
             agent_api::commands::agent_api_status,
         ])
         .run(tauri::generate_context!())

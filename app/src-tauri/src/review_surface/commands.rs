@@ -14,6 +14,7 @@ use std::sync::Arc;
 use super::Scope;
 use super::dto::{CommentDto, FileDetailDto, NewThread, ReviewScopeDto, ThreadDto};
 use super::query::{file_impl, scope_impl};
+use super::signoff::{self, SignoffStatus};
 use super::write::add_thread_impl;
 use crate::db::{Database, ReviewCommentRow};
 use crate::review::now_ms;
@@ -224,6 +225,43 @@ pub async fn review_set_base(
     tauri::async_runtime::spawn_blocking(move || {
         db.set_review_base_ref(&room_id, &base_ref, now_ms())?;
         scope_impl(&db, &room_id, &cwd, Scope::Branch, None)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ── the reviewer's sign-off (#214) ────────────────────────────────
+
+/// Where the room's review stands: approved, stale, or neither.
+#[tauri::command]
+pub async fn review_signoff_status(
+    room_id: String,
+    cwd: String,
+    db: tauri::State<'_, Arc<Database>>,
+) -> Result<SignoffStatus, String> {
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || signoff::status_impl(&db, &room_id, &cwd))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Approve the room's work, or withdraw an approval.
+///
+/// Confirmed in the pane first. The approved sha is read here rather
+/// than taken from the caller: the pane's HEAD is from its last
+/// refresh, and an approval has to name the commit that exists when
+/// the button is pressed.
+#[tauri::command]
+pub async fn review_set_signoff(
+    room_id: String,
+    cwd: String,
+    approved: bool,
+    note: Option<String>,
+    db: tauri::State<'_, Arc<Database>>,
+) -> Result<SignoffStatus, String> {
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        signoff::set_impl(&db, &room_id, &cwd, approved, note.as_deref(), now_ms())
     })
     .await
     .map_err(|e| e.to_string())?

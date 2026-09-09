@@ -782,3 +782,59 @@
 	font-size: 0.9em;
 	line-height: 1.5;
 }
+
+/* ── the reviewer's sign-off (#214, epic #52 D9 as corrected) ─────── */
+
+/* Three states, three colours, because they are three different
+   answers: nothing yet, approved, and approved-but-no-longer-of-this.
+   The lapsed one borrows the warning colour deliberately — it is the
+   state that looks like approval and is not. */
+.rv-signoff {
+	flex: 0 0 auto;
+	background: none;
+	border: 1px solid var(--line-strong);
+	border-radius: 3px;
+	color: var(--fg-2);
+	font-family: var(--sk-mono);
+	font-size: 0.85em;
+	padding: 0 6px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.rv-signoff:hover:not(:disabled) {
+	color: var(--ok);
+	border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+.rv-signoff:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.rv-signoff.approved {
+	color: var(--ok);
+	border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+	background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.rv-signoff.approved:hover:not(:disabled) {
+	color: var(--fg-2);
+	border-color: var(--line-strong);
+	background: none;
+}
+.rv-signoff.stale {
+	color: var(--warn);
+	border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+	background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.rv-signoff.stale:hover:not(:disabled) {
+	color: var(--warn);
+	border-color: color-mix(in srgb, var(--warn) 70%, transparent);
+}
+
+/* Not a tooltip: an approval that stopped applying has to be readable
+   without hovering the thing that stopped applying. */
+.rv-signoff-notice {
+	background: color-mix(in srgb, var(--warn) 12%, transparent);
+	border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+	color: var(--warn);
+	padding: 3px 8px;
+	font-size: 0.85em;
+}

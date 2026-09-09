@@ -48,6 +48,8 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
         .route("/api/comments/{thread_id}/addressed", post(api_addressed))
         .route("/api/comments/{thread_id}/resolve", post(api_resolve))
         .route("/api/diff", get(api_diff))
+        // POST is present and always refuses — see `api_signoff`.
+        .route("/api/status", get(api_status).post(api_signoff))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
         .with_state(state)
 }
@@ -251,6 +253,31 @@ async fn api_addressed(
         )
         .and_then(json_of)
     })
+}
+
+/// Whether the reviewer has signed off (#214) — the gate to read
+/// before landing.
+async fn api_status(State(state): State<Arc<AgentApiState>>, headers: HeaderMap) -> Response {
+    with_caller(&state, &headers, Notify::Never, |caller| {
+        verbs::review_status(&state.db, caller).and_then(json_of)
+    })
+}
+
+/// Present, and always refuses.
+///
+/// The write half of the sign-off does not exist for anyone but the
+/// reviewer. Same reasoning as `api_resolve` one level up: an agent
+/// that could approve its own work would remove the gate the review
+/// exists to be.
+async fn api_signoff(State(state): State<Arc<AgentApiState>>, headers: HeaderMap) -> Response {
+    if let Err(e) = authenticate(&state, &headers) {
+        return refuse(&e);
+    }
+    error_body(
+        StatusCode::FORBIDDEN,
+        "signing off is the reviewer's decision — GET this endpoint to \
+         see whether they have",
+    )
 }
 
 /// Present, and always refuses.

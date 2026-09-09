@@ -9,10 +9,13 @@
 //!
 //! # The tool list is the contract
 //!
-//! Five tools, and no sixth. `resolve` is absent from [`tool_specs`]
-//! and refused by name in [`call_tool`] — an agent that can close its
-//! own comments removes the review's only gate, so the refusal is
-//! spelled out rather than left to the tool list being short.
+//! Six tools, and no seventh. Two things are absent from [`tool_specs`]
+//! *and* refused by name in [`call_tool`]: `resolve`, because an agent
+//! that can close its own comments removes the review's only gate, and
+//! `approve`, because one that can sign off its own work removes it a
+//! level higher. Both refusals are spelled out rather than left to the
+//! tool list being short — a model told a tool is merely missing goes
+//! looking for another way in.
 //!
 //! The descriptions here are the agent's documentation; they are the
 //! only thing it reads before deciding what to call, so they say what
@@ -49,6 +52,20 @@ const RESOLVE_ALIASES: &[&str] = &[
     "mark_resolved",
 ];
 
+/// Names that mean "approve this myself" (#214). Refused for the same
+/// reason as [`RESOLVE_ALIASES`], one level up: an agent that can sign
+/// off its own work removes the only gate the review has. `review_status`
+/// is how it *reads* the sign-off, and there is no way to write one.
+const SIGNOFF_ALIASES: &[&str] = &[
+    "approve",
+    "sign_off",
+    "signoff",
+    "approve_review",
+    "set_review_status",
+    "set_signoff",
+    "mark_approved",
+];
+
 /// What the HTTP layer should do with a parsed message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -68,7 +85,10 @@ fn instructions() -> &'static str {
      get_diff to read the change under review. Answer with reply, and \
      use mark_addressed once you have made the change (give the commit \
      sha when you have one). You cannot resolve threads: the reviewer \
-     closes them after reading your reply."
+     closes them after reading your reply. Before you merge, push, or \
+     open a pull request, call review_status — it says whether the \
+     reviewer has signed off on the commit you are about to land. You \
+     cannot sign off yourself."
 }
 
 /// Handle one JSON-RPC message.
@@ -159,12 +179,22 @@ pub fn call_tool(
                 .into(),
         ));
     }
+    if SIGNOFF_ALIASES.contains(&name) {
+        return Err(VerbError::Refused(
+            "signing off is the reviewer's decision, not yours. An agent \
+             that could approve its own work would remove the only gate \
+             this review has. Call review_status to see whether they \
+             have."
+                .into(),
+        ));
+    }
     match name {
         "list_comments" => to_value(verbs::list_comments(db, caller, &parse(args)?)?),
         "get_comment" => to_value(verbs::get_comment(db, caller, &parse(args)?)?),
         "get_diff" => to_value(verbs::get_diff(db, caller, &parse(args)?)?),
         "reply" => to_value(verbs::reply(db, caller, &parse(args)?)?),
         "mark_addressed" => to_value(verbs::mark_addressed(db, caller, &parse(args)?)?),
+        "review_status" => to_value(verbs::review_status(db, caller)?),
         other => Err(VerbError::NotFound(format!("no such tool: {other}"))),
     }
 }
@@ -310,6 +340,17 @@ pub fn tool_specs() -> Vec<Value> {
                     "note": { "type": "string" },
                 },
                 "required": ["thread_id"],
+                "additionalProperties": false,
+            },
+        }),
+        json!({
+            "name": "review_status",
+            "title": "Is the review signed off?",
+            "description":
+                "Whether the reviewer has approved this work 2014 the gate to check \n                 BEFORE you merge, push, or open a pull request. `approved` is \n                 true only when the reviewer signed off on the exact commit HEAD \n                 points at now; if you have committed since, it reads `stale` and \n                 you must ask them to look again. You cannot grant a sign-off; \n                 only the reviewer can. When approved, land the branch the way \n                 this repository lands branches.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
                 "additionalProperties": false,
             },
         }),
