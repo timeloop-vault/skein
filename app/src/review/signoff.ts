@@ -71,18 +71,40 @@ export const signoffState = (s: SignoffStatus | undefined): SignoffState => {
 	return s.stale ? "stale" : "none";
 };
 
-/// The sentence the confirmation asks. Names what is being approved and
-/// what is still open, so the reviewer is never approving blind.
-export function approveConfirmation(s: SignoffStatus): string {
-	const what = s.headSha ? `commit ${short(s.headSha)}` : "this branch";
-	const open =
-		s.unresolvedCount > 0
-			? `\n\n${s.unresolvedCount} comment thread${
-					s.unresolvedCount === 1 ? " is" : "s are"
-				} still open. Approving does not close ${s.unresolvedCount === 1 ? "it" : "them"}.`
-			: "";
-	return `Sign off on ${what}?\n\nThe agent can read this and will treat it as clearance to land the branch. If anything is committed afterwards, the sign-off lapses until you renew it.${open}`;
+/// What the inline confirmation says.
+///
+/// Structured rather than one string: this renders as a row inside the
+/// pane, not as an OS message box, so the question, the consequence and
+/// the open-thread warning each get their own treatment.
+export interface Confirmation {
+	question: string;
+	detail: string;
+	/// Present only when approving over open threads.
+	openThreads?: string;
 }
+
+/// Names what is being approved and what is still open, so the reviewer
+/// is never approving blind.
+export function approvePrompt(s: SignoffStatus): Confirmation {
+	const what = s.headSha ? short(s.headSha) : "this branch";
+	const n = s.unresolvedCount;
+	return {
+		question: `sign off on ${what}?`,
+		// Two clauses, not three sentences: the pane is one narrow
+		// column and this row sits above the diff being reviewed.
+		detail: "the agent may read this as clearance to land; a later commit makes it lapse.",
+		...(n > 0
+			? {
+					openThreads: `${n} comment thread${n === 1 ? " is" : "s are"} still open — signing off does not close ${n === 1 ? "it" : "them"}`,
+				}
+			: {}),
+	};
+}
+
+export const withdrawPrompt = (): Confirmation => ({
+	question: "withdraw your sign-off?",
+	detail: "the agent will read this as no longer cleared to land.",
+});
 
 /// What the pane says under a stale sign-off. The reviewer needs to
 /// know their approval stopped applying and why.

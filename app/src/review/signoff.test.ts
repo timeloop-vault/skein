@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
 	type SignoffStatus,
-	approveConfirmation,
+	approvePrompt,
 	short,
 	signoffState,
 	staleExplanation,
+	withdrawPrompt,
 } from "./signoff.ts";
 
 const status = (over: Partial<SignoffStatus> = {}): SignoffStatus => ({
@@ -32,32 +33,47 @@ describe("signoffState", () => {
 	});
 });
 
-describe("approveConfirmation", () => {
-	it("names the commit being approved", () => {
-		const text = approveConfirmation(status({ headSha: "abcdef1234567890" }));
-		expect(text).toContain("abcdef12");
-		expect(text).toContain("lapses");
+describe("approvePrompt", () => {
+	it("names the commit, and says the approval is not permanent", () => {
+		// Both halves matter: what is being signed off, and that a later
+		// commit revokes it — a reviewer who thinks it is permanent has
+		// been misled about the one rule the feature runs on.
+		const p = approvePrompt(status({ headSha: "abcdef1234567890" }));
+		expect(p.question).toContain("abcdef12");
+		expect(p.detail).toContain("clearance to land");
+		expect(p.detail).toContain("lapse");
 	});
 
 	it("falls back to the branch when there is no head sha", () => {
-		expect(approveConfirmation(status())).toContain("this branch");
+		expect(approvePrompt(status()).question).toContain("this branch");
 	});
 
-	it("says how many threads are still open, and that approving leaves them open", () => {
+	it("says how many threads are still open, and that signing off leaves them open", () => {
 		// Open threads never block a sign-off — that is the reviewer's
 		// call — but they should not be able to approve without being
 		// told what they are approving over.
-		const one = approveConfirmation(status({ unresolvedCount: 1 }));
+		const one = approvePrompt(status({ unresolvedCount: 1 })).openThreads;
 		expect(one).toContain("1 comment thread is still open");
 		expect(one).toContain("does not close it");
 
-		const many = approveConfirmation(status({ unresolvedCount: 3 }));
+		const many = approvePrompt(status({ unresolvedCount: 3 })).openThreads;
 		expect(many).toContain("3 comment threads are still open");
 		expect(many).toContain("does not close them");
 	});
 
-	it("says nothing about threads when there are none", () => {
-		expect(approveConfirmation(status())).not.toContain("still open");
+	it("omits the open-threads line entirely when there are none", () => {
+		// `exactOptionalPropertyTypes` is on, so absent must mean absent
+		// rather than an empty string the row would still render.
+		expect(approvePrompt(status()).openThreads).toBeUndefined();
+	});
+});
+
+describe("withdrawPrompt", () => {
+	it("says what withdrawing means to the agent", () => {
+		const p = withdrawPrompt();
+		expect(p.question).toContain("withdraw");
+		expect(p.detail).toContain("no longer cleared to land");
+		expect(p.openThreads).toBeUndefined();
 	});
 });
 

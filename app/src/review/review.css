@@ -838,3 +838,58 @@
 	padding: 3px 8px;
 	font-size: 0.85em;
 }
+
+/* The confirmation, inline under the header rather than a native OS
+   message box. `plugin-dialog`'s confirm is right for closing a room —
+   PTYs die, unsaved buffers go — and wrong for this: signing off is
+   small, in-pane, and one click to undo, so a Win32 dialog over a dark
+   app is a bigger interruption than the action deserves. */
+.rv-signoff-confirm {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 6px 8px;
+	background: var(--bg-2);
+	border-bottom: 1px solid var(--line-strong);
+}
+.rv-signoff-ask {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+	flex: 1 1 240px;
+}
+.rv-signoff-ask .q {
+	color: var(--fg-1);
+}
+.rv-signoff-ask .detail {
+	color: var(--fg-3);
+	font-size: 0.85em;
+	line-height: 1.45;
+}
+.rv-signoff-ask .warn {
+	color: var(--warn);
+	font-size: 0.85em;
+}
+.rv-signoff-buttons {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 0 auto;
+}
+/* The pane is monospace; the shared button atom is not, and a sans
+   button in a mono row reads as a foreign control. */
+.rv-signoff-buttons .sk-btn {
+	font-family: var(--sk-mono);
+	font-size: 0.9em;
+	padding: 3px 9px;
+}
+
+/* The button stays visibly held down while its confirmation is open,
+   so the row below is anchored to something. */
+.rv-signoff.armed {
+	background: var(--bg-3);
+	color: var(--fg-1);
+}

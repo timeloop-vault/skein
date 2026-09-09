@@ -36,7 +36,12 @@ import type { HarnessKind } from "../types.ts";
 import { CommitList } from "./CommitList.tsx";
 import { DiffBody, type LineSelection, type ThreadHandlers } from "./DiffBody.tsx";
 import { FileList } from "./FileList.tsx";
-import { SignoffControl, SignoffNotice } from "./SignoffControl.tsx";
+import {
+	SignoffConfirm,
+	SignoffControl,
+	type SignoffIntent,
+	SignoffNotice,
+} from "./SignoffControl.tsx";
 import { Composer, ThreadView } from "./Thread.tsx";
 import {
 	type ReviewFile,
@@ -101,6 +106,10 @@ export const ReviewPane = ({
 	const [reviewComposerOpen, setReviewComposerOpen] = useState(false);
 	const [fileComposerOpen, setFileComposerOpen] = useState(false);
 	const [harnessFilter, setHarnessFilter] = useState<string | undefined>(undefined);
+	// Which sign-off confirmation is open. Here rather than in the
+	// control, because the button is in the header and its confirmation
+	// renders below it.
+	const [signoffIntent, setSignoffIntent] = useState<SignoffIntent | undefined>(undefined);
 
 	const effectiveCommit = scope === "commit" ? commitSha : undefined;
 	const {
@@ -319,7 +328,12 @@ export const ReviewPane = ({
 					    a push — Skein does neither. This records that the
 					    reviewer approved this commit, which is what the agent
 					    checks before landing the branch its own way. */}
-					<SignoffControl status={signoff} busy={signoffBusy} onSet={setSignoffState} />
+					<SignoffControl
+						status={signoff}
+						busy={signoffBusy}
+						pending={signoffIntent}
+						onRequest={setSignoffIntent}
+					/>
 				</span>
 			</div>
 		</div>
@@ -402,6 +416,17 @@ export const ReviewPane = ({
 			    rather than hover over: their approval stopped covering the
 			    branch the moment the agent committed again. */}
 			<SignoffNotice status={signoff} />
+
+			<SignoffConfirm
+				status={signoff}
+				pending={signoffIntent}
+				busy={signoffBusy}
+				onConfirm={(approved) => {
+					setSignoffState(approved);
+					setSignoffIntent(undefined);
+				}}
+				onCancel={() => setSignoffIntent(undefined)}
+			/>
 
 			{scope === "commit" && commitSha && (
 				<button type="button" className="rv-backlink" onClick={() => setCommitSha(undefined)}>
