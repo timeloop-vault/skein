@@ -832,67 +832,70 @@ const NewRoomDialog = ({
 
 					<div className="sk-field">
 						<label>Folder</label>
-						<div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+						{/* The row is the menu's positioning context, so the dropdown
+						    spans the whole field rather than hanging off the caret —
+						    a menu only as wide as its trigger squeezed the paths it
+						    exists to show (#233). */}
+						<div
+							className="sk-folder-row"
+							ref={recentRef}
+							onKeyDown={(e) => {
+								// On the row, not the caret: once the menu is open focus
+								// is on one of its rows, and Escape has to close it from
+								// there too.
+								if (e.key === "Escape" && showRecent) {
+									e.stopPropagation();
+									setShowRecent(false);
+								}
+							}}
+						>
 							<input
 								className="sk-input"
 								style={{ flex: 1 }}
 								placeholder="Pick a folder…"
 								value={cwd}
+								// The menu overlays the status blurb, so it gets out of
+								// the way the moment the field is being used directly.
+								onFocus={() => setShowRecent(false)}
 								onChange={(e) => {
 									setResolvedFromWorktree(false);
 									setCwd(e.target.value);
 								}}
 							/>
 							{recent.length > 0 && (
-								<div
-									className="sk-recent"
-									ref={recentRef}
-									// On the wrapper, not the caret: once the menu is open
-									// focus is on a row, and Escape has to close it from
-									// there too.
-									onKeyDown={(e) => {
-										if (e.key === "Escape" && showRecent) {
-											e.stopPropagation();
-											setShowRecent(false);
-										}
-									}}
+								<button
+									className="sk-btn"
+									type="button"
+									aria-haspopup="menu"
+									aria-expanded={showRecent}
+									title="Recent folders"
+									onClick={() => setShowRecent((v) => !v)}
 								>
-									<button
-										className="sk-btn"
-										type="button"
-										aria-haspopup="menu"
-										aria-expanded={showRecent}
-										title="Recent folders"
-										onClick={() => setShowRecent((v) => !v)}
-									>
-										▾
-									</button>
-									{showRecent && (
-										<div className="sk-recent-menu" role="menu">
-											{recent.map((r) => (
-												<button
-													key={r.folder}
-													className="sk-recent-row"
-													role="menuitem"
-													type="button"
-													onClick={() => pickRecent(r)}
-												>
-													{/* RTL truncation keeps the tail of a long path
-													    visible; the bidi isolate stops it reordering
-													    leading punctuation. */}
-													<span className="path">&#x2068;{r.folder}&#x2069;</span>
-													{r.defaults.baseBranch && (
-														<span className="branch">{r.defaults.baseBranch}</span>
-													)}
-												</button>
-											))}
-										</div>
-									)}
-								</div>
+									▾
+								</button>
 							)}
 							<button className="sk-btn" onClick={browse} type="button">
 								Browse…
 							</button>
+							{showRecent && (
+								<div className="sk-recent-menu" role="menu">
+									{recent.map((r) => (
+										<button
+											key={r.folder}
+											className="sk-recent-row"
+											role="menuitem"
+											type="button"
+											title={r.folder}
+											onClick={() => pickRecent(r)}
+										>
+											<span className="path">{r.folder}</span>
+											{r.defaults.baseBranch && (
+												<span className="branch">{r.defaults.baseBranch}</span>
+											)}
+										</button>
+									))}
+								</div>
+							)}
 						</div>
 						{statusBlurb && (
 							<div style={{ fontFamily: "var(--sk-mono)", fontSize: 10.5, marginTop: 2 }}>
