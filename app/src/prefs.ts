@@ -103,8 +103,24 @@ export const rememberFolder = (
 	},
 });
 
-/** Known folders, most recently used first. No UI yet — see #226 direction 2. */
-export const recentFolders = (memory: NewRoomMemory): string[] =>
+export interface RecentFolder {
+	folder: string;
+	defaults: FolderDefaults;
+}
+
+/**
+ * Known folders, most recently used first, capped at `limit` (#233).
+ *
+ * The cap is what keeps the list honest without a prune step: folders
+ * are never validated here — checking each one would be a round-trip
+ * per row for a list that is usually only glanced at — so a folder that
+ * has since been deleted stays in the memory until enough newer ones
+ * push it off the end. Picking a dead one is caught by the dialog's
+ * `missing` status, which is the same check every other path goes
+ * through.
+ */
+export const recentFolders = (memory: NewRoomMemory, limit = 8): RecentFolder[] =>
 	Object.entries(foldersOf(memory))
 		.sort(([, a], [, b]) => b.lastUsed - a.lastUsed)
-		.map(([folder]) => folder);
+		.slice(0, limit)
+		.map(([folder, defaults]) => ({ folder, defaults }));

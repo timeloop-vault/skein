@@ -2066,3 +2066,59 @@ body {
 	color: var(--fg-3);
 	word-break: break-all;
 }
+
+/* Recent-folders dropdown in the New Room dialog (#233). A complement to
+   the Folder text field and Browse…, never a replacement — the caret only
+   appears once there is something to remember. */
+.sk-recent {
+	position: relative;
+	display: flex;
+}
+.sk-recent-menu {
+	position: absolute;
+	top: calc(100% + 4px);
+	right: 0;
+	min-width: 260px;
+	max-width: 420px;
+	max-height: 244px;
+	overflow-y: auto;
+	z-index: 20;
+	background: var(--bg-2);
+	border: 1px solid var(--line-strong);
+	border-radius: 5px;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+	padding: 4px;
+}
+.sk-recent-row {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	width: 100%;
+	padding: 5px 7px;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--fg-0);
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.875);
+	text-align: left;
+	cursor: pointer;
+}
+.sk-recent-row:hover,
+.sk-recent-row:focus-visible {
+	background: var(--bg-3, rgba(255, 255, 255, 0.06));
+	outline: none;
+}
+.sk-recent-row .path {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	/* A long path is more identifiable by its tail than its head. */
+	direction: rtl;
+	text-align: left;
+}
+.sk-recent-row .branch {
+	flex: none;
+	color: var(--fg-3);
+}
