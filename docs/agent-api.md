@@ -68,7 +68,9 @@ at the next boot.
 ## The verbs
 
 All five are room-scoped by the token. MCP tool names; Claude Code
-presents them as `mcp__skein__<name>`.
+presents them as `mcp__plugin_skein_review__<name>` — the server is
+registered by the plugin Skein injects (#215), and plugin-provided MCP
+servers carry a `plugin_<plugin>_<server>` prefix.
 
 ### `list_comments`
 
@@ -194,51 +196,41 @@ Non-localhost `Origin` is rejected because a page in the user's browser
 can otherwise reach 127.0.0.1 by DNS rebinding — the MCP spec requires
 the check, and the listener binds 127.0.0.1 only besides.
 
-## Driving it today
+## How it reaches the harness
 
-Automatic config injection is #215. Until it lands, wire it by hand.
+Nothing to configure: #215 wires this at spawn. Skein ships a small
+config bundle as an app resource and points each CLI at it for that
+session only.
 
-**Claude Code** — `.mcp.json` in the room's worktree (both harnesses
-inherit the variables, and Claude Code expands `${VAR}` when it reads
-the file):
+| harness | what Skein does |
+| :-- | :-- |
+| Claude Code | appends `--plugin-dir <resources>/harness-config/claude-plugin` |
+| opencode | sets `OPENCODE_CONFIG=<resources>/harness-config/opencode/opencode.json` |
 
-```json
-{
-  "mcpServers": {
-    "skein": {
-      "type": "http",
-      "url": "${SKEIN_REVIEW_URL}",
-      "headers": {
-        "Authorization": "Bearer ${SKEIN_REVIEW_TOKEN}",
-        "X-Skein-Harness": "${SKEIN_HARNESS_ID}"
-      }
-    }
-  }
-}
-```
+The bundle's configs interpolate the variables above — `${VAR}` for
+Claude Code, `{env:VAR}` for opencode — so the ephemeral port still
+never has to be agreed in advance.
 
-Then `/mcp` inside the harness should list five tools and no resolve.
-`.mcp.json` is worktree-local, so add it to `.git/info/exclude` unless
-you want it in the review's own diff.
+**Nothing is written into the worktree.** No `.mcp.json` to exclude
+from the review's own diff, no MCP trust prompt on first run, and
+nothing left pointing at a dead port once the room is archived.
 
-**opencode** — the same, in `opencode.json`:
+**Both mechanisms are additive.** `--plugin-dir` loads alongside the
+plugins and connectors you installed (it shadows only a plugin of the
+same name); `OPENCODE_CONFIG` is *merged* between your global config
+and the project's, so your providers and credentials survive and a
+repo's own `opencode.json` still wins. **Settings → Shell &
+environment** shows exactly what is injected and can switch either off
+— turning the opencode one off is how you reclaim `OPENCODE_CONFIG`
+for a config file of your own.
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "skein": {
-      "type": "remote",
-      "url": "{env:SKEIN_REVIEW_URL}",
-      "enabled": true,
-      "headers": {
-        "Authorization": "Bearer {env:SKEIN_REVIEW_TOKEN}",
-        "X-Skein-Harness": "{env:SKEIN_HARNESS_ID}"
-      }
-    }
-  }
-}
-```
+The Claude Code plugin also carries a `skein-review` skill describing
+the loop. Skills are loaded lazily, so it costs nothing until used.
+
+Inside a Claude Code harness, `/mcp` should list the server and
+`review_status` should answer. The tools are named
+`mcp__plugin_skein_review__<verb>` — plugin-provided MCP servers carry
+a `plugin_<plugin>_<server>` prefix.
 
 **By hand, from inside a harness** — useful for checking the server is
 actually up:
@@ -262,6 +254,8 @@ Settings → About shows the bound port, or says why there is none.
 | `agent_api/http.rs` | the routes |
 | `agent_api/tests.rs` | scoping, both prohibitions, lifecycle, real HTTP |
 | `review_surface/signoff.rs` | the sign-off itself, and the staleness rule (#214) |
+| `harness_config.rs` | what Skein injects at spawn so a CLI finds all this (#215) |
+| `harness-config/` | the shipped plugin + opencode config themselves |
 
 Anchoring is **not** reimplemented here: `get_comment` and `get_diff`
 call `review_surface::query::file_impl`, the same function the pane

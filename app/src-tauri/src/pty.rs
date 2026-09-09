@@ -31,6 +31,7 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 use serde::Serialize;
 
 use crate::agent_api::state::HarnessIdentity;
+use crate::harness_config::{HarnessConfig, Injection};
 use crate::spawn_env;
 use crate::spawn_settings::SpawnSettings;
 // Only the probe reads the capture mode — see the `Instant` note above.
@@ -92,6 +93,15 @@ pub struct SpawnRequest<'a> {
     /// the agent API failed to bind — better no variables at all than
     /// four pointing at a dead port.
     pub agent: Option<&'a HarnessIdentity>,
+    /// The harness kind, so #215 knows which CLI's configuration
+    /// mechanism to use. Taken from the harness record rather than
+    /// inferred from `cmd`, because the two can legitimately disagree:
+    /// a `claude` harness whose command the user swapped for a shell is
+    /// still a `claude` harness.
+    pub kind: &'a str,
+    /// The shipped config bundle that teaches the agent CLIs about the
+    /// review API (#215). `None` outside the app (tests, preview).
+    pub harness_config: Option<&'a HarnessConfig>,
 }
 
 #[derive(Default)]
@@ -123,18 +133,47 @@ impl PtyManager {
             cols,
             settings,
             agent,
+            kind,
+            harness_config,
         } = req;
-        let Some((program, args)) = cmd.split_first() else {
+        let Some((program, stored_args)) = cmd.split_first() else {
             return Err(PtyError("pty_spawn: empty cmd".into()));
         };
+
+        // #215: what Skein appends so this harness's agent can reach the
+        // review API without the user configuring anything. Computed
+        // once — the Windows re-resolution below rebuilds the command
+        // and must not recompute it into something different.
+        let injection =
+            crate::harness_config::injection_for(kind, program, harness_config, settings, agent);
+        let args: Vec<String> = stored_args
+            .iter()
+            .cloned()
+            .chain(injection.args.iter().cloned())
+            .collect();
+
         tracing::info!(
             id = %id,
             cmd = ?cmd,
             cwd = %cwd.display(),
             rows,
             cols,
+            kind,
             "pty_spawn"
         );
+        // Separate line, and only when there is something to say: this
+        // is what you grep for when an agent turns out to have no
+        // review tools. `cmd` above is the *stored* argv, so without
+        // this the log would describe a command the child never got.
+        if !injection.is_empty() {
+            tracing::info!(
+                id = %id,
+                kind,
+                args = ?injection.args,
+                env = ?injection.env,
+                "pty_spawn harness config injected"
+            );
+        }
 
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -147,12 +186,12 @@ impl PtyManager {
             .map_err(PtyError::from_err)?;
 
         let mut builder = CommandBuilder::new(program);
-        for arg in args {
+        for arg in &args {
             builder.arg(arg);
         }
         builder.cwd(cwd);
 
-        let mut applied = apply_env(&mut builder, settings, probe_result(), agent);
+        let mut applied = apply_env(&mut builder, settings, probe_result(), agent, &injection);
 
         // #207: `portable-pty` resolves the program itself, and on
         // Windows it prefers an extensionless `dir\name` over every
@@ -166,11 +205,17 @@ impl PtyManager {
         if let Some(exe) = windows_resolved_program(program, &applied.path) {
             tracing::info!(id = %id, program, exe = %exe, "pty_spawn resolved program");
             let mut rebuilt = CommandBuilder::new(&exe);
-            for arg in args {
+            for arg in &args {
                 rebuilt.arg(arg);
             }
             rebuilt.cwd(cwd);
-            applied = apply_env(&mut rebuilt, settings, applied.probe.clone(), agent);
+            applied = apply_env(
+                &mut rebuilt,
+                settings,
+                applied.probe.clone(),
+                agent,
+                &injection,
+            );
             builder = rebuilt;
         }
 
@@ -373,6 +418,7 @@ fn apply_env(
     settings: &SpawnSettings,
     probe: ProbeOutcome,
     agent: Option<&HarnessIdentity>,
+    injection: &Injection,
 ) -> AppliedEnv {
     // `CommandBuilder::new` already seeds the child env from this
     // process's environment — and on Windows it additionally merges the
@@ -429,16 +475,27 @@ fn apply_env(
     // The user's own KEY=VALUE additions, last of the inherited layers
     // so they win over anything the base env carried, but before the
     // TERM/COLORTERM force below, which is ours to own.
+    //
+    // #215 adds to the reserved set *dynamically*: a key this spawn is
+    // about to inject (`OPENCODE_CONFIG`) is ours for this spawn only.
+    // Reserving it unconditionally would mean that turning the
+    // injection off in Settings — the documented way to reclaim the
+    // variable for your own config file — still left the user unable to
+    // set it.
     let mut ignored_env_keys = Vec::new();
     for var in &settings.extra_env {
         let key = var.key.trim();
         if key.is_empty() {
             continue;
         }
-        if RESERVED_ENV_KEYS
+        let reserved = RESERVED_ENV_KEYS
             .iter()
             .any(|r| r.eq_ignore_ascii_case(key))
-        {
+            || injection
+                .env
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case(key));
+        if reserved {
             ignored_env_keys.push(key.to_owned());
             continue;
         }
@@ -474,6 +531,13 @@ fn apply_env(
         builder.env("SKEIN_REVIEW_TOKEN", &agent.token);
         builder.env("SKEIN_ROOM_ID", &agent.room_id);
         builder.env("SKEIN_HARNESS_ID", &agent.harness_id);
+    }
+
+    // #215: the environment half of the config injection — today only
+    // opencode's `OPENCODE_CONFIG`. After the variables above, because
+    // the file it points at interpolates them.
+    for (key, value) in &injection.env {
+        builder.env(key, value);
     }
 
     AppliedEnv {
@@ -1288,7 +1352,13 @@ mod tests {
             ..SpawnSettings::default()
         };
         let mut builder = CommandBuilder::new("skein-preview");
-        let applied = apply_env(&mut builder, &settings, probe_snapshot(), None);
+        let applied = apply_env(
+            &mut builder,
+            &settings,
+            probe_snapshot(),
+            None,
+            &Injection::default(),
+        );
         assert!(applied.stripped.is_empty());
     }
 
@@ -1612,7 +1682,13 @@ pub(crate) fn env_preview(settings: &SpawnSettings) -> EnvPreview {
     // Tauri command, so waiting here would block the event loop for up
     // to `PROBE_WAIT`, and the panel already knows how to follow a
     // `pending` state until it settles.
-    let applied = apply_env(&mut builder, settings, probe_snapshot(), None);
+    let applied = apply_env(
+        &mut builder,
+        settings,
+        probe_snapshot(),
+        None,
+        &Injection::default(),
+    );
 
     let added: Vec<String> = applied.added;
     let from_shell = applied.probe.path().is_some();
@@ -1691,7 +1767,7 @@ fn launch_context() -> String {
 /// below are the only thing that gets a harness to the review at all.
 #[cfg(test)]
 mod agent_env_tests {
-    use super::{HarnessIdentity, apply_env, probe_snapshot};
+    use super::{HarnessIdentity, Injection, apply_env, probe_snapshot};
     use crate::spawn_settings::SpawnSettings;
     use portable_pty::CommandBuilder;
     use std::collections::HashMap;
@@ -1710,7 +1786,13 @@ mod agent_env_tests {
             harness_id: "h_a91".to_owned(),
         };
         let mut builder = CommandBuilder::new("skein-preview");
-        apply_env(&mut builder, &settings, probe_snapshot(), Some(&identity));
+        apply_env(
+            &mut builder,
+            &settings,
+            probe_snapshot(),
+            Some(&identity),
+            &Injection::default(),
+        );
         let env: HashMap<String, String> = builder
             .iter_full_env_as_str()
             .map(|(k, v)| (k.to_uppercase(), v.to_owned()))
@@ -1733,7 +1815,13 @@ mod agent_env_tests {
         // where the server never bound — nothing is set at all, rather
         // than four variables pointing at a dead port.
         let mut bare = CommandBuilder::new("skein-preview");
-        apply_env(&mut bare, &settings, probe_snapshot(), None);
+        apply_env(
+            &mut bare,
+            &settings,
+            probe_snapshot(),
+            None,
+            &Injection::default(),
+        );
         assert!(
             !bare
                 .iter_full_env_as_str()
@@ -1754,8 +1842,66 @@ mod agent_env_tests {
             ..SpawnSettings::default()
         };
         let mut builder = CommandBuilder::new("skein-preview");
-        let applied = apply_env(&mut builder, &settings, probe_snapshot(), None);
+        let applied = apply_env(
+            &mut builder,
+            &settings,
+            probe_snapshot(),
+            None,
+            &Injection::default(),
+        );
         assert_eq!(applied.ignored_env_keys, vec!["SKEIN_REVIEW_TOKEN"]);
+    }
+
+    #[test]
+    fn an_injected_variable_is_reserved_only_while_it_is_being_injected() {
+        // #215's escape hatch is the whole point of this asymmetry.
+        // OPENCODE_CONFIG is ours *when we are writing it*, so a user
+        // who pins it by hand is told it was ignored rather than
+        // silently losing it. But turning the injection off in Settings
+        // is the documented way to reclaim the variable for your own
+        // config file — so with nothing injected, the user's value has
+        // to reach the child.
+        let settings = SpawnSettings {
+            extra_env: vec![crate::spawn_settings::EnvVar {
+                key: "OPENCODE_CONFIG".to_owned(),
+                value: "/home/me/mine.json".to_owned(),
+            }],
+            ..SpawnSettings::default()
+        };
+        let injecting = Injection {
+            args: Vec::new(),
+            env: vec![(
+                "OPENCODE_CONFIG".to_owned(),
+                "/opt/skein/opencode.json".to_owned(),
+            )],
+        };
+
+        let mut builder = CommandBuilder::new("skein-preview");
+        let applied = apply_env(&mut builder, &settings, probe_snapshot(), None, &injecting);
+        assert_eq!(applied.ignored_env_keys, vec!["OPENCODE_CONFIG"]);
+        let value = builder
+            .iter_full_env_as_str()
+            .find(|(k, _)| k.eq_ignore_ascii_case("OPENCODE_CONFIG"))
+            .map(|(_, v)| v.to_owned());
+        assert_eq!(value.as_deref(), Some("/opt/skein/opencode.json"));
+
+        let mut off = CommandBuilder::new("skein-preview");
+        let applied = apply_env(
+            &mut off,
+            &settings,
+            probe_snapshot(),
+            None,
+            &Injection::default(),
+        );
+        assert!(
+            applied.ignored_env_keys.is_empty(),
+            "with the injection off the key is the user's again"
+        );
+        let value = off
+            .iter_full_env_as_str()
+            .find(|(k, _)| k.eq_ignore_ascii_case("OPENCODE_CONFIG"))
+            .map(|(_, v)| v.to_owned());
+        assert_eq!(value.as_deref(), Some("/home/me/mine.json"));
     }
 }
 

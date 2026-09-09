@@ -13,7 +13,14 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
-import type { CaptureMode, DropReason, EnvPreview, EnvVar, SpawnSettings } from "./types.ts";
+import type {
+	CaptureMode,
+	DropReason,
+	EnvPreview,
+	EnvVar,
+	HarnessConfigStatus,
+	SpawnSettings,
+} from "./types.ts";
 
 interface SpawnEnvPanelProps {
 	settings: SpawnSettings | null;
@@ -193,6 +200,7 @@ const EnvVarList = ({
 export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: SpawnEnvPanelProps) => {
 	const [draft, setDraft] = useState<SpawnSettings | null>(settings);
 	const [preview, setPreview] = useState<EnvPreview | null>(null);
+	const [harnessConfig, setHarnessConfig] = useState<HarnessConfigStatus | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
@@ -215,6 +223,16 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 	useEffect(() => {
 		void refreshPreview();
 	}, [refreshPreview]);
+
+	// The shipped bundle resolves once at boot and cannot move while
+	// the app runs, so this is read once rather than followed.
+	useEffect(() => {
+		invoke<HarnessConfigStatus>("harness_config_status")
+			.then(setHarnessConfig)
+			.catch((err: unknown) => {
+				setError(err instanceof Error ? err.message : String(err));
+			});
+	}, []);
 
 	// The probe runs on a helper thread, so a preview taken immediately
 	// after a save or re-probe can still read "pending". Follow it until
@@ -433,6 +451,73 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 					items={draft.extraEnv}
 					onChange={(extraEnv) => setDraft({ ...draft, extraEnv })}
 				/>
+			</div>
+
+			<div className="sk-field">
+				<label>Review tools in your agents</label>
+				<div className="sk-help">
+					So an agent can read your review comments (#215), Skein points each CLI at a small
+					configuration it ships. Both are <strong>session-scoped and additive</strong> — nothing is
+					written into the worktree, and your own plugins, connectors and config are left alone. A
+					repo's own <code>opencode.json</code> still wins over Skein's.
+				</div>
+				{harnessConfig?.error && (
+					<div className="sk-env-banner sk-env-err">
+						{harnessConfig.error} — agents in every room will have no review tools.
+					</div>
+				)}
+				<div className="sk-toggles">
+					<label className="sk-toggle">
+						<input
+							type="checkbox"
+							checked={draft.injectClaudePlugin}
+							disabled={!harnessConfig?.claudePlugin}
+							onChange={(e) => setDraft({ ...draft, injectClaudePlugin: e.target.checked })}
+						/>
+						<span className="sk-toggle-label">
+							<span className="sk-toggle-title">Claude Code</span>
+							<span className="sk-toggle-sub">
+								{harnessConfig?.claudePlugin ? (
+									<>
+										Appends{" "}
+										<code>
+											{harnessConfig.claudeFlag} {harnessConfig.claudePlugin}
+										</code>{" "}
+										to the command. Loads for that session only — nothing is installed, and a plugin
+										you installed yourself is untouched unless it is also named <code>skein</code>.
+									</>
+								) : (
+									<>The shipped plugin didn't resolve, so there is nothing to inject.</>
+								)}
+							</span>
+						</span>
+					</label>
+					<label className="sk-toggle">
+						<input
+							type="checkbox"
+							checked={draft.injectOpencodeConfig}
+							disabled={!harnessConfig?.opencodeConfig}
+							onChange={(e) => setDraft({ ...draft, injectOpencodeConfig: e.target.checked })}
+						/>
+						<span className="sk-toggle-label">
+							<span className="sk-toggle-title">opencode</span>
+							<span className="sk-toggle-sub">
+								{harnessConfig?.opencodeConfig ? (
+									<>
+										Sets{" "}
+										<code>
+											{harnessConfig.opencodeVar}={harnessConfig.opencodeConfig}
+										</code>
+										, which opencode merges between your global config and the project's. Turn this
+										off to use that variable for a config file of your own.
+									</>
+								) : (
+									<>The shipped config didn't resolve, so there is nothing to inject.</>
+								)}
+							</span>
+						</span>
+					</label>
+				</div>
 			</div>
 
 			<div className="sk-field">

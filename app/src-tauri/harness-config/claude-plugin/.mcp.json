@@ -1,0 +1,12 @@
+{
+	"mcpServers": {
+		"review": {
+			"type": "http",
+			"url": "${SKEIN_REVIEW_URL}",
+			"headers": {
+				"Authorization": "Bearer ${SKEIN_REVIEW_TOKEN}",
+				"X-Skein-Harness": "${SKEIN_HARNESS_ID}"
+			}
+		}
+	}
+}
