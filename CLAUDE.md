@@ -24,13 +24,14 @@ corrections:
 - **Review surface: #52 is the source of truth**, not the audit. It is
   now an epic with the decisions recorded (scope, diff lifetime,
   anchoring, the agent API) and five sub-issues, #211–#215. **#211,
-  #212 and #213 landed** — the diff has a baseline, the review pane is
-  the right pane's second tab, and the agent reads and answers comments
-  over an MCP endpoint (`docs/agent-api.md`). **#215 (Claude Code
-  plugin packaging + opencode config injection) is next**, and until it
-  lands the MCP config is written by hand per that doc. #106 was
-  rescoped out from under it and, now that the Diff card is gone, is a
-  review-pane issue.
+  #212, #213 and #214 landed** — the diff has a baseline, the review
+  pane is the right pane's second tab, the agent reads and answers
+  comments over an MCP endpoint (`docs/agent-api.md`), and the branch
+  leaves the room by merge or by pull request. **#215 (Claude Code
+  plugin packaging + opencode config injection) is the only one left**,
+  and until it lands the MCP config is written by hand per that doc.
+  #106 was rescoped out from under it and, now that the Diff card is
+  gone, is a review-pane issue.
 - **Files pillar (#49) is half-shipped:** A (#184) and B (#185) landed;
   C (#186) and D (#187) are open.
 
@@ -67,13 +68,22 @@ corrections:
     │   └── src/{claude,opencode}.rs #   Claude JSONL paths/rows/usage/cost-state + subagent
     │                                #   discovery; opencode.db sessions/tree/assistant messages.
     │                                #   Shared with the standalone cost tooling — parser fixes go HERE
-    ├── crates/skein-git/            # Pure-Rust libgit2 wrapper. Tauri-free, sync, local-only
-    │   └── src/lib.rs               # Repo: open, branches, head_branch, add_worktree,
-    │                                #   list/remove_worktree, status, diff_workdir, head_blob
-    │                                #   (the review baseline's source, #211);
-    │                                #   propose_worktree_path → sibling dir <repo>-wt/<slug>.
-    │                                #   No clone/fetch/push/commit yet (#182, #214 add
-    │                                #   writes — and #214 argues for the git CLI, not libgit2)
+    ├── crates/skein-git/            # Git for Skein. Tauri-free, sync. READS go through libgit2;
+    │   ├── src/lib.rs               #   WRITES that leave the worktree go through the git binary
+    │   │                            # Repo: open, branches, head_branch, add_worktree,
+    │   │                            #   list/remove_worktree, status, diff_workdir, head_blob
+    │   │                            #   (the review baseline's source, #211);
+    │   │                            #   propose_worktree_path → sibling dir <repo>-wt/<slug>
+    │   ├── src/range.rs             # merge_base/commits_between/diff_trees/blob_at (#212)
+    │   ├── src/cli.rs               # Spawned git + gh (#214 D9): the auth-suppression env
+    │   │                            #   (GIT_TERMINAL_PROMPT=0, ASKPASS="", BatchMode=yes,
+    │   │                            #   LFS smudge off) so no prompt can hang an invisible
+    │   │                            #   process, plus a deadline for what env cannot cover
+    │   └── src/land.rs              # The two land actions (#214): preflight (facts + every
+    │                                #   blocker), merge_to_base (in the worktree that has base
+    │                                #   checked out, else fast-forward the ref; conflicts are
+    │                                #   ABORTED then reported), push_branch, open_pr via gh.
+    │                                #   #182's commit/stage still open — it builds on cli.rs
     ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
     │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
     │             anchor}.rs         #   (text/binary/toolarge/symlink/unreadable), diff
@@ -134,9 +144,11 @@ corrections:
     │   │                            #   FileList, CommitList, DiffBody (one unified-diff
     │   │                            #   renderer for all three scopes, hover-to-comment,
     │   │                            #   shift-click to extend), Thread (threads + composer),
-    │   │                            #   useReviewData (scope/file fetch + worktree watcher)
+    │   │                            #   useReviewData (scope/file fetch + worktree watcher),
+    │   │                            #   land.ts + LandModal (#214: the ⏏ land button, the
+    │   │                            #   preflight facts, and the two confirmed actions)
     │   └── src-tauri/               # Tauri Rust shell
-    │       ├── src/lib.rs           # Builder + 54-command registry; tracing → daily-rotating
+    │       ├── src/lib.rs           # Builder + 57-command registry; tracing → daily-rotating
     │       │                        #   file in app_log_dir() + stderr (RUST_LOG overrides)
     │       ├── src/pty.rs           # PtyManager (portable-pty); 2 threads per spawn (reader +
     │       │                        #   waiter — the waiter is load-bearing on Windows ConPTY)
@@ -174,6 +186,10 @@ corrections:
     │       │                        #   mark_addressed) — and NO resolve, which is refused
     │       │                        #   by name; auth = the per-room bearer token, which IS
     │       │                        #   the scope. See docs/agent-api.md
+    │       ├── src/land.rs          # The land actions' boundary (#214, epic #52 D9): three
+    │       │                        #   commands on the blocking pool over skein-git's land
+    │       │                        #   module. Reads the room's base from review_settings,
+    │       │                        #   NEVER from review_threads — the PR starts clean
     │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1)
     │       ├── src/harness_events_opencode.rs  # SSE client → OpencodeEvent (L2c-2)
     │       ├── src/harness_actions_claude.rs   # JSONL → harness_actions rows (#80)
@@ -295,6 +311,27 @@ corrections:
   only sqlite, so no watcher would otherwise fire. Verbs reuse
   `review_surface::query::file_impl` rather than re-anchoring
   themselves. Full contract: `docs/agent-api.md`.
+- **Landing** (#214, epic #52 D9): the review pane's `⏏ land` button.
+  Two terminal actions — **merge to base**, and **push + open PR** via
+  `gh` — and **Skein's review comments go with neither**: the PR body
+  is prefilled from the branch's own commits and there is no code path
+  from a thread to it. Every mutation is a **spawned git**, not
+  libgit2, so hooks, LFS, credential helpers and the user's git config
+  all apply; every spawn carries the auth-suppression env
+  (`GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS=""`, `SSH_ASKPASS=""`,
+  `GIT_LFS_SKIP_SMUDGE=1`, `GIT_SSH_COMMAND="ssh -o BatchMode=yes"`)
+  because a prompt inside a Tauri-spawned process is invisible and
+  hangs forever, plus a deadline for what env cannot cover. The room's
+  worktree has the *branch* checked out, so a merge runs in whichever
+  worktree holds the base — clean, or it is refused — and falls back to
+  moving the ref when nothing holds it and the merge is a
+  fast-forward. Anything else is refused with the reason named. **A
+  conflicted merge is aborted before it is reported** (conflict UI is
+  out of epic scope; a foreign worktree left mid-merge is a trap).
+  `land_preflight` is what lets the dialog say what will move, what
+  will not (uncommitted work never travels), and every blocker;
+  both actions re-run it and refuse on a blocker, because an agent
+  commits while a dialog is open. Neither fires without a confirm.
 - **Files** (#185): `FileTree` lists via `list_dir`, `FilesBody` reads
   via `read_file_text` and saves via `write_file_text`, which
   round-trips an mtime token to detect a stale write. Buffer text
@@ -358,8 +395,9 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   it from `app/` (`cd app && npx biome check .`), never from the repo
   root with a path argument.
 - **Tests live with the code that owns them.**
-  `crates/skein-git/tests/` has 46 integration tests against tempfile
-  repos; `crates/skein-harness` has ~25 in-module tests;
+  `crates/skein-git/tests/` has 66 integration tests against tempfile
+  repos (20 of them drive the real `git` binary for #214's land
+  actions); `crates/skein-harness` has ~25 in-module tests;
   `crates/skein-review` has 45; `app/src-tauri` has ~285 in-module unit
   tests in source, of which ~245 run on any one platform — 244 on
   Windows; the rest are
@@ -405,8 +443,8 @@ and a CodeMirror editor), spawn-environment work (#192, #197, #207),
 authoritative session cost (#199), #209 (the `skein-harness` crate
 extraction), and a run of Windows daily-driver fixes
 (#200/#201/#202/#207/#217). #211 (the review baseline — the
-diff finally clears), #212 (the review pane) and #213 (the agent API +
-MCP server) open the #52 arc.
+diff finally clears), #212 (the review pane), #213 (the agent API +
+MCP server) and #214 (the land actions) open the #52 arc.
 
 Known-weak spots, still open: App.tsx size and duplication (#19 — now
 ~3.2k LOC), the duplicated Claude/opencode adapter pairs (#116), heavy
@@ -415,12 +453,13 @@ failure surfacing (#176), and no frontend tests (#169).
 
 The **review surface (#52)** is the current headline feature arc; its
 decisions are recorded in the epic. #211 (baseline model), #212 (the
-review pane — branch-vs-base diff, comments, anchoring) and #213 (the
+review pane — branch-vs-base diff, comments, anchoring), #213 (the
 review API + MCP server, which is what finally lets the agent *read*
-the comments) have landed; #215 (harness config injection, so the MCP
-server is wired up without a hand-written `.mcp.json`) and #214 (the
-land actions) are what remain. Do not plan review work off the audit —
-it predates those decisions.
+the comments) and #214 (the land actions, and with them the first git
+writes Skein performs) have landed; **#215** — harness config
+injection, so the MCP server is wired up without a hand-written
+`.mcp.json` — is all that remains. Do not plan review work off the
+audit — it predates those decisions.
 
 ## Design references
 

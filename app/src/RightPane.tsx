@@ -34,6 +34,7 @@ const TABS: Array<{ id: RightPaneTab; label: string; title: string }> = [
 export const RightPane = ({
 	roomId,
 	cwd,
+	roomName,
 	harnesses,
 	visible,
 	showTurnCosts,
@@ -44,6 +45,8 @@ export const RightPane = ({
 }: {
 	roomId: string;
 	cwd: string;
+	/** Only the land dialog needs it, to name what is being landed. */
+	roomName: string;
 	harnesses: Harness[];
 	visible: boolean;
 	showTurnCosts: boolean;
@@ -97,6 +100,7 @@ export const RightPane = ({
 				<ReviewPane
 					roomId={roomId}
 					cwd={cwd}
+					roomName={roomName}
 					actions={actions}
 					harnessKindOf={harnessKindOf}
 					visible={visible && tab === "review"}

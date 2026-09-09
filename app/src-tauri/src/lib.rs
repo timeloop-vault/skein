@@ -15,6 +15,7 @@ mod harness_actions_claude;
 mod harness_actions_opencode;
 mod harness_events_claude;
 mod harness_events_opencode;
+mod land;
 mod pty;
 mod resume;
 mod review;
@@ -378,6 +379,9 @@ pub fn run() {
             git::git_watch_start,
             git::git_watch_stop,
             git::git_diff,
+            land::land_preflight,
+            land::land_merge,
+            land::land_open_pr,
             resume::opencode_list_sessions,
             resume::opencode_session_exists,
             resume::claude_session_exists,

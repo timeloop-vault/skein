@@ -4,23 +4,32 @@
 #![allow(clippy::missing_errors_doc)]
 
 //! `skein-git` — typed wrapper around the git operations Skein needs:
-//! the worktree/branch surface used by the new-room flow, plus
-//! `status` and `diff_workdir` for the live-diff watcher. Git logic
-//! lands here rather than in `app/src-tauri` so it stays testable in
-//! isolation, with no Tauri runtime in the way.
+//! the worktree/branch surface used by the new-room flow, `status` and
+//! `diff_workdir` for the live-diff watcher, the commit-range queries
+//! the review surface reads (#212), and the two land actions that end a
+//! room's branch (#214). Git logic lands here rather than in
+//! `app/src-tauri` so it stays testable in isolation, with no Tauri
+//! runtime in the way.
 //!
-//! All operations are synchronous and local. We deliberately disable
-//! git2's default `https`/`ssh` features at the workspace level — Skein
-//! does not (yet) clone, fetch, or push from inside the app, so the
-//! OpenSSL/libssh2 dependency tree is wasted weight.
+//! All operations are synchronous. **Reads go through libgit2; writes
+//! that leave the room's worktree go through the git binary** — see
+//! [`cli`] for why, which is also why git2 keeps `default-features =
+//! false`: nothing here asks libgit2 to talk to a remote, so the
+//! OpenSSL/libssh2 dependency tree stays out of the build.
 
 use std::path::{Path, PathBuf};
 
 use git2::{BranchType, DiffOptions, Patch, Repository, Status, StatusOptions, WorktreeAddOptions};
 use thiserror::Error;
 
+pub mod cli;
+pub mod land;
 mod range;
 
+pub use land::{
+    LandPreflight, MergeKind, MergeOutcome, MergeTarget, PrOutcome, PushOutcome, merge_to_base,
+    open_pr, preflight, push_branch,
+};
 pub use range::{CommitInfo, MAX_RANGE_COMMITS};
 
 #[derive(Debug, Error)]
@@ -42,6 +51,31 @@ pub enum GitError {
 
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+
+    // ── the spawned-process side (#214) ───────────────────────────
+    #[error("{0} is not installed or not on PATH")]
+    CommandMissing(String),
+
+    #[error("git {0} failed: {1}")]
+    CommandFailed(String, String),
+
+    /// A spawn outlived its deadline and was killed. The environment in
+    /// [`cli::GIT_ENV`] turns every *prompt* into an immediate failure;
+    /// this covers what it cannot, such as a connect that never
+    /// resolves.
+    #[error("`{command}` did not finish within {secs}s and was stopped")]
+    Timeout { command: String, secs: u64 },
+
+    /// The merge conflicted and was aborted, leaving the target
+    /// worktree as it was. Resolving conflicts is out of scope (#52),
+    /// so the files are named and the user takes it from there.
+    #[error("merge conflicts, nothing was merged — conflicting files: {0}")]
+    MergeConflict(String),
+
+    /// A land action re-ran its preflight and found a reason not to
+    /// proceed. Always a sentence the user can act on.
+    #[error("{0}")]
+    Refused(String),
 }
 
 pub type Result<T> = std::result::Result<T, GitError>;

@@ -26,6 +26,11 @@
 // It also means this pane can change while nobody touches a file, so
 // `useAgentWrites` listens for the backend's `skein://review-changed`
 // alongside the worktree watcher.
+//
+// Sub-issue D (#214) adds the end of the story: the `land` button in
+// the header opens `LandModal`, which merges the branch into its base
+// or pushes it and opens a pull request. Both are confirmed, and
+// neither carries a Skein comment out of the room (D9).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { HChip } from "../components.tsx";
@@ -36,6 +41,7 @@ import type { HarnessKind } from "../types.ts";
 import { CommitList } from "./CommitList.tsx";
 import { DiffBody, type LineSelection, type ThreadHandlers } from "./DiffBody.tsx";
 import { FileList } from "./FileList.tsx";
+import { LandModal } from "./LandModal.tsx";
 import { Composer, ThreadView } from "./Thread.tsx";
 import {
 	type ReviewFile,
@@ -76,12 +82,14 @@ const SCOPES: Array<{ id: ReviewScope; label: string; title: string }> = [
 export const ReviewPane = ({
 	roomId,
 	cwd,
+	roomName,
 	actions,
 	harnessKindOf,
 	visible,
 }: {
 	roomId: string;
 	cwd: string;
+	roomName: string;
 	/** The room's action rows — per-hunk harness attribution only (D4). */
 	actions: HarnessAction[];
 	harnessKindOf: (harnessId: string) => HarnessKind;
@@ -99,6 +107,9 @@ export const ReviewPane = ({
 	const [reviewComposerOpen, setReviewComposerOpen] = useState(false);
 	const [fileComposerOpen, setFileComposerOpen] = useState(false);
 	const [harnessFilter, setHarnessFilter] = useState<string | undefined>(undefined);
+	// Sub-issue D (#214): the end of the review, and of the room's
+	// branch. Mounted only while open — its preflight spawns git.
+	const [landOpen, setLandOpen] = useState(false);
 
 	const effectiveCommit = scope === "commit" ? commitSha : undefined;
 	const {
@@ -300,6 +311,21 @@ export const ReviewPane = ({
 							onClick={() => run(() => acceptReview(roomId, cwd, undefined, [], undefined))}
 						>
 							✓ all
+						</button>
+					)}
+					{/* #214: the terminal action. Offered whenever the room is
+					    a repo — the dialog is where "you cannot, because…"
+					    belongs, since hiding the button would leave the user
+					    with no way to find out why. */}
+					{data?.isRepo && (
+						<button
+							type="button"
+							className="rv-act land"
+							disabled={busy}
+							title="merge this branch into its base, or push it and open a pull request"
+							onClick={() => setLandOpen(true)}
+						>
+							⏏ land
 						</button>
 					)}
 				</span>
@@ -564,6 +590,16 @@ export const ReviewPane = ({
 					</button>
 				)}
 			</div>
+
+			{landOpen && (
+				<LandModal
+					roomId={roomId}
+					cwd={cwd}
+					roomName={roomName}
+					onClose={() => setLandOpen(false)}
+					onLanded={refreshAll}
+				/>
+			)}
 		</div>
 	);
 };

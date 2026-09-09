@@ -3121,6 +3121,7 @@ export default function App() {
 							<RightPane
 								roomId={r.id}
 								cwd={r.cwd}
+								roomName={r.name}
 								harnesses={r.harnesses}
 								visible={r.id === activeRoomId}
 								showTurnCosts={showTurnCosts}

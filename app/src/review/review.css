@@ -782,3 +782,174 @@
 	font-size: 0.9em;
 	line-height: 1.5;
 }
+
+/* ── land (#214, epic #52 D9) ────────────────────────────────────── */
+
+/* The header button. Deliberately quieter than accept/reject until
+   hovered: it is the last thing you do in a room, not the frequent one,
+   and it is the only control here that can reach a remote. */
+.rv-act.land {
+	color: var(--fg-2);
+	border-color: var(--line-strong);
+	font-size: 0.85em;
+}
+.rv-act.land:hover:not(:disabled) {
+	color: var(--accent);
+	border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* The dialog rides the app's modal chrome (.sk-modal-bg / .sk-modal);
+   only the body inside it is review-specific. */
+.rv-land {
+	width: min(680px, 92vw);
+}
+.rv-land .sk-modal-body {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs, 12px) * 0.9167);
+}
+
+.rv-land-summary {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.rv-land-counts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	color: var(--fg-2);
+}
+.rv-land-behind {
+	color: var(--warn);
+}
+.rv-land-dim {
+	color: var(--fg-3);
+}
+.rv-land-commits {
+	margin: 0;
+	padding-left: 16px;
+	color: var(--fg-2);
+	max-height: 140px;
+	overflow-y: auto;
+	scrollbar-width: thin;
+}
+.rv-land-commits li {
+	overflow-wrap: anywhere;
+}
+
+.rv-land-note {
+	color: var(--fg-3);
+}
+.rv-land-warn {
+	color: var(--warn);
+	overflow-wrap: anywhere;
+}
+.rv-land-err {
+	background: color-mix(in srgb, var(--err) 12%, transparent);
+	border: 1px solid color-mix(in srgb, var(--err) 30%, transparent);
+	border-radius: 3px;
+	color: var(--err);
+	padding: 4px 6px;
+	overflow-wrap: anywhere;
+}
+
+/* One block per action, each carrying its own reasons it cannot run —
+   a disabled button and its explanation must never be far apart. */
+.rv-land-act {
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	padding: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.rv-land-act-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+.rv-land-act h3 {
+	margin: 0;
+	font-size: 1em;
+	color: var(--fg-1);
+}
+.rv-land-why {
+	margin: 0;
+	color: var(--fg-3);
+	line-height: 1.5;
+}
+.rv-land-go {
+	flex: 0 0 auto;
+	background: var(--bg-2);
+	border: 1px solid var(--line-strong);
+	border-radius: 3px;
+	color: var(--fg-1);
+	font-family: var(--sk-mono);
+	font-size: 0.9em;
+	padding: 3px 8px;
+	cursor: pointer;
+}
+.rv-land-go:hover:not(:disabled) {
+	border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+	color: var(--accent);
+}
+.rv-land-go:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.rv-land-blockers {
+	margin: 0;
+	padding-left: 16px;
+	color: var(--warn);
+}
+.rv-land-blockers li {
+	overflow-wrap: anywhere;
+}
+
+.rv-land-form {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.rv-land-field {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+.rv-land-field > span {
+	color: var(--fg-3);
+	font-size: 0.85em;
+}
+.rv-land-field input,
+.rv-land-field textarea {
+	background: var(--bg-2);
+	border: 1px solid var(--line-strong);
+	border-radius: 3px;
+	color: var(--fg-1);
+	font-family: var(--sk-mono);
+	font-size: 1em;
+	padding: 4px 6px;
+	resize: vertical;
+}
+
+.rv-land-done {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	color: var(--fg-1);
+}
+.rv-land-link {
+	background: none;
+	border: none;
+	padding: 0;
+	color: var(--accent);
+	font-family: var(--sk-mono);
+	font-size: 1em;
+	text-decoration: underline;
+	cursor: pointer;
+	overflow-wrap: anywhere;
+}
