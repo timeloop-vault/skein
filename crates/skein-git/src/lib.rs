@@ -304,6 +304,49 @@ impl Repo {
         &self.workdir
     }
 
+    /// The working directory of the *main* checkout this repo belongs
+    /// to — i.e. the folder a new worktree should be created from.
+    ///
+    /// For an ordinary repo this is just [`Repo::workdir`]. For a linked
+    /// worktree it is the repo the worktree was added from, which
+    /// [`Repo::workdir`] cannot tell you: opening `<repo>-wt/<slug>`
+    /// yields that worktree's own directory, so stacking a worktree on a
+    /// worktree looks perfectly valid (#226).
+    ///
+    /// Resolution goes through libgit2's *common dir*, which for a linked
+    /// worktree points at the main repo's git dir (`<main>/.git/`, not
+    /// `<main>/.git/worktrees/<name>/`). We take its parent and re-open
+    /// it to confirm, rather than trusting the path shape: with
+    /// `--separate-git-dir`, or a `.git` file pointing elsewhere, that
+    /// parent need not be a checkout at all.
+    ///
+    /// Best-effort by construction — every branch that cannot prove a
+    /// better answer returns [`Repo::workdir`], which is exactly today's
+    /// behaviour. Resolution can improve the result, never worsen it.
+    pub fn main_repo_root(&self) -> PathBuf {
+        if !self.repo.is_worktree() {
+            return self.workdir.clone();
+        }
+        let Some(parent) = self.repo.commondir().parent() else {
+            return self.workdir.clone();
+        };
+        match Repository::open(parent) {
+            // A bare main repo has no checkout to hand back, so the
+            // worktree we were opened with stays the best answer.
+            Ok(main) => main
+                .workdir()
+                .map_or_else(|| self.workdir.clone(), Path::to_path_buf),
+            Err(_) => self.workdir.clone(),
+        }
+    }
+
+    /// Whether this handle was opened on a linked worktree rather than
+    /// the main checkout. The New Room dialog uses it to say *why* the
+    /// folder it shows is not the folder that was picked.
+    pub fn is_worktree(&self) -> bool {
+        self.repo.is_worktree()
+    }
+
     /// The content of `relpath` (repo-relative, forward slashes) as of
     /// HEAD, or `None` when HEAD has no such entry.
     ///

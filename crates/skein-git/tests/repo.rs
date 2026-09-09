@@ -499,3 +499,80 @@ fn head_blob_reads_a_nested_path() {
         Some(&b"pub fn f() {}\n"[..])
     );
 }
+
+// ── main_repo_root / is_worktree (#226) ────────────────────────────
+//
+// The New Room dialog resolves whatever folder it is handed back to the
+// repo a worktree should be created *from*. Browsing into a Skein
+// worktree is one misclick away — the `-wt` sibling dir sits right next
+// to the repo — and without this it would stack a worktree on a
+// worktree.
+
+#[test]
+fn main_repo_root_is_identity_for_a_plain_repo() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+
+    assert!(!repo.is_worktree());
+    assert_eq!(
+        repo.main_repo_root().canonicalize().unwrap(),
+        path.canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn main_repo_root_resolves_a_linked_worktree_to_its_main_checkout() {
+    let (_tmp, path) = init_repo();
+    let main = Repo::open(&path).unwrap();
+    let wt_path = propose_worktree_path(&path, "resolve-me");
+    main.add_worktree("feat/resolve-me", "main", &wt_path)
+        .expect("add_worktree");
+
+    // Opening the worktree directly: `workdir` is the worktree itself,
+    // which is exactly the trap — only `main_repo_root` climbs out.
+    let wt = Repo::open(&wt_path).unwrap();
+    assert!(wt.is_worktree());
+    assert_eq!(
+        wt.workdir().canonicalize().unwrap(),
+        wt_path.canonicalize().unwrap()
+    );
+    assert_eq!(
+        wt.main_repo_root().canonicalize().unwrap(),
+        path.canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn main_repo_root_of_a_resolved_root_is_stable() {
+    // Resolution has to be idempotent: the dialog re-validates whatever
+    // it put in the field, and a second pass must not move the answer.
+    let (_tmp, path) = init_repo();
+    let main = Repo::open(&path).unwrap();
+    let wt_path = propose_worktree_path(&path, "stable");
+    main.add_worktree("feat/stable", "main", &wt_path).unwrap();
+
+    let once = Repo::open(&wt_path).unwrap().main_repo_root();
+    let twice = Repo::open(&once).unwrap().main_repo_root();
+    assert_eq!(
+        once.canonicalize().unwrap(),
+        twice.canonicalize().unwrap(),
+        "resolving an already-resolved root should be a no-op"
+    );
+}
+
+#[test]
+fn main_repo_root_falls_back_to_workdir_for_a_bare_repo() {
+    // A bare repo has no checkout at all. `main_repo_root` must not
+    // invent one — it hands back what it was opened with, which is the
+    // same thing every other caller already sees.
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_path_buf();
+    Repository::init_bare(&path).unwrap();
+
+    let repo = Repo::open(&path).unwrap();
+    assert!(!repo.is_worktree());
+    assert_eq!(
+        repo.main_repo_root().canonicalize().unwrap(),
+        path.canonicalize().unwrap()
+    );
+}

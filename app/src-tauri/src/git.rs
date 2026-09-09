@@ -53,13 +53,88 @@ pub fn git_is_repo(path: String) -> bool {
     Repo::is_repo(Path::new(&path))
 }
 
-/// List local branches with a `isHead` marker on the current HEAD.
+/// Everything the New Room dialog needs to know about a picked folder,
+/// in one round-trip (#226).
+///
+/// It replaces the `git_is_repo` + `git_branches` pair the dialog used
+/// to call in sequence. One command means one in-flight request to
+/// cancel and one atomic answer to render, rather than a window where
+/// the folder is known to be a repo but its branches are not yet
+/// loaded — which is exactly the window a prefilled field opens into.
+#[derive(Debug, Serialize)]
+pub struct FolderInfoDto {
+    /// Whether the path is a directory at all. Distinguishes "the
+    /// remembered folder is gone" from "this folder is not a repo",
+    /// which `git_is_repo` alone reports identically as `false` — and
+    /// the latter is a legitimately submittable state.
+    pub exists: bool,
+    #[serde(rename = "isRepo")]
+    pub is_repo: bool,
+    /// The repo a worktree should be created from. Equal to the path
+    /// handed in for a plain repo, a non-repo, or a missing path; the
+    /// main checkout when the path is a linked worktree.
+    pub root: String,
+    /// Set when `root` differs from the requested path. The dialog uses
+    /// it to explain why the folder it shows is not the one picked.
+    #[serde(rename = "resolvedFromWorktree")]
+    pub resolved_from_worktree: bool,
+    pub branches: Vec<BranchDto>,
+    pub head: Option<String>,
+}
+
+/// Inspect a folder for the New Room dialog: existence, repo-ness,
+/// worktree resolution and the branch list, in a single call.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-pub fn git_branches(path: String) -> Result<Vec<BranchDto>, String> {
-    let repo = Repo::open(Path::new(&path)).map_err(|e| e.to_string())?;
-    let branches = repo.branches().map_err(|e| e.to_string())?;
-    Ok(branches.into_iter().map(BranchDto::from).collect())
+pub fn git_inspect_folder(path: String) -> Result<FolderInfoDto, String> {
+    let picked = Path::new(&path);
+    let exists = picked.is_dir();
+    let mut info = FolderInfoDto {
+        exists,
+        is_repo: false,
+        root: path.clone(),
+        resolved_from_worktree: false,
+        branches: Vec::new(),
+        head: None,
+    };
+    if !exists {
+        return Ok(info);
+    }
+    // A non-repo folder is a valid choice (harnesses just run in it), so
+    // failing to open is not an error to surface — it is an answer.
+    let Ok(repo) = Repo::open(picked) else {
+        return Ok(info);
+    };
+    info.is_repo = true;
+
+    // Resolve a linked worktree back to its main checkout, then re-open
+    // there: the branch list and HEAD the user picks from must describe
+    // the repo the worktree will actually be created in.
+    let root = repo.main_repo_root();
+    if repo.is_worktree() && root != *repo.workdir() {
+        info.resolved_from_worktree = true;
+        info.root = root.to_string_lossy().into_owned();
+        // If the resolved root somehow will not open, keep the branches
+        // of the worktree we did open rather than reporting none.
+        if let Ok(main) = Repo::open(&root) {
+            info.branches = main
+                .branches()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(BranchDto::from)
+                .collect();
+            info.head = main.head_branch();
+            return Ok(info);
+        }
+    }
+    info.branches = repo
+        .branches()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(BranchDto::from)
+        .collect();
+    info.head = repo.head_branch();
+    Ok(info)
 }
 
 /// Current HEAD branch name, or `None` for detached HEAD / unborn branch /
