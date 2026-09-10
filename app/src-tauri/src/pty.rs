@@ -408,6 +408,16 @@ pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
     "SKEIN_HARNESS_ID",
 ];
 
+/// The four variables `pty_spawn` sets from a `HarnessIdentity` — and
+/// removes when it has none (#243), so a nested Skein never hands its
+/// harnesses the outer room's review.
+const AGENT_IDENTITY_ENV_KEYS: &[&str] = &[
+    "SKEIN_REVIEW_URL",
+    "SKEIN_REVIEW_TOKEN",
+    "SKEIN_ROOM_ID",
+    "SKEIN_HARNESS_ID",
+];
+
 /// Apply Skein's environment policy to a `CommandBuilder`.
 ///
 /// Shared verbatim by `spawn` and by the Settings preview, so "what the
@@ -526,11 +536,22 @@ fn apply_env(
     //
     // Both harnesses expand `${VAR}` inside their MCP config, so the
     // URL never has to be a number anyone agreed on in advance.
+    //
+    // #243: and when there is no identity, *remove* them rather than
+    // leave the base env alone. Skein (dev) is dogfooded from a harness
+    // inside the release Skein, so the base env carries the OUTER
+    // room's URL and token; an inner harness that inherited them would
+    // read and answer another room's review — the one thing the token
+    // model exists to prevent.
     if let Some(agent) = agent {
         builder.env("SKEIN_REVIEW_URL", &agent.url);
         builder.env("SKEIN_REVIEW_TOKEN", &agent.token);
         builder.env("SKEIN_ROOM_ID", &agent.room_id);
         builder.env("SKEIN_HARNESS_ID", &agent.harness_id);
+    } else {
+        for key in AGENT_IDENTITY_ENV_KEYS {
+            builder.env_remove(key);
+        }
     }
 
     // #215: the environment half of the config injection — today only
@@ -1767,7 +1788,7 @@ fn launch_context() -> String {
 /// below are the only thing that gets a harness to the review at all.
 #[cfg(test)]
 mod agent_env_tests {
-    use super::{HarnessIdentity, Injection, apply_env, probe_snapshot};
+    use super::{AGENT_IDENTITY_ENV_KEYS, HarnessIdentity, Injection, apply_env, probe_snapshot};
     use crate::spawn_settings::SpawnSettings;
     use portable_pty::CommandBuilder;
     use std::collections::HashMap;
@@ -1813,8 +1834,15 @@ mod agent_env_tests {
 
         // And without an identity — the settings preview, or a boot
         // where the server never bound — nothing is set at all, rather
-        // than four variables pointing at a dead port.
+        // than four variables pointing at a dead port. Seed the base
+        // env with a stale set first (#243): that is what a Skein
+        // launched from inside another Skein's harness inherits, and
+        // it must be removed, not merely left unset.
         let mut bare = CommandBuilder::new("skein-preview");
+        bare.env("SKEIN_REVIEW_URL", "http://127.0.0.1:1/mcp");
+        bare.env("SKEIN_REVIEW_TOKEN", "outer-room-token");
+        bare.env("SKEIN_ROOM_ID", "outer");
+        bare.env("SKEIN_HARNESS_ID", "outer-h");
         apply_env(
             &mut bare,
             &settings,
@@ -1822,11 +1850,12 @@ mod agent_env_tests {
             None,
             &Injection::default(),
         );
-        assert!(
-            !bare
-                .iter_full_env_as_str()
-                .any(|(k, _)| k.to_uppercase().starts_with("SKEIN_REVIEW"))
-        );
+        let leaked: Vec<String> = bare
+            .iter_full_env_as_str()
+            .map(|(k, _)| k.to_uppercase())
+            .filter(|k| AGENT_IDENTITY_ENV_KEYS.contains(&k.as_str()))
+            .collect();
+        assert!(leaked.is_empty(), "identity vars survived: {leaked:?}");
     }
 
     #[test]
