@@ -13,35 +13,25 @@ own conversation id (`Harness.sessionId`), used to resume conversations
 across restarts.
 
 Skein is daily-driven on macOS and Windows via auto-updating v0.2.x
-releases; **v0.2.9 is the latest**. The original 8-chapter build plan is
-complete; work is now driven by GitHub issues.
+releases. The original 8-chapter build plan is complete.
 
-**Roadmap.** `docs/audit-2026-07-03.md` §5 remains the structural
-backlog — #19 App.tsx split, #116 harness-adapter consolidation, #76
-cross-room view. It predates two things, so read it with these
-corrections:
+**Where the work is.** GitHub issues are the only backlog; this file
+does not restate their status. The order of attack is
+`gh issue list --label priority-high`; parked ideas live in
+`docs/backlog.md`; design decisions for the review surface are recorded
+on epic #52. `docs/audit-2026-07-03.md` §5 is a historical snapshot,
+not a roadmap. Two standing decisions that no issue body will tell you:
 
-- **Review surface: #52 is the source of truth**, not the audit. It is
-  now an epic with the decisions recorded (scope, diff lifetime,
-  anchoring, the agent API) and five sub-issues, #211–#215. **All five
-  landed** — the diff has a baseline, the review pane is the right
-  pane's second tab, the agent reads and answers comments over an MCP
-  endpoint (`docs/agent-api.md`), the reviewer signs off, and #215
-  wires each harness to that endpoint at spawn with nothing written
-  into the worktree. #106 was rescoped out from under it and, now that
-  the Diff card is gone, is a review-pane issue.
-- **D9 was corrected on 2026-09-09; the epic records it.** #214 was
-  going to make Skein merge the branch and open the PR. That shipped in
-  #229 and was reverted unmerged: it picked a merge strategy and a
-  forge the repository had already picked differently, and the agent
-  lands branches better by reading `.claude/skills/pr-workflow`. So
-  **Skein performs no git mutations at all**, and #214 is the
-  **sign-off** — the one fact that lives nowhere else. #182 (a manual
-  stage & commit pane) was closed not planned the same day, so nothing
-  on the roadmap needs git writes; a tested layer for them survives
-  unshipped in `2bcae5a` on `feat/214-land-actions`.
-- **Files pillar (#49) is half-shipped:** A (#184) and B (#185) landed;
-  C (#186) and D (#187) are open.
+- **Skein performs no git mutations.** It does not commit, merge, push
+  or open pull requests (D9 on #52, corrected 2026-09-09 after #229
+  shipped and was reverted). The reviewer's sign-off is the one fact
+  Skein owns; the agent lands branches by reading
+  `.claude/skills/pr-workflow`. A tested git-CLI write layer survives
+  unshipped in `2bcae5a` on `feat/214-land-actions` — lift it, don't
+  rewrite it, if an issue ever needs writes.
+- **Reviews happen after the fact, against git.** The review unit is
+  committed work on the room's branch, so nothing in the review surface
+  needs to cover non-git rooms or gitignored paths.
 
 ## Stack
 
@@ -136,7 +126,7 @@ corrections:
     │   │                            #   LiveContext.tsx + CardStack (chrome, per-room layout),
     │   │                            #   ActivityCard/feedItems/rows/toolRows/Row/ResultPreview
     │   │                            #   (feed), RoomSubtitle, PlanCard/plan.ts (todo reducer;
-    │   │                            #   merges all harnesses — bug #216),
+    │   │                            #   merges all harnesses in the room — accepted),
     │   │                            #   useGitBranchWatcher, payload.ts (all payload-shape
     │   │                            #   divergence lives here). review.ts survives the Diff
     │   │                            #   card: accept/reject + attributeHunks (#211 D4).
@@ -168,7 +158,7 @@ corrections:
     │       │                        #   WAL + .bak/.bak.1 snapshots (#167)
     │       ├── src/fs.rs            # list_dir + read/write_file_text — LIVE, called by
     │       │                        #   FileTree/FilesBody since #185. write returns an mtime
-    │       │                        #   token for staleness. #174 still wants CSP + scoping
+    │       │                        #   token for staleness. Paths are NOT yet scoped to the room (#174)
     │       ├── src/spawn_env.rs     # PATH/env merge for harness PTYs (#72, #192, #197, #207):
     │       │                        #   login-shell probe, host-terminal identity stripping,
     │       │                        #   PATHEXT resolution before portable-pty. 50 unit tests
@@ -279,10 +269,9 @@ corrections:
   fixes go there, not in the adapters, so the app and any standalone
   cost tooling stay in sync.
   The Live Context store backfills the newest 500 rows per room and
-  appends live ones; Diff/Plan/Activity cards all render from that one
-  array. One known consequence of it being **room**-scoped: the Plan
-  card merges every harness in the room into one incoherent list
-  (#216).
+  appends live ones; the Plan and Activity cards both render from that
+  one array. It is **room**-scoped, so the Plan card shows every
+  harness's todos in one list — a known and accepted consequence.
 - **Review baselines** (#211, epic #52 D3/D4): a `review_baselines`
   row per (room, file) holds the content the user last reviewed. It is
   captured from the git HEAD blob at the moment a **live** `patch` row
@@ -435,12 +424,11 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   and CI, but **`cargo test --workspace` does NOT reach the tauri
   crate** — it is excluded from the workspace (#168), so the hook runs
   it via a second `--manifest-path`. Same for fmt and clippy. The
-  frontend has vitest as of #170 (`cd app && npm test`, in the hook and
-  CI); `harnessCmd.test.ts` and `review/signoff.test.ts` use it so far —
-  #169 stays open for the rest, and it matters: nearly every shipped
-  regression has lived there. New suites are `src/**/*.test.ts`, node environment, no DOM;
-  pure modules are the cheap wins, so prefer extracting logic out of
-  App.tsx over reaching for jsdom.
+  frontend has vitest (`cd app && npm test`, in the hook and CI), but
+  coverage is thin and nearly every shipped regression has lived in the
+  frontend. New suites are `src/**/*.test.ts`, node environment, no
+  DOM; pure modules are the cheap wins, so prefer extracting logic out
+  of App.tsx over reaching for jsdom.
 - **Never spawn a bare `git` in a test.** Build fixture repos with
   `git2`, which takes the path as an argument — the way `review.rs`,
   `review_surface/signoff.rs` and `agent_api/tests.rs` all do. **Git
@@ -474,43 +462,19 @@ stderr; `RUST_LOG` overrides the default `info` filter.
 - **Keyboard shortcuts** only via the `BINDINGS` table in
   `shortcuts.ts`; prefer letters/digits (Swedish layout — AltGr =
   Ctrl+Alt collides with punctuation chords) and agree bindings with
-  Stefan before committing (#150 tracks user rebinding).
+  Stefan before committing. User rebinding is not planned.
 
-## Current state (2026-09)
+## Current state
 
 Chapters 1–8 all shipped: real PTYs and worktrees, sqlite-persisted
 rooms with archive/reopen, harness conversation resume across
-restarts, the Live Context right pane (activity/plan/diff cards fed
-by harness telemetry), notifications (badge/toast/OS), Windows +
-Linux support, keyboard-driven navigation, and distribution with
-in-app auto-update. **v0.2.9 is the latest release.**
-
-Landed since the 2026-07-03 audit: #167 (boot-wipe data-loss fix +
-persistence hardening), #168 (test gates), #173 (this file's last
-rewrite), Files pillar A + B (#184, #185 — the `files` harness kind
-and a CodeMirror editor), spawn-environment work (#192, #197, #207),
-authoritative session cost (#199), #209 (the `skein-harness` crate
-extraction), and a run of Windows daily-driver fixes
-(#200/#201/#202/#207/#217). #211 (the review baseline — the
-diff finally clears), #212 (the review pane) and #213 (the agent API +
-MCP server) open the #52 arc.
-
-Known-weak spots, still open: App.tsx size and duplication (#19 — now
-~3.2k LOC), the duplicated Claude/opencode adapter pairs (#116), heavy
-sync Tauri commands on the main thread (#171/#172/#178/#179), silent
-failure surfacing (#176), and frontend test coverage that is one file
-deep (#169 — vitest itself landed with #170).
-
-The **review surface (#52)** is the current headline feature arc; its
-decisions are recorded in the epic. #211 (baseline model), #212 (the
-review pane — branch-vs-base diff, comments, anchoring), #213 (the
-review API + MCP server, which is what finally lets the agent *read*
-the comments), #214 (the reviewer's sign-off, which is what lets it
-know when the human is *done*) and #215 (config injection, so the
-tools are simply there) have all landed. The arc is complete; what
-remains is #238, the nudge that tells an idle agent to go look. Do not
-plan review work off the audit: it predates these decisions, and D9 in
-particular was corrected after #229 shipped and was reverted.
+restarts, the Live Context right pane, notifications (badge/toast/OS),
+Windows + Linux support, keyboard-driven navigation, distribution with
+in-app auto-update, a `files` harness with a CodeMirror editor, and
+the review surface (baseline, review pane, agent API + MCP server,
+sign-off, config injection). What is open, what is next and what is
+known-weak is on GitHub — see "Where the work is" at the top. `git log`
+records what landed and when.
 
 ## Design references
 
