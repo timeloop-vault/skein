@@ -5,8 +5,8 @@
 //! inside the harness pane. Each spawn produces an id; subsequent
 //! writes/resizes/kills are keyed by it. Output streams back over a
 //! per-spawn `tauri::ipc::Channel<PtyEvent>` (tagged data/exit).
-
 mod agent_api;
+mod agents;
 mod db;
 mod fs;
 mod git;
@@ -385,6 +385,7 @@ pub fn run() {
             spawn_env_preview,
             spawn_env_reprobe,
             harness_config_status,
+            list_harness_agents,
             default_cwd,
             db_load_rooms,
             db_save_rooms,
@@ -818,6 +819,32 @@ fn spawn_settings_save(
 #[tauri::command]
 fn spawn_env_preview(spawn_env: tauri::State<'_, SpawnEnvState>) -> crate::pty::EnvPreview {
     crate::pty::env_preview(&spawn_env.snapshot())
+}
+
+/// Which agents `kind` will accept at `--agent` for a harness spawned
+/// in `cwd` (#246). Answers the picker in #247.
+///
+/// `async` deliberately: this shells out to the harness CLI, so a sync
+/// command would run the subprocess on the main thread and stall the
+/// event loop for as long as the CLI takes to start (#171). Never
+/// `Err` for "found nothing" — the DTO carries `degraded` and
+/// `unsupported` instead, because a picker needs a list plus a reason
+/// rather than a failure (#176).
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+async fn list_harness_agents(
+    kind: String,
+    cwd: String,
+    spawn_env: tauri::State<'_, SpawnEnvState>,
+    harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
+) -> Result<crate::agents::AgentListDto, String> {
+    let settings = spawn_env.snapshot();
+    Ok(crate::agents::list(
+        &kind,
+        &cwd,
+        &settings,
+        Some(&harness_config),
+    ))
 }
 
 /// What Skein injects into each agent CLI so it can reach the review

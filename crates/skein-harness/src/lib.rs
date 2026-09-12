@@ -16,6 +16,7 @@
 //! Everything is synchronous, read-only and local. The harnesses own
 //! their stores; we never write to them.
 
+pub mod agents;
 pub mod claude;
 pub mod opencode;
 pub mod time;

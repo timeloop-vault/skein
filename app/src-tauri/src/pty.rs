@@ -1678,6 +1678,35 @@ fn windows_resolved_program(program: &str, path: &OsStr) -> Option<String> {
     resolve_program(program, path)
 }
 
+/// The executable and `PATH` a harness spawn would use right now,
+/// without spawning anything.
+///
+/// #246 runs the harness CLI itself to ask which agents it accepts, and
+/// a picker that consulted a *different* `claude` than the spawn will
+/// use would be worse than no picker — it would be confidently wrong.
+/// So the agent probe goes through the same merge and the same #207
+/// `PATHEXT` resolution as `spawn`, and returns `None` for the program
+/// when `PATH` holds nothing by that name: the honest failure is the
+/// probe's, which names it.
+///
+/// Uses the *non-waiting* probe read, like `env_preview`: the caller is
+/// answering a picker, not starting work, and must not block the event
+/// loop for `PROBE_WAIT` (#171/#177).
+pub(crate) fn harness_program_lookup(
+    program: &str,
+    settings: &SpawnSettings,
+) -> (Option<String>, OsString) {
+    let mut builder = CommandBuilder::new("skein-agent-probe");
+    let applied = apply_env(
+        &mut builder,
+        settings,
+        probe_snapshot(),
+        None,
+        &Injection::default(),
+    );
+    (resolve_program(program, &applied.path), applied.path)
+}
+
 fn is_executable(path: &Path) -> bool {
     if !path.is_file() {
         return false;
