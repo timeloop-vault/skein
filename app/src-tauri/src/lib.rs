@@ -830,6 +830,12 @@ fn spawn_env_preview(spawn_env: tauri::State<'_, SpawnEnvState>) -> crate::pty::
 /// `Err` for "found nothing" — the DTO carries `degraded` and
 /// `unsupported` instead, because a picker needs a list plus a reason
 /// rather than a failure (#176).
+///
+/// The body then goes to `spawn_blocking`, because `async` alone only
+/// moves the block off the main thread and onto a tokio worker. #247
+/// made this a per-spawn call rather than a per-picker-open one, so a
+/// boot that restores several agent-bearing harnesses fires several at
+/// once — and the axum agent API (#213) runs on those same workers.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 async fn list_harness_agents(
@@ -839,12 +845,15 @@ async fn list_harness_agents(
     harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
 ) -> Result<crate::agents::AgentListDto, String> {
     let settings = spawn_env.snapshot();
-    Ok(crate::agents::list(
-        &kind,
-        &cwd,
-        &settings,
-        Some(&harness_config),
-    ))
+    // Cloned rather than borrowed: the closure outlives this frame as
+    // far as the compiler is concerned, and the config is a handful of
+    // paths.
+    let config = harness_config.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::agents::list(&kind, &cwd, &settings, Some(&config))
+    })
+    .await
+    .map_err(|e| format!("agent discovery panicked: {e}"))
 }
 
 /// What Skein injects into each agent CLI so it can reach the review

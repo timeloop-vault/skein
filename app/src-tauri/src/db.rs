@@ -58,6 +58,16 @@ pub struct Harness {
     /// for how it gets populated; Skein only round-trips it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub session_id: Option<String>,
+    /// Which agent this harness was spawned with (`--agent <name>`),
+    /// or `None` for "let the tool's own default decide" — a real
+    /// choice, and distinct from any named agent (#247).
+    ///
+    /// Round-tripped, not interpreted: the frontend owns argv. It has
+    /// to exist here all the same, because this struct *is* the
+    /// persisted shape — a field the blob carries but the struct does
+    /// not is dropped on the next save.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub agent: Option<String>,
     /// Count of attention-worthy transitions accumulated for this
     /// harness while the user wasn't viewing it. Cleared when the
     /// harness becomes the active harness in the active room.
@@ -1808,6 +1818,23 @@ mod tests {
         }
     }
 
+    fn harness(id: &str) -> Harness {
+        Harness {
+            id: id.into(),
+            kind: "claude".into(),
+            name: id.into(),
+            status: "running".into(),
+            model: String::new(),
+            tokens: "0".into(),
+            live: None,
+            cmd: None,
+            cwd: None,
+            session_id: None,
+            agent: None,
+            pending_notifications: None,
+        }
+    }
+
     // ── room persistence (#167) ──────────────────────────────────
 
     #[test]
@@ -1825,6 +1852,45 @@ mod tests {
         assert_eq!(outcome.rooms[0].branch.as_deref(), Some("skein/r1"));
         assert_eq!(outcome.rooms[0].archived, Some(1_000));
         assert_eq!(outcome.rooms[1].id, "r2");
+    }
+
+    /// #247: the selected agent survives a restart.
+    ///
+    /// The interesting half is the *struct*, not the column. Rooms are
+    /// stored as one JSON blob, and this type is the shape they are
+    /// re-serialised through on the next autosave — so a field the
+    /// frontend writes and this struct does not name is dropped
+    /// silently, on a save the user never asked for, some minutes after
+    /// they picked the agent.
+    #[test]
+    fn a_harness_agent_survives_the_round_trip() {
+        let (_dir, db) = fresh_db();
+        let mut r = room("r1");
+        let mut with_agent = harness("h1");
+        with_agent.agent = Some("pr-review-toolkit:code-reviewer".into());
+        // Absent is a choice — "the tool's own default" — and has to
+        // come back absent rather than as an empty string.
+        r.harnesses = vec![with_agent, harness("h2")];
+        r.active_harness_id = "h1".into();
+        db.save_all(&[r]).unwrap();
+        let outcome = db.load_all().unwrap();
+        let hs = &outcome.rooms[0].harnesses;
+        assert_eq!(
+            hs[0].agent.as_deref(),
+            Some("pr-review-toolkit:code-reviewer")
+        );
+        assert_eq!(hs[1].agent, None);
+    }
+
+    /// A blob written before #247 has no `agent` key at all. The field
+    /// policy says that must load, not quarantine the room.
+    #[test]
+    fn a_pre_247_blob_loads_without_an_agent_field() {
+        let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+            "harnesses":[{"id":"h1","kind":"claude","name":"h1","status":"running",
+            "model":"","tokens":"0"}],"activeHarnessId":"h1"}"#;
+        let room: Room = serde_json::from_str(json).unwrap();
+        assert_eq!(room.harnesses[0].agent, None);
     }
 
     #[test]

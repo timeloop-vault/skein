@@ -7,7 +7,7 @@ room's worktree. Most harness kinds are AI coding CLIs in real PTYs
 (Claude Code, opencode, a stub gh-copilot, a plain shell); `files` is
 the exception — a **non-PTY** harness (#184) that browses and edits the
 worktree. That is why `HARNESS_KINDS` carries a capability model
-(`pty` / `resume` / `notify`) instead of assuming a terminal.
+(`pty` / `resume` / `notify` / `agents`) instead of assuming a terminal.
 "Session" in Skein vocabulary means only one thing: the harness tool's
 own conversation id (`Harness.sessionId`), used to resume conversations
 across restarts.
@@ -63,9 +63,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
 
     skein/
     ├── crates/skein-harness/        # Tauri-free reader for the harnesses' own stores (#209):
-    │   └── src/{claude,opencode}.rs #   Claude JSONL paths/rows/usage/cost-state + subagent
+    │   ├── src/{claude,opencode}.rs #   Claude JSONL paths/rows/usage/cost-state + subagent
     │                                #   discovery; opencode.db sessions/tree/assistant messages.
     │                                #   Shared with the standalone cost tooling — parser fixes go HERE
+    │   └── src/agents/              #   Which agents each CLI accepts at `--agent` (#246).
+    │                                #   Names come from the CLI itself — an unknown --agent makes
+    │                                #   Claude enumerate its own list; opencode has `agent list`.
+    │                                #   Disk parsing is enrichment ONLY (description + the tools
+    │                                #   allowlist), because globbing the config dirs drifts silently
     ├── crates/skein-git/            # Pure-Rust libgit2 wrapper. Tauri-free, sync, local-only
     │   └── src/lib.rs               # Repo: open, branches, head_branch, add_worktree,
     │                                #   list/remove_worktree, status, diff_workdir, head_blob
@@ -101,14 +106,22 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   withResumeCmds / unarchiveRoomTransform. Rebuilt from
     │   │   │                        #   the harness RECORD, never by matching the previous
     │   │   │                        #   argv — that pattern-matching was #153/#170. Add a
-    │   │   │                        #   spawn flag here and resume keeps working
+    │   │   │                        #   spawn flag here and resume keeps working (#247's
+    │   │   │                        #   `--agent` is the proof: one `withAgent` per arm)
+    │   │   ├── agents.ts            # Which agents a kind accepts at `--agent` (#247): DTO
+    │   │   │                        #   mirror of agents.rs + validateAgent. A stored name
+    │   │   │                        #   is re-checked at EVERY spawn, not only at pick time —
+    │   │   │                        #   only a fresh `claude --agent X` fails loudly; resume
+    │   │   │                        #   and opencode fall back silently
     │   │   ├── harnessEvents.ts     # L2c translators: ClaudeEvent/OpencodeEvent → phase calls
     │   │   ├── harnessPatterns.ts   # L2b fallback regexes (copilot/shell waiting prompts)
     │   │   ├── data.tsx             # HARNESS_KINDS registry: chip/label/desc + the
-    │   │   │                        #   capability model (pty/resume/notify, #184) — small
-    │   │   │                        #   but load-bearing. HARNESS_ORDER lives here too
+    │   │   │                        #   capability model (pty/resume/notify/agents, #184 +
+    │   │   │                        #   #247) — small but load-bearing. HARNESS_ORDER too
     │   │   ├── types.ts             # Room / Harness / Status vocabulary
-    │   │   ├── components.tsx       # Shared atoms (HChip, StatusDot, tabs, picker)
+    │   │   ├── components.tsx       # Shared atoms (HChip, StatusDot, tabs, the two-step
+    │   │   │                        #   harness picker — kind, then agent for the kinds
+    │   │   │                        #   that take one)
     │   │   ├── shortcuts.ts         # ALL keyboard shortcuts: one platform-agnostic BINDINGS
     │   │   │                        #   table (#151); LiveTerminal swallows via isAppShortcut
     │   │   ├── SettingsModal.tsx    # Settings + in-app updater UI
@@ -174,6 +187,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │   claude-plugin/       #   resource (see tauri.conf.json `resources`):
     │       │   opencode/            #   .claude-plugin/plugin.json + .mcp.json + a lazily
     │       │                        #   loaded skein-review SKILL.md; opencode.json
+    │       ├── src/agents.rs        # DTO layer over the crate's agent discovery (#246), plus
+    │       │                        #   the two things it can't do: resolve the program the way
+    │       │                        #   a real spawn does, and pass #215's --plugin-dir so the
+    │       │                        #   list matches what the spawn will accept
     │       ├── src/resume.rs        # session-existence probes against the tools' own stores
     │       ├── src/review.rs        # Baseline capture + the three baseline commands (#211).
     │       │                        #   Captures from the HEAD blob the moment a LIVE patch
@@ -351,6 +368,22 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   `CLAUDE.md`, and the agent reads them. Skein owns the one fact that
   lives nowhere else. (#229 tried the other way and was reverted; see
   the Roadmap note.)
+- **Agent selection** (#246 + #247, epic #219): both CLIs bind
+  `--agent` at launch and Claude cannot change it afterwards, so the
+  choice is made *before* the process starts — a second step in the `+
+  harness` picker, and a field in New room remembered per folder.
+  `Harness.agent` is the authority, not the argv: `cmdForKind` and
+  `resumeCmd` both re-pass it, because `claude --resume` with no flag
+  restores whatever agent the *conversation* started as. Every call
+  site gates on `capabilities.agents`, never on a kind comparison.
+  Two failures the UI has to name because nothing else will: an
+  agent whose `tools` allowlist omits MCP **cannot see the review
+  tools at all** — healthy connection, no error, nothing in any log
+  (#215) — so those rows are badged; and a stored name that no longer
+  resolves is **re-checked at every spawn**, since only a fresh
+  `claude --agent X` fails loudly while resume and both opencode paths
+  fall back silently. A degraded list never blocks a spawn: it cannot
+  prove a name is gone.
 - **Files** (#185): `FileTree` lists via `list_dir`, `FilesBody` reads
   via `read_file_text` and saves via `write_file_text`, which
   round-trips an mtime token to detect a stale write. Buffer text

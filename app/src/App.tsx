@@ -27,7 +27,16 @@ import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
 import { RightPane, type RightPaneTab } from "./RightPane.tsx";
 import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
-import { HChip, HarnessPicker, HarnessTab, RoomTab, StatusDot } from "./components.tsx";
+import { type AgentListing, kindHasAgents } from "./agents.ts";
+import {
+	HChip,
+	HarnessPicker,
+	HarnessTab,
+	NO_REVIEW_TOOLS_TITLE,
+	RoomTab,
+	StatusDot,
+	useAgentListing,
+} from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import { filesRegistry } from "./filesRegistry.ts";
 import {
@@ -308,6 +317,7 @@ const HarnessBody = ({
 				roomId={roomId}
 				harnessKind={harness.kind}
 				sessionId={harness.sessionId}
+				agent={harness.agent}
 				opencodePort={opencodePort}
 				onSessionCaptured={onSessionCaptured}
 				fontSize={fontSize}
@@ -349,7 +359,7 @@ interface HarnessColumnProps {
 	// the active drag belongs to *this* room (cross-room drags are
 	// rejected upstream). Issue #26.
 	harnessDrag: HarnessDrag;
-	onPick: (kind: HarnessKind) => void;
+	onPick: (kind: HarnessKind, agent?: string) => void;
 	onAddHarness: (roomId: string) => void;
 	onCancelPick: () => void;
 	onSwitchHarness: (roomId: string, harnessId: string) => void;
@@ -450,7 +460,7 @@ const HarnessColumn = ({
 			 * to add a sibling to. The picker takes the flex space
 			 * while present; harness panes survive untouched.
 			 */}
-			{showPicker && <HarnessPicker onPick={onPick} onCancel={onCancelPick} />}
+			{showPicker && <HarnessPicker cwd={room.cwd ?? ""} onPick={onPick} onCancel={onCancelPick} />}
 			{room.harnesses.map((h) => {
 				// "Visible" = user can see and interact with this body:
 				// room is active, no picker shadowing it, and this is the
@@ -524,6 +534,9 @@ interface CreateRoomArgs {
 	cwd: string;
 	task: string;
 	harness: HarnessKind;
+	/** The agent the starting harness spawns as (#247), or absent for
+	 *  the tool's own default. */
+	agent?: string;
 	branch?: string;
 }
 
@@ -550,6 +563,58 @@ type RepoStatus =
 	| { kind: "not-a-repo" }
 	| { kind: "missing" };
 
+/** The one line under the Agent field. At most one thing is worth
+ *  saying at a time, and the order is the order of consequence:
+ *  a name that is gone blocks the create; an agent that cannot see the
+ *  review tools silently switches off the #52 loop; a degraded list
+ *  means the field is a guess. Nothing to say = no line, because a
+ *  permanent note under a field stops being read. */
+const AgentFieldNote = ({
+	agent,
+	listing,
+	missing,
+	kind,
+}: {
+	agent: string | undefined;
+	listing: AgentListing | null;
+	missing: boolean;
+	kind: HarnessKind;
+}) => {
+	const note = (() => {
+		if (missing && agent) {
+			return {
+				cls: "err" as const,
+				text: `${HARNESS_KINDS[kind].name} does not offer "${agent}" any more — pick another.`,
+			};
+		}
+		const picked = agent ? listing?.agents.find((a) => a.name === agent) : undefined;
+		if (picked && !picked.allowsReviewTools) {
+			return { cls: "warn" as const, text: NO_REVIEW_TOOLS_TITLE };
+		}
+		if (listing?.degraded) {
+			return {
+				cls: "warn" as const,
+				text: `This list may be incomplete — ${listing.degraded}`,
+			};
+		}
+		return null;
+	})();
+	if (!note) return null;
+	return (
+		<div
+			style={{
+				fontFamily: "var(--sk-mono)",
+				fontSize: 10.5,
+				marginTop: 4,
+				lineHeight: 1.5,
+				color: note.cls === "err" ? "var(--err)" : "var(--warn)",
+			}}
+		>
+			{note.text}
+		</div>
+	);
+};
+
 const NewRoomDialog = ({
 	defaultCwd,
 	initialCwd,
@@ -575,11 +640,18 @@ const NewRoomDialog = ({
 	const [cwd, setCwd] = useState<string>(initialCwd);
 	const [task, setTask] = useState("");
 	const [harness, setHarness] = useState<HarnessKind>(initialDefaults?.harness ?? "claude");
+	// `undefined` = the tool's own default, which is a selectable row in
+	// the field rather than the absence of a selection (#247).
+	const [agent, setAgent] = useState<string | undefined>(initialDefaults?.agent);
 	const [branchMode, setBranchMode] = useState<"worktree" | "current">(
 		initialDefaults?.branchMode ?? "worktree",
 	);
 	const [baseBranch, setBaseBranch] = useState<string>(initialDefaults?.baseBranch ?? "");
 	const [repoStatus, setRepoStatus] = useState<RepoStatus>({ kind: "empty" });
+	// The folder the validation effect last resolved — a repo root or a
+	// plain directory that exists. What #247's agent probe is keyed on;
+	// see `agentListing`.
+	const [settledCwd, setSettledCwd] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	// Sticky, and deliberately not part of `repoStatus`: resolving a
@@ -618,6 +690,7 @@ const NewRoomDialog = ({
 		// this: silently changing the harness under someone mid-edit is a
 		// surprise, and neither gesture names a folder we already know.
 		setHarness(r.defaults.harness);
+		setAgent(r.defaults.agent);
 		setBranchMode(r.defaults.branchMode);
 		// The validation effect drops this again if the branch is gone.
 		setBaseBranch(r.defaults.baseBranch);
@@ -638,6 +711,7 @@ const NewRoomDialog = ({
 		setError(null);
 		if (!cwd) {
 			setRepoStatus({ kind: "empty" });
+			setSettledCwd("");
 			return undefined;
 		}
 		setRepoStatus({ kind: "checking" });
@@ -649,10 +723,16 @@ const NewRoomDialog = ({
 					if (cancelled) return;
 					if (!info.exists) {
 						setRepoStatus({ kind: "missing" });
+						// A folder that is not there has no project agents and
+						// cannot be a room. Clearing rather than leaving the last
+						// good one keeps the Agent field from describing a folder
+						// the user has navigated away from.
+						setSettledCwd("");
 						return;
 					}
 					if (!info.isRepo) {
 						setRepoStatus({ kind: "not-a-repo" });
+						setSettledCwd(cwd);
 						return;
 					}
 					// A worktree resolves to the repo it was added from —
@@ -663,6 +743,10 @@ const NewRoomDialog = ({
 						setCwd(info.root);
 					}
 					setRepoStatus({ kind: "valid", branches: info.branches, head: info.head });
+					// `info.root`, not `cwd`: a worktree resolves to the repo it
+					// was added from, and the rewrite of `cwd` above lands a
+					// render later.
+					setSettledCwd(info.root);
 					// Default base branch to HEAD on first valid load. A
 					// remembered branch survives only if the repo still has
 					// it — otherwise the <select> would sit on a value with
@@ -695,6 +779,31 @@ const NewRoomDialog = ({
 			.slice(0, 28) || "task";
 	const proposedBranch = `skein/${slug}`;
 
+	// #247: the agents the chosen kind will accept in this folder.
+	//
+	// Keyed on the *settled* folder, not on `cwd`: the probe runs the
+	// harness CLI, and `cwd` changes on every keystroke in the path
+	// field. `settledCwd` only moves once the folder has resolved, which
+	// the git validation below already debounces — so a typed path costs
+	// one probe, not one per character.
+	//
+	// That folder is the picked one, which for a worktree room is the
+	// repo root rather than the worktree that does not exist yet. The
+	// worktree is branched off this repo, so it carries the same
+	// `.claude/agents`; every other source (user dir, plugins) is
+	// cwd-independent anyway.
+	const agentListing = useAgentListing(kindHasAgents(harness) ? harness : null, settledCwd);
+
+	// A remembered agent the CLI no longer offers. Only ever set when
+	// the list is authoritative — a degraded list cannot prove absence,
+	// and saying "not found" on the strength of a CLI that would not run
+	// is how a user ends up retyping a name that was fine.
+	const agentMissing =
+		agent !== undefined &&
+		agentListing !== null &&
+		agentListing.degraded === null &&
+		!agentListing.agents.some((a) => a.name === agent);
+
 	const isRepo = repoStatus.kind === "valid";
 	// `missing` is deliberately excluded: a folder that isn't there is the
 	// one unresolved state that must block submission (#226).
@@ -705,6 +814,12 @@ const NewRoomDialog = ({
 		task.trim().length > 0 &&
 		!busy &&
 		folderResolved &&
+		// #247: a name the CLI just told us it does not have would spawn
+		// a harness that refuses to start (Claude) or quietly runs as
+		// something else (opencode). Blocking here is cheap — the field
+		// is right there — and it is the only place that choice can be
+		// corrected without creating a room first.
+		!agentMissing &&
 		(!isRepo || branchMode === "current" || baseBranch.length > 0);
 
 	const browse = async () => {
@@ -727,7 +842,8 @@ const NewRoomDialog = ({
 		setError(null);
 		// Called only on a path that genuinely created the room — a create
 		// that throws must not teach the dialog anything.
-		const remember = (base: string) => onRemember(cwd, { baseBranch: base, harness, branchMode });
+		const remember = (base: string) =>
+			onRemember(cwd, { baseBranch: base, harness, branchMode, ...(agent ? { agent } : {}) });
 		try {
 			if (!isRepo) {
 				// Non-git folder — no worktree, no branch. cwd is the
@@ -740,6 +856,7 @@ const NewRoomDialog = ({
 					cwd,
 					task: task.trim(),
 					harness,
+					...(agent ? { agent } : {}),
 				});
 				return;
 			}
@@ -759,6 +876,7 @@ const NewRoomDialog = ({
 					cwd: wt.path,
 					task: task.trim(),
 					harness,
+					...(agent ? { agent } : {}),
 					branch: proposedBranch,
 				});
 			} else {
@@ -767,6 +885,7 @@ const NewRoomDialog = ({
 					cwd,
 					task: task.trim(),
 					harness,
+					...(agent ? { agent } : {}),
 					branch: repoStatus.kind === "valid" ? (repoStatus.head ?? "HEAD") : "HEAD",
 				});
 			}
@@ -963,7 +1082,14 @@ const NewRoomDialog = ({
 									<div
 										key={id}
 										className={`sk-radio-card ${harness === id ? "selected" : ""}`}
-										onClick={() => setHarness(id)}
+										onClick={() => {
+											setHarness(id);
+											// A kind without agents cannot carry one, and the
+											// remembered name belongs to the kind it was picked
+											// for — leaving it set would hand `--agent coder` to
+											// opencode on the next switch back.
+											if (!kindHasAgents(id)) setAgent(undefined);
+										}}
 									>
 										<div className="top">
 											<HChip kind={id} /> {k.name}
@@ -974,6 +1100,43 @@ const NewRoomDialog = ({
 							})}
 						</div>
 					</div>
+
+					{/* #247: only for kinds that bind `--agent` at launch. The
+					    field is a <select> rather than the picker's row list
+					    because the modal has one column and four fields above
+					    it; the full list with descriptions is what the `+
+					    harness` picker is for. */}
+					{kindHasAgents(harness) && (
+						<div className="sk-field">
+							<label htmlFor="sk-agent">Agent</label>
+							<select
+								id="sk-agent"
+								className="sk-select"
+								value={agent ?? ""}
+								onChange={(e) => setAgent(e.target.value || undefined)}
+							>
+								<option value="">(default)</option>
+								{/* A remembered name the CLI no longer offers still
+								    renders, so the field shows what it is actually set
+								    to instead of silently sliding to (default). */}
+								{agentMissing && agent !== undefined && (
+									<option value={agent}>{agent} — not found</option>
+								)}
+								{(agentListing?.agents ?? []).map((a) => (
+									<option key={a.name} value={a.name}>
+										{a.name}
+										{a.allowsReviewTools ? "" : "  ⚠ no review tools"}
+									</option>
+								))}
+							</select>
+							<AgentFieldNote
+								agent={agent}
+								listing={agentListing}
+								missing={agentMissing}
+								kind={harness}
+							/>
+						</div>
+					)}
 
 					{error && (
 						<div
@@ -2673,10 +2836,14 @@ export default function App() {
 	// menu (pickHarness) and the Mod+E files jump. Kind-specific setup
 	// branches on capabilities — `files` is a surface, not a process:
 	// no session id, no port, no cmd, and it starts (and stays) idle.
-	const createHarnessInRoom = async (targetRoomId: string, kind: HarnessKind) => {
+	const createHarnessInRoom = async (targetRoomId: string, kind: HarnessKind, agent?: string) => {
 		const targetRoom = roomsRef.current.find((r) => r.id === targetRoomId);
 		if (!targetRoom) return;
 		const caps = HARNESS_KINDS[kind].capabilities;
+		// The agent only survives onto the record for kinds that take it.
+		// Every other path reads it back from there, so a name that got
+		// this far on a shell harness would ride into the argv.
+		const agentName = caps.agents && agent?.trim() ? agent : undefined;
 		const id = newId("h");
 		const cwd = targetRoom.cwd ?? defaultCwd;
 		// Phase 2a: pre-allocate Claude's conversation id so the harness
@@ -2699,7 +2866,9 @@ export default function App() {
 				console.warn("[skein] pick_free_port failed; falling back to L2a:", err);
 			}
 		}
-		const cmd = caps.pty ? cmdForKind(kind, defaultShell, sessionId, opencodePort) : undefined;
+		const cmd = caps.pty
+			? cmdForKind(kind, defaultShell, sessionId, opencodePort, agentName)
+			: undefined;
 		setRooms((prev) =>
 			prev.map((r) => {
 				if (r.id !== targetRoomId) return r;
@@ -2716,6 +2885,7 @@ export default function App() {
 					...(cmd ? { cmd } : {}),
 					cwd,
 					...(sessionId ? { sessionId } : {}),
+					...(agentName ? { agent: agentName } : {}),
 				};
 				return { ...r, harnesses: [...r.harnesses, newH], activeHarnessId: id };
 			}),
@@ -2739,11 +2909,11 @@ export default function App() {
 		}
 	};
 
-	const pickHarness = (kind: HarnessKind) => {
+	const pickHarness = (kind: HarnessKind, agent?: string) => {
 		const targetRoomId = showPicker;
 		setShowPicker(null);
 		if (!targetRoomId) return;
-		void createHarnessInRoom(targetRoomId, kind);
+		void createHarnessInRoom(targetRoomId, kind, agent);
 	};
 
 	// #49 phase A: Mod+E = jump to the room's Files harness (creating
@@ -2788,7 +2958,7 @@ export default function App() {
 	};
 	toggleFilesRef.current = toggleFilesHarness;
 
-	const createRoom = async ({ cwd, task, harness, branch }: CreateRoomArgs) => {
+	const createRoom = async ({ cwd, task, harness, agent, branch }: CreateRoomArgs) => {
 		const sid = newId("s");
 		const hid = newId("h");
 		// Phase 2a: pre-allocate Claude's conversation id (see pickHarness).
@@ -2819,6 +2989,9 @@ export default function App() {
 		// phase 3). For non-git rooms the tab subtext shows just the
 		// folder name and LiveStatus is replaced by a placeholder.
 		const startCaps = HARNESS_KINDS[harness].capabilities;
+		// Same gate as `createHarnessInRoom`: a kind that does not take
+		// `--agent` never carries a name onto its record.
+		const agentName = startCaps.agents && agent?.trim() ? agent : undefined;
 		const newRoom: Room = {
 			id: sid,
 			name: `local · ${folderName}`,
@@ -2840,10 +3013,11 @@ export default function App() {
 					tokens: "0",
 					...(startCaps.pty ? { live: true } : {}),
 					...(startCaps.pty
-						? { cmd: cmdForKind(harness, defaultShell, sessionId, opencodePort) }
+						? { cmd: cmdForKind(harness, defaultShell, sessionId, opencodePort, agentName) }
 						: {}),
 					cwd,
 					...(sessionId ? { sessionId } : {}),
+					...(agentName ? { agent: agentName } : {}),
 				},
 			],
 			activeHarnessId: hid,

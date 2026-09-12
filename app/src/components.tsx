@@ -1,6 +1,7 @@
 // Shared, low-level components used across the app.
 
-import type { DragEvent } from "react";
+import { type DragEvent, useEffect, useState } from "react";
+import { type AgentInfo, type AgentListing, kindHasAgents, listHarnessAgents } from "./agents.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { Harness, HarnessKind, Room, Status } from "./types.ts";
 
@@ -162,36 +163,184 @@ export const HarnessTab = ({
 	</div>
 );
 
+/** The ⚠ an agent earns by not being able to see the review tools.
+ *
+ *  Shared by both pickers because the thing it warns about is the same
+ *  in both: an agent whose `tools` allowlist omits MCP cannot see
+ *  Skein's review server *at all*, with a healthy connection and
+ *  nothing in any log (#215). Nobody would find this out by using it —
+ *  they would find out that the agent never answers a review comment. */
+export const NO_REVIEW_TOOLS_TITLE =
+	"This agent's tools list leaves out MCP, so it cannot see Skein's review tools. " +
+	"Picking it switches off the review loop for this harness.";
+
+export const NoReviewToolsBadge = () => (
+	<span className="sk-agent-warn" title={NO_REVIEW_TOOLS_TITLE}>
+		⚠ no review tools
+	</span>
+);
+
+/** Fetch the agents a kind accepts in `cwd`, for as long as a picker
+ *  wants them. `null` kind = nothing to fetch yet.
+ *
+ *  Re-fetches on every (kind, cwd) change rather than caching: the
+ *  whole point of asking the CLI is that the answer moves — an agent
+ *  file added while Skein was open must show up on the next open of
+ *  the picker, not on the next restart. */
+export const useAgentListing = (kind: HarnessKind | null, cwd: string) => {
+	const [listing, setListing] = useState<AgentListing | null>(null);
+	useEffect(() => {
+		if (!kind || !kindHasAgents(kind)) {
+			setListing(null);
+			return undefined;
+		}
+		if (!cwd) {
+			// No folder to ask about. A degraded listing rather than
+			// `null`, which reads as "still loading" and would leave the
+			// step spinning forever on a room that has no cwd.
+			setListing({
+				agents: [],
+				degraded: `no folder to ask ${HARNESS_KINDS[kind].name} about`,
+				unsupported: false,
+			});
+			return undefined;
+		}
+
+		let cancelled = false;
+		setListing(null);
+		void listHarnessAgents(kind, cwd).then((l) => {
+			if (!cancelled) setListing(l);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [kind, cwd]);
+	return listing;
+};
+
+/** Second step of the picker: which agent this harness runs as.
+ *
+ *  `(default)` is the first row and not a decoration — it is what every
+ *  harness before #247 did, and it means "whatever the tool's own
+ *  `agent` setting says", which no named row can express. */
+const AgentStep = ({
+	kind,
+	listing,
+	onPick,
+	onBack,
+}: {
+	kind: HarnessKind;
+	listing: AgentListing | null;
+	onPick: (agent: string | undefined) => void;
+	onBack: () => void;
+}) => (
+	<>
+		<h3>{HARNESS_KINDS[kind].name} — which agent?</h3>
+		<p>
+			Bound at launch and fixed for the life of the conversation. Skein re-passes it on every
+			resume.
+		</p>
+		<div className="sk-agent-list">
+			<div className="sk-agent-row" onClick={() => onPick(undefined)}>
+				<div className="head">
+					<span className="a-name">(default)</span>
+				</div>
+				<div className="a-desc">Whatever {HARNESS_KINDS[kind].name} is configured to use.</div>
+			</div>
+			{listing === null ? (
+				<div className="sk-agent-note">asking {HARNESS_KINDS[kind].name}…</div>
+			) : (
+				<>
+					{listing.degraded && (
+						<div className="sk-agent-note warn">
+							This list may be incomplete — {listing.degraded}
+						</div>
+					)}
+					{listing.agents.map((a) => (
+						<AgentRow key={a.name} agent={a} onClick={() => onPick(a.name)} />
+					))}
+				</>
+			)}
+		</div>
+		<button className="sk-btn" type="button" onClick={onBack}>
+			← Back
+		</button>
+	</>
+);
+
+const AgentRow = ({ agent, onClick }: { agent: AgentInfo; onClick: () => void }) => (
+	<div className="sk-agent-row" onClick={onClick} title={agent.name}>
+		<div className="head">
+			<span className="a-name">{agent.name}</span>
+			{!agent.allowsReviewTools && <NoReviewToolsBadge />}
+		</div>
+		{agent.description && <div className="a-desc">{agent.description}</div>}
+	</div>
+);
+
 // The full-pane harness picker: `+ harness` swaps the body slot for
 // this card grid until a kind is picked. (The files-pillar design
 // proposed an anchored dropdown here instead; the owner prefers the
 // pane — 2026-07-14.) Iterating the registry means new kinds (Files)
 // appear as cards automatically.
+//
+// #247 makes it two-step for the kinds that take `--agent`: the grid
+// swaps for an agent list instead of spawning, because the agent is
+// bound at launch and Claude cannot change it afterwards — "pick it
+// later" is not on offer. Kinds without the capability still spawn on
+// click, so the extra step only appears where it buys something.
 export const HarnessPicker = ({
+	cwd,
 	onPick,
 	onCancel,
 }: {
-	onPick: (kind: HarnessKind) => void;
+	/** The room's worktree — project agents resolve relative to it. */
+	cwd: string;
+	onPick: (kind: HarnessKind, agent?: string) => void;
 	onCancel: () => void;
-}) => (
-	<div className="sk-empty-harness">
-		{/* #189: the picker needs a way out that isn't picking. */}
-		<span className="sk-empty-harness-x" title="Cancel (Esc)" onClick={onCancel}>
-			×
-		</span>
-		<h3>Add a harness</h3>
-		<p>Pick an agent for this workspace. All harnesses see the same worktree.</p>
-		<div className="sk-harness-grid">
-			{(Object.values(HARNESS_KINDS) as { id: HarnessKind; name: string; desc: string }[]).map(
-				(k) => (
-					<div key={k.id} className="sk-harness-card" onClick={() => onPick(k.id)}>
-						<div className="head">
-							<HChip kind={k.id} /> <span className="h-name">{k.name}</span>
-						</div>
-						<div className="h-desc">{k.desc}</div>
+}) => {
+	const [step, setStep] = useState<HarnessKind | null>(null);
+	// Fetched as soon as the kind is chosen, not on hover or on mount:
+	// the probe runs the harness CLI, and a grid that shells out five
+	// times just to be looked at would be a poor trade for a subtitle.
+	const listing = useAgentListing(step, cwd);
+	return (
+		<div className="sk-empty-harness">
+			{/* #189: the picker needs a way out that isn't picking. Esc still
+			    cancels the whole picker from the agent step too — Back is for
+			    changing your mind about the kind, not for leaving. */}
+			<span className="sk-empty-harness-x" title="Cancel (Esc)" onClick={onCancel}>
+				×
+			</span>
+			{step ? (
+				<AgentStep
+					kind={step}
+					listing={listing}
+					onPick={(agent) => onPick(step, agent)}
+					onBack={() => setStep(null)}
+				/>
+			) : (
+				<>
+					<h3>Add a harness</h3>
+					<p>Pick an agent for this workspace. All harnesses see the same worktree.</p>
+					<div className="sk-harness-grid">
+						{(
+							Object.values(HARNESS_KINDS) as { id: HarnessKind; name: string; desc: string }[]
+						).map((k) => (
+							<div
+								key={k.id}
+								className="sk-harness-card"
+								onClick={() => (kindHasAgents(k.id) ? setStep(k.id) : onPick(k.id))}
+							>
+								<div className="head">
+									<HChip kind={k.id} /> <span className="h-name">{k.name}</span>
+								</div>
+								<div className="h-desc">{k.desc}</div>
+							</div>
+						))}
 					</div>
-				),
+				</>
 			)}
 		</div>
-	</div>
-);
+	);
+};

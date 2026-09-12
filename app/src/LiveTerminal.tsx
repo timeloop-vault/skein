@@ -31,6 +31,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
+import { listHarnessAgents, unknownAgentMessage, validateAgent } from "./agents.ts";
 import { harnessActivity } from "./harnessActivity.ts";
 import { attachClaudeEvents, attachOpencodeEvents } from "./harnessEvents.ts";
 import { isAppShortcut, isMac } from "./shortcuts.ts";
@@ -62,6 +63,13 @@ interface LiveTerminalProps {
 	// heuristic. Epic #50 L2c-1.
 	harnessKind: HarnessKind;
 	sessionId: string | undefined;
+	// The agent baked into `cmd` (#247), re-read here so the spawn can
+	// be checked against what the CLI accepts *now*. Deliberately a
+	// prop and not parsed back out of the argv: reading argv to recover
+	// a decision is the pattern that produced #153 and #170.
+	//
+	// `undefined` = no `--agent` flag, which needs no check.
+	agent: string | undefined;
 	// Epic #50 L2c-2: opencode embedded-server port. Required for
 	// kind === "opencode" to attach the SSE adapter; `undefined`
 	// means the adapter is disabled for this harness and L2a takes
@@ -96,6 +104,7 @@ export const LiveTerminal = ({
 	roomId,
 	harnessKind,
 	sessionId,
+	agent,
 	opencodePort,
 	onSessionCaptured,
 	fontSize,
@@ -393,9 +402,51 @@ export const LiveTerminal = ({
 			term.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
 		};
 
+		/** Refuse the spawn when the harness names an agent the CLI no
+		 *  longer has (#247).
+		 *
+		 *  Here rather than at pick time *as well as* at pick time: a room
+		 *  restored from sqlite names an agent chosen weeks ago, and only
+		 *  one of the four spawn paths fails loudly on its own. Claude
+		 *  refuses a fresh spawn, but `claude --resume` and both opencode
+		 *  paths accept a dead name and quietly run as something else —
+		 *  #176's category, and invisible in a TUI where the warning
+		 *  scrolls past. Returning false costs one CLI probe (~0.35 s) and
+		 *  only for a harness that names an agent at all.
+		 *
+		 *  Verdicts other than `unknown` spawn: a degraded list cannot
+		 *  prove a name is gone, and refusing on a CLI that would not run
+		 *  would strand every harness in the app.
+		 *
+		 *  Gated on the argv actually carrying the flag, because the
+		 *  record outlives the process it described: a harness swapped to
+		 *  a shell by "Enter for shell" keeps `agent` set, and a dead
+		 *  agent name must not stop the user getting a shell. That is a
+		 *  question about *this* argv, not an attempt to recover a
+		 *  decision from it — the name still comes from the record. */
+		const agentResolves = async (cmdToSpawn: string[]): Promise<boolean> => {
+			if (!agent || !cmdToSpawn.includes("--agent")) return true;
+			const verdict = validateAgent(agent, await listHarnessAgents(harnessKind, cwd));
+			if (cancelled) return false;
+			if (verdict.kind === "unverified") {
+				console.warn(`[skein] could not verify agent "${agent}": ${verdict.why}`);
+			}
+			if (verdict.kind !== "unknown") return true;
+			term.write(`\r\n\x1b[31m[skein] ${unknownAgentMessage(agent, harnessKind)}\x1b[0m\r\n`);
+			// Same footer every other dead-harness path writes, and for the
+			// same reason: without it the pane is a wall of red with no
+			// visible way forward.
+			term.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
+			phase = "exited";
+			harnessActivity.exited(harnessId, null);
+			return false;
+		};
+
 		const startPty = async (cmdToSpawn: string[]) => {
 			if (cancelled) return;
 			programName = cmdToSpawn[0] ?? "child";
+			if (!(await agentResolves(cmdToSpawn))) return;
+			if (cancelled) return;
 			phase = "running";
 			// Record the spawn before we await — gives a deterministic
 			// `spawning` window in the activity store even when

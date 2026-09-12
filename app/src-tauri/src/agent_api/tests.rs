@@ -52,6 +52,7 @@ fn harness(id: &str, kind: &str, name: &str) -> Harness {
         cmd: None,
         cwd: None,
         session_id: None,
+        agent: None,
         pending_notifications: None,
     }
 }
