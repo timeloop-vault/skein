@@ -55,6 +55,17 @@ export interface FolderDefaults {
 	/** Empty for a folder that is not a git repo. */
 	baseBranch: string;
 	harness: HarnessKind;
+	/** The agent the starting harness was created with (#247), or
+	 *  absent for "the tool's own default" — which is also what every
+	 *  entry written before this field means, so absent has to keep
+	 *  meaning that rather than becoming a gap to fill in.
+	 *
+	 *  Remembered for the same reason `harness` is: the starting harness
+	 *  of the next room in this folder is nearly always the last one,
+	 *  and an agent is now half of what that harness *is*. Not keyed by
+	 *  kind — one folder, one starting harness, one agent; the per-kind
+	 *  default is #248's, and it belongs in Settings, not here. */
+	agent?: string;
 	/** Meaningless for a non-repo folder; kept so repos round-trip cleanly. */
 	branchMode: "worktree" | "current";
 	/** Epoch ms. Only used for MRU ordering, which has no UI yet. */

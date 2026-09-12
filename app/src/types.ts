@@ -31,6 +31,21 @@ export interface Harness {
 	// kinds without a resume concept (copilot, shell), and for legacy
 	// harnesses created before the field existed.
 	sessionId?: string;
+	// Which agent this harness runs as — exactly what follows
+	// `--agent`, namespace included (#247). Only meaningful for kinds
+	// whose `capabilities.agents` is true.
+	//
+	// **Absent is a choice, not a gap.** It means "let the tool's own
+	// `agent` setting decide", which is what every harness created
+	// before this field did and what the picker's `(default)` row
+	// selects. Optional per the post-v0.2.5 field policy: a required
+	// field makes every stored room blob unparseable.
+	//
+	// The record is authoritative, so `resumeCmd` re-passes it. Claude's
+	// `--resume` restores the session's *own* agent when no flag is
+	// given (measured on #219), so omitting it here would silently
+	// resurrect whatever the conversation started as.
+	agent?: string;
 	// Bumped on every deliberate respawn (Enter-for-shell after a child
 	// exits). Folded into the LiveTerminal mountKey so the remount fires
 	// even when the new cmd equals the old one — the case the cmd-identity

@@ -2,9 +2,10 @@
 //
 // Every property Skein has to decide *before* the child process starts
 // lives here: Claude's pre-allocated `--session-id`, opencode's pinned
-// `--port`. Both are spawn-time-locked, so the argv is the only place
-// they can be expressed, and both boot and room-reopen have to be able
-// to rebuild that argv from scratch.
+// `--port`, and the `--agent` both CLIs bind at launch (#247). All
+// three are spawn-time-locked, so the argv is the only place they can
+// be expressed, and both boot and room-reopen have to be able to
+// rebuild that argv from scratch.
 //
 // **Why this is a module and not two helpers in App.tsx.** `resumeCmd`
 // used to identify a rebuildable argv by matching its *exact shape* —
@@ -13,11 +14,11 @@
 // an unmatched cmd was returned unchanged: the next boot respawned
 // `--session-id <uuid>` against a session that already existed and
 // Claude refused with "Session ID is already in use". That is #153, and
-// it came back as #170, and it would have come back again the moment
-// #219 appended `--agent`. Reconstructing from the harness *record*
-// instead of from the previous argv retires the whole family — a new
-// flag is now one line in `cmdForKind` plus one in `resumeCmd`, with
-// nothing to keep in sync.
+// it came back as #170, and it would have come back a third time when
+// #247 appended `--agent` — which it did not, because reconstructing
+// from the harness *record* instead of from the previous argv retired
+// the whole family. `--agent` cost one `withAgent` call in each arm,
+// with nothing to keep in sync.
 
 import { HARNESS_KINDS } from "./data.tsx";
 import type { Harness, HarnessKind, Room } from "./types.ts";
@@ -39,6 +40,15 @@ const managedProgram = (kind: HarnessKind): string | null => {
 	}
 };
 
+/** Append `--agent <name>` when the harness names one.
+ *
+ *  Both CLIs spell it the same way, so this is shared. An empty or
+ *  whitespace-only name is treated as absent rather than passed
+ *  through: `--agent ""` is refused by Claude at spawn, and the only
+ *  way to get one is a stored blob that has been hand-edited. */
+const withAgent = (args: string[], agent: string | undefined): string[] =>
+	agent?.trim() ? [...args, "--agent", agent] : args;
+
 // Phase 2a: when sessionId is provided (always set by callers for
 // Claude, never for other kinds), pre-allocate Claude's conversation
 // id via --session-id <uuid>. Storing the same id on the harness
@@ -48,22 +58,33 @@ const managedProgram = (kind: HarnessKind): string | null => {
 // free port up front and passes `--port <N> --hostname 127.0.0.1` so
 // the L2c-2 SSE adapter knows where to subscribe. The port is fresh
 // per spawn (not persisted) — callers must pass one in for opencode.
+// Issue #247: `agent` is the third spawn-time-locked decision. Claude
+// binds `--agent` at launch and cannot change it afterwards, so like
+// the session id and the port it can only be expressed in the argv.
+// Undefined means "no flag" — the tool's own `agent` setting decides,
+// which is a real choice and not the absence of one.
 export const cmdForKind = (
 	kind: HarnessKind,
 	fallbackShell: string[],
 	sessionId?: string,
 	opencodePort?: number,
+	agent?: string,
 ): string[] => {
 	switch (kind) {
-		case "claude":
-			return sessionId ? ["claude", "--session-id", sessionId] : ["claude"];
+		case "claude": {
+			const args = sessionId ? ["claude", "--session-id", sessionId] : ["claude"];
+			return withAgent(args, agent);
+		}
 		case "opencode": {
 			// Default port=0 lets opencode pick; that defeats the whole
 			// adapter, so require an allocated port. If a caller forgot,
 			// fall back to bare opencode and the adapter just won't
 			// attach — same behaviour as pre-L2c-2.
-			if (opencodePort === undefined) return ["opencode"];
-			return ["opencode", "--port", String(opencodePort), "--hostname", "127.0.0.1"];
+			if (opencodePort === undefined) return withAgent(["opencode"], agent);
+			return withAgent(
+				["opencode", "--port", String(opencodePort), "--hostname", "127.0.0.1"],
+				agent,
+			);
 		}
 		case "copilot":
 			return ["gh", "copilot", "suggest"];
@@ -108,8 +129,16 @@ export const resumeCmd = (h: Harness, opencodePort?: number): string[] => {
 	// `claude --resume` would resurrect a harness the user retired.
 	if (cmd[0] !== managedProgram(h.kind)) return cmd;
 	switch (h.kind) {
-		case "claude":
-			return h.sessionId ? ["claude", "--resume", h.sessionId] : ["claude", "--resume"];
+		case "claude": {
+			// #247: the agent is re-passed, not left to the session.
+			// `claude --resume <sid>` with no flag restores whatever agent
+			// the conversation *started* as — so dropping it here would
+			// make the record and the process disagree the first time the
+			// user changes a harness's agent, silently and permanently.
+			// Re-passing overrides cleanly (measured on #219).
+			const args = h.sessionId ? ["claude", "--resume", h.sessionId] : ["claude", "--resume"];
+			return withAgent(args, h.agent);
+		}
 		case "opencode": {
 			// The port from sqlite is dead — the previous Skein run
 			// released it when the harness exited — so a fresh one is
@@ -120,7 +149,7 @@ export const resumeCmd = (h: Harness, opencodePort?: number): string[] => {
 			}
 			if (h.sessionId) args.push("--session", h.sessionId);
 			else args.push("--continue");
-			return args;
+			return withAgent(args, h.agent);
 		}
 		default:
 			return cmd;
