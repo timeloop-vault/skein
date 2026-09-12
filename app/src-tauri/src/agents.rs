@@ -13,7 +13,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use serde::Serialize;
-use skein_harness::agents::{self, AgentDef, AgentSource};
+use skein_harness::agents::{AgentDef, AgentSource, allows_mcp_tools, claude, opencode};
 
 use crate::harness_config::HarnessConfig;
 use crate::spawn_settings::SpawnSettings;
@@ -71,7 +71,7 @@ impl AgentListDto {
 }
 
 fn to_dto(def: AgentDef) -> AgentDto {
-    let allows_review_tools = agents::allows_mcp_tools(def.tools.as_deref());
+    let allows_review_tools = allows_mcp_tools(def.tools.as_deref());
     let (source, plugin) = match def.source {
         AgentSource::Builtin => ("builtin", None),
         AgentSource::User => ("user", None),
@@ -138,9 +138,9 @@ pub(crate) fn list(
     let list = match kind {
         "claude" => {
             let extra = claude_probe_args(settings, config);
-            agents::claude_agents(OsStr::new(&exe), &home, cwd_path, &extra)
+            claude::list(OsStr::new(&exe), &home, cwd_path, &extra)
         }
-        _ => agents::opencode_agents(OsStr::new(&exe), &home, cwd_path),
+        _ => opencode::list(OsStr::new(&exe), &home, cwd_path),
     };
     AgentListDto {
         agents: list.agents.into_iter().map(to_dto).collect(),
@@ -310,7 +310,7 @@ mod smoke {
             dto.agents.iter().any(|a| a.name == "build"),
             "opencode always has `build`"
         );
-        for internal in skein_harness::agents::OPENCODE_INTERNAL {
+        for internal in opencode::INTERNAL {
             assert!(
                 !dto.agents.iter().any(|a| a.name == *internal),
                 "{internal} is machinery and must not be offered"
