@@ -189,6 +189,16 @@ impl HarnessConfig {
         }
     }
 
+    /// The shipped Claude Code plugin directory, when it resolved.
+    ///
+    /// #246's agent probe passes the same `--plugin-dir` the spawn
+    /// does, so an agent shipped by Skein's own plugin appears in the
+    /// picker under the namespace the CLI would give it (`skein:<name>`)
+    /// rather than being a name the list omits and the spawn accepts.
+    pub(crate) fn claude_plugin_dir(&self) -> Option<&Path> {
+        self.claude_plugin.as_deref()
+    }
+
     pub fn status(&self) -> HarnessConfigStatus {
         HarnessConfigStatus {
             claude_plugin: self.claude_plugin.as_ref().map(|p| p.display().to_string()),
