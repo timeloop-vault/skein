@@ -26,6 +26,12 @@ const EDGE = 8;
 
 const isKind = (k: string): k is HarnessKind => k in HARNESS_KINDS;
 
+interface Resolved {
+	kind: string | null;
+	status: string | null;
+	agent: { key: string; value: string } | null;
+}
+
 export function attachStatusPopover(): () => void {
 	let pop: HTMLDivElement | null = null;
 	let timer: number | null = null;
@@ -46,12 +52,22 @@ export function attachStatusPopover(): () => void {
 	// half only when it's unambiguous (exactly one chip / one dot) — so a
 	// harness tab pairs both, while a room tab's multi-chip row-2 shows
 	// just the kind and the room dot shows just the state.
-	const resolve = (el: HTMLElement): { kind: string | null; status: string | null } | null => {
+	const resolve = (el: HTMLElement): Resolved | null => {
 		const isChip = el.classList.contains("h-chip");
 		const isDot = el.classList.contains("tab-status");
 		if (!isChip && !isDot) return null;
 		let kind = isChip ? (el.dataset.kind ?? null) : null;
 		let status = isDot ? (el.dataset.status ?? null) : null;
+		// #248: the chip carries its harness's agent label, already worded
+		// by `agentLabel` — the popover repeats it rather than deciding
+		// for itself what an opencode agent can be said to be.
+		const chip = isChip
+			? el
+			: el.closest<HTMLElement>(ROW_SEL)?.querySelector<HTMLElement>(".h-chip[data-agent-key]");
+		const agent =
+			chip?.dataset.agentKey && chip.dataset.agentValue
+				? { key: chip.dataset.agentKey, value: chip.dataset.agentValue }
+				: null;
 		// A chip knows its harness → read that harness's OWN live state from
 		// the store, so a room-tab summary chip shows its real state rather
 		// than borrowing the room's aggregate dot (#141).
@@ -65,10 +81,10 @@ export function attachStatusPopover(): () => void {
 			const chips = el.closest<HTMLElement>(ROW_SEL)?.querySelectorAll<HTMLElement>(".h-chip");
 			if (chips?.length === 1) kind = chips[0]?.dataset.kind ?? null;
 		}
-		return kind || status ? { kind, status } : null;
+		return kind || status ? { kind, status, agent } : null;
 	};
 
-	const render = (el: HTMLDivElement, c: { kind: string | null; status: string | null }) => {
+	const render = (el: HTMLDivElement, c: Resolved) => {
 		el.replaceChildren();
 		const seg = (label: string, value: string, valueClass?: string) => {
 			if (el.childElementCount > 0) {
@@ -86,6 +102,7 @@ export function attachStatusPopover(): () => void {
 			el.append(k, document.createTextNode(" "), v);
 		};
 		if (c.kind && isKind(c.kind)) seg("harness", HARNESS_KINDS[c.kind].name);
+		if (c.agent) seg(c.agent.key, c.agent.value);
 		if (c.status) seg("state", c.status, `pv-${c.status}`);
 	};
 

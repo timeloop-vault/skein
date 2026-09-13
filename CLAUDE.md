@@ -116,8 +116,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   ├── harnessEvents.ts     # L2c translators: ClaudeEvent/OpencodeEvent → phase calls
     │   │   ├── harnessPatterns.ts   # L2b fallback regexes (copilot/shell waiting prompts)
     │   │   ├── data.tsx             # HARNESS_KINDS registry: chip/label/desc + the
-    │   │   │                        #   capability model (pty/resume/notify/agents, #184 +
-    │   │   │                        #   #247) — small but load-bearing. HARNESS_ORDER too
+    │   │   │                        #   capability model (pty/resume/notify/agents/
+    │   │   │                        #   agentSwitchable, #184 + #247 + #248) — small but
+    │   │   │                        #   load-bearing. HARNESS_ORDER too
+    │   │   ├── harnessAgent.ts      # What agent a harness is on, honestly worded (#248):
+    │   │   │                        #   "agent X" (Claude), "started as X" / "last message
+    │   │   │                        #   to Y" (opencode, from SSE user messages)
     │   │   ├── types.ts             # Room / Harness / Status vocabulary
     │   │   ├── components.tsx       # Shared atoms (HChip, StatusDot, tabs, the two-step
     │   │   │                        #   harness picker — kind, then agent for the kinds
@@ -384,6 +388,17 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   `claude --agent X` fails loudly while resume and both opencode paths
   fall back silently. A degraded list never blocks a spawn: it cannot
   prove a name is gone.
+  **#248** adds a per-kind default in Settings (`prefs.ts`
+  `defaultAgents` — localStorage, because the frontend builds the argv),
+  preselected in the picker and prefilled in New room, where a folder's
+  own remembered agent still wins. No default is an absent key, never a
+  name. The agent shows in the status bar and the harness-tab popover,
+  worded by `harnessAgent.ts`: Claude is "agent X"; opencode can switch
+  mid-session, so it is "started as X" until an SSE `message.updated`
+  for a **user** message in the harness's **own** session says "last
+  message to Y" (assistant messages report `compaction`; `/event` also
+  carries subagent child sessions). The observation is never written
+  back to `Harness.agent`, which is what resume re-passes.
 - **Files** (#185): `FileTree` lists via `list_dir`, `FilesBody` reads
   via `read_file_text` and saves via `write_file_text`, which
   round-trips an mtime token to detect a stale write. Buffer text

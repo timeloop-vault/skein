@@ -46,6 +46,7 @@ import {
 	useHarnessActivity,
 	useRoomActivity,
 } from "./harnessActivity.ts";
+import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
 import { cmdForKind, unarchiveRoomTransform, withResumeCmds } from "./harnessCmd.ts";
 import {
 	ACTION_EVENT,
@@ -54,14 +55,18 @@ import {
 	parsePayload,
 } from "./liveContext/index.ts";
 import {
+	type DefaultAgents,
 	EMPTY_NEW_ROOM_MEMORY,
 	type FolderDefaults,
 	type NewRoomMemory,
 	type RecentFolder,
+	defaultAgentFor,
 	defaultsFor,
 	recentFolders,
 	rememberFolder,
+	startingAgent,
 	usePersistedState,
+	withDefaultAgent,
 } from "./prefs.ts";
 import { hints, isMac, matchShortcut, modLabel } from "./shortcuts.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
@@ -214,14 +219,15 @@ const Toast = ({
 
 const LiveHarnessTab = (props: Parameters<typeof HarnessTab>[0]) => {
 	const activity = useHarnessActivity(props.h.id);
-	if (!activity) return <HarnessTab {...props} />;
+	const agent = agentLabel(props.h, useObservedAgent(props.h.id));
+	if (!activity) return <HarnessTab {...props} agent={agent} />;
 	// Apply the acknowledged-downgrade: a waiting harness with no
 	// pending notifications has already been seen, so render it as
 	// idle (grey) instead of waiting (blue pulse). The phase in
 	// the store stays `waiting` — only the visual indicator
 	// collapses.
 	const status = effectiveStatus(activity, props.h.pendingNotifications ?? 0);
-	return <HarnessTab {...props} h={{ ...props.h, status }} />;
+	return <HarnessTab {...props} agent={agent} h={{ ...props.h, status }} />;
 };
 
 // L4 — per-room aggregate. Subscribes to every harness in the
@@ -264,6 +270,19 @@ const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
 		<span className="seg">
 			<span className={`dot-tiny st-${dotStatus}`} />
 			{label}
+		</span>
+	);
+};
+
+// #248: which agent the active harness is on, worded by `agentLabel` so
+// an opencode harness says "started as" rather than claiming to know.
+const AgentStatusBarSeg = ({ harness }: { harness: Harness }) => {
+	const label = agentLabel(harness, useObservedAgent(harness.id));
+	if (!label) return null;
+	return (
+		<span className="seg sk-statusbar-agent" title={label.title}>
+			<span className="pk">{label.key}</span>
+			{label.value}
 		</span>
 	);
 };
@@ -359,6 +378,8 @@ interface HarnessColumnProps {
 	// the active drag belongs to *this* room (cross-room drags are
 	// rejected upstream). Issue #26.
 	harnessDrag: HarnessDrag;
+	/** Settings' per-kind default agents (#248), for the picker. */
+	defaultAgents: DefaultAgents;
 	onPick: (kind: HarnessKind, agent?: string) => void;
 	onAddHarness: (roomId: string) => void;
 	onCancelPick: () => void;
@@ -381,6 +402,7 @@ const HarnessColumn = ({
 	showPicker,
 	roomActive,
 	harnessDrag,
+	defaultAgents,
 	onPick,
 	onAddHarness,
 	onCancelPick,
@@ -460,7 +482,15 @@ const HarnessColumn = ({
 			 * to add a sibling to. The picker takes the flex space
 			 * while present; harness panes survive untouched.
 			 */}
-			{showPicker && <HarnessPicker cwd={room.cwd ?? ""} onPick={onPick} onCancel={onCancelPick} />}
+			{showPicker && (
+				<HarnessPicker
+					cwd={room.cwd ?? ""}
+					defaultAgents={defaultAgents}
+					active={roomActive}
+					onPick={onPick}
+					onCancel={onCancelPick}
+				/>
+			)}
 			{room.harnesses.map((h) => {
 				// "Visible" = user can see and interact with this body:
 				// room is active, no picker shadowing it, and this is the
@@ -619,6 +649,7 @@ const NewRoomDialog = ({
 	defaultCwd,
 	initialCwd,
 	initialDefaults,
+	defaultAgents,
 	recent,
 	onRemember,
 	onCommit,
@@ -629,6 +660,9 @@ const NewRoomDialog = ({
 	initialCwd: string;
 	/** Per-folder defaults for `initialCwd`, when we have seen it before. */
 	initialDefaults: FolderDefaults | undefined;
+	/** Settings' per-kind default agents (#248). A folder's own memory
+	 *  still wins — see `startingAgent`. */
+	defaultAgents: DefaultAgents;
 	/** Known folders, MRU-first, for the Folder dropdown (#233). */
 	recent: RecentFolder[];
 	/** Called with the folder and its defaults after a room is created. */
@@ -642,7 +676,9 @@ const NewRoomDialog = ({
 	const [harness, setHarness] = useState<HarnessKind>(initialDefaults?.harness ?? "claude");
 	// `undefined` = the tool's own default, which is a selectable row in
 	// the field rather than the absence of a selection (#247).
-	const [agent, setAgent] = useState<string | undefined>(initialDefaults?.agent);
+	const [agent, setAgent] = useState<string | undefined>(() =>
+		startingAgent(initialDefaults, initialDefaults?.harness ?? "claude", defaultAgents),
+	);
 	const [branchMode, setBranchMode] = useState<"worktree" | "current">(
 		initialDefaults?.branchMode ?? "worktree",
 	);
@@ -690,7 +726,7 @@ const NewRoomDialog = ({
 		// this: silently changing the harness under someone mid-edit is a
 		// surprise, and neither gesture names a folder we already know.
 		setHarness(r.defaults.harness);
-		setAgent(r.defaults.agent);
+		setAgent(startingAgent(r.defaults, r.defaults.harness, defaultAgents));
 		setBranchMode(r.defaults.branchMode);
 		// The validation effect drops this again if the branch is gone.
 		setBaseBranch(r.defaults.baseBranch);
@@ -1083,12 +1119,14 @@ const NewRoomDialog = ({
 										key={id}
 										className={`sk-radio-card ${harness === id ? "selected" : ""}`}
 										onClick={() => {
+											if (id === harness) return;
 											setHarness(id);
-											// A kind without agents cannot carry one, and the
-											// remembered name belongs to the kind it was picked
-											// for — leaving it set would hand `--agent coder` to
-											// opencode on the next switch back.
-											if (!kindHasAgents(id)) setAgent(undefined);
+											// The agent belongs to the kind it was picked for —
+											// leaving it set would hand Claude's `--agent coder`
+											// to opencode. Switching kind takes that kind's
+											// Settings default instead (#248), which is
+											// undefined for a kind with no agents at all.
+											setAgent(defaultAgentFor(defaultAgents, id));
 										}}
 									>
 										<div className="top">
@@ -1115,7 +1153,7 @@ const NewRoomDialog = ({
 								value={agent ?? ""}
 								onChange={(e) => setAgent(e.target.value || undefined)}
 							>
-								<option value="">(default)</option>
+								<option value="">(tool default) — no agent named</option>
 								{/* A remembered name the CLI no longer offers still
 								    renders, so the field shows what it is actually set
 								    to instead of silently sliding to (default). */}
@@ -1405,6 +1443,9 @@ export default function App() {
 	// Off by default; toggled from the Activity card head. App-owned so
 	// every room's mounted LiveContext sees the same value.
 	const [showTurnCosts, setShowTurnCosts] = usePersistedState<boolean>("showTurnCosts", false);
+	// #248: default agent per harness kind, set in Settings. Read by the
+	// `+ harness` picker (preselected) and New room (prefilled).
+	const [defaultAgents, setDefaultAgents] = usePersistedState<DefaultAgents>("defaultAgents", {});
 	// Which right-pane tab each room is showing (#212). Per room rather
 	// than global: a room mid-task wants the activity feed and a room
 	// whose agent has just finished wants the review, and that is a
@@ -3064,6 +3105,10 @@ export default function App() {
 		spawnDegraded: spawnEnv?.degraded ?? null,
 		spawnSettingsPath: spawnEnv?.settingsPath ?? "",
 		onSpawnSettings: saveSpawnSettings,
+		defaultAgents,
+		onDefaultAgent: (kind: HarnessKind, agent: string | undefined) =>
+			setDefaultAgents((prev) => withDefaultAgent(prev, kind, agent)),
+		agentCwd: room?.cwd ?? defaultCwd,
 		onClose: () => setShowSettings(false),
 	};
 
@@ -3317,6 +3362,7 @@ export default function App() {
 						defaultCwd={defaultCwd}
 						initialCwd={newRoomSeed.cwd}
 						initialDefaults={newRoomSeed.defaults}
+						defaultAgents={defaultAgents}
 						recent={recentRoomFolders}
 						onRemember={rememberRoomFolder}
 						onCommit={createRoom}
@@ -3421,6 +3467,7 @@ export default function App() {
 								onDrop: handleHarnessDrop,
 								onDragEnd: handleDragEnd,
 							}}
+							defaultAgents={defaultAgents}
 							onPick={pickHarness}
 							onAddHarness={addHarness}
 							onCancelPick={() => setShowPicker(null)}
@@ -3471,6 +3518,7 @@ export default function App() {
 					<HChip kind={activeHarness.kind} />
 					<span>{HARNESS_KINDS[activeHarness.kind].name}</span>
 				</span>
+				<AgentStatusBarSeg harness={activeHarness} />
 				{/* #49 phase A: name the keyboard holder. Bodies are
 				    mutually exclusive, so this is purely informative —
 				    but "who has the keyboard" should never need guessing. */}
@@ -3550,6 +3598,7 @@ export default function App() {
 					defaultCwd={defaultCwd}
 					initialCwd={newRoomSeed.cwd}
 					initialDefaults={newRoomSeed.defaults}
+					defaultAgents={defaultAgents}
 					recent={recentRoomFolders}
 					onRemember={rememberRoomFolder}
 					onCommit={createRoom}

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+	type DefaultAgents,
 	EMPTY_NEW_ROOM_MEMORY,
 	type FolderDefaults,
 	type NewRoomMemory,
+	defaultAgentFor,
 	defaultsFor,
 	recentFolders,
 	rememberFolder,
+	startingAgent,
+	withDefaultAgent,
 } from "./prefs.ts";
 
 const defaults = (over: Partial<FolderDefaults> = {}): FolderDefaults => ({
@@ -128,5 +132,56 @@ describe("defaultsFor", () => {
 		// The seed is "" on a fresh install; it must not match a stored key.
 		const m = memory({ "": defaults({ baseBranch: "wrong" }) });
 		expect(defaultsFor(m, "")).toBeUndefined();
+	});
+});
+
+describe("default agents (#248)", () => {
+	it("has no default until one is set, and clearing is not a name", () => {
+		expect(defaultAgentFor({}, "claude")).toBeUndefined();
+		const set = withDefaultAgent({}, "claude", "coder");
+		expect(defaultAgentFor(set, "claude")).toBe("coder");
+		const cleared = withDefaultAgent(set, "claude", undefined);
+		// Absent key, not "" — "no default" must not be a storable name.
+		expect(cleared).toEqual({});
+		expect(withDefaultAgent(set, "claude", "  ")).toEqual({});
+	});
+
+	it("keeps each kind's default separate", () => {
+		const d = withDefaultAgent(withDefaultAgent({}, "claude", "coder"), "opencode", "plan");
+		expect(defaultAgentFor(d, "claude")).toBe("coder");
+		expect(defaultAgentFor(d, "opencode")).toBe("plan");
+	});
+
+	it("never offers a default to a kind that takes no --agent", () => {
+		const stale = { byoh: "coder", files: "coder" } as DefaultAgents;
+		expect(defaultAgentFor(stale, "byoh")).toBeUndefined();
+		expect(defaultAgentFor(stale, "files")).toBeUndefined();
+	});
+
+	it("survives a blob that parsed into the wrong shape", () => {
+		const junk = null as unknown as DefaultAgents;
+		expect(defaultAgentFor(junk, "claude")).toBeUndefined();
+		expect(withDefaultAgent(junk, "claude", "coder")).toEqual({ claude: "coder" });
+		expect(defaultAgentFor({ claude: 7 } as unknown as DefaultAgents, "claude")).toBeUndefined();
+	});
+});
+
+describe("startingAgent", () => {
+	const kindDefaults: DefaultAgents = { claude: "coder", opencode: "plan" };
+
+	it("lets a folder's own agent win for its own kind", () => {
+		const folder = defaults({ harness: "claude", agent: "reviewer" });
+		expect(startingAgent(folder, "claude", kindDefaults)).toBe("reviewer");
+	});
+
+	it("does not carry a folder's agent onto a different kind", () => {
+		const folder = defaults({ harness: "claude", agent: "reviewer" });
+		expect(startingAgent(folder, "opencode", kindDefaults)).toBe("plan");
+	});
+
+	it("falls back to the kind default for an unknown folder or one with no agent", () => {
+		expect(startingAgent(undefined, "claude", kindDefaults)).toBe("coder");
+		expect(startingAgent(defaults({ harness: "claude" }), "claude", kindDefaults)).toBe("coder");
+		expect(startingAgent(undefined, "claude", {})).toBeUndefined();
 	});
 });

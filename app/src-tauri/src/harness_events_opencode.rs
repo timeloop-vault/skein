@@ -79,6 +79,19 @@ pub enum OpencodeEvent {
     /// Tool call started. Currently unused for state policy; will
     /// power the L7 activity feed.
     ToolUseStart { name: String },
+    /// A user message was recorded, and opencode stamped it with the
+    /// agent it was sent to (#248). The closest thing opencode exposes to
+    /// "which agent is this harness on": the user can switch agent
+    /// mid-session (Tab, `switch_agent`, `@` mentions), and every user
+    /// message records the one selected when it was sent.
+    ///
+    /// User messages only. An assistant message reports the agent that
+    /// *produced* it, and a compaction turn reports `compaction` — which
+    /// is not an agent anyone picked. `session_id` is carried because
+    /// `/event` is instance-wide: a subagent's child session reports its
+    /// own agent on the same stream, and only the frontend knows which
+    /// session is the harness's own.
+    UserMessageAgent { session_id: String, agent: String },
     /// Server disconnected after a successful connect. Frontend
     /// falls back to L2a until the next reconnect succeeds. Initial
     /// cold-connect failures don't fire this — that case is normal
@@ -476,6 +489,29 @@ fn parse_event(payload: &str) -> Option<OpencodeEvent> {
             Some(OpencodeEvent::SessionCreated { session_id })
         }
         "message.part.delta" => Some(OpencodeEvent::MessageDelta),
+        "message.updated" => {
+            // Shape measured against opencode 1.18.30 (#248):
+            // `{"type":"message.updated","properties":{"sessionID":…,
+            //   "info":{"role":"user","sessionID":…,"agent":"plan",…}}}`.
+            // `mode` is the older name for the same field, as in
+            // `skein_harness::opencode`.
+            let info = props.and_then(|p| p.get("info"))?;
+            if info.get("role").and_then(serde_json::Value::as_str) != Some("user") {
+                return None;
+            }
+            let session_id = info
+                .get("sessionID")
+                .or_else(|| props.and_then(|p| p.get("sessionID")))
+                .and_then(serde_json::Value::as_str)?
+                .to_owned();
+            let agent = info
+                .get("agent")
+                .or_else(|| info.get("mode"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|a| !a.is_empty())?
+                .to_owned();
+            Some(OpencodeEvent::UserMessageAgent { session_id, agent })
+        }
         "message.part.updated" => {
             // Look at the part type — tool calls surface here as a
             // sub-object with type=tool. Other part types
@@ -615,6 +651,43 @@ mod tests {
             matches!(events.first(), Some(OpencodeEvent::ToolUseStart { name }) if name == "Edit"),
             "expected ToolUseStart(Edit), got {events:?}"
         );
+    }
+
+    #[test]
+    fn user_message_reports_the_agent_it_was_sent_to() {
+        // Verbatim from a live `opencode serve` 1.18.30 (#248).
+        let payload = r#"{"type":"message.updated","properties":{"sessionID":"ses_1","info":{"id":"msg_1","role":"user","sessionID":"ses_1","time":{"created":1789240141274},"agent":"plan","model":{"providerID":"p","modelID":"m"}}}}"#;
+        let events = drain_events(&[payload], |_, p| frame(p));
+        assert!(
+            matches!(events.as_slice(), [OpencodeEvent::UserMessageAgent { session_id, agent }]
+                if session_id == "ses_1" && agent == "plan"),
+            "expected UserMessageAgent(ses_1, plan), got {events:?}"
+        );
+    }
+
+    #[test]
+    fn older_mode_field_still_names_the_agent() {
+        let payload = r#"{"type":"message.updated","properties":{"info":{"role":"user","sessionID":"ses_1","mode":"build"}}}"#;
+        let events = drain_events(&[payload], |_, p| frame(p));
+        assert!(
+            matches!(events.as_slice(), [OpencodeEvent::UserMessageAgent { agent, .. }] if agent == "build"),
+            "got {events:?}"
+        );
+    }
+
+    #[test]
+    fn assistant_and_agentless_messages_do_not_report_an_agent() {
+        // A compaction turn's assistant message says `compaction`, which
+        // is not an agent the user picked — the reason this is user-only.
+        let events = drain_events(
+            &[
+                r#"{"type":"message.updated","properties":{"info":{"role":"assistant","sessionID":"s","agent":"compaction","mode":"compaction"}}}"#,
+                r#"{"type":"message.updated","properties":{"info":{"role":"user","sessionID":"s"}}}"#,
+                r#"{"type":"message.updated","properties":{"info":{"role":"user","sessionID":"s","agent":""}}}"#,
+            ],
+            |_, p| frame(p),
+        );
+        assert!(events.is_empty(), "got {events:?}");
     }
 
     #[test]

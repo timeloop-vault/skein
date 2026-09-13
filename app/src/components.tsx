@@ -1,8 +1,16 @@
 // Shared, low-level components used across the app.
 
-import { type DragEvent, useEffect, useState } from "react";
-import { type AgentInfo, type AgentListing, kindHasAgents, listHarnessAgents } from "./agents.ts";
+import { type DragEvent, useEffect, useRef, useState } from "react";
+import {
+	type AgentInfo,
+	type AgentListing,
+	kindHasAgents,
+	listHarnessAgents,
+	validateAgent,
+} from "./agents.ts";
 import { HARNESS_KINDS } from "./data.tsx";
+import type { AgentLabel } from "./harnessAgent.ts";
+import { type DefaultAgents, defaultAgentFor } from "./prefs.ts";
 import type { Harness, HarnessKind, Room, Status } from "./types.ts";
 
 // Drop indicator side relative to a tab. The dragOver handler picks
@@ -30,7 +38,17 @@ export interface DragProps {
 // (statusPopover.ts), which replaces the native title= (slow, unstyled,
 // and it couldn't show state). aria-label keeps the info available to
 // screen readers.
-export const HChip = ({ kind, harnessId }: { kind: HarnessKind; harnessId?: string }) => {
+export const HChip = ({
+	kind,
+	harnessId,
+	agent,
+}: {
+	kind: HarnessKind;
+	harnessId?: string;
+	/** #248: the harness's agent label, for the popover. Omitted where the
+	 *  chip is a kind rather than one harness (pickers, room-tab row). */
+	agent?: AgentLabel | null | undefined;
+}) => {
 	const k = HARNESS_KINDS[kind];
 	// #141: harnessId lets the popover read this harness's OWN live state
 	// (so a room-tab summary chip shows its real state, not the room
@@ -40,6 +58,8 @@ export const HChip = ({ kind, harnessId }: { kind: HarnessKind; harnessId?: stri
 			className={`h-chip ${k.chip}`}
 			data-kind={kind}
 			data-harness-id={harnessId}
+			data-agent-key={agent?.key}
+			data-agent-value={agent?.value}
 			aria-label={k.name}
 		>
 			{k.label}
@@ -118,6 +138,7 @@ export const RoomTab = ({
 
 export const HarnessTab = ({
 	h,
+	agent,
 	active,
 	closable,
 	onClick,
@@ -131,6 +152,9 @@ export const HarnessTab = ({
 	onDragEnd,
 }: {
 	h: Harness;
+	/** #248: surfaced in the hover popover, not on the tab — the tab is
+	 *  already dense. */
+	agent?: AgentLabel | null;
 	active: boolean;
 	closable: boolean;
 	onClick: () => void;
@@ -147,7 +171,7 @@ export const HarnessTab = ({
 		onDragEnd={onDragEnd}
 	>
 		<StatusDot status={h.status} />
-		<HChip kind={h.kind} harnessId={h.id} />
+		<HChip kind={h.kind} harnessId={h.id} agent={agent} />
 		<span className="ht-name">{h.name}</span>
 		{closable && (
 			<span
@@ -220,58 +244,149 @@ export const useAgentListing = (kind: HarnessKind | null, cwd: string) => {
 
 /** Second step of the picker: which agent this harness runs as.
  *
- *  `(default)` is the first row and not a decoration — it is what every
- *  harness before #247 did, and it means "whatever the tool's own
- *  `agent` setting says", which no named row can express. */
+ *  `(tool default)` is the first row and not a decoration — it is what
+ *  every harness before #247 did, and it means "whatever the tool's own
+ *  `agent` setting says", which no named row can express. Not labelled
+ *  plain "(default)" since #248: the Settings default is a *name*, and
+ *  the two must not read as the same thing.
+ *
+ *  #248: the kind's Settings default arrives preselected and Enter takes
+ *  it, so a settled-in user spends one keystroke rather than a hunt. A
+ *  default the CLI has since dropped is not preselected — the row it
+ *  would have highlighted is gone, and quietly highlighting something
+ *  else would spawn an agent nobody chose — so the step falls back to
+ *  `(tool default)` and says why. */
 const AgentStep = ({
 	kind,
 	listing,
+	preferred,
+	active,
 	onPick,
 	onBack,
 }: {
 	kind: HarnessKind;
 	listing: AgentListing | null;
+	/** The kind's default from Settings, if any. */
+	preferred: string | undefined;
+	/** Whether this picker's room is the one on screen. */
+	active: boolean;
 	onPick: (agent: string | undefined) => void;
 	onBack: () => void;
-}) => (
-	<>
-		<h3>{HARNESS_KINDS[kind].name} — which agent?</h3>
-		<p>
-			Bound at launch and fixed for the life of the conversation. Skein re-passes it on every
-			resume.
-		</p>
-		<div className="sk-agent-list">
-			<div className="sk-agent-row" onClick={() => onPick(undefined)}>
-				<div className="head">
-					<span className="a-name">(default)</span>
-				</div>
-				<div className="a-desc">Whatever {HARNESS_KINDS[kind].name} is configured to use.</div>
-			</div>
-			{listing === null ? (
-				<div className="sk-agent-note">asking {HARNESS_KINDS[kind].name}…</div>
-			) : (
-				<>
-					{listing.degraded && (
-						<div className="sk-agent-note warn">
-							This list may be incomplete — {listing.degraded}
-						</div>
-					)}
-					{listing.agents.map((a) => (
-						<AgentRow key={a.name} agent={a} onClick={() => onPick(a.name)} />
-					))}
-				</>
-			)}
-		</div>
-		<button className="sk-btn" type="button" onClick={onBack}>
-			← Back
-		</button>
-	</>
-);
+}) => {
+	const tool = HARNESS_KINDS[kind].name;
+	// Before the list arrives the default cannot be disproved, so it is
+	// preselected; the spawn re-checks the name anyway (#247).
+	const gone = listing !== null && validateAgent(preferred, listing).kind === "unknown";
+	const selected = gone ? undefined : preferred;
 
-const AgentRow = ({ agent, onClick }: { agent: AgentInfo; onClick: () => void }) => (
-	<div className="sk-agent-row" onClick={onClick} title={agent.name}>
+	// Enter *spawns*, so the listener is held to the one picker the user
+	// is looking at. Every room's column stays mounted and a picker can
+	// be left open in a room the user switched away from; unscoped, an
+	// Enter typed into another room's terminal would spawn a harness here,
+	// out of sight. Same for an Enter aimed at a field or a modal.
+	useEffect(() => {
+		if (!active) return undefined;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Enter" || e.repeat || e.defaultPrevented) return;
+			const t = e.target instanceof HTMLElement ? e.target : null;
+			if (
+				t?.closest("input, textarea, select, [contenteditable], .sk-modal, .sk-palette, .xterm")
+			) {
+				return;
+			}
+			e.preventDefault();
+			onPick(selected);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [active, onPick, selected]);
+
+	// The highlighted row is what Enter takes, so it has to be on screen:
+	// a default near the bottom of a long plugin list would otherwise sit
+	// out of view while Enter spawns it. Re-run when the list lands, since
+	// the row does not exist until then. Scrolls the list only —
+	// `scrollIntoView` would also scroll the panes around the picker.
+	const listRef = useRef<HTMLDivElement | null>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: selected + listing are deliberate triggers — the highlighted row moves or first appears without the effect reading either
+	useEffect(() => {
+		const list = listRef.current;
+		const row = list?.querySelector<HTMLElement>(".sk-agent-row.selected");
+		if (!list || !row) return;
+		const l = list.getBoundingClientRect();
+		const r = row.getBoundingClientRect();
+		if (r.top >= l.top && r.bottom <= l.bottom) return;
+		list.scrollTop += r.top - l.top - (l.height - r.height) / 2;
+	}, [selected, listing]);
+
+	return (
+		<>
+			<h3>{tool} — which agent?</h3>
+			<p>
+				Bound at launch and fixed for the life of the conversation. Skein re-passes it on every
+				resume. Enter picks the highlighted row.
+			</p>
+			<div className="sk-agent-list" ref={listRef}>
+				<div
+					className={`sk-agent-row ${selected === undefined ? "selected" : ""}`}
+					onClick={() => onPick(undefined)}
+				>
+					<div className="head">
+						<span className="a-name">(tool default)</span>
+					</div>
+					<div className="a-desc">No agent named — whatever {tool} is configured to use.</div>
+				</div>
+				{gone && preferred && (
+					<div className="sk-agent-note warn">
+						Your default "{preferred}" is not one {tool} offers here any more.
+					</div>
+				)}
+				{listing === null ? (
+					<div className="sk-agent-note">asking {tool}…</div>
+				) : (
+					<>
+						{listing.degraded && (
+							<div className="sk-agent-note warn">
+								This list may be incomplete — {listing.degraded}
+							</div>
+						)}
+						{listing.agents.map((a) => (
+							<AgentRow
+								key={a.name}
+								agent={a}
+								selected={a.name === selected}
+								isDefault={a.name === preferred}
+								onClick={() => onPick(a.name)}
+							/>
+						))}
+					</>
+				)}
+			</div>
+			<button className="sk-btn" type="button" onClick={onBack}>
+				← Back
+			</button>
+		</>
+	);
+};
+
+const AgentRow = ({
+	agent,
+	selected,
+	isDefault,
+	onClick,
+}: {
+	agent: AgentInfo;
+	selected: boolean;
+	isDefault: boolean;
+	onClick: () => void;
+}) => (
+	<div
+		className={`sk-agent-row ${selected ? "selected" : ""}`}
+		onClick={onClick}
+		title={agent.name}
+	>
 		<div className="head">
 			<span className="a-name">{agent.name}</span>
+			{isDefault && <span className="sk-agent-tag">your default</span>}
 			{!agent.allowsReviewTools && <NoReviewToolsBadge />}
 		</div>
 		{agent.description && <div className="a-desc">{agent.description}</div>}
@@ -291,11 +406,17 @@ const AgentRow = ({ agent, onClick }: { agent: AgentInfo; onClick: () => void })
 // click, so the extra step only appears where it buys something.
 export const HarnessPicker = ({
 	cwd,
+	defaultAgents,
+	active,
 	onPick,
 	onCancel,
 }: {
 	/** The room's worktree — project agents resolve relative to it. */
 	cwd: string;
+	/** Settings' per-kind defaults (#248), preselected in the agent step. */
+	defaultAgents: DefaultAgents;
+	/** The picker's room is the active one — gates the agent step's Enter. */
+	active: boolean;
 	onPick: (kind: HarnessKind, agent?: string) => void;
 	onCancel: () => void;
 }) => {
@@ -316,6 +437,8 @@ export const HarnessPicker = ({
 				<AgentStep
 					kind={step}
 					listing={listing}
+					preferred={defaultAgentFor(defaultAgents, step)}
+					active={active}
 					onPick={(agent) => onPick(step, agent)}
 					onBack={() => setStep(null)}
 				/>
