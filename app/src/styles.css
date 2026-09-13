@@ -505,6 +505,43 @@ body {
 .sk-agent-note.warn {
 	color: var(--warn);
 }
+/* #248: the row Enter takes — the kind's Settings default, or
+   (tool default) when there is none. */
+.sk-agent-row.selected {
+	border-color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 8%, var(--bg-1));
+}
+.sk-agent-tag {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.8);
+	color: var(--accent);
+	white-space: nowrap;
+}
+.sk-default-agent {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-top: 8px;
+}
+.sk-default-agent > label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.sk-default-agent-note {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.875);
+	line-height: 1.5;
+}
+.sk-default-agent-note.err {
+	color: var(--err);
+}
+.sk-default-agent-note.warn {
+	color: var(--warn);
+}
+.sk-statusbar-agent .pk {
+	color: var(--fg-3);
+}
 
 .sk-app[data-platform="mac"] .sk-titlebar {
 	padding-left: 80px;

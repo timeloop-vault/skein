@@ -16,6 +16,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
+import { observedAgents } from "./harnessAgent.ts";
 
 /// Mirror of the Rust enum. `kind` is the serde tag from
 /// `harness_events_claude.rs`'s `ClaudeEvent`. Keep these in lock-step;
@@ -134,6 +135,7 @@ export type OpencodeEvent =
 	| { kind: "session_idle" }
 	| { kind: "message_delta" }
 	| { kind: "tool_use_start"; name: string }
+	| { kind: "user_message_agent"; session_id: string; agent: string }
 	| { kind: "session_end" };
 
 /// Subscribe an opencode harness to its embedded-server SSE stream
@@ -184,6 +186,8 @@ export function attachOpencodeEvents(
 
 	return () => {
 		harnessActivity.detachAuthoritativeSource(harnessId);
+		// The process this was observed on is going away (#248).
+		observedAgents.forget(harnessId);
 		void invoke("opencode_events_detach", { harnessId }).catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.warn(`[skein] opencode_events_detach failed for ${harnessId}:`, msg);
@@ -227,6 +231,11 @@ const translateOpencode = (
 			return;
 		case "tool_use_start":
 			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c2OpencodeToolUse);
+			return;
+		case "user_message_agent":
+			// Not a phase signal. Recorded with its session so the label
+			// can ignore a subagent's child session (see `agentLabel`).
+			observedAgents.record(harnessId, event.session_id, event.agent);
 			return;
 		case "session_idle":
 			// The signal we built this for: opencode finished its

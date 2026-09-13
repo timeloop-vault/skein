@@ -6,6 +6,7 @@
 
 import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
 
+import { HARNESS_KINDS } from "./data.tsx";
 import type { HarnessKind } from "./types";
 
 const KEY_PREFIX = "skein:";
@@ -113,6 +114,59 @@ export const rememberFolder = (
 		[folder]: { ...defaults, lastUsed: Date.now() },
 	},
 });
+
+// ── Default agent per kind (#248) ──────────────────────────────────
+//
+// localStorage and not `spawn_settings.rs`: the agent goes into the
+// argv, and the argv is built in the frontend (`harnessCmd.ts`). Rust
+// never reads this.
+//
+// A kind with no entry has no default, which means "let the tool's own
+// `agent` setting decide" — the same thing an absent `Harness.agent`
+// means. That state is the absence of a key, never a name, so there is
+// no string a user could pick that collapses into it.
+
+export type DefaultAgents = Partial<Record<HarnessKind, string>>;
+
+/** The default agent for `kind`, or undefined for "no default". Also
+ *  undefined for a kind that takes no `--agent` at all, so a stale entry
+ *  can never ride into a shell's argv. Tolerates a blob that parsed into
+ *  the wrong shape, like `foldersOf` does. */
+export const defaultAgentFor = (defaults: DefaultAgents, kind: HarnessKind): string | undefined => {
+	if (!HARNESS_KINDS[kind].capabilities.agents) return undefined;
+	if (typeof defaults !== "object" || defaults === null) return undefined;
+	const name = defaults[kind];
+	return typeof name === "string" && name.trim() ? name : undefined;
+};
+
+/** `defaults` with `kind` set to `agent`, or cleared by `undefined`. */
+export const withDefaultAgent = (
+	defaults: DefaultAgents,
+	kind: HarnessKind,
+	agent: string | undefined,
+): DefaultAgents => {
+	const next: DefaultAgents =
+		typeof defaults === "object" && defaults !== null ? { ...defaults } : {};
+	if (agent?.trim()) next[kind] = agent;
+	else delete next[kind];
+	return next;
+};
+
+/** The agent New Room starts `kind` with in a folder it remembers.
+ *
+ *  The folder's own memory wins, because it is the more specific fact:
+ *  "rooms here start as `reviewer`" beats "Claude usually runs as
+ *  `coder`". But only when it names an agent *for this kind* — the
+ *  memory holds one starting harness, and its agent means nothing to a
+ *  different kind. An entry with no agent falls through to the kind's
+ *  default: absent is also what every entry written before #247 says,
+ *  so it cannot be read as a deliberate "no agent". */
+export const startingAgent = (
+	folder: FolderDefaults | undefined,
+	kind: HarnessKind,
+	defaults: DefaultAgents,
+): string | undefined =>
+	folder?.harness === kind && folder.agent ? folder.agent : defaultAgentFor(defaults, kind);
 
 export interface RecentFolder {
 	folder: string;

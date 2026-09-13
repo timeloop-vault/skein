@@ -22,6 +22,12 @@ export interface HarnessCapabilities {
 	/// is a managed program with no agent concept, which is exactly the
 	/// distinction a kind comparison loses.
 	agents: boolean;
+	/// The agent can change after launch without Skein seeing the argv
+	/// change (#248): opencode's Tab / `switch_agent` / `@` mentions.
+	/// Decides whether the harness's agent label may say "is X" (Claude,
+	/// which cannot change) or has to say "started as X". Meaningless
+	/// without `agents`.
+	agentSwitchable: boolean;
 }
 
 export interface HarnessKindMeta {
@@ -40,7 +46,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		name: "Claude Code",
 		chip: "h-claude",
 		desc: "Anthropic. Direct API.",
-		capabilities: { pty: true, resume: true, notify: true, agents: true },
+		capabilities: { pty: true, resume: true, notify: true, agents: true, agentSwitchable: false },
 	},
 	opencode: {
 		id: "opencode",
@@ -48,7 +54,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		name: "opencode",
 		chip: "h-opencode",
 		desc: "Local server, OSS.",
-		capabilities: { pty: true, resume: true, notify: true, agents: true },
+		capabilities: { pty: true, resume: true, notify: true, agents: true, agentSwitchable: true },
 	},
 	copilot: {
 		id: "copilot",
@@ -56,7 +62,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		name: "Copilot CLI",
 		chip: "h-copilot",
 		desc: "GitHub entitlement.",
-		capabilities: { pty: true, resume: false, notify: true, agents: false },
+		capabilities: { pty: true, resume: false, notify: true, agents: false, agentSwitchable: false },
 	},
 	// `byoh` is the kind id we kept from the design's "bring your own
 	// harness" idea; today it spawns a plain shell (the user's pwsh/
@@ -69,7 +75,13 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		name: "Shell",
 		chip: "h-byoh",
 		desc: "Plain shell — run anything.",
-		capabilities: { pty: true, resume: false, notify: false, agents: false },
+		capabilities: {
+			pty: true,
+			resume: false,
+			notify: false,
+			agents: false,
+			agentSwitchable: false,
+		},
 	},
 	// #49 phase A: the file surface as a harness. Deliberately not a
 	// coloured process chip — the ◇ renders in --accent via .h-files.
@@ -79,7 +91,13 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		name: "Files",
 		chip: "h-files",
 		desc: "Browse + edit the worktree.",
-		capabilities: { pty: false, resume: false, notify: false, agents: false },
+		capabilities: {
+			pty: false,
+			resume: false,
+			notify: false,
+			agents: false,
+			agentSwitchable: false,
+		},
 	},
 };
 
