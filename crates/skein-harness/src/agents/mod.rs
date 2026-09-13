@@ -72,6 +72,14 @@ use std::process::{Command, Stdio};
 /// repository* instead of the one it was pointed at — which is how a
 /// `.git` folder appears to vanish (see Conventions in `CLAUDE.md`, and
 /// `2bcae5a` on `feat/214-land-actions`). Stripping them costs nothing.
+///
+/// On Windows this also hides the console window the child would
+/// otherwise flash: a GUI-subsystem parent (release Skein builds run
+/// `windows_subsystem = "windows"`) has no console of its own, so a
+/// console child — `claude`/`opencode`, often an npm `.cmd` shim run
+/// through `cmd.exe` — gets a brand-new one allocated for it regardless
+/// of `Stdio::null`/piping, which only redirects the streams, not the
+/// allocation (#263).
 fn clean_command(program: &OsStr) -> Command {
     let mut cmd = Command::new(program);
     for key in [
@@ -87,5 +95,11 @@ fn clean_command(program: &OsStr) -> Command {
         cmd.env_remove(key);
     }
     cmd.stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     cmd
 }
