@@ -593,7 +593,9 @@ fn max_persisted_ts_ms(db: &Database, harness_id: &str) -> i64 {
 ///
 /// Returns:
 /// - `Some(AwaitingPrompt)` if the last assistant row had a terminal
-///   `stop_reason` (`end_turn` / `stop_sequence` / `max_tokens`).
+///   `stop_reason` (`end_turn` / `stop_sequence` / `max_tokens`), or
+///   the turn was last ended by an interrupt or a `turn_duration` row
+///   (#260, see [`ends_turn_without_stop_reason`]).
 /// - `Some(AssistantTurn)` if the last assistant row was non-terminal
 ///   (`tool_use`) — session ended mid-turn, `claude --resume` will
 ///   pick it up; treat as running so the dot doesn't immediately
@@ -620,6 +622,12 @@ fn determine_initial_state(content: &str) -> Option<ClaudeEvent> {
         let Some(ty) = value.get("type").and_then(serde_json::Value::as_str) else {
             continue;
         };
+        // #260: same rule as the live parser, or an interrupted session
+        // resumes into running on every restart.
+        if ends_turn_without_stop_reason(ty, &value) {
+            last = Some(ClaudeEvent::AwaitingPrompt);
+            continue;
+        }
         match ty {
             "assistant" => {
                 let stop_reason = value
@@ -647,6 +655,47 @@ fn determine_initial_state(content: &str) -> Option<ClaudeEvent> {
         }
     }
     last
+}
+
+/// Text Claude writes as a plain `user` row when the user stops a turn:
+/// `[Request interrupted by user]` mid-stream, `… for tool use]` during
+/// a tool call. Prefix-matched so both, and any later suffix, count.
+const INTERRUPT_PREFIX: &str = "[Request interrupted by user";
+
+/// Does this main-chain row end a turn that no terminal `stop_reason`
+/// will end (#260)? Two shapes, verified against Claude Code 2.1.270:
+///
+/// - the interrupt row above. It is a `user` row with no
+///   `toolUseResult`, so without this it reads as a fresh prompt and
+///   the harness shows running until the next restart — and then again,
+///   because the probe finds the same last row.
+/// - `system` / `turn_duration`, written the moment any turn ends,
+///   interrupted or not. A second signal, not a replacement for
+///   `end_turn`: it is missing after some turns that did end cleanly.
+fn ends_turn_without_stop_reason(ty: &str, value: &serde_json::Value) -> bool {
+    match ty {
+        "user" => {
+            if value.get("toolUseResult").is_some() {
+                return false;
+            }
+            let Some(content) = value.get("message").and_then(|m| m.get("content")) else {
+                return false;
+            };
+            // The first text block, or the whole content when it is a
+            // bare string — an interrupt row carries nothing else.
+            let text = content.as_str().or_else(|| {
+                content
+                    .as_array()?
+                    .iter()
+                    .find_map(|b| b.get("text").and_then(serde_json::Value::as_str))
+            });
+            text.is_some_and(|t| t.starts_with(INTERRUPT_PREFIX))
+        }
+        "system" => {
+            value.get("subtype").and_then(serde_json::Value::as_str) == Some("turn_duration")
+        }
+        _ => false,
+    }
 }
 
 /// Parse one JSONL row into at most one `ClaudeEvent`. Returns `None`
@@ -679,6 +728,13 @@ fn parse_value(value: &serde_json::Value, in_assistant_turn: &mut bool) -> Optio
         // main-session assistant row starts a fresh turn.
         *in_assistant_turn = false;
         return None;
+    }
+
+    // #260: an interrupt or a turn_duration row ends the turn even
+    // though no assistant row said so.
+    if ends_turn_without_stop_reason(ty, value) {
+        *in_assistant_turn = false;
+        return Some(ClaudeEvent::AwaitingPrompt);
     }
 
     match ty {
@@ -1261,6 +1317,93 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, ClaudeEvent::AssistantTurn)),
             "mid-turn session should emit AssistantTurn to signal running, got {events:?}"
+        );
+    }
+
+    /// `parse_value` on one JSON row, starting outside an assistant turn.
+    fn parse_one(row: &str) -> Option<ClaudeEvent> {
+        let value: serde_json::Value = serde_json::from_str(row).unwrap();
+        parse_value(&value, &mut false)
+    }
+
+    // #260 — the row shapes below are from a real Claude Code 2.1.270
+    // transcript whose last turn was interrupted during a tool call.
+
+    #[test]
+    fn interrupt_rows_end_the_turn() {
+        for row in [
+            r#"{"type":"user","sessionId":"x","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#,
+            r#"{"type":"user","sessionId":"x","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#,
+            r#"{"type":"user","sessionId":"x","message":{"role":"user","content":"[Request interrupted by user]"}}"#,
+        ] {
+            assert!(
+                matches!(parse_one(row), Some(ClaudeEvent::AwaitingPrompt)),
+                "{row}"
+            );
+        }
+    }
+
+    #[test]
+    fn interrupt_closes_an_open_assistant_turn() {
+        let value: serde_json::Value = serde_json::from_str(
+            r#"{"type":"user","sessionId":"x","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#,
+        )
+        .unwrap();
+        let mut in_turn = true;
+        assert!(matches!(
+            parse_value(&value, &mut in_turn),
+            Some(ClaudeEvent::AwaitingPrompt)
+        ));
+        assert!(!in_turn);
+    }
+
+    #[test]
+    fn a_prompt_that_only_mentions_the_interrupt_text_is_still_a_prompt() {
+        let row = r#"{"type":"user","sessionId":"x","message":{"content":[{"type":"text","text":"why did I see [Request interrupted by user]?"}]}}"#;
+        assert!(matches!(parse_one(row), Some(ClaudeEvent::UserPrompt)));
+        // A tool result never ends the turn, whatever its text says.
+        let result = r#"{"type":"user","sessionId":"x","toolUseResult":"x","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
+        assert!(matches!(
+            parse_one(result),
+            Some(ClaudeEvent::ToolUseResult)
+        ));
+    }
+
+    #[test]
+    fn turn_duration_ends_the_turn_and_other_system_rows_do_not() {
+        let duration = r#"{"type":"system","subtype":"turn_duration","durationMs":3158,"messageCount":44,"sessionId":"x"}"#;
+        assert!(matches!(
+            parse_one(duration),
+            Some(ClaudeEvent::AwaitingPrompt)
+        ));
+        let other = r#"{"type":"system","subtype":"compact_boundary","sessionId":"x"}"#;
+        assert!(parse_one(other).is_none());
+    }
+
+    #[test]
+    fn determine_initial_state_resumes_an_interrupted_turn_as_waiting() {
+        let log = concat!(
+            r#"{"type":"user","sessionId":"x","message":{"content":"try again"}}"#,
+            "\n",
+            r#"{"type":"assistant","sessionId":"x","message":{"stop_reason":"tool_use","content":[{"type":"text","text":"ok"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","sessionId":"x","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","name":"Bash","id":"t1","input":{}}]}}"#,
+            "\n",
+            r#"{"type":"user","sessionId":"x","toolUseResult":"Error","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}"#,
+            "\n",
+            r#"{"type":"user","sessionId":"x","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#,
+            "\n",
+            r#"{"type":"system","subtype":"turn_duration","durationMs":3158,"sessionId":"x"}"#,
+            "\n",
+            r#"{"type":"cost-state","sessionId":"x","totalCostUSD":0.9}"#,
+            "\n",
+            r#"{"type":"last-prompt","lastPrompt":"try again","sessionId":"x"}"#,
+            "\n"
+        );
+        let result = determine_initial_state(log);
+        assert!(
+            matches!(result, Some(ClaudeEvent::AwaitingPrompt)),
+            "an interrupted session must not resume into running, got {result:?}"
         );
     }
 

@@ -124,6 +124,8 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			// The signal we built this for: an assistant row with a
 			// terminal stop_reason (end_turn / stop_sequence /
 			// max_tokens) → "I'm done, awaiting your next prompt."
+			// #260: also an interrupt row or a turn_duration row — an
+			// interrupted turn never gets a terminal stop_reason.
 			harnessActivity.setWaitingFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
 			return;
 		case "attachment":
