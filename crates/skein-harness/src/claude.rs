@@ -24,6 +24,9 @@
 //!   (since 2.1.246): total USD, per-model tokens and cost, durations,
 //!   lines changed. Rewritten a handful of times per session; the
 //!   newest row wins, they must never be summed.
+//! - `agent-setting` — the agent definition the session runs as
+//!   (`claude --agent <name>` or the `agent` setting). Absent for a
+//!   plain session.
 //!
 //! Subagent transcripts use the same row shapes with
 //! `isSidechain: true` and an `agentId`. The main session's rows
@@ -355,6 +358,11 @@ pub enum Row {
     Assistant(AssistantRow),
     User(UserRow),
     CostState(CostState),
+    /// An `agent-setting` row: the name of the agent definition this
+    /// session runs as (`claude --agent <name>` or the `agent` setting).
+    /// Written once near the start of the transcript; absent when the
+    /// session runs as plain Claude Code.
+    AgentSetting(String),
     /// Any other row type (`system`, `attachment`, `last-prompt`,
     /// `ai-title`, `file-history-snapshot`, …). Kept so callers can
     /// count or skip them without a second parse.
@@ -370,7 +378,7 @@ impl Row {
         match self {
             Row::Assistant(r) => r.timestamp_ms,
             Row::User(r) => r.timestamp_ms,
-            Row::CostState(_) => None,
+            Row::CostState(_) | Row::AgentSetting(_) => None,
             Row::Other { timestamp_ms, .. } => *timestamp_ms,
         }
     }
@@ -420,6 +428,7 @@ pub fn row_from_value(v: &Value) -> Option<Row> {
             })
         }
         "cost-state" => Row::CostState(serde_json::from_value(v.clone()).unwrap_or_default()),
+        "agent-setting" => Row::AgentSetting(owned_str_at(v, "agentSetting").unwrap_or_default()),
         other => Row::Other {
             ty: other.to_owned(),
             timestamp_ms: timestamp_ms(v),
@@ -467,6 +476,9 @@ pub struct TranscriptSummary {
     /// Subagents this transcript launched, in order of appearance.
     pub spawned_agents: Vec<SpawnedAgent>,
     pub cwd: Option<String>,
+    /// The agent definition the session ran as, from the newest
+    /// `agent-setting` row. `None` for plain Claude Code sessions.
+    pub agent_setting: Option<String>,
 }
 
 /// Fold rows into a [`TranscriptSummary`]. Usage is summed once per
@@ -500,6 +512,7 @@ pub fn summarize<I: IntoIterator<Item = Row>>(rows: I) -> TranscriptSummary {
                 }
             }
             Row::CostState(c) => out.cost_state = Some(c),
+            Row::AgentSetting(name) => out.agent_setting = Some(name),
             Row::Other { .. } => {}
         }
     }
@@ -704,6 +717,36 @@ mod tests {
         };
         assert_eq!(c.total_cost_usd, 0.0);
         assert!(c.model_usage.is_empty());
+    }
+
+    /// Shape taken verbatim from a real 2.1.263 transcript started with
+    /// `claude --agent scribe`.
+    #[test]
+    fn agent_setting_row_names_the_agent() {
+        let v = json!({"type": "agent-setting", "agentSetting": "scribe", "sessionId": "s1"});
+        assert_eq!(
+            row_from_value(&v),
+            Some(Row::AgentSetting("scribe".to_owned()))
+        );
+        // Field-less row: still typed, so a caller can count it.
+        assert_eq!(
+            row_from_value(&json!({"type": "agent-setting"})),
+            Some(Row::AgentSetting(String::new()))
+        );
+    }
+
+    #[test]
+    fn summarize_reports_the_agent_setting_or_none() {
+        let plain = summarize(vec![row_from_value(&assistant_row()).unwrap()]);
+        assert_eq!(plain.agent_setting, None);
+
+        let named = summarize(vec![
+            row_from_value(&json!({"type": "agent-setting", "agentSetting": "explore"})).unwrap(),
+            row_from_value(&assistant_row()).unwrap(),
+            row_from_value(&json!({"type": "agent-setting", "agentSetting": "orchestrator"}))
+                .unwrap(),
+        ]);
+        assert_eq!(named.agent_setting.as_deref(), Some("orchestrator"));
     }
 
     #[test]
