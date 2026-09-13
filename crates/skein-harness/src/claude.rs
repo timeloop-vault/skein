@@ -44,13 +44,61 @@ use crate::time::parse_iso8601_ms;
 
 // ── paths ─────────────────────────────────────────────────────────
 
-/// Claude's project-directory encoding: every path separator and the
-/// Windows drive colon become `-`. `C:\git\skein` → `C--git-skein`,
-/// `/Users/foo/bar` → `-Users-foo-bar`, `D:\` → `D--`. The encoding is
-/// lossy (`/foo-bar/baz` and `/foo/bar/baz` collide), which is why
-/// [`session_exists`] scans rather than recomputes.
+/// Longest encoded name Claude uses as-is; longer ones are cut here and
+/// suffixed with a hash of the full path.
+const MAX_ENCODED_LEN: usize = 200;
+
+/// Claude's project-directory encoding, ported from Claude Code's own
+/// (2.1.270):
+///
+/// ```js
+/// let e = t.replace(/[^a-zA-Z0-9]/g, "-");
+/// if (e.length <= 200) return e;
+/// return `${e.slice(0, 200)}-${Math.abs(hash(t)).toString(36)}`;
+/// ```
+///
+/// **Every** character outside `[A-Za-z0-9]` becomes `-`, not only
+/// separators: `D:\gaming_pc_d\git` → `D--gaming-pc-d-git` (#259). The
+/// regex runs over UTF-16 code units, so a character outside the BMP
+/// becomes two dashes. The encoding is lossy (`/foo-bar/baz` and
+/// `/foo/bar/baz` collide), which is why [`session_exists`] scans
+/// rather than recomputes.
 pub fn encode_cwd(cwd: &str) -> String {
-    cwd.replace(['/', '\\', ':'], "-")
+    let mut out = String::with_capacity(cwd.len());
+    for c in cwd.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else {
+            out.extend(std::iter::repeat_n('-', c.len_utf16()));
+        }
+    }
+    if out.len() <= MAX_ENCODED_LEN {
+        return out;
+    }
+    // All ASCII by now, so byte length is the UTF-16 length JS measures.
+    out.truncate(MAX_ENCODED_LEN);
+    format!("{out}-{}", base36(js_string_hash(cwd).unsigned_abs()))
+}
+
+/// The `(h << 5) - h + charCode | 0` string hash Claude suffixes long
+/// names with: Java's `String.hashCode`, over UTF-16 code units.
+fn js_string_hash(s: &str) -> i32 {
+    s.encode_utf16().fold(0i32, |h, unit| {
+        h.wrapping_mul(31).wrapping_add(i32::from(unit))
+    })
+}
+
+/// `Number.prototype.toString(36)` for a non-negative integer.
+fn base36(mut n: u32) -> String {
+    let mut digits = Vec::new();
+    loop {
+        digits.push(char::from_digit(n % 36, 36).expect("remainder is below the radix"));
+        n /= 36;
+        if n == 0 {
+            break;
+        }
+    }
+    digits.iter().rev().collect()
 }
 
 /// `<home>/.claude/projects`.
@@ -73,19 +121,23 @@ pub fn subagents_dir(session_jsonl: &Path) -> Option<PathBuf> {
     Some(session_jsonl.with_file_name(stem).join("subagents"))
 }
 
-/// Does any project directory hold `<session-id>.jsonl`? Walks every
-/// project dir instead of recomputing the encoded cwd, so it survives
-/// the encoding's collisions and any future change to it. Tens of
-/// dirs on a typical machine — sub-millisecond.
-pub fn session_exists(home: &Path, session_id: &str) -> bool {
+/// The `<session-id>.jsonl` in whichever project directory holds it.
+/// Walks every project dir instead of recomputing the encoded cwd, so
+/// it survives the encoding's collisions and any future change to it.
+/// Tens of dirs on a typical machine — sub-millisecond.
+pub fn find_session_jsonl(home: &Path, session_id: &str) -> Option<PathBuf> {
     let filename = format!("{session_id}.jsonl");
-    let Ok(entries) = fs::read_dir(projects_dir(home)) else {
-        return false;
-    };
-    entries
+    fs::read_dir(projects_dir(home))
+        .ok()?
         .flatten()
-        .map(|e| e.path())
-        .any(|p| p.is_dir() && p.join(&filename).exists())
+        .map(|e| e.path().join(&filename))
+        .find(|p| p.is_file())
+}
+
+/// Does any project directory hold `<session-id>.jsonl`? See
+/// [`find_session_jsonl`].
+pub fn session_exists(home: &Path, session_id: &str) -> bool {
+    find_session_jsonl(home, session_id).is_some()
 }
 
 /// One session transcript on disk.
@@ -536,6 +588,54 @@ mod tests {
         assert_eq!(encode_cwd("D:\\"), "D--");
     }
 
+    // #259: the vectors below come from running Claude Code 2.1.270's
+    // own encoder, lifted from its binary, over the same inputs.
+
+    #[test]
+    fn encode_cwd_replaces_every_non_alphanumeric() {
+        assert_eq!(
+            encode_cwd("D:\\gaming_pc_d\\git\\amber-skola"),
+            "D--gaming-pc-d-git-amber-skola"
+        );
+        assert_eq!(encode_cwd("/home/u/my.proj dir"), "-home-u-my-proj-dir");
+        assert_eq!(encode_cwd("C:\\Users\\u\\.buzz"), "C--Users-u--buzz");
+    }
+
+    #[test]
+    fn encode_cwd_counts_utf16_units_like_claude() {
+        assert_eq!(encode_cwd("C:\\git\\skåne"), "C--git-sk-ne");
+        assert_eq!(encode_cwd("/tmp/a😀b"), "-tmp-a--b");
+    }
+
+    #[test]
+    fn encode_cwd_truncates_long_names_with_claudes_hash() {
+        let at_limit = format!("/{}", "a".repeat(199));
+        assert_eq!(encode_cwd(&at_limit), format!("-{}", "a".repeat(199)));
+
+        let over = format!("/{}", "a".repeat(200));
+        assert_eq!(encode_cwd(&over), format!("-{}-b6ymvl", "a".repeat(199)));
+
+        let nested = format!(
+            "/home/user/projects/{}end",
+            "some_long.directory name/".repeat(8)
+        );
+        let encoded = encode_cwd(&nested);
+        assert_eq!(encoded.len(), 207);
+        assert!(encoded.ends_with("-some--124j3r"), "{encoded}");
+    }
+
+    #[test]
+    fn long_name_hash_matches_javascript() {
+        assert_eq!(
+            js_string_hash("D:\\gaming_pc_d\\git\\amber-skola"),
+            1_073_734_462
+        );
+        assert_eq!(js_string_hash("/tmp/a😀b"), -1_782_071_675);
+        assert_eq!(base36(0), "0");
+        // |i32::MIN|, which `Math.abs` also yields as a positive number.
+        assert_eq!(base36(i32::MIN.unsigned_abs()), "zik0zk");
+    }
+
     #[test]
     fn session_path_and_subagents_dir_sit_side_by_side() {
         let home = Path::new("/home/u");
@@ -558,6 +658,11 @@ mod tests {
         fs::write(dir.join("s1.jsonl"), "").unwrap();
         assert!(session_exists(home.path(), "s1"));
         assert!(!session_exists(home.path(), "s2"));
+        assert_eq!(
+            find_session_jsonl(home.path(), "s1"),
+            Some(dir.join("s1.jsonl"))
+        );
+        assert_eq!(find_session_jsonl(home.path(), "s2"), None);
         assert!(!session_exists(Path::new("/definitely/not/here"), "s1"));
     }
 

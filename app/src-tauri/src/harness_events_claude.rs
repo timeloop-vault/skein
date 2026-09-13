@@ -90,14 +90,32 @@ impl ClaudeEventsError {
 
 /// `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`. The encoding
 /// and layout live in `skein-harness` (#209); chapter 5 pre-allocates
-/// the session uuid, so we compute the path directly instead of
-/// scanning project dirs. `None` when the home dir can't be resolved
-/// (exotic environments) so the caller can no-op cleanly.
+/// the session uuid, so a fresh spawn can only compute the path — the
+/// file does not exist anywhere until the first prompt.
+///
+/// A transcript that already exists wins over the computed path. That
+/// is resume, and the scan is what `resume.rs` already trusts: when the
+/// two disagree the encoder has drifted from Claude's (#259 was exactly
+/// that), and tailing the computed path would watch a directory Claude
+/// never writes to. `None` when the home dir can't be resolved (exotic
+/// environments) so the caller can no-op cleanly.
 fn session_jsonl_path(cwd: &str, session_id: &str) -> Option<PathBuf> {
     let home = crate::home_dir()?;
-    Some(skein_harness::claude::session_jsonl_path(
-        &home, cwd, session_id,
-    ))
+    let computed = skein_harness::claude::session_jsonl_path(&home, cwd, session_id);
+    if computed.is_file() {
+        return Some(computed);
+    }
+    match skein_harness::claude::find_session_jsonl(&home, session_id) {
+        Some(found) => {
+            tracing::warn!(
+                computed = %computed.display(),
+                found = %found.display(),
+                "claude_events: transcript is not where the cwd encodes to; tailing where it is"
+            );
+            Some(found)
+        }
+        None => Some(computed),
+    }
 }
 
 /// Per-harness adapter handle. Only role is to keep the debouncer

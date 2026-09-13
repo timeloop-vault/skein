@@ -64,6 +64,17 @@ export interface HarnessActivity {
 	/// leaves `permission` (see `setPhase`) so a stale name never
 	/// survives into whatever the harness does next. #86.
 	permissionTool: string | null;
+	/// Has the L2c adapter delivered at least one event since spawn?
+	/// Proof it is reading the right file / stream. #259.
+	adapterHeard: boolean;
+	/// When the user first pressed Enter while an attached adapter had
+	/// still said nothing — arms the silent-adapter watchdog. `null`
+	/// until then. #259.
+	promptSubmittedAt: number | null;
+	/// The watchdog gave up on this harness's adapter and handed phase
+	/// back to L2a. Cleared (and authority restored) the moment the
+	/// adapter does deliver. #259.
+	adapterSilent: boolean;
 }
 
 /// Sustained silence threshold for `running → idle`. Hard-coded for
@@ -95,6 +106,14 @@ const TICK_INTERVAL_MS = 1_000;
 /// generous enough to cover slow repaints; if real output arrives
 /// after the window, the normal path kicks back in.
 const INDUCED_MUTE_MS = 800;
+/// How long an attached adapter may stay silent after the user submits
+/// a prompt before the watchdog gives up on it (#259). Claude writes
+/// the prompt row the moment it is submitted and opencode's stream
+/// says `connected` before anything else, so a healthy adapter speaks
+/// well inside this. Gated on a prompt rather than on spawn because
+/// Claude creates no transcript at all until the first one: a fresh
+/// harness left at its prompt is healthy, not silent.
+const ADAPTER_SILENT_AFTER_MS = 10_000;
 
 const store = new Map<string, HarnessActivity>();
 const listeners = new Map<string, Set<() => void>>();
@@ -159,6 +178,9 @@ export const TRANSITION_SOURCE = {
 	// #86: the adapter that could have resolved a permission dialog
 	// went away. See `releasePermission`.
 	AdapterDetached: "adapter-detached",
+	// #259: the adapter never delivered anything after a prompt was
+	// submitted — the watchdog handed the harness back to L2a.
+	AdapterSilent: "adapter-silent",
 } as const;
 
 const emit = (id: string): void => {
@@ -232,6 +254,23 @@ const setPhase = (
 	}
 };
 
+/// The adapter never spoke after a prompt was submitted: give up on it.
+/// Without this an adapter watching the wrong place freezes the harness
+/// for good — authority silences PTY output, the tick skips it, and it
+/// never leaves `spawning` (#259, a JSONL path encoded differently from
+/// Claude's). `spawning` is moved on explicitly because the tick below
+/// only ever acts on `running`; `lastOutputAt` restarts so the idle
+/// window is measured from here, not from spawn.
+const degradeSilentAdapter = (id: string, cur: HarnessActivity, now: number): void => {
+	console.warn(
+		`[skein] harness ${id}: adapter delivered nothing ${ADAPTER_SILENT_AFTER_MS / 1000}s after a prompt; falling back to the idle heuristic`,
+	);
+	store.set(id, { ...cur, authoritative: false, adapterSilent: true, lastOutputAt: now });
+	if (cur.phase === "spawning") {
+		setPhase(id, "running", TRANSITION_SOURCE.AdapterSilent);
+	}
+};
+
 const ensureTick = (): void => {
 	if (tickHandle !== null) return;
 	tickHandle = setInterval(() => {
@@ -242,8 +281,18 @@ const ensureTick = (): void => {
 			// from the L2c module. The idle heuristic would fight
 			// the adapter — e.g. when Claude is mid-turn but the
 			// PTY is briefly quiet during a tool call, L2a would
-			// flip to `idle` while L2c says `running`. Skip these.
-			if (a.authoritative) continue;
+			// flip to `idle` while L2c says `running`. Skip these,
+			// unless the adapter has proven silent (#259).
+			if (a.authoritative) {
+				if (
+					!a.adapterHeard &&
+					a.promptSubmittedAt !== null &&
+					now - a.promptSubmittedAt >= ADAPTER_SILENT_AFTER_MS
+				) {
+					degradeSilentAdapter(id, a, now);
+				}
+				continue;
+			}
 			if (a.phase !== "running" || a.lastOutputAt === null) continue;
 			const quiet = now - a.lastOutputAt;
 			// L2b: pattern-match → waiting on a shorter threshold
@@ -307,6 +356,9 @@ export const harnessActivity = {
 			authoritative: false,
 			tail: "",
 			permissionTool: null,
+			adapterHeard: false,
+			promptSubmittedAt: null,
+			adapterSilent: false,
 		});
 		ensureTick();
 		emit(id);
@@ -321,6 +373,25 @@ export const harnessActivity = {
 		const cur = store.get(id);
 		if (!cur || cur.authoritative) return;
 		store.set(id, { ...cur, authoritative: true });
+	},
+
+	/// The L2c adapter delivered an event — call before translating
+	/// every one. Disarms the silent-adapter watchdog for this spawn,
+	/// and if the watchdog had already given up (a false alarm: say the
+	/// Enter answered a trust dialog and no prompt followed in time),
+	/// hands authority back so the adapter's phases win again. #259.
+	adapterDelivered(id: string): void {
+		const cur = store.get(id);
+		if (!cur || (cur.adapterHeard && !cur.adapterSilent)) return;
+		if (cur.adapterSilent) {
+			console.info(`[skein] harness ${id}: adapter recovered; handing phase back to it`);
+		}
+		store.set(id, {
+			...cur,
+			adapterHeard: true,
+			adapterSilent: false,
+			...(cur.adapterSilent ? { authoritative: true } : null),
+		});
 	},
 
 	/// Adapter detached — fall back to the L2a heuristic for this
@@ -398,11 +469,23 @@ export const harnessActivity = {
 	/// the PTY, so that keystroke IS the signal (#86). Doesn't emit for
 	/// the `hasUserInput` flip alone — consumers that care read the
 	/// flag lazily at transition time.
+	///
+	/// #259: the first Enter on a harness whose attached adapter has
+	/// said nothing yet arms the silent-adapter watchdog.
 	recordInput(id: string, data: string): void {
 		const cur = store.get(id);
 		if (!cur) return;
-		if (!cur.hasUserInput) {
-			store.set(id, { ...cur, hasUserInput: true });
+		const armWatchdog =
+			cur.authoritative &&
+			!cur.adapterHeard &&
+			cur.promptSubmittedAt === null &&
+			(data.includes("\r") || data.includes("\n"));
+		if (!cur.hasUserInput || armWatchdog) {
+			store.set(id, {
+				...cur,
+				hasUserInput: true,
+				...(armWatchdog ? { promptSubmittedAt: Date.now() } : null),
+			});
 		}
 		if (cur.phase === "permission" && isDecisiveInput(data)) {
 			setPhase(id, "running", TRANSITION_SOURCE.UserInputPermission);
@@ -528,6 +611,9 @@ export const harnessActivity = {
 				authoritative: false,
 				tail: "",
 				permissionTool: null,
+				adapterHeard: false,
+				promptSubmittedAt: null,
+				adapterSilent: false,
 			});
 			emit(id);
 			return;

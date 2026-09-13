@@ -48,7 +48,12 @@ export function attachClaudeEvents(
 	cwd: string,
 ): () => void {
 	const channel = new Channel<ClaudeEvent>();
+	let closed = false;
 	channel.onmessage = (event) => {
+		// #259: any event at all proves the tail is on the right file.
+		// Guarded so a straggler after unsubscribe can't hand authority
+		// back to an adapter that no longer exists.
+		if (!closed) harnessActivity.adapterDelivered(harnessId);
 		translate(harnessId, event);
 	};
 
@@ -77,6 +82,7 @@ export function attachClaudeEvents(
 	});
 
 	return () => {
+		closed = true;
 		harnessActivity.detachAuthoritativeSource(harnessId);
 		void invoke("claude_events_detach", { harnessId }).catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -189,7 +195,11 @@ export function attachOpencodeEvents(
 	onSessionCaptured: ((sessionId: string) => void) | undefined,
 ): () => void {
 	const channel = new Channel<OpencodeEvent>();
+	let closed = false;
 	channel.onmessage = (event) => {
+		// #259: see attachClaudeEvents. `connected` arrives first, so a
+		// stream that is up disarms the watchdog before any prompt.
+		if (!closed) harnessActivity.adapterDelivered(harnessId);
 		translateOpencode(harnessId, event, onSessionCaptured);
 	};
 
@@ -210,6 +220,7 @@ export function attachOpencodeEvents(
 	});
 
 	return () => {
+		closed = true;
 		harnessActivity.detachAuthoritativeSource(harnessId);
 		// The process this was observed on is going away (#248).
 		observedAgents.forget(harnessId);
