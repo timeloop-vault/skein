@@ -25,7 +25,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import { matchesWaitingPrompt, stripAnsi } from "./harnessPatterns.ts";
 import type { Status } from "./types.ts";
 
-export type ActivityPhase = "spawning" | "running" | "idle" | "waiting" | "exited";
+export type ActivityPhase = "spawning" | "running" | "idle" | "waiting" | "permission" | "exited";
 
 export interface HarnessActivity {
 	phase: ActivityPhase;
@@ -57,6 +57,13 @@ export interface HarnessActivity {
 	/// doesn't grow without bound; the matcher only looks at the
 	/// last ~256 chars anyway.
 	tail: string;
+	/// Which tool triggered the current `permission` phase, when the
+	/// adapter can say (Claude's PermissionRequest hook names it;
+	/// opencode's permission-asked SSE event doesn't, so `null` there).
+	/// Reset on every spawn; cleared automatically whenever the phase
+	/// leaves `permission` (see `setPhase`) so a stale name never
+	/// survives into whatever the harness does next. #86.
+	permissionTool: string | null;
 }
 
 /// Sustained silence threshold for `running → idle`. Hard-coded for
@@ -139,12 +146,54 @@ export const TRANSITION_SOURCE = {
 	L2c2OpencodeIdle: "l2c2-opencode-idle",
 	L2c2OpencodeMessageDelta: "l2c2-opencode-message-delta",
 	L2c2OpencodeToolUse: "l2c2-opencode-tool-use",
+	// #86 — permission promoted to its own phase.
+	L2c1ClaudePermission: "l2c1-claude-permission-request",
+	L2c2OpencodePermission: "l2c2-opencode-permission-asked",
+	L2c2OpencodePermissionReplied: "l2c2-opencode-permission-replied",
+	L2c2OpencodeQuestion: "l2c2-opencode-question-asked",
+	L2c2OpencodeQuestionResolved: "l2c2-opencode-question-resolved",
+	// The only "answered" signal Claude gives us for its own dialog:
+	// the user typed something decisive into the PTY. See
+	// `isDecisiveInput`.
+	UserInputPermission: "user-input-permission",
+	// #86: the adapter that could have resolved a permission dialog
+	// went away. See `releasePermission`.
+	AdapterDetached: "adapter-detached",
 } as const;
 
 const emit = (id: string): void => {
 	const set = listeners.get(id);
 	if (!set) return;
 	for (const cb of set) cb();
+};
+
+/// Set equality for the permission-ids snapshot below — only used to
+/// decide whether a fresh Set needs allocating, since
+/// `useSyncExternalStore` requires a referentially stable snapshot
+/// when nothing actually changed.
+const setsEqual = (a: ReadonlySet<string>, b: ReadonlySet<string>): boolean => {
+	if (a.size !== b.size) return false;
+	for (const id of a) if (!b.has(id)) return false;
+	return true;
+};
+
+/// Every harness id currently in `permission`, across every room.
+/// Rebuilt (not incrementally maintained) on every transition that
+/// touches the phase — the store is small enough that a full scan is
+/// cheap, and it keeps this correct by construction instead of by
+/// careful bookkeeping at each of the several call sites that can
+/// enter or leave `permission`. #86.
+let permissionIds: ReadonlySet<string> = new Set();
+const permissionListeners = new Set<() => void>();
+
+const recomputePermissionIds = (): void => {
+	const next = new Set<string>();
+	for (const [id, a] of store) {
+		if (a.phase === "permission") next.add(id);
+	}
+	if (setsEqual(next, permissionIds)) return;
+	permissionIds = next;
+	for (const cb of permissionListeners) cb();
 };
 
 const setPhase = (
@@ -158,13 +207,28 @@ const setPhase = (
 	// Suppress no-op transitions so consumers don't churn on
 	// continuous output (every chunk would otherwise emit). Only
 	// real phase changes notify subscribers; `lastOutputAt`
-	// mutates silently inside `recordOutput`.
+	// mutates silently inside `recordOutput`. A patch-only call (e.g.
+	// re-entering `permission` with a fresh tool name) still goes
+	// through even when the phase itself didn't change, so `.get()`
+	// reflects the new tool.
 	if (cur.phase === phase && !patch) return;
 	const from = cur.phase;
-	store.set(id, { ...cur, phase, ...patch });
+	// Leaving `permission` drops the stale tool name by default; a
+	// caller reporting a fresh one (re-entering `permission`) passes
+	// it in `patch`, which is spread after and wins.
+	const leftPermission = from === "permission" && phase !== "permission";
+	store.set(id, {
+		...cur,
+		phase,
+		...(leftPermission ? { permissionTool: null } : null),
+		...patch,
+	});
 	emit(id);
 	if (from !== phase) {
 		for (const cb of transitionListeners) cb(id, from, phase, source);
+	}
+	if (from === "permission" || phase === "permission") {
+		recomputePermissionIds();
 	}
 };
 
@@ -211,6 +275,24 @@ const stopTickIfIdle = (): void => {
 	}
 };
 
+/// Is this keystroke "decisive" enough to count as answering a
+/// permission dialog (#86)? Claude gives us no explicit "answered"
+/// signal — approval and denial both just let the tool proceed or
+/// error out, and that can take minutes — so the only prompt signal
+/// left is the user's own keystroke. Deliberately narrow: a lone ESC
+/// (dismiss) counts, but an escape *sequence* (arrow keys `\x1b[A`,
+/// xterm's focus events `\x1b[I` / `\x1b[O`) must not, since those
+/// fire on ordinary navigation and window-focus changes that have
+/// nothing to do with answering anything. Exported and pure so it can
+/// be unit tested without the store.
+export function isDecisiveInput(data: string): boolean {
+	if (data.includes("\r") || data.includes("\n")) return true;
+	if (data === "\x1b") return true;
+	if (data.includes("\x03")) return true;
+	if (data.length === 1 && /^[0-9yYnN]$/.test(data)) return true;
+	return false;
+}
+
 export const harnessActivity = {
 	/// Record a fresh spawn. Call from LiveTerminal once `pty_spawn`
 	/// resolves successfully.
@@ -224,6 +306,7 @@ export const harnessActivity = {
 			hasUserInput: false,
 			authoritative: false,
 			tail: "",
+			permissionTool: null,
 		});
 		ensureTick();
 		emit(id);
@@ -254,28 +337,86 @@ export const harnessActivity = {
 	/// `source` identifies which adapter event drove the transition
 	/// (e.g. `l2c1-claude-assistant`, `l2c2-opencode-busy`) and
 	/// flows through to the persisted event log for L7 attribution.
-	setRunningFromAdapter(id: string, source: TransitionSource): void {
+	///
+	/// #86: a harness sitting in `permission` is hard-blocked on a
+	/// dialog the user hasn't answered yet. Most adapter events that
+	/// call this just mean "still working" (a fresh assistant turn, the
+	/// next tool queued) and must not paper over that — so by default
+	/// this is a no-op while in `permission`. Only a signal that
+	/// genuinely means the gate is gone (a tool result landed, the
+	/// user submitted a fresh prompt) should pass `clearsPermission:
+	/// true`; the translator at each call site decides which it is.
+	setRunningFromAdapter(
+		id: string,
+		source: TransitionSource,
+		opts?: { clearsPermission?: boolean },
+	): void {
 		const cur = store.get(id);
 		if (!cur || cur.phase === "exited") return;
+		if (cur.phase === "permission" && !opts?.clearsPermission) return;
 		setPhase(id, "running", source);
 	},
 
-	/// L2c adapter says the harness is awaiting user input.
-	/// Bypasses the chunk throttle for the same reason.
+	/// L2c adapter says the harness is awaiting user input. Bypasses
+	/// the chunk throttle for the same reason. Always allowed to leave
+	/// `permission` — unlike `setRunningFromAdapter`, every signal that
+	/// calls this (Claude's end-of-turn, opencode's session-idle) means
+	/// the harness is unambiguously done with whatever it was doing,
+	/// permission gate included. #86.
 	setWaitingFromAdapter(id: string, source: TransitionSource): void {
 		const cur = store.get(id);
 		if (!cur || cur.phase === "exited") return;
 		setPhase(id, "waiting", source);
 	},
 
-	/// Record user input (keystroke / paste) on a harness. Flips
-	/// `hasUserInput` to true exactly once per spawn; subsequent
-	/// keystrokes are no-ops. Doesn't emit — consumers that care
-	/// (notification logic) read the flag lazily at transition time.
-	recordInput(id: string): void {
+	/// L2c adapter reports a permission dialog is on screen — Claude's
+	/// PermissionRequest hook fired, or opencode's permission-asked SSE
+	/// event landed. `toolName` is `null` when the adapter can't say
+	/// (opencode's event carries no tool name); every notification
+	/// surface shows it when present. No-op once exited. Always goes
+	/// through `setPhase` even when already in `permission`, so a
+	/// second request with a different tool name still updates
+	/// `.permissionTool` for anything reading `.get()` live. #86.
+	setPermissionFromAdapter(id: string, source: TransitionSource, toolName: string | null): void {
 		const cur = store.get(id);
-		if (!cur || cur.hasUserInput) return;
-		store.set(id, { ...cur, hasUserInput: true });
+		if (!cur || cur.phase === "exited") return;
+		setPhase(id, "permission", source, { permissionTool: toolName });
+	},
+
+	/// Record user input (keystroke / paste) on a harness. `data` is
+	/// the exact bytes that keystroke sends to the child (xterm's
+	/// `onKey` reports the same string `onData` would carry for it —
+	/// real user input, not an auto-response the terminal generates for
+	/// a device query).
+	///
+	/// Two independent effects: flips `hasUserInput` to true exactly
+	/// once per spawn (subsequent keystrokes are no-ops there); and, if
+	/// the harness is blocked on `permission`, checks whether `data` is
+	/// "decisive" (see `isDecisiveInput`) and if so moves it to
+	/// `running`. Claude gives no "the dialog was answered" signal of
+	/// its own — the only way the user can answer it is by typing into
+	/// the PTY, so that keystroke IS the signal (#86). Doesn't emit for
+	/// the `hasUserInput` flip alone — consumers that care read the
+	/// flag lazily at transition time.
+	recordInput(id: string, data: string): void {
+		const cur = store.get(id);
+		if (!cur) return;
+		if (!cur.hasUserInput) {
+			store.set(id, { ...cur, hasUserInput: true });
+		}
+		if (cur.phase === "permission" && isDecisiveInput(data)) {
+			setPhase(id, "running", TRANSITION_SOURCE.UserInputPermission);
+		}
+	},
+
+	/// Leave `permission` for `running`, and touch no other phase. For
+	/// an adapter detaching mid-dialog: nothing it would have sent can
+	/// arrive now, and the L2a tick never moves a non-running phase, so
+	/// without this the harness would read "permission needed" until
+	/// the user typed or the PTY died. `running` hands it back to L2a.
+	releasePermission(id: string, source: TransitionSource): void {
+		if (store.get(id)?.phase !== "permission") return;
+		setPhase(id, "running", source);
 	},
 
 	/// Record a chunk of PTY output. Side-effects: bumps
@@ -308,6 +449,17 @@ export const harnessActivity = {
 			// Adapter owns phase. Update lastOutputAt silently so any
 			// future detach-fallback to L2a starts with a fresh
 			// timestamp; don't touch phase or tail.
+			cur.lastOutputAt = now;
+			return;
+		}
+		// #86: a harness blocked on `permission` stays blocked no
+		// matter what repaints across the PTY — the dialog itself is
+		// what's producing this output. Only decisive user input
+		// (`recordInput`) or the adapter's own resolution signal may
+		// move it; falling through to the L2b tail/pattern logic below
+		// could otherwise misread the dialog's own text as a drained
+		// prompt and flip back to running early.
+		if (cur.phase === "permission") {
 			cur.lastOutputAt = now;
 			return;
 		}
@@ -375,6 +527,7 @@ export const harnessActivity = {
 				hasUserInput: false,
 				authoritative: false,
 				tail: "",
+				permissionTool: null,
 			});
 			emit(id);
 			return;
@@ -387,10 +540,12 @@ export const harnessActivity = {
 	/// on unmount so we don't accumulate dead entries.
 	forget(id: string): void {
 		if (!store.has(id) && !listeners.has(id) && !muteUntil.has(id)) return;
+		const wasPermission = store.get(id)?.phase === "permission";
 		store.delete(id);
 		listeners.delete(id);
 		muteUntil.delete(id);
 		stopTickIfIdle();
+		if (wasPermission) recomputePermissionIds();
 	},
 
 	get(id: string): HarnessActivity | null {
@@ -438,6 +593,24 @@ export function useHarnessActivity(id: string | null): HarnessActivity | null {
 	);
 }
 
+/// React hook: every harness id currently in `permission`, across
+/// every room. Backs the status-bar urgent slot (#86), which needs to
+/// know whether *anything* is blocked on a dialog without subscribing
+/// to each harness in every room individually. The returned Set is
+/// referentially stable across renders that don't change membership,
+/// as `useSyncExternalStore` requires.
+export function usePermissionHarnessIds(): ReadonlySet<string> {
+	return useSyncExternalStore(
+		(cb) => {
+			permissionListeners.add(cb);
+			return () => {
+				permissionListeners.delete(cb);
+			};
+		},
+		() => permissionIds,
+	);
+}
+
 /// Map the internal activity phase onto the existing display
 /// `Status` enum used by `StatusDot` and the status bar. Keep
 /// the mapping centralized so future strategies (additional L2c
@@ -452,9 +625,21 @@ export function activityToStatus(activity: HarnessActivity | null): Status {
 			return "idle";
 		case "waiting":
 			return "waiting";
+		case "permission":
+			return "permission";
 		case "exited":
 			return "exited";
 	}
+}
+
+/// Human-facing text for a `Status`, for the surfaces that print the
+/// raw word (bottom status bar, the hover popover). `permission` reads
+/// as "permission needed" — never the bare word "permission", which
+/// reads as a noun with no verb and doesn't say what's expected of the
+/// user — plus the tool name when the adapter could say (#86).
+export function statusLabel(status: Status, permissionTool?: string | null): string {
+	if (status !== "permission") return status;
+	return permissionTool ? `permission needed · ${permissionTool}` : "permission needed";
 }
 
 /// `activityToStatus` with the "acknowledged" downgrade applied:
@@ -478,10 +663,11 @@ export function effectiveStatus(
 
 /// Priority order for combining multiple harness statuses into a
 /// single room-level status (epic #50 L4). Higher = more important
-/// to surface on the room dot. `waiting` lands top — a harness
-/// blocked on user input is the most urgent thing a room can be
-/// doing.
+/// to surface on the room dot. `permission` lands top (#86) — a
+/// harness blocked on an approval dialog is a harder stop than one
+/// merely waiting for the user's next prompt.
 const STATUS_PRIORITY: Record<Status, number> = {
+	permission: 6,
 	waiting: 5,
 	running: 4,
 	idle: 3,
@@ -499,6 +685,17 @@ export interface RoomHarnessRef {
 	pendingNotifications?: number | undefined;
 }
 
+/// Pick whichever of two statuses is more important to surface, per
+/// `STATUS_PRIORITY`. Exported so the priority ordering itself — e.g.
+/// "permission outranks waiting" (#86) — is unit-testable directly,
+/// without going through `useRoomActivity`, which needs a React
+/// render context this project's node-environment test suite doesn't
+/// have. Ties keep `a`, matching the previous inline `>` comparison
+/// this replaced (first-seen wins a tie).
+export function higherPriorityStatus(a: Status, b: Status): Status {
+	return STATUS_PRIORITY[b] > STATUS_PRIORITY[a] ? b : a;
+}
+
 const aggregateRoomStatus = (harnesses: readonly RoomHarnessRef[]): Status | null => {
 	let best: Status | null = null;
 	for (const h of harnesses) {
@@ -510,9 +707,7 @@ const aggregateRoomStatus = (harnesses: readonly RoomHarnessRef[]): Status | nul
 		// acknowledged harness would keep pulsing the room tab
 		// even though the user knows.
 		const s = effectiveStatus(a, h.pendingNotifications ?? 0);
-		if (best === null || STATUS_PRIORITY[s] > STATUS_PRIORITY[best]) {
-			best = s;
-		}
+		best = best === null ? s : higherPriorityStatus(best, s);
 	}
 	return best;
 };

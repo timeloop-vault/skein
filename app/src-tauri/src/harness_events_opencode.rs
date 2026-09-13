@@ -92,6 +92,36 @@ pub enum OpencodeEvent {
     /// own agent on the same stream, and only the frontend knows which
     /// session is the harness's own.
     UserMessageAgent { session_id: String, agent: String },
+    /// A permission dialog opened for a tool call — opencode's
+    /// equivalent of Claude Code's `PermissionRequest` hook (#86). The
+    /// harness is blocked until the user answers. Not filtered by
+    /// session: a subagent's child session blocks the same turn just as
+    /// much as the harness's own.
+    PermissionAsked {
+        request_id: String,
+        session_id: String,
+    },
+    /// The dialog above was answered — `allow`, `deny` or `once` all
+    /// land here, since all three unblock the harness the same way.
+    PermissionReplied {
+        request_id: String,
+        session_id: String,
+    },
+    /// opencode's `question` tool blocked mid-turn on user input.
+    /// Distinct from a permission dialog (a different tool, no
+    /// allow/deny/patterns), but the same "harness cannot proceed"
+    /// consequence for the activity phase.
+    QuestionAsked {
+        request_id: String,
+        session_id: String,
+    },
+    /// The question above was answered (`question.replied`) or
+    /// dismissed (`question.rejected`) — both unblock the harness, so
+    /// both collapse to one event here.
+    QuestionResolved {
+        request_id: String,
+        session_id: String,
+    },
     /// Server disconnected after a successful connect. Frontend
     /// falls back to L2a until the next reconnect succeeds. Initial
     /// cold-connect failures don't fire this — that case is normal
@@ -512,6 +542,66 @@ fn parse_event(payload: &str) -> Option<OpencodeEvent> {
                 .to_owned();
             Some(OpencodeEvent::UserMessageAgent { session_id, agent })
         }
+        // `id` names the request on `*.asked`; `requestID` names it on
+        // the matching `*.replied`/`*.rejected` — verified against a
+        // live opencode 1.18.30 binary (#86). Not the same field, and
+        // not a typo to "fix" into consistency.
+        "permission.asked" => {
+            let session_id = props
+                .and_then(|p| p.get("sessionID"))
+                .and_then(serde_json::Value::as_str)?
+                .to_owned();
+            let request_id = props
+                .and_then(|p| p.get("id"))
+                .and_then(serde_json::Value::as_str)?
+                .to_owned();
+            Some(OpencodeEvent::PermissionAsked {
+                request_id,
+                session_id,
+            })
+        }
+        "permission.replied" => {
+            let session_id = props
+                .and_then(|p| p.get("sessionID"))
+                .and_then(serde_json::Value::as_str)?
+                .to_owned();
+            let request_id = props
+                .and_then(|p| p.get("requestID"))
+                .and_then(serde_json::Value::as_str)?
+                .to_owned();
+            Some(OpencodeEvent::PermissionReplied {
+                request_id,
+                session_id,
+            })
+        }
+        "question.asked" => {
+            let session_id = props
+                .and_then(|p| p.get("sessionID"))
+                .and_then(serde_json::Value::as_str)?
+                .to_owned();
+            let request_id = props
+                .and_then(|p| p.get("id"))
+                .and_then(serde_json::Value::as_str)?
+                .to_owned();
+            Some(OpencodeEvent::QuestionAsked {
+                request_id,
+                session_id,
+            })
+        }
+        "question.replied" | "question.rejected" => {
+            let session_id = props
+                .and_then(|p| p.get("sessionID"))
+                .and_then(serde_json::Value::as_str)?
+                .to_owned();
+            let request_id = props
+                .and_then(|p| p.get("requestID"))
+                .and_then(serde_json::Value::as_str)?
+                .to_owned();
+            Some(OpencodeEvent::QuestionResolved {
+                request_id,
+                session_id,
+            })
+        }
         "message.part.updated" => {
             // Look at the part type — tool calls surface here as a
             // sub-object with type=tool. Other part types
@@ -538,7 +628,8 @@ fn parse_event(payload: &str) -> Option<OpencodeEvent> {
         // `session.status` idle that fires alongside it),
         // `session.updated`, `session.diff`, `server.heartbeat`,
         // `mcp.tools.changed`, future event types — is silent at
-        // the policy layer. See recon §3 for the catalog.
+        // the policy layer. See recon §3 for the catalog. Permission
+        // and question events are handled above, not here.
         _ => None,
     }
 }
@@ -640,6 +731,65 @@ mod tests {
         assert!(
             events.is_empty(),
             "metadata rows should be silent, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn permission_asked_and_replied_use_different_id_fields() {
+        // `id` on asked, `requestID` on replied — verified against a
+        // live opencode 1.18.30 binary, not a guessed symmetry.
+        let events = drain_events(
+            &[
+                r#"{"type":"permission.asked","properties":{"id":"perm_1","sessionID":"ses_1","permission":"bash","patterns":["rm -rf"]}}"#,
+                r#"{"type":"permission.replied","properties":{"sessionID":"ses_1","requestID":"perm_1","reply":"once"}}"#,
+            ],
+            |_, p| frame(p),
+        );
+        assert!(
+            matches!(events.as_slice(), [
+                OpencodeEvent::PermissionAsked { request_id, session_id },
+                OpencodeEvent::PermissionReplied { request_id: r2, session_id: s2 },
+            ] if request_id == "perm_1" && session_id == "ses_1" && r2 == "perm_1" && s2 == "ses_1"),
+            "got {events:?}"
+        );
+    }
+
+    #[test]
+    fn question_asked_replied_and_rejected_all_parse() {
+        let events = drain_events(
+            &[
+                r#"{"type":"question.asked","properties":{"id":"q_1","sessionID":"ses_1","questions":[]}}"#,
+                r#"{"type":"question.replied","properties":{"sessionID":"ses_1","requestID":"q_1","answers":[]}}"#,
+                r#"{"type":"question.asked","properties":{"id":"q_2","sessionID":"ses_1","questions":[]}}"#,
+                r#"{"type":"question.rejected","properties":{"sessionID":"ses_1","requestID":"q_2"}}"#,
+            ],
+            |_, p| frame(p),
+        );
+        assert!(
+            matches!(events.as_slice(), [
+                OpencodeEvent::QuestionAsked { request_id: r1, .. },
+                OpencodeEvent::QuestionResolved { request_id: r2, .. },
+                OpencodeEvent::QuestionAsked { request_id: r3, .. },
+                OpencodeEvent::QuestionResolved { request_id: r4, .. },
+            ] if r1 == "q_1" && r2 == "q_1" && r3 == "q_2" && r4 == "q_2"),
+            "question.replied and question.rejected must both resolve: {events:?}"
+        );
+    }
+
+    /// A subagent's child session blocks the same turn just as much as
+    /// the harness's own — these events are never filtered by session,
+    /// unlike `UserMessageAgent`.
+    #[test]
+    fn permission_and_question_events_are_not_filtered_by_session() {
+        let events = drain_events(
+            &[
+                r#"{"type":"permission.asked","properties":{"id":"p1","sessionID":"ses_child_subagent"}}"#,
+            ],
+            |_, p| frame(p),
+        );
+        assert!(
+            matches!(events.first(), Some(OpencodeEvent::PermissionAsked { session_id, .. }) if session_id == "ses_child_subagent"),
+            "got {events:?}"
         );
     }
 

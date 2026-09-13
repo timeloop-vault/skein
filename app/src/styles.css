@@ -41,6 +41,11 @@ body {
 	   unaffected. The decisive move: waiting indigo → amber. */
 	--st-running: #6cb585;
 	--st-waiting: #e0ad48;
+	/* #86: same warm family as --st-waiting but pushed toward orange —
+	   a harder stop (blocked on an approval dialog) than plain waiting
+	   (blocked on the next prompt), so it reads as related but not
+	   interchangeable. */
+	--st-permission: #e0863a;
 	--st-idle: #82807a;
 	--st-error: #dd685a;
 	--diff-add: rgba(122, 163, 127, 0.18);
@@ -73,6 +78,7 @@ body {
 	/* #68 status palette (light). */
 	--st-running: #3f8a5a;
 	--st-waiting: #b07d1f;
+	--st-permission: #b0611f;
 	--st-idle: #8a877e;
 	--st-error: #c0503f;
 	--diff-add: rgba(84, 127, 91, 0.14);
@@ -874,8 +880,8 @@ body {
 /* Status dots — #68: each state has a distinct hue AND a distinct
    shape (carried entirely by box-shadow / border-radius, so the markup
    is unchanged), so colour is never the only cue (colour-blind safety):
-   running → disc, waiting → target, idle → hollow ring, error/exited →
-   square ring. */
+   running → disc, waiting → target, permission → target + "!" glyph +
+   a faster pulse, idle → hollow ring, error/exited → square ring. */
 .st-running {
 	background: var(--st-running);
 	box-shadow: 0 0 6px color-mix(in srgb, var(--st-running) 70%, transparent);
@@ -888,6 +894,29 @@ body {
 	box-shadow: 0 0 0 2px var(--bg-0), 0 0 0 3.5px var(--st-waiting);
 	animation: sk-pulse 1.6s ease-in-out infinite;
 }
+/* #86: permission is a harder stop than waiting, so it doesn't just
+   borrow waiting's target shape with a different hue — a bold "!"
+   glyph and a noticeably faster pulse (0.9s vs 1.6s) make it readable
+   as "more urgent" without relying on colour alone. */
+.st-permission {
+	position: relative;
+	background: var(--st-permission);
+	box-shadow: 0 0 0 2px var(--bg-0), 0 0 0 3.5px var(--st-permission);
+	animation: sk-pulse 0.9s ease-in-out infinite;
+}
+.st-permission::after {
+	content: "!";
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-family: var(--sk-mono);
+	font-weight: 700;
+	line-height: 1;
+	font-size: 7px;
+	color: var(--bg-0);
+}
 /* L2c-1: suppress the pulse on dots the user is *already looking at* —
    active harness/room tab and the bottom status bar's current-harness
    chip. The pulse is an attention-grabber for inactive surfaces; once
@@ -897,13 +926,17 @@ body {
    so it keeps pulsing for the inactive room it points at. */
 .sk-harness-tab.active .st-waiting,
 .sk-tab.active .st-waiting,
-.sk-statusbar > .seg:not(.sk-statusbar-urgent) .st-waiting {
+.sk-statusbar > .seg:not(.sk-statusbar-urgent) .st-waiting,
+.sk-harness-tab.active .st-permission,
+.sk-tab.active .st-permission,
+.sk-statusbar > .seg:not(.sk-statusbar-urgent) .st-permission {
 	animation: none;
 }
 /* #68: honour the OS reduced-motion setting (replaces the prototype's
    manual toggle). */
 @media (prefers-reduced-motion: reduce) {
-	.st-waiting {
+	.st-waiting,
+	.st-permission {
 		animation: none;
 	}
 }
@@ -1191,6 +1224,9 @@ body {
 .sk-pop .pv-waiting {
 	color: var(--st-waiting);
 }
+.sk-pop .pv-permission {
+	color: var(--st-permission);
+}
 .sk-pop .pv-error,
 .sk-pop .pv-exited {
 	color: var(--st-error);
@@ -1273,6 +1309,12 @@ body {
 	height: 5px;
 	border-radius: 50%;
 }
+/* #86: the "!" glyph reads fine at the full 8px tab-dot size but not
+   at this 5px mini dot — drop it here and lean on colour + the ring
+   box-shadow (still present) plus the adjoining text label instead. */
+.sk-statusbar .dot-tiny.st-permission::after {
+	content: none;
+}
 /* L5d — urgent segment. Highlights a non-active room that has
    pending notifications so the user has a single click to jump
    to whatever needs attention most. */
@@ -1288,6 +1330,13 @@ body {
 .sk-statusbar-urgent .dot-tiny {
 	background: var(--waiting);
 	box-shadow: 0 0 6px var(--waiting);
+}
+/* #86: the permission-ranked urgent segment gets its own colour
+   instead of the generic --waiting one above — three classes beats
+   two on specificity, so this wins regardless of source order. */
+.sk-statusbar-urgent .dot-tiny.st-permission {
+	background: var(--st-permission);
+	box-shadow: 0 0 6px var(--st-permission);
 }
 .sk-statusbar-urgent-count {
 	display: inline-flex;
@@ -1970,6 +2019,13 @@ body {
 }
 .sk-toast.error .sk-toast-sub {
 	color: var(--err);
+}
+/* #86: same treatment, permission's own hue. */
+.sk-toast.permission {
+	border-left: 3px solid var(--st-permission);
+}
+.sk-toast.permission .sk-toast-sub {
+	color: var(--st-permission);
 }
 .sk-toast-detail {
 	font-family: var(--sk-mono);

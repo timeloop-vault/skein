@@ -15,8 +15,9 @@
 // that reads from the store.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
+import { TRANSITION_SOURCE, type TransitionSource, harnessActivity } from "./harnessActivity.ts";
 import { observedAgents } from "./harnessAgent.ts";
+import { type PendingPhase, pendingPrompts } from "./pendingPrompts.ts";
 
 /// Mirror of the Rust enum. `kind` is the serde tag from
 /// `harness_events_claude.rs`'s `ClaudeEvent`. Keep these in lock-step;
@@ -96,10 +97,22 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeToolUse);
 			return;
 		case "tool_use_result":
-			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeToolResult);
+			// #86: a denial writes a tool_result with `is_error` set,
+			// same shape as any other result — verified against real
+			// Claude Code sessions. Either way the permission gate this
+			// tool call was waiting on is gone, approved or not.
+			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeToolResult, {
+				clearsPermission: true,
+			});
 			return;
 		case "user_prompt":
-			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeUserPrompt);
+			// #86: the user submitted a fresh prompt — whatever
+			// permission dialog might have been showing is gone by
+			// construction (Claude doesn't accept a new prompt while
+			// one is up).
+			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeUserPrompt, {
+				clearsPermission: true,
+			});
 			return;
 		case "awaiting_prompt":
 			// The signal we built this for: an assistant row with a
@@ -116,7 +129,11 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			// File vanished. Fall back to L2a — chunk-driven idle
 			// detection takes over. The Rust adapter stays alive in
 			// case the file reappears, but until then the dot
-			// reflects PTY truth.
+			// reflects PTY truth. #86: a dialog open at this moment
+			// would otherwise pin `permission` for good — the L2a tick
+			// never touches a non-running phase, and no tool_result can
+			// arrive from a file that is gone.
+			harnessActivity.releasePermission(harnessId, TRANSITION_SOURCE.AdapterDetached);
 			harnessActivity.detachAuthoritativeSource(harnessId);
 			return;
 	}
@@ -136,6 +153,14 @@ export type OpencodeEvent =
 	| { kind: "message_delta" }
 	| { kind: "tool_use_start"; name: string }
 	| { kind: "user_message_agent"; session_id: string; agent: string }
+	// #86 — opencode's own permission and question prompts. Not
+	// filtered by session: one opencode process backs the whole
+	// harness, and a subagent child session's prompt blocks the user
+	// just as much as the top-level session's would.
+	| { kind: "permission_asked"; request_id: string; session_id: string }
+	| { kind: "permission_replied"; request_id: string; session_id: string }
+	| { kind: "question_asked"; request_id: string; session_id: string }
+	| { kind: "question_resolved"; request_id: string; session_id: string }
 	| { kind: "session_end" };
 
 /// Subscribe an opencode harness to its embedded-server SSE stream
@@ -188,12 +213,38 @@ export function attachOpencodeEvents(
 		harnessActivity.detachAuthoritativeSource(harnessId);
 		// The process this was observed on is going away (#248).
 		observedAgents.forget(harnessId);
+		// #86: outstanding permission/question ids are meaningless once
+		// this adapter is gone — nothing will ever resolve them.
+		pendingPrompts.forget(harnessId);
 		void invoke("opencode_events_detach", { harnessId }).catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.warn(`[skein] opencode_events_detach failed for ${harnessId}:`, msg);
 		});
 	};
 }
+
+/// Apply a `PendingPhase` derived from `pendingPrompts` to the
+/// activity store. `permission` re-asserts (idempotent if already
+/// there); `waiting`/`running` both need `clearsPermission: true` on
+/// the running arm since draining every pending prompt is exactly the
+/// signal that means the gate is gone. #86.
+const applyPendingPhase = (
+	harnessId: string,
+	phase: PendingPhase,
+	source: TransitionSource,
+): void => {
+	switch (phase) {
+		case "permission":
+			harnessActivity.setPermissionFromAdapter(harnessId, source, null);
+			return;
+		case "waiting":
+			harnessActivity.setWaitingFromAdapter(harnessId, source);
+			return;
+		case "running":
+			harnessActivity.setRunningFromAdapter(harnessId, source, { clearsPermission: true });
+			return;
+	}
+};
 
 const translateOpencode = (
 	harnessId: string,
@@ -214,6 +265,12 @@ const translateOpencode = (
 			// SessionIdle the Rust adapter emits right after
 			// Connected handles the baseline state (see
 			// `stream_events` for the rationale).
+			//
+			// #86: a reconnect replays nothing, so any permission/
+			// question ids we were tracking are gone for good — the
+			// synthetic SessionIdle that follows will put the harness
+			// in `waiting`, not leave it stuck in `permission` forever.
+			pendingPrompts.forget(harnessId);
 			harnessActivity.attachAuthoritativeSource(harnessId);
 			return;
 		case "session_created":
@@ -224,6 +281,8 @@ const translateOpencode = (
 			onSessionCaptured?.(event.session_id);
 			return;
 		case "session_busy":
+			// #86: "still working" — must not clear a pending
+			// permission, so no `clearsPermission` (defaults to false).
 			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c2OpencodeBusy);
 			return;
 		case "message_delta":
@@ -237,16 +296,53 @@ const translateOpencode = (
 			// can ignore a subagent's child session (see `agentLabel`).
 			observedAgents.record(harnessId, event.session_id, event.agent);
 			return;
+		case "permission_asked":
+			pendingPrompts.permissionAsked(harnessId, event.request_id);
+			harnessActivity.setPermissionFromAdapter(
+				harnessId,
+				TRANSITION_SOURCE.L2c2OpencodePermission,
+				null,
+			);
+			return;
+		case "permission_replied":
+			applyPendingPhase(
+				harnessId,
+				pendingPrompts.permissionReplied(harnessId, event.request_id),
+				TRANSITION_SOURCE.L2c2OpencodePermissionReplied,
+			);
+			return;
+		case "question_asked":
+			// Outranked by a pending permission — `applyPendingPhase`
+			// re-asserts `permission` rather than overwriting it with
+			// `waiting` in that case.
+			applyPendingPhase(
+				harnessId,
+				pendingPrompts.questionAsked(harnessId, event.request_id),
+				TRANSITION_SOURCE.L2c2OpencodeQuestion,
+			);
+			return;
+		case "question_resolved":
+			applyPendingPhase(
+				harnessId,
+				pendingPrompts.questionResolved(harnessId, event.request_id),
+				TRANSITION_SOURCE.L2c2OpencodeQuestionResolved,
+			);
+			return;
 		case "session_idle":
 			// The signal we built this for: opencode finished its
-			// turn and is awaiting user input.
+			// turn and is awaiting user input. Unconditional — #86:
+			// whatever was pending is moot once the turn itself ends.
+			pendingPrompts.forget(harnessId);
 			harnessActivity.setWaitingFromAdapter(harnessId, TRANSITION_SOURCE.L2c2OpencodeIdle);
 			return;
 		case "session_end":
 			// Server disconnected after a successful connect. Drop
 			// authoritative so L2a takes over until the Rust side
 			// reconnects (it keeps trying with backoff while the
-			// PTY lives).
+			// PTY lives). #86: also drop any pending permission/
+			// question ids — nothing will resolve them across the gap.
+			pendingPrompts.forget(harnessId);
+			harnessActivity.releasePermission(harnessId, TRANSITION_SOURCE.AdapterDetached);
 			harnessActivity.detachAuthoritativeSource(harnessId);
 			return;
 	}

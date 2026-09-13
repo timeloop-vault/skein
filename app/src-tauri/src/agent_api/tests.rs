@@ -1049,6 +1049,98 @@ async fn the_resolve_route_exists_only_to_say_no() {
     );
 }
 
+// ── the permission hook route (#86) ──────────────────────────────
+
+#[tokio::test]
+async fn the_permission_route_needs_a_token() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    let anon = http
+        .post(format!("{base}/api/harness/permission"))
+        .header(auth::HARNESS_HEADER, "h1")
+        .json(&json!({ "tool_name": "Bash" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 401);
+}
+
+#[tokio::test]
+async fn the_permission_route_needs_a_harness_the_room_actually_contains() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let token = f.db.ensure_room_token("r1", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    // No X-Skein-Harness at all.
+    let no_header = http
+        .post(format!("{base}/api/harness/permission"))
+        .bearer_auth(&token)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(no_header.status(), 400);
+
+    // A harness id the room does not contain — attribution would keep
+    // it, but this route needs more than attribution.
+    let ghost = http
+        .post(format!("{base}/api/harness/permission"))
+        .bearer_auth(&token)
+        .header(auth::HARNESS_HEADER, "h-ghost")
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ghost.status(), 400);
+}
+
+#[tokio::test]
+async fn a_valid_permission_ping_answers_no_content() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let token = f.db.ensure_room_token("r1", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    let ok = http
+        .post(format!("{base}/api/harness/permission"))
+        .bearer_auth(&token)
+        .header(auth::HARNESS_HEADER, "h1")
+        .json(&json!({ "tool_name": "Bash", "agent_type": "general" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 204);
+}
+
+#[tokio::test]
+async fn a_body_that_is_not_json_still_answers_no_content() {
+    // The hook's payload shape is Claude Code's own, not ours to
+    // police — a hook whose payload changes shape must not start
+    // failing the harness's turn.
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let token = f.db.ensure_room_token("r1", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    let ok = http
+        .post(format!("{base}/api/harness/permission"))
+        .bearer_auth(&token)
+        .header(auth::HARNESS_HEADER, "h1")
+        .header("Content-Type", "application/json")
+        .body("not json at all")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 204);
+}
+
 #[tokio::test]
 async fn a_reply_over_http_lands_attributed_to_its_harness() {
     let f = fixture();

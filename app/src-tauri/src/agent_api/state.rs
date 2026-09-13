@@ -16,6 +16,14 @@ use crate::db::Database;
 /// of date, which is worse than one that is obviously empty.
 pub const REVIEW_CHANGED_EVENT: &str = "skein://review-changed";
 
+/// The event a harness tab listens for to show "permission required" as
+/// its own activity phase (#86), distinct from end-of-turn `waiting`.
+/// Fired by `POST /api/harness/permission`, which the injected Claude
+/// plugin hook calls; opencode's equivalent is a phase transition the
+/// frontend derives straight from `OpencodeEvent` and never touches
+/// this route.
+pub const HARNESS_PERMISSION_EVENT: &str = "skein://harness-permission";
+
 /// Shared by every route.
 ///
 /// `app` is optional for the same reason it is in the harness-event
@@ -31,6 +39,17 @@ pub struct AgentApiState {
 #[serde(rename_all = "camelCase")]
 pub struct ReviewChanged {
     pub room_id: String,
+}
+
+/// Payload of [`HARNESS_PERMISSION_EVENT`]. Frontend contract — do not
+/// rename a field without checking `app/src/` for the listener.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessPermission {
+    pub room_id: String,
+    pub harness_id: String,
+    pub tool_name: Option<String>,
+    pub agent_type: Option<String>,
 }
 
 impl AgentApiState {
@@ -57,6 +76,31 @@ impl AgentApiState {
             // Not fatal — the write landed, only the live nudge did
             // not — but silence here is exactly what #176 is about.
             tracing::warn!(room_id, error = %e, "agent api: review-changed emit failed");
+        }
+    }
+
+    /// Tell the frontend that this harness is blocked on a permission
+    /// dialog (#86). Never logs `tool_input` — the caller has already
+    /// dropped it before this is reached, and nothing here re-derives
+    /// it.
+    pub fn notify_harness_permission(
+        &self,
+        room_id: &str,
+        harness_id: &str,
+        tool_name: Option<String>,
+        agent_type: Option<String>,
+    ) {
+        let Some(app) = self.app.as_ref() else { return };
+        if let Err(e) = app.emit(
+            HARNESS_PERMISSION_EVENT,
+            HarnessPermission {
+                room_id: room_id.to_owned(),
+                harness_id: harness_id.to_owned(),
+                tool_name,
+                agent_type,
+            },
+        ) {
+            tracing::warn!(room_id, harness_id, error = %e, "agent api: harness-permission emit failed");
         }
     }
 }

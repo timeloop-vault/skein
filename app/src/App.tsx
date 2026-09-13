@@ -40,10 +40,13 @@ import {
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import { filesRegistry } from "./filesRegistry.ts";
 import {
+	TRANSITION_SOURCE,
 	activityToStatus,
 	effectiveStatus,
 	harnessActivity,
+	statusLabel,
 	useHarnessActivity,
+	usePermissionHarnessIds,
 	useRoomActivity,
 } from "./harnessActivity.ts";
 import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
@@ -99,11 +102,16 @@ interface ToastEntry {
 	// "waiting" lands here once L2c-1 (Claude JSONL adapter) reports
 	// a `last-prompt` row → harness is awaiting user input. Rendered
 	// verbatim in the toast subtitle. "error" is the D2f api_error
-	// variant — red treatment plus the dim `detail` line.
-	state: "idle" | "exited" | "waiting" | "error";
+	// variant — red treatment plus the dim `detail` line. "permission"
+	// (#86) is a harder stop than "waiting" — the harness is blocked on
+	// an approval dialog, not merely at end-of-turn.
+	state: "idle" | "exited" | "waiting" | "error" | "permission";
 	/** Error variant only: summary under the subtitle, e.g.
 	 *  "Overloaded (529), retrying · attempt 4 of 10 · retry in 4.4s". */
 	detail?: string | undefined;
+	/** Permission variant only: the tool name when the adapter could
+	 *  say (opencode's permission-asked event carries none). */
+	tool?: string | undefined;
 }
 
 const TOAST_DISMISS_MS = 6_000;
@@ -179,9 +187,16 @@ const Toast = ({
 		const id = setTimeout(onDismiss, TOAST_DISMISS_MS);
 		return () => clearTimeout(id);
 	}, [onDismiss]);
+	// #86: "permission" reads as "needs permission" (+ tool when known)
+	// rather than the bare phase word — same reasoning as `statusLabel`,
+	// just phrased for a subtitle instead of a status-bar segment.
+	const sub =
+		toast.state === "permission"
+			? `needs permission${toast.tool ? ` · ${toast.tool}` : ""}`
+			: toast.state;
 	return (
 		<div
-			className={`sk-toast${toast.state === "error" ? " error" : ""}`}
+			className={`sk-toast${toast.state === "error" ? " error" : toast.state === "permission" ? " permission" : ""}`}
 			onClick={onClick}
 			title="Go to this harness"
 		>
@@ -189,7 +204,7 @@ const Toast = ({
 			<div className="sk-toast-body">
 				<div className="sk-toast-title">{toast.roomName}</div>
 				<div className="sk-toast-sub">
-					{toast.harnessName} · {toast.state}
+					{toast.harnessName} · {sub}
 				</div>
 				{toast.detail && <div className="sk-toast-detail">{toast.detail}</div>}
 			</div>
@@ -265,7 +280,10 @@ const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
 	const dotStatus = activity
 		? effectiveStatus(activity, harness.pendingNotifications ?? 0)
 		: harness.status;
-	const label = activity ? activityToStatus(activity) : harness.status;
+	// #86: "permission needed" (+ tool) rather than the bare word.
+	const label = activity
+		? statusLabel(activityToStatus(activity), activity.permissionTool)
+		: harness.status;
 	return (
 		<span className="seg">
 			<span className={`dot-tiny st-${dotStatus}`} />
@@ -1439,6 +1457,10 @@ export default function App() {
 	const [notifyToast, setNotifyToast] = usePersistedState<boolean>("notifyToast", true);
 	const [notifyUrgent, setNotifyUrgent] = usePersistedState<boolean>("notifyUrgent", true);
 	const [notifyOs, setNotifyOs] = usePersistedState<boolean>("notifyOs", false);
+	// #86: every harness currently blocked on a permission dialog,
+	// across every room — the status-bar urgent slot ranks these above
+	// a plain pending-notifications backlog.
+	const permissionHarnessIds = usePermissionHarnessIds();
 	// Per-turn cost hair-lines in the Activity feed (issue #80 D2d-2).
 	// Off by default; toggled from the Activity card head. App-owned so
 	// every room's mounted LiveContext sees the same value.
@@ -2348,25 +2370,52 @@ export default function App() {
 		};
 	}, []);
 
+	// #86: Claude's PermissionRequest hook fires this global event the
+	// moment a permission dialog is on screen — the Rust side owns the
+	// hook wiring, this is just the frontend half of the contract.
+	// Room-agnostic by design: the harness id alone is enough to route
+	// it, and `setPermissionFromAdapter` is already a no-op for an id
+	// Skein doesn't have a record for (a stale event racing a closed
+	// harness).
+	useEffect(() => {
+		const un = listen<{
+			roomId: string;
+			harnessId: string;
+			toolName: string | null;
+			agentType: string | null;
+		}>("skein://harness-permission", (event) => {
+			harnessActivity.setPermissionFromAdapter(
+				event.payload.harnessId,
+				TRANSITION_SOURCE.L2c1ClaudePermission,
+				event.payload.toolName,
+			);
+		});
+		return () => {
+			void un.then((f) => f());
+		};
+	}, []);
+
 	// L5a — pending-notification accounting. A harness transitioning
-	// from working (spawning|running) to passive (idle|exited) bumps
-	// its own `pendingNotifications` counter — unless it's the
-	// harness the user is currently viewing (active room's active
-	// harness), in which case we skip because the user can already
-	// see the dot change. Same harness in the active room but in a
-	// non-active harness tab WILL bump — its tab isn't visible.
-	// Room.badge is rendered as the sum across harnesses by
-	// LiveRoomTab; we don't write to it here. Counters persist via
-	// the rooms→sqlite mirror so the badge survives a restart.
+	// from working (spawning|running) to passive (idle|exited), or
+	// into `permission` (#86), bumps its own `pendingNotifications`
+	// counter — unless it's the harness the user is currently viewing
+	// (active room's active harness), in which case we skip because
+	// the user can already see the dot change. Same harness in the
+	// active room but in a non-active harness tab WILL bump — its tab
+	// isn't visible. Room.badge is rendered as the sum across
+	// harnesses by LiveRoomTab; we don't write to it here. Counters
+	// persist via the rooms→sqlite mirror so the badge survives a
+	// restart.
 	//
 	// L5b — OS notification. Same predicates as the badge bump
-	// (passive transition + not the viewed harness + hasUserInput),
-	// PLUS Skein is not the focused app. If Skein is focused the
-	// badge update is already visible and an OS banner would just
-	// duplicate it. Permission is granted lazily on first launch.
+	// (passive/permission transition + not the viewed harness +
+	// hasUserInput where required), PLUS Skein is not the focused app.
+	// If Skein is focused the badge update is already visible and an
+	// OS banner would just duplicate it. Permission is granted lazily
+	// on first launch.
 	useEffect(() => {
 		const unsub = harnessActivity.subscribeTransitions((harnessId, from, to) => {
-			// Two trigger classes:
+			// Three trigger classes:
 			// • `running|idle → waiting` — a harness-native adapter
 			//   (L2c) reported the agent went from doing work to
 			//   awaiting user input. Notify-worthy regardless of
@@ -2381,19 +2430,27 @@ export default function App() {
 			//   conveys it. Without this gate every Skein restart
 			//   would badge every Claude room that was sitting at
 			//   a prompt before shutdown.
+			// • `* → permission` (#86) — a harness is now blocked on a
+			//   permission dialog. Notify-worthy unconditionally, same
+			//   as becameWaiting and for the same reason: there's no
+			//   replayed permission on boot (Claude's PermissionRequest
+			//   hook only fires live, mid-session; opencode's pending
+			//   sets start empty on every fresh connect), so there's no
+			//   spawning-exclusion case to guard against here.
 			// • working → passive (running|spawning → idle|exited).
 			//   The pre-L2c surface: agent went quiet. We keep the
 			//   hasUserInput gate so the spawn-banner cycle on
 			//   every Skein restart doesn't light up every room.
 			const becameWaiting = to === "waiting" && (from === "running" || from === "idle");
+			const becamePermission = to === "permission";
 			const wasWorking = from === "running" || from === "spawning";
 			const becamePassive = to === "idle" || to === "exited";
-			if (!becameWaiting && !(wasWorking && becamePassive)) return;
+			if (!becameWaiting && !becamePermission && !(wasWorking && becamePassive)) return;
 			const a = harnessActivity.get(harnessId);
 			if (!a) return;
 			// hasUserInput gate applies only to the passive transition.
-			// `→ waiting` from L2c is unconditional.
-			if (!becameWaiting && !a.hasUserInput) return;
+			// `→ waiting` and `→ permission` are both unconditional.
+			if (!becameWaiting && !becamePermission && !a.hasUserInput) return;
 			const activeRoom = roomsRef.current.find((r) => r.id === activeRoomIdRef.current);
 			const isViewedHarness = Boolean(activeRoom && activeRoom.activeHarnessId === harnessId);
 			const isWindowFocused = windowFocusedRef.current;
@@ -2442,13 +2499,20 @@ export default function App() {
 			}
 			const harness = owningRoom?.harnesses.find((h) => h.id === harnessId);
 			const kindName = harness ? HARNESS_KINDS[harness.kind].name : "harness";
-			// "waiting" wording surfaces the L2c case in toast / OS
-			// banner so the user knows the agent wants something from
-			// them — not that it finished. The ToastEntry's `state`
-			// field flows into the existing toast component, which
-			// renders it verbatim under the harness name.
-			const stateLabel: "idle" | "exited" | "waiting" =
-				to === "waiting" ? "waiting" : to === "idle" ? "idle" : "exited";
+			// "waiting"/"permission" wording surfaces the L2c case in
+			// toast / OS banner so the user knows the agent wants
+			// something from them — not that it finished. The
+			// ToastEntry's `state` field flows into the existing toast
+			// component, which renders "permission" as "needs
+			// permission" (+ tool) rather than verbatim (#86).
+			const stateLabel: "idle" | "exited" | "waiting" | "permission" =
+				to === "waiting"
+					? "waiting"
+					: to === "permission"
+						? "permission"
+						: to === "idle"
+							? "idle"
+							: "exited";
 			// L5c — in-app toast. Fires when window IS focused but
 			// the user isn't looking at the source harness (they're
 			// in Skein, but in a different room or different tab).
@@ -2465,6 +2529,7 @@ export default function App() {
 					roomName: owningRoom.name,
 					harnessName: harness.name,
 					state: stateLabel,
+					...(stateLabel === "permission" ? { tool: a.permissionTool ?? undefined } : {}),
 				};
 				setToasts((prev) => [...prev, entry].slice(-TOAST_MAX_VISIBLE));
 			}
@@ -2483,7 +2548,11 @@ export default function App() {
 			// transitions never call the plugin's `show` at the same time.
 			// The helper also catches plugin-absent rejections (dev builds
 			// skip it — see app/src-tauri/src/lib.rs).
-			enqueueOsNotification("Skein", `${owningRoom.name} · ${kindName}: ${stateLabel}`, {
+			const osLabel =
+				stateLabel === "permission"
+					? `needs permission${a.permissionTool ? ` (${a.permissionTool})` : ""}`
+					: stateLabel;
+			enqueueOsNotification("Skein", `${owningRoom.name} · ${kindName}: ${osLabel}`, {
 				roomId: owningRoom.id,
 				harnessId,
 			});
@@ -3553,6 +3622,25 @@ export default function App() {
 				<span className="spacer" />
 				{notifyUrgent &&
 					(() => {
+						// #86: a harness blocked on permission ranks above a
+						// plain pending-notifications backlog — it's a
+						// harder stop, and the room order it's found in
+						// breaks ties the same way L5d's own scan does.
+						for (const r of activeRooms) {
+							if (r.id === activeRoomId) continue;
+							const h = r.harnesses.find((hh) => permissionHarnessIds.has(hh.id));
+							if (!h) continue;
+							return (
+								<span
+									className="seg sk-statusbar-urgent"
+									title={`Jump to ${r.name}`}
+									onClick={() => jumpToHarness(r.id, h.id)}
+								>
+									<span className="dot-tiny st-permission" />
+									{r.name} · {h.name} permission needed
+								</span>
+							);
+						}
 						// L5d — urgent segment. Scan active (non-archived,
 						// non-active) rooms for any pending notifications;
 						// surface the room with the biggest backlog so

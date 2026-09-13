@@ -12,8 +12,8 @@
 // `.sk-app` ancestor so it inherits the active theme tokens.
 
 import { HARNESS_KINDS } from "./data.tsx";
-import { activityToStatus, harnessActivity } from "./harnessActivity.ts";
-import type { HarnessKind } from "./types.ts";
+import { activityToStatus, harnessActivity, statusLabel } from "./harnessActivity.ts";
+import type { HarnessKind, Status } from "./types.ts";
 
 const TARGET_SEL = ".h-chip, .tab-status";
 // Rows where a lone status dot describes the same harness as the row's
@@ -30,6 +30,10 @@ interface Resolved {
 	kind: string | null;
 	status: string | null;
 	agent: { key: string; value: string } | null;
+	/** #86: the tool a `permission` status is blocked on, when the
+	 *  adapter could say. Only ever populated via the chip's live
+	 *  harnessId lookup — a lone status dot has no harness id to ask. */
+	tool: string | null;
 }
 
 export function attachStatusPopover(): () => void {
@@ -58,6 +62,7 @@ export function attachStatusPopover(): () => void {
 		if (!isChip && !isDot) return null;
 		let kind = isChip ? (el.dataset.kind ?? null) : null;
 		let status = isDot ? (el.dataset.status ?? null) : null;
+		let tool: string | null = null;
 		// #248: the chip carries its harness's agent label, already worded
 		// by `agentLabel` — the popover repeats it rather than deciding
 		// for itself what an opencode agent can be said to be.
@@ -70,10 +75,15 @@ export function attachStatusPopover(): () => void {
 				: null;
 		// A chip knows its harness → read that harness's OWN live state from
 		// the store, so a room-tab summary chip shows its real state rather
-		// than borrowing the room's aggregate dot (#141).
+		// than borrowing the room's aggregate dot (#141). Also picks up
+		// `permissionTool` (#86) — only available here, since a lone dot
+		// has no harness id to ask.
 		if (isChip && el.dataset.harnessId) {
 			const a = harnessActivity.get(el.dataset.harnessId);
-			if (a) status = activityToStatus(a);
+			if (a) {
+				status = activityToStatus(a);
+				tool = a.permissionTool;
+			}
 		}
 		// A lone status dot borrows its row's chip for the kind (harness
 		// tab etc.); skipped for the room dot, which is an aggregate.
@@ -81,7 +91,7 @@ export function attachStatusPopover(): () => void {
 			const chips = el.closest<HTMLElement>(ROW_SEL)?.querySelectorAll<HTMLElement>(".h-chip");
 			if (chips?.length === 1) kind = chips[0]?.dataset.kind ?? null;
 		}
-		return kind || status ? { kind, status, agent } : null;
+		return kind || status ? { kind, status, agent, tool } : null;
 	};
 
 	const render = (el: HTMLDivElement, c: Resolved) => {
@@ -103,7 +113,10 @@ export function attachStatusPopover(): () => void {
 		};
 		if (c.kind && isKind(c.kind)) seg("harness", HARNESS_KINDS[c.kind].name);
 		if (c.agent) seg(c.agent.key, c.agent.value);
-		if (c.status) seg("state", c.status, `pv-${c.status}`);
+		// #86: "permission needed" (+ tool) rather than the bare word —
+		// the dataset value stays the raw Status for the `pv-*` class,
+		// only the printed text goes through `statusLabel`.
+		if (c.status) seg("state", statusLabel(c.status as Status, c.tool), `pv-${c.status}`);
 	};
 
 	const onOver = (e: MouseEvent) => {

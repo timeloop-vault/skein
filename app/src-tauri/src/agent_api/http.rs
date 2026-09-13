@@ -50,6 +50,7 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
         .route("/api/diff", get(api_diff))
         // POST is present and always refuses — see `api_signoff`.
         .route("/api/status", get(api_status).post(api_signoff))
+        .route("/api/harness/permission", post(api_harness_permission))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
         .with_state(state)
 }
@@ -301,6 +302,52 @@ async fn api_resolve(
         "resolving a thread is the reviewer's decision — reply and call \
          mark_addressed instead",
     )
+}
+
+/// The injected Claude plugin's `PermissionRequest` hook posts here
+/// (#86) — not an agent verb, so it carries no MCP tool and is not in
+/// `mcp.rs`. Unlike the review verbs, the harness id here is not mere
+/// attribution: it *is* what the event is about, so a header that is
+/// absent or names a harness the room doesn't contain is a 400, not a
+/// silent no-op.
+///
+/// The body is Claude Code's own hook payload shape, not ours to
+/// police: only `tool_name` and `agent_type` are read out of it, and a
+/// body that fails to parse as JSON at all still succeeds — a hook that
+/// changes shape in a future Claude Code release must not start
+/// breaking the harness's turn. `tool_input` is deliberately never
+/// read; it can hold secrets a permission dialog is about to ask on.
+async fn api_harness_permission(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    // `harness_label` is Some only when `X-Skein-Harness` named a
+    // harness the room actually contains (see `identify_harness`) — the
+    // same signal `harness_id` alone can't give, since an unknown hint
+    // is still kept as attribution.
+    let (Some(harness_id), Some(_)) = (caller.harness_id.clone(), caller.harness_label.as_ref())
+    else {
+        return error_body(
+            StatusCode::BAD_REQUEST,
+            "X-Skein-Harness must name a harness this room actually contains",
+        );
+    };
+    let payload: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    let tool_name = payload
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let agent_type = payload
+        .get("agent_type")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    state.notify_harness_permission(&caller.room_id, &harness_id, tool_name, agent_type);
+    StatusCode::NO_CONTENT.into_response()
 }
 
 // ── shared plumbing ───────────────────────────────────────────────

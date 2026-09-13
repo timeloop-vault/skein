@@ -12,7 +12,12 @@
 // string comparisons.
 export type HarnessKind = "claude" | "opencode" | "copilot" | "byoh" | "files";
 
-export type Status = "running" | "waiting" | "idle" | "error" | "exited";
+// "permission" (#86) is a harder stop than "waiting": the harness is
+// blocked on an approval dialog, not merely at end-of-turn awaiting a
+// fresh prompt. Kept as its own Status (not folded into "waiting") so
+// every notification surface can tell the two apart without reaching
+// into harnessActivity's ActivityPhase.
+export type Status = "running" | "waiting" | "permission" | "idle" | "error" | "exited";
 
 export interface Harness {
 	id: string;

@@ -24,7 +24,8 @@ Skein process
      ├─ POST   /api/comments/{id}/reply
      ├─ POST   /api/comments/{id}/addressed
      ├─ POST   /api/comments/{id}/resolve   403, always
-     └─ GET    /api/diff               get_diff
+     ├─ GET    /api/diff               get_diff
+     └─ POST   /api/harness/permission     see below — not an agent verb
 ```
 
 `/mcp` is what Claude Code and opencode talk to. `/api/*` is the same
@@ -154,6 +155,38 @@ are things this repository already says — in `.claude/skills/`, in
 `CLAUDE.md` — and the agent reads them. Skein owns the one fact that
 lives nowhere else, which is whether the human said yes.
 
+## The permission-required signal (#86)
+
+`POST /api/harness/permission` is not an agent verb — it carries no MCP
+tool, and no agent ever calls it on purpose. It exists so "permission
+required" can be a first-class activity phase instead of folding into
+end-of-turn `waiting`.
+
+The caller is the `PermissionRequest` command hook Skein's Claude Code
+plugin injects (#215): the hook fires only when a permission dialog is
+actually shown, POSTs its own JSON payload to this route, and always
+exits 0 so a curl failure never fails the tool call it is reporting on.
+opencode has no hook mechanism to match; its harness derives the same
+phase straight from the `permission.asked` / `question.asked` events on
+its own `/event` stream, and never calls this route at all.
+
+Same two headers as every other route — `Authorization: Bearer` and
+`X-Skein-Harness` — but here `X-Skein-Harness` is not mere attribution:
+the harness id **is** what the event is about, so it must be present
+*and* name a harness the room actually contains, or the answer is `400`
+rather than a silent no-op.
+
+The body is read leniently: only `tool_name` and `agent_type` are
+pulled out of it (both optional), and a body that is not JSON at all
+still answers `204` — the hook's payload shape belongs to Claude Code,
+not to Skein, and a future shape change must not start breaking the
+harness's turn. `tool_input` is never read or logged; a permission
+dialog is often asking about the very thing that would be a secret.
+
+A successful call emits `skein://harness-permission` —
+`{ roomId, harnessId, toolName: string | null, agentType: string | null }`
+— and answers `204 No Content`.
+
 ## The two things it will not do
 
 There is no `resolve` and no `approve`, and there never will be here.
@@ -180,7 +213,7 @@ Loud, and distinguishable (#176):
 
 | status | meaning |
 | :-- | :-- |
-| `400` | malformed JSON, or an `MCP-Protocol-Version` we do not speak |
+| `400` | malformed JSON, an `MCP-Protocol-Version` we do not speak, or (on the permission route only) a missing/unknown `X-Skein-Harness` |
 | `401` | no bearer token, or one that was never minted |
 | `403` | a revoked token, a non-localhost `Origin`, or `resolve` / `approve` |
 | `404` | the token's room is gone |
@@ -247,11 +280,11 @@ Settings → About shows the bound port, or says why there is none.
 
 | file | what it owns |
 | :-- | :-- |
-| `agent_api/state.rs` | shared state, the `skein://review-changed` event, `HarnessIdentity` |
+| `agent_api/state.rs` | shared state, the `skein://review-changed` and `skein://harness-permission` events, `HarnessIdentity` |
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
 | `agent_api/verbs.rs` | the six verbs — the whole testable core |
 | `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve and approve refusals |
-| `agent_api/http.rs` | the routes |
+| `agent_api/http.rs` | the routes, including `/api/harness/permission` (#86) |
 | `agent_api/tests.rs` | scoping, both prohibitions, lifecycle, real HTTP |
 | `review_surface/signoff.rs` | the sign-off itself, and the staleness rule (#214) |
 | `harness_config.rs` | what Skein injects at spawn so a CLI finds all this (#215) |
