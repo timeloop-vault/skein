@@ -1,0 +1,16 @@
+{
+	"description": "Tell Skein when Claude Code is blocked on a permission dialog, so the room can show \"permission required\" as its own activity phase (#86) instead of folding it into end-of-turn waiting.",
+	"hooks": {
+		"PermissionRequest": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "[ -n \"$SKEIN_REVIEW_URL\" ] && [ -n \"$SKEIN_REVIEW_TOKEN\" ] && curl -fsS -m 3 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"Authorization: Bearer $SKEIN_REVIEW_TOKEN\" -H \"X-Skein-Harness: $SKEIN_HARNESS_ID\" --data-binary @- \"${SKEIN_REVIEW_URL%/mcp}/api/harness/permission\"; exit 0",
+						"async": true
+					}
+				]
+			}
+		]
+	}
+}

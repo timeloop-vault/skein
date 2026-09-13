@@ -51,6 +51,19 @@
 //! agent API actually bound (#213). Injecting anyway would register an
 //! MCP server whose URL is the literal string `${SKEIN_REVIEW_URL}` and
 //! hand the agent a connection error instead of an absence.
+//!
+//! # The Claude plugin also carries a permission hook (#86)
+//!
+//! `hooks/hooks.json` at the plugin root registers a `PermissionRequest`
+//! command hook that POSTs its own JSON payload to
+//! `${SKEIN_REVIEW_URL%/mcp}/api/harness/permission` and always exits 0
+//! — a hook failure must never fail the harness turn. Same story as the
+//! MCP config above: session-scoped by the environment it reads,
+//! additive (Claude Code loads plugin hooks alongside any the user
+//! already has), and nothing lands in the worktree. opencode has no
+//! hook mechanism to match; its equivalent signal is the
+//! `permission.asked` / `question.asked` events on its own `/event`
+//! stream (`harness_events_opencode.rs`).
 
 use std::path::{Path, PathBuf};
 
@@ -469,6 +482,44 @@ mod tests {
             );
             assert!(!injection.is_empty(), "{program} should be recognised");
         }
+    }
+
+    /// The hook bundle actually shipped, not a copy of it — a
+    /// hand-transcribed fixture would happily drift from what
+    /// `tauri.conf.json` bundles while this test kept passing (#86).
+    #[test]
+    fn the_shipped_permission_hook_posts_to_the_right_route_and_never_fails_the_turn() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(BUNDLE_DIR)
+            .join(CLAUDE_PLUGIN_SUBDIR)
+            .join("hooks/hooks.json");
+        let raw =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+
+        let requests = parsed["hooks"]["PermissionRequest"]
+            .as_array()
+            .expect("a PermissionRequest matcher group");
+        let hook = requests
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
+            .find(|hook| hook["type"] == "command")
+            .expect("a command hook under PermissionRequest");
+
+        assert_eq!(
+            hook["async"].as_bool(),
+            Some(true),
+            "a synchronous hook would stall the turn on Skein's own response"
+        );
+        let command = hook["command"].as_str().expect("command is a string");
+        assert!(
+            command.contains("${SKEIN_REVIEW_URL%/mcp}/api/harness/permission"),
+            "{command}"
+        );
+        assert!(
+            command.trim_end().ends_with("exit 0"),
+            "a failing curl must not fail the tool call: {command}"
+        );
     }
 
     #[test]

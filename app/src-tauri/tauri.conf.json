@@ -37,6 +37,7 @@
 		"resources": [
 			"harness-config/claude-plugin/.claude-plugin/plugin.json",
 			"harness-config/claude-plugin/.mcp.json",
+			"harness-config/claude-plugin/hooks/hooks.json",
 			"harness-config/claude-plugin/skills/skein-review/SKILL.md",
 			"harness-config/opencode/opencode.json"
 		],

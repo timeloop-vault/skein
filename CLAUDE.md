@@ -289,6 +289,18 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   paths and row shapes live: `crates/skein-harness` (#209)** — parser
   fixes go there, not in the adapters, so the app and any standalone
   cost tooling stay in sync.
+  **`permission` is its own phase (#86)**, distinct from `waiting`
+  (end of turn / needs input), and outranks it everywhere. Claude's
+  JSONL records nothing when a dialog opens, so the signal is a
+  `PermissionRequest` command hook in the #215 plugin bundle that
+  curls `POST /api/harness/permission` → `skein://harness-permission`
+  (verified: it does not fire for auto-approved tools). Nothing says
+  when the dialog is *answered*, so a decisive keystroke in that PTY
+  clears it, backed by the next tool_result / prompt / end-turn;
+  PTY output and "still working" adapter events never do. opencode
+  gets exact `permission.asked`/`replied` ids; its `question.*`
+  events map to `waiting`. Injection off = no Claude permission
+  signal, just `waiting` as before.
   The Live Context store backfills the newest 500 rows per room and
   appends live ones; the Plan and Activity cards both render from that
   one array. It is **room**-scoped, so the Plan card shows every

@@ -528,19 +528,26 @@ export const LiveTerminal = ({
 				// Separate hook for "did the user actually press a
 				// key in this terminal?" — used by L5a notification
 				// gating to tell real work cycles apart from startup
-				// banner cycles. onKey is the right primitive:
-				// onData fires for *anything* the terminal sends to
-				// the child, including auto-responses to queries
-				// like `\x1b[6n` (cursor position) and `\x1b[5n`
-				// (device status). Treating those as input was the
-				// bug that lit up every room on Skein restart.
+				// banner cycles, and (#86) to tell whether a keystroke
+				// answered a permission dialog. onKey is the right
+				// primitive for both: onData fires for *anything* the
+				// terminal sends to the child, including auto-responses
+				// to queries like `\x1b[6n` (cursor position) and
+				// `\x1b[5n` (device status). Treating those as input was
+				// the bug that lit up every room on Skein restart, and
+				// would just as wrongly clear a permission dialog nobody
+				// answered. `key` is the exact bytes this keystroke sends
+				// to the child — the same string `onData` would carry for
+				// it — so `recordInput` can classify it without a second
+				// copy of the escape-sequence logic.
 				// Caveat: onKey doesn't fire for paste — if the user
 				// pastes without ever typing, their first task-idle
-				// transition won't bump. That's a corner-case false
-				// negative we'll address with a paste listener if it
-				// matters in practice.
-				term.onKey(() => {
-					harnessActivity.recordInput(harnessId);
+				// transition won't bump, and pasting an answer into a
+				// permission dialog won't clear it either. Corner-case
+				// false negative we'll address with a paste listener if
+				// it matters in practice.
+				term.onKey(({ key }) => {
+					harnessActivity.recordInput(harnessId, key);
 				});
 				if (!resizeObserver) {
 					// Track the dims we last sent so we can skip the
