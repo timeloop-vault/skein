@@ -35,6 +35,7 @@ export const RightPane = ({
 	roomId,
 	cwd,
 	harnesses,
+	activeHarness,
 	visible,
 	showTurnCosts,
 	onToggleTurnCosts,
@@ -45,6 +46,9 @@ export const RightPane = ({
 	roomId: string;
 	cwd: string;
 	harnesses: Harness[];
+	// The room's currently active/focused harness — the #238 nudge
+	// target. `undefined` for a room with no harnesses at all.
+	activeHarness: Harness | undefined;
 	visible: boolean;
 	showTurnCosts: boolean;
 	onToggleTurnCosts: () => void;
@@ -99,6 +103,7 @@ export const RightPane = ({
 					cwd={cwd}
 					actions={actions}
 					harnessKindOf={harnessKindOf}
+					activeHarness={activeHarness}
 					visible={visible && tab === "review"}
 				/>
 			</div>

@@ -122,6 +122,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   ├── harnessAgent.ts      # What agent a harness is on, honestly worded (#248):
     │   │   │                        #   "agent X" (Claude), "started as X" / "last message
     │   │   │                        #   to Y" (opencode, from SSE user messages)
+    │   │   ├── harnessInput.ts      # The #238 nudge seam (#41 reuses it): a per-harness
+    │   │   │                        #   paste/submit registry LiveTerminal fills in once its
+    │   │   │                        #   PTY is live, plus the pure gate `canSendPrompt` — pty
+    │   │   │                        #   capability, registered, phase===waiting, a proven L2c
+    │   │   │                        #   adapter, #215 config injection, and bracketed-paste
+    │   │   │                        #   for multi-line bodies. No nudge where safety can't be
+    │   │   │                        #   proven
     │   │   ├── types.ts             # Room / Harness / Status vocabulary
     │   │   ├── components.tsx       # Shared atoms (HChip, StatusDot, tabs, the two-step
     │   │   │                        #   harness picker — kind, then agent for the kinds
@@ -161,7 +168,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │                            #   useReviewData (scope/file fetch + worktree watcher +
     │   │                            #   useSignoff), signoff.ts + SignoffControl (#214: the
     │   │                            #   sign-off control, three states — none/approved/
-    │   │                            #   lapsed. Skein records the approval; the AGENT lands)
+    │   │                            #   lapsed. Skein records the approval; the AGENT lands),
+    │   │                            #   nudges.ts (#238: the header Nudge button's three
+    │   │                            #   fixed prompts, picked by sign-off state + open count)
     │   └── src-tauri/               # Tauri Rust shell
     │       ├── src/lib.rs           # Builder + 57-command registry; tracing → daily-rotating
     │       │                        #   file in app_log_dir() + stderr (RUST_LOG overrides)
