@@ -465,6 +465,14 @@
 .rv-act.all:hover:not(:disabled) {
 	color: var(--ok);
 }
+.rv-act.nudge {
+	color: var(--fg-2);
+	border-color: var(--line-strong);
+	font-size: 0.85em;
+}
+.rv-act.nudge:hover:not(:disabled) {
+	color: var(--accent);
+}
 
 /* ── threads ─────────────────────────────────────────────────────── */
 

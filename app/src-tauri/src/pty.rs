@@ -121,7 +121,11 @@ impl PtyManager {
     /// `Arc`.
     ///
     /// The id in `req` is what you pass to `write` / `resize` / `kill`.
-    pub fn spawn<F>(&self, req: SpawnRequest<'_>, on_event: F) -> Result<(), PtyError>
+    /// Returns whether #215's config injection was non-empty for this
+    /// spawn — the frontend's #238 nudge gate needs to know, and
+    /// computing it a second time on the caller's side would risk
+    /// drifting from what this function actually injected.
+    pub fn spawn<F>(&self, req: SpawnRequest<'_>, on_event: F) -> Result<bool, PtyError>
     where
         F: Fn(PtyEvent) + Send + Sync + 'static,
     {
@@ -146,6 +150,7 @@ impl PtyManager {
         // and must not recompute it into something different.
         let injection =
             crate::harness_config::injection_for(kind, program, harness_config, settings, agent);
+        let injected = !injection.is_empty();
         let args: Vec<String> = stored_args
             .iter()
             .cloned()
@@ -333,7 +338,7 @@ impl PtyManager {
             killer,
         };
         self.inner.lock().insert(id, pty);
-        Ok(())
+        Ok(injected)
     }
 
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), PtyError> {

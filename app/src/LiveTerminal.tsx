@@ -34,11 +34,21 @@ import { useEffect, useRef } from "react";
 import { listHarnessAgents, unknownAgentMessage, validateAgent } from "./agents.ts";
 import { harnessActivity } from "./harnessActivity.ts";
 import { attachClaudeEvents, attachOpencodeEvents } from "./harnessEvents.ts";
+import { harnessInput } from "./harnessInput.ts";
 import { isAppShortcut, isMac } from "./shortcuts.ts";
 import type { HarnessKind } from "./types.ts";
 import { OVERLAY_CLOSED_EVENT } from "./useFocusRestore.ts";
 
 type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
+
+/// `pty_spawn`'s resolved value. `injected` mirrors whether #215's
+/// config injection was non-empty for this spawn — see
+/// `harnessActivity.injected` and the #238 nudge gate in
+/// `harnessInput.ts`, the only consumers.
+interface PtySpawnResult {
+	id: string;
+	injected: boolean;
+}
 
 interface LiveTerminalProps {
 	cmd: string[];
@@ -382,11 +392,19 @@ export const LiveTerminal = ({
 		// `session.created` event (chapter 5 phase 2b's sqlite poll
 		// stays as fallback in App.tsx).
 		let detachOpencodeAdapter: (() => void) | null = null;
+		// #238: this harness's entry in the `harnessInput` seam (the
+		// Nudge button today, #41's file drop later). Registered once
+		// the PTY is live, unregistered on exit/unmount/respawn — a
+		// dead or about-to-respawn harness must not still be a nudge
+		// target.
+		let detachInputTarget: (() => void) | null = null;
 
 		const handleExit = (code: number | null) => {
 			if (cancelled) return;
 			phase = "exited";
 			harnessActivity.exited(harnessId, code);
+			detachInputTarget?.();
+			detachInputTarget = null;
 			// Stop forwarding keystrokes — the writer is gone, and we
 			// want Enter to flow through the custom handler instead.
 			dataDisposable?.dispose();
@@ -454,7 +472,7 @@ export const LiveTerminal = ({
 			// will flip it to `running` on the first chunk. Epic #50.
 			harnessActivity.spawned(harnessId);
 			try {
-				const id = await invoke<string>("pty_spawn", {
+				const { id, injected } = await invoke<PtySpawnResult>("pty_spawn", {
 					cmd: cmdToSpawn,
 					cwd,
 					rows: term.rows,
@@ -482,6 +500,18 @@ export const LiveTerminal = ({
 					return;
 				}
 				ptyIdRef.current = id;
+				harnessActivity.setInjected(harnessId, injected);
+				// #238: publish this harness to the `harnessInput` seam now
+				// that its PTY is live. `paste`/`bracketedPaste` read xterm
+				// state directly; `submit` is a separate `pty_write` of a
+				// bare "\r" after the paste, per the seam's contract.
+				detachInputTarget = harnessInput.register(harnessId, {
+					paste: (text) => term.paste(text),
+					bracketedPaste: () => term.modes.bracketedPasteMode,
+					submit: () => {
+						void invoke("pty_write", { id, data: "\r" });
+					},
+				});
 				// L2c-1 attach point: after PTY is alive, hook into the
 				// Claude session log for authoritative running/waiting
 				// signals. Only fires for Claude harnesses that own a
@@ -611,6 +641,7 @@ export const LiveTerminal = ({
 			// system row on exit and we don't need to react to it.
 			detachClaudeAdapter?.();
 			detachOpencodeAdapter?.();
+			detachInputTarget?.();
 			const id = ptyIdRef.current;
 			if (id) void invoke("pty_kill", { id });
 			term.dispose();

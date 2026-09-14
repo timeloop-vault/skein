@@ -29,10 +29,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { HChip } from "../components.tsx";
+import { HARNESS_KINDS } from "../data.tsx";
+import { useHarnessActivity } from "../harnessActivity.ts";
+import { canSendPrompt, harnessInput, sendPrompt } from "../harnessInput.ts";
 import { acceptReview, attributeHunks, rejectReview } from "../liveContext/review.ts";
 import type { ReviewHunk } from "../liveContext/review.ts";
 import type { HarnessAction } from "../liveContext/store.ts";
-import type { HarnessKind } from "../types.ts";
+import type { Harness, HarnessKind } from "../types.ts";
 import { CommitList } from "./CommitList.tsx";
 import { DiffBody, type LineSelection, type ThreadHandlers } from "./DiffBody.tsx";
 import { FileList } from "./FileList.tsx";
@@ -57,6 +60,8 @@ import {
 	setBaseRef,
 	unplacedThreads,
 } from "./api.ts";
+import { selectNudge } from "./nudges.ts";
+import { signoffState } from "./signoff.ts";
 import {
 	useAgentWrites,
 	useReviewFile,
@@ -85,6 +90,7 @@ export const ReviewPane = ({
 	cwd,
 	actions,
 	harnessKindOf,
+	activeHarness,
 	visible,
 }: {
 	roomId: string;
@@ -92,6 +98,10 @@ export const ReviewPane = ({
 	/** The room's action rows — per-hunk harness attribution only (D4). */
 	actions: HarnessAction[];
 	harnessKindOf: (harnessId: string) => HarnessKind;
+	/** The room's currently active/focused harness — the #238 nudge
+	 *  target. No picker: a nudge always goes to whichever harness the
+	 *  user would otherwise be typing into. */
+	activeHarness: Harness | undefined;
 	visible: boolean;
 }) => {
 	const [scope, setScope] = useState<ReviewScope>("branch");
@@ -138,6 +148,35 @@ export const ReviewPane = ({
 		busy: signoffBusy,
 		set: setSignoffState,
 	} = useSignoff(roomId, cwd, visible, nonce);
+
+	// #238: the Nudge button. Target is always the room's active
+	// harness — no picker — and which prompt applies is a pure function
+	// of the review's own state (sign-off, then unresolved threads).
+	// `useHarnessActivity` keeps enablement live as the harness's phase
+	// moves, without this component polling anything itself.
+	const activeCapabilities = activeHarness ? HARNESS_KINDS[activeHarness.kind].capabilities : null;
+	const activeActivity = useHarnessActivity(activeHarness?.id ?? null);
+	const nudge = selectNudge(signoffState(signoff), data?.unresolvedCount ?? 0);
+	const nudgeGate =
+		activeHarness && nudge
+			? canSendPrompt({
+					capabilities: HARNESS_KINDS[activeHarness.kind].capabilities,
+					activity: activeActivity,
+					registered: harnessInput.isRegistered(activeHarness.id),
+					bracketedPasteOn: harnessInput.bracketedPaste(activeHarness.id),
+					body: nudge.body,
+				})
+			: undefined;
+	const nudgeDisabledReason = !nudge
+		? "Nothing to nudge about"
+		: nudgeGate && !nudgeGate.ok
+			? nudgeGate.reason
+			: undefined;
+	const onNudge = () => {
+		if (!activeHarness || !nudge) return;
+		const result = sendPrompt(activeHarness.id, activeHarness.kind, nudge.body);
+		if (!result.ok) setActionError(result.reason);
+	};
 
 	const { file, error: fileError } = useReviewFile(
 		roomId,
@@ -322,6 +361,21 @@ export const ReviewPane = ({
 							onClick={() => run(() => acceptReview(roomId, cwd, undefined, [], undefined))}
 						>
 							✓ all
+						</button>
+					)}
+					{/* #238: pastes one of three fixed prompts into the room's
+					    active harness and submits it. No button at all when
+					    that harness has no terminal to paste into — #41's
+					    file drop will read the same seam. */}
+					{activeCapabilities?.pty && (
+						<button
+							type="button"
+							className="rv-act nudge"
+							disabled={!nudge || !nudgeGate?.ok}
+							title={nudgeDisabledReason ?? nudge?.body}
+							onClick={onNudge}
+						>
+							{nudge?.label ?? "Nudge"}
 						</button>
 					)}
 					{/* #214: the terminal act of a review. Not a merge and not

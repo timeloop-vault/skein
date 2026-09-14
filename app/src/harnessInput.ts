@@ -1,0 +1,161 @@
+// harnessInput — the seam for putting text into a harness's terminal
+// and submitting it, plus the safety gate over doing so (#238).
+//
+// #238's Nudge button is the first caller; #41 (drop a file onto a
+// harness) is written to reuse the same registry and the same gate
+// rather than inventing its own way to reach a live PTY.
+//
+// Two halves:
+//
+//   - A per-harness registry of `{ paste, bracketedPaste, submit }`,
+//     filled in by `LiveTerminal` once its PTY is live and drained on
+//     exit/unmount/respawn. Nothing outside `LiveTerminal` touches
+//     xterm or `pty_write` for this — the registry is the only door.
+//   - A pure gate, `canSendPrompt`, over harness capabilities, activity
+//     phase, registration and paste-mode/body shape. "No nudge where
+//     safety can't be proven": every refusal comes back as a reason
+//     string a caller can show verbatim as a disabled-button tooltip,
+//     never a silent no-op.
+//
+// `submit` is a *separate* write from `paste` — the seam pastes the
+// body (through xterm's `term.paste()`, so a multi-line body arrives as
+// one bracketed-paste message rather than as keystrokes) and then
+// writes a bare "\r", exactly the two actions a human would perform.
+//
+// `sendPrompt` re-evaluates the gate at call time rather than trusting
+// a value a caller rendered a moment earlier — the phase can flip
+// between a render and the click that follows it.
+
+import { HARNESS_KINDS } from "./data.tsx";
+import type { HarnessCapabilities } from "./data.tsx";
+import { harnessActivity } from "./harnessActivity.ts";
+import type { HarnessActivity } from "./harnessActivity.ts";
+import type { HarnessKind } from "./types.ts";
+
+/// What a live harness's terminal offers this seam. `LiveTerminal` is
+/// the only implementer today.
+export interface HarnessInputTarget {
+	/// Paste `text` into the terminal via xterm's own paste path
+	/// (`term.paste`), not `onData` — the point is one bracketed-paste
+	/// message, not a stream of synthetic keystrokes.
+	paste(text: string): void;
+	/// Is the terminal's own DECSET 2004 paste mode currently on? Only
+	/// xterm knows this (`term.modes.bracketedPasteMode`) — it depends
+	/// on what the child enabled.
+	bracketedPaste(): boolean;
+	/// Submit whatever is now in the harness's input — a bare "\r",
+	/// written as its own `pty_write` call after the paste.
+	submit(): void;
+}
+
+const targets = new Map<string, HarnessInputTarget>();
+
+export const harnessInput = {
+	/// Publish `target` for `id`. Returns the unregister function —
+	/// call it on PTY exit, on unmount, and before a respawn re-registers
+	/// under the same harness id, so a dead or about-to-change terminal
+	/// is never still a nudge target.
+	register(id: string, target: HarnessInputTarget): () => void {
+		targets.set(id, target);
+		return () => {
+			// Only clear our own registration: a respawn that already
+			// registered a fresh target for the same id must not have
+			// its target ripped out by the old effect's belated cleanup.
+			if (targets.get(id) === target) targets.delete(id);
+		};
+	},
+	isRegistered(id: string): boolean {
+		return targets.has(id);
+	},
+	bracketedPaste(id: string): boolean {
+		return targets.get(id)?.bracketedPaste() ?? false;
+	},
+};
+
+/// Everything `canSendPrompt` needs, gathered by the caller so the gate
+/// itself stays pure and DOM-free — testable in node with no xterm
+/// instance and no store singleton.
+export interface CanSendPromptInput {
+	capabilities: HarnessCapabilities;
+	activity: HarnessActivity | null;
+	registered: boolean;
+	/// Only consulted when `body` contains a newline.
+	bracketedPasteOn: boolean;
+	body: string;
+}
+
+export type GateResult = { ok: true } | { ok: false; reason: string };
+
+/// Pure safety gate. Allowed only when every one of these holds:
+///
+///  - the harness kind has a terminal (`capabilities.pty`);
+///  - it is registered in the seam (a live PTY, not a Files body or a
+///    just-exited one);
+///  - its phase is `waiting` — end of turn, the one moment a paste is
+///    unambiguously safe to submit. `permission` gets its own reason:
+///    it is a harder stop than "not waiting", not a variant of it;
+///  - an L2c adapter is attached, has actually spoken, and has not gone
+///    silent (`authoritative && adapterHeard && !adapterSilent`) — a
+///    `waiting` read off the L2a heuristic alone is a guess, not proof;
+///  - #215's config injection happened for this spawn (`injected`) —
+///    without it there is no evidence the harness's CLI even has the
+///    review tools wired up;
+///  - and, when `body` is multi-line, the terminal's own bracketed-paste
+///    mode is on — otherwise a multi-line paste can arrive as several
+///    separate "lines", each read as its own Enter.
+export function canSendPrompt(input: CanSendPromptInput): GateResult {
+	const { capabilities, activity, registered, bracketedPasteOn, body } = input;
+	if (!capabilities.pty) {
+		return { ok: false, reason: "this harness has no terminal to paste into" };
+	}
+	if (!registered) {
+		return { ok: false, reason: "this harness's terminal isn't ready yet" };
+	}
+	if (!activity) {
+		return { ok: false, reason: "this harness's terminal isn't ready yet" };
+	}
+	if (activity.phase === "permission") {
+		return { ok: false, reason: "the harness is waiting on a permission dialog" };
+	}
+	if (activity.phase !== "waiting") {
+		return {
+			ok: false,
+			reason: `the harness isn't at a safe stopping point (currently ${activity.phase})`,
+		};
+	}
+	if (!activity.authoritative || !activity.adapterHeard || activity.adapterSilent) {
+		return { ok: false, reason: "no confirmed adapter is watching this harness" };
+	}
+	if (!activity.injected) {
+		return { ok: false, reason: "this harness wasn't started with the review tools wired up" };
+	}
+	if (body.includes("\n") && !bracketedPasteOn) {
+		return {
+			ok: false,
+			reason:
+				"this harness's terminal isn't in paste mode, so a multi-line prompt isn't safe to send",
+		};
+	}
+	return { ok: true };
+}
+
+/// Paste `body` into `harnessId`'s terminal and submit it, after
+/// re-checking `canSendPrompt` against the *current* state — never the
+/// state a caller rendered a moment ago. Returns the gate result either
+/// way, so a caller that raced a phase change can show why it refused.
+export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): GateResult {
+	const target = targets.get(harnessId);
+	const gate = canSendPrompt({
+		capabilities: HARNESS_KINDS[kind].capabilities,
+		activity: harnessActivity.get(harnessId),
+		registered: target !== undefined,
+		bracketedPasteOn: target?.bracketedPaste() ?? false,
+		body,
+	});
+	if (!gate.ok) return gate;
+	// A passing gate required `registered: target !== undefined`, so
+	// `target` is set here by construction.
+	target?.paste(body);
+	target?.submit();
+	return gate;
+}

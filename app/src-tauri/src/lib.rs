@@ -441,9 +441,23 @@ fn ping(message: String) -> String {
     format!("pong: {message}")
 }
 
+/// Wire shape for `pty_spawn`'s return value.
+///
+/// `injected` names whether #215's config injection actually happened
+/// for this spawn (a non-empty `Injection`) — the one thing the
+/// frontend cannot compute itself, since `injection_for` lives entirely
+/// on the Rust side. #238's nudge gate refuses to send a prompt to a
+/// harness whose CLI might not even have the review tools wired up.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PtySpawnResult {
+    id: String,
+    injected: bool,
+}
+
 /// Spawn a child process attached to a fresh PTY and stream its output
 /// over `on_output`. Returns an opaque id the frontend uses for follow-up
-/// calls.
+/// calls, plus whether #215's config injection happened for this spawn.
 ///
 /// `cmd` is argv-style: the first element is the program, the rest are
 /// arguments. Empty `cmd` is rejected. `cwd` must exist.
@@ -468,7 +482,7 @@ fn pty_spawn(
     db: tauri::State<'_, Arc<Database>>,
     endpoint: tauri::State<'_, crate::agent_api::state::AgentApiEndpoint>,
     harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
-) -> Result<String, String> {
+) -> Result<PtySpawnResult, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let settings = spawn_env.snapshot();
     // #213: mint (or reuse) the room's review token and hand the
@@ -489,7 +503,7 @@ fn pty_spawn(
             }
         }
     });
-    manager
+    let injected = manager
         .spawn(
             crate::pty::SpawnRequest {
                 id: id.clone(),
@@ -509,7 +523,7 @@ fn pty_spawn(
             },
         )
         .map_err(|e| e.to_string())?;
-    Ok(id)
+    Ok(PtySpawnResult { id, injected })
 }
 
 /// Forward stdin bytes to the child. `data` is the raw string xterm.js
@@ -991,6 +1005,8 @@ fn db_save_rooms(rooms: Vec<Room>, db: tauri::State<'_, Arc<Database>>) -> Resul
 
 #[cfg(test)]
 mod tests {
+    use super::PtySpawnResult;
+
     /// #196 regression pin: with an onCloseRequested handler
     /// registered, Tauri's JS wrapper closes the window via
     /// `destroy()` — if the capability file stops granting it, every
@@ -1001,5 +1017,18 @@ mod tests {
         let caps = include_str!("../capabilities/default.json");
         assert!(caps.contains("core:window:allow-close"));
         assert!(caps.contains("core:window:allow-destroy"));
+    }
+
+    /// #238: the frontend's `harnessInput` gate reads `injected` off
+    /// `pty_spawn`'s resolved value — pin the wire shape so a field
+    /// rename here doesn't silently turn into `undefined` there.
+    #[test]
+    fn pty_spawn_result_serializes_as_camel_case() {
+        let json = serde_json::to_value(PtySpawnResult {
+            id: "abc".to_owned(),
+            injected: true,
+        })
+        .expect("serialize");
+        assert_eq!(json, serde_json::json!({ "id": "abc", "injected": true }));
     }
 }

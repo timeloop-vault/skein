@@ -3570,6 +3570,7 @@ export default function App() {
 								roomId={r.id}
 								cwd={r.cwd}
 								harnesses={r.harnesses}
+								activeHarness={r.harnesses.find((h) => h.id === r.activeHarnessId)}
 								visible={r.id === activeRoomId}
 								showTurnCosts={showTurnCosts}
 								onToggleTurnCosts={handleToggleTurnCosts}

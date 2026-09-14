@@ -75,6 +75,15 @@ export interface HarnessActivity {
 	/// back to L2a. Cleared (and authority restored) the moment the
 	/// adapter does deliver. #259.
 	adapterSilent: boolean;
+	/// Did #215's config injection actually happen for this spawn (a
+	/// non-empty `Injection`, per `pty_spawn`'s resolved `injected`
+	/// field)? Reset to `false` on every spawn and set once
+	/// `pty_spawn` resolves — the window between the two is "we don't
+	/// know yet," which the #238 nudge gate treats the same as "no."
+	/// Without #215 there is no proof the harness's CLI even has the
+	/// review MCP tools wired up, let alone that a pasted nudge will
+	/// reach an agent that can act on it.
+	injected: boolean;
 }
 
 /// Sustained silence threshold for `running → idle`. Hard-coded for
@@ -359,8 +368,21 @@ export const harnessActivity = {
 			adapterHeard: false,
 			promptSubmittedAt: null,
 			adapterSilent: false,
+			injected: false,
 		});
 		ensureTick();
+		emit(id);
+	},
+
+	/// Record whether #215's config injection happened for this spawn.
+	/// Call once `pty_spawn` resolves — LiveTerminal is the only
+	/// caller, and only for the spawn that just succeeded. No-op for a
+	/// harness we've already forgotten (a cancelled spawn racing
+	/// unmount).
+	setInjected(id: string, injected: boolean): void {
+		const cur = store.get(id);
+		if (!cur || cur.injected === injected) return;
+		store.set(id, { ...cur, injected });
 		emit(id);
 	},
 
@@ -614,6 +636,7 @@ export const harnessActivity = {
 				adapterHeard: false,
 				promptSubmittedAt: null,
 				adapterSilent: false,
+				injected: false,
 			});
 			emit(id);
 			return;
