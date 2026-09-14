@@ -27,7 +27,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   shipped and was reverted). The reviewer's sign-off is the one fact
   Skein owns; the agent lands branches by reading
   `.claude/skills/pr-workflow`. A tested git-CLI write layer survives
-  unshipped in `2bcae5a` on `feat/214-land-actions` — lift it, don't
+  unshipped in `2bcae5a` (tag `archive/214-land-actions`) — lift it, don't
   rewrite it, if an issue ever needs writes.
 - **Reviews happen after the fact, against git.** The review unit is
   committed work on the room's branch, so nothing in the review surface
@@ -79,7 +79,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   READS ONLY, deliberately: Skein performs no git
     │                                #   mutations (D9 corrected, #182 closed not planned).
     │                                #   A tested git-CLI write layer sits unshipped in
-    │                                #   2bcae5a on feat/214-land-actions — lift it, don't
+    │                                #   2bcae5a (tag archive/214-land-actions) — lift it, don't
     │                                #   rewrite it, if an issue ever needs writes
     ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
     │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
@@ -504,7 +504,7 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   `env_remove` `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
   `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
   `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE` and `GIT_PREFIX`
-  first; `2bcae5a` on `feat/214-land-actions` has that, tested.
+  first; `2bcae5a` (tag `archive/214-land-actions`) has that, tested.
 - **Issues drive the work.** Commit messages name the issue
   (`fix(#158): …`). The chapter/phase system ended with chapter 8;
   plan docs are history, not instructions. Parked ideas live in
