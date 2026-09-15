@@ -8,7 +8,7 @@
 //! produces, so the noise never reaches the frontend.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify_debouncer_mini::notify::RecommendedWatcher;
@@ -52,20 +52,42 @@ impl WatcherManager {
     /// Start watching `path` recursively. `on_change` is invoked from a
     /// background thread (the debouncer's flush thread) every time a
     /// quiet window passes after a real filesystem change.
+    ///
+    /// A thin wrapper over [`WatcherManager::start_with_paths`] for
+    /// callers (`git_watch_start`) that only care *that* something
+    /// changed, not *what*.
     pub fn start<F>(&self, id: String, path: &Path, on_change: F) -> Result<(), WatcherError>
     where
         F: Fn() + Send + 'static,
     {
+        self.start_with_paths(id, path, move |_paths| on_change())
+    }
+
+    /// Start watching `path` recursively, like [`WatcherManager::start`],
+    /// but hand `on_change` the paths the debounced batch actually
+    /// touched — review discovery (#221) needs to know *which* files
+    /// changed, not just that something did, so it can skip everything
+    /// else without re-walking the whole worktree on every tick.
+    ///
+    /// `Some(paths)` for a normal batch (one entry per path notify
+    /// coalesced events for); `None` when notify itself reports an
+    /// error (a dropped-events overflow, say) — the caller falls back to
+    /// a full re-scan in that case, the same "stale but honest" choice
+    /// `start` makes by refreshing on an error too.
+    pub fn start_with_paths<F>(
+        &self,
+        id: String,
+        path: &Path,
+        on_change: F,
+    ) -> Result<(), WatcherError>
+    where
+        F: Fn(Option<Vec<PathBuf>>) + Send + 'static,
+    {
         let mut debouncer = new_debouncer(
             Duration::from_millis(DEBOUNCE_MS),
-            move |result: DebounceEventResult| {
-                // Errors from notify are usually transient (dropped
-                // events when the queue overflows). We surface them as
-                // a refresh anyway — better stale-but-honest than
-                // silently missing a change.
-                if result.is_ok() || result.is_err() {
-                    on_change();
-                }
+            move |result: DebounceEventResult| match result {
+                Ok(events) => on_change(Some(events.into_iter().map(|e| e.path).collect())),
+                Err(_) => on_change(None),
             },
         )
         .map_err(WatcherError::from_err)?;

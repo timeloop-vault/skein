@@ -66,6 +66,38 @@ export function useWorktreeWatcher(cwd: string, enabled: boolean, onTick: () => 
 	}, [cwd, enabled]);
 }
 
+/// Start review discovery (#221) for `cwd`: a filesystem watcher that
+/// baselines whatever changed — a shell write, a hand edit, the `files`
+/// harness — not only what a harness `patch` row named. Modelled on
+/// `useWorktreeWatcher`, but owns its own backend watcher rather than
+/// piggybacking on the review pane's: discovery has to run for every
+/// active room, not only the one whose Review tab is currently open, so
+/// a file someone edited while looking at Live Context is still
+/// pending by the time they switch tabs.
+export function useReviewDiscovery(roomId: string, cwd: string | undefined) {
+	useEffect(() => {
+		if (!roomId || !cwd) return;
+		let cancelled = false;
+		let watchId: string | null = null;
+		invoke<string>("review_discovery_start", { roomId, cwd })
+			.then((id) => {
+				if (cancelled) {
+					void invoke("git_watch_stop", { id });
+					return;
+				}
+				watchId = id;
+			})
+			.catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error("[skein] review_discovery_start failed:", msg);
+			});
+		return () => {
+			cancelled = true;
+			if (watchId) void invoke("git_watch_stop", { id: watchId });
+		};
+	}, [roomId, cwd]);
+}
+
 /// Re-fetch when an agent writes to this room's review (#213).
 ///
 /// The sibling of `useWorktreeWatcher`, and needed for the same reason

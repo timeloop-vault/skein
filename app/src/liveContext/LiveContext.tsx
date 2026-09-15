@@ -25,6 +25,7 @@ import { ActivityCardBody, IDLE_AFTER_MS, useIdleBasis } from "./ActivityCard.ts
 import { type CardLayout, CardStack, defaultLayout, normalizeLayout } from "./CardStack.tsx";
 import { SessionTotals, sessionTotals } from "./feedItems.tsx";
 import "./chrome.css";
+import { useReviewDiscovery } from "../review/useReviewData.ts";
 import { PlanCardBody } from "./PlanCard.tsx";
 import { RoomSubtitle } from "./RoomSubtitle.tsx";
 import { type PlanGroup, planTotals, reducePlan } from "./plan.ts";
@@ -131,6 +132,14 @@ export const LiveContext = memo(function LiveContext({
 		[onBranchChange, roomId],
 	);
 	useGitBranchWatcher(cwd, onBranch);
+
+	// Watcher-driven review discovery (#221): baselines a shell write, a
+	// hand edit, or a files-harness save the moment it lands on disk, not
+	// only what a harness `patch` row named. Runs for every active room
+	// regardless of `visible` or which right-pane tab is open — a file
+	// touched while looking at Live Context must still be pending when
+	// the user switches to Review.
+	useReviewDiscovery(roomId, cwd);
 
 	// "· idle 2h 14m" in the Activity head once the room's been silent
 	// past the tail threshold (§10 long-quiet). A per-minute ticker

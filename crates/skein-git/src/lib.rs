@@ -375,6 +375,41 @@ impl Repo {
         Ok(object.as_blob().map(|b| b.content().to_vec()))
     }
 
+    /// Is `relpath` (repo-relative, forward slashes) covered by a
+    /// `.gitignore` rule (or a `core.excludesfile` / `.git/info/exclude`
+    /// one)? Used by watcher-driven review discovery (#221) so an
+    /// ignored file the filesystem watcher notices — `target/`,
+    /// `node_modules/` — never grows a baseline just because it changed
+    /// on disk.
+    pub fn is_path_ignored(&self, relpath: &str) -> Result<bool> {
+        Ok(self.repo.is_path_ignored(relpath)?)
+    }
+
+    /// Was `relpath` (repo-relative, forward slashes) a **directory** at
+    /// HEAD?
+    ///
+    /// Watcher-driven review discovery (#221) uses this to tell a
+    /// deleted directory — which the OS folds into a single event, so
+    /// discovery falls back to a full `git status` sweep to find the
+    /// individual files inside it — from ordinary file churn (a
+    /// lockfile, an editor swap file) that is merely gone by the time
+    /// discovery runs and must NOT trigger that sweep.
+    ///
+    /// `false` covers every "not a tracked directory" case uniformly:
+    /// an unborn HEAD, a path git never tracked, and a tracked path
+    /// that is a blob rather than a tree. Read-only, like every other
+    /// method here.
+    pub fn head_is_dir(&self, relpath: &str) -> Result<bool> {
+        let Ok(head) = self.repo.head() else {
+            return Ok(false); // unborn HEAD — a repo with no commits
+        };
+        let tree = head.peel_to_tree()?;
+        let Ok(entry) = tree.get_path(Path::new(relpath)) else {
+            return Ok(false); // not tracked at HEAD
+        };
+        Ok(entry.kind() == Some(git2::ObjectType::Tree))
+    }
+
     /// Is this reported path actually a directory on disk?
     ///
     /// libgit2 sees a Windows junction (and a symlink to a directory)

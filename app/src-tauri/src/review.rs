@@ -6,19 +6,34 @@
 //!
 //! # When a baseline is captured
 //!
-//! At the moment a **live** `patch` row is recorded — see
-//! [`note_patch`], called from the Claude and opencode adapters. Not
-//! later, and deliberately not from the frontend: by the time the user
-//! looks at the room the agent may already have committed, and a
-//! baseline taken from a HEAD that has moved would show nothing
-//! pending, which is precisely the "changes silently auto-applied"
-//! failure #211 exists to prevent.
+//! Two knockers, both best-effort and both landing through
+//! [`db::insert_review_baseline_if_absent`](crate::db::Database::insert_review_baseline_if_absent)
+//! so neither can ever move an existing baseline:
 //!
-//! Backfill rows do not capture. Replaying a harness's own history on
-//! attach is exactly the case where HEAD has already moved, so a
-//! baseline taken there would be wrong; a room that predates this
-//! feature therefore starts with a clean diff pane rather than a
-//! confidently wrong one.
+//! 1. A **live** `patch` row — see [`note_patch`], called from the
+//!    Claude and opencode adapters. Not later, and deliberately not
+//!    from the frontend: by the time the user looks at the room the
+//!    agent may already have committed, and a baseline taken from a
+//!    HEAD that has moved would show nothing pending, which is
+//!    precisely the "changes silently auto-applied" failure #211
+//!    exists to prevent. Backfill rows do not capture — replaying a
+//!    harness's own history on attach is exactly the case where HEAD
+//!    has already moved, so a room that predates this feature starts
+//!    with a clean diff pane rather than a confidently wrong one.
+//! 2. **Watcher discovery** (#221) — see [`discover`], fed every path a
+//!    room's filesystem watcher reports changed (`review_discovery_start`
+//!    in the commands section below), plus a one-shot [`catch_up`] run
+//!    when that watcher starts, which walks `git status` to cover
+//!    changes made while Skein itself was closed. This is what makes a
+//!    shell write, a hand edit, or the `files` harness show up: none of
+//!    them emit a `patch` row, only a filesystem event. A row captured
+//!    this way carries an empty `harness_id` — the OS does not say
+//!    *who* touched a file, so there is no chip until (if ever) a later
+//!    live `patch` row claims it through `note_patch`'s touch path.
+//!    Git only supplies the initial baseline *value* here (same as
+//!    knocker 1) and the `catch_up` shortcut; a non-git room still
+//!    discovers from live watcher ticks, it just cannot catch up on
+//!    changes made before Skein was running to see them.
 //!
 //! # Where the content comes from
 //!
@@ -41,8 +56,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use serde_json::Value;
 use skein_review::{FileState, Hunk};
+use tauri::Emitter;
 
+use crate::agent_api::state::{REVIEW_CHANGED_EVENT, ReviewChanged};
 use crate::db::Database;
+use crate::watcher::WatcherManager;
 
 // ── path keys ─────────────────────────────────────────────────────
 
@@ -155,9 +173,19 @@ fn patch_targets(payload: &str) -> Vec<String> {
 }
 
 /// The baseline content for a freshly touched path — see the module
-/// docs for the two tiers.
+/// docs for the two tiers. Opens its own repo handle; callers already
+/// holding one (discovery, which processes a whole batch of paths)
+/// should use [`capture_state_with_repo`] instead so each path doesn't
+/// pay for a fresh `Repo::open`.
 fn capture_state(cwd: &str, key: &str) -> FileState {
-    let Ok(repo) = skein_git::Repo::open(Path::new(cwd)) else {
+    let repo = skein_git::Repo::open(Path::new(cwd)).ok();
+    capture_state_with_repo(repo.as_ref(), key)
+}
+
+/// Same as [`capture_state`], against an already-opened repo (or `None`
+/// for a non-git room).
+fn capture_state_with_repo(repo: Option<&skein_git::Repo>, key: &str) -> FileState {
+    let Some(repo) = repo else {
         return FileState::Missing; // not a git room
     };
     match repo.head_blob(key) {
@@ -193,20 +221,210 @@ pub fn note_patch(db: &Database, room_id: &str, cwd: &str, harness_id: &str, pay
             }
             Ok(None) => {
                 let (kind, content) = skein_review::encode(&capture_state(cwd, &key));
-                if let Err(e) = db.insert_review_baseline_if_absent(
-                    room_id,
-                    &key,
-                    kind,
-                    content.as_deref(),
-                    harness_id,
-                    ts,
-                ) {
+                if let Err(e) =
+                    insert_or_attribute(db, room_id, &key, kind, content.as_deref(), harness_id, ts)
+                {
                     tracing::warn!(path = %key, error = %e, "review: baseline capture failed");
                 }
             }
             Err(e) => tracing::warn!(path = %key, error = %e, "review: baseline lookup failed"),
         }
     }
+}
+
+/// Insert a fresh baseline, or — when a concurrent capture (watcher
+/// discovery racing this same live `patch` row, or the reverse) already
+/// won — fall through to attribution only.
+///
+/// `discover_batch` runs on the debouncer thread and can insert the
+/// same row (with `harness_id == ""`) in the window between this
+/// caller's own `review_baseline` read and its insert. Losing the
+/// insert race must not lose the harness chip: content is never
+/// re-captured once a row exists (the #211 invariant), but `harness_id`
+/// and `touched_ms` still move, the same as the `Ok(Some(_))` arm above
+/// does for an ordinary second edit.
+fn insert_or_attribute(
+    db: &Database,
+    room_id: &str,
+    key: &str,
+    kind: &str,
+    content: Option<&str>,
+    harness_id: &str,
+    ts: i64,
+) -> Result<(), String> {
+    if db.insert_review_baseline_if_absent(room_id, key, kind, content, harness_id, ts)? {
+        return Ok(());
+    }
+    db.touch_review_baseline(room_id, key, harness_id, ts)
+}
+
+// ── discovery (#221) ─────────────────────────────────────────────
+
+/// Feed a batch of watcher-reported paths (absolute or relative)
+/// through the same capture as a live `patch` row, but with no
+/// attribution: the filesystem doesn't say who wrote a file, so a row
+/// discovered here starts with an empty `harness_id` — no chip until a
+/// later `patch` row claims it via `note_patch`'s touch path.
+///
+/// Returns how many baselines were newly captured. Best-effort like
+/// [`note_patch`]: logs and moves on rather than propagating, and never
+/// touches a path that already has a baseline — recapturing would
+/// silently move the baseline behind the user's back and absorb
+/// whatever they haven't reviewed yet (the same #211 invariant
+/// [`note_patch`] protects).
+pub(crate) fn discover(
+    db: &Database,
+    room_id: &str,
+    cwd: &str,
+    reported: impl IntoIterator<Item = String>,
+) -> usize {
+    if cwd.is_empty() {
+        return 0;
+    }
+    let repo = skein_git::Repo::open(Path::new(cwd)).ok();
+    let (mut inserted, needs_catch_up) =
+        discover_batch(db, room_id, cwd, repo.as_ref(), reported, true);
+    if needs_catch_up {
+        if let Some(repo) = &repo {
+            inserted += catch_up_with(db, room_id, cwd, repo);
+        }
+        // A non-git room has nothing to catch up against — nothing
+        // else to do.
+    }
+    inserted
+}
+
+/// One-shot `git status` sweep, run when a room's watcher (re)starts so
+/// changes made while Skein itself was closed still surface. A non-git
+/// room has no status to walk and returns 0 — see the module docs.
+pub(crate) fn catch_up(db: &Database, room_id: &str, cwd: &str) -> usize {
+    if cwd.is_empty() {
+        return 0;
+    }
+    let Ok(repo) = skein_git::Repo::open(Path::new(cwd)) else {
+        return 0;
+    };
+    catch_up_with(db, room_id, cwd, &repo)
+}
+
+fn catch_up_with(db: &Database, room_id: &str, cwd: &str, repo: &skein_git::Repo) -> usize {
+    let entries = match repo.status() {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(cwd, error = %e, "review: discovery catch-up status failed");
+            return 0;
+        }
+    };
+    // `discover_batch`'s own needs-catch-up detection is moot here —
+    // every path status() reports already exists or is a real tracked
+    // deletion, never a directory collapsed into one OS event — so the
+    // flag it returns is ignored. `status()` also already excludes
+    // ignored files, so skip the redundant `is_path_ignored` re-check.
+    let (inserted, _) = discover_batch(
+        db,
+        room_id,
+        cwd,
+        Some(repo),
+        entries.into_iter().map(|e| e.path),
+        false,
+    );
+    inserted
+}
+
+/// The shared walk behind [`discover`] and [`catch_up`]. Returns
+/// `(inserted, needs_catch_up)` — the latter set when a reported path
+/// no longer exists on disk, has no HEAD blob either, AND was a
+/// **directory** at HEAD ([`skein_git::Repo::head_is_dir`]): the OS
+/// folds a deleted directory into a single watcher event, so the caller
+/// re-derives the individual deleted files via `git status`. An
+/// ordinary file that is merely gone by the time discovery runs — a
+/// lockfile, an editor swap file, anything create-then-delete — is
+/// *not* a directory at HEAD and must not trigger that sweep.
+///
+/// `check_ignores` skips the `is_path_ignored` call for callers (the
+/// `catch_up` path) whose `reported` already came from `git status`,
+/// which excludes ignored files itself.
+fn discover_batch(
+    db: &Database,
+    room_id: &str,
+    cwd: &str,
+    repo: Option<&skein_git::Repo>,
+    reported: impl IntoIterator<Item = String>,
+    check_ignores: bool,
+) -> (usize, bool) {
+    let mut inserted = 0;
+    let mut needs_catch_up = false;
+    for reported_path in reported {
+        let Some(key) = relative_key(cwd, &reported_path) else {
+            continue;
+        };
+        if key.split('/').any(|seg| seg == ".git") {
+            continue;
+        }
+        match db.review_baseline(room_id, &key) {
+            Ok(Some(_)) => continue, // never recapture — see module docs
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(path = %key, error = %e, "review: discovery baseline lookup failed");
+                continue;
+            }
+        }
+        if check_ignores {
+            if let Some(repo) = repo {
+                match repo.is_path_ignored(&key) {
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                    // Can't prove it's ignored — the safe direction is
+                    // to keep going rather than silently drop a real
+                    // change.
+                    Err(e) => {
+                        tracing::warn!(path = %key, error = %e, "review: discovery ignore check failed");
+                    }
+                }
+            }
+        }
+        let abs = abs_path(cwd, &key);
+        // `symlink_metadata` so a symlink-to-directory doesn't get
+        // followed into "yes, it's a directory".
+        let meta = std::fs::symlink_metadata(&abs);
+        if meta.as_ref().is_ok_and(std::fs::Metadata::is_dir) {
+            continue; // not a file to baseline
+        }
+        let exists = meta.is_ok();
+        let base = capture_state_with_repo(repo, &key);
+        if !exists && base == FileState::Missing {
+            let was_dir_at_head = repo.is_some_and(|r| match r.head_is_dir(&key) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(path = %key, error = %e, "review: discovery head_is_dir check failed");
+                    false
+                }
+            });
+            if was_dir_at_head {
+                needs_catch_up = true;
+            }
+        }
+        let disk = skein_review::read_state(&abs);
+        if base == disk {
+            continue; // nothing pending — a later write fires another event
+        }
+        let (kind, content) = skein_review::encode(&base);
+        match db.insert_review_baseline_if_absent(
+            room_id,
+            &key,
+            kind,
+            content.as_deref(),
+            "",
+            now_ms(),
+        ) {
+            Ok(true) => inserted += 1,
+            Ok(false) => {} // lost a race with another capture — fine
+            Err(e) => {
+                tracing::warn!(path = %key, error = %e, "review: discovery baseline capture failed");
+            }
+        }
+    }
+    (inserted, needs_catch_up)
 }
 
 // ── DTOs ──────────────────────────────────────────────────────────
@@ -485,6 +703,87 @@ pub async fn review_reject(
     .map_err(|e| e.to_string())?
 }
 
+/// Start watching `cwd` for review discovery (#221): every debounced
+/// change re-runs [`discover`] over just the paths that moved, and a
+/// notify error (dropped events) falls back to [`catch_up`]'s full
+/// `git status` sweep. Returns an opaque id — stop it with the existing
+/// `git_watch_stop` (same [`WatcherManager`], no new stop command).
+///
+/// Also runs one [`catch_up`] immediately, off the async runtime, so a
+/// room reopened after Skein was closed for a while sees what changed
+/// meanwhile — the reason this command exists rather than callers just
+/// reusing `git_watch_start` with a `review_pending`-shaped callback.
+///
+/// A capture emits [`REVIEW_CHANGED_EVENT`] so the review pane's
+/// `useAgentWrites` re-fetches without racing its own worktree watcher
+/// tick (both are debounced independently).
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn review_discovery_start(
+    room_id: String,
+    cwd: String,
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Arc<Database>>,
+    manager: tauri::State<'_, WatcherManager>,
+) -> Result<String, String> {
+    if cwd.is_empty() {
+        return Err("cwd must not be empty".to_string());
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let db_for_watch = Arc::clone(&db);
+    let app_for_watch = app.clone();
+    let room_for_watch = room_id.clone();
+    let cwd_for_watch = cwd.clone();
+    manager
+        .start_with_paths(id.clone(), Path::new(&cwd), move |paths| {
+            let inserted = match paths {
+                Some(paths) => discover(
+                    &db_for_watch,
+                    &room_for_watch,
+                    &cwd_for_watch,
+                    paths_to_reported(paths),
+                ),
+                None => catch_up(&db_for_watch, &room_for_watch, &cwd_for_watch),
+            };
+            if inserted > 0 {
+                emit_review_changed(&app_for_watch, &room_for_watch);
+            }
+        })
+        .map_err(|e| e.to_string())?;
+
+    // The initial sweep: catches changes made while this room had no
+    // watcher running (Skein closed, or the tab was never opened).
+    let db_for_catchup = Arc::clone(&db);
+    let room_for_catchup = room_id;
+    let cwd_for_catchup = cwd;
+    tauri::async_runtime::spawn_blocking(move || {
+        let inserted = catch_up(&db_for_catchup, &room_for_catchup, &cwd_for_catchup);
+        if inserted > 0 {
+            emit_review_changed(&app, &room_for_catchup);
+        }
+    });
+
+    Ok(id)
+}
+
+fn paths_to_reported(paths: Vec<PathBuf>) -> Vec<String> {
+    paths
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect()
+}
+
+fn emit_review_changed(app: &tauri::AppHandle, room_id: &str) {
+    if let Err(e) = app.emit(
+        REVIEW_CHANGED_EVENT,
+        ReviewChanged {
+            room_id: room_id.to_owned(),
+        },
+    ) {
+        tracing::warn!(room_id, error = %e, "review: discovery-changed emit failed");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -628,6 +927,22 @@ mod tests {
             let joined = lines.concat();
             self.write(rel, &joined);
             joined
+        }
+
+        /// What the watcher reports: absolute paths, the shape
+        /// `event.path` comes in as.
+        fn discover(&self, rels: &[&str]) -> usize {
+            discover(
+                &self.db,
+                "r1",
+                &self.cwd,
+                rels.iter()
+                    .map(|r| self.path(r).to_string_lossy().to_string()),
+            )
+        }
+
+        fn catch_up(&self) -> usize {
+            catch_up(&self.db, "r1", &self.cwd)
         }
     }
 
@@ -986,5 +1301,275 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].path, "a.rs");
         assert_eq!((pending[0].additions, pending[0].deletions), (1, 1));
+    }
+
+    // ── discovery (#221) ─────────────────────────────────────────
+
+    #[test]
+    fn discover_baselines_a_shell_write_in_a_non_git_room() {
+        let room = Room::bare();
+        room.write("notes.md", "hello\n");
+        assert_eq!(room.discover(&["notes.md"]), 1);
+
+        let pending = room.pending();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].change, "added");
+        assert_eq!(
+            pending[0].harness_id, "",
+            "no chip — discovery has no attribution"
+        );
+    }
+
+    #[test]
+    fn discover_baselines_a_modified_tracked_file_from_head() {
+        let room = Room::new();
+        room.write("src/a.rs", "one\nTWO\nthree\n");
+        assert_eq!(room.discover(&["src/a.rs"]), 1);
+
+        let pending = room.pending();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].change, "modified");
+        assert_eq!(pending[0].harness_id, "");
+        let row = room.db.review_baseline("r1", "src/a.rs").unwrap().unwrap();
+        assert_eq!(
+            row.content.as_deref(),
+            Some("one\ntwo\nthree\n"),
+            "baseline is HEAD content, not what's on disk"
+        );
+    }
+
+    #[test]
+    fn discover_never_touches_an_existing_baseline() {
+        let room = Room::new();
+        room.write("src/a.rs", "one\nTWO\nthree\n");
+        room.touched("h1", "src/a.rs");
+        room.write("src/a.rs", "one\nTWO\nTHREE\n");
+
+        assert_eq!(room.discover(&["src/a.rs"]), 0);
+
+        let row = room.db.review_baseline("r1", "src/a.rs").unwrap().unwrap();
+        assert_eq!(row.content.as_deref(), Some("one\ntwo\nthree\n"));
+        assert_eq!(row.harness_id, "h1", "discovery must not steal the chip");
+    }
+
+    #[test]
+    fn discover_skips_git_internals_ignored_directory_and_unchanged_paths() {
+        let room = Room::new();
+        room.write(".gitignore", "ignored.log\n");
+        room.commit_all("add gitignore");
+        room.write("ignored.log", "noise\n");
+
+        // `.git/`, a gitignored file, and a directory (src already holds
+        // a.rs from Room::new).
+        assert_eq!(room.discover(&[".git/HEAD", "ignored.log", "src"]), 0);
+        assert!(
+            room.db
+                .review_baseline("r1", "ignored.log")
+                .unwrap()
+                .is_none()
+        );
+        assert!(room.db.review_baseline("r1", "src").unwrap().is_none());
+
+        // Outside the worktree entirely.
+        assert_eq!(
+            discover(
+                &room.db,
+                "r1",
+                &room.cwd,
+                vec!["C:/elsewhere/x.rs".to_string()]
+            ),
+            0
+        );
+
+        // An unchanged tracked file — nothing pending yet.
+        assert_eq!(room.discover(&["src/a.rs"]), 0);
+        assert!(room.db.review_baseline("r1", "src/a.rs").unwrap().is_none());
+    }
+
+    #[test]
+    fn discover_baselines_a_deleted_tracked_file() {
+        let room = Room::new();
+        fs::remove_file(room.path("src/a.rs")).unwrap();
+        assert_eq!(room.discover(&["src/a.rs"]), 1);
+
+        let pending = room.pending();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].change, "deleted");
+    }
+
+    #[test]
+    fn discover_falls_back_to_catch_up_for_a_deleted_tracked_directory() {
+        let room = Room::new();
+        room.write("src/inner/b.rs", "b\n");
+        room.write("src/inner/c.rs", "c\n");
+        room.commit_all("add inner dir");
+        fs::remove_dir_all(room.path("src/inner")).unwrap();
+
+        // The watcher only ever reports the directory itself vanishing —
+        // one OS event, not one per file inside it.
+        let inserted = room.discover(&["src/inner"]);
+        assert_eq!(
+            inserted, 2,
+            "both files must surface via the catch-up fallback"
+        );
+
+        let mut paths: Vec<String> = room.pending().into_iter().map(|f| f.path).collect();
+        paths.sort();
+        assert_eq!(paths, ["src/inner/b.rs", "src/inner/c.rs"]);
+        assert!(
+            room.db
+                .review_baseline("r1", "src/inner")
+                .unwrap()
+                .is_none(),
+            "the directory path itself is never baselined"
+        );
+    }
+
+    #[test]
+    fn discover_ignores_untracked_temp_file_churn_and_does_not_sweep() {
+        // A never-tracked path that is gone by the time discovery runs
+        // (an editor swap file, a lockfile, any create-then-delete temp
+        // file) must not latch the catch-up fallback — only a
+        // directory that existed at HEAD may. Observed through the
+        // sweep's own effect: a dirty tracked file that was never
+        // reported in the batch would only surface if a full
+        // `git status` sweep ran.
+        let room = Room::new();
+        room.write("src/other.rs", "hello\n");
+        room.commit_all("add other");
+        room.write("src/other.rs", "HELLO\n"); // dirty, but not reported below
+
+        room.write("tmp.x", "noise");
+        fs::remove_file(room.path("tmp.x")).unwrap();
+
+        assert_eq!(
+            room.discover(&["tmp.x"]),
+            0,
+            "temp churn must not trigger a sweep"
+        );
+        assert!(
+            room.db
+                .review_baseline("r1", "src/other.rs")
+                .unwrap()
+                .is_none(),
+            "a full sweep would have picked up the unreported dirty file"
+        );
+    }
+
+    #[test]
+    fn catch_up_discovers_dirty_and_untracked_files() {
+        let room = Room::new();
+        // The fixture's own sqlite file lives inside this same worktree
+        // (real rooms never do — the db is in APP_DATA), so keep it out
+        // of `git status` or it would show up as untracked noise.
+        room.write(".gitignore", "skein.db*\n");
+        room.commit_all("ignore fixture db");
+
+        room.write("src/a.rs", "one\nTWO\nthree\n"); // dirty
+        room.write("new.rs", "brand new\n"); // untracked
+
+        assert_eq!(room.catch_up(), 2);
+        let mut paths: Vec<String> = room.pending().into_iter().map(|f| f.path).collect();
+        paths.sort();
+        assert_eq!(paths, ["new.rs", "src/a.rs"]);
+    }
+
+    #[test]
+    fn catch_up_in_a_non_git_room_does_nothing() {
+        let room = Room::bare();
+        room.write("notes.md", "hello\n");
+        assert_eq!(room.catch_up(), 0);
+        assert!(room.pending().is_empty(), "non-git rooms cannot catch up");
+    }
+
+    #[test]
+    fn accepting_a_discovered_file_clears_it() {
+        let room = Room::new();
+        room.write("src/a.rs", "one\nTWO\nthree\n");
+        room.discover(&["src/a.rs"]);
+        let hash = room.pending()[0].content_hash.clone();
+
+        accept_impl(
+            &room.db,
+            "r1",
+            &room.cwd,
+            Some("src/a.rs"),
+            &[],
+            Some(&hash),
+        )
+        .unwrap();
+        assert!(room.pending().is_empty());
+    }
+
+    #[test]
+    fn rejecting_a_discovered_created_file_deletes_it_in_a_non_git_room() {
+        let room = Room::bare();
+        room.write("notes.md", "unwanted\n");
+        room.discover(&["notes.md"]);
+        assert_eq!(room.pending()[0].change, "added");
+
+        reject_impl(&room.db, "r1", &room.cwd, "notes.md", &[], None).unwrap();
+        assert!(!room.path("notes.md").exists());
+        assert!(room.pending().is_empty());
+    }
+
+    #[test]
+    fn note_patch_after_discovery_attributes_the_row() {
+        let room = Room::new();
+        room.write("src/a.rs", "one\nTWO\nthree\n");
+        room.discover(&["src/a.rs"]);
+        assert_eq!(room.pending()[0].harness_id, "");
+
+        room.touched("h1", "src/a.rs");
+        assert_eq!(room.pending()[0].harness_id, "h1");
+
+        let row = room.db.review_baseline("r1", "src/a.rs").unwrap().unwrap();
+        assert_eq!(
+            row.content.as_deref(),
+            Some("one\ntwo\nthree\n"),
+            "note_patch must attribute, not recapture"
+        );
+    }
+
+    // ── insert_or_attribute (lost-insert race, #221) ────────────────
+
+    #[test]
+    fn insert_or_attribute_claims_a_row_a_concurrent_capture_already_won() {
+        // Simulates the race the module docs describe: watcher
+        // discovery's own insert lands first, with no attribution,
+        // in the window between `note_patch`'s baseline read and its
+        // own insert.
+        let room = Room::new();
+        assert!(
+            room.db
+                .insert_review_baseline_if_absent(
+                    "r1",
+                    "src/a.rs",
+                    "text",
+                    Some("one\ntwo\nthree\n"),
+                    "",
+                    100,
+                )
+                .unwrap()
+        );
+
+        insert_or_attribute(
+            &room.db,
+            "r1",
+            "src/a.rs",
+            "text",
+            Some("a different snapshot"),
+            "h1",
+            200,
+        )
+        .unwrap();
+
+        let row = room.db.review_baseline("r1", "src/a.rs").unwrap().unwrap();
+        assert_eq!(row.harness_id, "h1", "the chip must not be lost");
+        assert_eq!(
+            row.content.as_deref(),
+            Some("one\ntwo\nthree\n"),
+            "content must never be re-captured, only attribution moves"
+        );
     }
 }

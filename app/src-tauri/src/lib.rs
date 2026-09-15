@@ -416,6 +416,7 @@ pub fn run() {
             review::review_pending,
             review::review_accept,
             review::review_reject,
+            review::review_discovery_start,
             review_surface::commands::review_scope,
             review_surface::commands::review_file,
             review_surface::commands::review_add_thread,
