@@ -736,6 +736,11 @@ body {
 	border-left: 1px solid transparent;
 	border-right: 1px solid transparent;
 	gap: 2px;
+	/* #271: pointer-drag reorder presses and moves over this tab's own
+	 * text — without these, a press-drag can start a text selection
+	 * instead of (or alongside) the reorder. */
+	user-select: none;
+	touch-action: none;
 }
 .sk-tab:hover {
 	color: var(--fg-1);
@@ -1034,6 +1039,9 @@ body {
 	height: calc(var(--cfs, 12px) * 2.5);
 	border: 1px solid transparent;
 	border-bottom: none;
+	/* #271: see .sk-tab's same properties. */
+	user-select: none;
+	touch-action: none;
 }
 .sk-harness-tab:hover {
 	color: var(--fg-1);
@@ -1053,22 +1061,82 @@ body {
 	background: var(--bg-2);
 }
 
-/* Issue #26 — drag-and-drop reorder. `dragging` dims the source
- * tab while it's being dragged; `drop-before` / `drop-after` paint
- * a 2px accent-coloured bar on the matching edge of the hovered
- * tab to show where the drop will land. box-shadow over a border
- * so the indicator doesn't shift adjacent tabs as it appears. */
-.sk-tab.dragging,
-.sk-harness-tab.dragging {
+/* Issue #26 — drag-and-drop reorder, rebuilt on pointer events for
+ * #271 (tabDrag.ts / useTabDrag.ts). `dragging` marks the source tab
+ * as a placeholder while its clone (the drag ghost, below) follows the
+ * pointer; `drop-before` / `drop-after` paint a 2px accent-coloured
+ * bar at the matching edge of the tab the gap (see tabDrag.ts) has
+ * resolved to, showing where the drop will land. */
+/* Only the source tab's CHILDREN dim, not the tab element itself —
+ * dimming the element also dims its own ::before/::after (the active
+ * tab's accent line / seam-hider below), which used to turn a dragged
+ * active tab's accent bar a muddy brown. A dashed inset outline marks
+ * the placeholder instead of the old whole-tab opacity. */
+.sk-tab.dragging > *,
+.sk-harness-tab.dragging > * {
 	opacity: 0.4;
 }
-.sk-tab.drop-before,
-.sk-harness-tab.drop-before {
-	box-shadow: -2px 0 0 var(--accent);
+.sk-tab.dragging,
+.sk-harness-tab.dragging {
+	outline: 1px dashed var(--line-strong);
+	outline-offset: -3px;
 }
-.sk-tab.drop-after,
-.sk-harness-tab.drop-after {
-	box-shadow: 2px 0 0 var(--accent);
+/* Drawn as a pseudo-element INSIDE the tab's own box (not a box-shadow
+ * outside it) so it can't be clipped by the strip's overflow:hidden —
+ * the old box-shadow version barely showed on the rightmost tab for
+ * exactly that reason. Room tabs use ::after (::before is the active
+ * tab's top accent line); harness tabs use ::before (::after is the
+ * active tab's seam-hider) — whichever pseudo-element isn't already
+ * spoken for on that tab kind. */
+.sk-tab.drop-before::after,
+.sk-tab.drop-after::after,
+.sk-harness-tab.drop-before::before,
+.sk-harness-tab.drop-after::before {
+	content: "";
+	position: absolute;
+	top: 4px;
+	bottom: 4px;
+	width: 2px;
+	background: var(--accent);
+	z-index: 2;
+	pointer-events: none;
+}
+.sk-tab.drop-before::after,
+.sk-harness-tab.drop-before::before {
+	left: 0;
+}
+.sk-tab.drop-after::after,
+.sk-harness-tab.drop-after::before {
+	right: 0;
+}
+/* #271: pointer-drag has no native "no-drop" cursor to fall back on —
+ * unlike HTML5 DnD, nothing stops the browser from showing whatever
+ * cursor the hovered element underneath declares. Force one everywhere
+ * for the duration of the drag instead; `tab-drag-refused` (set while
+ * a harness drag hovers a different room's tab) swaps it to
+ * not-allowed. useTabDrag toggles both classes on <html>. */
+html.tab-dragging,
+html.tab-dragging * {
+	cursor: grabbing !important;
+}
+html.tab-dragging.tab-drag-refused,
+html.tab-dragging.tab-drag-refused * {
+	cursor: not-allowed !important;
+}
+/* #271: a floating clone of the tab being dragged (useTabDrag's
+ * createGhost), so the user sees what they're holding instead of only
+ * an edge indicator elsewhere on screen. Fixed + transformed on every
+ * pointermove; width/height are pinned inline to the source tab's own
+ * size since the clone isn't inside the strip's flex layout. */
+.tab-drag-ghost {
+	position: fixed;
+	top: 0;
+	left: 0;
+	pointer-events: none;
+	z-index: 9500;
+	opacity: 0.9;
+	box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+	overflow: hidden;
 }
 .sk-harness-tab .ht-name {
 	white-space: nowrap;

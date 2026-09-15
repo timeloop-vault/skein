@@ -19,7 +19,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
-import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type PointerEvent as ReactPointerEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
 import { FilesBody } from "./FilesBody.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
@@ -83,6 +90,7 @@ import type {
 	Theme,
 } from "./types.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
+import { useTabDrag } from "./useTabDrag.ts";
 
 // ── Toasts (in-app notifications, L5c) ─────────────────────────────
 //
@@ -376,10 +384,15 @@ interface HarnessDrag {
 	draggedHarnessId: string | null;
 	dropTargetHarnessId: string | null;
 	dropSide: "before" | "after" | null;
-	onDragStart: (e: DragEvent<HTMLDivElement>, roomId: string, harnessId: string) => void;
-	onDragOver: (e: DragEvent<HTMLDivElement>, roomId: string, harnessId: string) => void;
-	onDrop: (e: DragEvent<HTMLDivElement>, roomId: string, targetId: string) => void;
-	onDragEnd: () => void;
+	// #271: pointer-based drag start, scoped to this room by the caller
+	// (App.tsx curries roomId in); the rest — move/up/cancel — doesn't
+	// need per-tab identity, so it's a single shared handler set.
+	onPointerDown: (e: ReactPointerEvent<HTMLDivElement>, roomId: string, harnessId: string) => void;
+	onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
+	onPointerUp: (e: ReactPointerEvent<HTMLDivElement>) => void;
+	onPointerCancel: (e: ReactPointerEvent<HTMLDivElement>) => void;
+	onLostPointerCapture: (e: ReactPointerEvent<HTMLDivElement>) => void;
+	suppressClick: () => boolean;
 }
 
 interface HarnessColumnProps {
@@ -456,7 +469,11 @@ const HarnessColumn = ({
 
 	return (
 		<div className="sk-harness-col">
-			<div className="sk-harness-tabs">
+			{/* #271: data-drag-strip (+ data-drag-room) covers this whole
+			    outer row — tablist, `+ harness`, and the meta text — so a
+			    drop anywhere past the last tab resolves to an end-of-strip
+			    gap. See the room strip's own data-drag-strip above. */}
+			<div className="sk-harness-tabs" data-drag-strip="harness" data-drag-room={room.id}>
 				{/* Scrollable list + PINNED add button: without the split, a
 				    room with many harnesses pushed `+ harness` off-screen at
 				    laptop width (design README — the pinning is load-bearing). */}
@@ -469,13 +486,17 @@ const HarnessColumn = ({
 							closable={room.harnesses.length > 1}
 							onClick={() => onSwitchHarness(room.id, h.id)}
 							onClose={() => onCloseHarness(room.id, h.id)}
-							draggable
 							dragging={harnessDrag.draggedHarnessId === h.id}
 							dropSide={harnessDrag.dropTargetHarnessId === h.id ? harnessDrag.dropSide : null}
-							onDragStart={(e) => harnessDrag.onDragStart(e, room.id, h.id)}
-							onDragOver={(e) => harnessDrag.onDragOver(e, room.id, h.id)}
-							onDrop={(e) => harnessDrag.onDrop(e, room.id, h.id)}
-							onDragEnd={harnessDrag.onDragEnd}
+							dragKind="harness"
+							dragId={h.id}
+							dragRoomId={room.id}
+							onPointerDown={(e) => harnessDrag.onPointerDown(e, room.id, h.id)}
+							onPointerMove={harnessDrag.onPointerMove}
+							onPointerUp={harnessDrag.onPointerUp}
+							onPointerCancel={harnessDrag.onPointerCancel}
+							onLostPointerCapture={harnessDrag.onLostPointerCapture}
+							suppressClick={harnessDrag.suppressClick}
 						/>
 					))}
 				</div>
@@ -1515,28 +1536,6 @@ export default function App() {
 	const handleBranchChange = useCallback((roomId: string, branch: string | null) => {
 		setLiveBranches((prev) => (prev[roomId] === branch ? prev : { ...prev, [roomId]: branch }));
 	}, []);
-	// Drag-and-drop reorder state. `drag` tracks what's being dragged
-	// (a whole room, or a harness scoped to its room — cross-room
-	// harness drops are rejected). `dropTarget` tracks where the drop
-	// indicator should render, updated by every dragOver. Issue #26.
-	//
-	// `dragRef` mirrors `drag` synchronously so the dragOver handler
-	// can read it without waiting for React to commit the state update
-	// from dragstart. Two-channel design: React state drives the UI
-	// (`dragging` opacity, drop indicator), the ref drives the drag-
-	// kind check in dragOver / drop. Using DataTransfer.types for this
-	// doesn't work in WebKit (Tauri's macOS engine) because custom MIME
-	// types aren't exposed until the drop event fires for privacy
-	// reasons — checking in dragOver always returns false, so
-	// preventDefault is skipped and the drop is silently rejected.
-	type DragInfo = { kind: "room"; id: string } | { kind: "harness"; roomId: string; id: string };
-	const [drag, setDrag] = useState<DragInfo | null>(null);
-	const dragRef = useRef<DragInfo | null>(null);
-	const [dropTarget, setDropTarget] = useState<
-		| { kind: "room"; id: string; side: "before" | "after" }
-		| { kind: "harness"; roomId: string; id: string; side: "before" | "after" }
-		| null
-	>(null);
 	const [showPicker, setShowPicker] = useState<string | null>(null);
 	const [showNewRoom, setShowNewRoom] = useState(false);
 	const [showPalette, setShowPalette] = useState(false);
@@ -2096,95 +2095,14 @@ export default function App() {
 		);
 	};
 
-	const dropSideForRoom = (e: DragEvent<HTMLDivElement>): "before" | "after" => {
-		const rect = e.currentTarget.getBoundingClientRect();
-		return e.clientX < rect.left + rect.width / 2 ? "before" : "after";
-	};
-
-	const handleRoomDragStart = (e: DragEvent<HTMLDivElement>, roomId: string) => {
-		const info: DragInfo = { kind: "room", id: roomId };
-		dragRef.current = info;
-		setDrag(info);
-		e.dataTransfer.effectAllowed = "move";
-		// Some browsers require setData for a drag to "register"
-		// properly; the value is unused since dragRef carries the
-		// real intent.
-		e.dataTransfer.setData("text/plain", roomId);
-	};
-
-	const handleRoomDragOver = (e: DragEvent<HTMLDivElement>, roomId: string) => {
-		// Gate preventDefault on the drag kind so cross-kind drags
-		// (e.g. dragging a file from outside the app over a tab) get
-		// the no-drop cursor automatically. dragRef is set
-		// synchronously in dragstart so this check is reliable —
-		// React state lag isn't an issue here.
-		if (dragRef.current?.kind !== "room") return;
-		e.preventDefault();
-		e.dataTransfer.dropEffect = "move";
-		const side = dropSideForRoom(e);
-		setDropTarget((prev) =>
-			prev?.kind === "room" && prev.id === roomId && prev.side === side
-				? prev
-				: { kind: "room", id: roomId, side },
-		);
-	};
-
-	const handleRoomDrop = (e: DragEvent<HTMLDivElement>, targetId: string) => {
-		e.preventDefault();
-		const info = dragRef.current;
-		if (info?.kind !== "room") return;
-		const side = dropSideForRoom(e);
-		reorderRoom(info.id, targetId, side);
-	};
-
-	const handleHarnessDragStart = (
-		e: DragEvent<HTMLDivElement>,
-		roomId: string,
-		harnessId: string,
-	) => {
-		const info: DragInfo = { kind: "harness", roomId, id: harnessId };
-		dragRef.current = info;
-		setDrag(info);
-		e.dataTransfer.effectAllowed = "move";
-		e.dataTransfer.setData("text/plain", harnessId);
-	};
-
-	const handleHarnessDragOver = (
-		e: DragEvent<HTMLDivElement>,
-		roomId: string,
-		harnessId: string,
-	) => {
-		// Cross-room harness drags get the no-drop cursor for free:
-		// roomId mismatch → no preventDefault → browser refuses the
-		// drop. Same gating principle as handleRoomDragOver.
-		const info = dragRef.current;
-		if (info?.kind !== "harness" || info.roomId !== roomId) return;
-		e.preventDefault();
-		e.dataTransfer.dropEffect = "move";
-		const side = dropSideForRoom(e);
-		setDropTarget((prev) =>
-			prev?.kind === "harness" &&
-			prev.roomId === roomId &&
-			prev.id === harnessId &&
-			prev.side === side
-				? prev
-				: { kind: "harness", roomId, id: harnessId, side },
-		);
-	};
-
-	const handleHarnessDrop = (e: DragEvent<HTMLDivElement>, roomId: string, targetId: string) => {
-		e.preventDefault();
-		const info = dragRef.current;
-		if (info?.kind !== "harness" || info.roomId !== roomId) return;
-		const side = dropSideForRoom(e);
-		reorderHarness(roomId, info.id, targetId, side);
-	};
-
-	const handleDragEnd = () => {
-		dragRef.current = null;
-		setDrag(null);
-		setDropTarget(null);
-	};
+	// Pointer-based drag-to-reorder (#271, replacing the HTML5 DnD this
+	// used before — see tabDrag.ts's header for why). The state machine
+	// and its DOM wiring both live outside App.tsx; `reorderRoom` /
+	// `reorderHarness` above are the only pieces the hook needs back.
+	const { drag, dropTarget, startDrag, dragHandlers, suppressClick } = useTabDrag(
+		reorderRoom,
+		reorderHarness,
+	);
 
 	// Window-level keyboard shortcuts. Uses isAppShortcut as the gate —
 	// that same predicate also makes LiveTerminal's xterm custom handler
@@ -2837,16 +2755,20 @@ export default function App() {
 	// the native title=). One delegated listener for the whole app.
 	useEffect(() => attachStatusPopover(), []);
 
-	// #120: the window has `dragDropEnabled: false` (so the in-webview
-	// harness-reorder DnD works, #26). The side effect is that a stray OS
-	// file drop hits the webview's default handler and navigates to the
-	// `file://` URL — a black screen with no way back. Swallow file drags
-	// at the window level so they can't navigate. Gated to actual file
-	// drags (`dataTransfer` carries "Files"), so the harness-reorder DnD —
-	// and its cross-room no-drop cursor, which relies on NOT preventing
-	// default — is left completely untouched.
+	// #120: this window-level swallow predates #271. Back when
+	// `dragDropEnabled` was `false` (kept off so the in-webview
+	// harness-reorder DnD of #26 would work), a stray OS file drop hit
+	// the webview's default handler and navigated to the `file://` URL —
+	// a black screen with no way back. #271 rebuilt tab reorder on
+	// pointer events precisely so `dragDropEnabled: true` could go on —
+	// Tauri's native handler now owns OS file drops before the webview
+	// ever sees them, which should make this redundant. It stays as
+	// belt-and-braces until that's verified on both macOS and Windows
+	// (can't be done from here); #41 will consume real file drops via
+	// `getCurrentWebview().onDragDropEvent` rather than this listener.
+	// Gated to actual file drags (`dataTransfer` carries "Files") so it
+	// doesn't interfere with anything else.
 	useEffect(() => {
-		// DOM DragEvent (the bare `DragEvent` name is React's in this file).
 		const swallow = (e: WindowEventMap["drop"]) => {
 			if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
 		};
@@ -3471,7 +3393,10 @@ export default function App() {
 		>
 			<Titlebar {...titlebarProps} />
 
-			<div className="sk-tabstrip">
+			{/* #271: data-drag-strip lets useTabDrag's hitTest resolve a drop
+			    over blank strip space or the `+` button to an end-of-strip
+			    gap, instead of finding nothing draggable there. */}
+			<div className="sk-tabstrip" data-drag-strip="room">
 				{activeRooms.map((r) => {
 					const isDraggedRoom = drag?.kind === "room" && drag.id === r.id;
 					const dropSide =
@@ -3483,13 +3408,16 @@ export default function App() {
 							active={r.id === activeRoomId}
 							onClick={() => switchRoom(r.id)}
 							onClose={() => closeRoom(r.id)}
-							draggable
 							dragging={isDraggedRoom}
 							dropSide={dropSide}
-							onDragStart={(e) => handleRoomDragStart(e, r.id)}
-							onDragOver={(e) => handleRoomDragOver(e, r.id)}
-							onDrop={(e) => handleRoomDrop(e, r.id)}
-							onDragEnd={handleDragEnd}
+							dragKind="room"
+							dragId={r.id}
+							onPointerDown={(e) => startDrag(e, { kind: "room", id: r.id })}
+							onPointerMove={dragHandlers.onPointerMove}
+							onPointerUp={dragHandlers.onPointerUp}
+							onPointerCancel={dragHandlers.onPointerCancel}
+							onLostPointerCapture={dragHandlers.onLostPointerCapture}
+							suppressClick={suppressClick}
 						/>
 					);
 				})}
@@ -3531,10 +3459,13 @@ export default function App() {
 									dropTarget?.kind === "harness" && dropTarget.roomId === r.id
 										? dropTarget.side
 										: null,
-								onDragStart: handleHarnessDragStart,
-								onDragOver: handleHarnessDragOver,
-								onDrop: handleHarnessDrop,
-								onDragEnd: handleDragEnd,
+								onPointerDown: (e, roomId, harnessId) =>
+									startDrag(e, { kind: "harness", roomId, id: harnessId }),
+								onPointerMove: dragHandlers.onPointerMove,
+								onPointerUp: dragHandlers.onPointerUp,
+								onPointerCancel: dragHandlers.onPointerCancel,
+								onLostPointerCapture: dragHandlers.onLostPointerCapture,
+								suppressClick,
 							}}
 							defaultAgents={defaultAgents}
 							onPick={pickHarness}
