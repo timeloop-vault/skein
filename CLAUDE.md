@@ -325,7 +325,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   reject writes the file back and moves nothing. A file the harness
   only *created* untracked reads as fully added on first touch —
   over-reporting is the safe direction, and one accept settles it.
-  (Discovery is still patch-row-driven, which is the hole #221 names.)
+  (#221: a per-room filesystem watcher also discovers baselines, so a
+  shell write, a hand edit or the `files` harness shows up too, not
+  only a harness `patch` row — captured with an empty `harness_id`, so
+  no chip, until a later `patch` row claims the file. The watcher also
+  runs one `git status` catch-up on start, to cover changes made while
+  Skein itself was closed; a non-git room has no status to catch up
+  from, so it only ever discovers from live watcher ticks.)
 - **The review surface** (#212, epic #52 D1/D5/D6/D7): the right pane's
   second tab. Three scopes over one renderer — **branch**
   (`merge-base(HEAD, base) → working tree`, the default and the only

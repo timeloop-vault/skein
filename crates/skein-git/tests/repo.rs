@@ -576,3 +576,62 @@ fn main_repo_root_falls_back_to_workdir_for_a_bare_repo() {
         path.canonicalize().unwrap()
     );
 }
+
+// is_path_ignored — the watcher-discovery gate (#221)
+
+#[test]
+fn is_path_ignored_honors_gitignore() {
+    let (_tmp, path) = init_repo();
+    fs::write(path.join(".gitignore"), "target/\n*.log\n").unwrap();
+    fs::create_dir_all(path.join("target")).unwrap();
+    fs::write(path.join("target/out.bin"), b"bin").unwrap();
+    fs::write(path.join("debug.log"), b"log").unwrap();
+    fs::write(path.join("src.rs"), b"fn main() {}").unwrap();
+
+    let repo = Repo::open(&path).unwrap();
+    assert!(repo.is_path_ignored("target/out.bin").unwrap());
+    assert!(repo.is_path_ignored("debug.log").unwrap());
+    assert!(!repo.is_path_ignored("src.rs").unwrap());
+    // The .gitignore file itself is not ignored.
+    assert!(!repo.is_path_ignored(".gitignore").unwrap());
+}
+
+// head_is_dir — the directory-collapse discriminator for review
+// discovery's catch-up fallback (#221)
+
+#[test]
+fn head_is_dir_true_for_a_committed_directory() {
+    let (_tmp, path) = init_repo();
+    fs::create_dir_all(path.join("src/inner")).unwrap();
+    fs::write(path.join("src/inner/lib.rs"), b"pub fn f() {}\n").unwrap();
+    commit_all(&path, "add nested");
+
+    let repo = Repo::open(&path).unwrap();
+    assert!(repo.head_is_dir("src/inner").unwrap());
+    assert!(repo.head_is_dir("src").unwrap());
+}
+
+#[test]
+fn head_is_dir_false_for_a_committed_file() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    assert!(!repo.head_is_dir("README.md").unwrap());
+}
+
+#[test]
+fn head_is_dir_false_for_an_unknown_path() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    assert!(!repo.head_is_dir("nope").unwrap());
+    assert!(!repo.head_is_dir("nested/deep/nope").unwrap());
+}
+
+#[test]
+fn head_is_dir_false_on_an_unborn_head() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_path_buf();
+    Repository::init(&path).unwrap();
+
+    let repo = Repo::open(&path).unwrap();
+    assert!(!repo.head_is_dir("src").unwrap());
+}
