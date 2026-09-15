@@ -2,8 +2,9 @@
 // and submitting it, plus the safety gate over doing so (#238).
 //
 // #238's Nudge button is the first caller; #41 (drop a file onto a
-// harness) is written to reuse the same registry and the same gate
-// rather than inventing its own way to reach a live PTY.
+// harness) reuses the same registry rather than inventing its own way
+// to reach a live PTY, but pairs it with its own gate — a drop has no
+// submit, so it is safe at points a nudge is not.
 //
 // Two halves:
 //
@@ -11,11 +12,12 @@
 //     filled in by `LiveTerminal` once its PTY is live and drained on
 //     exit/unmount/respawn. Nothing outside `LiveTerminal` touches
 //     xterm or `pty_write` for this — the registry is the only door.
-//   - A pure gate, `canSendPrompt`, over harness capabilities, activity
-//     phase, registration and paste-mode/body shape. "No nudge where
-//     safety can't be proven": every refusal comes back as a reason
-//     string a caller can show verbatim as a disabled-button tooltip,
-//     never a silent no-op.
+//   - Two pure gates over harness capabilities, activity phase and
+//     registration: `canSendPrompt` (paste + submit, end-of-turn only)
+//     and `canInsertText` (paste only, allowed mid-turn — #41). "No
+//     nudge where safety can't be proven": every refusal comes back as
+//     a reason string a caller can show verbatim as a disabled-button
+//     tooltip or a drag-overlay label, never a silent no-op.
 //
 // `submit` is a *separate* write from `paste` — the seam pastes the
 // body (through xterm's `term.paste()`, so a multi-line body arrives as
@@ -86,6 +88,44 @@ export interface CanSendPromptInput {
 
 export type GateResult = { ok: true } | { ok: false; reason: string };
 
+/// Shared across `canSendPrompt` and `canInsertText`: the harness has to
+/// have a terminal at all, and that terminal has to be the one the seam
+/// actually knows about — a kind with no `pty` capability (`files`), a
+/// harness that hasn't registered yet (just spawned, or just exited),
+/// or one with no activity record at all (same two cases, seen from the
+/// store side) are refused identically by both gates.
+function checkRegistered(input: {
+	capabilities: HarnessCapabilities;
+	activity: HarnessActivity | null;
+	registered: boolean;
+}): GateResult | null {
+	if (!input.capabilities.pty) {
+		return { ok: false, reason: "this harness has no terminal to paste into" };
+	}
+	if (!input.registered || !input.activity) {
+		return { ok: false, reason: "this harness's terminal isn't ready yet" };
+	}
+	return null;
+}
+
+/// Shared across `canSendPrompt` and `canInsertText`: once the phase
+/// itself has cleared each gate's own check, both require the same
+/// proof that something is actually watching this harness — an L2c
+/// adapter attached, heard from, and not given up on
+/// (`authoritative && adapterHeard && !adapterSilent`) — and that #215's
+/// config injection happened for this spawn (`injected`), since without
+/// it there's no evidence the harness's CLI even has the review tools
+/// wired up.
+function checkWatched(activity: HarnessActivity): GateResult | null {
+	if (!activity.authoritative || !activity.adapterHeard || activity.adapterSilent) {
+		return { ok: false, reason: "no confirmed adapter is watching this harness" };
+	}
+	if (!activity.injected) {
+		return { ok: false, reason: "this harness wasn't started with the review tools wired up" };
+	}
+	return null;
+}
+
 /// Pure safety gate. Allowed only when every one of these holds:
 ///
 ///  - the harness kind has a terminal (`capabilities.pty`);
@@ -105,30 +145,22 @@ export type GateResult = { ok: true } | { ok: false; reason: string };
 ///    separate "lines", each read as its own Enter.
 export function canSendPrompt(input: CanSendPromptInput): GateResult {
 	const { capabilities, activity, registered, bracketedPasteOn, body } = input;
-	if (!capabilities.pty) {
-		return { ok: false, reason: "this harness has no terminal to paste into" };
-	}
-	if (!registered) {
-		return { ok: false, reason: "this harness's terminal isn't ready yet" };
-	}
-	if (!activity) {
-		return { ok: false, reason: "this harness's terminal isn't ready yet" };
-	}
-	if (activity.phase === "permission") {
+	const notReady = checkRegistered({ capabilities, activity, registered });
+	if (notReady) return notReady;
+	// `activity` is non-null here — `checkRegistered` above refused
+	// otherwise.
+	const a = activity as HarnessActivity;
+	if (a.phase === "permission") {
 		return { ok: false, reason: "the harness is waiting on a permission dialog" };
 	}
-	if (activity.phase !== "waiting") {
+	if (a.phase !== "waiting") {
 		return {
 			ok: false,
-			reason: `the harness isn't at a safe stopping point (currently ${activity.phase})`,
+			reason: `the harness isn't at a safe stopping point (currently ${a.phase})`,
 		};
 	}
-	if (!activity.authoritative || !activity.adapterHeard || activity.adapterSilent) {
-		return { ok: false, reason: "no confirmed adapter is watching this harness" };
-	}
-	if (!activity.injected) {
-		return { ok: false, reason: "this harness wasn't started with the review tools wired up" };
-	}
+	const notWatched = checkWatched(a);
+	if (notWatched) return notWatched;
 	if (body.includes("\n") && !bracketedPasteOn) {
 		return {
 			ok: false,
@@ -137,6 +169,63 @@ export function canSendPrompt(input: CanSendPromptInput): GateResult {
 		};
 	}
 	return { ok: true };
+}
+
+/// Everything `canInsertText` needs, gathered by the caller for the same
+/// reason `CanSendPromptInput` is — pure and DOM-free, testable with no
+/// store singleton and no xterm instance.
+export interface CanInsertTextInput {
+	capabilities: HarnessCapabilities;
+	activity: HarnessActivity | null;
+	registered: boolean;
+}
+
+/// Pure safety gate for #41's drop-a-file seam — a paste with no
+/// submit, so it is allowed at points `canSendPrompt` refuses: mid-turn,
+/// while the harness is still working, not only at the end of one. Only
+/// the phase check differs from `canSendPrompt`:
+///
+///  - `running`, `idle` and `waiting` are all fine — there's no "unsafe
+///    to paste a path" moment among them, unlike a body that might get
+///    submitted;
+///  - `permission` gets its own reason, same principle as
+///    `canSendPrompt`, but a sharper one: a path *typed* into an open
+///    permission dialog could answer it, which a paste-without-submit
+///    still risks becoming once the user's next keystroke lands;
+///  - `spawning` and `exited` refuse too — there is no terminal on the
+///    other end of the paste yet, or any more.
+///
+/// Registration, the adapter-watching proof, and #215 injection are
+/// checked exactly as `canSendPrompt` checks them — see `checkRegistered`
+/// / `checkWatched`.
+export function canInsertText(input: CanInsertTextInput): GateResult {
+	const { capabilities, activity, registered } = input;
+	const notReady = checkRegistered({ capabilities, activity, registered });
+	if (notReady) return notReady;
+	const a = activity as HarnessActivity;
+	if (a.phase === "permission") {
+		return {
+			ok: false,
+			reason: "the harness is waiting on a permission dialog — a dropped path could answer it",
+		};
+	}
+	if (a.phase === "spawning" || a.phase === "exited") {
+		return {
+			ok: false,
+			reason: `the harness isn't ready to receive input (currently ${a.phase})`,
+		};
+	}
+	return checkWatched(a) ?? { ok: true };
+}
+
+/// Wrap every path in `paths` that contains whitespace in double quotes,
+/// join with single spaces, and add one trailing space so the user can
+/// keep typing right after the drop lands. `[]` returns `""` — nothing
+/// to insert, nothing to seed the input with.
+export function formatDroppedPaths(paths: string[]): string {
+	if (paths.length === 0) return "";
+	const quoted = paths.map((p) => (/\s/.test(p) ? `"${p}"` : p));
+	return `${quoted.join(" ")} `;
 }
 
 /// Paste `body` into `harnessId`'s terminal and submit it, after
@@ -157,5 +246,25 @@ export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): 
 	// `target` is set here by construction.
 	target?.paste(body);
 	target?.submit();
+	return gate;
+}
+
+/// Paste `text` into `harnessId`'s terminal — and only that, never
+/// `submit` — after re-checking `canInsertText` against the *current*
+/// state. #41's drop-a-file caller: a path dropped mid-turn seeds the
+/// input for whatever the user types next, it does not send anything on
+/// the harness's behalf. Same re-check-at-call-time contract as
+/// `sendPrompt`.
+export function insertText(harnessId: string, kind: HarnessKind, text: string): GateResult {
+	const target = targets.get(harnessId);
+	const gate = canInsertText({
+		capabilities: HARNESS_KINDS[kind].capabilities,
+		activity: harnessActivity.get(harnessId),
+		registered: target !== undefined,
+	});
+	if (!gate.ok) return gate;
+	// A passing gate required `registered: target !== undefined`, so
+	// `target` is set here by construction.
+	target?.paste(text);
 	return gate;
 }

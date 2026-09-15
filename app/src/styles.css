@@ -2373,3 +2373,40 @@ html.tab-dragging.tab-drag-refused * {
 	white-space: nowrap;
 	color: var(--fg-3);
 }
+
+/* #41 — native OS file drop onto a visible harness terminal. The
+   wrapper around xterm's own host div; the host keeps its 100%/100%
+   sizing untouched, the overlay is an absolutely-positioned sibling so
+   it never affects layout. `pointer-events: none` throughout — the
+   drag is tracked by Tauri's own webview-level event, not the DOM drag
+   events this overlay would otherwise intercept. */
+.sk-terminal-drop-host {
+	position: relative;
+	width: 100%;
+	height: 100%;
+}
+.sk-terminal-drop-overlay {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: flex-end;
+	justify-content: center;
+	padding-bottom: 24px;
+	pointer-events: none;
+	z-index: 5;
+	border: 2px solid var(--accent);
+}
+.sk-terminal-drop-overlay.refused {
+	border-color: var(--err);
+}
+.sk-terminal-drop-label {
+	background: var(--bg-2);
+	border: 1px solid var(--line-strong);
+	border-radius: 6px;
+	padding: 6px 12px;
+	font-size: calc(var(--cfs, 12px) * 0.9);
+	color: var(--fg-0);
+}
+.sk-terminal-drop-overlay.refused .sk-terminal-drop-label {
+	color: var(--err);
+}
