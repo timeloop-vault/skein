@@ -269,6 +269,12 @@ export function useTabDrag(
 			stateRef.current = next;
 			if (!wasDragging && next.status === "dragging") {
 				draggedRef.current = true;
+				// #271: WebKit (Tauri's macOS WKWebView) can have already
+				// started a text selection by the time the press crosses the
+				// drag threshold — the CSS `user-select: none` added at drag
+				// start only stops NEW selection, not one already underway.
+				// Drop it here, once, not on every plain click.
+				window.getSelection()?.removeAllRanges();
 				createGhost();
 			}
 			if (next.status === "dragging") moveGhost(e.clientX, e.clientY);

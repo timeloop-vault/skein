@@ -738,7 +738,9 @@ body {
 	gap: 2px;
 	/* #271: pointer-drag reorder presses and moves over this tab's own
 	 * text — without these, a press-drag can start a text selection
-	 * instead of (or alongside) the reorder. */
+	 * instead of (or alongside) the reorder. WebKit (Tauri's macOS
+	 * WKWebView) ignores the unprefixed property alone. */
+	-webkit-user-select: none;
 	user-select: none;
 	touch-action: none;
 }
@@ -1040,6 +1042,7 @@ body {
 	border: 1px solid transparent;
 	border-bottom: none;
 	/* #271: see .sk-tab's same properties. */
+	-webkit-user-select: none;
 	user-select: none;
 	touch-action: none;
 }
@@ -1118,6 +1121,12 @@ body {
 html.tab-dragging,
 html.tab-dragging * {
 	cursor: grabbing !important;
+	/* #271: the pointer moves over terminal/right-pane text during a
+	 * drag, not just the tab strip; without this WebKit (macOS
+	 * WKWebView) highlights it as a selection. -webkit- prefix needed
+	 * there, unlike WebView2. */
+	-webkit-user-select: none !important;
+	user-select: none !important;
 }
 html.tab-dragging.tab-drag-refused,
 html.tab-dragging.tab-drag-refused * {
