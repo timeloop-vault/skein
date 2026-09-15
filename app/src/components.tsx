@@ -1,6 +1,6 @@
 // Shared, low-level components used across the app.
 
-import { type DragEvent, useEffect, useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import {
 	type AgentInfo,
 	type AgentListing,
@@ -13,23 +13,37 @@ import type { AgentLabel } from "./harnessAgent.ts";
 import { type DefaultAgents, defaultAgentFor } from "./prefs.ts";
 import type { Harness, HarnessKind, Room, Status } from "./types.ts";
 
-// Drop indicator side relative to a tab. The dragOver handler picks
+// Drop indicator side relative to a tab. useTabDrag's hit-test picks
 // "before" if the cursor is left of the tab's horizontal midpoint,
 // "after" if right. CSS pseudo-elements render an accent-colored bar
 // on the matching edge so the user can see where the drop will land.
-// Issue #26.
+// Issue #26; rebuilt on pointer events for #271 (see tabDrag.ts /
+// useTabDrag.ts) so the webview's native file-drop handler (#41) can
+// share the window — HTML5 DnD and `dragDropEnabled: true` can't
+// coexist.
 export type DropSide = "before" | "after" | null;
 
 // Drag-related props that both tab kinds share. All optional so the
 // presentational tab can render without drag wiring (e.g. in tests).
+// `dragKind`/`dragId`/`dragRoomId` are hit-test data attributes read by
+// useTabDrag's `elementFromPoint` walk — pointer capture retargets
+// pointermove/up to the tab the drag started on, so the DOM event's own
+// `target` can't say what's under the cursor now.
 export interface DragProps {
-	draggable?: boolean;
 	dragging?: boolean;
 	dropSide?: DropSide;
-	onDragStart?: (e: DragEvent<HTMLDivElement>) => void;
-	onDragOver?: (e: DragEvent<HTMLDivElement>) => void;
-	onDrop?: (e: DragEvent<HTMLDivElement>) => void;
-	onDragEnd?: (e: DragEvent<HTMLDivElement>) => void;
+	dragKind?: "room" | "harness";
+	dragId?: string;
+	dragRoomId?: string;
+	onPointerDown?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+	onPointerMove?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+	onPointerUp?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+	onPointerCancel?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+	onLostPointerCapture?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+	/** One-shot: true if the click following pointerup is the tail of a
+	 *  real drag (threshold crossed) and should not select/activate the
+	 *  tab. Consumed by the wrapper below, not passed through to onClick. */
+	suppressClick?: () => boolean;
 }
 
 // #68: size is owned by CSS (density --chip / --dot tokens + context
@@ -78,13 +92,17 @@ export const RoomTab = ({
 	active,
 	onClick,
 	onClose,
-	draggable,
 	dragging,
 	dropSide,
-	onDragStart,
-	onDragOver,
-	onDrop,
-	onDragEnd,
+	dragKind,
+	dragId,
+	dragRoomId,
+	onPointerDown,
+	onPointerMove,
+	onPointerUp,
+	onPointerCancel,
+	onLostPointerCapture,
+	suppressClick,
 }: {
 	r: Room;
 	active: boolean;
@@ -93,12 +111,21 @@ export const RoomTab = ({
 } & DragProps) => (
 	<div
 		className={`sk-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
-		onClick={onClick}
-		draggable={draggable}
-		onDragStart={onDragStart}
-		onDragOver={onDragOver}
-		onDrop={onDrop}
-		onDragEnd={onDragEnd}
+		onClick={() => {
+			// #271: a real drag's pointerup is followed by a click on the
+			// same element — swallow that one so dropping doesn't also
+			// select the tab. A plain click (no drag) passes straight through.
+			if (suppressClick?.()) return;
+			onClick();
+		}}
+		data-drag-kind={dragKind}
+		data-drag-id={dragId}
+		data-drag-room={dragRoomId}
+		onPointerDown={onPointerDown}
+		onPointerMove={onPointerMove}
+		onPointerUp={onPointerUp}
+		onPointerCancel={onPointerCancel}
+		onLostPointerCapture={onLostPointerCapture}
 	>
 		<div className="row-1">
 			<StatusDot status={r.status} />
@@ -143,13 +170,17 @@ export const HarnessTab = ({
 	closable,
 	onClick,
 	onClose,
-	draggable,
 	dragging,
 	dropSide,
-	onDragStart,
-	onDragOver,
-	onDrop,
-	onDragEnd,
+	dragKind,
+	dragId,
+	dragRoomId,
+	onPointerDown,
+	onPointerMove,
+	onPointerUp,
+	onPointerCancel,
+	onLostPointerCapture,
+	suppressClick,
 }: {
 	h: Harness;
 	/** #248: surfaced in the hover popover, not on the tab — the tab is
@@ -163,12 +194,19 @@ export const HarnessTab = ({
 	<div
 		className={`sk-harness-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
 		data-htab={h.id}
-		onClick={onClick}
-		draggable={draggable}
-		onDragStart={onDragStart}
-		onDragOver={onDragOver}
-		onDrop={onDrop}
-		onDragEnd={onDragEnd}
+		onClick={() => {
+			// #271: see RoomTab's onClick — same swallow-the-post-drop-click.
+			if (suppressClick?.()) return;
+			onClick();
+		}}
+		data-drag-kind={dragKind}
+		data-drag-id={dragId}
+		data-drag-room={dragRoomId}
+		onPointerDown={onPointerDown}
+		onPointerMove={onPointerMove}
+		onPointerUp={onPointerUp}
+		onPointerCancel={onPointerCancel}
+		onLostPointerCapture={onLostPointerCapture}
 	>
 		<StatusDot status={h.status} />
 		<HChip kind={h.kind} harnessId={h.id} agent={agent} />
