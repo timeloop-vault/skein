@@ -2,8 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import type { HarnessActivity } from "./harnessActivity.ts";
-import { canSendPrompt, harnessInput, sendPrompt } from "./harnessInput.ts";
-import type { CanSendPromptInput, HarnessInputTarget } from "./harnessInput.ts";
+import {
+	canInsertText,
+	canSendPrompt,
+	formatDroppedPaths,
+	harnessInput,
+	insertText,
+	sendPrompt,
+} from "./harnessInput.ts";
+import type { CanInsertTextInput, CanSendPromptInput, HarnessInputTarget } from "./harnessInput.ts";
 
 // Pure `canSendPrompt` tests build the input by hand — no store, no
 // DOM, no xterm — exactly what the gate is supposed to allow.
@@ -141,5 +148,131 @@ describe("sendPrompt", () => {
 		const result = sendPrompt(id, "claude", "do the thing");
 		expect(result.ok).toBe(false);
 		expect(target.paste).not.toHaveBeenCalled();
+	});
+});
+
+// #41: canInsertText is deliberately more permissive than canSendPrompt
+// on phase — a drop has no submit — so its own test suite builds the
+// input by hand the same way, minus body/bracketed-paste (irrelevant to
+// a paste-only gate).
+
+const insertInput = (over: Partial<CanInsertTextInput> = {}): CanInsertTextInput => ({
+	capabilities: HARNESS_KINDS.claude.capabilities,
+	activity: activity(),
+	registered: true,
+	...over,
+});
+
+describe("canInsertText", () => {
+	it.each(["running", "idle", "waiting"] as const)("allows a drop mid-turn (phase %s)", (phase) => {
+		expect(canInsertText(insertInput({ activity: activity({ phase }) }))).toEqual({ ok: true });
+	});
+
+	it("refuses a kind with no terminal", () => {
+		const r = canInsertText(insertInput({ capabilities: HARNESS_KINDS.files.capabilities }));
+		expect(r).toEqual({ ok: false, reason: expect.stringContaining("no terminal") });
+	});
+
+	it("refuses a harness that hasn't registered a live terminal", () => {
+		const r = canInsertText(insertInput({ registered: false }));
+		expect(r.ok).toBe(false);
+	});
+
+	it("refuses when there's no activity record at all", () => {
+		const r = canInsertText(insertInput({ activity: null }));
+		expect(r.ok).toBe(false);
+	});
+
+	it("gives permission its own reason — a typed path could answer the dialog", () => {
+		const r = canInsertText(insertInput({ activity: activity({ phase: "permission" }) }));
+		expect(r).toEqual({ ok: false, reason: expect.stringContaining("permission dialog") });
+	});
+
+	it.each(["spawning", "exited"] as const)("refuses phase %s", (phase) => {
+		const r = canInsertText(insertInput({ activity: activity({ phase }) }));
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.reason).toContain(phase);
+	});
+
+	it("refuses without a source that has proven it's watching the harness", () => {
+		expect(canInsertText(insertInput({ activity: activity({ authoritative: false }) })).ok).toBe(
+			false,
+		);
+		expect(canInsertText(insertInput({ activity: activity({ adapterHeard: false }) })).ok).toBe(
+			false,
+		);
+		expect(canInsertText(insertInput({ activity: activity({ adapterSilent: true }) })).ok).toBe(
+			false,
+		);
+	});
+
+	it("refuses a harness that wasn't spawned with config injection", () => {
+		const r = canInsertText(insertInput({ activity: activity({ injected: false }) }));
+		expect(r).toEqual({ ok: false, reason: expect.stringContaining("review tools") });
+	});
+});
+
+describe("insertText", () => {
+	let id: string;
+	let target: HarnessInputTarget;
+	let calls: string[];
+
+	beforeEach(() => {
+		id = nextId();
+		calls = [];
+		target = {
+			paste: vi.fn(() => calls.push("paste")),
+			bracketedPaste: () => false,
+			submit: vi.fn(() => calls.push("submit")),
+		};
+		// Bring a real store entry to a state canInsertText allows —
+		// mid-turn (`running`), authoritative, heard-from, injected.
+		harnessActivity.spawned(id);
+		harnessActivity.attachAuthoritativeSource(id);
+		harnessActivity.adapterDelivered(id);
+		harnessActivity.setRunningFromAdapter(id, "test");
+		harnessActivity.setInjected(id, true);
+	});
+
+	it("pastes but never submits, when the gate allows it", () => {
+		harnessInput.register(id, target);
+
+		const result = insertText(id, "claude", "/tmp/dropped.txt ");
+
+		expect(result).toEqual({ ok: true });
+		expect(calls).toEqual(["paste"]);
+	});
+
+	it("refuses — and never pastes — a harness that never registered", () => {
+		const result = insertText(id, "claude", "/tmp/dropped.txt ");
+		expect(result.ok).toBe(false);
+		expect(target.paste).not.toHaveBeenCalled();
+	});
+
+	it("re-checks the gate at call time rather than trusting a stale render", () => {
+		harnessInput.register(id, target);
+		harnessActivity.exited(id, 0);
+
+		const result = insertText(id, "claude", "/tmp/dropped.txt ");
+		expect(result.ok).toBe(false);
+		expect(target.paste).not.toHaveBeenCalled();
+	});
+});
+
+describe("formatDroppedPaths", () => {
+	it("returns an empty string for no paths", () => {
+		expect(formatDroppedPaths([])).toBe("");
+	});
+
+	it("joins plain paths with a single space and a trailing space", () => {
+		expect(formatDroppedPaths(["/a/b.txt", "/c/d.txt"])).toBe("/a/b.txt /c/d.txt ");
+	});
+
+	it("quotes a path containing whitespace", () => {
+		expect(formatDroppedPaths(["/a/my file.txt"])).toBe('"/a/my file.txt" ');
+	});
+
+	it("quotes only the paths that need it, in a mixed list", () => {
+		expect(formatDroppedPaths(["/a/b.txt", "/c/my file.txt"])).toBe('/a/b.txt "/c/my file.txt" ');
 	});
 });
