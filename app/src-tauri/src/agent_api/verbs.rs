@@ -27,7 +27,7 @@ use super::auth::Caller;
 use crate::db::{Database, ReviewAddressedRow, ReviewCommentRow, ReviewThreadRow};
 use crate::review::{abs_path, now_ms};
 use crate::review_surface::Scope;
-use crate::review_surface::query::{file_impl, scope_impl};
+use crate::review_surface::query::{ScopeFiles, file_impl, scope_impl};
 
 /// Rendered diff text is capped so a whole-branch `get_diff` on a large
 /// change cannot swallow the agent's context. Truncation is reported,
@@ -391,6 +391,28 @@ pub fn get_diff(db: &Database, caller: &Caller, args: &DiffArgs) -> VerbResult<D
         }
     }
 
+    // One diff for every file this call needs, not one per file (#171
+    // slice (f)) — `files` is already the exact set `render_file` below
+    // will draw from, truncation aside. A single requested file gets a
+    // literal pathspec; asking for nothing in particular means `files`
+    // is the whole change set already, and naming every one of them as
+    // a pathspec would cost strictly more than no filter at all for
+    // the identical result.
+    let paths: Vec<String> = if wanted.is_some() {
+        files.iter().map(|f| f.path.clone()).collect()
+    } else {
+        Vec::new()
+    };
+    let snapshot = ScopeFiles::load(
+        db,
+        &caller.room_id,
+        cwd,
+        scope,
+        args.commit_sha.as_deref(),
+        &paths,
+    )
+    .map_err(VerbError::Unavailable)?;
+
     let mut diff = String::new();
     let mut truncated = false;
     for f in &files {
@@ -398,15 +420,7 @@ pub fn get_diff(db: &Database, caller: &Caller, args: &DiffArgs) -> VerbResult<D
             truncated = true;
             break;
         }
-        let detail = file_impl(
-            db,
-            &caller.room_id,
-            cwd,
-            &f.path,
-            scope,
-            args.commit_sha.as_deref(),
-        )
-        .map_err(VerbError::Unavailable)?;
+        let detail = snapshot.file(db, &f.path).map_err(VerbError::Unavailable)?;
         diff.push_str(&render_file(&detail.path, detail.blocked, &detail.hunks));
     }
 
@@ -546,14 +560,12 @@ pub(super) fn scope_name(scope: Scope) -> &'static str {
 /// The per-room reads a listing needs, done once.
 ///
 /// The anchoring pass is the expensive part and the reason this exists:
-/// each file that carries threads is re-anchored exactly once, through
-/// the pane's own `file_impl`, rather than once per thread. That is
-/// still one scope diff per commented file — the same per-tick cost the
-/// pane already pays, on a call an agent makes occasionally rather than
-/// every 200 ms, and it belongs to the standing "heavy sync work"
-/// question in #171/#172 rather than to a cheaper anchoring model here.
-/// Reading the stored coordinates instead would be free and sometimes
-/// wrong, which is the one thing D6 does not allow.
+/// every file that carries threads is re-anchored through one
+/// `ScopeFiles` snapshot (#171 slice (f)) rather than once per thread —
+/// and, since that slice, rather than once per file either: the whole
+/// batch costs one scope diff, not one per commented file. Reading the
+/// stored coordinates instead would be free and sometimes wrong, which
+/// is the one thing D6 does not allow.
 struct RoomCtx {
     comments: BTreeMap<String, Vec<ReviewCommentRow>>,
     addressed: BTreeMap<String, ReviewAddressedRow>,
@@ -591,16 +603,24 @@ impl RoomCtx {
 
         let mut placed = BTreeMap::new();
         if let Some(cwd) = caller.cwd.as_deref() {
-            for path in files_of(threads) {
-                // A file we cannot diff (deleted, not a repo, unreadable)
-                // is not a failure of the listing — those threads simply
-                // fall back to their stored coordinates below.
-                let Ok(detail) = file_impl(db, &caller.room_id, cwd, &path, Scope::Branch, None)
-                else {
-                    continue;
-                };
-                for t in detail.threads {
-                    placed.insert(t.id, (t.line_start, t.line_end, t.outdated));
+            let paths: Vec<String> = files_of(threads).into_iter().collect();
+            // A snapshot that cannot be built at all (not a repo, and so
+            // on) is not a failure of the listing — every thread just
+            // falls back to its stored coordinates below, the same as
+            // when each file's own `file_impl` would have failed.
+            if let Ok(snapshot) =
+                ScopeFiles::load(db, &caller.room_id, cwd, Scope::Branch, None, &paths)
+            {
+                for path in &paths {
+                    // A single file we cannot diff (deleted, unreadable)
+                    // must not sink the rest of the batch — its threads
+                    // fall back the same way.
+                    let Ok(detail) = snapshot.file(db, path) else {
+                        continue;
+                    };
+                    for t in detail.threads {
+                        placed.insert(t.id, (t.line_start, t.line_end, t.outdated));
+                    }
                 }
             }
         }
