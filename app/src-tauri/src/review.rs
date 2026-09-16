@@ -792,15 +792,22 @@ mod tests {
 
     // ── path keys ─────────────────────────────────────────────────
 
+    /// An absolute-path prefix for this platform. `C:/…` is not absolute
+    /// on Unix, so a Windows-only literal would be joined under the
+    /// worktree and accepted there (#281).
+    const ABS: &str = if cfg!(windows) { "C:" } else { "" };
+
     #[test]
     fn relative_key_normalizes_separators_and_scopes_to_the_worktree() {
-        let cwd = "C:/git/skein-wt/room";
+        let cwd = format!("{ABS}/git/skein-wt/room");
+        let cwd = cwd.as_str();
+        #[cfg(windows)]
         assert_eq!(
             relative_key(cwd, r"C:\git\skein-wt\room\src\a.rs").as_deref(),
             Some("src/a.rs")
         );
         assert_eq!(
-            relative_key(cwd, "C:/git/skein-wt/room/src/a.rs").as_deref(),
+            relative_key(cwd, &format!("{ABS}/git/skein-wt/room/src/a.rs")).as_deref(),
             Some("src/a.rs")
         );
         // Already relative — interpreted against the worktree.
@@ -809,16 +816,26 @@ mod tests {
 
     #[test]
     fn relative_key_refuses_anything_outside_the_worktree() {
-        let cwd = "C:/git/skein-wt/room";
+        let cwd = format!("{ABS}/git/skein-wt/room");
+        let cwd = cwd.as_str();
         // A sibling directory that merely shares a prefix.
-        assert_eq!(relative_key(cwd, "C:/git/skein-wt/room-other/a.rs"), None);
+        assert_eq!(
+            relative_key(cwd, &format!("{ABS}/git/skein-wt/room-other/a.rs")),
+            None
+        );
         // Somewhere else entirely — harnesses do edit global config.
-        assert_eq!(relative_key(cwd, "C:/Users/x/.claude/settings.json"), None);
+        assert_eq!(
+            relative_key(cwd, &format!("{ABS}/Users/x/.claude/settings.json")),
+            None
+        );
         // Traversal, however it is spelled.
         assert_eq!(relative_key(cwd, "../escape.rs"), None);
-        assert_eq!(relative_key(cwd, "C:/git/skein-wt/room/../escape.rs"), None);
+        assert_eq!(
+            relative_key(cwd, &format!("{ABS}/git/skein-wt/room/../escape.rs")),
+            None
+        );
         // The worktree root itself is not a file.
-        assert_eq!(relative_key(cwd, "C:/git/skein-wt/room"), None);
+        assert_eq!(relative_key(cwd, &format!("{ABS}/git/skein-wt/room")), None);
     }
 
     #[cfg(windows)]
@@ -1376,7 +1393,7 @@ mod tests {
                 &room.db,
                 "r1",
                 &room.cwd,
-                vec!["C:/elsewhere/x.rs".to_string()]
+                vec![format!("{ABS}/elsewhere/x.rs")]
             ),
             0
         );
