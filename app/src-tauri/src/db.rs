@@ -134,6 +134,18 @@ pub struct HarnessAction {
     pub source: Option<String>,
 }
 
+/// One row to insert via the batch path, `record_harness_actions`
+/// (#171e). `harness_id`/`room_id` aren't here — a batch is always for
+/// one harness in one room, so the caller passes those once for the
+/// whole slice instead of repeating them per row. Adapters build these
+/// from their own (per-module, identically shaped) `ExtractedAction`.
+pub struct NewHarnessAction {
+    pub timestamp_ms: i64,
+    pub kind: &'static str,
+    pub payload: String,
+    pub source: Option<String>,
+}
+
 /// The v1 `kind` vocabulary for [`HarnessAction`] rows. Adapters and
 /// consumers refer to these constants instead of magic strings so a
 /// rename is one place. Adding a new kind doesn't require changing
@@ -934,6 +946,50 @@ impl Database {
         )
         .map_err(|e| e.to_string())?;
         Ok(conn.last_insert_rowid())
+    }
+
+    /// Batch counterpart to `record_harness_action` (#171e). The two
+    /// backfill scans (Claude JSONL history, opencode `SQLite`
+    /// history) walk a whole session's worth of rows in one shot at
+    /// attach time; inserting each one individually meant one lock +
+    /// one implicit transaction per row. This takes the lock once,
+    /// opens a single transaction, reuses one prepared statement for
+    /// every row, and commits — `harness_id`/`room_id` are stamped on
+    /// every row exactly like the per-call path. Empty `rows` is a
+    /// no-op (no lock taken). Returns the number of rows inserted.
+    pub fn record_harness_actions(
+        &self,
+        harness_id: &str,
+        room_id: &str,
+        rows: &[NewHarnessAction],
+    ) -> Result<usize, String> {
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO harness_actions \
+                     (harness_id, room_id, timestamp_ms, kind, payload, source) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                )
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                stmt.execute(params![
+                    harness_id,
+                    room_id,
+                    row.timestamp_ms,
+                    row.kind,
+                    row.payload,
+                    row.source
+                ])
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(rows.len())
     }
 
     /// Most recent actions for a single harness with
@@ -2337,6 +2393,56 @@ mod tests {
         assert_eq!(actions.len(), 5);
         assert_eq!(actions[0].timestamp_ms, 49);
         assert_eq!(actions[4].timestamp_ms, 45);
+    }
+
+    #[test]
+    fn batch_record_lands_every_row_in_one_transaction() {
+        let (_dir, db) = fresh_db();
+        let rows = vec![
+            NewHarnessAction {
+                timestamp_ms: 100,
+                kind: action_kind::TOOL_CALL,
+                payload: r#"{"n":1}"#.into(),
+                source: None,
+            },
+            NewHarnessAction {
+                timestamp_ms: 200,
+                kind: action_kind::PATCH,
+                payload: r#"{"n":2}"#.into(),
+                source: Some("l2c1".into()),
+            },
+            NewHarnessAction {
+                timestamp_ms: 300,
+                kind: action_kind::TOOL_CALL,
+                payload: r#"{"n":3}"#.into(),
+                source: None,
+            },
+        ];
+        let inserted = db.record_harness_actions("h1", "r1", &rows).unwrap();
+        assert_eq!(inserted, 3);
+        let actions = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
+        assert_eq!(actions.len(), 3);
+        assert!(
+            actions
+                .iter()
+                .all(|a| a.harness_id == "h1" && a.room_id == "r1")
+        );
+        // Newest first.
+        assert_eq!(actions[0].payload, r#"{"n":3}"#);
+        assert_eq!(actions[1].source.as_deref(), Some("l2c1"));
+        assert_eq!(actions[2].payload, r#"{"n":1}"#);
+    }
+
+    #[test]
+    fn batch_record_of_empty_rows_is_a_no_op() {
+        let (_dir, db) = fresh_db();
+        let inserted = db.record_harness_actions("h1", "r1", &[]).unwrap();
+        assert_eq!(inserted, 0);
+        assert!(
+            db.recent_harness_actions_by_harness("h1", -1, 10)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
