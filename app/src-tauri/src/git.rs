@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use parking_lot::Mutex;
 use serde::Serialize;
 use skein_git::{
     BranchInfo, DiffHunk, DiffLine, DiffLineKind, FileDiff, Repo, StatusEntry, StatusKind,
@@ -14,6 +15,13 @@ use skein_git::{
 use tauri::ipc::Channel;
 
 use crate::watcher::WatcherManager;
+
+/// Serializes `git_add_worktree` (#171): nothing else stops two
+/// concurrent calls against the same repo from colliding on the same
+/// branch ref, and async scheduling is what makes that possible now
+/// that the command runs on the blocking pool instead of inline on
+/// the main thread.
+static ADD_WORKTREE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Serialize)]
 pub struct BranchDto {
@@ -47,10 +55,14 @@ impl From<WorktreeInfo> for WorktreeDto {
 }
 
 /// Returns true iff `path` is a git repository (per libgit2).
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: `is_repo` discovers `.git` by walking up from `path` — a
+/// disk walk, and #171 wants that off the main thread.
 #[tauri::command]
-pub fn git_is_repo(path: String) -> bool {
-    Repo::is_repo(Path::new(&path))
+pub async fn git_is_repo(path: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || Repo::is_repo(Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Everything the New Room dialog needs to know about a picked folder,
@@ -84,15 +96,24 @@ pub struct FolderInfoDto {
 
 /// Inspect a folder for the New Room dialog: existence, repo-ness,
 /// worktree resolution and the branch list, in a single call.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: opens the repo, resolves the worktree root and walks the
+/// branch list — several libgit2 calls, each of which touches disk
+/// (#171).
 #[tauri::command]
-pub fn git_inspect_folder(path: String) -> Result<FolderInfoDto, String> {
-    let picked = Path::new(&path);
+pub async fn git_inspect_folder(path: String) -> Result<FolderInfoDto, String> {
+    tauri::async_runtime::spawn_blocking(move || git_inspect_folder_impl(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
+    let picked = Path::new(path);
     let exists = picked.is_dir();
     let mut info = FolderInfoDto {
         exists,
         is_repo: false,
-        root: path.clone(),
+        root: path.to_owned(),
         resolved_from_worktree: false,
         branches: Vec::new(),
         head: None,
@@ -141,10 +162,14 @@ pub fn git_inspect_folder(path: String) -> Result<FolderInfoDto, String> {
 /// non-repo path. Used by the bottom status bar to track checkouts that
 /// happen inside a harness — `room.branch` is captured at room creation
 /// and doesn't follow `git checkout`.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: opening the repo and reading HEAD are libgit2 calls that
+/// touch disk, and this fires on every debounced watcher tick (#171).
 #[tauri::command]
-pub fn git_head_branch(path: String) -> Option<String> {
-    Repo::open(Path::new(&path)).ok()?.head_branch()
+pub async fn git_head_branch(path: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || Repo::open(Path::new(&path)).ok()?.head_branch())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Default path proposal for a worktree under `repo_path` named after
@@ -159,17 +184,40 @@ pub fn git_propose_worktree_path(repo_path: String, task_slug: String) -> String
 
 /// Create a new worktree on a fresh branch. Returns the worktree path
 /// (which the frontend uses as the new room's `cwd`).
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: `add_worktree` creates a branch ref and a new checkout on
+/// disk — real libgit2 + filesystem work (#171). `ADD_WORKTREE_LOCK`
+/// serializes it against any other concurrent call, since nothing else
+/// stops two of them from colliding on the same repo.
 #[tauri::command]
-pub fn git_add_worktree(
+pub async fn git_add_worktree(
     repo_path: String,
     branch: String,
     base_branch: String,
     worktree_path: String,
 ) -> Result<WorktreeDto, String> {
-    let repo = Repo::open(Path::new(&repo_path)).map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        git_add_worktree_impl(&repo_path, &branch, &base_branch, &worktree_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Guarded by `ADD_WORKTREE_LOCK` for its whole body (see
+/// `git_add_worktree`'s doc comment) so the lock travels with the
+/// open-then-add-worktree sequence it protects rather than living only
+/// in the command closure, where an extracted-fn test could bypass it
+/// unnoticed.
+fn git_add_worktree_impl(
+    repo_path: &str,
+    branch: &str,
+    base_branch: &str,
+    worktree_path: &str,
+) -> Result<WorktreeDto, String> {
+    let _guard = ADD_WORKTREE_LOCK.lock();
+    let repo = Repo::open(Path::new(repo_path)).map_err(|e| e.to_string())?;
     let info = repo
-        .add_worktree(&branch, &base_branch, &PathBuf::from(&worktree_path))
+        .add_worktree(branch, base_branch, &PathBuf::from(worktree_path))
         .map_err(|e| e.to_string())?;
     Ok(info.into())
 }
@@ -197,12 +245,19 @@ impl From<StatusEntry> for StatusDto {
 /// Snapshot of the worktree's status — every changed file relative to
 /// HEAD, sorted by path. The frontend re-fetches on demand (Phase 5a)
 /// and via the file watcher (Phase 5b).
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: `status` walks the whole worktree via libgit2 — #171 wants
+/// that off the main thread, since this fires on every debounced
+/// watcher tick.
 #[tauri::command]
-pub fn git_status(path: String) -> Result<Vec<StatusDto>, String> {
-    let repo = Repo::open(Path::new(&path)).map_err(|e| e.to_string())?;
-    let entries = repo.status().map_err(|e| e.to_string())?;
-    Ok(entries.into_iter().map(StatusDto::from).collect())
+pub async fn git_status(path: String) -> Result<Vec<StatusDto>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(Path::new(&path)).map_err(|e| e.to_string())?;
+        let entries = repo.status().map_err(|e| e.to_string())?;
+        Ok(entries.into_iter().map(StatusDto::from).collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Start a recursive filesystem watcher rooted at `path`. `on_change`
@@ -297,6 +352,88 @@ impl From<FileDiff> for FileDiffDto {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+    use tempfile::TempDir;
+
+    /// A repo with one commit on its initial branch, whatever git2
+    /// happens to name it (`master` unless `init.defaultBranch` says
+    /// otherwise) — read back from HEAD rather than assumed.
+    fn repo_with_commit() -> (TempDir, String) {
+        let dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        let branch = repo.head().unwrap().shorthand().unwrap().to_owned();
+        (dir, branch)
+    }
+
+    /// Two threads race `git_add_worktree_impl` for the same repo and
+    /// the same new branch name (different worktree paths, so the only
+    /// possible collision is the branch ref itself). A `Barrier` lines
+    /// them up so both reach the guarded section at the same instant
+    /// rather than merely running one after the other by scheduling
+    /// luck — without `ADD_WORKTREE_LOCK` this is exactly the window
+    /// where two libgit2 handles could both observe "branch absent"
+    /// before either creates it.
+    #[test]
+    fn add_worktree_concurrent_same_branch_one_wins() {
+        let (dir, base_branch) = repo_with_commit();
+        // A dedicated parent for the candidate worktrees, separate from
+        // the system temp root, so this test can't collide with another
+        // test's own "wt-race-N" leaf names.
+        let wt_parent = TempDir::new().unwrap();
+        let repo_path = dir.path().to_string_lossy().into_owned();
+        let barrier = Arc::new(Barrier::new(2));
+
+        let mut handles = Vec::new();
+        for i in 0..2 {
+            let repo_path = repo_path.clone();
+            let base_branch = base_branch.clone();
+            let barrier = Arc::clone(&barrier);
+            let worktree_path = wt_parent
+                .path()
+                .join(format!("wt-race-{i}"))
+                .to_string_lossy()
+                .into_owned();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                git_add_worktree_impl(&repo_path, "feature/race", &base_branch, &worktree_path)
+            }));
+        }
+        let results: Vec<Result<WorktreeDto, String>> =
+            handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        let ok_count = results.iter().filter(|r| r.is_ok()).count();
+        let err_count = results.iter().filter(|r| r.is_err()).count();
+        assert_eq!(ok_count, 1, "exactly one add_worktree call should win");
+        assert_eq!(err_count, 1, "the other should fail, not silently no-op");
+
+        // The losing call must not have left a half-created worktree:
+        // the repo reports exactly one, and the loser's target
+        // directory was never created.
+        let raw = git2::Repository::open(dir.path()).unwrap();
+        let worktrees = raw.worktrees().unwrap();
+        assert_eq!(worktrees.len(), 1, "repo should have exactly one worktree");
+        let existing: Vec<bool> = (0..2)
+            .map(|i| wt_parent.path().join(format!("wt-race-{i}")).exists())
+            .collect();
+        assert_eq!(
+            existing.iter().filter(|&&e| e).count(),
+            1,
+            "exactly one candidate worktree path should exist on disk"
+        );
+    }
+}
+
 const fn status_kind_str(k: StatusKind) -> &'static str {
     match k {
         StatusKind::Added => "added",
@@ -311,10 +448,17 @@ const fn status_kind_str(k: StatusKind) -> &'static str {
 
 /// Structured diff of every changed file in the worktree against HEAD.
 /// One entry per file; binary files have `binary: true` and empty hunks.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: `diff_workdir` computes a real diff over the whole worktree —
+/// libgit2 work that can be sizeable, and #171 wants it off the main
+/// thread since this fires on every debounced watcher tick.
 #[tauri::command]
-pub fn git_diff(path: String) -> Result<Vec<FileDiffDto>, String> {
-    let repo = Repo::open(Path::new(&path)).map_err(|e| e.to_string())?;
-    let files = repo.diff_workdir().map_err(|e| e.to_string())?;
-    Ok(files.into_iter().map(FileDiffDto::from).collect())
+pub async fn git_diff(path: String) -> Result<Vec<FileDiffDto>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(Path::new(&path)).map_err(|e| e.to_string())?;
+        let files = repo.diff_workdir().map_err(|e| e.to_string())?;
+        Ok(files.into_iter().map(FileDiffDto::from).collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

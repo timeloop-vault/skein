@@ -34,32 +34,49 @@ fn open_opencode_db() -> Result<Option<rusqlite::Connection>, String> {
 /// IDs of all non-archived opencode sessions whose `directory` matches
 /// `cwd`, newest first. Empty vec when the db doesn't exist or `HOME`
 /// isn't set.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: opens the sqlite db and runs a query against it — real disk
+/// I/O, and #171 wants that off the main thread.
 #[tauri::command]
-pub fn opencode_list_sessions(cwd: String) -> Result<Vec<String>, String> {
-    let Some(conn) = open_opencode_db()? else {
-        return Ok(Vec::new());
-    };
-    opencode::session_ids_for_directory(&conn, &cwd).map_err(|e| format!("query: {e}"))
+pub async fn opencode_list_sessions(cwd: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(conn) = open_opencode_db()? else {
+            return Ok(Vec::new());
+        };
+        opencode::session_ids_for_directory(&conn, &cwd).map_err(|e| format!("query: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Phase 4: does the opencode session row for `id` still exist (and
 /// is non-archived)? Used at boot to drop stale captured ids before
 /// resume tries to use them.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: same opencode.db read as `opencode_list_sessions` (#171).
 #[tauri::command]
-pub fn opencode_session_exists(id: String) -> Result<bool, String> {
-    let Some(conn) = open_opencode_db()? else {
-        return Ok(false);
-    };
-    opencode::session_exists(&conn, &id).map_err(|e| format!("exists: {e}"))
+pub async fn opencode_session_exists(id: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(conn) = open_opencode_db()? else {
+            return Ok(false);
+        };
+        opencode::session_exists(&conn, &id).map_err(|e| format!("exists: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Phase 4: does Claude still have a session file for this id? Scans
 /// every project dir rather than recomputing the lossy cwd encoding —
 /// see `skein_harness::claude::session_exists`.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: a directory scan across every Claude project dir — real
+/// disk I/O run at boot for every restored harness at once (#171).
 #[tauri::command]
-pub fn claude_session_exists(id: String) -> bool {
-    crate::home_dir().is_some_and(|home| claude::session_exists(&home, &id))
+pub async fn claude_session_exists(id: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::home_dir().is_some_and(|home| claude::session_exists(&home, &id))
+    })
+    .await
+    .map_err(|e| e.to_string())
 }

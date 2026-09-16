@@ -30,8 +30,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   unshipped in `2bcae5a` (tag `archive/214-land-actions`) — lift it, don't
   rewrite it, if an issue ever needs writes.
 - **Reviews happen after the fact, against git.** The review unit is
-  committed work on the room's branch, so nothing in the review surface
-  needs to cover non-git rooms or gitignored paths.
+  still committed work on the room's branch, so the branch and commit
+  scopes stay git-only and nothing needs to cover gitignored paths —
+  but the pending scope's baseline discovery runs off a per-room
+  filesystem watcher (#221) and therefore does work in a non-git room,
+  with no `git status` catch-up for changes made while Skein was
+  closed, so it only ever discovers from live watcher ticks.
 
 ## Stack
 
