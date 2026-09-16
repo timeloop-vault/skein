@@ -15,12 +15,21 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::db::Database;
 
 const TEXT_MAX_BYTES: u64 = 256 * 1024;
 const BINARY_SNIFF_BYTES: usize = 2048;
+
+/// Serializes `write_file_text`'s check-through-rename (#171). The
+/// mtime check and the rename that follows it are not atomic, so two
+/// overlapping saves of the same path could both pass the staleness
+/// guard before either has written — one global mutex is enough since
+/// saves are rare and user-initiated; a path-keyed map would be
+/// overbuilt for that.
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Serialize)]
 pub struct DirEntryDto {
@@ -72,13 +81,23 @@ pub(crate) fn ensure_room_scope(db: &Database, path: &str) -> Result<PathBuf, St
 /// the frontend filters by default but can opt-in. Common build /
 /// dependency dirs are *not* skipped here either; that's a UX call,
 /// not a filesystem call.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: `read_dir` + a `metadata()`/`symlink_metadata()` call per
+/// entry is a filesystem walk, and #171 wants that off the main thread
+/// so it can't queue behind an agent's own file churn.
 #[tauri::command]
-pub fn list_dir(
+pub async fn list_dir(
     path: String,
     db: tauri::State<'_, Arc<Database>>,
 ) -> Result<Vec<DirEntryDto>, String> {
-    let canon = ensure_room_scope(&db, &path)?;
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || list_dir_impl(&path, &db))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn list_dir_impl(path: &str, db: &Database) -> Result<Vec<DirEntryDto>, String> {
+    let canon = ensure_room_scope(db, path)?;
     let read = std::fs::read_dir(&canon).map_err(|e| format!("read_dir: {e}"))?;
     let mut out = Vec::new();
     for entry in read {
@@ -116,14 +135,23 @@ pub fn list_dir(
 /// `Err("binary")` when the leading sniff window contains a NUL byte
 /// (cheap heuristic — robust enough for "is this a JPEG or a Rust
 /// file" and matches `git diff`'s behaviour).
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: reading up to `TEXT_MAX_BYTES` (256 KiB) off disk is real
+/// blocking work — #171.
 #[tauri::command]
-pub fn read_file_text(
+pub async fn read_file_text(
     path: String,
     db: tauri::State<'_, Arc<Database>>,
 ) -> Result<FileTextDto, String> {
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || read_file_text_impl(&path, &db))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn read_file_text_impl(path: &str, db: &Database) -> Result<FileTextDto, String> {
     use std::io::Read;
-    let canon = ensure_room_scope(&db, &path)?;
+    let canon = ensure_room_scope(db, path)?;
     let file = std::fs::File::open(&canon).map_err(|e| format!("open: {e}"))?;
     let meta = file.metadata().map_err(|e| format!("metadata: {e}"))?;
     let total_size = meta.len();
@@ -168,18 +196,45 @@ fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
 /// rewritten the file under the buffer, and silently reverting its
 /// work is the one thing a save must never do. Returns the new mtime
 /// for the frontend to store.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: the metadata check, the write-then-rename and the
+/// permissions carry-over are all blocking filesystem calls — #171.
+/// `WRITE_LOCK` serializes the whole check-through-rename (acquired
+/// inside `write_file_text_impl`, held for its full body): the
+/// metadata check and the rename that settles it are not atomic with
+/// each other, so async scheduling could otherwise let two overlapping
+/// saves of the same path both pass the staleness guard before either
+/// has written.
 #[tauri::command]
-pub fn write_file_text(
+pub async fn write_file_text(
     path: String,
     content: String,
     expected_mtime_ms: i64,
     db: tauri::State<'_, Arc<Database>>,
 ) -> Result<i64, String> {
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        write_file_text_impl(&path, &content, expected_mtime_ms, &db)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Guarded by `WRITE_LOCK` for its whole body (see `write_file_text`'s
+/// doc comment) so the lock travels with the logic it protects rather
+/// than living only in the command closure, where an extracted-fn test
+/// could bypass it unnoticed.
+fn write_file_text_impl(
+    path: &str,
+    content: &str,
+    expected_mtime_ms: i64,
+    db: &Database,
+) -> Result<i64, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-    let canon = ensure_room_scope(&db, &path)?;
+    let _guard = WRITE_LOCK.lock();
+    let canon = ensure_room_scope(db, path)?;
     let meta = std::fs::metadata(&canon).map_err(|e| format!("metadata: {e}"))?;
     if !meta.is_file() {
         return Err("not a file".into());
@@ -216,7 +271,14 @@ pub fn write_file_text(
 mod tests {
     use super::*;
     use crate::db::{Harness, Room};
+    use std::sync::Barrier;
     use tempfile::TempDir;
+
+    fn now_ms() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+    }
 
     fn db_with_room_at(cwd: &std::path::Path) -> (TempDir, Database) {
         let db_dir = TempDir::new().unwrap();
@@ -273,6 +335,72 @@ mod tests {
         crate::db::replace_file(&tmp, &canon).unwrap();
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "new content");
         assert!(!tmp.exists());
+    }
+
+    /// Two threads race `write_file_text_impl` against the same path
+    /// with the SAME `expected_mtime_ms` — the shape of two overlapping
+    /// saves of one buffer. A `Barrier` lines them up so both reach the
+    /// guarded section at once rather than merely running one after the
+    /// other by scheduling luck; without `WRITE_LOCK` living inside the
+    /// impl, both could observe the same on-disk mtime and pass the
+    /// staleness guard before either has written.
+    #[test]
+    fn write_file_text_concurrent_same_mtime_one_wins() {
+        let room_dir = TempDir::new().unwrap();
+        let f = room_dir.path().join("race.txt");
+        std::fs::write(&f, "original").unwrap();
+        let (_db_dir, db) = db_with_room_at(room_dir.path());
+        let db = Arc::new(db);
+
+        let expected = mtime_ms(&std::fs::metadata(&f).unwrap());
+        // Millisecond mtime resolution: wait past the current tick so a
+        // write landing "now" is observably newer than `expected` —
+        // otherwise a write could coincidentally land in the same
+        // millisecond as `expected` and this test would be flaky by
+        // clock granularity rather than by the guard under test.
+        while now_ms() == expected {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        let path = f.to_string_lossy().into_owned();
+        let barrier = Arc::new(Barrier::new(2));
+        let content_a = "A".repeat(5000);
+        let content_b = "B".repeat(7000);
+
+        let mut handles = Vec::new();
+        for content in [content_a.clone(), content_b.clone()] {
+            let db = Arc::clone(&db);
+            let path = path.clone();
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                write_file_text_impl(&path, &content, expected, db.as_ref())
+            }));
+        }
+        let results: Vec<Result<i64, String>> =
+            handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        let ok_count = results.iter().filter(|r| r.is_ok()).count();
+        let err_count = results.iter().filter(|r| r.is_err()).count();
+        assert_eq!(
+            ok_count, 1,
+            "exactly one writer should pass the staleness guard"
+        );
+        assert_eq!(
+            err_count, 1,
+            "the other should be refused, not silently dropped or duplicated"
+        );
+
+        let final_content = std::fs::read_to_string(&f).unwrap();
+        let winner = if results[0].is_ok() {
+            &content_a
+        } else {
+            &content_b
+        };
+        assert_eq!(
+            &final_content, winner,
+            "file must hold the winner's content in full, not interleaved or truncated"
+        );
     }
 
     #[cfg(unix)]

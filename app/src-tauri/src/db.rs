@@ -30,7 +30,7 @@
 //! are in `docs/live-context-recon.md` §4 and the design brief.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
@@ -236,6 +236,20 @@ pub struct Database {
     /// the frontend only legitimately saves `[]` after a good load
     /// (issue #167: a failed boot load must never wipe the table).
     loaded_ok: AtomicBool,
+    /// Ticket source for `save_all_seq` (#171). `db_save_rooms` became
+    /// an async command so it could move sqlite's wipe-and-reinsert
+    /// off the main thread — but the frontend fires it un-debounced on
+    /// every `rooms` state change without awaiting the previous call,
+    /// so two saves can now reach the connection lock out of order.
+    /// Each save mints a ticket before its blocking work starts; see
+    /// `save_all_seq`.
+    save_seq: AtomicU64,
+    /// The ticket of the last save that actually committed, held for
+    /// the whole check-then-write so it can't race a concurrent save's
+    /// own check (#171). `Mutex<u64>` rather than an atomic: the guard
+    /// serializes seq-aware saves against each other for their full
+    /// duration, not just the compare.
+    last_saved_seq: Mutex<u64>,
 }
 
 impl Database {
@@ -262,7 +276,23 @@ impl Database {
             conn: Mutex::new(conn),
             path: path.to_path_buf(),
             loaded_ok: AtomicBool::new(false),
+            save_seq: AtomicU64::new(0),
+            last_saved_seq: Mutex::new(0),
         })
+    }
+
+    /// Mint the next ticket for a `save_all_seq` call (#171). Callers
+    /// mint this *before* the blocking work starts, which is what lets
+    /// `save_all_seq` detect a save that reaches the connection lock
+    /// after a newer one already committed — the realistic case, since
+    /// two overlapping saves racing sqlite is far more likely than
+    /// their tickets minting out of order. Minting itself happens at
+    /// the top of the async command body, not at dispatch time, so a
+    /// work-stealing runtime gives no guarantee that two concurrently
+    /// dispatched saves mint in the order the frontend fired them —
+    /// that residual window is a few instructions wide and accepted.
+    pub fn next_save_seq(&self) -> u64 {
+        self.save_seq.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Idempotent schema setup. Each table uses `IF NOT EXISTS`; new
@@ -708,6 +738,37 @@ impl Database {
             .map_err(|e| e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Seq-aware wrapper around `save_all` (#171). `db_save_rooms` is
+    /// async now, and the frontend fires it un-debounced on every
+    /// `rooms` change without awaiting the previous call — so a save
+    /// minted *before* another can still reach this lock *after* it,
+    /// and a plain `save_all` would let the older, stale room list
+    /// silently overwrite the newer one that already committed.
+    ///
+    /// `seq` is a ticket from `next_save_seq`, minted by the command
+    /// before its blocking work starts. Holding `last_saved_seq` for
+    /// the whole check-then-write serializes every seq-aware save
+    /// against every other one, so a save whose ticket is older than
+    /// the last one committed is dropped — the newer room list wins
+    /// and the #167 empty-save refusal inside `save_all` still applies
+    /// unchanged. This reliably fixes *completion*-order inversion —
+    /// two overlapping saves where the older one's blocking work
+    /// finishes last, which is the realistic case a work-stealing
+    /// runtime produces. It does not guarantee *mint*-order matches
+    /// dispatch order (see `next_save_seq`); that residual window is a
+    /// few instructions wide and accepted.
+    pub fn save_all_seq(&self, rooms: &[Room], seq: u64) -> Result<(), String> {
+        let mut last_seq = self.last_saved_seq.lock();
+        if seq < *last_seq {
+            // A newer save already committed; applying this one would
+            // silently revert it.
+            return Ok(());
+        }
+        self.save_all(rooms)?;
+        *last_seq = seq;
         Ok(())
     }
 
@@ -1948,6 +2009,49 @@ mod tests {
         // "User deleted the last room" — legitimate empty save.
         db.save_all(&[]).unwrap();
         assert!(db.load_all().unwrap().rooms.is_empty());
+    }
+
+    // ── save_all_seq ordering (#171) ─────────────────────────────
+
+    #[test]
+    fn save_all_seq_applies_in_order_tickets() {
+        let (_dir, db) = fresh_db();
+        let _ = db.load_all().unwrap();
+        db.save_all_seq(&[room("r1")], db.next_save_seq()).unwrap();
+        db.save_all_seq(&[room("r1"), room("r2")], db.next_save_seq())
+            .unwrap();
+        assert_eq!(db.load_all().unwrap().rooms.len(), 2);
+    }
+
+    #[test]
+    fn save_all_seq_drops_a_save_whose_ticket_already_lost() {
+        let (_dir, db) = fresh_db();
+        let _ = db.load_all().unwrap();
+        // Mint tickets in order, but apply them out of order — the
+        // shape of an async db_save_rooms(N) that reaches the
+        // connection lock after db_save_rooms(N+1) already committed.
+        let older = db.next_save_seq();
+        let newer = db.next_save_seq();
+        db.save_all_seq(&[room("r1"), room("r2")], newer).unwrap();
+        db.save_all_seq(&[room("r1")], older).unwrap();
+        // The stale save must not have reverted the newer room list.
+        assert_eq!(db.load_all().unwrap().rooms.len(), 2);
+    }
+
+    #[test]
+    fn save_all_seq_still_refuses_the_167_empty_save() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        {
+            let db = Database::open(&path).unwrap();
+            db.save_all(&[room("r1")]).unwrap();
+        }
+        // Fresh process: loaded_ok is false, same #167 boot-wipe guard
+        // save_all_seq must not bypass.
+        let db = Database::open(&path).unwrap();
+        let err = db.save_all_seq(&[], db.next_save_seq()).unwrap_err();
+        assert!(err.contains("#167"), "unexpected error: {err}");
+        assert_eq!(db.load_all().unwrap().rooms.len(), 1);
     }
 
     #[test]

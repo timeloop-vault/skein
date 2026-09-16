@@ -467,9 +467,16 @@ struct PtySpawnResult {
 /// agent can reach the review API. It is passed separately from `cmd`
 /// because the two can legitimately disagree — the user can swap a
 /// harness's command without changing what the harness is.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+///
+/// Async: `PtyManager::spawn` calls into `apply_env`, which reads the
+/// login-shell probe result and can block waiting on it for up to
+/// `PROBE_WAIT` (6 s, #171/#177) — plus the actual child-process spawn.
+/// None of the managed state here is `Arc`-wrapped, so the blocking
+/// closure re-resolves each one off an owned `AppHandle` instead of
+/// trying to move a borrowed `State` into a `'static` closure.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
-fn pty_spawn(
+async fn pty_spawn(
     cmd: Vec<String>,
     cwd: String,
     rows: u16,
@@ -478,57 +485,69 @@ fn pty_spawn(
     harness_id: String,
     kind: String,
     on_event: Channel<PtyEvent>,
-    manager: tauri::State<'_, PtyManager>,
-    spawn_env: tauri::State<'_, SpawnEnvState>,
-    db: tauri::State<'_, Arc<Database>>,
-    endpoint: tauri::State<'_, crate::agent_api::state::AgentApiEndpoint>,
-    harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
+    app: tauri::AppHandle,
 ) -> Result<PtySpawnResult, String> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let settings = spawn_env.snapshot();
-    // #213: mint (or reuse) the room's review token and hand the
-    // harness its endpoint. A failure here is not a reason to refuse
-    // the spawn — the terminal still works, the agent simply has no
-    // review tools — but it is logged rather than swallowed (#176).
-    let agent = endpoint.mcp_url().and_then(|url| {
-        match db.ensure_room_token(&room_id, crate::review::now_ms()) {
-            Ok(token) => Some(crate::agent_api::state::HarnessIdentity {
-                url,
-                token,
-                room_id: room_id.clone(),
-                harness_id: harness_id.clone(),
-            }),
-            Err(e) => {
-                tracing::error!(room_id, error = %e, "agent api: minting a room token failed");
-                None
+    tauri::async_runtime::spawn_blocking(move || {
+        let manager = app.state::<PtyManager>();
+        let spawn_env = app.state::<SpawnEnvState>();
+        let db = app.state::<Arc<Database>>();
+        let endpoint = app.state::<crate::agent_api::state::AgentApiEndpoint>();
+        let harness_config = app.state::<crate::harness_config::HarnessConfig>();
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let settings = spawn_env.snapshot();
+        // #213: mint (or reuse) the room's review token and hand the
+        // harness its endpoint. A failure here is not a reason to
+        // refuse the spawn — the terminal still works, the agent
+        // simply has no review tools — but it is logged rather than
+        // swallowed (#176).
+        let agent = endpoint.mcp_url().and_then(|url| {
+            match db.ensure_room_token(&room_id, crate::review::now_ms()) {
+                Ok(token) => Some(crate::agent_api::state::HarnessIdentity {
+                    url,
+                    token,
+                    room_id: room_id.clone(),
+                    harness_id: harness_id.clone(),
+                }),
+                Err(e) => {
+                    tracing::error!(room_id, error = %e, "agent api: minting a room token failed");
+                    None
+                }
             }
-        }
-    });
-    let injected = manager
-        .spawn(
-            crate::pty::SpawnRequest {
-                id: id.clone(),
-                cmd: &cmd,
-                cwd: Path::new(&cwd),
-                rows,
-                cols,
-                settings: &settings,
-                agent: agent.as_ref(),
-                kind: &kind,
-                harness_config: Some(&harness_config),
-            },
-            move |event| {
-                // Channel send only fails if the frontend dropped the
-                // channel; nothing useful we can do at that point.
-                let _ = on_event.send(event);
-            },
-        )
-        .map_err(|e| e.to_string())?;
-    Ok(PtySpawnResult { id, injected })
+        });
+        let injected = manager
+            .spawn(
+                crate::pty::SpawnRequest {
+                    id: id.clone(),
+                    cmd: &cmd,
+                    cwd: Path::new(&cwd),
+                    rows,
+                    cols,
+                    settings: &settings,
+                    agent: agent.as_ref(),
+                    kind: &kind,
+                    harness_config: Some(&harness_config),
+                },
+                move |event| {
+                    // Channel send only fails if the frontend dropped
+                    // the channel; nothing useful we can do at that
+                    // point.
+                    let _ = on_event.send(event);
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(PtySpawnResult { id, injected })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Forward stdin bytes to the child. `data` is the raw string xterm.js
 /// gives us from `term.onData`.
+///
+/// Deliberately sync (#171): keystroke ordering to a PTY must stay
+/// FIFO, and async scheduling could let two writes to the same PTY
+/// invert.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 fn pty_write(
@@ -541,6 +560,7 @@ fn pty_write(
         .map_err(|e| e.to_string())
 }
 
+// Deliberately sync (#171): same FIFO-ordering reasoning as `pty_write`.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 fn pty_resize(
@@ -552,6 +572,7 @@ fn pty_resize(
     manager.resize(&id, rows, cols).map_err(|e| e.to_string())
 }
 
+// Deliberately sync (#171): same FIFO-ordering reasoning as `pty_write`.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 fn pty_kill(id: String, manager: tauri::State<'_, PtyManager>) {
@@ -585,21 +606,33 @@ fn pick_free_port() -> Result<u16, String> {
 /// back to the L2a idle heuristic. We surface the error as a string
 /// for the frontend to log, but the frontend treats it as soft —
 /// notifications keep working from the chunk-based path.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+///
+/// Async: on first attach, `ClaudeEventsManager::attach` reads the
+/// whole existing JSONL file to derive the current phase and backfill
+/// actions (#80) before it starts tailing — for a long-running resumed
+/// conversation that is real disk I/O, off the main thread (#171).
+/// `ClaudeEventsManager` isn't `Arc`-wrapped, so the blocking closure
+/// re-resolves it off an owned `AppHandle`.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
-fn claude_events_attach(
+async fn claude_events_attach(
     harness_id: String,
     room_id: String,
     session_id: String,
     cwd: String,
     on_event: Channel<ClaudeEvent>,
-    manager: tauri::State<'_, ClaudeEventsManager>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    manager
-        .attach(harness_id, room_id, &session_id, &cwd, move |event| {
-            let _ = on_event.send(event);
-        })
-        .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let manager = app.state::<ClaudeEventsManager>();
+        manager
+            .attach(harness_id, room_id, &session_id, &cwd, move |event| {
+                let _ = on_event.send(event);
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Stop tailing the JSONL for `harness_id`. No-op if unknown.
@@ -657,9 +690,11 @@ fn opencode_events_detach(harness_id: String, manager: tauri::State<'_, Opencode
 ///
 /// `source` is reserved for L7 attribution ("which adapter event
 /// drove this transition"). For v1 the frontend passes `None`.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+///
+/// Async: an sqlite insert — off the main thread (#171).
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
-fn db_record_harness_event(
+async fn db_record_harness_event(
     harness_id: String,
     room_id: String,
     from_phase: String,
@@ -669,40 +704,57 @@ fn db_record_harness_event(
     source: Option<String>,
     db: tauri::State<'_, Arc<Database>>,
 ) -> Result<(), String> {
-    db.record_harness_event(
-        &harness_id,
-        &room_id,
-        &from_phase,
-        &to_phase,
-        timestamp_ms,
-        has_user_input,
-        source.as_deref(),
-    )
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        db.record_harness_event(
+            &harness_id,
+            &room_id,
+            &from_phase,
+            &to_phase,
+            timestamp_ms,
+            has_user_input,
+            source.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Read recent events for a single harness. Newest-first. Epic #50 L6.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: an sqlite query — off the main thread (#171).
 #[tauri::command]
-fn db_recent_harness_events_by_harness(
+async fn db_recent_harness_events_by_harness(
     harness_id: String,
     since_ms: i64,
     limit: i64,
     db: tauri::State<'_, Arc<Database>>,
 ) -> Result<Vec<HarnessEvent>, String> {
-    db.recent_harness_events_by_harness(&harness_id, since_ms, limit)
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        db.recent_harness_events_by_harness(&harness_id, since_ms, limit)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Read recent events across every harness in a room. Newest-first.
 /// Epic #50 L6 — foundation for the L7 activity feed.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: an sqlite query — off the main thread (#171).
 #[tauri::command]
-fn db_recent_harness_events_by_room(
+async fn db_recent_harness_events_by_room(
     room_id: String,
     since_ms: i64,
     limit: i64,
     db: tauri::State<'_, Arc<Database>>,
 ) -> Result<Vec<HarnessEvent>, String> {
-    db.recent_harness_events_by_room(&room_id, since_ms, limit)
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        db.recent_harness_events_by_room(&room_id, since_ms, limit)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Append one row to the `harness_actions` log. Issue #80.
@@ -712,9 +764,13 @@ fn db_recent_harness_events_by_room(
 /// the canonical shape per kind is documented in the design brief.
 /// `source` carries the adapter event id (mirrors the L7a `source`
 /// column on `harness_events`).
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+///
+/// Async: an sqlite insert, called once per extracted action — off
+/// the main thread so an agent's tool-call storm can't queue behind
+/// it (#171).
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
-fn db_record_harness_action(
+async fn db_record_harness_action(
     harness_id: String,
     room_id: String,
     timestamp_ms: i64,
@@ -723,54 +779,77 @@ fn db_record_harness_action(
     source: Option<String>,
     db: tauri::State<'_, Arc<Database>>,
 ) -> Result<(), String> {
-    db.record_harness_action(
-        &harness_id,
-        &room_id,
-        timestamp_ms,
-        &kind,
-        &payload,
-        source.as_deref(),
-    )
-    .map(drop)
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        db.record_harness_action(
+            &harness_id,
+            &room_id,
+            timestamp_ms,
+            &kind,
+            &payload,
+            source.as_deref(),
+        )
+        .map(drop)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Read recent actions for a single harness. Newest-first.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: an sqlite query — off the main thread (#171).
 #[tauri::command]
-fn db_recent_harness_actions_by_harness(
+async fn db_recent_harness_actions_by_harness(
     harness_id: String,
     since_ms: i64,
     limit: i64,
     db: tauri::State<'_, Arc<Database>>,
 ) -> Result<Vec<HarnessAction>, String> {
-    db.recent_harness_actions_by_harness(&harness_id, since_ms, limit)
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        db.recent_harness_actions_by_harness(&harness_id, since_ms, limit)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Read recent actions across every harness in a room. Newest-first.
 /// Backs the Activity card.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: an sqlite query — off the main thread (#171).
 #[tauri::command]
-fn db_recent_harness_actions_by_room(
+async fn db_recent_harness_actions_by_room(
     room_id: String,
     since_ms: i64,
     limit: i64,
     db: tauri::State<'_, Arc<Database>>,
 ) -> Result<Vec<HarnessAction>, String> {
-    db.recent_harness_actions_by_room(&room_id, since_ms, limit)
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        db.recent_harness_actions_by_room(&room_id, since_ms, limit)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Read recent actions of a single `kind` in a room. Backs the Plan
 /// card (`kind = "plan_change"`) and other per-kind surfaces.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: an sqlite query — off the main thread (#171).
 #[tauri::command]
-fn db_recent_harness_actions_by_room_and_kind(
+async fn db_recent_harness_actions_by_room_and_kind(
     room_id: String,
     kind: String,
     since_ms: i64,
     limit: i64,
     db: tauri::State<'_, Arc<Database>>,
 ) -> Result<Vec<HarnessAction>, String> {
-    db.recent_harness_actions_by_room_and_kind(&room_id, &kind, since_ms, limit)
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        db.recent_harness_actions_by_room_and_kind(&room_id, &kind, since_ms, limit)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Wire shape for the Settings "Shell & environment" section.
@@ -812,18 +891,27 @@ fn spawn_settings_load(spawn_env: tauri::State<'_, SpawnEnvState>) -> SpawnSetti
 /// spawn of any harness*, whereas the shell is baked into `Harness.cmd`
 /// when a shell harness is created and persisted from there — so
 /// existing harnesses are never rewritten behind the user's back.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: writes the settings file to disk (#171). `SpawnEnvState`
+/// isn't `Arc`-wrapped, so the blocking closure re-resolves it off an
+/// owned `AppHandle` rather than trying to move the `State` borrow
+/// into a `'static` closure.
 #[tauri::command]
-fn spawn_settings_save(
+async fn spawn_settings_save(
     settings: SpawnSettings,
-    spawn_env: tauri::State<'_, SpawnEnvState>,
+    app: tauri::AppHandle,
 ) -> Result<SpawnSettingsPayload, String> {
-    crate::spawn_settings::save(&spawn_env.data_dir, &settings)?;
-    *spawn_env.settings.write() = settings.clone();
-    // A successful save replaces whatever was unreadable before.
-    *spawn_env.degraded.write() = None;
-    crate::pty::reprobe(spawn_env.data_dir.clone(), settings);
-    Ok(spawn_settings_payload(&spawn_env))
+    tauri::async_runtime::spawn_blocking(move || {
+        let spawn_env = app.state::<SpawnEnvState>();
+        crate::spawn_settings::save(&spawn_env.data_dir, &settings)?;
+        *spawn_env.settings.write() = settings.clone();
+        // A successful save replaces whatever was unreadable before.
+        *spawn_env.degraded.write() = None;
+        crate::pty::reprobe(spawn_env.data_dir.clone(), settings);
+        Ok(spawn_settings_payload(&spawn_env))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The environment a harness would get if it spawned right now.
@@ -961,47 +1049,68 @@ fn default_cwd() -> String {
 /// A clean, non-empty load also refreshes the `skein.db.bak`
 /// last-known-good snapshot — on a helper thread so boot isn't taxed.
 /// Empty or quarantine-marred loads leave the previous snapshot alone.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: `load_all` walks every row in `sessions` and parses each
+/// blob — sqlite I/O plus JSON parsing, off the main thread (#171).
 #[tauri::command]
-fn db_load_rooms(db: tauri::State<'_, Arc<Database>>) -> Result<LoadOutcome, String> {
-    let mut outcome = db.load_all()?;
-    for s in &outcome.skipped {
-        tracing::warn!(
-            id = %s.id,
-            error = %s.error,
-            "quarantined unparseable room row (see sessions_quarantine)"
-        );
-    }
-    if outcome.rooms.is_empty() && outcome.skipped.is_empty() {
-        // A vanished/recreated skein.db parses as a clean fresh
-        // install. If a backup with rooms sits next to it, tell the
-        // frontend so the user isn't shown first-run onboarding over
-        // recoverable rooms.
-        outcome.backup_rooms = db.count_backup_rooms().filter(|n| *n > 0);
-        if let Some(n) = outcome.backup_rooms {
-            tracing::warn!("rooms table is empty but skein.db.bak holds {n} room(s)");
+async fn db_load_rooms(db: tauri::State<'_, Arc<Database>>) -> Result<LoadOutcome, String> {
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut outcome = db.load_all()?;
+        for s in &outcome.skipped {
+            tracing::warn!(
+                id = %s.id,
+                error = %s.error,
+                "quarantined unparseable room row (see sessions_quarantine)"
+            );
         }
-    }
-    // Refresh the last-known-good snapshot at most once per process
-    // (first_load), and only for a clean, non-empty load — a marred
-    // or empty load must leave the previous generations alone.
-    if outcome.first_load && outcome.skipped.is_empty() && !outcome.rooms.is_empty() {
-        let db = Arc::clone(db.inner());
-        std::thread::spawn(move || match db.backup_last_known_good() {
-            Ok(dest) => tracing::info!("refreshed room backup at {}", dest.display()),
-            Err(e) => tracing::warn!("room backup failed: {e}"),
-        });
-    }
-    Ok(outcome)
+        if outcome.rooms.is_empty() && outcome.skipped.is_empty() {
+            // A vanished/recreated skein.db parses as a clean fresh
+            // install. If a backup with rooms sits next to it, tell the
+            // frontend so the user isn't shown first-run onboarding over
+            // recoverable rooms.
+            outcome.backup_rooms = db.count_backup_rooms().filter(|n| *n > 0);
+            if let Some(n) = outcome.backup_rooms {
+                tracing::warn!("rooms table is empty but skein.db.bak holds {n} room(s)");
+            }
+        }
+        // Refresh the last-known-good snapshot at most once per process
+        // (first_load), and only for a clean, non-empty load — a marred
+        // or empty load must leave the previous generations alone.
+        if outcome.first_load && outcome.skipped.is_empty() && !outcome.rooms.is_empty() {
+            let db = Arc::clone(&db);
+            std::thread::spawn(move || match db.backup_last_known_good() {
+                Ok(dest) => tracing::info!("refreshed room backup at {}", dest.display()),
+                Err(e) => tracing::warn!("room backup failed: {e}"),
+            });
+        }
+        Ok(outcome)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Replaces the DB's room list wholesale. Called whenever the
 /// frontend's rooms state changes — wipe-and-insert is fine at
 /// prototype scale and avoids the bookkeeping of granular upserts.
-#[allow(clippy::needless_pass_by_value)]
+///
+/// Async: `save_all` is a wipe + re-insert in one transaction — sqlite
+/// fsync, off the main thread (#171). The frontend fires this
+/// un-debounced on every `rooms` change without awaiting the previous
+/// call, so async scheduling can let two saves commit out of order;
+/// the seq ticket, minted here before the blocking work starts, makes
+/// `save_all_seq` drop a save that lands after a newer one already
+/// committed instead of silently reverting it.
 #[tauri::command]
-fn db_save_rooms(rooms: Vec<Room>, db: tauri::State<'_, Arc<Database>>) -> Result<(), String> {
-    db.save_all(&rooms)
+async fn db_save_rooms(
+    rooms: Vec<Room>,
+    db: tauri::State<'_, Arc<Database>>,
+) -> Result<(), String> {
+    let db = Arc::clone(&db);
+    let seq = db.next_save_seq();
+    tauri::async_runtime::spawn_blocking(move || db.save_all_seq(&rooms, seq))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
