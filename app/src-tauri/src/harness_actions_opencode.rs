@@ -307,7 +307,8 @@ fn extract_reasoning(part: &Value, out: &mut Vec<ExtractedAction>) {
 }
 
 /// Read the opencode `SQLite` DB and extract all actions for a session,
-/// persisting any with `timestamp_ms > max_ts` into Skein's DB.
+/// persisting any with `timestamp_ms > max_ts` into Skein's DB in one
+/// batch insert (#171e — this used to be one `INSERT` per action).
 /// Returns the number of actions inserted. Opens the opencode DB
 /// read-only so we never contend with opencode's writer lock.
 pub fn backfill_from_db(
@@ -327,7 +328,7 @@ pub fn backfill_from_db(
         return 0;
     };
 
-    let mut count = 0;
+    let mut rows_to_insert: Vec<crate::db::NewHarnessAction> = Vec::new();
 
     // Parts — the main source of tool calls, patches, step-finish.
     let Ok(mut stmt) = conn.prepare(
@@ -358,18 +359,12 @@ pub fn backfill_from_db(
             if action.timestamp_ms <= max_ts {
                 continue;
             }
-            if let Err(e) = skein_db.record_harness_action(
-                harness_id,
-                room_id,
-                action.timestamp_ms,
-                action.kind,
-                &action.payload,
-                action.source.as_deref(),
-            ) {
-                tracing::trace!(error = %e, "opencode backfill: record failed");
-            } else {
-                count += 1;
-            }
+            rows_to_insert.push(crate::db::NewHarnessAction {
+                timestamp_ms: action.timestamp_ms,
+                kind: action.kind,
+                payload: action.payload,
+                source: action.source,
+            });
         }
     }
 
@@ -405,23 +400,25 @@ pub fn backfill_from_db(
                     "prompt": null,
                     "summary_diffs": summary_text,
                 });
-                if let Err(e) = skein_db.record_harness_action(
-                    harness_id,
-                    room_id,
-                    ts_created,
-                    action_kind::USER_PROMPT,
-                    &payload.to_string(),
-                    None,
-                ) {
-                    tracing::trace!(error = %e, "opencode backfill: user_prompt record failed");
-                } else {
-                    count += 1;
-                }
+                rows_to_insert.push(crate::db::NewHarnessAction {
+                    timestamp_ms: ts_created,
+                    kind: action_kind::USER_PROMPT,
+                    payload: payload.to_string(),
+                    source: None,
+                });
             }
         }
     }
 
-    count
+    match skein_db.record_harness_actions(harness_id, room_id, &rows_to_insert) {
+        Ok(inserted) => inserted,
+        Err(e) => {
+            // max_ts didn't advance, so the next attach retries this same batch.
+            tracing::warn!(harness_id = %harness_id, rows = rows_to_insert.len(), error = %e,
+                "opencode backfill: batch record failed");
+            0
+        }
+    }
 }
 
 #[cfg(test)]

@@ -274,13 +274,17 @@ impl ClaudeEventsManager {
         // on re-attach after Skein restart, we only insert rows newer
         // than the largest persisted timestamp. The phase-side
         // initial-event probe is unchanged; both consume the same
-        // file read.
+        // file read — `scan_history` walks it exactly once (#171e:
+        // this used to be two full parses, `determine_initial_state`
+        // then `backfill_actions`, each running `serde_json::from_str`
+        // on every line) and the fresh actions it collects are
+        // persisted with one batch insert instead of one per line.
         let mut actions = actions;
         let (last_pos, attached, initial_event) = match fs::read_to_string(&path) {
             Ok(content) => {
-                let init = determine_initial_state(&content);
-                if let Some(ap) = actions.as_mut() {
-                    backfill_actions(ap, &content);
+                let (init, fresh) = scan_history(&content, actions.as_mut());
+                if let Some(ap) = actions.as_ref() {
+                    persist_extracted_batch(ap, fresh);
                 }
                 let len = u64::try_from(content.len()).unwrap_or(u64::MAX);
                 (len, true, init)
@@ -489,15 +493,38 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
 }
 
 /// One-shot historical scan of the JSONL — runs once on attach
-/// before the watcher arms. We walk every row in order so the
-/// extractor's `tool_use` buffer can join with its result row even if
-/// they fall on different lines. Insert only rows whose timestamp
-/// is newer than the largest one already persisted for this harness
+/// before the watcher arms, in a single walk over every line (#171e:
+/// this used to be two separate walks, one for phase and one for
+/// actions, each re-parsing every line). We still need to touch every
+/// row in order for two independent reasons that happen to want the
+/// same parsed line:
+///
+/// - the phase probe (`apply_initial_state_row`, same logic
+///   `determine_initial_state` uses) needs the *last* relevant row,
+///   not the first;
+/// - the action extractor's `tool_use` buffer needs to join with its
+///   result row even when they fall on different lines.
+///
+/// `actions` is `None` for phase-only callers/tests, in which case
+/// the second element of the return is always empty. When present,
+/// returns every extracted action whose timestamp is newer than the
+/// largest one already persisted for this harness
 /// (`max_persisted_ts_ms`) — that's how a re-attach after Skein
-/// restart avoids duplicating rows. On first attach the max is 0,
-/// so every row goes in.
-fn backfill_actions(ap: &mut ActionPersistence, content: &str) {
-    let max_ts = max_persisted_ts_ms(&ap.db, &ap.harness_id);
+/// restart avoids duplicating rows. On first attach the max is 0, so
+/// every row is fresh. Persistence itself is the caller's job
+/// (`persist_extracted_batch`), so this function stays a pure scan.
+fn scan_history(
+    content: &str,
+    mut actions: Option<&mut ActionPersistence>,
+) -> (
+    Option<ClaudeEvent>,
+    Vec<crate::harness_actions_claude::ExtractedAction>,
+) {
+    let max_ts = actions
+        .as_ref()
+        .map_or(0, |ap| max_persisted_ts_ms(&ap.db, &ap.harness_id));
+    let mut last: Option<ClaudeEvent> = None;
+    let mut fresh = Vec::new();
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -506,16 +533,13 @@ fn backfill_actions(ap: &mut ActionPersistence, content: &str) {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
             continue;
         };
-        let extracted = ap.extractor.ingest(&value);
-        let fresh: Vec<_> = extracted
-            .into_iter()
-            .filter(|a| a.timestamp_ms > max_ts)
-            .collect();
-        // Backfill: persist silently. The frontend loads history via
-        // its initial per-room query, so broadcasting thousands of
-        // backfilled rows would be wasted IPC.
-        persist_extracted(ap, fresh, false);
+        apply_initial_state_row(&value, &mut last);
+        if let Some(ap) = actions.as_mut() {
+            let extracted = ap.extractor.ingest(&value);
+            fresh.extend(extracted.into_iter().filter(|a| a.timestamp_ms > max_ts));
+        }
     }
+    (last, fresh)
 }
 
 /// Insert every action in `extracted` into `harness_actions`. When
@@ -572,6 +596,43 @@ fn persist_extracted(
     }
 }
 
+/// Batch counterpart to `persist_extracted`, used by `scan_history`'s
+/// backfill path (#171e): one transaction for the whole history read
+/// instead of one `INSERT` per action. Backfill never emits — same
+/// reasoning as `persist_extracted`'s `emit` flag — so there's no
+/// per-row broadcast or review-baseline capture to replicate here.
+/// A no-op for an empty `extracted` (also a no-op on the DB side, but
+/// this skips the allocation).
+///
+/// Takes `&ActionPersistence`, not `&mut`: `extracted` already came out
+/// of `scan_history`'s walk over the extractor, so this function only
+/// writes rows — it never feeds the extractor itself.
+fn persist_extracted_batch(
+    ap: &ActionPersistence,
+    extracted: Vec<crate::harness_actions_claude::ExtractedAction>,
+) {
+    if extracted.is_empty() {
+        return;
+    }
+    let rows: Vec<crate::db::NewHarnessAction> = extracted
+        .into_iter()
+        .map(|a| crate::db::NewHarnessAction {
+            timestamp_ms: a.timestamp_ms,
+            kind: a.kind,
+            payload: a.payload,
+            source: a.source,
+        })
+        .collect();
+    if let Err(e) = ap
+        .db
+        .record_harness_actions(&ap.harness_id, &ap.room_id, &rows)
+    {
+        // max_ts didn't advance, so the next attach retries this same batch.
+        tracing::warn!(harness_id = %ap.harness_id, rows = rows.len(), error = %e,
+            "claude_events: batch backfill insert failed");
+    }
+}
+
 /// Query the largest `timestamp_ms` already persisted for this
 /// harness. Returns 0 when the harness has no rows yet (first
 /// attach). Read errors fall back to 0 — re-inserting rows is
@@ -606,55 +667,64 @@ fn max_persisted_ts_ms(db: &Database, harness_id: &str) -> i64 {
 /// - `None` if there's nothing meaningful to derive state from
 ///   (empty file, only metadata rows). The first PTY chunk that
 ///   arrives will flip to running via the normal path.
+///
+/// Production code no longer calls this directly — `attach_at` uses
+/// `scan_history`, which drives the same per-row logic
+/// (`apply_initial_state_row`) from one walk shared with the action
+/// extractor (#171e) instead of two. Kept as a `#[cfg(test)]` helper,
+/// delegating to `scan_history` (with no `ActionPersistence`, so the
+/// action side of its walk is a no-op) rather than re-implementing the
+/// line walk, so the standalone "feed it a whole log, check the
+/// derived phase" tests below stay simple to write.
+#[cfg(test)]
 fn determine_initial_state(content: &str) -> Option<ClaudeEvent> {
-    let mut last: Option<ClaudeEvent> = None;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-            continue;
-        };
-        if skein_harness::claude::is_sidechain(&value) {
-            continue;
-        }
-        let Some(ty) = value.get("type").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        // #260: same rule as the live parser, or an interrupted session
-        // resumes into running on every restart.
-        if ends_turn_without_stop_reason(ty, &value) {
-            last = Some(ClaudeEvent::AwaitingPrompt);
-            continue;
-        }
-        match ty {
-            "assistant" => {
-                let stop_reason = value
-                    .get("message")
-                    .and_then(|m| m.get("stop_reason"))
-                    .and_then(serde_json::Value::as_str);
-                if matches!(
-                    stop_reason,
-                    Some("end_turn" | "stop_sequence" | "max_tokens")
-                ) {
-                    last = Some(ClaudeEvent::AwaitingPrompt);
-                } else {
-                    last = Some(ClaudeEvent::AssistantTurn);
-                }
-            }
-            "user" => {
-                last = if value.get("toolUseResult").is_some() {
-                    Some(ClaudeEvent::ToolUseResult)
-                } else {
-                    Some(ClaudeEvent::UserPrompt)
-                };
-            }
-            // Metadata rows don't shift phase; skip.
-            _ => {}
-        }
+    scan_history(content, None).0
+}
+
+/// One row's worth of `determine_initial_state`'s logic, factored out
+/// so `scan_history` can drive it from the same parsed `Value` its
+/// action extractor already walked, instead of `determine_initial_state`
+/// and the action scan each re-parsing every line (#171e). Mutates
+/// `last` in place — same "last relevant row wins" rule the doc comment
+/// on `determine_initial_state` describes.
+fn apply_initial_state_row(value: &serde_json::Value, last: &mut Option<ClaudeEvent>) {
+    if skein_harness::claude::is_sidechain(value) {
+        return;
     }
-    last
+    let Some(ty) = value.get("type").and_then(serde_json::Value::as_str) else {
+        return;
+    };
+    // #260: same rule as the live parser, or an interrupted session
+    // resumes into running on every restart.
+    if ends_turn_without_stop_reason(ty, value) {
+        *last = Some(ClaudeEvent::AwaitingPrompt);
+        return;
+    }
+    match ty {
+        "assistant" => {
+            let stop_reason = value
+                .get("message")
+                .and_then(|m| m.get("stop_reason"))
+                .and_then(serde_json::Value::as_str);
+            if matches!(
+                stop_reason,
+                Some("end_turn" | "stop_sequence" | "max_tokens")
+            ) {
+                *last = Some(ClaudeEvent::AwaitingPrompt);
+            } else {
+                *last = Some(ClaudeEvent::AssistantTurn);
+            }
+        }
+        "user" => {
+            *last = if value.get("toolUseResult").is_some() {
+                Some(ClaudeEvent::ToolUseResult)
+            } else {
+                Some(ClaudeEvent::UserPrompt)
+            };
+        }
+        // Metadata rows don't shift phase; skip.
+        _ => {}
+    }
 }
 
 /// Text Claude writes as a plain `user` row when the user stops a turn:
