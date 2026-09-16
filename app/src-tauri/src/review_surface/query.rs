@@ -132,7 +132,7 @@ pub(crate) fn scope_impl(
     let files = if scope == Scope::Pending {
         pending_files(&pending, &viewed, &per_file)
     } else {
-        let diffs = scope_diffs(&repo, &range, scope, commit_sha)?;
+        let diffs = scope_diffs(&repo, &range, scope, commit_sha, None)?;
         diffs
             .iter()
             .map(|f| {
@@ -145,6 +145,10 @@ pub(crate) fn scope_impl(
                     change: status_str(f.kind),
                     additions: additions(f),
                     deletions: deletions(f),
+                    // `ReviewFileDto` has no `blocked` field (kept
+                    // minimal — the list doesn't need to explain, only
+                    // the detail view does), so a too-large file simply
+                    // reads as binary here, same as before the cap.
                     binary: f.binary,
                     viewed: marked.is_some_and(|h| *h == hash),
                     changed_since_viewed: marked.is_some_and(|h| *h != hash),
@@ -271,7 +275,9 @@ pub(crate) fn file_impl(
 
     let repo_ref = repo.as_ref().ok_or("not a git repository")?;
     let range = resolve_range(db, room_id, repo_ref)?;
-    let diffs = scope_diffs(repo_ref, &range, scope, commit_sha)?;
+    // Restricted to `key` — this is the one-file view, not the whole
+    // scope, so it costs one file's diff rather than the branch's.
+    let diffs = scope_diffs(repo_ref, &range, scope, commit_sha, Some(&key))?;
     let found = diffs.iter().find(|f| norm(&f.path) == key);
 
     let ctx = PlaceCtx::new(
@@ -289,8 +295,16 @@ pub(crate) fn file_impl(
         Some(f) => FileDetailDto {
             name: key.rsplit('/').next().unwrap_or(&key).to_owned(),
             change: status_str(f.kind),
-            binary: f.binary,
-            blocked: if f.binary { Some("binary") } else { None },
+            // A too-large file is not really binary — just never read —
+            // so it gets its own `blocked` reason instead of `binary`'s.
+            binary: f.binary && !f.too_large,
+            blocked: if f.too_large {
+                Some("toolarge")
+            } else if f.binary {
+                Some("binary")
+            } else {
+                None
+            },
             content_hash: hash,
             hunks: f.hunks.iter().map(to_review_hunk).collect(),
             threads,
@@ -310,4 +324,86 @@ pub(crate) fn file_impl(
             path: key,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_impl_maps_toolarge_and_binary_to_distinct_blocked_reasons() {
+        // Pins the #171 slice (c) DTO mapping: a too-large file and a
+        // real binary both come back from skein-git as `binary: true`
+        // (`max_size` makes an oversized file look binary before any
+        // content is read), and `file_impl` is the one place that tells
+        // them apart for the pane — `blocked: Some("toolarge")` vs
+        // `Some("binary")`. A small text file gets neither and keeps
+        // its hunks.
+        let (db, tmp) = tests_support::repo_with_commit();
+        let cwd = tmp.path().to_str().unwrap();
+
+        let big = "x".repeat(usize::try_from(skein_git::MAX_DIFF_FILE_BYTES).unwrap() + 1);
+        std::fs::write(tmp.path().join("big.txt"), &big).unwrap();
+        std::fs::write(tmp.path().join("bin.dat"), [0u8, 1, 2, 0, 3, 4]).unwrap();
+        std::fs::write(tmp.path().join("small.txt"), "hello\n").unwrap();
+
+        let big_detail = file_impl(&db, "r1", cwd, "big.txt", Scope::Branch, None).unwrap();
+        assert_eq!(big_detail.blocked, Some("toolarge"));
+        assert!(!big_detail.binary, "too-large is not the same as binary");
+        assert!(big_detail.hunks.is_empty());
+
+        let binary_detail = file_impl(&db, "r1", cwd, "bin.dat", Scope::Branch, None).unwrap();
+        assert_eq!(binary_detail.blocked, Some("binary"));
+        assert!(binary_detail.binary);
+        assert!(binary_detail.hunks.is_empty());
+
+        let small_detail = file_impl(&db, "r1", cwd, "small.txt", Scope::Branch, None).unwrap();
+        assert_eq!(small_detail.blocked, None);
+        assert!(!small_detail.binary);
+        assert!(!small_detail.hunks.is_empty());
+    }
+
+    /// Fixtures. Kept beside the tests rather than in a shared helper —
+    /// see `signoff.rs`'s copy of the same note.
+    mod tests_support {
+        use std::fs;
+        use std::path::Path;
+
+        use tempfile::TempDir;
+
+        use crate::db::Database;
+
+        /// A repository with one commit, and a database beside it.
+        ///
+        /// **git2, never a spawned `git`.** The pre-commit hook runs
+        /// these tests with `GIT_DIR` exported, and a spawned git
+        /// inherits it — see `signoff.rs`'s `tests_support` for the
+        /// full story of why that is dangerous.
+        pub fn repo_with_commit() -> (Database, TempDir) {
+            let tmp = TempDir::new().unwrap();
+            git2::Repository::init(tmp.path()).unwrap();
+            commit(tmp.path(), "a.txt", "one\n", "init");
+            let db = Database::open(&tmp.path().join("skein.db")).unwrap();
+            (db, tmp)
+        }
+
+        fn commit(cwd: &Path, file: &str, body: &str, msg: &str) {
+            fs::write(cwd.join(file), body).unwrap();
+            let repo = git2::Repository::open(cwd).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new(file)).unwrap();
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig = git2::Signature::now("t", "t@example.com").unwrap();
+            let parents = repo
+                .head()
+                .ok()
+                .and_then(|h| h.peel_to_commit().ok())
+                .map(|c| vec![c])
+                .unwrap_or_default();
+            let refs: Vec<&git2::Commit> = parents.iter().collect();
+            repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &refs)
+                .unwrap();
+        }
+    }
 }

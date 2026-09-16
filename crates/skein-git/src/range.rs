@@ -21,7 +21,7 @@
 
 use git2::{Commit, DiffOptions, Oid};
 
-use crate::{FileDiff, GitError, Repo, Result};
+use crate::{FileDiff, GitError, MAX_DIFF_FILE_BYTES, Repo, Result};
 
 /// How many commits a range will report before it stops walking. A
 /// review of more than this is not a review, and the revwalk is the one
@@ -167,13 +167,22 @@ impl Repo {
     /// Serves both granularities the review has: a single commit
     /// (`parent → commit`) and the whole committed range
     /// (`merge-base → HEAD`).
-    pub fn diff_trees(&self, from: Option<&str>, to: &str) -> Result<Vec<FileDiff>> {
+    ///
+    /// `path`, when given, restricts the diff to that one repo-relative
+    /// path (matched literally, not as a glob) — what `file_impl` asks
+    /// for instead of computing the whole range and searching it.
+    pub fn diff_trees(
+        &self,
+        from: Option<&str>,
+        to: &str,
+        path: Option<&str>,
+    ) -> Result<Vec<FileDiff>> {
         let from_tree = match from {
             Some(rev) => Some(self.tree_at(rev)?),
             None => None,
         };
         let to_tree = self.tree_at(to)?;
-        let mut opts = diff_options();
+        let mut opts = diff_options(path);
         let diff =
             self.repo
                 .diff_tree_to_tree(from_tree.as_ref(), Some(&to_tree), Some(&mut opts))?;
@@ -190,12 +199,22 @@ impl Repo {
     /// committed and work it has not. It is the same question a PR
     /// answers, and the only one that does not lie by omission while the
     /// agent is still mid-task.
-    pub fn diff_tree_to_workdir(&self, from: Option<&str>) -> Result<Vec<FileDiff>> {
+    ///
+    /// `path`, when given, restricts the diff to that one repo-relative
+    /// path (matched literally, not as a glob) — `file_impl`'s way of
+    /// pricing a single-file view the same as it would cost the pane to
+    /// find that file inside the whole-scope diff, without computing
+    /// the whole-scope diff at all.
+    pub fn diff_tree_to_workdir(
+        &self,
+        from: Option<&str>,
+        path: Option<&str>,
+    ) -> Result<Vec<FileDiff>> {
         let from_tree = match from {
             Some(rev) => Some(self.tree_at(rev)?),
             None => None,
         };
-        let mut opts = diff_options();
+        let mut opts = diff_options(path);
         opts.include_untracked(true);
         opts.recurse_untracked_dirs(true);
         opts.show_untracked_content(true);
@@ -213,13 +232,17 @@ impl Repo {
     /// First-parent for merges on purpose: a merge's diff against both
     /// parents re-reports every change from the merged branch, which in
     /// a review reads as the agent having written work it only pulled in.
-    pub fn diff_commit(&self, rev: &str) -> Result<Vec<FileDiff>> {
+    ///
+    /// `path` restricts the diff the same way [`Repo::diff_trees`]'s
+    /// does — cheap to thread through here since this is just
+    /// `diff_trees` with the endpoints resolved.
+    pub fn diff_commit(&self, rev: &str, path: Option<&str>) -> Result<Vec<FileDiff>> {
         let Some(sha) = self.resolve_commit(rev)? else {
             return Ok(Vec::new());
         };
         let commit = self.repo.find_commit(Oid::from_str(&sha)?)?;
         let parent = commit.parent_id(0).ok().map(|id| id.to_string());
-        self.diff_trees(parent.as_deref(), &sha)
+        self.diff_trees(parent.as_deref(), &sha, path)
     }
 
     /// The content of `relpath` (repo-relative, forward slashes) at
@@ -291,8 +314,19 @@ impl Repo {
     }
 }
 
-fn diff_options() -> DiffOptions {
+/// `path`, when given, restricts the diff to that one repo-relative
+/// path — matched literally (`disable_pathspec_match`), not as a glob,
+/// since callers pass an exact path they already have, not a pattern.
+fn diff_options(path: Option<&str>) -> DiffOptions {
     let mut opts = DiffOptions::new();
     opts.context_lines(3);
+    // Beyond this, don't bother building hunk text at all — see
+    // `MAX_DIFF_FILE_BYTES`. libgit2 reads it as binary instead.
+    #[allow(clippy::cast_possible_wrap)]
+    opts.max_size(MAX_DIFF_FILE_BYTES as i64);
+    if let Some(path) = path {
+        opts.pathspec(path);
+        opts.disable_pathspec_match(true);
+    }
     opts
 }
