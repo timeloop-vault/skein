@@ -23,6 +23,7 @@ import {
 	fetchFile,
 	fetchScope,
 } from "./api.ts";
+import { createCoalescer, sameJson } from "./coalesce.ts";
 import { type SignoffStatus, fetchSignoff, setSignoff } from "./signoff.ts";
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -148,28 +149,33 @@ export function useReviewScope(
 		let cancelled = false;
 		setLoading(true);
 
-		const run = () => {
-			fetchScope(roomId, cwd, scope, commitSha)
-				.then((next) => {
-					if (cancelled) return;
-					setData(next);
+		// Single-flight with trailing rerun (#171): a key change (scope,
+		// commit, room/cwd) gets its own coalescer, disposed on cleanup so
+		// a fetch still in flight for the OLD key never lands here. Within
+		// one key, `refresh()` — driven by watcher ticks and agent writes,
+		// which arrive far faster than the backend's own worktree diff —
+		// collapses into at most one trailing run per in-flight fetch.
+		const coalescer = createCoalescer(
+			() => fetchScope(roomId, cwd, scope, commitSha),
+			(result) => {
+				if (cancelled) return;
+				if (result.ok) {
 					// The backend's own `error` field (an unresolvable base
 					// ref, say) is part of the data, not a failed call — it
 					// is rendered in the header beside a working file list.
+					setData((prev) => (sameJson(prev, result.value) ? prev : result.value));
 					setError(undefined);
-				})
-				.catch((err: unknown) => {
-					if (cancelled) return;
-					setError(message(err));
-				})
-				.finally(() => {
-					if (!cancelled) setLoading(false);
-				});
-		};
-		runRef.current = run;
-		run();
+				} else {
+					setError(message(result.error));
+				}
+				setLoading(false);
+			},
+		);
+		runRef.current = () => coalescer.request();
+		coalescer.request();
 		return () => {
 			cancelled = true;
+			coalescer.dispose();
 			runRef.current = () => {};
 		};
 	}, [roomId, cwd, scope, commitSha, enabled]);
@@ -190,32 +196,56 @@ export function useReviewFile(
 	const [file, setFile] = useState<ReviewFileDetail | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
 	const [loading, setLoading] = useState(false);
+	const runRef = useRef<() => void>(() => {});
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: nonce is a deliberate trigger — writing a comment changes only sqlite, so no other dependency moves and nothing would re-anchor
+	// The "real" inputs: a change here has to fetch promptly and win over
+	// whatever the old key's coalescer still has in flight, so it gets a
+	// fresh coalescer rather than sharing one across keys.
 	useEffect(() => {
 		if (!enabled || !path || !roomId || !cwd) {
 			setFile(undefined);
+			runRef.current = () => {};
 			return;
 		}
 		let cancelled = false;
 		setLoading(true);
-		fetchFile(roomId, cwd, path, scope, commitSha)
-			.then((next) => {
+
+		const coalescer = createCoalescer(
+			() => fetchFile(roomId, cwd, path, scope, commitSha),
+			(result) => {
 				if (cancelled) return;
-				setFile(next);
-				setError(undefined);
-			})
-			.catch((err: unknown) => {
-				if (cancelled) return;
-				setError(message(err));
-			})
-			.finally(() => {
-				if (!cancelled) setLoading(false);
-			});
+				if (result.ok) {
+					setFile((prev) => (sameJson(prev, result.value) ? prev : result.value));
+					setError(undefined);
+				} else {
+					setError(message(result.error));
+				}
+				setLoading(false);
+			},
+		);
+		runRef.current = () => coalescer.request();
+		coalescer.request();
 		return () => {
 			cancelled = true;
+			coalescer.dispose();
+			runRef.current = () => {};
 		};
-	}, [roomId, cwd, path, scope, commitSha, enabled, nonce]);
+	}, [roomId, cwd, path, scope, commitSha, enabled]);
+
+	// `nonce` is a refresh signal, not a key: writing a comment changes
+	// only sqlite, so nothing above moves and nothing would re-anchor
+	// without it. Routed through the same coalescer as the effect above
+	// (via `runRef`) rather than its own fetch, so a burst of comment
+	// writes collapses the same way a burst of watcher ticks does.
+	const firstNonce = useRef(true);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: nonce is the deliberate trigger here; runRef is a ref and reading .current is not a reactive dependency
+	useEffect(() => {
+		if (firstNonce.current) {
+			firstNonce.current = false;
+			return;
+		}
+		runRef.current();
+	}, [nonce]);
 
 	return { file, error, loading };
 }
