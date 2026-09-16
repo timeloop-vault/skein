@@ -1,29 +1,54 @@
 //! PTY layer — wraps `portable-pty` so the rest of the app sees an
 //! event-stream handle keyed by an opaque id.
 //!
-//! Each spawn runs two OS threads:
-//!   - The reader thread streams `PtyEvent::Data` chunks until the
-//!     master pipe sees EOF.
+//! Each spawn runs four OS threads:
+//!   - The reader thread does the blocking PTY `read()` and forwards
+//!     raw bytes over an mpsc channel; it never calls `on_event`
+//!     itself, so `recv_timeout` elsewhere can do the batching.
+//!   - The coalescer thread drains that channel and batches bytes into
+//!     `PtyEvent::Data` chunks (#171 slice b): a chunk arriving after a
+//!     quiet spell goes out immediately, so keystroke echo isn't
+//!     delayed, but a sustained firehose (`cargo build` and friends)
+//!     accumulates and flushes at most once per tick, or sooner past a
+//!     byte cap, instead of one IPC message per up-to-8-KB `read()`. It
+//!     flushes whatever is pending when the reader disconnects, before
+//!     it exits — see `run_coalescer`.
+//!   - The writer thread (#171 slice d) owns the PTY's stdin and drains
+//!     a `Vec<u8>` channel that `PtyManager::write` only ever sends on.
+//!     The blocking `write_all`/`flush` used to happen under the
+//!     manager-wide lock, so a child that stopped reading stdin (a full
+//!     tty input queue) blocked that write forever and froze
+//!     resize/kill/spawn for every *other* PTY too — see
+//!     `spawn_pty_writer`.
 //!   - The waiter thread blocks on the OS process handle via
 //!     `child.wait()` and emits `PtyEvent::Exit` the moment the child
 //!     dies — naturally (Claude `/exit`) or via `kill`.
 //!
-//! Two threads is load-bearing on Windows: `ConPTY` keeps the reader
+//! The waiter is load-bearing on Windows: `ConPTY` keeps the reader
 //! pipe open after the child exits, so the read loop alone would never
 //! see EOF on a natural exit. Watching the process handle independently
-//! gets us the exit signal regardless.
+//! gets us the exit signal regardless. Ordering the coalescer's
+//! trailing `PtyEvent::Data` ahead of `PtyEvent::Exit` is **guaranteed**
+//! when the coalescer finishes draining within 250 ms of `child.wait()`
+//! returning — it drops a `Sender<()>` on exit, and the waiter's
+//! `recv_timeout` on the paired receiver returns the instant that
+//! happens, almost always far under the bound. Past 250 ms it degrades
+//! to **best-effort**, same as before: a background grandchild can hold
+//! the PTY open on Unix, and on Windows `ConPTY` may not have EOF'd the
+//! reader yet, so the waiter gives up waiting and emits `Exit` anyway
+//! rather than hang forever.
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Condvar, LazyLock, Mutex as StdMutex, PoisonError};
 use std::thread;
 use std::time::Duration;
-// Probe timing only. The probe thread is compiled out on Windows
-// (`prewarm_probe`), so the import would be unused there.
-#[cfg(not(target_os = "windows"))]
+// Used by the login-shell probe's timing on Unix and, on every
+// platform, by the reader's output coalescer (`run_coalescer`).
 use std::time::Instant;
 
 use parking_lot::Mutex;
@@ -71,11 +96,13 @@ impl PtyError {
     }
 }
 
-/// One live PTY. We hold the master so we can resize, the writer for
-/// stdin, and the killer so closing the harness doesn't leak the child.
+/// One live PTY. We hold the master so we can resize, a channel to the
+/// dedicated writer thread for stdin (#171d — `write` never touches the
+/// PTY's own I/O), and the killer so closing the harness doesn't leak
+/// the child.
 struct Pty {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer_tx: mpsc::Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
 }
 
@@ -252,62 +279,93 @@ impl PtyManager {
         let on_event_reader = Arc::clone(&on_event);
         let on_event_waiter = on_event;
 
+        // #171b: the raw reader only moves bytes off the PTY as fast as
+        // the OS delivers them; it never calls `on_event` itself. The
+        // coalescer thread below is what decides when a `PtyEvent::Data`
+        // actually goes out, via `recv_timeout` — something a blocking
+        // `reader.read()` loop can't do on its own.
+        let (raw_tx, raw_rx) = mpsc::channel::<Vec<u8>>();
+
         let reader_id = id.clone();
         thread::spawn(move || {
-            // Issue #23: keep a small carry buffer so a multi-byte
-            // UTF-8 sequence split across two reads (em-dash, box-
-            // drawing chars, emoji — all 3 or 4 bytes) doesn't get
-            // replaced with U+FFFD on each side of the boundary.
-            // We append each read into `pending`, slice off the
-            // longest valid UTF-8 prefix, emit it, and carry the
-            // trailing partial bytes into the next iteration.
-            //
-            // For genuinely malformed bytes (not just incomplete),
-            // we still drop them via lossy conversion — same as
-            // before — but only for bytes we're *certain* are
-            // invalid (Utf8Error::error_len() is Some).
-            let mut pending: Vec<u8> = Vec::with_capacity(8192);
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        pending.extend_from_slice(&buf[..n]);
-                        match std::str::from_utf8(&pending) {
-                            Ok(s) => {
-                                on_event_reader(PtyEvent::Data {
-                                    chunk: s.to_owned(),
-                                });
-                                pending.clear();
-                            }
-                            Err(e) => {
-                                let valid_up_to = e.valid_up_to();
-                                if valid_up_to > 0 {
-                                    // Safe by construction: bytes
-                                    // [..valid_up_to] are valid UTF-8.
-                                    let valid =
-                                        std::str::from_utf8(&pending[..valid_up_to]).unwrap_or("");
-                                    on_event_reader(PtyEvent::Data {
-                                        chunk: valid.to_owned(),
-                                    });
-                                }
-                                if let Some(invalid_len) = e.error_len() {
-                                    // Definitely-malformed bytes — drop
-                                    // them (same as the old lossy path).
-                                    let drain_to = valid_up_to + invalid_len;
-                                    pending.drain(..drain_to);
-                                } else {
-                                    // Trailing bytes are an incomplete
-                                    // sequence — wait for the next read.
-                                    pending.drain(..valid_up_to);
-                                }
-                            }
+                        if raw_tx.send(buf[..n].to_vec()).is_err() {
+                            // Coalescer already gone; nothing more to do.
+                            break;
                         }
                     }
                 }
             }
+            // Dropping `raw_tx` here is the EOF signal the coalescer
+            // acts on to flush and exit.
             tracing::info!(id = %reader_id, "pty reader exit");
         });
+
+        // #171: the coalescer drops this the moment it has flushed
+        // everything pending and is about to exit, so the waiter thread
+        // below can hear "drained" without a fixed sleep.
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+
+        let coalescer_id = id.clone();
+        thread::spawn(move || {
+            // Held only so it is dropped when this thread ends, after
+            // `run_coalescer`'s final flush — that drop is the signal.
+            let _done_tx = done_tx;
+            // Issue #23: keep a small carry buffer so a multi-byte
+            // UTF-8 sequence split across two coalesced chunks (em-
+            // dash, box-drawing chars, emoji — all 3 or 4 bytes)
+            // doesn't get replaced with U+FFFD on each side of the
+            // boundary. Append each chunk into `carry`, slice off the
+            // longest valid UTF-8 prefix, emit it, and carry the
+            // trailing partial bytes into the next chunk.
+            //
+            // For genuinely malformed bytes (not just incomplete), we
+            // still drop them — same as before — but only for bytes
+            // we're *certain* are invalid (`Utf8Error::error_len()` is
+            // `Some`).
+            let mut carry: Vec<u8> = Vec::with_capacity(8192);
+            run_coalescer(&raw_rx, COALESCE_WINDOW, COALESCE_BYTE_CAP, |chunk| {
+                carry.extend_from_slice(&chunk);
+                match std::str::from_utf8(&carry) {
+                    Ok(s) => {
+                        on_event_reader(PtyEvent::Data {
+                            chunk: s.to_owned(),
+                        });
+                        carry.clear();
+                    }
+                    Err(e) => {
+                        let valid_up_to = e.valid_up_to();
+                        if valid_up_to > 0 {
+                            // Safe by construction: bytes [..valid_up_to]
+                            // are valid UTF-8.
+                            let valid = std::str::from_utf8(&carry[..valid_up_to]).unwrap_or("");
+                            on_event_reader(PtyEvent::Data {
+                                chunk: valid.to_owned(),
+                            });
+                        }
+                        if let Some(invalid_len) = e.error_len() {
+                            // Definitely-malformed bytes — drop them
+                            // (same as the old lossy path).
+                            let drain_to = valid_up_to + invalid_len;
+                            carry.drain(..drain_to);
+                        } else {
+                            // Trailing bytes are an incomplete sequence —
+                            // wait for the next chunk.
+                            carry.drain(..valid_up_to);
+                        }
+                    }
+                }
+            });
+            tracing::info!(id = %coalescer_id, "pty coalescer exit");
+        });
+
+        // #171d: the writer thread owns `writer` from here on; `write`
+        // only ever sends on this channel, never touches the PTY's I/O.
+        let writer_tx = spawn_pty_writer(id.clone(), writer);
 
         let exit_id = id.clone();
         thread::spawn(move || {
@@ -316,39 +374,58 @@ impl PtyManager {
             // reliable way to detect a natural exit on Windows `ConPTY`.
             let code = child.wait().ok().map(|s| s.exit_code());
             tracing::info!(id = %exit_id, code = ?code, "pty exit");
-            // Chapter 7 phase 2: data-flush timeout. The reader thread
-            // can still deliver trailing bytes after the child has
-            // exited — on Windows ConPTY especially, the read pipe
-            // stays open until the master is dropped, so a TUI's last
-            // frame can lag the wait() return by a few ms. Sleeping a
-            // beat before firing Exit lets the reader drain so the
-            // user actually sees that final frame instead of a
-            // truncated viewport. Mirrors VS Code's
-            // ShutdownConstants.DataFlushTimeout (250 ms) — see
-            // microsoft/node-pty#72 for the original bug. Skein-side
-            // the latency is on the natural-exit path only, never
-            // during running output.
-            thread::sleep(Duration::from_millis(250));
+            // #171: wait for the coalescer to signal it has flushed
+            // every pending byte, bounded so a stream that never
+            // naturally closes can't stall `Exit` forever. This
+            // replaces the old unconditional 250 ms sleep — Chapter 7
+            // phase 2's data-flush timeout, mirroring VS Code's
+            // ShutdownConstants.DataFlushTimeout (see
+            // microsoft/node-pty#72) — with the same 250 ms upper
+            // bound, so this path is never *slower* than before, only
+            // usually much faster: `Err(Disconnected)` means the
+            // coalescer already drained and exited, so `Exit` fires
+            // immediately instead of waiting out the rest of the bound.
+            //
+            // A real timeout still happens: on Windows `ConPTY` the
+            // read pipe stays open until the master is dropped, so the
+            // reader may not have seen EOF yet, and on Unix a
+            // backgrounded grandchild can hold the PTY slave open
+            // indefinitely. Past the bound this degrades to the old
+            // best-effort behaviour and emits `Exit` regardless —
+            // trailing output can still be lost, exactly as before.
+            match done_rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    tracing::warn!(
+                        id = %exit_id,
+                        "pty exit: coalescer still draining after 250ms, emitting Exit anyway"
+                    );
+                }
+            }
             on_event_waiter(PtyEvent::Exit { code });
         });
 
         let pty = Pty {
             master: pair.master,
-            writer,
+            writer_tx,
             killer,
         };
         self.inner.lock().insert(id, pty);
         Ok(injected)
     }
 
+    /// Enqueue `data` for the PTY's dedicated writer thread (#171d).
+    /// Only ever sends on the channel — never does I/O itself — so a
+    /// child that has stopped reading stdin cannot block this call, nor
+    /// the manager-wide lock it briefly holds.
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), PtyError> {
-        let mut map = self.inner.lock();
+        let map = self.inner.lock();
         let pty = map
-            .get_mut(id)
+            .get(id)
             .ok_or_else(|| PtyError(format!("pty_write: no pty with id {id}")))?;
-        pty.writer.write_all(data).map_err(PtyError::from_err)?;
-        pty.writer.flush().map_err(PtyError::from_err)?;
-        Ok(())
+        pty.writer_tx
+            .send(data.to_vec())
+            .map_err(|_| PtyError(format!("pty_write: writer closed for id {id}")))
     }
 
     pub fn resize(&self, id: &str, rows: u16, cols: u16) -> Result<(), PtyError> {
@@ -368,11 +445,322 @@ impl PtyManager {
     }
 
     /// Best-effort: if the child has already exited, this is a no-op.
+    ///
+    /// Removing the `Pty` drops `writer_tx`, which is the writer
+    /// thread's own shutdown signal (#171d) — but this deliberately does
+    /// not join it. A writer wedged on a `write_all` to a child that
+    /// stopped reading stdin may never wake up; `kill` must return
+    /// regardless.
     pub fn kill(&self, id: &str) {
         let mut map = self.inner.lock();
         if let Some(mut pty) = map.remove(id) {
             let _ = pty.killer.kill();
         }
+    }
+}
+
+/// How long the coalescer waits for more output before deciding a burst
+/// is over. Doubles as the "was it idle?" threshold for the leading-edge
+/// send: a chunk arriving after at least this much quiet goes straight
+/// out, so typed-character echo isn't delayed. One frame at 60 Hz is a
+/// reasonable amateur's proxy for "still feels live" and comfortably
+/// under the waiter's 250 ms exit-flush sleep.
+const COALESCE_WINDOW: Duration = Duration::from_millis(16);
+
+/// Force an early flush once buffered output crosses this many bytes, so
+/// one `PtyEvent::Data` message stays bounded even mid-firehose.
+const COALESCE_BYTE_CAP: usize = 64 * 1024;
+
+/// Batch raw PTY bytes from `rx` into fewer, larger `sink` calls (#171b).
+///
+/// Without this, a `cargo build` (or anything else that writes faster
+/// than a human types) turns into one Tauri IPC message — and one
+/// xterm.js write — per up-to-8-KB `read()`, at whatever rate the pipe
+/// delivers them.
+///
+/// - **Leading edge:** a chunk that arrives at least `window` after the
+///   last flush is forwarded immediately, so interactive echo latency is
+///   unchanged.
+/// - **Trailing accumulation:** anything else is buffered and flushed at
+///   most once per `window` (so a burst's tail is never stuck waiting
+///   for more data that never comes), or sooner once the buffer passes
+///   `byte_cap` (so a single message stays bounded).
+/// - **Disconnect:** whatever is pending is flushed before returning.
+///   The caller relies on this to keep output ordered ahead of the
+///   `PtyEvent::Exit` the waiter thread sends independently.
+///
+/// A plain function over a `Receiver` and a `FnMut(Vec<u8>)` sink,
+/// deliberately not touching `PtyEvent`/Tauri, so it can be pinned with
+/// a bare `mpsc::channel` and no PTY at all — see the tests below.
+fn run_coalescer<F: FnMut(Vec<u8>)>(
+    rx: &mpsc::Receiver<Vec<u8>>,
+    window: Duration,
+    byte_cap: usize,
+    mut sink: F,
+) {
+    let mut pending: Vec<u8> = Vec::new();
+    // Backdated so the very first chunk always sees "it's been idle
+    // `window` or more" and takes the leading-edge path. Falls back to
+    // "now" if `window` somehow outlives the monotonic clock's epoch —
+    // then the first chunk just takes the trailing path instead.
+    let mut last_flush = Instant::now()
+        .checked_sub(window)
+        .unwrap_or_else(Instant::now);
+    loop {
+        let received = if pending.is_empty() {
+            // Nothing buffered to age out; block for the next chunk.
+            rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+        } else {
+            rx.recv_timeout(window.saturating_sub(last_flush.elapsed()))
+        };
+        match received {
+            Ok(chunk) => {
+                let now = Instant::now();
+                if pending.is_empty() && now.duration_since(last_flush) >= window {
+                    sink(chunk);
+                    last_flush = now;
+                } else {
+                    pending.extend_from_slice(&chunk);
+                    if pending.len() >= byte_cap {
+                        sink(std::mem::take(&mut pending));
+                        last_flush = Instant::now();
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if !pending.is_empty() {
+                    sink(std::mem::take(&mut pending));
+                    last_flush = Instant::now();
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if !pending.is_empty() {
+                    sink(pending);
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// Spin up the dedicated writer thread for one PTY (#171d). It owns
+/// `writer` and drains `Vec<u8>` messages sent on the returned channel,
+/// doing the blocking `write_all` + `flush` itself.
+///
+/// This is what keeps `PtyManager::write` from ever touching the PTY's
+/// own I/O: previously the write happened under the manager-wide lock,
+/// so a child that stopped reading stdin (a full tty input queue) froze
+/// that write forever — and with it `resize`/`kill`/`spawn` for every
+/// *other* PTY, since they all share the same lock.
+///
+/// FIFO by construction: `mpsc::channel` preserves send order and the
+/// loop drains one message at a time. The thread ends when the sender
+/// is dropped (kill/remove) or a write errors — nothing joins it, so a
+/// wedged child can never make `kill` block.
+fn spawn_pty_writer(id: String, mut writer: Box<dyn Write + Send>) -> mpsc::Sender<Vec<u8>> {
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    thread::spawn(move || {
+        while let Ok(data) = rx.recv() {
+            if let Err(e) = writer.write_all(&data).and_then(|()| writer.flush()) {
+                tracing::warn!(id = %id, error = %e, "pty writer error, stopping");
+                break;
+            }
+        }
+        tracing::info!(id = %id, "pty writer exit");
+    });
+    tx
+}
+
+#[cfg(test)]
+mod thread_tests {
+    use super::{Instant, run_coalescer, spawn_pty_writer};
+    use std::io::Write;
+    use std::sync::mpsc;
+    use std::sync::{Arc, Mutex as StdMutex, PoisonError};
+    use std::thread;
+    use std::time::Duration;
+
+    /// A `Write` that hangs on its very first call until released,
+    /// simulating a child that has stopped reading stdin — the scenario
+    /// that used to freeze `PtyManager::write` (#171d). Every write,
+    /// gated or not, is recorded in order so FIFO can be checked once
+    /// released.
+    struct GatedWriter {
+        release_rx: mpsc::Receiver<()>,
+        released: bool,
+        sink: Arc<StdMutex<Vec<u8>>>,
+    }
+
+    impl Write for GatedWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if !self.released {
+                let _ = self.release_rx.recv();
+                self.released = true;
+            }
+            self.sink
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_returns_promptly_even_when_the_pty_stops_reading() {
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let sink = Arc::new(StdMutex::new(Vec::new()));
+        let writer = GatedWriter {
+            release_rx,
+            released: false,
+            sink: Arc::clone(&sink),
+        };
+        let tx = spawn_pty_writer("test".to_owned(), Box::new(writer));
+
+        // The writer thread is about to hang on its first write; sending
+        // more must never block on that, or on each other.
+        let started = Instant::now();
+        tx.send(b"first".to_vec()).expect("send 1");
+        tx.send(b"second".to_vec()).expect("send 2");
+        tx.send(b"third".to_vec()).expect("send 3");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "send() blocked on the wedged writer"
+        );
+
+        // Confirm it really is still gated before releasing it.
+        thread::sleep(Duration::from_millis(50));
+        assert!(
+            sink.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty(),
+            "writer drained before being released"
+        );
+
+        release_tx.send(()).expect("release the gate");
+
+        // Generous bound: we only care that all three eventually land,
+        // in order, not on the exact timing.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if sink.lock().unwrap_or_else(PoisonError::into_inner).len()
+                >= b"firstsecondthird".len()
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "writer never drained the queue");
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            *sink.lock().unwrap_or_else(PoisonError::into_inner),
+            b"firstsecondthird".to_vec()
+        );
+    }
+
+    fn collect(rx: &mpsc::Receiver<Vec<u8>>, window: Duration, byte_cap: usize) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        run_coalescer(rx, window, byte_cap, |chunk| out.push(chunk));
+        out
+    }
+
+    #[test]
+    fn a_single_chunk_after_idle_passes_straight_through() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(b"hello".to_vec()).expect("send");
+        drop(tx);
+        let out = collect(&rx, Duration::from_millis(50), 64 * 1024);
+        assert_eq!(out, vec![b"hello".to_vec()]);
+    }
+
+    #[test]
+    fn a_burst_is_merged_into_fewer_messages_than_chunks() {
+        let (tx, rx) = mpsc::channel();
+        let chunks: Vec<Vec<u8>> = (0..20).map(|i| vec![i; 10]).collect();
+        for c in &chunks {
+            tx.send(c.clone()).expect("send");
+        }
+        drop(tx);
+
+        let out = collect(&rx, Duration::from_millis(200), 1024 * 1024);
+
+        let expected: Vec<u8> = chunks.concat();
+        let got: Vec<u8> = out.concat();
+        assert_eq!(got, expected, "byte order must be preserved");
+        assert!(
+            out.len() < chunks.len(),
+            "expected coalescing to reduce {} chunks to fewer messages, got {}",
+            chunks.len(),
+            out.len()
+        );
+    }
+
+    #[test]
+    fn the_byte_cap_forces_an_early_flush() {
+        let (tx, rx) = mpsc::channel();
+        // Long enough that the timer never fires in this test — only
+        // the byte cap should force a flush before disconnect.
+        let window = Duration::from_secs(10);
+        let lead = b"lead".to_vec();
+        let a = vec![b'x'; 5];
+        let b = vec![b'y'; 5];
+        let tail = b"tail".to_vec();
+        tx.send(lead.clone()).expect("send");
+        tx.send(a.clone()).expect("send");
+        tx.send(b.clone()).expect("send");
+        tx.send(tail.clone()).expect("send");
+        drop(tx);
+
+        let out = collect(&rx, window, 8);
+
+        assert!(
+            out.len() >= 3,
+            "expected the 8-byte cap to force a flush before disconnect, got {out:?}"
+        );
+        let expected: Vec<u8> = [lead, a, b, tail].concat();
+        let got: Vec<u8> = out.concat();
+        assert_eq!(got, expected, "byte order must be preserved");
+    }
+
+    #[test]
+    fn pending_bytes_are_flushed_on_disconnect_even_below_the_cap() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(b"a".to_vec()).expect("send"); // leading edge, own message
+        tx.send(b"b".to_vec()).expect("send"); // far below any cap
+        drop(tx);
+
+        let out = collect(&rx, Duration::from_secs(10), 64 * 1024);
+        assert_eq!(out, vec![b"a".to_vec(), b"b".to_vec()]);
+    }
+
+    // #171: the waiter's exit-ordering fix is one `recv_timeout` call on
+    // the `done_tx`/`done_rx` pair the coalescer thread is given — cheap
+    // enough to pin directly, with no PTY or child process involved.
+
+    #[test]
+    fn a_dropped_done_sender_lets_the_waiter_return_before_the_bound() {
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        drop(done_tx); // the coalescer's "I'm drained and exiting" signal
+        let started = Instant::now();
+        let result = done_rx.recv_timeout(Duration::from_millis(250));
+        assert!(matches!(result, Err(mpsc::RecvTimeoutError::Disconnected)));
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "a disconnected sender must not wait out the bound, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_coalescer_that_never_finishes_bounds_the_wait_at_the_timeout() {
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        // Still alive for the whole wait — the "coalescer still
+        // draining" case, which must degrade to the old best-effort
+        // behaviour rather than block forever.
+        let result = done_rx.recv_timeout(Duration::from_millis(50));
+        assert!(matches!(result, Err(mpsc::RecvTimeoutError::Timeout)));
+        drop(done_tx);
     }
 }
 
@@ -1152,6 +1540,16 @@ mod tests {
                     rows: 24,
                     cols: 80,
                     settings,
+                    // Neutral values: these tests exercise the
+                    // environment/PTY plumbing, not #213/#215's agent
+                    // identity or config injection. "byoh" (bring your
+                    // own harness — the plain-shell kind, see
+                    // `managed_program`) has no injection mechanism of
+                    // its own, so `None` config is honest rather than a
+                    // stand-in.
+                    agent: None,
+                    kind: "byoh",
+                    harness_config: None,
                 },
                 move |event| match event {
                     PtyEvent::Data { chunk } => {
