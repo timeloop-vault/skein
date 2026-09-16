@@ -168,21 +168,23 @@ impl Repo {
     /// (`parent → commit`) and the whole committed range
     /// (`merge-base → HEAD`).
     ///
-    /// `path`, when given, restricts the diff to that one repo-relative
-    /// path (matched literally, not as a glob) — what `file_impl` asks
-    /// for instead of computing the whole range and searching it.
+    /// `paths`, when non-empty, restricts the diff to those repo-relative
+    /// paths (matched literally, not as a glob) — what `file_impl` asks
+    /// for instead of computing the whole range and searching it, and
+    /// what a #171 slice (f) batch asks for to cover several files in
+    /// one diff instead of one call each.
     pub fn diff_trees(
         &self,
         from: Option<&str>,
         to: &str,
-        path: Option<&str>,
+        paths: &[&str],
     ) -> Result<Vec<FileDiff>> {
         let from_tree = match from {
             Some(rev) => Some(self.tree_at(rev)?),
             None => None,
         };
         let to_tree = self.tree_at(to)?;
-        let mut opts = diff_options(path);
+        let mut opts = diff_options(paths);
         let diff =
             self.repo
                 .diff_tree_to_tree(from_tree.as_ref(), Some(&to_tree), Some(&mut opts))?;
@@ -200,21 +202,22 @@ impl Repo {
     /// answers, and the only one that does not lie by omission while the
     /// agent is still mid-task.
     ///
-    /// `path`, when given, restricts the diff to that one repo-relative
-    /// path (matched literally, not as a glob) — `file_impl`'s way of
+    /// `paths`, when non-empty, restricts the diff to those repo-relative
+    /// paths (matched literally, not as a glob) — `file_impl`'s way of
     /// pricing a single-file view the same as it would cost the pane to
     /// find that file inside the whole-scope diff, without computing
-    /// the whole-scope diff at all.
+    /// the whole-scope diff at all; a multi-path caller (#171 slice (f))
+    /// prices a batch the same way, one diff for all the files it needs.
     pub fn diff_tree_to_workdir(
         &self,
         from: Option<&str>,
-        path: Option<&str>,
+        paths: &[&str],
     ) -> Result<Vec<FileDiff>> {
         let from_tree = match from {
             Some(rev) => Some(self.tree_at(rev)?),
             None => None,
         };
-        let mut opts = diff_options(path);
+        let mut opts = diff_options(paths);
         opts.include_untracked(true);
         opts.recurse_untracked_dirs(true);
         opts.show_untracked_content(true);
@@ -233,16 +236,16 @@ impl Repo {
     /// parents re-reports every change from the merged branch, which in
     /// a review reads as the agent having written work it only pulled in.
     ///
-    /// `path` restricts the diff the same way [`Repo::diff_trees`]'s
+    /// `paths` restricts the diff the same way [`Repo::diff_trees`]'s
     /// does — cheap to thread through here since this is just
     /// `diff_trees` with the endpoints resolved.
-    pub fn diff_commit(&self, rev: &str, path: Option<&str>) -> Result<Vec<FileDiff>> {
+    pub fn diff_commit(&self, rev: &str, paths: &[&str]) -> Result<Vec<FileDiff>> {
         let Some(sha) = self.resolve_commit(rev)? else {
             return Ok(Vec::new());
         };
         let commit = self.repo.find_commit(Oid::from_str(&sha)?)?;
         let parent = commit.parent_id(0).ok().map(|id| id.to_string());
-        self.diff_trees(parent.as_deref(), &sha, path)
+        self.diff_trees(parent.as_deref(), &sha, paths)
     }
 
     /// The content of `relpath` (repo-relative, forward slashes) at
@@ -314,18 +317,21 @@ impl Repo {
     }
 }
 
-/// `path`, when given, restricts the diff to that one repo-relative
-/// path — matched literally (`disable_pathspec_match`), not as a glob,
-/// since callers pass an exact path they already have, not a pattern.
-fn diff_options(path: Option<&str>) -> DiffOptions {
+/// `paths`, when non-empty, restricts the diff to exactly those
+/// repo-relative paths — matched literally (`disable_pathspec_match`),
+/// not as a glob, since callers pass exact paths they already have, not
+/// a pattern. An empty slice means no filter at all.
+fn diff_options(paths: &[&str]) -> DiffOptions {
     let mut opts = DiffOptions::new();
     opts.context_lines(3);
     // Beyond this, don't bother building hunk text at all — see
     // `MAX_DIFF_FILE_BYTES`. libgit2 reads it as binary instead.
     #[allow(clippy::cast_possible_wrap)]
     opts.max_size(MAX_DIFF_FILE_BYTES as i64);
-    if let Some(path) = path {
-        opts.pathspec(path);
+    if !paths.is_empty() {
+        for path in paths {
+            opts.pathspec(*path);
+        }
         opts.disable_pathspec_match(true);
     }
     opts

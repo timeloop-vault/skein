@@ -137,17 +137,18 @@ pub(super) fn resolve_range(db: &Database, room_id: &str, repo: &Repo) -> Result
 
 /// The file diffs a scope produces.
 ///
-/// `path`, when given, restricts the diff to that one file — what
-/// `file_impl` passes instead of computing the whole scope and
-/// searching it, so a single-file open costs one file's diff rather
-/// than the whole branch's. `scope_impl` passes `None`, for the file
-/// list.
+/// `paths`, when non-empty, restricts the diff to those files — what
+/// `file_impl` passes (a single path) instead of computing the whole
+/// scope and searching it, and what a `ScopeFiles` snapshot (#171
+/// slice (f)) passes for a whole batch, so an agent-API call that needs
+/// several files' diffs still costs one diff rather than one per file.
+/// `scope_impl` passes `&[]`, for the file list.
 pub(super) fn scope_diffs(
     repo: &Repo,
     range: &Range,
     scope: Scope,
     commit_sha: Option<&str>,
-    path: Option<&str>,
+    paths: &[&str],
 ) -> Result<Vec<FileDiff>, String> {
     match scope {
         // merge-base → working tree. A `None` base is an unrelated or
@@ -155,10 +156,10 @@ pub(super) fn scope_diffs(
         // the branch as wholly added, which over-reports rather than
         // hiding work.
         Scope::Branch => repo
-            .diff_tree_to_workdir(range.base_sha.as_deref(), path)
+            .diff_tree_to_workdir(range.base_sha.as_deref(), paths)
             .map_err(|e| e.to_string()),
         Scope::Commit => match commit_sha {
-            Some(sha) => repo.diff_commit(sha, path).map_err(|e| e.to_string()),
+            Some(sha) => repo.diff_commit(sha, paths).map_err(|e| e.to_string()),
             None => Ok(Vec::new()),
         },
         // Pending has no git side at all — it is baseline → disk.
