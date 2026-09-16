@@ -1152,6 +1152,16 @@ mod tests {
                     rows: 24,
                     cols: 80,
                     settings,
+                    // Neutral values: these tests exercise the
+                    // environment/PTY plumbing, not #213/#215's agent
+                    // identity or config injection. "byoh" (bring your
+                    // own harness — the plain-shell kind, see
+                    // `managed_program`) has no injection mechanism of
+                    // its own, so `None` config is honest rather than a
+                    // stand-in.
+                    agent: None,
+                    kind: "byoh",
+                    harness_config: None,
                 },
                 move |event| match event {
                     PtyEvent::Data { chunk } => {
