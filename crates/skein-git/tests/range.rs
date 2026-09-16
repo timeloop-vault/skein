@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use git2::{Repository, Signature};
-use skein_git::{DiffLineKind, Repo, StatusKind};
+use skein_git::{DiffLineKind, MAX_DIFF_FILE_BYTES, Repo, StatusKind};
 use tempfile::TempDir;
 
 /// A repo with one commit on `main`.
@@ -225,7 +225,7 @@ fn diff_trees_reports_the_range_as_one_change_per_file() {
     commit_file(&path, "b.txt", "new\n", "add a file");
 
     let repo = Repo::open(&path).unwrap();
-    let files = repo.diff_trees(Some(&base), "HEAD").unwrap();
+    let files = repo.diff_trees(Some(&base), "HEAD", None).unwrap();
     let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(paths, vec!["a.txt", "b.txt"]);
     assert_eq!(files[0].kind, StatusKind::Modified);
@@ -245,7 +245,7 @@ fn diff_trees_reports_the_range_as_one_change_per_file() {
 fn diff_trees_against_no_base_is_the_whole_tree_as_additions() {
     let (_tmp, path) = init_repo();
     let repo = Repo::open(&path).unwrap();
-    let files = repo.diff_trees(None, "HEAD").unwrap();
+    let files = repo.diff_trees(None, "HEAD", None).unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].path, "README.md");
     assert_eq!(files[0].kind, StatusKind::Added);
@@ -258,7 +258,7 @@ fn diff_commit_shows_only_that_commit_not_the_range() {
     commit_file(&path, "b.txt", "two\n", "second");
 
     let repo = Repo::open(&path).unwrap();
-    let files = repo.diff_commit("HEAD").unwrap();
+    let files = repo.diff_commit("HEAD", None).unwrap();
     let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(
         paths,
@@ -271,7 +271,7 @@ fn diff_commit_shows_only_that_commit_not_the_range() {
 fn diff_commit_on_a_root_commit_diffs_against_the_empty_tree() {
     let (_tmp, path) = init_repo();
     let repo = Repo::open(&path).unwrap();
-    let files = repo.diff_commit("HEAD").unwrap();
+    let files = repo.diff_commit("HEAD", None).unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].kind, StatusKind::Added);
 }
@@ -286,10 +286,56 @@ fn diff_tree_to_workdir_counts_committed_and_uncommitted_together() {
     fs::write(path.join("b.txt"), "uncommitted\n").unwrap();
 
     let repo = Repo::open(&path).unwrap();
-    let files = repo.diff_tree_to_workdir(Some(&base)).unwrap();
+    let files = repo.diff_tree_to_workdir(Some(&base), None).unwrap();
     let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(paths, vec!["a.txt", "b.txt"]);
     assert_eq!(files[1].kind, StatusKind::Untracked);
+}
+
+#[test]
+fn diff_tree_to_workdir_caps_an_oversized_untracked_file() {
+    // The #171 slice (c) cap: an untracked file at or above
+    // `MAX_DIFF_FILE_BYTES` must not become per-line hunk text on every
+    // watcher tick — it reads as `too_large` with empty hunks instead,
+    // while an ordinary small file is untouched.
+    let (_tmp, path) = init_repo();
+    let base = commit_file(&path, "a.txt", "one\n", "base");
+    fs::write(path.join("small.txt"), "still small\n").unwrap();
+    let big = "x".repeat(usize::try_from(MAX_DIFF_FILE_BYTES).unwrap() + 1);
+    fs::write(path.join("big.txt"), &big).unwrap();
+
+    let repo = Repo::open(&path).unwrap();
+    let files = repo.diff_tree_to_workdir(Some(&base), None).unwrap();
+
+    let big_entry = files.iter().find(|f| f.path == "big.txt").unwrap();
+    assert!(big_entry.too_large, "oversized file must be flagged");
+    assert!(big_entry.binary, "libgit2 reports it binary via max_size");
+    assert!(big_entry.hunks.is_empty(), "never diffed");
+
+    let small_entry = files.iter().find(|f| f.path == "small.txt").unwrap();
+    assert!(!small_entry.too_large);
+    assert!(!small_entry.binary);
+    assert!(!small_entry.hunks.is_empty(), "a small file still diffs");
+}
+
+#[test]
+fn diff_tree_to_workdir_with_a_path_filter_matches_the_full_diffs_entry() {
+    // What `file_impl` relies on: filtering to one path must not change
+    // that path's own entry, only which other entries are absent.
+    let (_tmp, path) = init_repo();
+    let base = commit_file(&path, "a.txt", "one\ntwo\n", "base");
+    fs::write(path.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    fs::write(path.join("b.txt"), "unrelated\n").unwrap();
+
+    let repo = Repo::open(&path).unwrap();
+    let full = repo.diff_tree_to_workdir(Some(&base), None).unwrap();
+    let filtered = repo
+        .diff_tree_to_workdir(Some(&base), Some("a.txt"))
+        .unwrap();
+
+    assert_eq!(filtered.len(), 1, "only the requested path comes back");
+    let full_entry = full.iter().find(|f| f.path == "a.txt").unwrap();
+    assert_eq!(&filtered[0], full_entry);
 }
 
 #[test]
@@ -299,7 +345,7 @@ fn diff_trees_errors_on_an_unknown_revision() {
     // Unlike resolve_commit, asking for a *diff* of something that does
     // not exist is a real error — the caller resolved it first or should
     // have.
-    assert!(repo.diff_trees(Some("nope"), "HEAD").is_err());
+    assert!(repo.diff_trees(Some("nope"), "HEAD", None).is_err());
 }
 
 // ── blob at a revision ────────────────────────────────────────────

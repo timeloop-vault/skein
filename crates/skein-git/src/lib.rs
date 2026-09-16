@@ -118,6 +118,20 @@ pub struct DiffHunk {
     pub lines: Vec<DiffLine>,
 }
 
+/// Per-file diff cost cap, in bytes (#171 slice c). A file at or above
+/// this size is diffed with libgit2's `max_size` in effect, which reads
+/// it as binary — with no hunk text ever built — rather than spending a
+/// full text diff on a file the review pane discards past this size
+/// anyway. Matters most for [`Repo::diff_tree_to_workdir`], which the
+/// review pane calls on every debounced watcher tick: without the cap,
+/// one large generated file becomes per-line hunk text on every tick.
+///
+/// `skein-git` must not depend on `skein-review` (the crate graph goes
+/// the other way), so this is its own constant rather than a re-export.
+/// Keep it equal to `skein_review::content::MAX_FILE_BYTES` — if one
+/// changes, change the other.
+pub const MAX_DIFF_FILE_BYTES: u64 = 1024 * 1024;
+
 /// One file's diff against HEAD (with index changes folded in).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileDiff {
@@ -126,8 +140,18 @@ pub struct FileDiff {
     pub hunks: Vec<DiffHunk>,
     /// `true` if libgit2 marked this file as binary — in which case
     /// `hunks` will be empty and the UI should render a "binary file
-    /// changed" placeholder rather than nothing.
+    /// changed" placeholder rather than nothing. A file over
+    /// [`MAX_DIFF_FILE_BYTES`] is *also* reported binary by libgit2 (see
+    /// `too_large`), since `max_size` works by making the delta look
+    /// binary before any content is read.
     pub binary: bool,
+    /// `true` when the file was at or above [`MAX_DIFF_FILE_BYTES`] and
+    /// was therefore never diffed — distinguishes a genuinely oversized
+    /// file from a real binary, both of which come back with
+    /// `binary: true` and empty `hunks` and are otherwise
+    /// indistinguishable from the delta alone. Always `false` from
+    /// [`Repo::diff_workdir`], which sets no cap.
+    pub too_large: bool,
 }
 
 /// A repository handle. Opens lazily and is cheap to construct — there's
@@ -147,9 +171,9 @@ impl Repo {
         if !path.exists() {
             return Err(GitError::PathMissing(path.to_path_buf()));
         }
-        // `Repository::open` also walks up parents looking for a .git
-        // dir — fine for now, callers using New Session always pick a
-        // root so this matches their intent.
+        // `Repository::open` does NOT walk up parents looking for a
+        // .git dir (only `discover`/`open_ext` do) — `path` must be the
+        // repo root or its `.git`, which matches every caller's intent.
         let repo = Repository::open(path).map_err(|e| {
             if e.code() == git2::ErrorCode::NotFound {
                 GitError::NotARepo(path.to_path_buf())
@@ -549,8 +573,13 @@ impl Repo {
         let mut files: Vec<FileDiff> = Vec::new();
         let n_deltas = diff.deltas().len();
         for i in 0..n_deltas {
-            // `Patch::from_diff` returns None for binary deltas — we
-            // still want to surface those, just without hunk content.
+            // `Patch::from_diff` returns `Ok(None)` for a delta libgit2
+            // never marked binary in the first place (rare — a content
+            // error mid-diff). A delta *that is* binary — real NUL
+            // content, or one pushed over `max_size` — still comes back
+            // `Ok(Some(patch))`, just with zero hunks, so the binary
+            // flag on the delta's file entries is the one source of
+            // truth, checked before trusting the patch's hunks at all.
             let delta = diff.get_delta(i).ok_or_else(|| {
                 GitError::Git(git2::Error::from_str("diff delta index out of range"))
             })?;
@@ -580,18 +609,32 @@ impl Repo {
                     kind,
                     hunks: Vec::new(),
                     binary: false,
+                    too_large: false,
                 });
                 continue;
             };
-            let Some(file_patch) = patch_opt else {
+            // The delta's binary flag is only populated once content
+            // generation actually runs — i.e. after `Patch::from_diff`
+            // above, never before it — which is also why it must be
+            // checked here rather than trusted from `patch_opt` alone:
+            // a delta pushed over `max_size` still comes back
+            // `Ok(Some(patch))`, just with zero hunks.
+            let is_binary = delta.new_file().is_binary() || delta.old_file().is_binary();
+            if is_binary || patch_opt.is_none() {
+                // A delta over `max_size` is reported binary the same
+                // way a real binary file is — the size check is what
+                // tells the two apart.
+                let too_large = self.delta_too_large(&delta, &path);
                 files.push(FileDiff {
                     path,
                     kind,
                     hunks: Vec::new(),
                     binary: true,
+                    too_large,
                 });
                 continue;
-            };
+            }
+            let file_patch = patch_opt.expect("checked Some above");
 
             let mut hunks = Vec::new();
             for h_idx in 0..file_patch.num_hunks() {
@@ -630,11 +673,31 @@ impl Repo {
                 kind,
                 hunks,
                 binary: false,
+                too_large: false,
             });
         }
 
         files.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(files)
+    }
+
+    /// Was this delta forced binary by [`MAX_DIFF_FILE_BYTES`] rather
+    /// than genuinely being one?
+    ///
+    /// Reads the larger of the two sides' reported sizes. For a tree
+    /// side that is always the real git-object size, but an *untracked*
+    /// workdir file can come back reporting `0` — libgit2 only stats it
+    /// as part of reading the content that `max_size` exists to skip —
+    /// so a `0` falls back to statting the file ourselves, relative to
+    /// the worktree.
+    fn delta_too_large(&self, delta: &git2::DiffDelta<'_>, path: &str) -> bool {
+        let reported = delta.new_file().size().max(delta.old_file().size());
+        let size = if reported > 0 {
+            reported
+        } else {
+            std::fs::metadata(self.workdir.join(path)).map_or(0, |m| m.len())
+        };
+        size >= MAX_DIFF_FILE_BYTES
     }
 }
 
