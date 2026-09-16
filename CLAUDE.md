@@ -178,8 +178,11 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   └── src-tauri/               # Tauri Rust shell
     │       ├── src/lib.rs           # Builder + 57-command registry; tracing → daily-rotating
     │       │                        #   file in app_log_dir() + stderr (RUST_LOG overrides)
-    │       ├── src/pty.rs           # PtyManager (portable-pty); 2 threads per spawn (reader +
-    │       │                        #   waiter — the waiter is load-bearing on Windows ConPTY)
+    │       ├── src/pty.rs           # PtyManager (portable-pty); 4 threads per spawn (raw
+    │       │                        #   reader + coalescer + writer + waiter — the waiter is
+    │       │                        #   load-bearing on Windows ConPTY; #171 split the reader
+    │       │                        #   in two to batch output and gave stdin its own thread
+    │       │                        #   so a wedged child can't block write/resize/kill)
     │       ├── src/git.rs           # DTO wrappers around skein-git; GitError → String
     │       ├── src/watcher.rs       # notify-debouncer-mini, 200 ms, .git/ deliberately unfiltered
     │       ├── src/db.rs            # rusqlite: rooms (table `sessions` — legacy name),
