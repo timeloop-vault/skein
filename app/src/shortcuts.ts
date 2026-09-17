@@ -25,6 +25,14 @@
 export const isMac =
 	typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("mac");
 
+// Windows/Linux distinction (#158's paste fallback needs it — Claude
+// Code binds plain Ctrl+V to image paste on Linux but not Windows).
+// No Tauri OS plugin is installed, so this reads `navigator.platform`
+// the same way `isMac` does. Linux is `!isMac && !isWindows` wherever
+// that's needed — no dedicated export until a second call site wants one.
+export const isWindows =
+	typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("win");
+
 // Secondary modifier for ROOM-navigation arrows on Windows/Linux (harness
 // arrows are plain Alt). Alt+Ctrl per the chosen scheme (#151). Flip to
 // "shift" if Alt+Ctrl+Arrow collides with AltGr (= Ctrl+Alt on Swedish/
