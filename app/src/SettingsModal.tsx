@@ -17,6 +17,7 @@ import { kindHasAgents } from "./agents.ts";
 import { HChip, NO_REVIEW_TOOLS_TITLE, useAgentListing } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import { type DefaultAgents, defaultAgentFor } from "./prefs.ts";
+import { isMac } from "./shortcuts.ts";
 import type { Density, HarnessKind, SpawnSettings, Theme } from "./types.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
 
@@ -50,6 +51,10 @@ interface SettingsModalProps {
 	onDensity: (v: Density) => void;
 	onFontSize: (v: number) => void;
 	onChromeFontSize: (v: number) => void;
+	// #158: copy a mouse selection to the clipboard as soon as it's made.
+	// Default true — see App.tsx's `copyOnSelect` state for the rest.
+	copyOnSelect: boolean;
+	onCopyOnSelect: (v: boolean) => void;
 	// Notification toggles (#12 L5e). Each controls one surface
 	// independently; defaults are in App.tsx (in-app on, OS off).
 	notifyBadge: boolean;
@@ -157,6 +162,8 @@ export const SettingsModal = ({
 	onDensity,
 	onFontSize,
 	onChromeFontSize,
+	copyOnSelect,
+	onCopyOnSelect,
 	notifyBadge,
 	notifyToast,
 	notifyUrgent,
@@ -338,6 +345,26 @@ export const SettingsModal = ({
 							>
 								+
 							</button>
+						</div>
+					</div>
+
+					<div className="sk-field">
+						<div className="sk-toggles">
+							<label className="sk-toggle">
+								<input
+									type="checkbox"
+									checked={copyOnSelect}
+									onChange={(e) => onCopyOnSelect(e.target.checked)}
+								/>
+								<span className="sk-toggle-label">
+									<span className="sk-toggle-title">Copy on select</span>
+									<span className="sk-toggle-sub">
+										Finishing a mouse selection in a terminal copies it immediately — no Ctrl+C
+										needed. {isMac ? "Option+drag" : "Shift+drag"} still forces a selection over an
+										agent's TUI when it's capturing the mouse.
+									</span>
+								</span>
+							</label>
 						</div>
 					</div>
 

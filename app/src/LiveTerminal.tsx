@@ -25,7 +25,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { PhysicalPosition } from "@tauri-apps/api/dpi";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
@@ -39,9 +39,23 @@ import { harnessActivity } from "./harnessActivity.ts";
 import { attachClaudeEvents, attachOpencodeEvents } from "./harnessEvents.ts";
 import { canInsertText, formatDroppedPaths, harnessInput, insertText } from "./harnessInput.ts";
 import type { GateResult } from "./harnessInput.ts";
-import { isAppShortcut, isMac } from "./shortcuts.ts";
+import { isAppShortcut, isMac, isWindows } from "./shortcuts.ts";
+import { decideClipboardAction, emptySelectionHint } from "./terminalClipboard.ts";
+import type { ClipboardPlatform } from "./terminalClipboard.ts";
 import type { HarnessKind } from "./types.ts";
 import { OVERLAY_CLOSED_EVENT } from "./useFocusRestore.ts";
+
+/// This platform, as far as the copy/paste key matrix cares — see
+/// `terminalClipboard.ts`. Computed once; `navigator.platform` doesn't
+/// change mid-session.
+const clipboardPlatform: ClipboardPlatform = isMac ? "mac" : isWindows ? "windows" : "linux";
+
+/// Transient hint durations (#158): long enough to read, short enough
+/// not to linger over the TUI. Success is quick because it's expected;
+/// failures/instructions get longer because they're the ones the user
+/// needs to actually read.
+const HINT_MS_SUCCESS = 1200;
+const HINT_MS_INFO = 4000;
 
 type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
 
@@ -95,6 +109,13 @@ interface LiveTerminalProps {
 	// `undefined` for non-opencode harnesses.
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
 	fontSize: number;
+	// #158: copy a mouse selection to the clipboard the moment it's made
+	// (Settings → "Copy on select", default true). Read through a ref
+	// (`copyOnSelectRef` below), like `defaultShellRef` — toggling it
+	// must apply to an already-running terminal without respawning the
+	// PTY, so it cannot be a dep of the mountKey-only effect that owns
+	// the mouseup listener.
+	copyOnSelect: boolean;
 	// Default shell argv (from `default_shell`). Used when the user
 	// presses Enter on the post-exit prompt to drop into a usable shell.
 	defaultShell: string[];
@@ -122,6 +143,7 @@ export const LiveTerminal = ({
 	opencodePort,
 	onSessionCaptured,
 	fontSize,
+	copyOnSelect,
 	defaultShell,
 	visible,
 	onCmdChange,
@@ -132,6 +154,16 @@ export const LiveTerminal = ({
 	// label, `ok: false` renders the refusal reason. Driven by the
 	// drag-drop effect below, which only subscribes while `visible`.
 	const [dropGate, setDropGate] = useState<GateResult | null>(null);
+	// #158: transient copy/paste feedback — "Copied", "Nothing
+	// selected — …", "Paste failed", etc. `null` renders nothing.
+	// Cleared, and its auto-dismiss timer reset, on every new hint; the
+	// timer is also cleared on unmount/respawn. The clipboard
+	// writeText/readText callbacks below each check `cancelled` before
+	// calling `showHint` too — a promise settling after teardown must
+	// not setState (React warning) or arm an orphan timer that outlives
+	// this effect.
+	const [hint, setHint] = useState<string | null>(null);
+	const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	// Track live-spawn state by mountKey so StrictMode's double effect
 	// doesn't spawn twice, and so a re-mount with the same harness can
 	// reuse the previous spawn id when we add reconnects later.
@@ -153,6 +185,11 @@ export const LiveTerminal = ({
 	defaultShellRef.current = defaultShell;
 	const onCmdChangeRef = useRef(onCmdChange);
 	onCmdChangeRef.current = onCmdChange;
+	// #158: same reasoning as defaultShellRef — the mouseup listener set
+	// up once per mountKey reads this at fire time, not at effect-setup
+	// time, so toggling the Settings checkbox takes effect immediately.
+	const copyOnSelectRef = useRef(copyOnSelect);
+	copyOnSelectRef.current = copyOnSelect;
 
 	// Run only on mountKey changes. cmd / cwd / fontSize are consumed
 	// once at first mount: cmd seeds the closure's programName /
@@ -183,6 +220,13 @@ export const LiveTerminal = ({
 			cursorBlink: true,
 			scrollback: 5000,
 			allowProposedApi: true,
+			// #158: Claude Code / opencode enable mouse reporting, so a
+			// plain drag goes to the TUI instead of an xterm selection.
+			// xterm's SelectionService already forces a selection on
+			// Shift+drag on Windows/Linux (`shouldForceSelection`, no
+			// option needed); on macOS the equivalent is Option+drag, gated
+			// behind this option (default false).
+			macOptionClickForcesSelection: true,
 		});
 		const fit = new FitAddon();
 		term.loadAddon(fit);
@@ -274,26 +318,120 @@ export const LiveTerminal = ({
 		let phase: "running" | "exited" = "running";
 		let programName = cmd[0] ?? "child";
 
+		// #158: transient in-pane feedback for copy/paste — auto-dismisses,
+		// a new hint replaces whatever's showing, and the timer is cleared
+		// on respawn/unmount below so it can never setState after teardown.
+		const showHint = (text: string, ms: number) => {
+			if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
+			setHint(text);
+			hintTimerRef.current = setTimeout(() => {
+				setHint(null);
+				hintTimerRef.current = null;
+			}, ms);
+		};
+
+		// #158: the one path that ever writes a selection to the system
+		// clipboard — shared by the Ctrl+C/⌘C keydown handling below and
+		// the copy-on-select mouseup listener further down, so both get
+		// identical hints and the same `cancelled` guard against a
+		// promise settling after this effect has torn down.
+		const copySelectionToClipboard = (sel: string) => {
+			void writeText(sel)
+				.then(() => {
+					if (cancelled) return;
+					showHint("Copied", HINT_MS_SUCCESS);
+				})
+				.catch((err: unknown) => {
+					console.warn("[skein] clipboard copy failed:", err);
+					if (cancelled) return;
+					showHint("Copy failed", HINT_MS_INFO);
+				});
+		};
+
 		// Copy binding plus the post-exit prompt keys.
 		//
 		// **Copy** is custom because xterm needs to write the *selection*
 		// to the system clipboard, not the input bytes:
-		// - macOS:     ⌘C        (Ctrl+C still sends SIGINT to the PTY)
-		// - Win/Linux: Ctrl+Shift+C (Ctrl+C still sends SIGINT)
+		// - macOS:   ⌘C                (Ctrl+C still sends SIGINT to the PTY)
+		// - Win/Linux: Ctrl+Shift+C always copies (Ctrl+C still sends SIGINT)
+		// - Windows ALSO gets Windows-Terminal-style smart plain Ctrl+C: it
+		//   copies (and clears the selection) only when there's a live
+		//   selection; with no selection it falls through untouched so
+		//   \x03 still reaches the PTY. A harness is interrupted with Esc,
+		//   not Ctrl+C, in this scheme — Ctrl+C only copies, and only when
+		//   there's something selected; with nothing selected it still
+		//   reaches the PTY as SIGINT in a shell or Claude's clear/exit.
+		//   Linux keeps plain Ctrl+C as unconditional SIGINT — no
+		//   smart-Ctrl+C convention there.
+		// It's checked (and handled) BEFORE the post-exit-prompt gate below
+		// so copying the final output still works once the harness has
+		// exited — previously the branch was unreachable there (#158).
 		//
-		// **Paste** is left to xterm.js's native paste handling. xterm
-		// listens to the browser's `paste` event on its hidden textarea
-		// and writes the bytes through `term.onData`, which our
-		// outer wiring then forwards to the PTY. Adding our own Cmd+V
-		// handler used to fire that path *plus* the native one for a
-		// double-paste; see #5 / #4 — removing the custom branch fixes
-		// both.
+		// **Copy on select** (#158, Settings → "Copy on select", default
+		// true on every platform) is a separate mouseup listener below —
+		// finishing a mouse selection copies it too, without waiting for
+		// any of the chords above. It shares `copySelectionToClipboard`
+		// with this handler but is otherwise independent: it never clears
+		// the selection and never touches the keyboard event.
+		//
+		// **Paste** is native (the browser `paste` event on xterm's hidden
+		// textarea → `term.onData` → our outer `pty_write` wiring) for
+		// every combo except the two `decideClipboardAction` calls
+		// "paste": Windows' plain-Ctrl+V and Ctrl+Shift+V (WebView2's
+		// paste event is unreliable enough that xterm's native path often
+		// never fires), and Linux's Ctrl+Shift+V (plain Ctrl+V stays a
+		// \x16 byte to the PTY — Claude Code binds it to image paste
+		// there). macOS is untouched; ⌘V is always native. For an
+		// intercepted combo we `e.preventDefault()` and return false —
+		// that's load-bearing, it's what stops the native `paste` event
+		// from *also* firing — then read the OS clipboard ourselves and
+		// hand the text to `term.paste()`, xterm's own paste path (so it
+		// still gets bracketed-paste framing and a single `onData`
+		// message, not a readText→pty_write bypass — that shape produced
+		// the double-paste bugs in #4/#5, so it must not come back).
 		term.attachCustomKeyEventHandler((e) => {
 			if (e.type !== "keydown") return true;
 
 			// Reserved app shortcuts: don't let xterm forward the byte to
 			// the PTY. The window-level listener in App.tsx handles them.
 			if (isAppShortcut(e)) return false;
+
+			const clipboardAction = decideClipboardAction(e, clipboardPlatform, term.hasSelection());
+
+			if (clipboardAction === "copy") {
+				// Windows-Terminal-style smart Ctrl+C (#158): plain Ctrl+C —
+				// as opposed to the always-copy Ctrl+Shift+C — only reaches
+				// here because `decideClipboardAction` already confirmed a
+				// live selection, so it clears it and prevents the default
+				// SIGINT byte instead of the general copy path's "return
+				// false is enough" (Ctrl+Shift+C has no native browser
+				// default worth suppressing; plain Ctrl+C does, hence the
+				// explicit preventDefault here specifically).
+				const isWindowsSmartCtrlC =
+					clipboardPlatform === "windows" && e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey;
+				const sel = term.getSelection();
+				if (sel) {
+					copySelectionToClipboard(sel);
+					if (isWindowsSmartCtrlC) {
+						term.clearSelection();
+						e.preventDefault();
+					}
+				} else {
+					// Empty selection — or it didn't register. Claude Code /
+					// opencode both enable mouse tracking, which routes a
+					// plain drag to the TUI instead of an xterm selection;
+					// tell the user the forced-selection chord that gets
+					// them past it, when it's actually relevant (#158).
+					const mouseTrackingOn = term.modes.mouseTrackingMode !== "none";
+					console.warn(
+						`[skein] copy: nothing selected${mouseTrackingOn ? " (mouse tracking is on — force a selection with Shift+drag / Option+drag)" : ""}`,
+					);
+					showHint(emptySelectionHint(clipboardPlatform, mouseTrackingOn), HINT_MS_INFO);
+				}
+				// Suppress xterm's default handling either way — sending the
+				// raw modifier byte sequence to the PTY is rarely useful.
+				return false;
+			}
 
 			if (phase === "exited") {
 				if (e.key === "Enter") {
@@ -310,33 +448,23 @@ export const LiveTerminal = ({
 					return false;
 				}
 				// Swallow other keys while at the prompt — forwarding
-				// them to a dead writer would error.
+				// them to a dead writer would error. Paste combos are
+				// swallowed here too, same as before #158.
 				return false;
 			}
 
-			const copyCombo = isMac
-				? e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey
-				: e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
-			if (copyCombo && e.code === "KeyC") {
-				const sel = term.getSelection();
-				if (sel) {
-					// #158: the write is async and WebView2's clipboard can
-					// reject (timing / secure-context); don't swallow it.
-					void writeText(sel).catch((err: unknown) => {
-						console.warn("[skein] clipboard copy failed:", err);
+			if (clipboardAction === "paste") {
+				e.preventDefault();
+				void readText()
+					.then((text) => {
+						if (cancelled || phase !== "running" || !text) return;
+						term.paste(text);
+					})
+					.catch((err: unknown) => {
+						console.warn("[skein] clipboard paste failed:", err);
+						if (cancelled) return;
+						showHint("Paste failed", HINT_MS_INFO);
 					});
-				} else {
-					// Empty selection — or it didn't register. On an alt-screen
-					// TUI (Claude Code / opencode) xterm's selection can come
-					// back empty even when text looks selected; surface it so
-					// the failure is diagnosable rather than silent (#158).
-					const altScreen = term.buffer.active.type === "alternate";
-					console.warn(
-						`[skein] copy: nothing selected${altScreen ? " (alt-screen TUI — selection may be lossy)" : ""}`,
-					);
-				}
-				// Suppress xterm's default handling either way — sending the
-				// raw modifier byte sequence to the PTY is rarely useful.
 				return false;
 			}
 
@@ -367,6 +495,50 @@ export const LiveTerminal = ({
 			}
 			return true;
 		});
+
+		// #158: copy-on-select (Settings → "Copy on select", default
+		// true) — not xterm's `onSelectionChange`, which fires
+		// continuously while a drag is in progress, so a selection is
+		// copied exactly once, when it's finished: a plain drag, a
+		// Shift/Option+drag forced over an agent's TUI, or a double/
+		// triple-click word/line select. Shares `copySelectionToClipboard`
+		// with the keyboard path above, so the hints and the `cancelled`
+		// guard are identical either way. Runs in both phases (running
+		// and exited) — there's no reason to gate copying scrollback the
+		// harness already produced.
+		//
+		// Armed on `mousedown` *inside the host, capture phase* (so it
+		// fires before xterm's own mousedown handling can stop
+		// propagation) and consumed by a one-shot `mouseup` on
+		// `document`, also capture phase. A drag can be released outside
+		// the host — over a splitter, a neighbouring pane, even outside
+		// the window — and xterm tracks the drag on `ownerDocument`
+		// regardless of where the mouseup lands, so a host-only mouseup
+		// listener misses exactly that case. Deliberately NOT a permanent
+		// document listener: every mounted terminal (hidden rooms
+		// included) would otherwise re-copy its stale selection on any
+		// click anywhere in the app. Only armed for primary-button
+		// (`button === 0`) presses — a right-click opens a context menu,
+		// not a selection.
+		let armedMouseUp: ((e: MouseEvent) => void) | null = null;
+		const copySelectionIfAny = () => {
+			if (!copyOnSelectRef.current) return;
+			if (!term.hasSelection()) return;
+			const sel = term.getSelection();
+			if (sel) copySelectionToClipboard(sel);
+		};
+		const handleHostMouseDown = (e: MouseEvent) => {
+			if (e.button !== 0) return;
+			if (armedMouseUp) document.removeEventListener("mouseup", armedMouseUp, true);
+			const onDocMouseUp = () => {
+				document.removeEventListener("mouseup", onDocMouseUp, true);
+				armedMouseUp = null;
+				copySelectionIfAny();
+			};
+			armedMouseUp = onDocMouseUp;
+			document.addEventListener("mouseup", onDocMouseUp, true);
+		};
+		host.addEventListener("mousedown", handleHostMouseDown, true);
 
 		const channel = new Channel<PtyEvent>();
 		channel.onmessage = (ev) => {
@@ -651,6 +823,19 @@ export const LiveTerminal = ({
 			detachClaudeAdapter?.();
 			detachOpencodeAdapter?.();
 			detachInputTarget?.();
+			// #158: copy-on-select — the host mousedown listener always
+			// comes off; the document mouseup only if a drag is still
+			// mid-flight (armed but not yet fired) when this tears down.
+			host.removeEventListener("mousedown", handleHostMouseDown, true);
+			if (armedMouseUp) {
+				document.removeEventListener("mouseup", armedMouseUp, true);
+				armedMouseUp = null;
+			}
+			// #158: cancel the hint auto-dismiss so it can't setState after
+			// this effect has torn down (mount-key respawn or true unmount).
+			if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
+			hintTimerRef.current = null;
+			setHint(null);
 			const id = ptyIdRef.current;
 			if (id) void invoke("pty_kill", { id });
 			term.dispose();
@@ -805,6 +990,11 @@ export const LiveTerminal = ({
 					<div className="sk-terminal-drop-label">
 						{dropGate.ok ? "Drop to insert the path" : dropGate.reason}
 					</div>
+				</div>
+			)}
+			{hint && (
+				<div className="sk-terminal-hint-overlay">
+					<div className="sk-terminal-hint-label">{hint}</div>
 				</div>
 			)}
 		</div>

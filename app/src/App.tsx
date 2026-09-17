@@ -323,6 +323,10 @@ const AgentStatusBarSeg = ({ harness }: { harness: Harness }) => {
 interface HarnessBodyProps {
 	harness: Harness;
 	fontSize: number;
+	// #158: copy-on-select setting — read live via a ref in LiveTerminal,
+	// so toggling it applies to an already-running terminal without a
+	// respawn. Threaded down exactly like fontSize.
+	copyOnSelect: boolean;
 	defaultShell: string[];
 	visible: boolean;
 	onCmdChange: (cmd: string[]) => void;
@@ -343,6 +347,7 @@ interface HarnessBodyProps {
 const HarnessBody = ({
 	harness,
 	fontSize,
+	copyOnSelect,
 	defaultShell,
 	visible,
 	onCmdChange,
@@ -371,6 +376,7 @@ const HarnessBody = ({
 				opencodePort={opencodePort}
 				onSessionCaptured={onSessionCaptured}
 				fontSize={fontSize}
+				copyOnSelect={copyOnSelect}
 				defaultShell={defaultShell}
 				visible={visible}
 				onCmdChange={onCmdChange}
@@ -403,6 +409,7 @@ interface HarnessDrag {
 interface HarnessColumnProps {
 	room: Room;
 	fontSize: number;
+	copyOnSelect: boolean;
 	defaultShell: string[];
 	showPicker: boolean;
 	// True iff this column's room is the active room. Combined with
@@ -434,6 +441,7 @@ interface HarnessColumnProps {
 const HarnessColumn = ({
 	room,
 	fontSize,
+	copyOnSelect,
 	defaultShell,
 	showPicker,
 	roomActive,
@@ -559,6 +567,7 @@ const HarnessColumn = ({
 							<HarnessBody
 								harness={h}
 								fontSize={fontSize}
+								copyOnSelect={copyOnSelect}
 								defaultShell={defaultShell}
 								visible={visible}
 								onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
@@ -1476,6 +1485,13 @@ export default function App() {
 		"chromeFontPt",
 		CHROME_FONT_DEFAULT,
 	);
+	// #158: copy a mouse selection to the clipboard the moment it's made
+	// (drag, Shift/Option+drag over an agent's TUI, double/triple-click),
+	// on top of the explicit Ctrl+C/Cmd+C bindings. Default true on every
+	// platform — most terminal apps do this — with a toggle in Settings.
+	// Absent key (every install before this setting shipped) reads as
+	// true via `usePersistedState`'s own initial-value fallback.
+	const [copyOnSelect, setCopyOnSelect] = usePersistedState<boolean>("copyOnSelect", true);
 	// L5e — per-surface notification toggles. Defaults: in-app on,
 	// OS off (less surprising on first run; user opts in to OS
 	// banners when they want them).
@@ -3085,6 +3101,8 @@ export default function App() {
 		chromeFontSize: chromeFontPt,
 		chromeFontMin: CHROME_FONT_MIN,
 		chromeFontMax: CHROME_FONT_MAX,
+		copyOnSelect,
+		onCopyOnSelect: setCopyOnSelect,
 		onTheme: setTheme,
 		onDensity: setDensity,
 		onFontSize: setFontSize,
@@ -3451,6 +3469,7 @@ export default function App() {
 						<HarnessColumn
 							room={r}
 							fontSize={fontSize}
+							copyOnSelect={copyOnSelect}
 							defaultShell={defaultShell}
 							showPicker={showPicker === r.id}
 							roomActive={r.id === activeRoomId}

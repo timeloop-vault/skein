@@ -2410,3 +2410,24 @@ html.tab-dragging.tab-drag-refused * {
 .sk-terminal-drop-overlay.refused .sk-terminal-drop-label {
 	color: var(--err);
 }
+/* #158: transient copy/paste feedback — quiet, corner-anchored, never
+   intercepts pointer events (the TUI underneath stays fully live). */
+.sk-terminal-hint-overlay {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: flex-end;
+	justify-content: flex-end;
+	padding: 0 10px 8px 0;
+	pointer-events: none;
+	z-index: 5;
+}
+.sk-terminal-hint-label {
+	background: var(--bg-2);
+	border: 1px solid var(--line-strong);
+	border-radius: 6px;
+	padding: 4px 10px;
+	font-size: calc(var(--cfs, 12px) * 0.85);
+	color: var(--fg-1);
+	opacity: 0.92;
+}
