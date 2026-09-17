@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
 	TRANSITION_SOURCE,
 	activityToStatus,
+	aggregateRoomStatus,
 	effectiveStatus,
 	harnessActivity,
 	higherPriorityStatus,
@@ -198,5 +199,42 @@ describe("higherPriorityStatus (room aggregate ranking)", () => {
 		expect(higherPriorityStatus("waiting", "running")).toBe("waiting");
 		expect(higherPriorityStatus("idle", "waiting")).toBe("waiting");
 		expect(higherPriorityStatus("exited", "waiting")).toBe("waiting");
+	});
+});
+
+describe("aggregateRoomStatus (#290)", () => {
+	it("returns idle for a room with no harnesses", () => {
+		expect(aggregateRoomStatus([], () => null)).toBe("idle");
+	});
+
+	it("returns idle when no harness in the room has an activity record", () => {
+		// e.g. a room made up only of a non-PTY `files` harness, which
+		// never spawns a PTY and so never gets a store entry.
+		const refs = [{ id: "h_files" }, { id: "h_other" }];
+		expect(aggregateRoomStatus(refs, () => undefined)).toBe("idle");
+	});
+
+	it("aggregates across a mix of recorded and unrecorded harnesses", () => {
+		const id = nextId();
+		harnessActivity.spawned(id);
+		harnessActivity.setRunningFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeAssistant);
+		const refs = [{ id: "h_files" }, { id }];
+		expect(aggregateRoomStatus(refs, (hid) => harnessActivity.get(hid))).toBe("running");
+	});
+
+	it("downgrades waiting to idle with no pending notifications", () => {
+		const id = nextId();
+		harnessActivity.spawned(id);
+		harnessActivity.setWaitingFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
+		const refs = [{ id, pendingNotifications: 0 }];
+		expect(aggregateRoomStatus(refs, (hid) => harnessActivity.get(hid))).toBe("idle");
+	});
+
+	it("keeps waiting when notifications are pending", () => {
+		const id = nextId();
+		harnessActivity.spawned(id);
+		harnessActivity.setWaitingFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
+		const refs = [{ id, pendingNotifications: 1 }];
+		expect(aggregateRoomStatus(refs, (hid) => harnessActivity.get(hid))).toBe("waiting");
 	});
 });

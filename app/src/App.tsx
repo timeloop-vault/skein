@@ -274,7 +274,12 @@ const LiveRoomTab = (props: Parameters<typeof RoomTab>[0]) => {
 	);
 	const aggregate = useRoomActivity(harnessRefs);
 	const badge = props.r.harnesses.reduce((acc, h) => acc + (h.pendingNotifications ?? 0), 0);
-	const derived = { ...props.r, badge, ...(aggregate !== null && { status: aggregate }) };
+	// #290: status always comes from the harness aggregate, never the
+	// persisted `r.status` field — that field is written once at room
+	// creation and never updated, so falling back to it on a `null`
+	// aggregate made a room with no harness activity record (e.g. only
+	// a `files` harness) show "running" forever.
+	const derived = { ...props.r, badge, status: aggregate };
 	return <RoomTab {...props} r={derived} />;
 };
 

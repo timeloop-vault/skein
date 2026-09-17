@@ -805,10 +805,24 @@ export function higherPriorityStatus(a: Status, b: Status): Status {
 	return STATUS_PRIORITY[b] > STATUS_PRIORITY[a] ? b : a;
 }
 
-const aggregateRoomStatus = (harnesses: readonly RoomHarnessRef[]): Status | null => {
+/// Combine a room's harnesses into one room-level status. `lookup`
+/// is injected (rather than reading the module-level `store`
+/// directly) so this is unit-testable without React or the store's
+/// global state — see `harnessActivity.test.ts`.
+///
+/// Returns `"idle"`, never `null`, when no harness in the list has a
+/// record yet (e.g. a room made up only of non-PTY harnesses like
+/// `files`, or the first paint before any LiveTerminal effect has
+/// fired) — issue #290: a room's status derives ONLY from its
+/// harnesses, so "nothing has reported in" reads as idle rather than
+/// falling back to the room's stale persisted `status` field.
+export function aggregateRoomStatus(
+	harnesses: readonly RoomHarnessRef[],
+	lookup: (id: string) => HarnessActivity | null | undefined,
+): Status {
 	let best: Status | null = null;
 	for (const h of harnesses) {
-		const a = store.get(h.id);
+		const a = lookup(h.id);
 		if (!a) continue;
 		// Per-harness effective status: waiting downgrades to idle
 		// when the harness has been viewed since the last
@@ -818,14 +832,14 @@ const aggregateRoomStatus = (harnesses: readonly RoomHarnessRef[]): Status | nul
 		const s = effectiveStatus(a, h.pendingNotifications ?? 0);
 		best = best === null ? s : higherPriorityStatus(best, s);
 	}
-	return best;
-};
+	return best ?? "idle";
+}
 
 /// React hook: subscribes to every harness in a room and returns
-/// the aggregate room status. Returns `null` when no harness in
-/// the list has a record yet (first paint before LiveTerminal
-/// effects fire) so callers can fall back to the persisted
-/// `room.status`.
+/// the aggregate room status via `aggregateRoomStatus`. Always
+/// returns a concrete `Status` — `"idle"` when no harness in the
+/// list has a record yet — so callers use it directly and never fall
+/// back to the persisted `room.status` (#290).
 ///
 /// Takes the full harness records (rather than just ids) so the
 /// aggregation can apply the same acknowledged-downgrade rule
@@ -836,7 +850,7 @@ const aggregateRoomStatus = (harnesses: readonly RoomHarnessRef[]): Status | nul
 /// (use useMemo). `useSyncExternalStore` re-subscribes whenever
 /// `subscribe` changes; a fresh array reference each render would
 /// thrash the listener Sets without changing behaviour.
-export function useRoomActivity(harnesses: readonly RoomHarnessRef[]): Status | null {
+export function useRoomActivity(harnesses: readonly RoomHarnessRef[]): Status {
 	const subscribe = useCallback(
 		(cb: () => void) => {
 			const unsubs = harnesses.map((h) => harnessActivity.subscribe(h.id, cb));
@@ -846,6 +860,9 @@ export function useRoomActivity(harnesses: readonly RoomHarnessRef[]): Status | 
 		},
 		[harnesses],
 	);
-	const getSnapshot = useCallback(() => aggregateRoomStatus(harnesses), [harnesses]);
+	const getSnapshot = useCallback(
+		() => aggregateRoomStatus(harnesses, (id) => store.get(id)),
+		[harnesses],
+	);
 	return useSyncExternalStore(subscribe, getSnapshot);
 }
