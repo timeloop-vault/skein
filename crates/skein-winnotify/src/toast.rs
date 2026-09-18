@@ -8,19 +8,19 @@ use windows::UI::Notifications::{
 use windows::core::{HSTRING, IInspectable, Interface, Ref};
 
 use crate::error::Result;
-use crate::launch::parse_launch;
+use crate::launch::{LaunchTarget, parse_launch};
 
 /// Show a toast for `aumid` with `title`/`body`, and call
-/// `on_banner_click(id)` if the user taps it while it's still visible
-/// as a banner.
+/// `on_banner_click(target)` if the user taps it while it's still
+/// visible as a banner.
 ///
 /// Built with the `XmlDocument` DOM API (`SetInnerText`, so `title`
 /// and `body` are escaped for free) rather than string
 /// concatenation. The root `<toast>` carries
-/// `launch="skein-notify:<id>"` and `activationType="foreground"`, so
-/// a tap delivers the same id string this crate's COM activator
-/// would see for a later Action Center click — `parse_launch` is the
-/// shared decoder for both.
+/// `launch="skein-notify:<room_id>:<harness_id>"` and
+/// `activationType="foreground"`, so a tap delivers the same string
+/// this crate's COM activator would see for a later Action Center
+/// click — `parse_launch` is the shared decoder for both.
 ///
 /// # Errors
 /// Returns an error if building the toast XML or showing it fails
@@ -28,19 +28,16 @@ use crate::launch::parse_launch;
 /// should log and continue — Skein is fully usable without OS toasts.
 pub fn show_toast(
     aumid: &str,
-    id: u32,
+    target: &LaunchTarget,
     title: &str,
     body: &str,
-    on_banner_click: impl Fn(u32) + Send + 'static,
+    on_banner_click: impl Fn(LaunchTarget) + Send + 'static,
 ) -> Result<()> {
     let doc = XmlDocument::new()?;
 
     let toast_el = doc.CreateElement(&HSTRING::from("toast"))?;
     doc.AppendChild(&toast_el)?;
-    toast_el.SetAttribute(
-        &HSTRING::from("launch"),
-        &HSTRING::from(format!("skein-notify:{id}")),
-    )?;
+    toast_el.SetAttribute(&HSTRING::from("launch"), &HSTRING::from(target.encode()))?;
     toast_el.SetAttribute(
         &HSTRING::from("activationType"),
         &HSTRING::from("foreground"),
@@ -69,9 +66,9 @@ pub fn show_toast(
             if let Some(inspectable) = &*args
                 && let Ok(activated) = inspectable.cast::<ToastActivatedEventArgs>()
                 && let Ok(arguments) = activated.Arguments()
-                && let Some(clicked_id) = parse_launch(&arguments.to_string_lossy())
+                && let Some(clicked_target) = parse_launch(&arguments.to_string_lossy())
             {
-                on_banner_click(clicked_id);
+                on_banner_click(clicked_target);
             }
             Ok(())
         },

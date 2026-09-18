@@ -64,6 +64,7 @@ import {
 	apiErrorToastText,
 	parsePayload,
 } from "./liveContext/index.ts";
+import { type ClickTarget, resolveClickTarget, shouldDrainOnClickEvent } from "./osNotifyClick.ts";
 import {
 	type DefaultAgents,
 	EMPTY_NEW_ROOM_MEMORY,
@@ -157,7 +158,12 @@ const enqueueOsNotification = (
 ): void => {
 	osNotifyId = (osNotifyId + 1) % 0x7fff_ffff;
 	const id = osNotifyId;
-	if (extra) {
+	// #294: Windows no longer round-trips this numeric id at all — the
+	// click target is stored Rust-side, keyed off the toast itself, and
+	// handed back via `os_notify_take_pending` (a store that survives
+	// Skein being closed at click time). Only macOS's plugin still needs
+	// the id-keyed map, since it drops `extra` but echoes the id.
+	if (extra && !isWindows) {
 		osNotifyTargets.set(id, extra);
 		if (osNotifyTargets.size > OS_NOTIFY_TARGETS_MAX) {
 			const oldest = osNotifyTargets.keys().next().value;
@@ -166,15 +172,25 @@ const enqueueOsNotification = (
 	}
 	osNotifyChain = osNotifyChain
 		.catch(() => {})
-		.then(() =>
+		.then(() => {
 			// #155: the plugin's notify-rust backend never fires
 			// `onNotificationClicked` on Windows (fire-and-forget —
 			// see `os_notify.rs`), so Windows toasts go through our
 			// own command instead, which wires up a real click.
-			isWindows
-				? invoke("os_notify_show", { id, title, body })
-				: sendNotification(extra ? { id, title, body, extra } : { title, body }),
-		)
+			if (isWindows) {
+				if (!extra) {
+					console.warn("[skein] os_notify_show skipped: no roomId/harnessId (#294)");
+					return undefined;
+				}
+				return invoke("os_notify_show", {
+					roomId: extra.roomId,
+					harnessId: extra.harnessId,
+					title,
+					body,
+				});
+			}
+			return sendNotification(extra ? { id, title, body, extra } : { title, body });
+		})
 		.catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.warn("[skein] os notification failed:", msg);
@@ -1635,6 +1651,12 @@ export default function App() {
 	// session with no visible surface (the retry card only renders
 	// pre-load).
 	const hydratedOnceRef = useRef(false);
+	// #294: mirrors `loaded`, set at the exact same call site — unlike
+	// `hydratedOnceRef` (flipped earlier, before the resume/port-alloc
+	// await chain below), this is only true once `rooms` actually holds
+	// the hydrated set. A live click-listener poke that lands in that
+	// gap must not drain against the still-empty `roomsRef`.
+	const loadedRef = useRef(false);
 	const hydrateRooms = useCallback(() => {
 		// Chapter 5 phase 4: drop any stored sessionId that no longer
 		// exists on disk before resumeCmd uses it. claude --resume <id>
@@ -1733,6 +1755,7 @@ export default function App() {
 					const first = withResume.find((r) => !r.archived);
 					if (first) setActiveRoomId(first.id);
 				}
+				loadedRef.current = true;
 				setLoaded(true);
 			})
 			.catch((err: unknown) => {
@@ -2809,55 +2832,82 @@ export default function App() {
 		};
 	}, []);
 
+	// #294: the decision + side-effect shared by every OS-notification
+	// click path (macOS's id-keyed map lookup below, Windows's live
+	// event, and Windows's post-hydrate pending-click drain further
+	// down) — un-archive the room if needed and switch to the harness
+	// that fired the toast. Stable identity ([] deps): only reads refs
+	// and calls stable setState setters, so sharing it across effects
+	// never forces a re-registration.
+	const jumpToTarget = useCallback((target: ClickTarget) => {
+		const decision = resolveClickTarget(roomsRef.current, target);
+		if (!decision.found) return; // closed-and-deleted since the banner fired
+		const { roomId, harnessId } = target;
+		// #170: un-archive it if it was archived in the meantime, so
+		// it's reachable. This used to strip `archived` inline and stop
+		// there — no resume rewrite, no fresh opencode port — so the
+		// remount respawned the stored fresh-form cmd and Claude died
+		// with "Session ID is already in use". unarchiveRoom does both
+		// halves (and focuses the room, archived or not).
+		void unarchiveRoomRef.current(roomId);
+		if (decision.hasHarness) {
+			setRooms((prev) =>
+				prev.map((r) => (r.id === roomId ? { ...r, activeHarnessId: harnessId } : r)),
+			);
+		}
+	}, []);
+
+	// #294: Windows only — the click target for a toast clicked while
+	// Skein was closed lives Rust-side (crates/skein-winnotify) rather
+	// than riding an event, so both the live listener below and the
+	// post-hydrate effect further down read it through this one call.
+	// Idempotent: once one caller has drained it, a second call just
+	// gets `null` back.
+	const drainPendingClick = useCallback(() => {
+		invoke<ClickTarget | null>("os_notify_take_pending")
+			.then((target) => {
+				if (target) jumpToTarget(target);
+			})
+			.catch((err: unknown) => {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.warn("[skein] os_notify_take_pending failed:", msg);
+			});
+	}, [jumpToTarget]);
+
 	// #118: clicking the OS notification brings Skein to the front and
 	// jumps to the harness that fired it. macOS's native plugin delivers
 	// the click as `{ id }` and drops the `extra` payload, so we resolve
 	// the jump target from the id-keyed `osNotifyTargets` map populated at
-	// send time. #155: Windows now delivers clicks too, through Skein's
-	// own `os_notify.rs` path (see `enqueueOsNotification`) — both while
-	// the toast banner is still on screen AND later from Action Center (or
-	// a cold `-Embedding` launch with Skein closed), via a registered
-	// unpackaged-app AUMID + COM `CustomActivator`
-	// (`crates/skein-winnotify`). Rust itself brings the window to the
-	// foreground on that path (`skein_winnotify::bring_to_front`, the
-	// `AttachThreadInput` trick — plain `SetForegroundWindow` loses to the
-	// foreground lock for a click that didn't originate in this process);
-	// the calls below are harmless belt-and-braces once that's already
-	// happened. Linux still has no click path at all (notify-rust, #108).
-	// Wrapped so a missing-permission rejection doesn't surface as an
-	// unhandled error.
+	// send time. #155/#294: Windows delivers clicks too, through Skein's
+	// own `os_notify.rs` path — both while the toast banner is still on
+	// screen AND later from Action Center (or a cold `-Embedding` launch
+	// with Skein closed), via a registered unpackaged-app AUMID + COM
+	// `CustomActivator` (`crates/skein-winnotify`). The Windows event now
+	// carries no payload — it's just a poke — because a cold launch has
+	// nowhere to have stashed one client-side; the real target comes from
+	// `os_notify_take_pending` (`drainPendingClick` above). Rust itself
+	// brings the window to the foreground on that path
+	// (`skein_winnotify::bring_to_front`, the `AttachThreadInput` trick —
+	// plain `SetForegroundWindow` loses to the foreground lock for a
+	// click that didn't originate in this process); the calls below are
+	// harmless belt-and-braces once that's already happened. Linux still
+	// has no click path at all (notify-rust, #108). Wrapped so a
+	// missing-permission rejection doesn't surface as an unhandled error.
 	useEffect(() => {
-		// Shared by both the plugin's click event (macOS) and #155's own
-		// Windows event — same `{ id }` shape, same jump logic.
-		const focusAndJump = (id: number) => {
+		const focusWindow = () => {
 			// Always surface the window — the user clicked a Skein banner.
 			const win = getCurrentWindow();
 			void win.show();
 			void win.unminimize();
 			void win.setFocus();
+		};
 
+		const focusAndJump = (id: number) => {
+			focusWindow();
 			const target = osNotifyTargets.get(id);
 			osNotifyTargets.delete(id);
 			if (!target) return;
-			const { roomId, harnessId } = target;
-			const room = roomsRef.current.find((r) => r.id === roomId);
-			if (!room) return; // closed-and-deleted since the banner fired
-			// #170: un-archive it if it was archived in the meantime, so
-			// it's reachable. This used to strip `archived` inline and stop
-			// there — no resume rewrite, no fresh opencode port — so the
-			// remount respawned the stored fresh-form cmd and Claude died
-			// with "Session ID is already in use". unarchiveRoom does both
-			// halves (and focuses the room, archived or not).
-			void unarchiveRoomRef.current(roomId);
-			// Inline the harness switch (rather than calling
-			// switchHarnessInRoom) so this startup effect depends only on
-			// stable setters and stays []-keyed — otherwise it would
-			// re-register the native click listener on every render.
-			if (room.harnesses.some((h) => h.id === harnessId)) {
-				setRooms((prev) =>
-					prev.map((r) => (r.id === roomId ? { ...r, activeHarnessId: harnessId } : r)),
-				);
-			}
+			jumpToTarget(target);
 		};
 
 		const pluginPromise = onNotificationClicked((clicked) => focusAndJump(clicked.id)).catch(
@@ -2867,13 +2917,14 @@ export default function App() {
 				return null;
 			},
 		);
-		// #155: the plugin never delivers this on Windows (notify-rust is
-		// fire-and-forget there), so `os_notify.rs` emits its own event
-		// carrying the same `{ id }` shape.
+		// #294: before hydrate, ignore the poke — draining now would jump
+		// into the still-empty boot-time rooms list; the post-hydrate
+		// effect below drains once real rooms exist instead.
 		const winPromise = isWindows
-			? listen<{ id: number }>("skein://os-notification-clicked", (event) =>
-					focusAndJump(event.payload.id),
-				).catch((err: unknown) => {
+			? listen("skein://os-notification-clicked", () => {
+					focusWindow();
+					if (shouldDrainOnClickEvent(loadedRef.current)) drainPendingClick();
+				}).catch((err: unknown) => {
 					const msg = err instanceof Error ? err.message : String(err);
 					console.warn("[skein] os-notification-clicked listener unavailable:", msg);
 					return null;
@@ -2884,7 +2935,18 @@ export default function App() {
 			void pluginPromise.then((listener) => listener?.unregister());
 			void winPromise?.then((unlisten) => unlisten?.());
 		};
-	}, []);
+	}, [jumpToTarget, drainPendingClick]);
+
+	// #294: the click arrived before Skein finished booting — Rust
+	// queued it instead of firing a live event, so pick it up once
+	// hydrate has produced a real rooms list to jump into. `loaded`
+	// flips false→true at most once per boot and only on a *successful*
+	// load (#167 — a failed load must not consume the click), so this
+	// fires exactly once, right after that first success.
+	useEffect(() => {
+		if (!isWindows || !loaded) return;
+		drainPendingClick();
+	}, [loaded, drainPendingClick]);
 
 	// All session ids any harness has already captured. captureOpencode
 	// excludes these so a fresh capture can't claim someone else's id

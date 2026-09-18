@@ -22,7 +22,7 @@ mod clsid;
 mod launch;
 
 pub use clsid::{clsid_braced, clsid_for};
-pub use launch::parse_launch;
+pub use launch::{LaunchTarget, parse_launch};
 
 #[cfg(windows)]
 mod activator;
