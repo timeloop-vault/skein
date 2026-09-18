@@ -448,6 +448,7 @@ pub fn run() {
             review_surface::commands::review_set_signoff,
             agent_api::commands::agent_api_status,
             os_notify::os_notify_show,
+            os_notify::os_notify_take_pending,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
