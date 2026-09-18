@@ -4130,6 +4130,7 @@ dependencies = [
  "skein-git",
  "skein-harness",
  "skein-review",
+ "skein-winnotify",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -4170,6 +4171,15 @@ dependencies = [
  "serde",
  "similar",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "skein-winnotify"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "windows",
+ "windows-core 0.61.2",
 ]
 
 [[package]]

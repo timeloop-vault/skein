@@ -16,6 +16,7 @@ mod harness_actions_opencode;
 mod harness_config;
 mod harness_events_claude;
 mod harness_events_opencode;
+mod os_notify;
 mod pty;
 mod resume;
 mod review;
@@ -97,7 +98,9 @@ pub fn run() {
     // runs the binary directly, so we skip registering it in
     // macOS-debug builds. Linux / Windows builds use the notify-rust
     // backend, which has no such requirement, so they always register
-    // (both dev and release). Epic #50 L5b.
+    // (both dev and release). Epic #50 L5b. Windows clicks don't come
+    // through this plugin at all (#155) — see `os_notify.rs`, wired up
+    // separately below via `generate_handler!`, not `.plugin(...)`.
     // `mut` is unused only in the macOS-debug case where no plugin is
     // added below; quiet the warning for that one path.
     #[allow(unused_mut)]
@@ -154,6 +157,20 @@ pub fn run() {
                 log_dir = %log_dir.display(),
                 "Skein starting"
             );
+
+            // #155: registers Skein's unpackaged-build AUMID and COM
+            // toast activator on Windows so a notification click
+            // reaches it from Action Center or a cold `-Embedding`
+            // launch, not only while the banner itself is on screen.
+            // A no-op on every other OS. Needs only the app handle
+            // (config, its own app-data dir for the icon) — placed as
+            // early in `setup()` as that allows, right after logging
+            // comes up, because a cold `-Embedding` launch blocks on
+            // this registration with a timeout rather than waiting
+            // behind the DB open and agent-API bind below.
+            // Best-effort — see `os_notify::init` — never aborts
+            // startup.
+            crate::os_notify::init(app.handle());
 
             // Persist Skein state under the OS-conventional app data dir
             // (e.g. %APPDATA%/com.timeloop-vault.skein on Windows). Create
@@ -430,6 +447,7 @@ pub fn run() {
             review_surface::commands::review_signoff_status,
             review_surface::commands::review_set_signoff,
             agent_api::commands::agent_api_status,
+            os_notify::os_notify_show,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

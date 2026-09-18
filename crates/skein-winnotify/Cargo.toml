@@ -1,0 +1,66 @@
+[package]
+name = "skein-winnotify"
+version = "0.1.0"
+description = "Windows-only OS toast notifications for an unpackaged app: COM click activation (Action Center, cold start) and foreground-window recovery (#155)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The workspace forbids unsafe everywhere else (root Cargo.toml). This
+# crate is the one deliberate exception: registry writes, COM class
+# registration and the WinRT toast APIs all require raw FFI calls that
+# the `windows` crate cannot make safe. Its own table (rather than
+# `[lints] workspace = true`) is how it opts out — `unsafe_code` stays
+# unset (default allow) rather than the workspace's `forbid`, and
+# `undocumented_unsafe_blocks` is turned up to `deny` so every unsafe
+# block still has to justify itself with a `// SAFETY:` comment.
+# `app/src-tauri` keeps the workspace's `forbid` and only ever calls
+# this crate's safe public functions.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+too_many_lines = "allow"
+undocumented_unsafe_blocks = "deny"
+
+# Everything below is Windows-only: registry, COM class registration,
+# and WinRT toasts don't exist on macOS/Linux. Kept as a target dep
+# (rather than a plain dependency gated with `#[cfg(windows)]` inside
+# the crate) so `cargo build`/`cargo test` on macOS/Linux never even
+# resolves the `windows` crate — this crate compiles to just the pure,
+# cross-platform `clsid`/`launch` modules there.
+[target.'cfg(windows)'.dependencies]
+# Only the features this crate actually calls: WinRT toasts
+# (Data_Xml_Dom, Foundation, UI_Notifications), the raw Win32 registry
+# writes `register_app` needs (Win32_System_Registry, gated behind
+# Win32_Security by the `windows` crate itself), the COM class
+# registration `start_activator` needs (Win32_System_Com,
+# Win32_UI_Notifications for `INotificationActivationCallback`), and
+# the foreground-window recovery in `bring_to_front`
+# (Win32_System_Threading, Win32_UI_Input_KeyboardAndMouse,
+# Win32_UI_WindowsAndMessaging). Same major version as the transitive
+# copy already in app/src-tauri/Cargo.lock (0.61.x) so Cargo resolves
+# one copy, not two.
+windows = { version = "0.61", default-features = false, features = [
+    "Data_Xml_Dom",
+    "Foundation",
+    "UI_Notifications",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Notifications",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# `#[implement(...)]` (used for the COM activator/factory in
+# `activator.rs`) expands to code that names the `windows_core` crate
+# at the crate root, so it must be resolvable there — re-exporting it
+# through `windows::core` isn't enough. Same version as `windows`
+# pulls transitively, so Cargo still resolves one copy.
+windows-core = "0.61"
+thiserror.workspace = true

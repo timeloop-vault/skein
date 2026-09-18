@@ -78,12 +78,28 @@ tracing-appender = "0.2"
 # (notify-rust uses the deprecated NSUserNotificationCenter, which is
 # silently broken on Sequoia/Tahoe). But on Linux/Windows that flag
 # would leave neither branch active and the crate fails to compile.
-# So: macOS skips notify-rust, everything else keeps it.
+# So: macOS skips notify-rust, everything else keeps it. On Windows,
+# notify-rust's toasts are fire-and-forget — no click activation, ever
+# (#155) — so a toast that needs a click to focus Skein and jump to the
+# harness that fired it goes through `os_notify.rs` instead, built on
+# `skein-winnotify` (see the target dependency below). Everything
+# that doesn't need a click still uses this plugin.
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-notifications = { version = "0.4", default-features = false }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 tauri-plugin-notifications = "0.4"
+
+# Skein's own Windows toast + click-activation path (#155): registers
+# an unpackaged-app AUMID and COM `CustomActivator` so a click reaches
+# Skein from Action Center or a cold `-Embedding` launch, not only
+# while the banner is still on screen. notify-rust (above) never wires
+# any of that up on Windows. See `crates/skein-winnotify` — the one
+# workspace crate allowed `unsafe`, for exactly this raw WinRT/Win32
+# surface; this crate keeps the workspace's `unsafe_code = "forbid"`
+# and only calls its safe functions.
+[target.'cfg(windows)'.dependencies]
+skein-winnotify = { path = "../../crates/skein-winnotify" }
 
 [dev-dependencies]
 tempfile = "3"

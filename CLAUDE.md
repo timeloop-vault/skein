@@ -46,10 +46,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
 - **React 18 + strict TypeScript** UI (Vite); xterm.js for terminals,
   react-virtuoso for the activity feed, CodeMirror 6 for the file
   editor (#185)
-- **Three Rust workspace crates** — `skein-git`, `skein-harness`,
-  `skein-review` — plus `app/src-tauri`, which is deliberately
-  **excluded** from the workspace. Every cargo command therefore needs
-  running twice; see Conventions
+- **Four Rust workspace crates** — `skein-git`, `skein-harness`,
+  `skein-review`, `skein-winnotify` — plus `app/src-tauri`, which is
+  deliberately **excluded** from the workspace. Every cargo command
+  therefore needs running twice; see Conventions
 - **axum** on the tokio runtime Tauri already runs, for the localhost
   agent API + MCP endpoint (#213) — the hyper/http/tower stack under it
   was already locked via reqwest
@@ -96,6 +96,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   the line number; three tiers (exact/exact-elsewhere/
     │                                #   max-overlap) then outdated. Never silently moves or
     │                                #   drops a comment; 22 table tests, no repo needed
+    ├── crates/skein-winnotify/      # Windows-only OS toasts + COM click activation (#155):
+    │                                #   unpackaged-app AUMID registration, a
+    │                                #   INotificationActivationCallback so Action Center/cold-start
+    │                                #   clicks work, foreground-window recovery. The workspace's
+    │                                #   ONE crate allowed `unsafe` (its own `[lints]` table, not
+    │                                #   `workspace = true`) — raw WinRT/Win32 calls can't be made
+    │                                #   safe otherwise. app/src-tauri keeps `forbid` and only
+    │                                #   calls its safe functions
     ├── app/
     │   ├── src/                     # React + TS UI
     │   │   ├── App.tsx              # The single React tree (~3.2k LOC hotspot; #19 tracks
