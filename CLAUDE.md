@@ -468,7 +468,11 @@ so APP_DATA / logs / config never bleed between them:
 
 - **dev** — debug build, hot-reload, devtools; day-to-day feature work.
 - **local release** — optimized bundle beside the daily driver without
-  touching its state.
+  touching its state. Its exe is `skein-app-local.exe` (`mainBinaryName`,
+  #293): the NSIS installer refuses while *any* process of its own exe
+  name runs, so a shared `skein-app.exe` blocked installing it beside
+  the release. Release keeps `skein-app` for the updater and existing
+  installs; dev needs nothing, since `tauri dev` never renames.
 - **release** — what the GitHub pipeline ships. Releases are cut by
   publishing a GitHub Release with a `vX.Y.Z` tag; `release.yml`
   builds macOS (Apple Silicon only) / Windows / Linux, attaches
