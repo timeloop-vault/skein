@@ -22,7 +22,9 @@ use tauri::AppHandle;
 /// Emitted when the user activates (clicks) a toast shown via
 /// [`os_notify_show`], or a COM activation reaches a running Skein
 /// with a parseable id. Frontend contract — do not rename `id`
-/// without checking `App.tsx`'s listener.
+/// without checking `App.tsx`'s listener. Windows-only: every emitter
+/// is, and an ungated const is dead code (`-D warnings`) elsewhere.
+#[cfg(windows)]
 pub const OS_NOTIFICATION_CLICKED_EVENT: &str = "skein://os-notification-clicked";
 
 /// Payload of [`OS_NOTIFICATION_CLICKED_EVENT`].
