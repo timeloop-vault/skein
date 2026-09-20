@@ -21,7 +21,7 @@
 //! fails to attach, the harness falls back to the L2a idle heuristic
 //! and nothing user-visible breaks.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -69,6 +69,34 @@ pub enum ClaudeEvent {
     /// Session log was deleted or otherwise vanished — fall back to
     /// L2a heuristics.
     SessionEnd,
+    /// A subagent transcript began (or resumed): a new
+    /// `agent-<id>.jsonl` appeared under the session's `subagents`
+    /// dir, or one that had already finished got more rows after its
+    /// terminal row (a follow-up delegation to the same id, which
+    /// flips it live again). `agent_type`/`description` come from the
+    /// `agent-<id>.meta.json` sidecar when it exists and parses;
+    /// `None` otherwise.
+    SubagentStart {
+        agent_id: String,
+        agent_type: Option<String>,
+        description: Option<String>,
+    },
+    /// A tool call inside a subagent's own turn just returned a
+    /// result. This exists so a permission dialog a *subagent* opened
+    /// can be cleared (epic #298 — today the badge stays stuck until
+    /// the whole subagent finishes). It must never be read as a
+    /// parent-harness phase change: it says nothing about the main
+    /// session's own state.
+    SubagentToolResult { agent_id: String },
+    /// A subagent's transcript ended — its last row is an assistant
+    /// row with a terminal `stop_reason` (see
+    /// `skein_harness::claude::subagent_row_is_terminal`). A subagent
+    /// has no user to await, so the end of its turn IS its exit.
+    SubagentEnd {
+        agent_id: String,
+        agent_type: Option<String>,
+        description: Option<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -126,6 +154,53 @@ struct Adapter {
     _debouncer: Debouncer<RecommendedWatcher>,
 }
 
+/// Per-subagent tail state, one per `agent-<id>.jsonl` under the
+/// session's `subagents` dir. Mirrors `TailState`'s read/carry-partial
+/// shape but scoped to a single subagent transcript.
+struct SubagentTail {
+    path: PathBuf,
+    /// Byte offset already consumed — same role as `TailState::last_pos`.
+    last_pos: u64,
+    /// Trailing partial line carried across ticks — same role as
+    /// `TailState::partial`.
+    partial: String,
+    /// Whether the last row read from this transcript is terminal
+    /// (see `skein_harness::claude::subagent_row_is_terminal`). A
+    /// subagent that gets more rows after finishing (a follow-up
+    /// delegation to the same id) flips this back to `false` and
+    /// re-emits `SubagentStart`.
+    finished: bool,
+    /// From the `agent-<id>.meta.json` sidecar; `None` when it's
+    /// absent or doesn't parse. Carried here so `SubagentEnd` can
+    /// report the same type/description `SubagentStart` did, without
+    /// re-reading the sidecar every tick.
+    agent_type: Option<String>,
+    description: Option<String>,
+    /// Epoch ms parsed from the *first* row read off this transcript
+    /// after this `SubagentTail` was created, used to compute
+    /// `SubagentEnd`'s `duration_ms`. Set once (see
+    /// `started_ms_resolved`); stays `None` when that first row
+    /// carried no `timestamp` field. A subagent seeded from disk at
+    /// attach time (see `initial_subagents` in `attach_at`) is jumped
+    /// straight to EOF and its earlier rows are never read — no extra
+    /// file read is added just to backfill a start time — so it is
+    /// seeded with this already resolved to `None` and stays that way
+    /// for its whole life: an absent duration is honest, a guessed
+    /// one is not.
+    started_ms: Option<i64>,
+    /// Whether `started_ms` has already been set from the first row.
+    /// Needed because `started_ms` staying `None` is itself a valid
+    /// resolved outcome (row had no timestamp) that must not be
+    /// overwritten by a later row.
+    started_ms_resolved: bool,
+    /// Carry-forward "most recent timestamp seen on this transcript" —
+    /// same role as `ActionExtractor::last_ts_ms` in
+    /// `harness_actions_claude.rs`. Used as the `SubagentEnd` action's
+    /// own timestamp when the terminal row itself carries no
+    /// `timestamp`, rather than inventing `now`.
+    last_ts_ms: i64,
+}
+
 /// Mutable state shared with the watcher callback. The callback runs
 /// on the debouncer thread — every field it touches lives in here.
 struct TailState {
@@ -149,6 +224,13 @@ struct TailState {
     /// `attach_at_with_actions`. Lives in `TailState` so the watcher
     /// callback can both extract and persist on each tick. Issue #80.
     actions: Option<ActionPersistence>,
+    /// The session's `subagents` dir, when it could be created and
+    /// watched at attach time. `None` disables subagent tailing
+    /// entirely for this attach — telemetry here is strictly
+    /// additive and must never be a reason `attach` itself fails.
+    subagents_dir: Option<PathBuf>,
+    /// Per-subagent tail state, keyed by agent id.
+    subagents: HashMap<String, SubagentTail>,
 }
 
 /// Action-extraction context bundled per attached harness. The
@@ -301,6 +383,81 @@ impl ClaudeEventsManager {
             .parent()
             .map(Path::to_path_buf)
             .ok_or_else(|| ClaudeEventsError("session path has no parent".into()))?;
+
+        // Subagent transcripts live in a sibling `<session-id>/subagents`
+        // dir next to the main `.jsonl` (`skein_harness::claude::
+        // subagents_dir`, #209). Create it eagerly, mirroring the
+        // `parent` precedent just above — a session that hasn't
+        // delegated yet still gets a watchable directory the moment it
+        // does. This is strictly additive telemetry: any failure here
+        // degrades to no subagent tracking for this attach rather than
+        // failing `attach` itself — a working harness must never be
+        // held hostage by it.
+        let mut subagents_dir_opt = skein_harness::claude::subagents_dir(&path);
+        if let Some(dir) = &subagents_dir_opt
+            && let Err(e) = fs::create_dir_all(dir)
+        {
+            tracing::warn!(
+                dir = %dir.display(),
+                error = %e,
+                "claude_events: could not create subagents dir; subagent telemetry disabled for this attach"
+            );
+            subagents_dir_opt = None;
+        }
+
+        // Seed initial subagent state from disk *before* arming the
+        // watcher — same reasoning as the history probe above: the
+        // disk is the truth, and a subagent could already be mid-flight
+        // by the time we watch. `last_pos` starts at each file's
+        // current length (everything already there counts as "seen");
+        // `finished` reflects whichever row is last, so a subagent
+        // that already finished before this attach doesn't get
+        // replayed as freshly started. The `SubagentStart` events
+        // themselves are held back to `initial_subagent_starts` and
+        // emitted only after the watcher is armed, for the same
+        // no-lost-window reason `initial_event` is below.
+        let mut initial_subagents: HashMap<String, SubagentTail> = HashMap::new();
+        let mut initial_subagent_starts: Vec<ClaudeEvent> = Vec::new();
+        if let Some(dir) = &subagents_dir_opt
+            && let Ok(entries) = fs::read_dir(dir)
+        {
+            for entry in entries.flatten() {
+                let sub_path = entry.path();
+                let Some(agent_id) = skein_harness::claude::subagent_id_from_path(&sub_path) else {
+                    continue;
+                };
+                let content = fs::read_to_string(&sub_path).unwrap_or_default();
+                let last_pos = u64::try_from(content.len()).unwrap_or(u64::MAX);
+                let finished = subagent_content_is_finished(&content);
+                let meta = skein_harness::claude::read_subagent_meta(&sub_path);
+                let (agent_type, description) =
+                    meta.map_or((None, None), |m| (m.agent_type, m.description));
+                if !finished {
+                    initial_subagent_starts.push(ClaudeEvent::SubagentStart {
+                        agent_id: agent_id.clone(),
+                        agent_type: agent_type.clone(),
+                        description: description.clone(),
+                    });
+                }
+                initial_subagents.insert(
+                    agent_id,
+                    SubagentTail {
+                        path: sub_path,
+                        last_pos,
+                        partial: String::new(),
+                        finished,
+                        agent_type,
+                        description,
+                        // Seeded at attach, jumped straight to EOF —
+                        // see the field doc on `started_ms`.
+                        started_ms: None,
+                        started_ms_resolved: true,
+                        last_ts_ms: 0,
+                    },
+                );
+            }
+        }
+
         let state = Arc::new(Mutex::new(TailState {
             path,
             last_pos,
@@ -308,6 +465,8 @@ impl ClaudeEventsManager {
             attached,
             in_assistant_turn: false,
             actions,
+            subagents_dir: subagents_dir_opt.clone(),
+            subagents: initial_subagents,
         }));
         let cb_state = Arc::clone(&state);
         let on_event = Arc::new(on_event);
@@ -343,6 +502,24 @@ impl ClaudeEventsManager {
             .watch(parent_ref, RecursiveMode::NonRecursive)
             .map_err(ClaudeEventsError::from_err)?;
 
+        // Arm the subagents-dir watch on the same debouncer — notify
+        // supports several watched paths on one watcher, and the same
+        // `tick` closure above fires for either. Same additive-only
+        // rule as directory creation above: a failure here disables
+        // subagent tailing for this attach (clearing the state's
+        // `subagents_dir`) rather than failing `attach`.
+        if let Some(dir) = &subagents_dir_opt
+            && let Err(e) = debouncer.watcher().watch(dir, RecursiveMode::NonRecursive)
+        {
+            tracing::warn!(
+                dir = %dir.display(),
+                error = %e,
+                "claude_events: could not watch subagents dir; subagent telemetry disabled for this attach"
+            );
+            state.lock().subagents_dir = None;
+            subagents_dir_opt = None;
+        }
+
         // Emit the synthetic initial event from the history probe
         // *after* arming the watcher — so if the file grows between
         // probe and arm, the tick that follows picks up the delta
@@ -352,6 +529,14 @@ impl ClaudeEventsManager {
         // expectation.
         if let Some(event) = initial_event {
             on_event(event);
+        }
+        // Same reasoning, for the subagents discovered above: only
+        // emit if the watch actually armed (otherwise `subagents_dir`
+        // was cleared and disk state is untracked from here on).
+        if subagents_dir_opt.is_some() {
+            for event in initial_subagent_starts {
+                on_event(event);
+            }
         }
 
         // One immediate tick to catch anything written between the
@@ -485,11 +670,268 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
         }
     }
     s.in_assistant_turn = in_assistant_turn;
+
+    // Subagent transcripts, after the main file — same lock, same
+    // events vec, so consumers see main-session events first and
+    // subagent events second within one tick.
+    tick_subagents(&mut s, &mut events);
     drop(s);
 
     for event in events {
         on_event(event);
     }
+}
+
+/// Subagent-transcript half of `tick`: walks every `agent-*.jsonl`
+/// under `state.subagents_dir`, tailing each exactly like the main
+/// file (byte offset + carried partial line), and appends any
+/// `SubagentStart`/`SubagentToolResult`/`SubagentEnd` events to
+/// `events`. Called under the same lock `tick` already holds — never
+/// locks independently.
+///
+/// A `None` `subagents_dir` (creation or watch failed at attach, or
+/// this session never delegated and the dir was never armed) is a
+/// silent no-op: subagent telemetry is strictly additive and must
+/// never affect the main tail.
+///
+/// Also persists (and, live, broadcasts) one `subagent_end`
+/// `harness_actions` row per `SubagentEnd` — mirroring how `tick`'s
+/// main-file loop feeds `s.actions` — so the Live Context feed gets a
+/// "subagent finished" row (epic #298). This only ever runs from a
+/// live tick, never from attach-time disk seeding: a subagent already
+/// finished on disk when `attach_at` seeds `initial_subagents` never
+/// enters this function's terminal-row branch at all, because its
+/// `finished` flag is already `true` and its rows are never re-read.
+fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
+    let Some(dir) = s.subagents_dir.clone() else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut subagent_end_actions: Vec<crate::harness_actions_claude::ExtractedAction> = Vec::new();
+    for entry in entries.flatten() {
+        let sub_path = entry.path();
+        let Some(agent_id) = skein_harness::claude::subagent_id_from_path(&sub_path) else {
+            continue;
+        };
+        seen.insert(agent_id.clone());
+
+        if !s.subagents.contains_key(&agent_id) {
+            // A transcript we haven't seen before — a fresh
+            // delegation since attach (or since the last tick).
+            let meta = skein_harness::claude::read_subagent_meta(&sub_path);
+            let (agent_type, description) =
+                meta.map_or((None, None), |m| (m.agent_type, m.description));
+            events.push(ClaudeEvent::SubagentStart {
+                agent_id: agent_id.clone(),
+                agent_type: agent_type.clone(),
+                description: description.clone(),
+            });
+            s.subagents.insert(
+                agent_id.clone(),
+                SubagentTail {
+                    path: sub_path.clone(),
+                    last_pos: 0,
+                    partial: String::new(),
+                    finished: false,
+                    agent_type,
+                    description,
+                    started_ms: None,
+                    started_ms_resolved: false,
+                    last_ts_ms: 0,
+                },
+            );
+        }
+
+        let Some(tail) = s.subagents.get_mut(&agent_id) else {
+            continue;
+        };
+
+        // `tick` fires on ANY watched-path change — including ordinary
+        // main-transcript writes that have nothing to do with
+        // subagents — and finished entries are never removed from
+        // `s.subagents` (the re-open transition below depends on them
+        // surviving). Left unchecked, a long session with many
+        // delegations pays an open+seek+read for every quiet subagent
+        // file on every single tick, all under the tail lock. Stat
+        // first and skip straight to the next entry when the file's
+        // length hasn't moved since we last read it — a `stat` is far
+        // cheaper than an `open`+`read`, and it helps a live-but-quiet
+        // tail just as much as a finished one. A stat failure is not
+        // proof there's nothing new, so it falls through to the normal
+        // open path below rather than skipping — a skip must never
+        // cost us data.
+        if let Ok(meta) = fs::metadata(&tail.path)
+            && meta.len() == tail.last_pos
+        {
+            continue;
+        }
+
+        let Ok(mut file) = fs::File::open(&tail.path) else {
+            continue;
+        };
+        if let Ok(meta) = file.metadata()
+            && meta.len() < tail.last_pos
+        {
+            tail.last_pos = 0;
+            tail.partial.clear();
+        }
+        if file.seek(SeekFrom::Start(tail.last_pos)).is_err() {
+            continue;
+        }
+        let mut buf = String::new();
+        let Ok(bytes) = file.read_to_string(&mut buf) else {
+            // UTF-8 decode failed somewhere mid-file — same story as
+            // the main tail's identical guard in `tick`: we landed
+            // mid multi-byte char. Leave `last_pos` where it is and
+            // wait for the next tick to pick up a full line; logged
+            // at trace so it's diagnosable without being noisy.
+            tracing::trace!(path = %tail.path.display(), "claude_events: subagent utf8 mid-line; retrying next tick");
+            continue;
+        };
+        let advance: u64 = u64::try_from(bytes).unwrap_or(u64::MAX);
+        tail.last_pos = tail.last_pos.saturating_add(advance);
+
+        tail.partial.push_str(&buf);
+        let drained = std::mem::take(&mut tail.partial);
+        let mut lines = drained.split('\n').peekable();
+        while let Some(line) = lines.next() {
+            if lines.peek().is_none() {
+                tail.partial.push_str(line);
+                break;
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                continue;
+            };
+            let row_ts = skein_harness::claude::timestamp_ms(&value);
+            if !tail.started_ms_resolved {
+                tail.started_ms = row_ts;
+                tail.started_ms_resolved = true;
+            }
+            if let Some(ts) = row_ts {
+                tail.last_ts_ms = ts;
+            }
+            if skein_harness::claude::subagent_row_is_terminal(&value) {
+                if !tail.finished {
+                    tail.finished = true;
+                    events.push(ClaudeEvent::SubagentEnd {
+                        agent_id: agent_id.clone(),
+                        agent_type: tail.agent_type.clone(),
+                        description: tail.description.clone(),
+                    });
+                    // Feed a `subagent_end` row into the activity feed
+                    // (epic #298). The delegation itself already
+                    // renders via the main transcript's `Agent`
+                    // tool_call row (`AgentRow`, toolRows.tsx) — what's
+                    // missing is the other end for a *background*
+                    // subagent: its `AgentRow` lands at launch
+                    // (`toolUseResult.status == "async_launched"`) and
+                    // nothing ever marks completion. A second
+                    // "delegated" row would just duplicate the
+                    // existing one, so this is "finished" only.
+                    let duration_ms = tail
+                        .started_ms
+                        .map(|start| tail.last_ts_ms.saturating_sub(start));
+                    let mut payload = serde_json::json!({
+                        "agent_id": agent_id,
+                        "agent_type": tail.agent_type,
+                        "description": tail.description,
+                    });
+                    if let Some(duration_ms) = duration_ms
+                        && let Some(obj) = payload.as_object_mut()
+                    {
+                        obj.insert("duration_ms".into(), serde_json::json!(duration_ms));
+                    }
+                    subagent_end_actions.push(crate::harness_actions_claude::ExtractedAction {
+                        kind: crate::db::action_kind::SUBAGENT_END,
+                        timestamp_ms: tail.last_ts_ms,
+                        payload: payload.to_string(),
+                        source: None,
+                    });
+                }
+            } else if tail.finished {
+                // More rows arrived after a terminal one — a
+                // follow-up delegation to the same id. Live again.
+                // Reuses the cached `agent_type`/`description` from
+                // this id's first appearance rather than re-reading
+                // the `.meta.json` sidecar — on the assumption Claude
+                // never changes an id's meta after the fact.
+                tail.finished = false;
+                events.push(ClaudeEvent::SubagentStart {
+                    agent_id: agent_id.clone(),
+                    agent_type: tail.agent_type.clone(),
+                    description: tail.description.clone(),
+                });
+            }
+            if is_subagent_tool_result_row(&value) {
+                events.push(ClaudeEvent::SubagentToolResult {
+                    agent_id: agent_id.clone(),
+                });
+            }
+        }
+    }
+
+    // A transcript that vanished (pruned/rotated — not observed in
+    // practice, but defensive symmetry with the main tail): drop it
+    // from the map, no event. Nothing downstream needs to be told a
+    // file disappeared; the last event it emitted already said
+    // whether it was live or finished.
+    s.subagents.retain(|id, _| seen.contains(id));
+
+    // Persist (and, live, broadcast) any `subagent_end` rows collected
+    // above — same sink and same `emit` semantics as the main tail's
+    // `persist_extracted(ap, extracted, true)` call in `tick`. `None`
+    // for the phase-only test constructor, in which case this is a
+    // silent no-op (nothing to persist to).
+    if let Some(ap) = s.actions.as_ref() {
+        persist_extracted(ap, subagent_end_actions, true);
+    }
+}
+
+/// Scans every complete line in `content` and returns whether the
+/// *last* one is terminal (see
+/// `skein_harness::claude::subagent_row_is_terminal`). Used to seed a
+/// subagent's `finished` state from what's already on disk at attach
+/// time, mirroring the per-row logic `tick_subagents` applies while
+/// tailing live.
+fn subagent_content_is_finished(content: &str) -> bool {
+    let mut finished = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        finished = skein_harness::claude::subagent_row_is_terminal(&value);
+    }
+    finished
+}
+
+/// A `user` row whose `message.content` carries a `tool_result` block
+/// — a tool call inside a subagent's own turn just returned. This is
+/// what backs `ClaudeEvent::SubagentToolResult`; see its doc comment
+/// for why it exists and what it must not be read as.
+fn is_subagent_tool_result_row(value: &serde_json::Value) -> bool {
+    if value.get("type").and_then(serde_json::Value::as_str) != Some("user") {
+        return false;
+    }
+    value
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|b| b.get("type").and_then(serde_json::Value::as_str) == Some("tool_result"))
+        })
 }
 
 /// One-shot historical scan of the JSONL — runs once on attach
@@ -1706,5 +2148,486 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    // ── subagent tailing (#276) ────────────────────────────────────
+
+    /// Like `make_adapter`, but the main transcript already has one
+    /// row on disk before `attach_at` runs. Subagent-tailing tests
+    /// want `attached == true` from the start — otherwise `tick`
+    /// returns before it ever reaches `tick_subagents` (see the early
+    /// `if !s.attached` return), and a subagents-dir-only change
+    /// would silently be missed until the main file also gets its
+    /// first write. Production sessions always write the main file
+    /// before delegating, so this mirrors reality, not just the test.
+    fn make_adapter_with_existing_main(
+        dir: &TempDir,
+    ) -> (ClaudeEventsManager, PathBuf, mpsc::Receiver<ClaudeEvent>) {
+        let path = dir.path().join("session.jsonl");
+        {
+            let mut f = fs::File::create(&path).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"user","sessionId":"x","message":{{"content":[{{"type":"text","text":"hi"}}]}}}}"#
+            )
+            .unwrap();
+            f.sync_all().unwrap();
+        }
+        let (tx, rx) = mpsc::channel();
+        let manager = test_manager();
+        manager
+            .attach_at(
+                "harness-1".into(),
+                path.clone(),
+                move |event| {
+                    tx.send(event).unwrap();
+                },
+                None,
+            )
+            .unwrap();
+        (manager, path, rx)
+    }
+
+    #[test]
+    fn subagent_start_emitted_with_meta_from_sidecar() {
+        let dir = TempDir::new().unwrap();
+        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        // Drain the main-transcript bootstrap event before we care
+        // about subagent ones.
+        drain(&rx);
+
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        fs::write(
+            sub_dir.join("agent-a1.meta.json"),
+            r#"{"agentType":"explore","description":"Map the tailer"}"#,
+        )
+        .unwrap();
+        let mut f = fs::File::create(sub_dir.join("agent-a1.jsonl")).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","isSidechain":true,"agentId":"a1","message":{{"stop_reason":"tool_use","content":[]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+
+        let events = drain(&rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ClaudeEvent::SubagentStart { agent_id, agent_type, description }
+                    if agent_id == "a1"
+                        && agent_type.as_deref() == Some("explore")
+                        && description.as_deref() == Some("Map the tailer")
+            )),
+            "expected SubagentStart with sidecar meta, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn subagent_start_emitted_without_sidecar() {
+        let dir = TempDir::new().unwrap();
+        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        // No .meta.json sidecar written for this one.
+        let mut f = fs::File::create(sub_dir.join("agent-a2.jsonl")).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","isSidechain":true,"agentId":"a2","message":{{"stop_reason":"tool_use","content":[]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+
+        let events = drain(&rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ClaudeEvent::SubagentStart { agent_id, agent_type, description }
+                    if agent_id == "a2" && agent_type.is_none() && description.is_none()
+            )),
+            "expected SubagentStart with no metadata, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn subagent_end_emitted_once_not_per_tick() {
+        let dir = TempDir::new().unwrap();
+        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        let mut f = fs::File::create(sub_dir.join("agent-a3.jsonl")).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","isSidechain":true,"agentId":"a3","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+
+        let events = drain(&rx);
+        let end_count = events
+            .iter()
+            .filter(|e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "a3"))
+            .count();
+        assert_eq!(
+            end_count, 1,
+            "expected exactly one SubagentEnd, got {events:?}"
+        );
+
+        // Force another tick that has nothing new to say about the
+        // subagent — append to the main transcript, which shares the
+        // same debouncer/callback as the subagents dir.
+        {
+            let mut mf = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            writeln!(
+                mf,
+                r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+            )
+            .unwrap();
+            mf.sync_all().unwrap();
+        }
+
+        let more = drain(&rx);
+        assert!(
+            !more.iter().any(
+                |e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "a3")
+            ),
+            "SubagentEnd re-fired on a later tick, got {more:?}"
+        );
+    }
+
+    /// `tick_subagents` stats a subagent file before opening it and
+    /// skips the open/seek/read entirely when nothing has grown since
+    /// `last_pos` — the skip must never wedge the tail. A no-growth
+    /// tick produces no duplicate events, and a later tick where the
+    /// file DOES grow is still read correctly.
+    #[test]
+    fn subagent_tail_skip_on_no_growth_does_not_wedge_later_reads() {
+        let dir = TempDir::new().unwrap();
+        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub_path = sub_dir.join("agent-a6.jsonl");
+        {
+            let mut f = fs::File::create(&sub_path).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"assistant","isSidechain":true,"agentId":"a6","message":{{"stop_reason":"tool_use","content":[]}}}}"#
+            )
+            .unwrap();
+            f.sync_all().unwrap();
+        }
+
+        let events = drain(&rx);
+        assert!(
+            events.iter().any(
+                |e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "a6")
+            ),
+            "expected SubagentStart for a6, got {events:?}"
+        );
+
+        // A tick with nothing new for the subagent — append only to
+        // the main transcript, which shares the same debouncer/
+        // callback and still drives `tick_subagents` once per tick.
+        {
+            let mut mf = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            writeln!(
+                mf,
+                r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+            )
+            .unwrap();
+            mf.sync_all().unwrap();
+        }
+        let quiet = drain(&rx);
+        assert!(
+            !quiet.iter().any(
+                |e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "a6")
+            ),
+            "SubagentStart re-fired on a no-growth tick, got {quiet:?}"
+        );
+
+        // The subagent file DOES grow now — a stat-skip on the
+        // previous tick must not have wedged `last_pos` such that this
+        // new row goes unread.
+        {
+            let mut f = fs::OpenOptions::new().append(true).open(&sub_path).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"assistant","isSidechain":true,"agentId":"a6","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+            )
+            .unwrap();
+            f.sync_all().unwrap();
+        }
+        let after_growth = drain(&rx);
+        let end_count = after_growth
+            .iter()
+            .filter(|e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "a6"))
+            .count();
+        assert_eq!(
+            end_count, 1,
+            "expected exactly one SubagentEnd after the file grew again, got {after_growth:?}"
+        );
+    }
+
+    /// A live subagent reaching a terminal row writes exactly one
+    /// `subagent_end` `harness_actions` row, with the expected payload
+    /// fields including a `duration_ms` computed from the first row's
+    /// timestamp on this transcript.
+    #[test]
+    fn subagent_end_persists_one_action_with_duration() {
+        let dir = TempDir::new().unwrap();
+        let jsonl = dir.path().join("session.jsonl");
+        let db_path = dir.path().join("test.db");
+
+        // `tick()` only reaches `tick_subagents` once the main
+        // transcript exists and the initial attach probe has seen it
+        // (see `!s.attached` in `tick`) — a session with no main file
+        // yet never ticks at all, subagents included. Give it one row
+        // so the watcher has something to attach to, mirroring
+        // `main_transcript_events_unaffected_by_a_subagents_dir`.
+        let _manager = make_persisting_adapter(jsonl.clone(), &db_path, "h1", "r1");
+        {
+            let mut f = fs::File::create(&jsonl).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"assistant","sessionId":"x","timestamp":"2026-05-15T21:16:19.000Z","message":{{"stop_reason":"tool_use","content":[]}}}}"#
+            )
+            .unwrap();
+            f.sync_all().unwrap();
+        }
+
+        let sub_dir = skein_harness::claude::subagents_dir(&jsonl).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        fs::write(
+            sub_dir.join("agent-a1.meta.json"),
+            r#"{"agentType":"explore","description":"Map the tailer"}"#,
+        )
+        .unwrap();
+        let mut f = fs::File::create(sub_dir.join("agent-a1.jsonl")).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","isSidechain":true,"agentId":"a1","timestamp":"2026-05-15T21:16:20.000Z","message":{{"stop_reason":"tool_use","content":[]}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","isSidechain":true,"agentId":"a1","timestamp":"2026-05-15T21:16:25.000Z","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+
+        // Give the debouncer a moment to tick and persist.
+        thread::sleep(Duration::from_secs(2));
+
+        let db = crate::db::Database::open(&db_path).unwrap();
+        let actions = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
+        let ends: Vec<_> = actions
+            .iter()
+            .filter(|a| a.kind == crate::db::action_kind::SUBAGENT_END)
+            .collect();
+        assert_eq!(
+            ends.len(),
+            1,
+            "expected exactly one subagent_end row, got {actions:?}"
+        );
+        let payload: serde_json::Value = serde_json::from_str(&ends[0].payload).unwrap();
+        assert_eq!(payload["agent_id"], "a1");
+        assert_eq!(payload["agent_type"], "explore");
+        assert_eq!(payload["description"], "Map the tailer");
+        assert_eq!(payload["duration_ms"], 5000);
+    }
+
+    /// A subagent already finished on disk at attach time must not get
+    /// a synthetic `subagent_end` action — mirrors
+    /// `attach_emits_start_only_for_the_unfinished_subagent`'s phase
+    /// assertion, but for the persisted action row.
+    #[test]
+    fn attach_does_not_persist_subagent_end_for_already_finished_subagent() {
+        let dir = TempDir::new().unwrap();
+        let jsonl = dir.path().join("session.jsonl");
+        let db_path = dir.path().join("test.db");
+        {
+            let mut f = fs::File::create(&jsonl).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"tool_use","content":[]}}}}"#
+            )
+            .unwrap();
+            f.sync_all().unwrap();
+        }
+        let sub_dir = skein_harness::claude::subagents_dir(&jsonl).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        // Finished before attach — last row has a terminal stop_reason.
+        fs::write(
+            sub_dir.join("agent-fin.jsonl"),
+            "{\"type\":\"assistant\",\"isSidechain\":true,\"agentId\":\"fin\",\"timestamp\":\"2026-05-15T21:16:20.000Z\",\"message\":{\"stop_reason\":\"end_turn\",\"content\":[]}}\n",
+        )
+        .unwrap();
+
+        let _manager = make_persisting_adapter(jsonl, &db_path, "h1", "r1");
+        thread::sleep(Duration::from_secs(2));
+
+        let db = crate::db::Database::open(&db_path).unwrap();
+        let actions = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
+        assert!(
+            !actions
+                .iter()
+                .any(|a| a.kind == crate::db::action_kind::SUBAGENT_END),
+            "attach must not synthesize a subagent_end action for an already-finished subagent, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn subagent_tool_result_emitted_for_tool_result_row() {
+        let dir = TempDir::new().unwrap();
+        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        let mut f = fs::File::create(sub_dir.join("agent-a4.jsonl")).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"user","isSidechain":true,"agentId":"a4","message":{{"content":[{{"type":"tool_result","tool_use_id":"t1","content":"ok"}}]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+
+        let events = drain(&rx);
+        assert!(
+            events.iter().any(
+                |e| matches!(e, ClaudeEvent::SubagentToolResult { agent_id } if agent_id == "a4")
+            ),
+            "expected SubagentToolResult, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn attach_emits_start_only_for_the_unfinished_subagent() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        {
+            let mut f = fs::File::create(&path).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"tool_use","content":[]}}}}"#
+            )
+            .unwrap();
+            f.sync_all().unwrap();
+        }
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        // Finished before attach — last row has a terminal stop_reason.
+        fs::write(
+            sub_dir.join("agent-fin.jsonl"),
+            "{\"type\":\"assistant\",\"isSidechain\":true,\"agentId\":\"fin\",\"message\":{\"stop_reason\":\"end_turn\",\"content\":[]}}\n",
+        )
+        .unwrap();
+        // Still running — last row has no terminal stop_reason.
+        fs::write(
+            sub_dir.join("agent-live.jsonl"),
+            "{\"type\":\"assistant\",\"isSidechain\":true,\"agentId\":\"live\",\"message\":{\"stop_reason\":\"tool_use\",\"content\":[]}}\n",
+        )
+        .unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let manager = test_manager();
+        manager
+            .attach_at("h1".into(), path, move |e| tx.send(e).unwrap(), None)
+            .unwrap();
+
+        let events = drain_brief(&rx);
+        assert!(
+            events.iter().any(
+                |e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "live")
+            ),
+            "expected SubagentStart for the unfinished subagent, got {events:?}"
+        );
+        assert!(
+            !events.iter().any(
+                |e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "fin")
+            ),
+            "the already-finished subagent must not get a synthetic SubagentStart, got {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ClaudeEvent::SubagentEnd { .. })),
+            "attach should not synthesize a SubagentEnd for a subagent that was already finished, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn subagent_line_split_across_two_ticks_is_reassembled() {
+        let dir = TempDir::new().unwrap();
+        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub_path = sub_dir.join("agent-a5.jsonl");
+        {
+            let mut f = fs::File::create(&sub_path).unwrap();
+            f.write_all(
+                br#"{"type":"assistant","isSidechain":true,"agentId":"a5","message":{"stop_reason":"#,
+            )
+            .unwrap();
+            f.sync_all().unwrap();
+        }
+        thread::sleep(Duration::from_millis(150));
+        {
+            let mut f = fs::OpenOptions::new().append(true).open(&sub_path).unwrap();
+            f.write_all(b"\"end_turn\",\"content\":[]}}\n").unwrap();
+            f.sync_all().unwrap();
+        }
+
+        let events = drain(&rx);
+        let end_count = events
+            .iter()
+            .filter(|e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "a5"))
+            .count();
+        assert_eq!(
+            end_count, 1,
+            "expected the reassembled line to parse into exactly one SubagentEnd, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn main_transcript_events_unaffected_by_a_subagents_dir() {
+        let dir = TempDir::new().unwrap();
+        let (_mgr, path, rx) = make_adapter(&dir);
+
+        // A session that has already delegated: subagents dir exists
+        // with a live transcript in it before the main file gets its
+        // first (and, here, only) row.
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        fs::write(
+            sub_dir.join("agent-a9.jsonl"),
+            "{\"type\":\"assistant\",\"isSidechain\":true,\"agentId\":\"a9\",\"message\":{\"stop_reason\":\"tool_use\",\"content\":[]}}\n",
+        )
+        .unwrap();
+
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"end_turn","content":[{{"type":"text","text":"done"}}]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+
+        let events = drain(&rx);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ClaudeEvent::AwaitingPrompt)),
+            "main-transcript AwaitingPrompt must still fire with a subagents dir present, got {events:?}"
+        );
     }
 }

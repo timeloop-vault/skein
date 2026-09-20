@@ -69,7 +69,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     ├── crates/skein-harness/        # Tauri-free reader for the harnesses' own stores (#209):
     │   ├── src/{claude,opencode}.rs #   Claude JSONL paths/rows/usage/cost-state + subagent
     │                                #   discovery; opencode.db sessions/tree/assistant messages.
-    │                                #   Shared with the standalone cost tooling — parser fixes go HERE
+    │                                #   Since #276: the agent-<id>.meta.json sidecar parse
+    │                                #   (undocumented upstream, every field optional) and the
+    │                                #   terminal-stop_reason check that tells a subagent
+    │                                #   transcript's own end of turn from its exit — it has no
+    │                                #   user to await, so those are the same event. Shared with
+    │                                #   the standalone cost tooling — parser fixes go HERE
     │   └── src/agents/              #   Which agents each CLI accepts at `--agent` (#246).
     │                                #   Names come from the CLI itself — an unknown --agent makes
     │                                #   Claude enumerate its own list; opencode has `agent list`.
@@ -114,6 +119,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   ├── harnessActivity.ts   # Source of truth for harness phase (spawning/running/
     │   │   │                        #   idle/waiting/exited); L2a idle heuristic + L2b
     │   │   │                        #   patterns + L2c authoritative adapters
+    │   │   ├── subagents.ts         # Per-harness live-Claude-subagent registry + useLiveSubagents
+    │   │   │                        #   (#276, epic #298). Disk is the source of truth: the
+    │   │   │                        #   adapter re-derives the live set from the transcripts on
+    │   │   │                        #   every attach, so `record` is idempotent and a restart
+    │   │   │                        #   replay never looks like a second start. Exists so #277
+    │   │   │                        #   (subagent-aware phase/notification policy) has something
+    │   │   │                        #   clean to read — nothing here yet changes phase or fires
+    │   │   │                        #   a notification off subagent activity
     │   │   ├── harnessCmd.ts        # Harness argv: cmdForKind (fresh spawn) + resumeCmd /
     │   │   │                        #   withResumeCmds / unarchiveRoomTransform. Rebuilt from
     │   │   │                        #   the harness RECORD, never by matching the previous
@@ -244,7 +257,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   NO approve, both refused BY NAME; auth = the
     │       │                        #   per-room bearer token, which IS the scope.
     │       │                        #   See docs/agent-api.md
-    │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1)
+    │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1). Since #276,
+    │       │                                   #   tails every `subagents/agent-*.jsonl` sidecar
+    │       │                                   #   alongside the main file on the same debouncer,
+    │       │                                   #   re-deriving the live set from disk on every
+    │       │                                   #   attach — SubagentStart/ToolResult/End, plus one
+    │       │                                   #   `subagent_end` harness_actions row per finish
     │       ├── src/harness_events_opencode.rs  # SSE client → OpencodeEvent (L2c-2)
     │       ├── src/harness_actions_claude.rs   # JSONL → harness_actions rows (#80)
     │       ├── src/harness_actions_opencode.rs # SSE/opencode.db → harness_actions rows (#80)
@@ -313,6 +331,31 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   paths and row shapes live: `crates/skein-harness` (#209)** — parser
   fixes go there, not in the adapters, so the app and any standalone
   cost tooling stay in sync.
+  **Subagent awareness (#276, epic #298):** the main transcript never
+  carries a subagent's own rows — zero sidechain rows in every session
+  sampled; the two `isSidechain` filters in
+  `claude.rs`/`harness_events_claude.rs` are defensive legacy, not
+  load-bearing. Each delegation gets its own sibling file,
+  `<sid>/subagents/agent-<id>.jsonl`, with an undocumented
+  `agent-<id>.meta.json` sidecar giving `agentType`/`description`
+  (`crates/skein-harness`: every field optional, unknown keys ignored on
+  purpose — the shape belongs to Claude Code, not Skein).
+  `harness_events_claude.rs` tails every such file on the same debouncer
+  as the main one and re-derives the live set from the transcripts on
+  every attach, never from a `SubagentStart`/`SubagentStop` hook pair —
+  #276 shipped without the hooks it originally specified, because a
+  hook-fed set of outstanding ids can drift from reality with nothing to
+  repair it (parked in #309, which also records that upstream
+  `SubagentStop` is reported not to always fire). A subagent has no user
+  to await, so its own end of turn IS its exit: a terminal `stop_reason`
+  (`end_turn`/`stop_sequence`/`max_tokens`) means done, verified 221/221
+  on real transcripts — nothing polls mtime. The frontend mirrors the
+  live set in a pure per-harness registry, `subagents.ts`; it changes no
+  phase and fires no notification on its own — that policy is #277's.
+  The feed already renders the delegation via the main transcript's
+  `Agent` tool_call row, so the only new row is `subagent_end`: a
+  *background* subagent's `AgentRow` lands at launch and nothing else
+  ever marks it finished.
   **`permission` is its own phase (#86)**, distinct from `waiting`
   (end of turn / needs input), and outranks it everywhere. Claude's
   JSONL records nothing when a dialog opens, so the signal is a
@@ -325,6 +368,42 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   gets exact `permission.asked`/`replied` ids; its `question.*`
   events map to `waiting`. Injection off = no Claude permission
   signal, just `waiting` as before.
+  A subagent's own `PermissionRequest` fires the same hook — POSTing to
+  `/api/harness/permission` exactly like a main-session dialog — but the
+  *answering* tool result lands only in the subagent's own transcript,
+  which nothing in the main tail reads, so the keystroke fallback can't
+  clear it either, and a mouse click reaches it even less (a click
+  arrives via xterm's `onData`, not `onKey`, so it was never going to be
+  seen). That was epic #298's headline bug: the badge stuck for minutes
+  on a subagent dialog nobody could answer with a keystroke. The fix is
+  the subagent's own answering tool result: `SubagentToolResult` calls
+  `harnessActivity.clearPermission`, a no-op unless the phase is already
+  `permission`, moving it only to `running` — never
+  `waiting`/`idle`/`spawning`/`exited`, and never a notification,
+  because a subagent tool result proves only that its own gate is gone,
+  not that the harness is doing anything in particular.
+  That "own gate" claim needed enforcing, and review caught that it
+  wasn't: the hook payload carries `agent_id` when it fires inside a
+  subagent, Skein reads it (`agent_api/http.rs`), ships it on
+  `skein://harness-permission` as `agentId`, and stores it as
+  `permissionAgentId`; `clearPermission(id, source, agentId)` now clears
+  only when the stored `permissionAgentId` is `null` **or** equals the
+  reporting subagent's id. The null case still clears unconditionally —
+  that is a main-session dialog, or a CLI that didn't report the id, and
+  falling back to the old behaviour is the safe direction, since a
+  dialog cleared slightly early is recoverable while one stuck for
+  minutes is the bug being fixed. The bug this correlation prevents,
+  worth naming because it is non-obvious: two background subagents, B
+  opens a dialog, A returns an unrelated tool result, and without
+  correlation A's result clears B's still-open dialog — the badge reads
+  "running" while the harness is actually blocked. Concurrent delegation
+  is exactly this epic's target workload. A user action (the decisive
+  keystroke) and adapter loss (`releasePermission`) still clear
+  unconditionally, whoever opened the dialog.
+  `/api/harness/permission` now writes one `tracing::info!` per request
+  (#176) — the 2026-09-19 incident could only be reconstructed from the
+  database because it did not.
+  All further subagent phase/notification policy stays with #277.
   The Live Context store backfills the newest 500 rows per room and
   appends live ones; the Plan and Activity cards both render from that
   one array. It is **room**-scoped, so the Plan card shows every
@@ -561,14 +640,15 @@ stderr; `RUST_LOG` overrides the default `info` filter.
 ## Current state
 
 Chapters 1–8 all shipped: real PTYs and worktrees, sqlite-persisted
-rooms with archive/reopen, harness conversation resume across
-restarts, the Live Context right pane, notifications (badge/toast/OS),
-Windows + Linux support, keyboard-driven navigation, distribution with
-in-app auto-update, a `files` harness with a CodeMirror editor, and
-the review surface (baseline, review pane, agent API + MCP server,
-sign-off, config injection). What is open, what is next and what is
-known-weak is on GitHub — see "Where the work is" at the top. `git log`
-records what landed and when.
+rooms with archive/reopen, harness conversation resume across restarts,
+the Live Context right pane, notifications (badge/toast/OS), Windows +
+Linux support, keyboard-driven navigation, distribution with in-app
+auto-update, a `files` harness with a CodeMirror editor, the review
+surface (baseline, review pane, agent API + MCP server, sign-off, config
+injection), and Claude subagent awareness — a feed row for a finished
+delegation plus permission clearing for a subagent's own dialog (#276).
+What is open, what is next and what is known-weak is on GitHub — see
+"Where the work is" at the top. `git log` records what landed and when.
 
 ## Design references
 

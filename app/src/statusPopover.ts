@@ -34,6 +34,10 @@ interface Resolved {
 	 *  adapter could say. Only ever populated via the chip's live
 	 *  harnessId lookup — a lone status dot has no harness id to ask. */
 	tool: string | null;
+	/** #298: the subagent name when the `permission` dialog belongs to
+	 *  one rather than the main session. Same lookup restriction as
+	 *  `tool`. */
+	agentType: string | null;
 }
 
 export function attachStatusPopover(): () => void {
@@ -63,6 +67,7 @@ export function attachStatusPopover(): () => void {
 		let kind = isChip ? (el.dataset.kind ?? null) : null;
 		let status = isDot ? (el.dataset.status ?? null) : null;
 		let tool: string | null = null;
+		let agentType: string | null = null;
 		// #248: the chip carries its harness's agent label, already worded
 		// by `agentLabel` — the popover repeats it rather than deciding
 		// for itself what an opencode agent can be said to be.
@@ -83,6 +88,7 @@ export function attachStatusPopover(): () => void {
 			if (a) {
 				status = activityToStatus(a);
 				tool = a.permissionTool;
+				agentType = a.permissionAgentType;
 			}
 		}
 		// A lone status dot borrows its row's chip for the kind (harness
@@ -91,7 +97,7 @@ export function attachStatusPopover(): () => void {
 			const chips = el.closest<HTMLElement>(ROW_SEL)?.querySelectorAll<HTMLElement>(".h-chip");
 			if (chips?.length === 1) kind = chips[0]?.dataset.kind ?? null;
 		}
-		return kind || status ? { kind, status, agent, tool } : null;
+		return kind || status ? { kind, status, agent, tool, agentType } : null;
 	};
 
 	const render = (el: HTMLDivElement, c: Resolved) => {
@@ -116,7 +122,8 @@ export function attachStatusPopover(): () => void {
 		// #86: "permission needed" (+ tool) rather than the bare word —
 		// the dataset value stays the raw Status for the `pv-*` class,
 		// only the printed text goes through `statusLabel`.
-		if (c.status) seg("state", statusLabel(c.status as Status, c.tool), `pv-${c.status}`);
+		if (c.status)
+			seg("state", statusLabel(c.status as Status, c.tool, c.agentType), `pv-${c.status}`);
 	};
 
 	const onOver = (e: MouseEvent) => {

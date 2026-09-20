@@ -40,6 +40,7 @@ import { attachClaudeEvents, attachOpencodeEvents } from "./harnessEvents.ts";
 import { canInsertText, formatDroppedPaths, harnessInput, insertText } from "./harnessInput.ts";
 import type { GateResult } from "./harnessInput.ts";
 import { isAppShortcut, isMac, isWindows } from "./shortcuts.ts";
+import { subagents } from "./subagents.ts";
 import { decideClipboardAction, emptySelectionHint } from "./terminalClipboard.ts";
 import type { ClipboardPlatform } from "./terminalClipboard.ts";
 import type { HarnessKind } from "./types.ts";
@@ -848,6 +849,10 @@ export const LiveTerminal = ({
 			// change for "Enter for shell") re-runs the effect and
 			// re-records via spawned() above. Epic #50.
 			harnessActivity.forget(harnessId);
+			// #298: same lifetime as the activity record — the Rust
+			// side rediscovers live subagents fresh on the next
+			// attach, so nothing is lost by dropping the cache here.
+			subagents.forget(harnessId);
 		};
 	}, [mountKey]);
 

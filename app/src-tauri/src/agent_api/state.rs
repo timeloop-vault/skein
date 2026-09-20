@@ -50,6 +50,16 @@ pub struct HarnessPermission {
     pub harness_id: String,
     pub tool_name: Option<String>,
     pub agent_type: Option<String>,
+    /// Which subagent opened the dialog, when any did (`None` for a
+    /// main-session dialog). Lets the frontend avoid letting one
+    /// subagent's tool result clear another subagent's still-open
+    /// dialog (#276). Upstream documents `agent_id` as present only
+    /// inside a subagent call, confirmed on a live run (2026-09-20)
+    /// — so the frontend must still treat `None` as "clear as
+    /// before", never as "never clear": it legitimately means a
+    /// main-session dialog, and injection (#215) can be switched off
+    /// entirely.
+    pub agent_id: Option<String>,
 }
 
 impl AgentApiState {
@@ -89,6 +99,7 @@ impl AgentApiState {
         harness_id: &str,
         tool_name: Option<String>,
         agent_type: Option<String>,
+        agent_id: Option<String>,
     ) {
         let Some(app) = self.app.as_ref() else { return };
         if let Err(e) = app.emit(
@@ -98,6 +109,7 @@ impl AgentApiState {
                 harness_id: harness_id.to_owned(),
                 tool_name,
                 agent_type,
+                agent_id,
             },
         ) {
             tracing::warn!(room_id, harness_id, error = %e, "agent api: harness-permission emit failed");
