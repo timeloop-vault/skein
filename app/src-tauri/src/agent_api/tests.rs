@@ -1119,6 +1119,50 @@ async fn a_valid_permission_ping_answers_no_content() {
 }
 
 #[tokio::test]
+async fn a_permission_ping_with_agent_id_answers_no_content() {
+    // Subagent case (#276): `agent_id` is present only inside a
+    // subagent call, per Claude Code's own hook docs. There is no
+    // `AppHandle` in `fixture()` (see `AgentApiState::for_test`), so
+    // the emitted event payload isn't observable here — this only
+    // proves the route accepts and threads the field without erroring.
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let token = f.db.ensure_room_token("r1", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    let ok = http
+        .post(format!("{base}/api/harness/permission"))
+        .bearer_auth(&token)
+        .header(auth::HARNESS_HEADER, "h1")
+        .json(&json!({ "tool_name": "Bash", "agent_type": "general", "agent_id": "sub-1" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 204);
+}
+
+#[tokio::test]
+async fn a_permission_ping_with_no_agent_id_answers_no_content() {
+    // Main-session case: no `agent_id` in the payload at all.
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let token = f.db.ensure_room_token("r1", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    let ok = http
+        .post(format!("{base}/api/harness/permission"))
+        .bearer_auth(&token)
+        .header(auth::HARNESS_HEADER, "h1")
+        .json(&json!({ "tool_name": "Bash", "agent_type": "general" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 204);
+}
+
+#[tokio::test]
 async fn a_body_that_is_not_json_still_answers_no_content() {
     // The hook's payload shape is Claude Code's own, not ours to
     // police — a hook whose payload changes shape must not start

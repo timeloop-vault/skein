@@ -18,6 +18,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { TRANSITION_SOURCE, type TransitionSource, harnessActivity } from "./harnessActivity.ts";
 import { observedAgents } from "./harnessAgent.ts";
 import { type PendingPhase, pendingPrompts } from "./pendingPrompts.ts";
+import { subagents } from "./subagents.ts";
 
 /// Mirror of the Rust enum. `kind` is the serde tag from
 /// `harness_events_claude.rs`'s `ClaudeEvent`. Keep these in lock-step;
@@ -31,7 +32,26 @@ export type ClaudeEvent =
 	| { kind: "user_prompt" }
 	| { kind: "awaiting_prompt" }
 	| { kind: "attachment" }
-	| { kind: "session_end" };
+	| { kind: "session_end" }
+	// #298 — Claude subagents (Task tool). A subagent transcript
+	// appeared, or one was found still running at attach time
+	// (`subagent_start`, idempotent per `agent_id` — see
+	// `subagents.record`); it reached a terminal stop reason
+	// (`subagent_end`); it got a tool result, proof its own permission
+	// gate (if any) is gone (`subagent_tool_result`).
+	| {
+			kind: "subagent_start";
+			agent_id: string;
+			agent_type: string | null;
+			description: string | null;
+	  }
+	| { kind: "subagent_tool_result"; agent_id: string }
+	| {
+			kind: "subagent_end";
+			agent_id: string;
+			agent_type: string | null;
+			description: string | null;
+	  };
 
 /// Subscribe a Claude harness to its JSONL event stream. Marks the
 /// activity store as authoritative-source so the L2a idle tick stops
@@ -143,6 +163,37 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			// arrive from a file that is gone.
 			harnessActivity.releasePermission(harnessId, TRANSITION_SOURCE.AdapterDetached);
 			harnessActivity.detachAuthoritativeSource(harnessId);
+			return;
+		// #298: subagent bookkeeping only — none of these three may call
+		// `setRunningFromAdapter` or `setWaitingFromAdapter`. The parent
+		// (main-session) phase is deliberately left untouched here: a
+		// subagent starting, finishing, or getting a tool result says
+		// nothing about whether the main session is running, waiting, or
+		// idle, and guessing wrongly would fight whatever the main
+		// transcript's own events are already saying. All further
+		// phase/notification policy from subagent activity belongs to
+		// #277, which is deliberately not in scope here.
+		case "subagent_start":
+			subagents.record(harnessId, {
+				agentId: event.agent_id,
+				agentType: event.agent_type,
+				description: event.description,
+			});
+			return;
+		case "subagent_end":
+			subagents.finish(harnessId, event.agent_id);
+			return;
+		case "subagent_tool_result":
+			// The one narrow effect a subagent's own tool result is
+			// allowed: prove its own permission gate is gone — not a
+			// different subagent's, which `event.agent_id` lets
+			// `clearPermission` tell apart. See
+			// `harnessActivity.clearPermission`.
+			harnessActivity.clearPermission(
+				harnessId,
+				TRANSITION_SOURCE.L2c1ClaudeSubagentToolResult,
+				event.agent_id,
+			);
 			return;
 	}
 };

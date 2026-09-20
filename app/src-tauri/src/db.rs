@@ -173,6 +173,11 @@ pub mod action_kind {
     pub const USER_PROMPT: &str = "user_prompt";
     pub const COMPACTION: &str = "compaction";
     pub const REASONING: &str = "reasoning";
+    /// A subagent transcript reached its terminal row (epic #298). The
+    /// delegation itself already renders via the main transcript's
+    /// `Agent` `tool_call` row; this is the other end, for background
+    /// subagents where nothing else ever marks completion.
+    pub const SUBAGENT_END: &str = "subagent_end";
 }
 
 /// Mirrors the TS Room interface.

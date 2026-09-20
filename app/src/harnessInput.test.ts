@@ -29,6 +29,8 @@ const activity = (over: Partial<HarnessActivity> = {}): HarnessActivity => ({
 	authoritative: true,
 	tail: "",
 	permissionTool: null,
+	permissionAgentType: null,
+	permissionAgentId: null,
 	adapterHeard: true,
 	promptSubmittedAt: null,
 	adapterSilent: false,

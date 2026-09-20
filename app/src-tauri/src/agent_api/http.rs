@@ -312,11 +312,12 @@ async fn api_resolve(
 /// silent no-op.
 ///
 /// The body is Claude Code's own hook payload shape, not ours to
-/// police: only `tool_name` and `agent_type` are read out of it, and a
-/// body that fails to parse as JSON at all still succeeds — a hook that
-/// changes shape in a future Claude Code release must not start
-/// breaking the harness's turn. `tool_input` is deliberately never
-/// read; it can hold secrets a permission dialog is about to ask on.
+/// police: only `tool_name`, `agent_type` and `agent_id` are read out
+/// of it, and a body that fails to parse as JSON at all still succeeds
+/// — a hook that changes shape in a future Claude Code release must not
+/// start breaking the harness's turn. `tool_input` is deliberately
+/// never read; it can hold secrets a permission dialog is about to ask
+/// on.
 async fn api_harness_permission(
     State(state): State<Arc<AgentApiState>>,
     headers: HeaderMap,
@@ -346,7 +347,25 @@ async fn api_harness_permission(
         .get("agent_type")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    state.notify_harness_permission(&caller.room_id, &harness_id, tool_name, agent_type);
+    let agent_id = payload
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    tracing::info!(
+        harness_id = %harness_id,
+        room_id = %caller.room_id,
+        tool_name = tool_name.as_deref(),
+        agent_type = agent_type.as_deref(),
+        agent_id = agent_id.as_deref(),
+        "agent api: harness permission ping"
+    );
+    state.notify_harness_permission(
+        &caller.room_id,
+        &harness_id,
+        tool_name,
+        agent_type,
+        agent_id,
+    );
     StatusCode::NO_CONTENT.into_response()
 }
 

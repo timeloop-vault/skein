@@ -176,16 +176,20 @@ the harness id **is** what the event is about, so it must be present
 *and* name a harness the room actually contains, or the answer is `400`
 rather than a silent no-op.
 
-The body is read leniently: only `tool_name` and `agent_type` are
-pulled out of it (both optional), and a body that is not JSON at all
-still answers `204` — the hook's payload shape belongs to Claude Code,
-not to Skein, and a future shape change must not start breaking the
-harness's turn. `tool_input` is never read or logged; a permission
-dialog is often asking about the very thing that would be a secret.
+The body is read leniently: only `tool_name`, `agent_type` and
+`agent_id` are pulled out of it (all optional), and a body that is not
+JSON at all still answers `204` — the hook's payload shape belongs to
+Claude Code, not to Skein, and a future shape change must not start
+breaking the harness's turn. `tool_input` is never read or logged; a
+permission dialog is often asking about the very thing that would be a
+secret. `agent_id` is present only when the hook fires inside a
+subagent — it is what lets Skein tell whose dialog is open, so one
+subagent's tool result can't clear another's (#276, epic #298).
 
 A successful call emits `skein://harness-permission` —
-`{ roomId, harnessId, toolName: string | null, agentType: string | null }`
-— and answers `204 No Content`.
+`{ roomId, harnessId, toolName: string | null, agentType: string | null, agentId: string | null }`
+— and answers `204 No Content`. The route also writes one
+`tracing::info!` per request (#176).
 
 ## The two things it will not do
 

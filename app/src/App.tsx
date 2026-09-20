@@ -121,6 +121,9 @@ interface ToastEntry {
 	/** Permission variant only: the tool name when the adapter could
 	 *  say (opencode's permission-asked event carries none). */
 	tool?: string | undefined;
+	/** Permission variant only: the subagent name when the dialog
+	 *  belongs to one rather than the main session (#298). */
+	agentType?: string | undefined;
 }
 
 const TOAST_DISMISS_MS = 6_000;
@@ -222,9 +225,11 @@ const Toast = ({
 	// #86: "permission" reads as "needs permission" (+ tool when known)
 	// rather than the bare phase word — same reasoning as `statusLabel`,
 	// just phrased for a subtitle instead of a status-bar segment.
+	// #298: the subagent name (when known) joins the tool name.
+	const permissionParts = [toast.agentType, toast.tool].filter((p): p is string => p !== undefined);
 	const sub =
 		toast.state === "permission"
-			? `needs permission${toast.tool ? ` · ${toast.tool}` : ""}`
+			? `needs permission${permissionParts.length > 0 ? ` · ${permissionParts.join(" · ")}` : ""}`
 			: toast.state;
 	return (
 		<div
@@ -319,7 +324,7 @@ const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
 		: harness.status;
 	// #86: "permission needed" (+ tool) rather than the bare word.
 	const label = activity
-		? statusLabel(activityToStatus(activity), activity.permissionTool)
+		? statusLabel(activityToStatus(activity), activity.permissionTool, activity.permissionAgentType)
 		: harness.status;
 	return (
 		<span className="seg">
@@ -2353,11 +2358,14 @@ export default function App() {
 			harnessId: string;
 			toolName: string | null;
 			agentType: string | null;
+			agentId: string | null;
 		}>("skein://harness-permission", (event) => {
 			harnessActivity.setPermissionFromAdapter(
 				event.payload.harnessId,
 				TRANSITION_SOURCE.L2c1ClaudePermission,
 				event.payload.toolName,
+				event.payload.agentType,
+				event.payload.agentId,
 			);
 		});
 		return () => {
@@ -2499,7 +2507,9 @@ export default function App() {
 					roomName: owningRoom.name,
 					harnessName: harness.name,
 					state: stateLabel,
-					...(stateLabel === "permission" ? { tool: a.permissionTool ?? undefined } : {}),
+					...(stateLabel === "permission"
+						? { tool: a.permissionTool ?? undefined, agentType: a.permissionAgentType ?? undefined }
+						: {}),
 				};
 				setToasts((prev) => [...prev, entry].slice(-TOAST_MAX_VISIBLE));
 			}
@@ -2518,9 +2528,12 @@ export default function App() {
 			// transitions never call the plugin's `show` at the same time.
 			// The helper also catches plugin-absent rejections (dev builds
 			// skip it — see app/src-tauri/src/lib.rs).
+			const osPermissionParts = [a.permissionAgentType, a.permissionTool].filter(
+				(p): p is string => p !== null,
+			);
 			const osLabel =
 				stateLabel === "permission"
-					? `needs permission${a.permissionTool ? ` (${a.permissionTool})` : ""}`
+					? `needs permission${osPermissionParts.length > 0 ? ` (${osPermissionParts.join(" · ")})` : ""}`
 					: stateLabel;
 			enqueueOsNotification("Skein", `${owningRoom.name} · ${kindName}: ${osLabel}`, {
 				roomId: owningRoom.id,
@@ -3686,6 +3699,10 @@ export default function App() {
 							if (r.id === activeRoomId) continue;
 							const h = r.harnesses.find((hh) => permissionHarnessIds.has(hh.id));
 							if (!h) continue;
+							// #298: name the subagent when the dialog belongs to
+							// one, same wording as `statusLabel` (tool omitted
+							// here, as before this change).
+							const permAgentType = harnessActivity.get(h.id)?.permissionAgentType;
 							return (
 								<span
 									className="seg sk-statusbar-urgent"
@@ -3693,7 +3710,7 @@ export default function App() {
 									onClick={() => jumpToHarness(r.id, h.id)}
 								>
 									<span className="dot-tiny st-permission" />
-									{r.name} · {h.name} permission needed
+									{r.name} · {h.name} {statusLabel("permission", undefined, permAgentType)}
 								</span>
 							);
 						}

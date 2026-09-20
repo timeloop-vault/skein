@@ -210,6 +210,61 @@ pub fn list_sessions(home: &Path) -> Vec<SessionFile> {
     out
 }
 
+// ── subagents ────────────────────────────────────────────────────
+
+/// The `<id>` in `agent-<id>.jsonl`. `None` for anything else — no
+/// `agent-` prefix, a non-`.jsonl` extension (including the
+/// `.meta.json` sidecar itself), or an empty id.
+pub fn subagent_id_from_path(path: &Path) -> Option<String> {
+    if path.extension().is_none_or(|x| x != "jsonl") {
+        return None;
+    }
+    let stem = path.file_stem().and_then(|s| s.to_str())?;
+    let id = stem.strip_prefix("agent-")?;
+    if id.is_empty() {
+        return None;
+    }
+    Some(id.to_owned())
+}
+
+/// The sidecar next to a subagent transcript: `agent-<id>.jsonl` ->
+/// `agent-<id>.meta.json`. Built explicitly from the stem rather than
+/// `with_extension("meta.json")` — that only does the right thing
+/// here because the stem itself has no dot.
+pub fn subagent_meta_path(jsonl: &Path) -> PathBuf {
+    let stem = jsonl.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    jsonl.with_file_name(format!("{stem}.meta.json"))
+}
+
+/// The `agent-<id>.meta.json` sidecar Claude Code writes next to a
+/// subagent's transcript. A real one, verbatim (2.1.263):
+///
+/// ```json
+/// {"agentType":"explore","description":"Map Claude JSONL tailer","toolUseId":"toolu_01NQaF9vThE1Z2brYyXv4anm","spawnDepth":1,"requestShape":"background","requestNonInteractive":true}
+/// ```
+///
+/// Every field is optional and unknown keys are ignored ON PURPOSE —
+/// this shape belongs to Claude Code, not Skein, and a future field
+/// must not break parsing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SubagentMeta {
+    pub agent_type: Option<String>,
+    pub description: Option<String>,
+    pub tool_use_id: Option<String>,
+    pub spawn_depth: Option<u32>,
+    pub request_shape: Option<String>,
+    pub request_non_interactive: Option<bool>,
+}
+
+/// Reads and parses the sidecar for a subagent transcript. `None` on
+/// a missing file, an I/O error, or JSON that doesn't parse — never
+/// an error, never a panic.
+pub fn read_subagent_meta(jsonl: &Path) -> Option<SubagentMeta> {
+    let text = fs::read_to_string(subagent_meta_path(jsonl)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 // ── row helpers on raw JSON ───────────────────────────────────────
 
 /// `isSidechain == true` — the row belongs to a subagent transcript.
@@ -217,6 +272,35 @@ pub fn is_sidechain(row: &Value) -> bool {
     row.get("isSidechain")
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+/// The terminal stop-reason set, shared by `subagent_row_is_terminal`
+/// (raw `Value`, needed because the subagent tailer never deserializes
+/// a full `AssistantRow`) and `AssistantRow::is_terminal` (the parsed
+/// struct) — one place spelling out `end_turn` / `stop_sequence` /
+/// `max_tokens` so a future stop reason can't land in one and not the
+/// other.
+fn stop_reason_is_terminal(stop_reason: Option<&str>) -> bool {
+    matches!(
+        stop_reason,
+        Some("end_turn" | "stop_sequence" | "max_tokens")
+    )
+}
+
+/// True for an `assistant` row whose `stop_reason` is terminal
+/// (`end_turn` / `stop_sequence` / `max_tokens` — mirrors the set
+/// `harness_events_claude.rs` treats as ending a turn). A subagent has
+/// no user to await, so the end of its turn is its exit: this is how
+/// a finished subagent transcript is told from a live one.
+pub fn subagent_row_is_terminal(row: &Value) -> bool {
+    if row.get("type").and_then(Value::as_str) != Some("assistant") {
+        return false;
+    }
+    let stop_reason = row
+        .get("message")
+        .and_then(|m| m.get("stop_reason"))
+        .and_then(Value::as_str);
+    stop_reason_is_terminal(stop_reason)
 }
 
 /// The row's `timestamp` (ISO 8601) as epoch ms. `None` when the row
@@ -322,10 +406,7 @@ impl AssistantRow {
     /// waiting for the user. `tool_use` and `None` mean more rows
     /// follow.
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self.stop_reason.as_deref(),
-            Some("end_turn" | "stop_sequence" | "max_tokens")
-        )
+        stop_reason_is_terminal(self.stop_reason.as_deref())
     }
 
     /// Key for collapsing the streamed chunks of one response, which
@@ -687,6 +768,102 @@ mod tests {
             .map(|p| p.file_name().unwrap().to_str().unwrap().to_owned())
             .collect();
         assert_eq!(names, ["agent-a.jsonl", "agent-b.jsonl"]);
+    }
+
+    #[test]
+    fn subagent_id_from_path_accepts_only_agent_jsonl() {
+        assert_eq!(
+            subagent_id_from_path(Path::new("agent-01ABC.jsonl")),
+            Some("01ABC".to_owned())
+        );
+        assert_eq!(subagent_id_from_path(Path::new("notagent-x.jsonl")), None);
+        assert_eq!(subagent_id_from_path(Path::new("agent-x.meta.json")), None);
+        assert_eq!(subagent_id_from_path(Path::new("agent-.jsonl")), None);
+    }
+
+    #[test]
+    fn subagent_meta_path_swaps_extension_for_meta_json() {
+        assert_eq!(
+            subagent_meta_path(Path::new("/a/subagents/agent-01ABC.jsonl")),
+            Path::new("/a/subagents/agent-01ABC.meta.json")
+        );
+    }
+
+    #[test]
+    fn read_subagent_meta_parses_a_real_sidecar() {
+        let home = tempfile::TempDir::new().unwrap();
+        let dir = home.path().join("subagents");
+        fs::create_dir_all(&dir).unwrap();
+        let jsonl = dir.join("agent-01ABC.jsonl");
+        fs::write(&jsonl, "").unwrap();
+        fs::write(
+            dir.join("agent-01ABC.meta.json"),
+            r#"{"agentType":"explore","description":"Map Claude JSONL tailer","toolUseId":"toolu_01NQaF9vThE1Z2brYyXv4anm","spawnDepth":1,"requestShape":"background","requestNonInteractive":true}"#,
+        )
+        .unwrap();
+
+        let meta = read_subagent_meta(&jsonl).expect("sidecar should parse");
+        assert_eq!(meta.agent_type.as_deref(), Some("explore"));
+        assert_eq!(meta.description.as_deref(), Some("Map Claude JSONL tailer"));
+        assert_eq!(
+            meta.tool_use_id.as_deref(),
+            Some("toolu_01NQaF9vThE1Z2brYyXv4anm")
+        );
+        assert_eq!(meta.spawn_depth, Some(1));
+        assert_eq!(meta.request_shape.as_deref(), Some("background"));
+        assert_eq!(meta.request_non_interactive, Some(true));
+    }
+
+    #[test]
+    fn read_subagent_meta_ignores_unknown_keys() {
+        let home = tempfile::TempDir::new().unwrap();
+        let dir = home.path().join("subagents");
+        fs::create_dir_all(&dir).unwrap();
+        let jsonl = dir.join("agent-01ABC.jsonl");
+        fs::write(&jsonl, "").unwrap();
+        fs::write(
+            dir.join("agent-01ABC.meta.json"),
+            r#"{"agentType":"explore","fromTheFuture":true}"#,
+        )
+        .unwrap();
+
+        let meta = read_subagent_meta(&jsonl).expect("sidecar should parse");
+        assert_eq!(meta.agent_type.as_deref(), Some("explore"));
+    }
+
+    #[test]
+    fn read_subagent_meta_missing_or_malformed_is_none() {
+        let home = tempfile::TempDir::new().unwrap();
+        let dir = home.path().join("subagents");
+        fs::create_dir_all(&dir).unwrap();
+
+        let no_sidecar = dir.join("agent-missing.jsonl");
+        fs::write(&no_sidecar, "").unwrap();
+        assert_eq!(read_subagent_meta(&no_sidecar), None);
+
+        let malformed = dir.join("agent-bad.jsonl");
+        fs::write(&malformed, "").unwrap();
+        fs::write(dir.join("agent-bad.meta.json"), "not json").unwrap();
+        assert_eq!(read_subagent_meta(&malformed), None);
+    }
+
+    #[test]
+    fn subagent_row_is_terminal_matches_the_terminal_stop_reasons() {
+        for reason in ["end_turn", "stop_sequence", "max_tokens"] {
+            let row = json!({"type": "assistant", "message": {"stop_reason": reason}});
+            assert!(
+                subagent_row_is_terminal(&row),
+                "{reason} should be terminal"
+            );
+        }
+        let tool_use = json!({"type": "assistant", "message": {"stop_reason": "tool_use"}});
+        assert!(!subagent_row_is_terminal(&tool_use));
+
+        let null_reason = json!({"type": "assistant", "message": {"stop_reason": null}});
+        assert!(!subagent_row_is_terminal(&null_reason));
+
+        let user_row = json!({"type": "user", "message": {"stop_reason": "end_turn"}});
+        assert!(!subagent_row_is_terminal(&user_row));
     }
 
     /// Shape taken from a real 2.1.263 assistant row.

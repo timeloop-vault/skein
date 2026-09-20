@@ -120,6 +120,111 @@ describe("permission phase", () => {
 	});
 });
 
+describe("clearPermission (#298)", () => {
+	let id: string;
+
+	beforeEach(() => {
+		id = nextId();
+		harnessActivity.spawned(id);
+	});
+
+	it("moves permission -> running", () => {
+		harnessActivity.setPermissionFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudePermission, "Bash");
+		harnessActivity.clearPermission(id, TRANSITION_SOURCE.L2c1ClaudeSubagentToolResult);
+		expect(harnessActivity.get(id)?.phase).toBe("running");
+	});
+
+	// The #277 boundary: a subagent tool result must never move a phase
+	// other than `permission`. Each of these starts the harness in a
+	// non-permission phase and asserts `clearPermission` left it alone.
+	// (The `idle` case needs fake timers installed before the module's
+	// first `spawned()` call — see `harnessActivity.clearPermission-idle.test.ts`.)
+	it("is a no-op from waiting", () => {
+		harnessActivity.setWaitingFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
+		harnessActivity.clearPermission(id, TRANSITION_SOURCE.L2c1ClaudeSubagentToolResult);
+		expect(harnessActivity.get(id)?.phase).toBe("waiting");
+	});
+
+	it("is a no-op from running", () => {
+		harnessActivity.setRunningFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeAssistant);
+		harnessActivity.clearPermission(id, TRANSITION_SOURCE.L2c1ClaudeSubagentToolResult);
+		expect(harnessActivity.get(id)?.phase).toBe("running");
+	});
+
+	it("is a no-op from spawning", () => {
+		expect(harnessActivity.get(id)?.phase).toBe("spawning");
+		harnessActivity.clearPermission(id, TRANSITION_SOURCE.L2c1ClaudeSubagentToolResult);
+		expect(harnessActivity.get(id)?.phase).toBe("spawning");
+	});
+
+	it("is a no-op from exited", () => {
+		harnessActivity.exited(id, 0);
+		harnessActivity.clearPermission(id, TRANSITION_SOURCE.L2c1ClaudeSubagentToolResult);
+		expect(harnessActivity.get(id)?.phase).toBe("exited");
+	});
+
+	it("stores permissionAgentType and clears it when the phase leaves permission", () => {
+		harnessActivity.setPermissionFromAdapter(
+			id,
+			TRANSITION_SOURCE.L2c1ClaudePermission,
+			"Bash",
+			"explore",
+		);
+		expect(harnessActivity.get(id)?.permissionAgentType).toBe("explore");
+		harnessActivity.clearPermission(id, TRANSITION_SOURCE.L2c1ClaudeSubagentToolResult);
+		const a = harnessActivity.get(id);
+		expect(a?.phase).toBe("running");
+		expect(a?.permissionAgentType).toBeNull();
+		expect(a?.permissionTool).toBeNull();
+	});
+
+	// The headline case: two subagents running concurrently, B's dialog
+	// is open, and A's own tool result must not clear it.
+	it("leaves a different subagent's dialog open", () => {
+		harnessActivity.setPermissionFromAdapter(
+			id,
+			TRANSITION_SOURCE.L2c1ClaudePermission,
+			"Bash",
+			"reviewer",
+			"B",
+		);
+		harnessActivity.clearPermission(id, TRANSITION_SOURCE.L2c1ClaudeSubagentToolResult, "A");
+		expect(harnessActivity.get(id)?.phase).toBe("permission");
+	});
+
+	it("clears its own subagent's dialog", () => {
+		harnessActivity.setPermissionFromAdapter(
+			id,
+			TRANSITION_SOURCE.L2c1ClaudePermission,
+			"Bash",
+			"reviewer",
+			"B",
+		);
+		harnessActivity.clearPermission(id, TRANSITION_SOURCE.L2c1ClaudeSubagentToolResult, "B");
+		expect(harnessActivity.get(id)?.phase).toBe("running");
+	});
+
+	it("clears a main-session dialog (no stored agent id) regardless of who reports", () => {
+		harnessActivity.setPermissionFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudePermission, "Bash");
+		expect(harnessActivity.get(id)?.permissionAgentId).toBeNull();
+		harnessActivity.clearPermission(id, TRANSITION_SOURCE.L2c1ClaudeSubagentToolResult, "B");
+		expect(harnessActivity.get(id)?.phase).toBe("running");
+	});
+
+	it("stores permissionAgentId and clears it when the phase leaves permission", () => {
+		harnessActivity.setPermissionFromAdapter(
+			id,
+			TRANSITION_SOURCE.L2c1ClaudePermission,
+			"Bash",
+			"reviewer",
+			"B",
+		);
+		expect(harnessActivity.get(id)?.permissionAgentId).toBe("B");
+		harnessActivity.clearPermission(id, TRANSITION_SOURCE.L2c1ClaudeSubagentToolResult, "B");
+		expect(harnessActivity.get(id)?.permissionAgentId).toBeNull();
+	});
+});
+
 describe("isDecisiveInput", () => {
 	it("treats Enter/Return as decisive", () => {
 		expect(isDecisiveInput("\r")).toBe(true);
@@ -163,6 +268,15 @@ describe("activityToStatus / statusLabel", () => {
 		expect(statusLabel("permission", "Bash")).toBe("permission needed · Bash");
 		expect(statusLabel("permission", null)).toBe("permission needed");
 		expect(statusLabel("permission")).toBe("permission needed");
+	});
+
+	it("names the subagent when the dialog belongs to one (#298)", () => {
+		expect(statusLabel("permission", "Bash", "explore")).toBe("permission needed · explore · Bash");
+		// No tool name known, but the subagent is.
+		expect(statusLabel("permission", null, "explore")).toBe("permission needed · explore");
+		// No agent type: identical to the pre-#298 wording.
+		expect(statusLabel("permission", "Bash", null)).toBe("permission needed · Bash");
+		expect(statusLabel("permission", "Bash", undefined)).toBe("permission needed · Bash");
 	});
 
 	it("passes other statuses through unchanged", () => {

@@ -64,6 +64,24 @@ export interface HarnessActivity {
 	/// leaves `permission` (see `setPhase`) so a stale name never
 	/// survives into whatever the harness does next. #86.
 	permissionTool: string | null;
+	/// Which subagent raised the current `permission` phase, when the
+	/// adapter can say — Claude's PermissionRequest hook fires inside a
+	/// subagent transcript same as the main one, and names the
+	/// subagent's `agent_type` when it isn't the main session. `null`
+	/// for a main-session permission or when the adapter can't say.
+	/// Reset on every spawn; cleared automatically whenever the phase
+	/// leaves `permission`, same as `permissionTool` (#298).
+	permissionAgentType: string | null;
+	/// The subagent id (`ClaudeEvent.agent_id`) that raised the current
+	/// `permission` phase, when the adapter can say. `null` for a
+	/// main-session permission or when the adapter can't say. Distinct
+	/// from `permissionAgentType`, which is a display name and not
+	/// guaranteed unique across concurrent subagents — `clearPermission`
+	/// correlates on this field so one subagent's tool result can't
+	/// clear a different subagent's still-open dialog. Reset on every
+	/// spawn; cleared automatically whenever the phase leaves
+	/// `permission`, same as `permissionAgentType` (#298).
+	permissionAgentId: string | null;
 	/// Has the L2c adapter delivered at least one event since spawn?
 	/// Proof it is reading the right file / stream. #259.
 	adapterHeard: boolean;
@@ -190,6 +208,10 @@ export const TRANSITION_SOURCE = {
 	// #259: the adapter never delivered anything after a prompt was
 	// submitted — the watchdog handed the harness back to L2a.
 	AdapterSilent: "adapter-silent",
+	// #298: a subagent's own tool result proves the gate its permission
+	// prompt held is gone, even though the main transcript never sees
+	// it. See `clearPermission`.
+	L2c1ClaudeSubagentToolResult: "l2c1-claude-subagent-tool-result",
 } as const;
 
 const emit = (id: string): void => {
@@ -251,7 +273,9 @@ const setPhase = (
 	store.set(id, {
 		...cur,
 		phase,
-		...(leftPermission ? { permissionTool: null } : null),
+		...(leftPermission
+			? { permissionTool: null, permissionAgentType: null, permissionAgentId: null }
+			: null),
 		...patch,
 	});
 	emit(id);
@@ -365,6 +389,8 @@ export const harnessActivity = {
 			authoritative: false,
 			tail: "",
 			permissionTool: null,
+			permissionAgentType: null,
+			permissionAgentId: null,
 			adapterHeard: false,
 			promptSubmittedAt: null,
 			adapterSilent: false,
@@ -466,14 +492,29 @@ export const harnessActivity = {
 	/// PermissionRequest hook fired, or opencode's permission-asked SSE
 	/// event landed. `toolName` is `null` when the adapter can't say
 	/// (opencode's event carries no tool name); every notification
-	/// surface shows it when present. No-op once exited. Always goes
-	/// through `setPhase` even when already in `permission`, so a
-	/// second request with a different tool name still updates
-	/// `.permissionTool` for anything reading `.get()` live. #86.
-	setPermissionFromAdapter(id: string, source: TransitionSource, toolName: string | null): void {
+	/// surface shows it when present. `agentType` names the subagent
+	/// the dialog belongs to when it isn't the main session (#298);
+	/// omitted or `null` for the main session or when the adapter
+	/// can't say. `agentId` is that same subagent's id — what
+	/// `clearPermission` correlates on — omitted or `null` likewise.
+	/// No-op once exited. Always goes through `setPhase` even when
+	/// already in `permission`, so a second request with a different
+	/// tool name still updates `.permissionTool` for anything reading
+	/// `.get()` live. #86.
+	setPermissionFromAdapter(
+		id: string,
+		source: TransitionSource,
+		toolName: string | null,
+		agentType?: string | null,
+		agentId?: string | null,
+	): void {
 		const cur = store.get(id);
 		if (!cur || cur.phase === "exited") return;
-		setPhase(id, "permission", source, { permissionTool: toolName });
+		setPhase(id, "permission", source, {
+			permissionTool: toolName,
+			permissionAgentType: agentType ?? null,
+			permissionAgentId: agentId ?? null,
+		});
 	},
 
 	/// Record user input (keystroke / paste) on a harness. `data` is
@@ -521,6 +562,38 @@ export const harnessActivity = {
 	/// the user typed or the PTY died. `running` hands it back to L2a.
 	releasePermission(id: string, source: TransitionSource): void {
 		if (store.get(id)?.phase !== "permission") return;
+		setPhase(id, "running", source);
+	},
+
+	/// A subagent's tool result landed (#298). Proves *that subagent's*
+	/// gate is gone, and only that one — with several subagents running
+	/// concurrently, an unrelated subagent finishing its own tool call
+	/// must not clear a different subagent's still-open dialog. No-op
+	/// unless the harness is actually in `permission`. When it is:
+	/// `agentId` is compared against the stored `permissionAgentId` —
+	/// a match clears; a mismatch (a *different* subagent's result) is
+	/// left alone. A stored `null` still clears unconditionally, for
+	/// two folded-together cases that read the same way from here: a
+	/// main-session dialog (there is no subagent to disambiguate
+	/// against), and an adapter event where `agentId` wasn't reported
+	/// at all — the field is confirmed live as of 2026-09-20, so that
+	/// second case is now the rare one (injection off, or a future CLI
+	/// change), but falling back to the pre-#298 behaviour is still the
+	/// safe direction; a dialog cleared slightly early is recoverable,
+	/// one left stuck for minutes is the bug this exists to fix. Unlike
+	/// `releasePermission` (adapter vanished entirely) this fires on a
+	/// live, healthy adapter mid-conversation, so it must do the one
+	/// narrow thing it's proof of and nothing more: never touch
+	/// `waiting`, `idle`, `spawning` or `exited`. A subagent tool
+	/// result is not "the harness is now doing work" (it might be the
+	/// main session sitting at `waiting` while a background subagent
+	/// finishes up) — it is only "whatever dialog was on screen has
+	/// been answered." All further phase/notification policy belongs
+	/// to #277.
+	clearPermission(id: string, source: TransitionSource, agentId?: string | null): void {
+		const cur = store.get(id);
+		if (cur?.phase !== "permission") return;
+		if (cur.permissionAgentId != null && cur.permissionAgentId !== agentId) return;
 		setPhase(id, "running", source);
 	},
 
@@ -633,6 +706,8 @@ export const harnessActivity = {
 				authoritative: false,
 				tail: "",
 				permissionTool: null,
+				permissionAgentType: null,
+				permissionAgentId: null,
 				adapterHeard: false,
 				promptSubmittedAt: null,
 				adapterSilent: false,
@@ -745,10 +820,21 @@ export function activityToStatus(activity: HarnessActivity | null): Status {
 /// raw word (bottom status bar, the hover popover). `permission` reads
 /// as "permission needed" — never the bare word "permission", which
 /// reads as a noun with no verb and doesn't say what's expected of the
-/// user — plus the tool name when the adapter could say (#86).
-export function statusLabel(status: Status, permissionTool?: string | null): string {
+/// user — plus the tool name when the adapter could say (#86), plus
+/// the subagent name when the dialog belongs to one rather than the
+/// main session (#298), e.g. "permission needed · explore · Bash".
+/// Both existing shapes (no tool, tool only) are unchanged when
+/// `permissionAgentType` is absent or `null`.
+export function statusLabel(
+	status: Status,
+	permissionTool?: string | null,
+	permissionAgentType?: string | null,
+): string {
 	if (status !== "permission") return status;
-	return permissionTool ? `permission needed · ${permissionTool}` : "permission needed";
+	const parts = [permissionAgentType, permissionTool].filter(
+		(p): p is string => p !== null && p !== undefined,
+	);
+	return parts.length > 0 ? `permission needed · ${parts.join(" · ")}` : "permission needed";
 }
 
 /// `activityToStatus` with the "acknowledged" downgrade applied:

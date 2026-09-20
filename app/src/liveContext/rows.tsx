@@ -9,7 +9,7 @@
 import { useMemo } from "react";
 import type { HarnessKind } from "../types.ts";
 import { type PreviewExpansion, PreviewExpansionContext, ResultPreview } from "./ResultPreview.tsx";
-import { Row, basename } from "./Row.tsx";
+import { Row, basename, formatDuration } from "./Row.tsx";
 import { type Payload, num, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
 import { ToolFamilyRow } from "./toolRows.tsx";
@@ -73,6 +73,8 @@ export const ActivityRow = ({
 				return <UserFileRow payload={payload} harness={harness} timestampMs={ts} />;
 			case "slash_command":
 				return <SlashRow payload={payload} harness={harness} timestampMs={ts} />;
+			case "subagent_end":
+				return <SubagentEndRow payload={payload} harness={harness} timestampMs={ts} />;
 			case "tool_call":
 			case "patch":
 			case "plan_change":
@@ -215,6 +217,30 @@ const SlashRow = ({ payload, harness, timestampMs }: SimpleRowProps) => {
 	return (
 		<Row kind="slash" harness={harness} timestampMs={timestampMs}>
 			<span className="tool">slash</span> <span className="target">/{name}</span>
+		</Row>
+	);
+};
+
+/// A subagent transcript reached its terminal row (epic #298). The
+/// delegation itself already renders via the main transcript's `Agent`
+/// tool_call row (AgentRow, toolRows.tsx) — that one lands at launch
+/// time and, for a *background* subagent
+/// (`toolUseResult.status === "async_launched"`), nothing else ever
+/// marks completion. This is only the other end; a second "delegated"
+/// row here would just duplicate the existing one. Same `kind="agent"`
+/// Row styling as AgentRow, so a finish reads as its sibling.
+const SubagentEndRow = ({ payload, harness, timestampMs }: SimpleRowProps) => {
+	const target =
+		str(payload.description) ?? str(payload.agent_type) ?? str(payload.agent_id) ?? "sub-agent";
+	const ms = num(payload.duration_ms);
+	return (
+		<Row
+			kind="agent"
+			harness={harness}
+			timestampMs={timestampMs}
+			right={ms != null ? <span className="dim">{formatDuration(ms)}</span> : undefined}
+		>
+			<span className="tool">sub-agent</span> <span className="target">{target}</span>
 		</Row>
 	);
 };
