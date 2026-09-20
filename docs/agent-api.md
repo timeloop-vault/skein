@@ -25,7 +25,8 @@ Skein process
      ├─ POST   /api/comments/{id}/addressed
      ├─ POST   /api/comments/{id}/resolve   403, always
      ├─ GET    /api/diff               get_diff
-     └─ POST   /api/harness/permission     see below — not an agent verb
+     ├─ POST   /api/harness/permission     see below — not an agent verb
+     └─ POST   /api/harness/session-start  see below — not an agent verb
 ```
 
 `/mcp` is what Claude Code and opencode talk to. `/api/*` is the same
@@ -191,6 +192,45 @@ A successful call emits `skein://harness-permission` —
 — and answers `204 No Content`. The route also writes one
 `tracing::info!` per request (#176).
 
+## The launch signal (#273)
+
+`POST /api/harness/session-start` is not an agent verb either. A
+freshly spawned Claude harness has no JSONL transcript at all until the
+first prompt, and the transcript tail is the phase store's
+authoritative source everywhere else — so a harness sat there before
+its first prompt never left `spawning`. This route gives it a way out.
+
+The caller is the `SessionStart` command hook Skein's Claude Code
+plugin injects (#215): it fires on every session start, resume, clear,
+compact and fork, with no matcher restricting it to only the first.
+That is deliberate rather than an oversight — the frontend only ever
+acts on a harness still in `spawning`, so a later fire (a `clear` or a
+`compact` mid-session) is a free no-op. opencode has no hook mechanism
+to match; it already reports liveness over its own `/event` SSE stream
+and never calls this route.
+
+Same two headers as the permission route, and `X-Skein-Harness` is
+authoritative the same way: absent or unknown is `400`, not a silent
+no-op.
+
+The body is Claude Code's own hook payload — it also carries
+`session_id`, `cwd`, `transcript_path`, `permission_mode` and sometimes
+`model` — and none of it is Skein's to police. Only `source` is read,
+purely for the log line, and a body that is not JSON at all still
+answers `204`: a future payload shape change must not start breaking a
+harness's launch.
+
+Duplicate fires must stay harmless, and not only because of the
+matcher-less hook above: upstream anthropics/claude-code#78455 reports
+`SessionStart` firing twice within a few hundred ms for the same
+project, once for a "phantom" session that never materialises, with a
+payload indistinguishable from the real one. Nothing here or downstream
+may hang a consume-once side effect on this route — emitting the event
+twice is fine.
+
+A successful call emits `skein://harness-session-start` —
+`{ roomId, harnessId }` — and answers `204 No Content`.
+
 ## The two things it will not do
 
 There is no `resolve` and no `approve`, and there never will be here.
@@ -217,7 +257,7 @@ Loud, and distinguishable (#176):
 
 | status | meaning |
 | :-- | :-- |
-| `400` | malformed JSON, an `MCP-Protocol-Version` we do not speak, or (on the permission route only) a missing/unknown `X-Skein-Harness` |
+| `400` | malformed JSON, an `MCP-Protocol-Version` we do not speak, or (on the permission and session-start routes only) a missing/unknown `X-Skein-Harness` |
 | `401` | no bearer token, or one that was never minted |
 | `403` | a revoked token, a non-localhost `Origin`, or `resolve` / `approve` |
 | `404` | the token's room is gone |
@@ -284,11 +324,11 @@ Settings → About shows the bound port, or says why there is none.
 
 | file | what it owns |
 | :-- | :-- |
-| `agent_api/state.rs` | shared state, the `skein://review-changed` and `skein://harness-permission` events, `HarnessIdentity` |
+| `agent_api/state.rs` | shared state, the `skein://review-changed`, `skein://harness-permission` and `skein://harness-session-start` events, `HarnessIdentity` |
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
 | `agent_api/verbs.rs` | the six verbs — the whole testable core |
 | `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve and approve refusals |
-| `agent_api/http.rs` | the routes, including `/api/harness/permission` (#86) |
+| `agent_api/http.rs` | the routes, including `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
 | `agent_api/tests.rs` | scoping, both prohibitions, lifecycle, real HTTP |
 | `review_surface/signoff.rs` | the sign-off itself, and the staleness rule (#214) |
 | `harness_config.rs` | what Skein injects at spawn so a CLI finds all this (#215) |

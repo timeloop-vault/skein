@@ -1,6 +1,17 @@
 {
-	"description": "Tell Skein when Claude Code is blocked on a permission dialog, so the room can show \"permission required\" as its own activity phase (#86) instead of folding it into end-of-turn waiting.",
+	"description": "Tell Skein about two things Claude Code otherwise never reports on its own. SessionStart (#273): a freshly spawned harness can leave the \"spawning\" activity phase even before a first prompt writes anything to its transcript. It carries no matcher on purpose, so it fires for every `source` (`startup`, `resume`, `clear`, `compact`, `fork`) rather than only the first — a repeat or phantom fire is harmless because the frontend handler is idempotent, recording a timestamp and only moving the phase when the transcript tail hasn't already spoken for itself, never overriding a permission dialog or an exited harness. PermissionRequest (#86): Claude Code is blocked on a permission dialog, so the room can show \"permission required\" as its own activity phase instead of folding it into end-of-turn waiting.",
 	"hooks": {
+		"SessionStart": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "[ -n \"$SKEIN_REVIEW_URL\" ] && [ -n \"$SKEIN_REVIEW_TOKEN\" ] && curl -fsS -m 3 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"Authorization: Bearer $SKEIN_REVIEW_TOKEN\" -H \"X-Skein-Harness: $SKEIN_HARNESS_ID\" --data-binary @- \"${SKEIN_REVIEW_URL%/mcp}/api/harness/session-start\"; exit 0",
+						"async": true
+					}
+				]
+			}
+		],
 		"PermissionRequest": [
 			{
 				"hooks": [

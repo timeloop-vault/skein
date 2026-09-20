@@ -111,13 +111,30 @@ function checkRegistered(input: {
 /// Shared across `canSendPrompt` and `canInsertText`: once the phase
 /// itself has cleared each gate's own check, both require the same
 /// proof that something is actually watching this harness — an L2c
-/// adapter attached, heard from, and not given up on
-/// (`authoritative && adapterHeard && !adapterSilent`) — and that #215's
-/// config injection happened for this spawn (`injected`), since without
-/// it there's no evidence the harness's CLI even has the review tools
-/// wired up.
+/// adapter attached and not given up on (`authoritative &&
+/// !adapterSilent`), with proof of life from EITHER the tail
+/// (`adapterHeard`) OR the harness's own launch signal
+/// (`launchSignalAt !== null`, #273) — and that #215's config injection
+/// happened for this spawn (`injected`), since without it there's no
+/// evidence the harness's CLI even has the review tools wired up.
+///
+/// A launch signal is accepted as equivalent proof to `adapterHeard`
+/// here, not a weaker substitute: it only ever arrives once the CLI is
+/// past its trust gate and sitting at its own input prompt (verified
+/// live — with the dialog open and unanswered, the hook does not fire),
+/// and it is delivered by the very same #215 injection `injected`
+/// already requires — the same channel that wires up the review MCP
+/// tools is the one reporting the launch. A freshly spawned harness
+/// that has only just cleared its trust dialog has no transcript yet
+/// (Claude writes none until the first prompt), so `adapterHeard` alone
+/// would keep the nudge gate refusing a harness that is, in fact, ready
+/// and safe to paste into.
 function checkWatched(activity: HarnessActivity): GateResult | null {
-	if (!activity.authoritative || !activity.adapterHeard || activity.adapterSilent) {
+	if (
+		!activity.authoritative ||
+		(!activity.adapterHeard && activity.launchSignalAt === null) ||
+		activity.adapterSilent
+	) {
 		return { ok: false, reason: "no confirmed adapter is watching this harness" };
 	}
 	if (!activity.injected) {
@@ -134,9 +151,11 @@ function checkWatched(activity: HarnessActivity): GateResult | null {
 ///  - its phase is `waiting` — end of turn, the one moment a paste is
 ///    unambiguously safe to submit. `permission` gets its own reason:
 ///    it is a harder stop than "not waiting", not a variant of it;
-///  - an L2c adapter is attached, has actually spoken, and has not gone
-///    silent (`authoritative && adapterHeard && !adapterSilent`) — a
-///    `waiting` read off the L2a heuristic alone is a guess, not proof;
+///  - an L2c adapter is attached, has not gone silent, and has proven
+///    itself either by speaking or by the harness's own launch signal
+///    (`authoritative && (adapterHeard || launchSignalAt !== null) &&
+///    !adapterSilent`, #273) — a `waiting` read off the L2a heuristic
+///    alone is a guess, not proof;
 ///  - #215's config injection happened for this spawn (`injected`) —
 ///    without it there is no evidence the harness's CLI even has the
 ///    review tools wired up;
@@ -195,9 +214,10 @@ export interface CanInsertTextInput {
 ///  - `spawning` and `exited` refuse too — there is no terminal on the
 ///    other end of the paste yet, or any more.
 ///
-/// Registration, the adapter-watching proof, and #215 injection are
-/// checked exactly as `canSendPrompt` checks them — see `checkRegistered`
-/// / `checkWatched`.
+/// Registration, the adapter-watching proof (`authoritative &&
+/// (adapterHeard || launchSignalAt !== null) && !adapterSilent`, #273),
+/// and #215 injection are checked exactly as `canSendPrompt` checks
+/// them — see `checkRegistered` / `checkWatched`.
 export function canInsertText(input: CanInsertTextInput): GateResult {
 	const { capabilities, activity, registered } = input;
 	const notReady = checkRegistered({ capabilities, activity, registered });
