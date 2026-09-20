@@ -39,11 +39,17 @@ export type ClaudeEvent =
 	// `subagents.record`); it reached a terminal stop reason
 	// (`subagent_end`); it got a tool result, proof its own permission
 	// gate (if any) is gone (`subagent_tool_result`).
+	//
+	// `initial` (#277): `true` only for the batch `attach_at` seeds
+	// from disk at attach time — see the doc comment on the Rust
+	// `SubagentStart` variant. Read defensively as `=== true`, same as
+	// every other boolean crossing this boundary.
 	| {
 			kind: "subagent_start";
 			agent_id: string;
 			agent_type: string | null;
 			description: string | null;
+			initial: boolean;
 	  }
 	| { kind: "subagent_tool_result"; agent_id: string }
 	| {
@@ -139,6 +145,9 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeUserPrompt, {
 				clearsPermission: true,
 			});
+			// #277: a fresh prompt starts a new delegation-counting
+			// window.
+			harnessActivity.noteUserPrompt(harnessId);
 			return;
 		case "awaiting_prompt":
 			// The signal we built this for: an assistant row with a
@@ -146,7 +155,12 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			// max_tokens) → "I'm done, awaiting your next prompt."
 			// #260: also an interrupt row or a turn_duration row — an
 			// interrupted turn never gets a terminal stop_reason.
-			harnessActivity.setWaitingFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
+			//
+			// #277: routed through `awaitingPromptFromAdapter`, not
+			// `setWaitingFromAdapter` directly — the main transcript's
+			// own end of turn is a lie about the harness being done
+			// while subagents it just delegated to are still working.
+			harnessActivity.awaitingPromptFromAdapter(harnessId, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
 			return;
 		case "attachment":
 			// User-side action between turns — doesn't shift phase
@@ -164,27 +178,34 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			harnessActivity.releasePermission(harnessId, TRANSITION_SOURCE.AdapterDetached);
 			harnessActivity.detachAuthoritativeSource(harnessId);
 			return;
-		// #298: subagent bookkeeping only — none of these three may call
-		// `setRunningFromAdapter` or `setWaitingFromAdapter`. The parent
-		// (main-session) phase is deliberately left untouched here: a
-		// subagent starting, finishing, or getting a tool result says
-		// nothing about whether the main session is running, waiting, or
-		// idle, and guessing wrongly would fight whatever the main
-		// transcript's own events are already saying. All further
-		// phase/notification policy from subagent activity belongs to
-		// #277, which is deliberately not in scope here.
+		// #298: subagent bookkeeping — none of these three may call
+		// `setRunningFromAdapter` or `setWaitingFromAdapter` directly.
+		// The parent (main-session) PHASE is deliberately left untouched
+		// here: a subagent starting, finishing, or getting a tool result
+		// says nothing about whether the main session is running,
+		// waiting, or idle, and guessing wrongly would fight whatever
+		// the main transcript's own events are already saying. #277
+		// adds bookkeeping (`note*`) alongside these that feeds the
+		// deferred-end-of-turn timers, but still no direct phase write.
 		case "subagent_start":
-			subagents.record(harnessId, {
-				agentId: event.agent_id,
-				agentType: event.agent_type,
-				description: event.description,
-			});
+			subagents.record(
+				harnessId,
+				{ agentId: event.agent_id, agentType: event.agent_type, description: event.description },
+				event.initial,
+			);
+			// #277: only a LIVE start counts toward `delegatedCount` and
+			// counts as proof-of-life for the ceiling — an attach-time
+			// replay belongs to a PTY that's already dead (see
+			// `SubagentEntry.fromAttach`) and must not look like fresh
+			// activity.
+			if (event.initial !== true) harnessActivity.noteSubagentStarted(harnessId);
 			return;
 		case "subagent_end":
 			subagents.finish(harnessId, event.agent_id);
+			harnessActivity.noteSubagentActivity(harnessId);
 			return;
 		case "subagent_tool_result":
-			// The one narrow effect a subagent's own tool result is
+			// The one narrow phase effect a subagent's own tool result is
 			// allowed: prove its own permission gate is gone — not a
 			// different subagent's, which `event.agent_id` lets
 			// `clearPermission` tell apart. See
@@ -194,6 +215,8 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 				TRANSITION_SOURCE.L2c1ClaudeSubagentToolResult,
 				event.agent_id,
 			);
+			// #277: proof of life either way, phase effect or not.
+			harnessActivity.noteSubagentActivity(harnessId);
 			return;
 	}
 };

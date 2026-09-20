@@ -23,6 +23,7 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import { matchesWaitingPrompt, stripAnsi } from "./harnessPatterns.ts";
+import { subagents } from "./subagents.ts";
 import type { Status } from "./types.ts";
 
 export type ActivityPhase = "spawning" | "running" | "idle" | "waiting" | "permission" | "exited";
@@ -102,6 +103,46 @@ export interface HarnessActivity {
 	/// review MCP tools wired up, let alone that a pasted nudge will
 	/// reach an agent that can act on it.
 	injected: boolean;
+	/// #277 (epic #298): epoch ms the main transcript's end of turn
+	/// was deferred because `subagents.workingCount` was non-zero at
+	/// the time, or `null` when no deferral is armed. Arming changes
+	/// no phase — the harness stays whatever it already was (`running`
+	/// or `permission`). Disarmed by any main-transcript work signal
+	/// (`setRunningFromAdapter`/`setWaitingFromAdapter`/`exited`, plus
+	/// a fresh `spawned` record starts with it unset) — see
+	/// `awaitingPromptFromAdapter` and the tick's Rules 3/4 for how a
+	/// deferral eventually resolves on its own. In-memory only, reset
+	/// on every spawn.
+	delegationDeferredAt: number | null;
+	/// #277: epoch ms of the most recent subagent event of any kind
+	/// (start/tool-result/end) — what the Rule 4 ceiling measures
+	/// silence against. Bumped by `noteSubagentStarted` (live starts
+	/// only) and `noteSubagentActivity`; both mutate silently, the way
+	/// `recordOutput` bumps `lastOutputAt`. In-memory only, reset on
+	/// every spawn.
+	delegationActivityAt: number;
+	/// #277: epoch ms the tick first observed the working-subagent set
+	/// empty while a deferral was armed, or `null`. What the Rule 3
+	/// settle timer measures against. **The tick is the only writer**
+	/// — it sets this when it observes empty and clears it if the set
+	/// becomes non-empty again — kept that way deliberately: one
+	/// writer is what keeps this field debuggable. In-memory only,
+	/// reset on every spawn.
+	delegationEmptiedAt: number | null;
+	/// #277: how many subagents have started live since the user's
+	/// last prompt to this harness. Consumed by the notification
+	/// wording (not built here — see the issue) for "N delegated
+	/// agents finished"; reset by `spawned` and by `noteUserPrompt`.
+	/// In-memory only.
+	///
+	/// Deliberately cumulative across a flush: nothing resets it when
+	/// the phase moves to `waiting` (settle, ceiling, or a plain
+	/// adapter end-of-turn with no deferral) — only the next prompt
+	/// does. That's what makes "3 delegated agents finished" true for
+	/// the whole prompt cycle rather than just since the last flush.
+	/// A future call site that flips the phase without going through
+	/// `noteUserPrompt` would silently reintroduce a stale count.
+	delegatedCount: number;
 }
 
 /// Sustained silence threshold for `running → idle`. Hard-coded for
@@ -141,6 +182,26 @@ const INDUCED_MUTE_MS = 800;
 /// Claude creates no transcript at all until the first one: a fresh
 /// harness left at its prompt is healthy, not silent.
 const ADAPTER_SILENT_AFTER_MS = 10_000;
+/// #277 (epic #298), Rule 3 — how long a deferred end-of-turn waits,
+/// once the working-subagent set is observed empty, before flushing to
+/// `waiting` on its own. Measured on 1009 real delegations: after a
+/// subagent's transcript reaches a terminal row, the main session's
+/// next row (proof it woke up and is working the delegation's result)
+/// appears in 27 ms median, 1.7 s p90, 54.1 s max — every one of the
+/// 1009 woke up. 60 s sits comfortably above the worst observed
+/// wake-up, so this only ever fires when the session genuinely did not
+/// come back.
+const DELEGATION_SETTLE_MS = 60_000;
+/// #277, Rule 4 — the safety net for a lost subagent signal: while a
+/// deferral is armed and the working set is non-empty, no event from
+/// any of those subagents for this long presumes them gone. Measured
+/// on 1038 real subagents: 12.4% have an internal quiet gap over 2
+/// min, 4.4% over 5 min, 2.4% over 10 min (p99 ≈ 2 h) — ordinary tool
+/// calls, not stuck sessions. A false "presumed gone" only costs one
+/// early notification (today's behaviour), so the cost is asymmetric
+/// and the constant leans long rather than risk a permanently
+/// suppressed harness.
+const DELEGATION_CEILING_MS = 15 * 60_000;
 
 const store = new Map<string, HarnessActivity>();
 const listeners = new Map<string, Set<() => void>>();
@@ -212,6 +273,16 @@ export const TRANSITION_SOURCE = {
 	// prompt held is gone, even though the main transcript never sees
 	// it. See `clearPermission`.
 	L2c1ClaudeSubagentToolResult: "l2c1-claude-subagent-tool-result",
+	// #277: a deferred end-of-turn resolving on its own, via the tick's
+	// Rule 3 (working set went empty and stayed empty) or Rule 4
+	// (ceiling — a subagent signal was presumed lost). Deliberately
+	// NOT prefixed `l2c1-claude-`: the deferral mechanism is
+	// harness-agnostic, keyed only on `subagents.workingCount`, so if
+	// opencode ever grows a child-session liveness signal feeding the
+	// same registry, it gets this behaviour — and these source names —
+	// for free.
+	DelegationSettled: "delegation-settled",
+	DelegationCeiling: "delegation-ceiling",
 } as const;
 
 const emit = (id: string): void => {
@@ -304,11 +375,76 @@ const degradeSilentAdapter = (id: string, cur: HarnessActivity, now: number): vo
 	}
 };
 
+/// #277: void an armed end-of-turn deferral. Called from every
+/// main-transcript work/settle signal — `setRunningFromAdapter`,
+/// `setWaitingFromAdapter`, `exited` — so the deferral can never
+/// survive past whatever event proves the session isn't waiting on
+/// its subagents anymore. Mutates in place, the way `recordOutput`
+/// bumps `lastOutputAt`: this is bookkeeping, not a phase change, so
+/// it must not emit — a caller that goes on to call `setPhase` gets
+/// its own emit from that.
+///
+/// Deliberately unconditional on the harness's current phase: Rule 2
+/// requires this to run even when the caller it's called from is
+/// about to no-op (`setRunningFromAdapter` while still `permission`
+/// without `clearsPermission`, or `setPhase`'s own same-phase
+/// short-circuit) — the disarm must not depend on a phase write
+/// actually happening.
+const disarmDelegation = (id: string): void => {
+	const cur = store.get(id);
+	if (!cur || cur.delegationDeferredAt === null) return;
+	cur.delegationDeferredAt = null;
+	cur.delegationEmptiedAt = null;
+};
+
 const ensureTick = (): void => {
 	if (tickHandle !== null) return;
 	tickHandle = setInterval(() => {
 		const now = Date.now();
 		for (const [id, a] of store) {
+			// #277: a deferred end-of-turn is evaluated before the
+			// `authoritative` skip below, because a deferred harness
+			// IS authoritative by definition — only the Claude
+			// translator's `awaitingPromptFromAdapter` arms one, and
+			// only while an L2c adapter is attached. `continue`s out
+			// either way, so the authoritative block never
+			// double-handles it.
+			if (a.delegationDeferredAt !== null) {
+				// #86: permission is the harder stop. Leave the
+				// harness alone; re-evaluate on a later tick once the
+				// dialog clears back to `running`.
+				if (a.phase === "permission") continue;
+				const working = subagents.workingCount(id);
+				if (working === 0) {
+					// Rule 3 — settle timer. See `DELEGATION_SETTLE_MS`
+					// for the measurement behind the threshold.
+					if (a.delegationEmptiedAt === null) {
+						a.delegationEmptiedAt = now;
+					} else if (now - a.delegationEmptiedAt >= DELEGATION_SETTLE_MS) {
+						a.delegationDeferredAt = null;
+						a.delegationEmptiedAt = null;
+						setPhase(id, "waiting", TRANSITION_SOURCE.DelegationSettled);
+					}
+				} else {
+					// The working set is non-empty again after having
+					// been seen empty — clear the mark so a fresh
+					// settle window starts cleanly if it empties again.
+					if (a.delegationEmptiedAt !== null) a.delegationEmptiedAt = null;
+					// Rule 4 — ceiling. See `DELEGATION_CEILING_MS` for
+					// the measurement behind the threshold.
+					if (now - a.delegationActivityAt >= DELEGATION_CEILING_MS) {
+						const dropped = subagents.presumeGone(id);
+						console.warn(
+							`[skein] harness ${id}: presumed ${dropped} subagent(s) gone after ` +
+								`${DELEGATION_CEILING_MS / 60_000} min with no subagent event; flushing the deferred end of turn`,
+						);
+						a.delegationDeferredAt = null;
+						a.delegationEmptiedAt = null;
+						setPhase(id, "waiting", TRANSITION_SOURCE.DelegationCeiling);
+					}
+				}
+				continue;
+			}
 			// Harnesses with an authoritative source (Claude JSONL
 			// tail, opencode SSE adapter) write their own phase
 			// from the L2c module. The idle heuristic would fight
@@ -395,6 +531,10 @@ export const harnessActivity = {
 			promptSubmittedAt: null,
 			adapterSilent: false,
 			injected: false,
+			delegationDeferredAt: null,
+			delegationActivityAt: now,
+			delegationEmptiedAt: null,
+			delegatedCount: 0,
 		});
 		ensureTick();
 		emit(id);
@@ -444,7 +584,25 @@ export const harnessActivity = {
 
 	/// Adapter detached — fall back to the L2a heuristic for this
 	/// harness. The next chunk or tick will re-evaluate.
+	///
+	/// #277: also disarms any armed deferral. An adapter that is gone
+	/// can never resolve the end of turn it deferred — its own
+	/// `awaiting_prompt` won't come again, and neither will the
+	/// subagent events `delegationActivityAt` needs, since (today) the
+	/// same tail feeds both. Left armed, the deferral would keep
+	/// steering the harness's phase — Rule 3/4 evaluate it BEFORE the
+	/// tick's `authoritative` skip — even though authority has already
+	/// reverted to L2a, so the dot would read `running` /
+	/// "delegating · N agents" regardless of PTY truth for up to
+	/// `DELEGATION_CEILING_MS`, instead of `session_end`'s promised
+	/// fallback to chunk-driven detection. Called unconditionally,
+	/// ahead of the `authoritative` guard below: `disarmDelegation` is
+	/// itself idempotent (no-ops once `delegationDeferredAt` is
+	/// already `null`), and a second detach call on an already-
+	/// detached harness has nothing left to disarm, so running it
+	/// on that path too is free, not merely harmless.
 	detachAuthoritativeSource(id: string): void {
+		disarmDelegation(id);
 		const cur = store.get(id);
 		if (!cur || !cur.authoritative) return;
 		store.set(id, { ...cur, authoritative: false });
@@ -470,6 +628,11 @@ export const harnessActivity = {
 		source: TransitionSource,
 		opts?: { clearsPermission?: boolean },
 	): void {
+		// #277 Rule 2: any main-transcript work signal disarms a
+		// deferred end-of-turn, even one this call is about to no-op
+		// on below (still `permission` without `clearsPermission`) —
+		// the disarm must not depend on `setPhase` actually running.
+		disarmDelegation(id);
 		const cur = store.get(id);
 		if (!cur || cur.phase === "exited") return;
 		if (cur.phase === "permission" && !opts?.clearsPermission) return;
@@ -483,9 +646,38 @@ export const harnessActivity = {
 	/// the harness is unambiguously done with whatever it was doing,
 	/// permission gate included. #86.
 	setWaitingFromAdapter(id: string, source: TransitionSource): void {
+		// #277 Rule 2: unconditional disarm, same reasoning as
+		// `setRunningFromAdapter` above.
+		disarmDelegation(id);
 		const cur = store.get(id);
 		if (!cur || cur.phase === "exited") return;
 		setPhase(id, "waiting", source);
+	},
+
+	/// #277 (epic #298): the Claude translator's `awaiting_prompt` arm
+	/// calls this instead of `setWaitingFromAdapter` directly. The main
+	/// transcript ended its turn, but that is a lie about the harness
+	/// being done if it just delegated work still running in the
+	/// background — measured true in 94% of 127 real sessions.
+	///
+	/// No working subagents (`subagents.workingCount` is 0): identical
+	/// to today, straight to `waiting`. One or more: arm the deferral
+	/// (idempotent — a second end-of-turn while already deferred
+	/// doesn't reset when it was armed) and change NO phase at all.
+	/// The harness is already `running`, or `permission` — which
+	/// outranks this regardless, so simply not calling `setPhase`
+	/// leaves it alone either way. See the tick's Rules 3/4 for how a
+	/// deferral eventually resolves without a further adapter event.
+	awaitingPromptFromAdapter(id: string, source: TransitionSource): void {
+		const cur = store.get(id);
+		if (!cur || cur.phase === "exited") return;
+		if (subagents.workingCount(id) === 0) {
+			harnessActivity.setWaitingFromAdapter(id, source);
+			return;
+		}
+		if (cur.delegationDeferredAt === null) {
+			cur.delegationDeferredAt = Date.now();
+		}
 	},
 
 	/// L2c adapter reports a permission dialog is on screen — Claude's
@@ -597,6 +789,41 @@ export const harnessActivity = {
 		setPhase(id, "running", source);
 	},
 
+	/// #277: a subagent started LIVE (never an attach-time replay — the
+	/// translator only calls this for `event.initial !== true`). Bumps
+	/// `delegatedCount` (what the notification wording counts) and
+	/// `delegationActivityAt` (what the Rule 4 ceiling measures
+	/// silence against). Silent mutation, no emit — the way
+	/// `recordOutput` bumps `lastOutputAt` — subscribers must not
+	/// re-render on subagent chatter, only on the harness's own phase.
+	noteSubagentStarted(id: string): void {
+		const cur = store.get(id);
+		if (!cur) return;
+		cur.delegatedCount += 1;
+		cur.delegationActivityAt = Date.now();
+	},
+
+	/// #277: a subagent produced a tool result or reached its own end
+	/// of turn. Bumps `delegationActivityAt` only — proof of life for
+	/// the Rule 4 ceiling. Doesn't touch `delegatedCount`: that counts
+	/// starts, not activity. Silent mutation, no emit, same reasoning
+	/// as `noteSubagentStarted`.
+	noteSubagentActivity(id: string): void {
+		const cur = store.get(id);
+		if (!cur) return;
+		cur.delegationActivityAt = Date.now();
+	},
+
+	/// #277: the user submitted a fresh prompt to this harness — resets
+	/// `delegatedCount` to 0, since it counts delegations since the
+	/// LAST prompt. Silent mutation, no emit, same reasoning as
+	/// `noteSubagentStarted`.
+	noteUserPrompt(id: string): void {
+		const cur = store.get(id);
+		if (!cur) return;
+		cur.delegatedCount = 0;
+	},
+
 	/// Record a chunk of PTY output. Side-effects: bumps
 	/// `lastOutputAt`; appends the stripped chunk to the L2b tail
 	/// buffer (only when no L2c adapter is attached); transitions
@@ -696,7 +923,8 @@ export const harnessActivity = {
 		if (!cur) {
 			// A late exit for a harness we never saw spawn (shouldn't
 			// normally happen but worth recording so consumers see
-			// the truth).
+			// the truth). Never had a deferral armed, so the #277
+			// fields are just their spawn defaults.
 			store.set(id, {
 				phase: "exited",
 				lastOutputAt: null,
@@ -712,11 +940,18 @@ export const harnessActivity = {
 				promptSubmittedAt: null,
 				adapterSilent: false,
 				injected: false,
+				delegationDeferredAt: null,
+				delegationActivityAt: Date.now(),
+				delegationEmptiedAt: null,
+				delegatedCount: 0,
 			});
 			emit(id);
 			return;
 		}
 		if (cur.phase === "exited") return;
+		// #277 Rule 2: an exited harness can't still be waiting on its
+		// subagents.
+		disarmDelegation(id);
 		setPhase(id, "exited", TRANSITION_SOURCE.PtyExit, { exitCode: code });
 	},
 
@@ -825,16 +1060,42 @@ export function activityToStatus(activity: HarnessActivity | null): Status {
 /// main session (#298), e.g. "permission needed · explore · Bash".
 /// Both existing shapes (no tool, tool only) are unchanged when
 /// `permissionAgentType` is absent or `null`.
+///
+/// #277: `running` with a non-zero `workingSubagentCount` reads as
+/// "delegating · N agents" ("1 agent" singular) instead of the bare
+/// "running" — the phase itself doesn't change (the dot stays green
+/// via `effectiveStatus`), only the word this function prints. Any
+/// other status ignores the count entirely, `permission` included —
+/// a harness can't be both blocked on a dialog and shown as
+/// delegating.
 export function statusLabel(
 	status: Status,
 	permissionTool?: string | null,
 	permissionAgentType?: string | null,
+	workingSubagentCount?: number,
 ): string {
-	if (status !== "permission") return status;
-	const parts = [permissionAgentType, permissionTool].filter(
-		(p): p is string => p !== null && p !== undefined,
-	);
-	return parts.length > 0 ? `permission needed · ${parts.join(" · ")}` : "permission needed";
+	if (status === "permission") {
+		const parts = [permissionAgentType, permissionTool].filter(
+			(p): p is string => p !== null && p !== undefined,
+		);
+		return parts.length > 0 ? `permission needed · ${parts.join(" · ")}` : "permission needed";
+	}
+	if (status === "running" && workingSubagentCount) {
+		return `delegating · ${workingSubagentCount} agent${workingSubagentCount === 1 ? "" : "s"}`;
+	}
+	return status;
+}
+
+/// #277: the notification-wording half of the deferred end-of-turn —
+/// how many subagents this harness delegated since the user's last
+/// prompt (`HarnessActivity.delegatedCount`), worded for a toast
+/// subtitle / OS banner suffix. `null` for zero, so call sites can
+/// `if (summary)` rather than check the count themselves. Pure and
+/// exported so the wording is unit-testable without going through
+/// App.tsx's notification effect.
+export function delegationSummary(count: number): string | null {
+	if (count <= 0) return null;
+	return count === 1 ? "1 delegated agent finished" : `${count} delegated agents finished`;
 }
 
 /// `activityToStatus` with the "acknowledged" downgrade applied:

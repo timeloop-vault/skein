@@ -32,6 +32,20 @@ export interface SubagentEntry {
 	/// redundant `subagent_start` for the same `agentId` — see
 	/// `record`.
 	startedAt: number;
+	/// Has this id only ever been seen via an attach-time replay
+	/// (`ClaudeEvent.initial === true`), never a live start? `true`
+	/// means the transcript was already on disk when the adapter
+	/// attached — the PTY that spawned it is gone (PTYs die with
+	/// Skein), so on real transcripts it's typically days-old and
+	/// nothing is coming. #277 (epic #298): 2.8% of real subagent
+	/// transcripts are exactly these orphans, and counting one as
+	/// "working" would suppress a harness's notifications for the
+	/// whole delegation-ceiling window after every restart — worse
+	/// than the missed notification it would be covering for. Sticky
+	/// false: once a live start is recorded for an id, a later replay
+	/// (Skein restarting while it's still genuinely running) must not
+	/// revert it — see `record`.
+	fromAttach: boolean;
 }
 
 const live = new Map<string, Map<string, SubagentEntry>>();
@@ -69,9 +83,16 @@ export const subagents = {
 	/// does not double-count — the Rust side re-emits this after every
 	/// restart for whatever is still live, and that replay must read
 	/// as "still going," not "started again."
+	///
+	/// `initial` mirrors `ClaudeEvent.initial` (#277): `true` for the
+	/// attach-time batch found already on disk, `false` for a start
+	/// observed live. `fromAttach` is derived rather than copied
+	/// straight across so a later live re-emit for an id first seen at
+	/// attach promotes it — once `false`, always `false`.
 	record(
 		harnessId: string,
 		entry: { agentId: string; agentType: string | null; description: string | null },
+		initial: boolean,
 	): void {
 		let forHarness = live.get(harnessId);
 		if (!forHarness) {
@@ -79,7 +100,11 @@ export const subagents = {
 			live.set(harnessId, forHarness);
 		}
 		const existing = forHarness.get(entry.agentId);
-		forHarness.set(entry.agentId, { ...entry, startedAt: existing?.startedAt ?? Date.now() });
+		forHarness.set(entry.agentId, {
+			...entry,
+			startedAt: existing?.startedAt ?? Date.now(),
+			fromAttach: (existing?.fromAttach ?? true) && initial === true,
+		});
 		refreshSnapshot(harnessId);
 		emit(harnessId);
 	},
@@ -108,6 +133,43 @@ export const subagents = {
 		return snapshots.get(harnessId) ?? EMPTY;
 	},
 
+	/// Count of this harness's subagents that count as "working" for
+	/// #277's deferral (Rules 1/3/4) — every tracked entry EXCEPT the
+	/// attach-time-only orphans `fromAttach` exists to exclude. `live`
+	/// above stays an honest mirror of the transcripts (#276's
+	/// contract); this is the one place the counting is opinionated.
+	workingCount(harnessId: string): number {
+		const forHarness = live.get(harnessId);
+		if (!forHarness) return 0;
+		let n = 0;
+		for (const e of forHarness.values()) if (!e.fromAttach) n++;
+		return n;
+	},
+
+	/// #277's ceiling: presume every "working" subagent for this
+	/// harness is gone — no event from any of them in
+	/// `DELEGATION_CEILING_MS`, so a signal was almost certainly lost.
+	/// Leaves attach-time-only entries alone; they were never counted
+	/// as working, so there's nothing to presume about them, and the
+	/// disk stays the eventual source of truth if one really is still
+	/// running (its next event re-records it). Returns how many were
+	/// dropped so the caller can name the count in its warning.
+	presumeGone(harnessId: string): number {
+		const forHarness = live.get(harnessId);
+		if (!forHarness) return 0;
+		let n = 0;
+		for (const [id, e] of forHarness) {
+			if (e.fromAttach) continue;
+			forHarness.delete(id);
+			n++;
+		}
+		if (n === 0) return 0;
+		if (forHarness.size === 0) live.delete(harnessId);
+		refreshSnapshot(harnessId);
+		emit(harnessId);
+		return n;
+	},
+
 	subscribe(harnessId: string, cb: () => void): () => void {
 		let set = listeners.get(harnessId);
 		if (!set) {
@@ -130,5 +192,16 @@ export function useLiveSubagents(harnessId: string): readonly SubagentEntry[] {
 	return useSyncExternalStore(
 		(cb) => subagents.subscribe(harnessId, cb),
 		() => subagents.live(harnessId),
+	);
+}
+
+/// React hook: `subagents.workingCount` for one harness, kept live.
+/// #277's `statusLabel` call sites need this reactively — a number is
+/// already a stable primitive across renders that don't change it, so
+/// unlike `useLiveSubagents` there's no snapshot-caching to do.
+export function useWorkingSubagentCount(harnessId: string): number {
+	return useSyncExternalStore(
+		(cb) => subagents.subscribe(harnessId, cb),
+		() => subagents.workingCount(harnessId),
 	);
 }

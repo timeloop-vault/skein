@@ -13,6 +13,7 @@
 
 import { HARNESS_KINDS } from "./data.tsx";
 import { activityToStatus, harnessActivity, statusLabel } from "./harnessActivity.ts";
+import { subagents } from "./subagents.ts";
 import type { HarnessKind, Status } from "./types.ts";
 
 const TARGET_SEL = ".h-chip, .tab-status";
@@ -38,6 +39,10 @@ interface Resolved {
 	 *  one rather than the main session. Same lookup restriction as
 	 *  `tool`. */
 	agentType: string | null;
+	/** #277: how many subagents are currently working, for the
+	 *  "delegating · N agents" wording. Only ever populated via the
+	 *  chip's live harnessId lookup, same restriction as `tool`. */
+	workingCount: number;
 }
 
 export function attachStatusPopover(): () => void {
@@ -68,6 +73,7 @@ export function attachStatusPopover(): () => void {
 		let status = isDot ? (el.dataset.status ?? null) : null;
 		let tool: string | null = null;
 		let agentType: string | null = null;
+		let workingCount = 0;
 		// #248: the chip carries its harness's agent label, already worded
 		// by `agentLabel` — the popover repeats it rather than deciding
 		// for itself what an opencode agent can be said to be.
@@ -90,6 +96,7 @@ export function attachStatusPopover(): () => void {
 				tool = a.permissionTool;
 				agentType = a.permissionAgentType;
 			}
+			workingCount = subagents.workingCount(el.dataset.harnessId);
 		}
 		// A lone status dot borrows its row's chip for the kind (harness
 		// tab etc.); skipped for the room dot, which is an aggregate.
@@ -97,7 +104,7 @@ export function attachStatusPopover(): () => void {
 			const chips = el.closest<HTMLElement>(ROW_SEL)?.querySelectorAll<HTMLElement>(".h-chip");
 			if (chips?.length === 1) kind = chips[0]?.dataset.kind ?? null;
 		}
-		return kind || status ? { kind, status, agent, tool, agentType } : null;
+		return kind || status ? { kind, status, agent, tool, agentType, workingCount } : null;
 	};
 
 	const render = (el: HTMLDivElement, c: Resolved) => {
@@ -121,9 +128,14 @@ export function attachStatusPopover(): () => void {
 		if (c.agent) seg(c.agent.key, c.agent.value);
 		// #86: "permission needed" (+ tool) rather than the bare word —
 		// the dataset value stays the raw Status for the `pv-*` class,
-		// only the printed text goes through `statusLabel`.
+		// only the printed text goes through `statusLabel`. #277:
+		// "delegating · N agents" in place of bare "running" likewise.
 		if (c.status)
-			seg("state", statusLabel(c.status as Status, c.tool, c.agentType), `pv-${c.status}`);
+			seg(
+				"state",
+				statusLabel(c.status as Status, c.tool, c.agentType, c.workingCount),
+				`pv-${c.status}`,
+			);
 	};
 
 	const onOver = (e: MouseEvent) => {

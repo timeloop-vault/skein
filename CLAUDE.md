@@ -118,15 +118,16 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   mountKey; attaches the L2c event adapters
     │   │   ├── harnessActivity.ts   # Source of truth for harness phase (spawning/running/
     │   │   │                        #   idle/waiting/exited); L2a idle heuristic + L2b
-    │   │   │                        #   patterns + L2c authoritative adapters
+    │   │   │                        #   patterns + L2c authoritative adapters. #277 defers
+    │   │   │                        #   a main session's end-of-turn while its subagents
+    │   │   │                        #   are still working, rather than adding a phase
     │   │   ├── subagents.ts         # Per-harness live-Claude-subagent registry + useLiveSubagents
     │   │   │                        #   (#276, epic #298). Disk is the source of truth: the
     │   │   │                        #   adapter re-derives the live set from the transcripts on
     │   │   │                        #   every attach, so `record` is idempotent and a restart
-    │   │   │                        #   replay never looks like a second start. Exists so #277
-    │   │   │                        #   (subagent-aware phase/notification policy) has something
-    │   │   │                        #   clean to read — nothing here yet changes phase or fires
-    │   │   │                        #   a notification off subagent activity
+    │   │   │                        #   replay never looks like a second start. `workingCount`
+    │   │   │                        #   (excludes attach-time orphans) and `presumeGone` back
+    │   │   │                        #   #277's end-of-turn deferral in harnessActivity.ts
     │   │   ├── harnessCmd.ts        # Harness argv: cmdForKind (fresh spawn) + resumeCmd /
     │   │   │                        #   withResumeCmds / unarchiveRoomTransform. Rebuilt from
     │   │   │                        #   the harness RECORD, never by matching the previous
@@ -262,7 +263,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                                   #   alongside the main file on the same debouncer,
     │       │                                   #   re-deriving the live set from disk on every
     │       │                                   #   attach — SubagentStart/ToolResult/End, plus one
-    │       │                                   #   `subagent_end` harness_actions row per finish
+    │       │                                   #   `subagent_end` harness_actions row per finish.
+    │       │                                   #   `SubagentStart.initial` (#277) is true only
+    │       │                                   #   for the disk-seeded attach batch, never a
+    │       │                                   #   live start
     │       ├── src/harness_events_opencode.rs  # SSE client → OpencodeEvent (L2c-2)
     │       ├── src/harness_actions_claude.rs   # JSONL → harness_actions rows (#80)
     │       ├── src/harness_actions_opencode.rs # SSE/opencode.db → harness_actions rows (#80)
@@ -350,12 +354,45 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   to await, so its own end of turn IS its exit: a terminal `stop_reason`
   (`end_turn`/`stop_sequence`/`max_tokens`) means done, verified 221/221
   on real transcripts — nothing polls mtime. The frontend mirrors the
-  live set in a pure per-harness registry, `subagents.ts`; it changes no
-  phase and fires no notification on its own — that policy is #277's.
-  The feed already renders the delegation via the main transcript's
-  `Agent` tool_call row, so the only new row is `subagent_end`: a
-  *background* subagent's `AgentRow` lands at launch and nothing else
-  ever marks it finished.
+  live set in a pure per-harness registry, `subagents.ts`. The feed
+  already renders the delegation via the main transcript's `Agent`
+  tool_call row, so the only new row is `subagent_end`: a *background*
+  subagent's `AgentRow` lands at launch and nothing else ever marks it
+  finished.
+  **End-of-turn deferral (#277, epic #298):** a main session ending its
+  turn while `subagents.workingCount` is non-zero does not move to
+  `waiting` — that phase means "your turn", and it was a lie while
+  delegated work ran, measured on 127 real session dirs: 1,894
+  end-of-turns with a subagent still running, in 119 of them (94%).
+  `awaitingPromptFromAdapter` arms a deferral instead of moving the
+  phase; no new phase was added (decision (c) on #277) — the harness
+  stays `running` (or `permission`, which outranks it), and
+  `statusLabel` prints "delegating · N agents" in its place. The
+  dominant resolution needs no timer: any main-transcript work signal
+  disarms the deferral, and the session's OWN next end-of-turn — by
+  when the working set is empty, since it woke to work the delegation's
+  result — is what actually flips to `waiting`, carrying
+  `delegationSummary`'s "N delegated agents finished". Measured on 1009
+  real delegations, that wake-up followed a subagent's terminal row
+  every time: 27 ms median, 1.7 s p90, 54.1 s max. Two safety nets exist
+  because a leaked entry means permanent silence, worse than the noise
+  being fixed: `DELEGATION_SETTLE_MS` (60 s, above the 54.1 s worst
+  wake-up) flushes once the working set is seen empty and stays empty;
+  `DELEGATION_CEILING_MS` (15 min of total subagent silence — measured
+  2.4% of 1038 real subagents have an internal quiet gap that long)
+  presumes the working set gone and notifies without claiming anything
+  finished, since Skein can't know that. The restart leak — every
+  attach-time subagent reading as newly working — is closed by
+  `ClaudeEvent::SubagentStart.initial`, true only for the disk-seeded
+  attach batch; `subagents.workingCount` excludes those via
+  `SubagentEntry.fromAttach` (sticky false once a live start is seen;
+  2.8% of real transcripts are these orphans). The mechanism keys only
+  on `subagents.workingCount`, not on anything Claude-specific — the
+  sources are `delegation-settled`/`delegation-ceiling`, not
+  `l2c1-claude-*` — so a future opencode child-session signal would
+  inherit it for free; opencode registers no subagents today, so the
+  count is always 0, and none of this needs #215 config injection, same
+  as subagent discovery generally — only the *permission* signal does.
   **`permission` is its own phase (#86)**, distinct from `waiting`
   (end of turn / needs input), and outranks it everywhere. Claude's
   JSONL records nothing when a dialog opens, so the signal is a
@@ -403,7 +440,6 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   `/api/harness/permission` now writes one `tracing::info!` per request
   (#176) — the 2026-09-19 incident could only be reconstructed from the
   database because it did not.
-  All further subagent phase/notification policy stays with #277.
   The Live Context store backfills the newest 500 rows per room and
   appends live ones; the Plan and Activity cards both render from that
   one array. It is **room**-scoped, so the Plan card shows every
@@ -646,7 +682,9 @@ Linux support, keyboard-driven navigation, distribution with in-app
 auto-update, a `files` harness with a CodeMirror editor, the review
 surface (baseline, review pane, agent API + MCP server, sign-off, config
 injection), and Claude subagent awareness — a feed row for a finished
-delegation plus permission clearing for a subagent's own dialog (#276).
+delegation, permission clearing for a subagent's own dialog (#276), and
+an end-of-turn deferral so a harness with subagents still working reads
+"delegating" rather than a premature "waiting" (#277).
 What is open, what is next and what is known-weak is on GitHub — see
 "Where the work is" at the top. `git log` records what landed and when.
 

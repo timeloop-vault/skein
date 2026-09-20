@@ -75,11 +75,21 @@ pub enum ClaudeEvent {
     /// terminal row (a follow-up delegation to the same id, which
     /// flips it live again). `agent_type`/`description` come from the
     /// `agent-<id>.meta.json` sidecar when it exists and parses;
-    /// `None` otherwise.
+    /// `None` otherwise. `initial` is `true` only for the batch seeded
+    /// from disk at attach time (`attach_at`'s `initial_subagent_starts`)
+    /// — a transcript that already existed, with no terminal
+    /// `stop_reason`, belongs to a Claude process that died with the
+    /// PTY it ran in (PTYs die with Skein; `claude_events_attach` runs
+    /// once per spawn), so it can never still be running. `false` is
+    /// everything a live watcher tick discovers afterwards, which can
+    /// be. #277 needs the distinction to avoid deferring a harness's
+    /// "done" notification for the ceiling's whole duration after
+    /// every restart on account of subagents that are already dead.
     SubagentStart {
         agent_id: String,
         agent_type: Option<String>,
         description: Option<String>,
+        initial: bool,
     },
     /// A tool call inside a subagent's own turn just returned a
     /// result. This exists so a permission dialog a *subagent* opened
@@ -437,6 +447,7 @@ impl ClaudeEventsManager {
                         agent_id: agent_id.clone(),
                         agent_type: agent_type.clone(),
                         description: description.clone(),
+                        initial: true,
                     });
                 }
                 initial_subagents.insert(
@@ -728,6 +739,7 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
                 agent_id: agent_id.clone(),
                 agent_type: agent_type.clone(),
                 description: description.clone(),
+                initial: false,
             });
             s.subagents.insert(
                 agent_id.clone(),
@@ -867,6 +879,7 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
                     agent_id: agent_id.clone(),
                     agent_type: tail.agent_type.clone(),
                     description: tail.description.clone(),
+                    initial: false,
                 });
             }
             if is_subagent_tool_result_row(&value) {
@@ -2215,12 +2228,13 @@ mod tests {
         assert!(
             events.iter().any(|e| matches!(
                 e,
-                ClaudeEvent::SubagentStart { agent_id, agent_type, description }
+                ClaudeEvent::SubagentStart { agent_id, agent_type, description, initial }
                     if agent_id == "a1"
                         && agent_type.as_deref() == Some("explore")
                         && description.as_deref() == Some("Map the tailer")
+                        && !initial
             )),
-            "expected SubagentStart with sidecar meta, got {events:?}"
+            "expected a live (non-initial) SubagentStart with sidecar meta, got {events:?}"
         );
     }
 
@@ -2245,10 +2259,10 @@ mod tests {
         assert!(
             events.iter().any(|e| matches!(
                 e,
-                ClaudeEvent::SubagentStart { agent_id, agent_type, description }
-                    if agent_id == "a2" && agent_type.is_none() && description.is_none()
+                ClaudeEvent::SubagentStart { agent_id, agent_type, description, initial }
+                    if agent_id == "a2" && agent_type.is_none() && description.is_none() && !initial
             )),
-            "expected SubagentStart with no metadata, got {events:?}"
+            "expected a live (non-initial) SubagentStart with no metadata, got {events:?}"
         );
     }
 
@@ -2544,10 +2558,12 @@ mod tests {
 
         let events = drain_brief(&rx);
         assert!(
-            events.iter().any(
-                |e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "live")
-            ),
-            "expected SubagentStart for the unfinished subagent, got {events:?}"
+            events.iter().any(|e| matches!(
+                e,
+                ClaudeEvent::SubagentStart { agent_id, initial, .. }
+                    if agent_id == "live" && *initial
+            )),
+            "expected an initial SubagentStart for the unfinished subagent, got {events:?}"
         );
         assert!(
             !events.iter().any(

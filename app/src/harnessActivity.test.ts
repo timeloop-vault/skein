@@ -3,6 +3,7 @@ import {
 	TRANSITION_SOURCE,
 	activityToStatus,
 	aggregateRoomStatus,
+	delegationSummary,
 	effectiveStatus,
 	harnessActivity,
 	higherPriorityStatus,
@@ -282,6 +283,34 @@ describe("activityToStatus / statusLabel", () => {
 	it("passes other statuses through unchanged", () => {
 		expect(statusLabel("waiting")).toBe("waiting");
 		expect(statusLabel("running")).toBe("running");
+	});
+
+	it("reads 'delegating · N agents' for a running harness with working subagents (#277)", () => {
+		expect(statusLabel("running", null, null, 2)).toBe("delegating · 2 agents");
+		expect(statusLabel("running", null, null, 1)).toBe("delegating · 1 agent");
+		expect(statusLabel("running", null, null, 0)).toBe("running");
+		expect(statusLabel("running")).toBe("running");
+	});
+
+	it("ignores the working-subagent count for any status but running", () => {
+		expect(statusLabel("waiting", null, null, 3)).toBe("waiting");
+		// The permission shapes (#86/#298) are unaffected by the count.
+		expect(statusLabel("permission", null, null, 3)).toBe("permission needed");
+		expect(statusLabel("permission", "Bash", null, 3)).toBe("permission needed · Bash");
+		expect(statusLabel("permission", "Bash", "explore", 3)).toBe(
+			"permission needed · explore · Bash",
+		);
+	});
+});
+
+describe("delegationSummary", () => {
+	it("is null for zero", () => {
+		expect(delegationSummary(0)).toBeNull();
+	});
+
+	it("is singular for one, plural otherwise", () => {
+		expect(delegationSummary(1)).toBe("1 delegated agent finished");
+		expect(delegationSummary(3)).toBe("3 delegated agents finished");
 	});
 });
 
