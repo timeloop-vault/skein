@@ -34,6 +34,8 @@ const activity = (over: Partial<HarnessActivity> = {}): HarnessActivity => ({
 	adapterHeard: true,
 	promptSubmittedAt: null,
 	adapterSilent: false,
+	degradedBy: null,
+	launchSignalAt: null,
 	injected: true,
 	delegationDeferredAt: null,
 	delegationActivityAt: 0,
@@ -97,6 +99,58 @@ describe("canSendPrompt", () => {
 	it("refuses a harness that wasn't spawned with config injection", () => {
 		const r = canSendPrompt(baseInput({ activity: activity({ injected: false }) }));
 		expect(r).toEqual({ ok: false, reason: expect.stringContaining("review tools") });
+	});
+
+	// #273: a launch signal is proof-of-life equivalent to `adapterHeard`
+	// — the harness's CLI reaching its own prompt before the tail has
+	// ever spoken (a fresh, just-past-trust-dialog spawn).
+	it("accepts a harness whose only proof is a launch signal", () => {
+		const r = canSendPrompt(
+			baseInput({ activity: activity({ adapterHeard: false, launchSignalAt: Date.now() }) }),
+		);
+		expect(r).toEqual({ ok: true });
+	});
+
+	it("still refuses a launch-signalled harness that isn't injected", () => {
+		const r = canSendPrompt(
+			baseInput({
+				activity: activity({ adapterHeard: false, launchSignalAt: Date.now(), injected: false }),
+			}),
+		);
+		expect(r).toEqual({ ok: false, reason: expect.stringContaining("review tools") });
+	});
+
+	it("still refuses a launch-signalled harness whose watchdog gave up", () => {
+		const r = canSendPrompt(
+			baseInput({
+				activity: activity({
+					adapterHeard: false,
+					launchSignalAt: Date.now(),
+					adapterSilent: true,
+				}),
+			}),
+		);
+		expect(r.ok).toBe(false);
+	});
+
+	// Regression for the #273/#259 interaction: a launch signal recorded
+	// AFTER the #259 watchdog already gave up on the adapter must not
+	// read as proof of life — the #259 diagnosis (a prompted tail that
+	// stayed mute) says nothing about the launch hook's channel, so
+	// `adapterSilent` staying true here (left by `degradeSilentAdapter`,
+	// not the launch-silent path) must still refuse.
+	it("refuses a harness left adapter-silent by the #259 watchdog even with a launch signal", () => {
+		const r = canSendPrompt(
+			baseInput({
+				activity: activity({
+					adapterHeard: false,
+					launchSignalAt: Date.now(),
+					adapterSilent: true,
+					degradedBy: "adapter-silent",
+				}),
+			}),
+		);
+		expect(r.ok).toBe(false);
 	});
 
 	it("refuses a multi-line body when bracketed paste is off", () => {
@@ -215,6 +269,51 @@ describe("canInsertText", () => {
 	it("refuses a harness that wasn't spawned with config injection", () => {
 		const r = canInsertText(insertInput({ activity: activity({ injected: false }) }));
 		expect(r).toEqual({ ok: false, reason: expect.stringContaining("review tools") });
+	});
+
+	// #273: same launch-signal equivalence as `canSendPrompt`.
+	it("accepts a harness whose only proof is a launch signal", () => {
+		const r = canInsertText(
+			insertInput({ activity: activity({ adapterHeard: false, launchSignalAt: Date.now() }) }),
+		);
+		expect(r).toEqual({ ok: true });
+	});
+
+	it("still refuses a launch-signalled harness that isn't injected", () => {
+		const r = canInsertText(
+			insertInput({
+				activity: activity({ adapterHeard: false, launchSignalAt: Date.now(), injected: false }),
+			}),
+		);
+		expect(r).toEqual({ ok: false, reason: expect.stringContaining("review tools") });
+	});
+
+	it("still refuses a launch-signalled harness whose watchdog gave up", () => {
+		const r = canInsertText(
+			insertInput({
+				activity: activity({
+					adapterHeard: false,
+					launchSignalAt: Date.now(),
+					adapterSilent: true,
+				}),
+			}),
+		);
+		expect(r.ok).toBe(false);
+	});
+
+	// Same #273/#259 regression as `canSendPrompt` above.
+	it("refuses a harness left adapter-silent by the #259 watchdog even with a launch signal", () => {
+		const r = canInsertText(
+			insertInput({
+				activity: activity({
+					adapterHeard: false,
+					launchSignalAt: Date.now(),
+					adapterSilent: true,
+					degradedBy: "adapter-silent",
+				}),
+			}),
+		);
+		expect(r.ok).toBe(false);
 	});
 });
 

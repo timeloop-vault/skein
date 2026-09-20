@@ -51,6 +51,10 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
         // POST is present and always refuses — see `api_signoff`.
         .route("/api/status", get(api_status).post(api_signoff))
         .route("/api/harness/permission", post(api_harness_permission))
+        .route(
+            "/api/harness/session-start",
+            post(api_harness_session_start),
+        )
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
         .with_state(state)
 }
@@ -366,6 +370,56 @@ async fn api_harness_permission(
         agent_type,
         agent_id,
     );
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// The injected Claude plugin's `SessionStart` hook posts here (#273)
+/// — like the permission route above, this is not an agent verb: it
+/// carries no MCP tool and is not in `mcp.rs`.
+///
+/// The body is Claude Code's own hook payload, not ours to police:
+/// only `source` is read out of it, purely for the log line, and a
+/// body that fails to parse as JSON at all still succeeds — a future
+/// Claude Code payload change must not start breaking a harness's
+/// launch.
+///
+/// Duplicate fires are expected and must stay harmless. Upstream
+/// anthropics/claude-code#78455 reports `SessionStart` firing twice
+/// within a few hundred ms for the same project — once for a
+/// "phantom" session that never materialises, with a payload
+/// indistinguishable from the real one — so nothing here or
+/// downstream may hang a consume-once side effect on this route:
+/// emitting the event twice is fine, since the frontend handler
+/// (`noteLaunchSignal`) is idempotent — it always records a
+/// timestamp, and only moves the phase when the transcript tail
+/// hasn't already spoken for itself (or when recovering a harness its
+/// own launch-silent watchdog gave up on), never overriding
+/// `permission` or `exited`.
+async fn api_harness_session_start(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let (Some(harness_id), Some(_)) = (caller.harness_id.clone(), caller.harness_label.as_ref())
+    else {
+        return error_body(
+            StatusCode::BAD_REQUEST,
+            "X-Skein-Harness must name a harness this room actually contains",
+        );
+    };
+    let payload: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    let source = payload.get("source").and_then(Value::as_str);
+    tracing::info!(
+        harness_id = %harness_id,
+        room_id = %caller.room_id,
+        source,
+        "agent api: harness session-start ping"
+    );
+    state.notify_harness_session_start(&caller.room_id, &harness_id);
     StatusCode::NO_CONTENT.into_response()
 }
 

@@ -2397,6 +2397,24 @@ export default function App() {
 		};
 	}, []);
 
+	// #273: Claude's `SessionStart` command hook fires this global event
+	// the moment its CLI has (re)started — including before any
+	// transcript exists, which is exactly the gap that used to leave a
+	// freshly spawned harness stuck in `spawning` forever. Room-agnostic
+	// like the permission listener above; `noteLaunchSignal` is already
+	// a no-op for an id Skein doesn't have a record for.
+	useEffect(() => {
+		const un = listen<{
+			roomId: string;
+			harnessId: string;
+		}>("skein://harness-session-start", (event) => {
+			harnessActivity.noteLaunchSignal(event.payload.harnessId);
+		});
+		return () => {
+			void un.then((f) => f());
+		};
+	}, []);
+
 	// L5a — pending-notification accounting. A harness transitioning
 	// from working (spawning|running) to passive (idle|exited), or
 	// into `permission` (#86), bumps its own `pendingNotifications`

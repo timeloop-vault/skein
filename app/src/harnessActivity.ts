@@ -94,6 +94,37 @@ export interface HarnessActivity {
 	/// back to L2a. Cleared (and authority restored) the moment the
 	/// adapter does deliver. #259.
 	adapterSilent: boolean;
+	/// Which watchdog set `adapterSilent`, so a recovery signal can tell
+	/// the two diagnoses apart. `null` whenever `adapterSilent` is
+	/// false. Deliberately an explicit field rather than something
+	/// inferred (e.g. from `promptSubmittedAt === null`) — the two
+	/// degrade helpers currently sit in an `else if`, so today the
+	/// inference happens to match, but that's an accident of the guard
+	/// order, exactly the kind of coupling that breaks silently the
+	/// next time someone edits it. #273.
+	degradedBy: "adapter-silent" | "launch-silent" | null;
+	/// #273: epoch ms at which the harness's own CLI reported its own
+	/// launch — today, Claude's `SessionStart` command hook (wired up by
+	/// #215's config injection) POSTing to `/api/harness/session-start`,
+	/// re-broadcast on `skein://harness-session-start`. `null` until
+	/// that arrives — which is permanent for a spawn with injection off,
+	/// or for an authoritative kind whose CLI has no launch hook at all
+	/// (opencode today).
+	///
+	/// Deliberately a SEPARATE field from `adapterHeard`, not folded
+	/// into it, even though both mean roughly "this harness proved it's
+	/// alive": `adapterHeard` specifically means "the JSONL/SSE tail is
+	/// reading the right file/stream" — that is exactly what #259's
+	/// silent-adapter watchdog keys on to detect a mis-encoded
+	/// transcript path. The launch hook is a different channel
+	/// entirely (an HTTP POST from inside the CLI, nothing to do with
+	/// the tail Skein reads) and proves nothing about whether the tail
+	/// is attached to the right file. Folding this into `adapterHeard`
+	/// would make a harness whose CLI reported launch but whose tail is
+	/// reading the wrong path look identical to a healthy one — exactly
+	/// the failure mode #259 exists to catch — so the two stay apart:
+	/// two facts, two fields. Reset to `null` on every spawn.
+	launchSignalAt: number | null;
 	/// Did #215's config injection actually happen for this spawn (a
 	/// non-empty `Injection`, per `pty_spawn`'s resolved `injected`
 	/// field)? Reset to `false` on every spawn and set once
@@ -182,6 +213,23 @@ const INDUCED_MUTE_MS = 800;
 /// Claude creates no transcript at all until the first one: a fresh
 /// harness left at its prompt is healthy, not silent.
 const ADAPTER_SILENT_AFTER_MS = 10_000;
+/// #273 — how long an authoritative harness may sit in `spawning` with
+/// no launch signal (`launchSignalAt` still `null`) before the tick
+/// hands it back to L2a. Unlike `ADAPTER_SILENT_AFTER_MS`, this isn't
+/// gated on a prompt — Claude writes no transcript until the first one,
+/// so a harness with #215 injection off, or a kind whose CLI has no
+/// launch hook, would otherwise sit in `spawning` forever with
+/// `authoritative` true and the L2a tick standing down for it (the
+/// original #273 bug). 15 s is generous compared with a real injected
+/// start, where the hook lands a second or two after spawn — but it
+/// deliberately accepts that a brand-new room sitting at an unanswered
+/// "trust this folder?" dialog WILL hit this timer and fall back to
+/// L2a. That's correct, not a regression: it's strictly better than
+/// sitting in `spawning` forever, the input gates in `harnessInput.ts`
+/// still refuse a harness that hasn't proven itself, and
+/// `noteLaunchSignal` recovers the harness the moment the dialog is
+/// accepted and the hook actually fires.
+const LAUNCH_SILENT_AFTER_MS = 15_000;
 /// #277 (epic #298), Rule 3 — how long a deferred end-of-turn waits,
 /// once the working-subagent set is observed empty, before flushing to
 /// `waiting` on its own. Measured on 1009 real delegations: after a
@@ -269,6 +317,16 @@ export const TRANSITION_SOURCE = {
 	// #259: the adapter never delivered anything after a prompt was
 	// submitted — the watchdog handed the harness back to L2a.
 	AdapterSilent: "adapter-silent",
+	// #273: no launch signal ever arrived (and the tail hadn't spoken
+	// either) within LAUNCH_SILENT_AFTER_MS of spawn — the watchdog
+	// handed the harness back to L2a. Deliberately its own source
+	// rather than reusing `AdapterSilent`: the two are diagnosed
+	// differently (no prompt was even needed to arm this one), and this
+	// table exists so the L7 feed's "why" chip says which.
+	LaunchSilent: "launch-silent",
+	// #273: the harness's own CLI reported its own launch — Claude's
+	// `SessionStart` hook via #215 injection. See `noteLaunchSignal`.
+	L2c1ClaudeSessionStart: "l2c1-claude-session-start",
 	// #298: a subagent's own tool result proves the gate its permission
 	// prompt held is gone, even though the main transcript never sees
 	// it. See `clearPermission`.
@@ -369,10 +427,42 @@ const degradeSilentAdapter = (id: string, cur: HarnessActivity, now: number): vo
 	console.warn(
 		`[skein] harness ${id}: adapter delivered nothing ${ADAPTER_SILENT_AFTER_MS / 1000}s after a prompt; falling back to the idle heuristic`,
 	);
-	store.set(id, { ...cur, authoritative: false, adapterSilent: true, lastOutputAt: now });
+	store.set(id, {
+		...cur,
+		authoritative: false,
+		adapterSilent: true,
+		degradedBy: "adapter-silent",
+		lastOutputAt: now,
+	});
 	if (cur.phase === "spawning") {
 		setPhase(id, "running", TRANSITION_SOURCE.AdapterSilent);
 	}
+};
+
+/// #273: neither the tail nor the launch hook has said anything at all,
+/// this long after spawn, and the harness is still `spawning`: give up
+/// on the adapter the same way `degradeSilentAdapter` does, but under
+/// its own transition source (`LaunchSilent`) because the two are
+/// diagnosed differently — this one needed no prompt to arm, it fires
+/// on pure silence since spawn. Sets `adapterSilent` (not a separate
+/// flag) so `noteLaunchSignal`'s recovery path — the same one
+/// `adapterDelivered` already uses — applies here too if the launch
+/// signal turns up late (e.g. the user finally accepts a trust
+/// dialog). Unlike `degradeSilentAdapter`, the phase write here is
+/// unconditional: the caller's guard already confirmed `phase ===
+/// "spawning"`.
+const degradeLaunchSilentAdapter = (id: string, cur: HarnessActivity, now: number): void => {
+	console.warn(
+		`[skein] harness ${id}: no launch signal ${LAUNCH_SILENT_AFTER_MS / 1000}s after spawn; falling back to the idle heuristic`,
+	);
+	store.set(id, {
+		...cur,
+		authoritative: false,
+		adapterSilent: true,
+		degradedBy: "launch-silent",
+		lastOutputAt: now,
+	});
+	setPhase(id, "running", TRANSITION_SOURCE.LaunchSilent);
 };
 
 /// #277: void an armed end-of-turn deferral. Called from every
@@ -459,6 +549,18 @@ const ensureTick = (): void => {
 					now - a.promptSubmittedAt >= ADAPTER_SILENT_AFTER_MS
 				) {
 					degradeSilentAdapter(id, a, now);
+				} else if (
+					// #273: mirrors the #259 check's own `!a.adapterHeard`
+					// guard — if the tail has already proven itself, this
+					// timer has nothing to add, so an `else if` keeps the
+					// two mutually exclusive rather than both firing (and
+					// double-transitioning) in the same tick.
+					!a.adapterHeard &&
+					a.launchSignalAt === null &&
+					a.phase === "spawning" &&
+					now - a.spawnedAt >= LAUNCH_SILENT_AFTER_MS
+				) {
+					degradeLaunchSilentAdapter(id, a, now);
 				}
 				continue;
 			}
@@ -530,6 +632,8 @@ export const harnessActivity = {
 			adapterHeard: false,
 			promptSubmittedAt: null,
 			adapterSilent: false,
+			degradedBy: null,
+			launchSignalAt: null,
 			injected: false,
 			delegationDeferredAt: null,
 			delegationActivityAt: now,
@@ -578,8 +682,73 @@ export const harnessActivity = {
 			...cur,
 			adapterHeard: true,
 			adapterSilent: false,
+			degradedBy: null,
 			...(cur.adapterSilent ? { authoritative: true } : null),
 		});
+	},
+
+	/// #273: the harness's own CLI reported its own launch (Claude's
+	/// `SessionStart` hook, relayed via `skein://harness-session-start`).
+	/// No-op for an unknown harness or one already `exited`.
+	///
+	/// Always records `launchSignalAt` (even on a second call — Claude
+	/// is known to fire `SessionStart` twice for a "phantom" session
+	/// within a few hundred ms, anthropics/claude-code#78455 — so this
+	/// must be idempotent and carry no consume-once side effect; a
+	/// re-record is harmless since nothing here treats it as an edge).
+	///
+	/// Only the launch-silent watchdog's diagnosis is voided by this
+	/// event — `recovering` below checks `degradedBy`, not just
+	/// `adapterSilent`. A launch signal means the harness IS alive and
+	/// sitting at its prompt, which is exactly what
+	/// `degradeLaunchSilentAdapter` had no proof of; it says nothing at
+	/// all about what `degradeSilentAdapter` (#259) diagnosed — a
+	/// PROMPTED tail that stayed mute, which usually means the tail is
+	/// watching the wrong file entirely. A `SessionStart` hook firing
+	/// proves nothing about that, so an adapter-silent harness must
+	/// stay exactly as the #259 watchdog left it: `authoritative`
+	/// false, `adapterSilent` true, phase untouched. Only
+	/// `adapterDelivered` — the tail actually speaking — may recover
+	/// that one. `launchSignalAt` is still recorded either way; that
+	/// fact is true regardless of which watchdog fired.
+	///
+	/// When it does recover (the launch-silent case), it restores the
+	/// harness exactly the way `adapterDelivered` does — authority
+	/// back, `adapterSilent` and `degradedBy` cleared, same
+	/// `console.info` recovery line — the "accepted the trust dialog
+	/// late" case.
+	///
+	/// Moves phase to `waiting` only when `!cur.adapterHeard` AND the
+	/// phase is `spawning` or the harness had just been recovered from
+	/// `adapterSilent`. Never while `phase === "permission"` (#86
+	/// outranks everything). The `!cur.adapterHeard` guard is load-
+	/// bearing, not incidental: the hook entry is matcher-less, so it
+	/// fires for every `SessionStart` source — `startup`, but also
+	/// `resume`/`clear`/`compact`/`fork` mid-session — and `source`
+	/// is deliberately not on the event payload, so this guard is the
+	/// only thing telling a genuine launch apart from a `clear`/
+	/// `compact` firing mid-conversation: by the time either of those
+	/// happens, the transcript tail has always already spoken, and a
+	/// live adapter is the better authority (it may correctly know the
+	/// session is mid-turn, which this event can't say either way).
+	/// A second `noteLaunchSignal` while already `waiting` is a no-op
+	/// by construction — `setPhase`'s same-phase short-circuit.
+	noteLaunchSignal(id: string): void {
+		const cur = store.get(id);
+		if (!cur || cur.phase === "exited") return;
+		const recovering = cur.adapterSilent && cur.degradedBy === "launch-silent";
+		if (recovering) {
+			console.info(`[skein] harness ${id}: launch signal arrived; handing phase back to it`);
+		}
+		store.set(id, {
+			...cur,
+			launchSignalAt: Date.now(),
+			...(recovering ? { adapterSilent: false, degradedBy: null, authoritative: true } : null),
+		});
+		if (cur.phase === "permission") return;
+		if (!cur.adapterHeard && (cur.phase === "spawning" || recovering)) {
+			setPhase(id, "waiting", TRANSITION_SOURCE.L2c1ClaudeSessionStart);
+		}
 	},
 
 	/// Adapter detached — fall back to the L2a heuristic for this
@@ -939,6 +1108,8 @@ export const harnessActivity = {
 				adapterHeard: false,
 				promptSubmittedAt: null,
 				adapterSilent: false,
+				degradedBy: null,
+				launchSignalAt: null,
 				injected: false,
 				delegationDeferredAt: null,
 				delegationActivityAt: Date.now(),
