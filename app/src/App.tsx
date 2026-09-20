@@ -49,6 +49,7 @@ import { filesRegistry } from "./filesRegistry.ts";
 import {
 	TRANSITION_SOURCE,
 	activityToStatus,
+	delegationSummary,
 	effectiveStatus,
 	harnessActivity,
 	statusLabel,
@@ -81,6 +82,7 @@ import {
 } from "./prefs.ts";
 import { hints, isMac, isWindows, matchShortcut, modLabel } from "./shortcuts.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
+import { useWorkingSubagentCount } from "./subagents.ts";
 import type {
 	Density,
 	Harness,
@@ -124,6 +126,13 @@ interface ToastEntry {
 	/** Permission variant only: the subagent name when the dialog
 	 *  belongs to one rather than the main session (#298). */
 	agentType?: string | undefined;
+	/** Waiting variant only (#277): `delegationSummary` of
+	 *  `HarnessActivity.delegatedCount`, when the harness delegated
+	 *  work since the user's last prompt and this end-of-turn wasn't
+	 *  flushed by the ceiling (see the `DelegationCeiling` check at the
+	 *  call site) — "Skein cannot claim the delegated work finished"
+	 *  there, so no suffix rides along. */
+	delegationNote?: string | undefined;
 }
 
 const TOAST_DISMISS_MS = 6_000;
@@ -230,7 +239,11 @@ const Toast = ({
 	const sub =
 		toast.state === "permission"
 			? `needs permission${permissionParts.length > 0 ? ` · ${permissionParts.join(" · ")}` : ""}`
-			: toast.state;
+			: // #277: "waiting · 3 delegated agents finished" when the
+				// end-of-turn was withheld for delegated work.
+				toast.state === "waiting" && toast.delegationNote
+				? `${toast.state} · ${toast.delegationNote}`
+				: toast.state;
 	return (
 		<div
 			className={`sk-toast${toast.state === "error" ? " error" : toast.state === "permission" ? " permission" : ""}`}
@@ -314,6 +327,10 @@ const LiveRoomTab = (props: Parameters<typeof RoomTab>[0]) => {
 
 const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
 	const activity = useHarnessActivity(harness.id);
+	// #277: reactively needed so "delegating · N agents" updates live
+	// as subagents start/finish, not just on the next unrelated
+	// harnessActivity emit.
+	const workingCount = useWorkingSubagentCount(harness.id);
 	// Dot color uses effectiveStatus so a waiting-but-acknowledged
 	// harness renders grey (no pulse) in the bottom bar. The TEXT
 	// keeps the underlying phase via activityToStatus — telling the
@@ -323,8 +340,15 @@ const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
 		? effectiveStatus(activity, harness.pendingNotifications ?? 0)
 		: harness.status;
 	// #86: "permission needed" (+ tool) rather than the bare word.
+	// #277: "delegating · N agents" in place of bare "running" while
+	// subagents are working.
 	const label = activity
-		? statusLabel(activityToStatus(activity), activity.permissionTool, activity.permissionAgentType)
+		? statusLabel(
+				activityToStatus(activity),
+				activity.permissionTool,
+				activity.permissionAgentType,
+				workingCount,
+			)
 		: harness.status;
 	return (
 		<span className="seg">
@@ -2392,7 +2416,7 @@ export default function App() {
 	// OS banner would just duplicate it. Permission is granted lazily
 	// on first launch.
 	useEffect(() => {
-		const unsub = harnessActivity.subscribeTransitions((harnessId, from, to) => {
+		const unsub = harnessActivity.subscribeTransitions((harnessId, from, to, source) => {
 			// Three trigger classes:
 			// • `running|idle → waiting` — a harness-native adapter
 			//   (L2c) reported the agent went from doing work to
@@ -2426,6 +2450,18 @@ export default function App() {
 			if (!becameWaiting && !becamePermission && !(wasWorking && becamePassive)) return;
 			const a = harnessActivity.get(harnessId);
 			if (!a) return;
+			// #277: the end-of-turn notification explains itself when it
+			// was withheld for delegated work — but only when Skein can
+			// still claim the delegation "finished". The `DelegationCeiling`
+			// path flushes because a subagent signal was presumed lost
+			// after 15 min of silence, not because the work actually
+			// completed, so no suffix rides along there; every other route
+			// into `waiting` (including `DelegationSettled`) can say so
+			// honestly.
+			const delegationNote =
+				to === "waiting" && source !== TRANSITION_SOURCE.DelegationCeiling
+					? delegationSummary(a.delegatedCount)
+					: null;
 			// hasUserInput gate applies only to the passive transition.
 			// `→ waiting` and `→ permission` are both unconditional.
 			if (!becameWaiting && !becamePermission && !a.hasUserInput) return;
@@ -2510,6 +2546,7 @@ export default function App() {
 					...(stateLabel === "permission"
 						? { tool: a.permissionTool ?? undefined, agentType: a.permissionAgentType ?? undefined }
 						: {}),
+					...(delegationNote ? { delegationNote } : {}),
 				};
 				setToasts((prev) => [...prev, entry].slice(-TOAST_MAX_VISIBLE));
 			}
@@ -2534,7 +2571,9 @@ export default function App() {
 			const osLabel =
 				stateLabel === "permission"
 					? `needs permission${osPermissionParts.length > 0 ? ` (${osPermissionParts.join(" · ")})` : ""}`
-					: stateLabel;
+					: stateLabel === "waiting" && delegationNote
+						? `${stateLabel} (${delegationNote})`
+						: stateLabel;
 			enqueueOsNotification("Skein", `${owningRoom.name} · ${kindName}: ${osLabel}`, {
 				roomId: owningRoom.id,
 				harnessId,
