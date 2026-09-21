@@ -138,16 +138,39 @@ export function attachStatusPopover(): () => void {
 			);
 	};
 
+	// #314: the one place a pending/shown popover gets torn down. Used by
+	// both the mouseout path and every early-out in onOver — a removed
+	// element never fires mouseout, so those early-outs must hide rather
+	// than just returning, or a popover shown for a chip the picker then
+	// unmounted is stuck forever.
+	const hide = () => {
+		if (timer !== null) clearTimeout(timer);
+		timer = null;
+		pop?.classList.remove("show");
+	};
+
 	const onOver = (e: MouseEvent) => {
 		const target = e.target as HTMLElement | null;
 		const el = target?.closest<HTMLElement>(TARGET_SEL);
 		// Skip while inside a modal/palette — the prototype did the same;
-		// those surfaces have their own affordances.
-		if (!el || el.closest(".sk-modal, .sk-palette")) return;
+		// those surfaces have their own affordances. #314: hide rather than
+		// leaving a stale popover from a previously-hovered element.
+		if (!el || el.closest(".sk-modal, .sk-palette")) {
+			hide();
+			return;
+		}
 		const c = resolve(el);
-		if (!c) return;
+		if (!c) {
+			hide();
+			return;
+		}
 		if (timer !== null) clearTimeout(timer);
 		timer = window.setTimeout(() => {
+			timer = null;
+			// #314: the element can be unmounted (e.g. the `+ harness` picker
+			// closing on click) within the delay window, with no mouseout to
+			// cancel the timer — never show a popover for a detached element.
+			if (!el.isConnected) return;
 			const p = ensurePop(el);
 			if (!p) return;
 			render(p, c);
@@ -172,14 +195,17 @@ export function attachStatusPopover(): () => void {
 	const onOut = (e: MouseEvent) => {
 		const target = e.target as HTMLElement | null;
 		if (!target?.closest(TARGET_SEL)) return;
-		if (timer !== null) clearTimeout(timer);
-		pop?.classList.remove("show");
+		hide();
 	};
 
+	// #314: a click changes the surface under the popover (standard tooltip
+	// behaviour) — e.g. the `+ harness` picker unmounting the hovered chip.
+	document.addEventListener("pointerdown", hide);
 	document.addEventListener("mouseover", onOver);
 	document.addEventListener("mouseout", onOut);
 	return () => {
-		if (timer !== null) clearTimeout(timer);
+		hide();
+		document.removeEventListener("pointerdown", hide);
 		document.removeEventListener("mouseover", onOver);
 		document.removeEventListener("mouseout", onOut);
 		pop?.remove();
