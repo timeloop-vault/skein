@@ -78,9 +78,15 @@ export function attachClaudeEvents(
 	channel.onmessage = (event) => {
 		// #259: any event at all proves the tail is on the right file.
 		// Guarded so a straggler after unsubscribe can't hand authority
-		// back to an adapter that no longer exists.
-		if (!closed) harnessActivity.adapterDelivered(harnessId);
-		translate(harnessId, event);
+		// back to an adapter that no longer exists. #116: unsubscribe is
+		// no longer only end-of-life — a `/clear` re-point now detaches
+		// and reattaches this same harness mid-life, so a straggler from
+		// the OLD tail landing after that detach must not feed the NEW
+		// session's phase/subagent state either.
+		if (!closed) {
+			harnessActivity.adapterDelivered(harnessId);
+			translate(harnessId, event);
+		}
 	};
 
 	// Mark authoritative *synchronously*, not on `.then()`. By the

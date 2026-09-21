@@ -176,6 +176,20 @@ export const LiveTerminal = ({
 	// retune them without re-spawning the PTY.
 	const termRef = useRef<Terminal | null>(null);
 	const fitRef = useRef<FitAddon | null>(null);
+	// #116 step two: the mount effect only runs on `mountKey` changes (see
+	// the exhaustive-deps note below), so its attach closure must read the
+	// CURRENT sessionId at attach time — including one that lands between
+	// render and the effect actually spawning the PTY — not the value
+	// captured when the effect was defined.
+	const sessionIdRef = useRef(sessionId);
+	sessionIdRef.current = sessionId;
+	// #116 step two: the Claude JSONL adapter's unsubscribe, paired with
+	// the sessionId it was attached with, so the re-point effect below can
+	// tell "still the same session" from "/clear moved us to a new one"
+	// without re-running the whole spawn effect (which would kill the
+	// PTY). `null` whenever no adapter is attached (PTY not live yet,
+	// non-Claude harness, or no sessionId at attach time).
+	const claudeAdapterRef = useRef<{ detach: () => void; sessionId: string } | null>(null);
 
 	// Sync the latest props into refs so the long-lived effect's closure
 	// always reads current values. defaultShell starts empty and gets
@@ -566,8 +580,10 @@ export const LiveTerminal = ({
 		// `last-prompt` rows directly instead of waiting for the L2a
 		// idle heuristic to time out. `null` for every other case
 		// (non-claude kinds, claude without sessionId — picker
-		// fallback). Cleaned up alongside pty_kill below.
-		let detachClaudeAdapter: (() => void) | null = null;
+		// fallback). Cleaned up alongside pty_kill below. Lives in
+		// `claudeAdapterRef` (not a local) so the #116 step two re-point
+		// effect below can detach/reattach it without re-running this
+		// whole spawn effect.
 		// L2c-2: same shape for opencode. Adapter SSE-subscribes to
 		// opencode's embedded server on the pre-allocated port, plus
 		// captures the auto-allocated sessionID via the SSE
@@ -701,8 +717,12 @@ export const LiveTerminal = ({
 				// The translator marks the activity store authoritative
 				// once Rust confirms attach; until then L2a keeps
 				// ticking, so a slow attach is a graceful degradation.
-				if (harnessKind === "claude" && sessionId) {
-					detachClaudeAdapter = attachClaudeEvents(harnessId, roomId, sessionId, cwd);
+				if (harnessKind === "claude" && sessionIdRef.current) {
+					const attachedSessionId = sessionIdRef.current;
+					claudeAdapterRef.current = {
+						detach: attachClaudeEvents(harnessId, roomId, attachedSessionId, cwd),
+						sessionId: attachedSessionId,
+					};
 				}
 				// L2c-2: attach the opencode SSE adapter when we have a
 				// port (App allocated one via pick_free_port before the
@@ -821,7 +841,8 @@ export const LiveTerminal = ({
 			// L2c-1: detach before pty_kill so the adapter stops
 			// reading the JSONL — Claude itself will flush a final
 			// system row on exit and we don't need to react to it.
-			detachClaudeAdapter?.();
+			claudeAdapterRef.current?.detach();
+			claudeAdapterRef.current = null;
 			detachOpencodeAdapter?.();
 			detachInputTarget?.();
 			// #158: copy-on-select — the host mousedown listener always
@@ -855,6 +876,26 @@ export const LiveTerminal = ({
 			subagents.forget(harnessId);
 		};
 	}, [mountKey]);
+
+	// #116 step two: re-point the Claude JSONL adapter when `sessionId`
+	// changes under an already-running PTY — Claude's own `/clear`
+	// starting a new conversation, reported via App.tsx's
+	// `skein://harness-session-start` listener updating the harness
+	// record, which flows back down here as a new prop. The PTY itself
+	// is untouched: only the tail target moves. A no-op when no adapter
+	// is attached (PTY not live yet, or a non-Claude harness) — the mount
+	// effect's own attach (above) picks up the current sessionId whenever
+	// it eventually runs.
+	useEffect(() => {
+		const current = claudeAdapterRef.current;
+		if (!current) return;
+		if (typeof sessionId !== "string" || sessionId === current.sessionId) return;
+		current.detach();
+		claudeAdapterRef.current = {
+			detach: attachClaudeEvents(harnessId, roomId, sessionId, cwd),
+			sessionId,
+		};
+	}, [sessionId, harnessId, roomId, cwd]);
 
 	// Issue #22: focus the xterm whenever this pane becomes visible —
 	// covers keyboard-driven room switches (Mod+1..9, palette,

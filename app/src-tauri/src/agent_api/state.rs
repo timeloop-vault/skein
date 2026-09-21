@@ -32,7 +32,9 @@ pub const HARNESS_PERMISSION_EVENT: &str = "skein://harness-permission";
 /// /api/harness/session-start`, which the injected Claude plugin's
 /// `SessionStart` hook calls on every session start, resume, clear,
 /// compact and fork — opencode reports its own liveness over its
-/// `/event` SSE stream and never touches this route.
+/// `/event` SSE stream and never touches this route. Since #116 the
+/// payload also carries Claude's own `session_id` and `source`, so the
+/// frontend can follow a `/clear` onto the new conversation id.
 pub const HARNESS_SESSION_START_EVENT: &str = "skein://harness-session-start";
 
 /// Shared by every route.
@@ -80,6 +82,15 @@ pub struct HarnessPermission {
 pub struct HarnessSessionStart {
     pub room_id: String,
     pub harness_id: String,
+    /// Claude's own new conversation id. After a `/clear` this differs
+    /// from the id Skein spawned the harness with — that's what the
+    /// frontend follows. `None` when the hook payload had no
+    /// `session_id`, or one that didn't look like a plausible id (see
+    /// `session_start_fields` in `http.rs`).
+    pub session_id: Option<String>,
+    /// One of Claude's own `startup`/`resume`/`clear`/`compact`/`fork`.
+    /// `None` when the hook payload had no `source`.
+    pub source: Option<String>,
 }
 
 impl AgentApiState {
@@ -138,14 +149,23 @@ impl AgentApiState {
 
     /// Tell the frontend that this harness has (re)started a session
     /// (#273), so a harness stuck in `spawning` can move on even
-    /// before its transcript exists.
-    pub fn notify_harness_session_start(&self, room_id: &str, harness_id: &str) {
+    /// before its transcript exists. `session_id`/`source` (#116) let
+    /// the frontend follow a `/clear` onto the new conversation id.
+    pub fn notify_harness_session_start(
+        &self,
+        room_id: &str,
+        harness_id: &str,
+        session_id: Option<String>,
+        source: Option<String>,
+    ) {
         let Some(app) = self.app.as_ref() else { return };
         if let Err(e) = app.emit(
             HARNESS_SESSION_START_EVENT,
             HarnessSessionStart {
                 room_id: room_id.to_owned(),
                 harness_id: harness_id.to_owned(),
+                session_id,
+                source,
             },
         ) {
             tracing::warn!(room_id, harness_id, error = %e, "agent api: harness-session-start emit failed");

@@ -80,6 +80,7 @@ import {
 	usePersistedState,
 	withDefaultAgent,
 } from "./prefs.ts";
+import { clearedSessionId } from "./sessionTracking.ts";
 import { hints, isMac, isWindows, matchShortcut, modLabel } from "./shortcuts.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
 import { useWorkingSubagentCount } from "./subagents.ts";
@@ -2403,12 +2404,36 @@ export default function App() {
 	// freshly spawned harness stuck in `spawning` forever. Room-agnostic
 	// like the permission listener above; `noteLaunchSignal` is already
 	// a no-op for an id Skein doesn't have a record for.
+	//
+	// #116 step two: the same hook is the ONLY signal Skein gets that a
+	// mid-session `/clear` started a brand-new conversation — Claude's
+	// JSONL gives no other sign. `clearedSessionId` (sessionTracking.ts)
+	// filters to `source === "clear"` reporting a genuinely different id;
+	// when it does, the harness's stored sessionId is overwritten
+	// (`replaceHarnessSessionId`, first-writer-wins would never adopt it)
+	// so a future resume/reopen picks up the new conversation, and
+	// `harnessActivity.sessionCleared` forgets the old session's
+	// subagents/delegation state. Per-pane re-pointing of the live JSONL
+	// tail itself happens in LiveTerminal, keyed off the `sessionId`
+	// prop — this listener only owns the persisted record. Attribution
+	// for which pane the hook fired in comes from `SKEIN_HARNESS_ID` via
+	// the `X-Skein-Harness` header, not from anything computed here.
 	useEffect(() => {
 		const un = listen<{
 			roomId: string;
 			harnessId: string;
+			sessionId: string | null;
+			source: string | null;
 		}>("skein://harness-session-start", (event) => {
 			harnessActivity.noteLaunchSignal(event.payload.harnessId);
+			const room = roomsRef.current.find((r) => r.id === event.payload.roomId);
+			const h = room?.harnesses.find((x) => x.id === event.payload.harnessId);
+			if (!h || h.kind !== "claude") return;
+			const next = clearedSessionId(h.sessionId, event.payload);
+			if (next !== null) {
+				replaceHarnessSessionId(event.payload.roomId, event.payload.harnessId, next);
+				harnessActivity.sessionCleared(event.payload.harnessId);
+			}
 		});
 		return () => {
 			void un.then((f) => f());
@@ -3050,6 +3075,29 @@ export default function App() {
 						if (h.sessionId) return h;
 						return { ...h, sessionId: captured };
 					}),
+				};
+			}),
+		);
+	};
+
+	// #116 step two: overwrite a harness's sessionId after Claude's own
+	// `/clear` hook reports the conversation moved onto a new id. This is
+	// deliberately NOT `setHarnessSessionId` above — that one is
+	// first-writer-wins to survive opencode's create-vs-poll capture
+	// race, but a `/clear` report is authoritative: the old id is
+	// definitely gone, so the new one must win even though `sessionId`
+	// is already set. `cmd` is untouched here — it's part of
+	// LiveTerminal's mountKey, so changing it would respawn the PTY;
+	// `resumeCmd` (harnessCmd.ts) rebuilds the argv from `sessionId` on
+	// the next boot/reopen, which is what makes the new conversation the
+	// one resumed.
+	const replaceHarnessSessionId = (targetRoomId: string, harnessId: string, sessionId: string) => {
+		setRooms((prev) =>
+			prev.map((r) => {
+				if (r.id !== targetRoomId) return r;
+				return {
+					...r,
+					harnesses: r.harnesses.map((h) => (h.id === harnessId ? { ...h, sessionId } : h)),
 				};
 			}),
 		);

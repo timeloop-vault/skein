@@ -252,3 +252,79 @@ describe("subagent-aware end-of-turn deferral (#277)", () => {
 		subagents.forget(id);
 	});
 });
+
+describe("sessionCleared (#116)", () => {
+	beforeAll(() => {
+		vi.useFakeTimers();
+	});
+	afterAll(() => {
+		vi.useRealTimers();
+	});
+
+	it("running moves to waiting with the session-clear source", () => {
+		const id = runningHarness();
+		const transitions: Array<{ to: string; source: string }> = [];
+		const unsubscribe = harnessActivity.subscribeTransitions((tid, _from, to, source) => {
+			if (tid === id) transitions.push({ to, source });
+		});
+
+		harnessActivity.sessionCleared(id);
+
+		expect(harnessActivity.get(id)?.phase).toBe("waiting");
+		expect(transitions).toEqual([
+			{ to: "waiting", source: TRANSITION_SOURCE.L2c1ClaudeSessionClear },
+		]);
+		unsubscribe();
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+
+	it("permission stays permission", () => {
+		const id = runningHarness();
+		harnessActivity.setPermissionFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudePermission, "Bash");
+		expect(harnessActivity.get(id)?.phase).toBe("permission");
+
+		harnessActivity.sessionCleared(id);
+
+		expect(harnessActivity.get(id)?.phase).toBe("permission");
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+
+	it("exited stays exited", () => {
+		const id = runningHarness();
+		harnessActivity.exited(id, 0);
+		expect(harnessActivity.get(id)?.phase).toBe("exited");
+
+		harnessActivity.sessionCleared(id);
+
+		expect(harnessActivity.get(id)?.phase).toBe("exited");
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+
+	it("forgets a subagent registered before the clear — workingCount reads 0 after", () => {
+		const id = runningHarness();
+		startLiveSubagent(id, "a1");
+		expect(subagents.workingCount(id)).toBe(1);
+
+		harnessActivity.sessionCleared(id);
+
+		expect(subagents.workingCount(id)).toBe(0);
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+
+	it("disarms an armed delegation deferral", () => {
+		const id = runningHarness();
+		startLiveSubagent(id, "a1");
+		harnessActivity.awaitingPromptFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
+		expect(harnessActivity.get(id)?.delegationDeferredAt).not.toBeNull();
+
+		harnessActivity.sessionCleared(id);
+
+		expect(harnessActivity.get(id)?.delegationDeferredAt).toBeNull();
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+});
