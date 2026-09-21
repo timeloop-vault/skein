@@ -70,6 +70,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::agent_api::state::HarnessIdentity;
+use crate::harness_kind::HarnessKind;
 use crate::spawn_settings::SpawnSettings;
 
 /// The environment variable opencode reads a custom config path from.
@@ -226,17 +227,6 @@ impl HarnessConfig {
     }
 }
 
-/// The program Skein spawns for a kind, where Skein chooses it. Mirrors
-/// `managedProgram` in `app/src/harnessCmd.ts`; `byoh` runs the user's
-/// shell and `files` runs nothing, so neither has one.
-fn managed_program(kind: &str) -> Option<&'static str> {
-    match kind {
-        "claude" => Some("claude"),
-        "opencode" => Some("opencode"),
-        _ => None,
-    }
-}
-
 /// Whether `program` really is the CLI this kind is about.
 ///
 /// The kind and the argv can legitimately disagree: a harness whose
@@ -266,7 +256,7 @@ fn program_is(program: &str, expected: &str) -> bool {
 /// mechanism applies; `program` is the argv's head and decides whether
 /// that CLI is actually the thing being spawned. Both have to agree.
 pub(crate) fn injection_for(
-    kind: &str,
+    kind: HarnessKind,
     program: &str,
     config: Option<&HarnessConfig>,
     settings: &SpawnSettings,
@@ -276,7 +266,7 @@ pub(crate) fn injection_for(
     // swapped the command, and Skein's configuration for a program that
     // is not running would at best be noise and at worst a broken
     // spawn.
-    if !managed_program(kind).is_some_and(|p| program_is(program, p)) {
+    if !kind.program().is_some_and(|p| program_is(program, p)) {
         return Injection::default();
     }
     // No live endpoint means the config would interpolate a variable
@@ -288,25 +278,24 @@ pub(crate) fn injection_for(
         return Injection::default();
     };
     match kind {
-        "claude" if settings.inject_claude_plugin => {
-            config
-                .claude_plugin
-                .as_ref()
-                .map_or_else(Injection::default, |dir| Injection {
-                    args: vec!["--plugin-dir".to_owned(), dir.display().to_string()],
-                    env: Vec::new(),
-                })
-        }
-        "opencode" if settings.inject_opencode_config => config
+        HarnessKind::Claude if settings.inject_claude_plugin => config
+            .claude_plugin
+            .as_ref()
+            .map_or_else(Injection::default, |dir| Injection {
+                args: vec!["--plugin-dir".to_owned(), dir.display().to_string()],
+                env: Vec::new(),
+            }),
+        HarnessKind::Opencode if settings.inject_opencode_config => config
             .opencode_config
             .as_ref()
             .map_or_else(Injection::default, |file| Injection {
                 args: Vec::new(),
                 env: vec![(OPENCODE_CONFIG_VAR.to_owned(), file.display().to_string())],
             }),
-        // copilot, byoh and files reach no review API: gh-copilot has
-        // no MCP configuration Skein can inject, a shell is not an
-        // agent, and `files` never spawns anything at all.
+        // Claude/opencode with their own injection switched off, plus
+        // copilot, byoh and files, which reach no review API at all:
+        // gh-copilot has no MCP configuration Skein can inject, a shell
+        // is not an agent, and `files` never spawns anything.
         _ => Injection::default(),
     }
 }
@@ -360,7 +349,7 @@ mod tests {
     fn claude_gets_the_plugin_dir_and_nothing_in_the_environment() {
         let (_tmp, config) = bundle();
         let injection = injection_for(
-            "claude",
+            HarnessKind::Claude,
             "claude",
             Some(&config),
             &SpawnSettings::default(),
@@ -385,7 +374,7 @@ mod tests {
     fn opencode_gets_the_config_variable_and_nothing_in_the_argv() {
         let (_tmp, config) = bundle();
         let injection = injection_for(
-            "opencode",
+            HarnessKind::Opencode,
             "opencode",
             Some(&config),
             &SpawnSettings::default(),
@@ -400,17 +389,46 @@ mod tests {
 
     #[test]
     fn kinds_with_no_review_path_get_nothing() {
+        // An unknown kind string is unrepresentable now — it is
+        // rejected at the Tauri boundary (#116) before it ever reaches
+        // this function.
         let (_tmp, config) = bundle();
-        for kind in ["copilot", "byoh", "files", "something-new"] {
+        for kind in [HarnessKind::Copilot, HarnessKind::Byoh, HarnessKind::Files] {
+            // Real program where the kind has one (`gh` for copilot),
+            // so this exercises the `match kind` fallthrough and not
+            // just the program-mismatch gate above it.
+            let program = kind.program().unwrap_or(kind.as_str());
             let injection = injection_for(
                 kind,
-                kind,
+                program,
                 Some(&config),
                 &SpawnSettings::default(),
                 Some(&identity()),
             );
             assert!(injection.is_empty(), "{kind} should get no injection");
         }
+    }
+
+    #[test]
+    fn copilot_reaches_the_match_but_still_gets_nothing() {
+        // Copilot's own program is `gh`, so with both injections on and
+        // a real program string the gate above the `match kind` opens —
+        // this is what proves the `_ => Injection::default()` arm, not
+        // just the program-mismatch gate, is what refuses it.
+        let (_tmp, config) = bundle();
+        let settings = SpawnSettings {
+            inject_claude_plugin: true,
+            inject_opencode_config: true,
+            ..SpawnSettings::default()
+        };
+        let injection = injection_for(
+            HarnessKind::Copilot,
+            "gh",
+            Some(&config),
+            &settings,
+            Some(&identity()),
+        );
+        assert!(injection.is_empty());
     }
 
     #[test]
@@ -422,7 +440,7 @@ mod tests {
         };
         assert!(
             injection_for(
-                "claude",
+                HarnessKind::Claude,
                 "claude",
                 Some(&config),
                 &settings,
@@ -432,7 +450,7 @@ mod tests {
         );
         assert!(
             !injection_for(
-                "opencode",
+                HarnessKind::Opencode,
                 "opencode",
                 Some(&config),
                 &settings,
@@ -450,7 +468,7 @@ mod tests {
         // would break the spawn outright.
         let (_tmp, config) = bundle();
         let injection = injection_for(
-            "claude",
+            HarnessKind::Claude,
             "/bin/bash",
             Some(&config),
             &SpawnSettings::default(),
@@ -474,7 +492,7 @@ mod tests {
         }
         for program in programs {
             let injection = injection_for(
-                "claude",
+                HarnessKind::Claude,
                 program,
                 Some(&config),
                 &SpawnSettings::default(),
@@ -528,9 +546,14 @@ mod tests {
         // when the agent API bound. Injecting anyway would register an
         // MCP server pointing at the literal variable name.
         let (_tmp, config) = bundle();
-        for kind in ["claude", "opencode"] {
-            let injection =
-                injection_for(kind, kind, Some(&config), &SpawnSettings::default(), None);
+        for kind in [HarnessKind::Claude, HarnessKind::Opencode] {
+            let injection = injection_for(
+                kind,
+                kind.as_str(),
+                Some(&config),
+                &SpawnSettings::default(),
+                None,
+            );
             assert!(injection.is_empty(), "{kind} without an endpoint");
         }
     }

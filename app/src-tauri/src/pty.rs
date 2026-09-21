@@ -57,6 +57,7 @@ use serde::Serialize;
 
 use crate::agent_api::state::HarnessIdentity;
 use crate::harness_config::{HarnessConfig, Injection};
+use crate::harness_kind::HarnessKind;
 use crate::spawn_env;
 use crate::spawn_settings::SpawnSettings;
 // Only the probe reads the capture mode — see the `Instant` note above.
@@ -125,7 +126,7 @@ pub struct SpawnRequest<'a> {
     /// inferred from `cmd`, because the two can legitimately disagree:
     /// a `claude` harness whose command the user swapped for a shell is
     /// still a `claude` harness.
-    pub kind: &'a str,
+    pub kind: HarnessKind,
     /// The shipped config bundle that teaches the agent CLIs about the
     /// review API (#215). `None` outside the app (tests, preview).
     pub harness_config: Option<&'a HarnessConfig>,
@@ -190,7 +191,7 @@ impl PtyManager {
             cwd = %cwd.display(),
             rows,
             cols,
-            kind,
+            kind = %kind,
             "pty_spawn"
         );
         // Separate line, and only when there is something to say: this
@@ -200,7 +201,7 @@ impl PtyManager {
         if !injection.is_empty() {
             tracing::info!(
                 id = %id,
-                kind,
+                kind = %kind,
                 args = ?injection.args,
                 env = ?injection.env,
                 "pty_spawn harness config injected"
@@ -1542,13 +1543,13 @@ mod tests {
                     settings,
                     // Neutral values: these tests exercise the
                     // environment/PTY plumbing, not #213/#215's agent
-                    // identity or config injection. "byoh" (bring your
+                    // identity or config injection. `Byoh` (bring your
                     // own harness — the plain-shell kind, see
-                    // `managed_program`) has no injection mechanism of
-                    // its own, so `None` config is honest rather than a
-                    // stand-in.
+                    // `HarnessKind::program`) has no injection mechanism
+                    // of its own, so `None` config is honest rather than
+                    // a stand-in.
                     agent: None,
-                    kind: "byoh",
+                    kind: HarnessKind::Byoh,
                     harness_config: None,
                 },
                 move |event| match event {
