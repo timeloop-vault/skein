@@ -23,23 +23,6 @@
 import { HARNESS_KINDS } from "./data.tsx";
 import type { Harness, HarnessKind, Room } from "./types.ts";
 
-/** The program Skein spawns for a kind, or null where Skein doesn't
- *  choose it (`byoh` takes the user's shell; `files` has no process).
- *  Used as the ownership test in `resumeCmd` — see there. */
-const managedProgram = (kind: HarnessKind): string | null => {
-	switch (kind) {
-		case "claude":
-			return "claude";
-		case "opencode":
-			return "opencode";
-		case "copilot":
-			return "gh";
-		case "byoh":
-		case "files":
-			return null;
-	}
-};
-
 /** Append `--agent <name>` when the harness names one.
  *
  *  Both CLIs spell it the same way, so this is shared. An empty or
@@ -127,7 +110,7 @@ export const resumeCmd = (h: Harness, opencodePort?: number): string[] => {
 	// old argv-length matching it does not care how many flags Skein
 	// adds. A shell-swapped harness keeps its shell; rebuilding it into
 	// `claude --resume` would resurrect a harness the user retired.
-	if (cmd[0] !== managedProgram(h.kind)) return cmd;
+	if (cmd[0] !== HARNESS_KINDS[h.kind].program) return cmd;
 	switch (h.kind) {
 		case "claude": {
 			// #247: the agent is re-passed, not left to the session.

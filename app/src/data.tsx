@@ -36,6 +36,11 @@ export interface HarnessKindMeta {
 	name: string;
 	chip: string;
 	desc: string;
+	/** The program Skein spawns for this kind, or `null` where Skein
+	 *  doesn't choose it (`byoh` takes the user's shell; `files` has no
+	 *  process). Mirrored in Rust by `HarnessKind::program` — the two
+	 *  are kept honest by an agreement test in `harness_kind.rs`. */
+	program: string | null;
 	capabilities: HarnessCapabilities;
 }
 
@@ -46,6 +51,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		name: "Claude Code",
 		chip: "h-claude",
 		desc: "Anthropic. Direct API.",
+		program: "claude",
 		capabilities: { pty: true, resume: true, notify: true, agents: true, agentSwitchable: false },
 	},
 	opencode: {
@@ -54,6 +60,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		name: "opencode",
 		chip: "h-opencode",
 		desc: "Local server, OSS.",
+		program: "opencode",
 		capabilities: { pty: true, resume: true, notify: true, agents: true, agentSwitchable: true },
 	},
 	copilot: {
@@ -62,6 +69,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		name: "Copilot CLI",
 		chip: "h-copilot",
 		desc: "GitHub entitlement.",
+		program: "gh",
 		capabilities: { pty: true, resume: false, notify: true, agents: false, agentSwitchable: false },
 	},
 	// `byoh` is the kind id we kept from the design's "bring your own
@@ -75,6 +83,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		name: "Shell",
 		chip: "h-byoh",
 		desc: "Plain shell — run anything.",
+		program: null,
 		capabilities: {
 			pty: true,
 			resume: false,
@@ -91,6 +100,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		name: "Files",
 		chip: "h-files",
 		desc: "Browse + edit the worktree.",
+		program: null,
 		capabilities: {
 			pty: false,
 			resume: false,

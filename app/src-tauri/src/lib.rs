@@ -16,6 +16,7 @@ mod harness_actions_opencode;
 mod harness_config;
 mod harness_events_claude;
 mod harness_events_opencode;
+mod harness_kind;
 mod os_notify;
 mod pty;
 mod resume;
@@ -485,7 +486,9 @@ struct PtySpawnResult {
 /// `kind` is the harness kind, which decides what #215 injects so the
 /// agent can reach the review API. It is passed separately from `cmd`
 /// because the two can legitimately disagree — the user can swap a
-/// harness's command without changing what the harness is.
+/// harness's command without changing what the harness is. Tauri
+/// deserializes it as `HarnessKind` (#116), so an unknown kind string
+/// fails the invoke outright rather than silently injecting nothing.
 ///
 /// Async: `PtyManager::spawn` calls into `apply_env`, which reads the
 /// login-shell probe result and can block waiting on it for up to
@@ -502,7 +505,7 @@ async fn pty_spawn(
     cols: u16,
     room_id: String,
     harness_id: String,
-    kind: String,
+    kind: crate::harness_kind::HarnessKind,
     on_event: Channel<PtyEvent>,
     app: tauri::AppHandle,
 ) -> Result<PtySpawnResult, String> {
@@ -544,7 +547,7 @@ async fn pty_spawn(
                     cols,
                     settings: &settings,
                     agent: agent.as_ref(),
-                    kind: &kind,
+                    kind,
                     harness_config: Some(&harness_config),
                 },
                 move |event| {
@@ -958,10 +961,13 @@ fn spawn_env_preview(spawn_env: tauri::State<'_, SpawnEnvState>) -> crate::pty::
 /// made this a per-spawn call rather than a per-picker-open one, so a
 /// boot that restores several agent-bearing harnesses fires several at
 /// once — and the axum agent API (#213) runs on those same workers.
+///
+/// `kind` deserializes as `HarnessKind` (#116): an unknown kind string
+/// fails the invoke instead of falling through to `unsupported`.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 async fn list_harness_agents(
-    kind: String,
+    kind: crate::harness_kind::HarnessKind,
     cwd: String,
     spawn_env: tauri::State<'_, SpawnEnvState>,
     harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
@@ -972,7 +978,7 @@ async fn list_harness_agents(
     // paths.
     let config = harness_config.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::agents::list(&kind, &cwd, &settings, Some(&config))
+        crate::agents::list(kind, &cwd, &settings, Some(&config))
     })
     .await
     .map_err(|e| format!("agent discovery panicked: {e}"))

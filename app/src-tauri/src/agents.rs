@@ -16,6 +16,7 @@ use serde::Serialize;
 use skein_harness::agents::{AgentDef, AgentSource, allows_mcp_tools, claude, opencode};
 
 use crate::harness_config::HarnessConfig;
+use crate::harness_kind::HarnessKind;
 use crate::spawn_settings::SpawnSettings;
 
 /// One row of the picker.
@@ -90,37 +91,26 @@ fn to_dto(def: AgentDef) -> AgentDto {
     }
 }
 
-/// The program Skein would spawn for a kind that has agents.
-///
-/// Kept as its own list rather than reused from `harness_config`'s
-/// `managed_program`: that one answers "may Skein inject config here",
-/// which is a different question from "does this kind take `--agent`",
-/// and `copilot` is about to separate them — it is a managed program
-/// with no agent concept.
-fn agent_program(kind: &str) -> Option<&'static str> {
-    match kind {
-        "claude" => Some("claude"),
-        "opencode" => Some("opencode"),
-        // gh-copilot has no agent concept, a shell is not an agent, and
-        // `files` never spawns anything at all.
-        _ => None,
-    }
-}
-
 /// List the agents `kind` will accept for a harness spawned in `cwd`.
 ///
 /// Never returns an error for "nothing found": a picker needs a list
 /// plus a reason, not a failure, so an unrunnable CLI comes back as a
 /// short list with `degraded` set (#176).
 pub(crate) fn list(
-    kind: &str,
+    kind: HarnessKind,
     cwd: &str,
     settings: &SpawnSettings,
     config: Option<&HarnessConfig>,
 ) -> AgentListDto {
-    let Some(program) = agent_program(kind) else {
+    // `takes_agent`, not `program().is_some()`: `copilot` is a managed
+    // program (`gh`) with no agent concept, which is exactly the
+    // distinction those two would collapse.
+    if !kind.takes_agent() {
         return AgentListDto::unsupported();
-    };
+    }
+    let program = kind
+        .program()
+        .expect("every takes_agent() kind has a program");
     let Some(home) = skein_harness::home_dir() else {
         return AgentListDto {
             agents: Vec::new(),
@@ -136,7 +126,7 @@ pub(crate) fn list(
     let cwd_path = Path::new(cwd);
 
     let list = match kind {
-        "claude" => {
+        HarnessKind::Claude => {
             let extra = claude_probe_args(settings, config);
             claude::list(OsStr::new(&exe), &home, cwd_path, &extra)
         }
@@ -177,15 +167,14 @@ mod tests {
     }
 
     #[test]
-    fn only_the_two_agent_kinds_have_a_program() {
-        assert_eq!(agent_program("claude"), Some("claude"));
-        assert_eq!(agent_program("opencode"), Some("opencode"));
-        for kind in ["copilot", "byoh", "files", ""] {
-            assert_eq!(
-                agent_program(kind),
-                None,
-                "{kind} must have no agent picker"
-            );
+    fn kinds_without_agents_are_unsupported() {
+        // Only claude/opencode take `takes_agent()`, so only they reach
+        // past this gate — see `harness_kind`'s agreement test for the
+        // per-kind truth table.
+        let settings = SpawnSettings::default();
+        for kind in [HarnessKind::Copilot, HarnessKind::Byoh, HarnessKind::Files] {
+            let dto = list(kind, ".", &settings, None);
+            assert!(dto.unsupported, "{kind} must have no agent picker");
         }
     }
 
@@ -268,7 +257,7 @@ mod tests {
 mod smoke {
     use super::*;
 
-    fn probe(kind: &str) -> AgentListDto {
+    fn probe(kind: HarnessKind) -> AgentListDto {
         let cwd = std::env::current_dir().expect("a cwd");
         list(
             kind,
@@ -281,7 +270,7 @@ mod smoke {
     #[test]
     #[ignore = "shells out to the installed CLIs; run by hand"]
     fn claude_lists_its_agents_on_this_machine() {
-        let dto = probe("claude");
+        let dto = probe(HarnessKind::Claude);
         println!("degraded: {:?}", dto.degraded);
         for a in &dto.agents {
             println!(
@@ -300,7 +289,7 @@ mod smoke {
     #[test]
     #[ignore = "shells out to the installed CLIs; run by hand"]
     fn opencode_lists_its_primary_agents_on_this_machine() {
-        let dto = probe("opencode");
+        let dto = probe(HarnessKind::Opencode);
         println!("degraded: {:?}", dto.degraded);
         for a in &dto.agents {
             println!("  {:<20} {}", a.name, a.source);
@@ -321,7 +310,7 @@ mod smoke {
     #[test]
     #[ignore = "shells out to the installed CLIs; run by hand"]
     fn a_kind_without_agents_needs_no_cli_at_all() {
-        for kind in ["copilot", "byoh", "files"] {
+        for kind in [HarnessKind::Copilot, HarnessKind::Byoh, HarnessKind::Files] {
             let dto = probe(kind);
             assert!(dto.unsupported, "{kind} must report unsupported");
             assert!(dto.agents.is_empty());
