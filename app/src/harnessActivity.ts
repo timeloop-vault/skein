@@ -327,6 +327,9 @@ export const TRANSITION_SOURCE = {
 	// #273: the harness's own CLI reported its own launch — Claude's
 	// `SessionStart` hook via #215 injection. See `noteLaunchSignal`.
 	L2c1ClaudeSessionStart: "l2c1-claude-session-start",
+	// #116: `/clear` starts a brand new session id mid-process — see
+	// `sessionCleared`.
+	L2c1ClaudeSessionClear: "l2c1-claude-session-clear",
 	// #298: a subagent's own tool result proves the gate its permission
 	// prompt held is gone, even though the main transcript never sees
 	// it. See `clearPermission`.
@@ -749,6 +752,37 @@ export const harnessActivity = {
 		if (!cur.adapterHeard && (cur.phase === "spawning" || recovering)) {
 			setPhase(id, "waiting", TRANSITION_SOURCE.L2c1ClaudeSessionStart);
 		}
+	},
+
+	/// #116: `/clear` re-points the JSONL tail onto a brand new session
+	/// id mid-process — see `sessionTracking.ts`'s `clearedSessionId`,
+	/// which decides *whether* to follow; this is what the harness's
+	/// state needs once the caller has decided to.
+	///
+	/// The subagent registry is keyed by harness, not session, so a
+	/// subagent still tracked as live under the old session would
+	/// otherwise keep `subagents.workingCount` non-zero forever — the
+	/// new session's own tail never reports its end, since it never
+	/// started it. Forgetting here means the new session starts clean;
+	/// disarming any armed #277 deferral for the same reason
+	/// `detachAuthoritativeSource` does — the old session's
+	/// `awaiting_prompt` that would have resolved it is never coming.
+	///
+	/// If the phase is `running`, move it to `waiting`: by the time
+	/// this fires `/clear` has already completed, so Claude is sitting
+	/// at its prompt by definition, and nothing is written to the
+	/// transcript for `/clear` itself (sampled: no row) — no ordinary
+	/// end-of-turn event is coming to do this. Every other phase is
+	/// left alone: `permission` outranks it (#86), and `exited` /
+	/// `spawning` / `idle` / `waiting` aren't this event's business.
+	/// No-op for an unknown id.
+	sessionCleared(id: string): void {
+		const cur = store.get(id);
+		if (!cur) return;
+		subagents.forget(id);
+		disarmDelegation(id);
+		if (cur.phase !== "running") return;
+		setPhase(id, "waiting", TRANSITION_SOURCE.L2c1ClaudeSessionClear);
 	},
 
 	/// Adapter detached — fall back to the L2a heuristic for this

@@ -377,11 +377,13 @@ async fn api_harness_permission(
 /// — like the permission route above, this is not an agent verb: it
 /// carries no MCP tool and is not in `mcp.rs`.
 ///
-/// The body is Claude Code's own hook payload, not ours to police:
-/// only `source` is read out of it, purely for the log line, and a
+/// The body is Claude Code's own hook payload, not ours to police: a
 /// body that fails to parse as JSON at all still succeeds — a future
 /// Claude Code payload change must not start breaking a harness's
-/// launch.
+/// launch. Since #116, `session_id` and `source` are forwarded (see
+/// `session_start_fields`) so the frontend can follow a `/clear` onto
+/// the new conversation id — `source == "clear"` is the only value it
+/// acts on.
 ///
 /// Duplicate fires are expected and must stay harmless. Upstream
 /// anthropics/claude-code#78455 reports `SessionStart` firing twice
@@ -411,16 +413,57 @@ async fn api_harness_session_start(
             "X-Skein-Harness must name a harness this room actually contains",
         );
     };
-    let payload: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
-    let source = payload.get("source").and_then(Value::as_str);
+    let (session_id, source) = session_start_fields(&body);
     tracing::info!(
         harness_id = %harness_id,
         room_id = %caller.room_id,
-        source,
+        session_id = session_id.as_deref(),
+        source = source.as_deref(),
         "agent api: harness session-start ping"
     );
-    state.notify_harness_session_start(&caller.room_id, &harness_id);
+    state.notify_harness_session_start(&caller.room_id, &harness_id, session_id, source);
     StatusCode::NO_CONTENT.into_response()
+}
+
+/// The largest `source` value passed through — Claude's own values
+/// (`startup`/`resume`/`clear`/`compact`/`fork`) are all well under
+/// this; a longer value is treated the same as absent rather than
+/// truncated.
+const MAX_SOURCE_LEN: usize = 32;
+
+/// The largest plausible session id. Claude's ids are UUIDs (36
+/// chars); this is generous headroom, not a format promise.
+const MAX_SESSION_ID_LEN: usize = 128;
+
+/// Pulls `session_id` and `source` out of a `SessionStart` hook body,
+/// tolerating a body that isn't JSON at all (returns `(None, None)`).
+///
+/// `session_id` is validated, not merely extracted: the frontend turns
+/// it straight into a transcript file name (`<sid>.jsonl`), so a value
+/// containing a path separator or `..` must never get through. Only a
+/// non-empty string of at most [`MAX_SESSION_ID_LEN`] ASCII
+/// alphanumerics, `-` and `_` is accepted; anything else — including a
+/// non-string JSON value — becomes `None`. `source` is passed through
+/// verbatim (no trimming) when it is a string of at most
+/// [`MAX_SOURCE_LEN`]; longer or non-string values become `None`.
+fn session_start_fields(body: &str) -> (Option<String>, Option<String>) {
+    let payload: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+    let session_id = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= MAX_SESSION_ID_LEN
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
+        .map(str::to_owned);
+    let source = payload
+        .get("source")
+        .and_then(Value::as_str)
+        .filter(|s| s.len() <= MAX_SOURCE_LEN)
+        .map(str::to_owned);
+    (session_id, source)
 }
 
 // ── shared plumbing ───────────────────────────────────────────────
@@ -497,4 +540,58 @@ fn refuse(e: &AuthError) -> Response {
 
 fn error_body(status: StatusCode, message: &str) -> Response {
     (status, axum::Json(json!({ "error": message }))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_start_fields_reads_a_valid_id_and_source() {
+        let body = r#"{"session_id":"9c1f2e3a-1111-2222-3333-444455556666","source":"clear"}"#;
+        assert_eq!(
+            session_start_fields(body),
+            (
+                Some("9c1f2e3a-1111-2222-3333-444455556666".to_owned()),
+                Some("clear".to_owned())
+            )
+        );
+    }
+
+    #[test]
+    fn session_start_fields_tolerates_missing_fields() {
+        assert_eq!(session_start_fields("{}"), (None, None));
+    }
+
+    #[test]
+    fn session_start_fields_tolerates_a_non_json_body() {
+        assert_eq!(session_start_fields("not json at all"), (None, None));
+    }
+
+    #[test]
+    fn session_start_fields_rejects_a_traversal_attempt() {
+        for bad in ["../x", "a/b", "a\\b"] {
+            let body = json!({ "session_id": bad }).to_string();
+            let (session_id, _) = session_start_fields(&body);
+            assert_eq!(session_id, None, "expected {bad:?} to be rejected");
+        }
+    }
+
+    #[test]
+    fn session_start_fields_rejects_an_overlong_id() {
+        let body = json!({ "session_id": "a".repeat(MAX_SESSION_ID_LEN + 1) }).to_string();
+        assert_eq!(session_start_fields(&body).0, None);
+    }
+
+    #[test]
+    fn session_start_fields_rejects_a_non_string_session_id() {
+        let body = json!({ "session_id": 12345 }).to_string();
+        assert_eq!(session_start_fields(&body).0, None);
+    }
+
+    #[test]
+    fn session_start_fields_ignores_an_overlong_source() {
+        let body = json!({ "source": "x".repeat(MAX_SOURCE_LEN + 1) }).to_string();
+        assert_eq!(session_start_fields(&body).1, None);
+    }
 }
