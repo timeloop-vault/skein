@@ -48,6 +48,13 @@ const BACKOFF_SCHEDULE_SECS: &[u64] = &[1, 2, 4, 8, 16, 30];
 /// fired after 5 s every reconnect cycle).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Budget for the `GET /session/<id>` root/child lookup (#116),
+/// used only when a user message arrives in a session the adapter has
+/// no cached answer for. Short: it blocks the SSE read loop from the
+/// next frame while it runs, and a slow/failed lookup should give up
+/// fast rather than stall the loop.
+const SESSION_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Semantic events emitted to the frontend. Mirrors the shape of
 /// `ClaudeEvent` so the translator in `harnessEvents.ts` can keep
 /// the same policy structure.
@@ -67,7 +74,26 @@ pub enum OpencodeEvent {
     /// opencode created a session in-process. Frontend uses
     /// `session_id` to capture the auto-allocated id for resume
     /// (replaces the chapter 5 sqlite snapshot-poll path).
-    SessionCreated { session_id: String },
+    ///
+    /// `parent_id` is `/event`'s own root/child signal (#116): a
+    /// subagent (task-tool) child session always carries its parent's
+    /// id here; a root session never does. Carried verbatim — `null`
+    /// on the wire, not omitted — so the frontend can tell "root" from
+    /// "we don't know yet" without a second round trip.
+    SessionCreated {
+        session_id: String,
+        parent_id: Option<String>,
+    },
+    /// A user-role message landed in a session known to be a ROOT
+    /// (#116). The frontend's cue to follow opencode's own `/new` and
+    /// in-TUI `/sessions` picker switches onto the resumed/new session
+    /// — the picker publishes nothing to `/event` itself
+    /// (sst/opencode#5409), so the first observable sign of a switch
+    /// is this user message. Never fires for a subagent's own child
+    /// session, which also gets user-role messages but must never be
+    /// followed. Independent of `UserMessageAgent` below — this fires
+    /// whether or not opencode stamped an `agent`/`mode` field.
+    RootSessionPrompted { session_id: String },
     /// `session.status` with `status.type === "busy"`.
     SessionBusy,
     /// `session.status` with `status.type === "idle"`. The "Claude
@@ -217,7 +243,18 @@ impl OpencodeEventsManager {
         let hid = harness_id.clone();
         let rid = room_id;
         let handle = tokio::spawn(async move {
-            run_adapter(port, cancel_for_task, on_event, db, app, hid, rid, cwd).await;
+            run_adapter(
+                port,
+                cancel_for_task,
+                on_event,
+                db,
+                app,
+                hid,
+                rid,
+                cwd,
+                session_id,
+            )
+            .await;
         });
         self.inner.lock().insert(
             harness_id,
@@ -247,6 +284,7 @@ async fn run_adapter(
     harness_id: String,
     room_id: String,
     cwd: String,
+    session_id: Option<String>,
 ) {
     let url = format!("http://127.0.0.1:{port}/event");
     let client = match reqwest::Client::builder()
@@ -267,6 +305,19 @@ async fn run_adapter(
     // quiet (no, this is still the initial cold-connect race while
     // opencode hasn't bound yet).
     let connected_once = Arc::new(AtomicBool::new(false));
+    // Per-adapter root/child cache (#116), keyed by opencode session
+    // id. Lives across reconnects deliberately: `session.created` only
+    // fires once, at session birth, so a reconnect that misses it must
+    // not forget what an earlier connection already learned.
+    let root_cache: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
+    // Seed with the harness's own attached/resumed session: Skein only
+    // ever captures or resumes a ROOT session for a harness, never a
+    // subagent child, so this is safe to assume without a lookup — and
+    // it means a boot resume's first user message doesn't pay a
+    // network round trip for something already known.
+    if let Some((sid, is_root)) = seed_own_session_root(session_id.as_deref()) {
+        root_cache.lock().insert(sid, is_root);
+    }
     let mut attempt: usize = 0;
     loop {
         // Race the SSE attempt against cancellation. If `cancel` ever
@@ -275,6 +326,7 @@ async fn run_adapter(
         let connect = stream_events(
             &client,
             &url,
+            port,
             &cancel,
             on_event.as_ref(),
             &connected_for_call,
@@ -283,6 +335,7 @@ async fn run_adapter(
             &harness_id,
             &room_id,
             &cwd,
+            &root_cache,
         );
         tokio::select! {
             biased;
@@ -341,6 +394,7 @@ async fn run_adapter(
 async fn stream_events(
     client: &reqwest::Client,
     url: &str,
+    port: u16,
     cancel: &Notify,
     on_event: &(dyn Fn(OpencodeEvent) + Send + Sync),
     connected_once: &AtomicBool,
@@ -349,6 +403,7 @@ async fn stream_events(
     harness_id: &str,
     room_id: &str,
     cwd: &str,
+    root_cache: &Mutex<HashMap<String, bool>>,
 ) -> Result<(), reqwest::Error> {
     use futures_util::StreamExt;
 
@@ -392,7 +447,33 @@ async fn stream_events(
                 };
                 let chunk = chunk?;
                 buf.extend_from_slice(&chunk);
-                process_buffer(&mut buf, on_event, db, app, harness_id, room_id, cwd);
+                let unresolved =
+                    process_buffer(&mut buf, on_event, db, app, harness_id, room_id, cwd, root_cache);
+                // Resolve outside process_buffer: this is the only
+                // point in the adapter allowed to do network I/O, and
+                // process_buffer stays synchronous and unit-testable.
+                // Sequential (order-preserving), but each lookup races
+                // `cancel` too — up to SESSION_LOOKUP_TIMEOUT per id is
+                // otherwise unobserved by the outer select!, so closing
+                // a harness mid-lookup would hang the detach on it.
+                for session_id in unresolved {
+                    let lookup = lookup_session_is_root(client, port, &session_id);
+                    tokio::select! {
+                        biased;
+                        () = cancel.notified() => {
+                            tracing::debug!(port, "opencode_events: cancelled during root lookup");
+                            return Ok(());
+                        }
+                        is_root = lookup => {
+                            if let Some(is_root) = is_root {
+                                root_cache.lock().insert(session_id.clone(), is_root);
+                                if let Some(event) = decide_root_session_prompted(&session_id, Some(is_root)) {
+                                    on_event(event);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -401,6 +482,13 @@ async fn stream_events(
 /// Walk `buf` for complete SSE frames (`...\n\n`), parse each, emit
 /// matched events. Leaves any trailing partial frame in `buf` for
 /// the next chunk to extend.
+///
+/// Returns the session ids of any user-role `message.updated` whose
+/// root/child status isn't in `root_cache` yet — the caller (the only
+/// place in this module allowed to do network I/O) resolves those via
+/// `GET /session/<id>` and re-emits `RootSessionPrompted` itself. Kept
+/// out of this function so it stays synchronous and testable without a
+/// network.
 #[allow(clippy::too_many_arguments)]
 fn process_buffer(
     buf: &mut Vec<u8>,
@@ -410,10 +498,12 @@ fn process_buffer(
     harness_id: &str,
     room_id: &str,
     cwd: &str,
-) {
+    root_cache: &Mutex<HashMap<String, bool>>,
+) -> Vec<String> {
+    let mut unresolved = Vec::new();
     loop {
         let Some(sep) = find_double_newline(buf) else {
-            return;
+            return unresolved;
         };
         let frame: Vec<u8> = buf.drain(..sep + 2).collect();
         let Ok(frame_str) = std::str::from_utf8(&frame[..frame.len().saturating_sub(2)]) else {
@@ -431,9 +521,40 @@ fn process_buffer(
         if payload.is_empty() {
             continue;
         }
+        // Root/child cache maintenance (#116). `session.created` only
+        // fires at session birth; `session.updated` re-states the same
+        // fact and is the only signal available for a session already
+        // alive when the adapter attaches, so it's read here even
+        // though it never surfaces its own `OpencodeEvent`.
+        if let Some((session_id, parent_id)) = parse_session_updated_parent(&payload) {
+            root_cache.lock().insert(session_id, parent_id.is_none());
+        }
         // Phase event (existing path).
         if let Some(event) = parse_event(&payload) {
+            if let OpencodeEvent::SessionCreated {
+                session_id,
+                parent_id,
+            } = &event
+            {
+                root_cache
+                    .lock()
+                    .insert(session_id.clone(), parent_id.is_none());
+            }
             on_event(event);
+        }
+        // Root-session follow decision (#116): independent of
+        // `UserMessageAgent` above, which requires an `agent` field —
+        // this must not, since the only thing that matters here is
+        // "a user typed something in a session we know is root."
+        if let Some(session_id) = user_message_session_id(&payload) {
+            match root_cache.lock().get(&session_id).copied() {
+                Some(is_root) => {
+                    if let Some(event) = decide_root_session_prompted(&session_id, Some(is_root)) {
+                        on_event(event);
+                    }
+                }
+                None => unresolved.push(session_id),
+            }
         }
         // Action extraction (issue #80). Live rows broadcast to the
         // frontend; backfill (in attach()) is silent.
@@ -516,7 +637,21 @@ fn parse_event(payload: &str) -> Option<OpencodeEvent> {
                 .and_then(|p| p.get("sessionID"))
                 .and_then(serde_json::Value::as_str)?
                 .to_owned();
-            Some(OpencodeEvent::SessionCreated { session_id })
+            // `properties.info` is the full session object; `parentID`
+            // set means a subagent (task-tool) child, absent means a
+            // root session — verified upstream, no ambiguous case
+            // (#116). Leniently optional: a `session.created` shape
+            // that ever omits `info` still yields a `SessionCreated`
+            // for resume-id capture, just with an unknown parent.
+            let parent_id = props
+                .and_then(|p| p.get("info"))
+                .and_then(|info| info.get("parentID"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            Some(OpencodeEvent::SessionCreated {
+                session_id,
+                parent_id,
+            })
         }
         "message.part.delta" => Some(OpencodeEvent::MessageDelta),
         "message.updated" => {
@@ -626,12 +761,135 @@ fn parse_event(payload: &str) -> Option<OpencodeEvent> {
         }
         // Everything else — `session.idle` (redundant with the
         // `session.status` idle that fires alongside it),
-        // `session.updated`, `session.diff`, `server.heartbeat`,
-        // `mcp.tools.changed`, future event types — is silent at
-        // the policy layer. See recon §3 for the catalog. Permission
-        // and question events are handled above, not here.
+        // `session.updated` (read separately by
+        // `parse_session_updated_parent` for the #116 root/child
+        // cache, but it has no `OpencodeEvent` of its own),
+        // `session.diff`, `server.heartbeat`, `mcp.tools.changed`,
+        // future event types — is silent at the policy layer. See
+        // recon §3 for the catalog. Permission and question events
+        // are handled above, not here.
         _ => None,
     }
+}
+
+/// `session.updated`'s root/child fact (#116), extracted the same way
+/// as `session.created`'s but never surfaced as its own
+/// `OpencodeEvent` — the frontend has no use for "session metadata
+/// changed." Read purely to backfill the root/child cache for a
+/// session the adapter attached to mid-life, whose `session.created`
+/// (fired once, at birth) it never saw.
+fn parse_session_updated_parent(payload: &str) -> Option<(String, Option<String>)> {
+    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+    if value.get("type").and_then(serde_json::Value::as_str) != Some("session.updated") {
+        return None;
+    }
+    let props = value.get("properties")?;
+    // Both the id and the parent fact live under `info` — unlike
+    // `session.created`, `session.updated` has no top-level
+    // `sessionID` to fall back on, so a frame without `info` carries
+    // nothing usable and is skipped rather than guessed at.
+    let info = props.get("info")?;
+    let session_id = info
+        .get("id")
+        .or_else(|| info.get("sessionID"))
+        .and_then(serde_json::Value::as_str)?
+        .to_owned();
+    let parent_id = info
+        .get("parentID")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    Some((session_id, parent_id))
+}
+
+/// Session id of a user-role `message.updated`, independent of the
+/// `agent`/`mode` field that `UserMessageAgent` requires (#116) — the
+/// root/child follow decision cares only that a user typed something,
+/// not what agent it went to.
+fn user_message_session_id(payload: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+    if value.get("type").and_then(serde_json::Value::as_str) != Some("message.updated") {
+        return None;
+    }
+    let props = value.get("properties")?;
+    let info = props.get("info")?;
+    if info.get("role").and_then(serde_json::Value::as_str) != Some("user") {
+        return None;
+    }
+    info.get("sessionID")
+        .or_else(|| props.get("sessionID"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+/// Turn "we now know whether `session_id` is root" into the follow
+/// event, or not (#116). Pure, so the cache-hit path (in
+/// `process_buffer`) and the lookup-hit path (after the async
+/// `GET /session/<id>`, in `stream_events`) share one decision, and it
+/// is testable without touching the network: `is_root = None` stands
+/// in for a failed or ambiguous lookup, which must never be followed
+/// on a guess.
+fn decide_root_session_prompted(session_id: &str, is_root: Option<bool>) -> Option<OpencodeEvent> {
+    is_root
+        .filter(|&root| root)
+        .map(|_| OpencodeEvent::RootSessionPrompted {
+            session_id: session_id.to_owned(),
+        })
+}
+
+/// opencode session ids look like `ses_<alnum>`. Reject anything else
+/// before it goes into a URL path segment — defense in depth, since
+/// the id already came off the wire as a JSON string, not user input,
+/// but a malformed one has no business being ranged over `/session/`.
+fn is_valid_session_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Seed value for the harness's own attached/resumed session (#116
+/// follow-up). Pure so the seeding decision is testable without
+/// touching the cache/`Mutex` it feeds. `None` when there's no session
+/// yet (fresh spawn) or the id fails validation — the same guard the
+/// network lookup uses, so a malformed id is refused everywhere it
+/// could reach a cache or a URL, not just one of them.
+fn seed_own_session_root(session_id: Option<&str>) -> Option<(String, bool)> {
+    let sid = session_id?;
+    is_valid_session_id(sid).then(|| (sid.to_owned(), true))
+}
+
+/// Authoritative root/child lookup for a session the adapter has no
+/// cached answer for (attached mid-life, after both `session.created`
+/// and any `session.updated` for it had already passed) — `GET
+/// /session/<id>` against opencode's own HTTP API. `None` on any
+/// failure (bad id, timeout, network error, non-200, unparseable
+/// body): conservative, since guessing risks following the wrong
+/// session. Bounded by `SESSION_LOOKUP_TIMEOUT` so a wedged opencode
+/// can't stall the SSE read loop indefinitely.
+async fn lookup_session_is_root(
+    client: &reqwest::Client,
+    port: u16,
+    session_id: &str,
+) -> Option<bool> {
+    if !is_valid_session_id(session_id) {
+        tracing::warn!(
+            session_id,
+            "opencode_events: refusing malformed session id for root lookup"
+        );
+        return None;
+    }
+    let url = format!("http://127.0.0.1:{port}/session/{session_id}");
+    let response = tokio::time::timeout(SESSION_LOOKUP_TIMEOUT, client.get(&url).send())
+        .await
+        .ok()?
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let value: serde_json::Value = response.json().await.ok()?;
+    Some(
+        value
+            .get("parentID")
+            .and_then(serde_json::Value::as_str)
+            .is_none(),
+    )
 }
 
 #[cfg(test)]
@@ -657,10 +915,11 @@ mod tests {
             tx.send(e).unwrap();
         };
         let (_dir, db) = test_db();
+        let cache: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
         let mut buf = Vec::new();
         for (i, chunk) in input.iter().enumerate() {
             buf.extend_from_slice(&frame_each(i, chunk));
-            process_buffer(&mut buf, &cb, &db, None, "h-test", "r-test", "");
+            process_buffer(&mut buf, &cb, &db, None, "h-test", "r-test", "", &cache);
         }
         let mut out = Vec::new();
         while let Ok(e) = rx.try_recv() {
@@ -696,9 +955,153 @@ mod tests {
         let payload = r#"{"type":"session.created","properties":{"sessionID":"ses_abc123","info":{"id":"ses_abc123"}}}"#;
         let events = drain_events(&[payload], |_, p| frame(p));
         assert!(
-            matches!(events.first(), Some(OpencodeEvent::SessionCreated { session_id }) if session_id == "ses_abc123"),
+            matches!(events.first(), Some(OpencodeEvent::SessionCreated { session_id, .. }) if session_id == "ses_abc123"),
             "expected SessionCreated(ses_abc123), got {events:?}"
         );
+    }
+
+    #[test]
+    fn session_created_reports_root_when_no_parent_id() {
+        let payload = r#"{"type":"session.created","properties":{"sessionID":"ses_root","info":{"id":"ses_root"}}}"#;
+        let events = drain_events(&[payload], |_, p| frame(p));
+        assert!(
+            matches!(events.first(), Some(OpencodeEvent::SessionCreated { session_id, parent_id })
+                if session_id == "ses_root" && parent_id.is_none()),
+            "expected root SessionCreated, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn session_created_reports_child_when_parent_id_present() {
+        // A subagent (task-tool) child session always carries its
+        // parent's id — verified upstream, not a guessed symmetry
+        // (#116).
+        let payload = r#"{"type":"session.created","properties":{"sessionID":"ses_child","info":{"id":"ses_child","parentID":"ses_root"}}}"#;
+        let events = drain_events(&[payload], |_, p| frame(p));
+        assert!(
+            matches!(events.first(), Some(OpencodeEvent::SessionCreated { session_id, parent_id })
+                if session_id == "ses_child" && parent_id.as_deref() == Some("ses_root")),
+            "expected child SessionCreated, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn user_message_in_root_session_emits_root_session_prompted() {
+        // opencode's `/sessions` picker publishes nothing to `/event`
+        // itself (sst/opencode#5409) — a user-role message in a known
+        // root session is the first observable sign of a switch.
+        let events = drain_events(
+            &[
+                r#"{"type":"session.created","properties":{"sessionID":"ses_root","info":{"id":"ses_root"}}}"#,
+                r#"{"type":"message.updated","properties":{"info":{"role":"user","sessionID":"ses_root"}}}"#,
+            ],
+            |_, p| frame(p),
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, OpencodeEvent::RootSessionPrompted { session_id } if session_id == "ses_root")),
+            "expected RootSessionPrompted for a known root session, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn user_message_in_child_session_never_emits_root_session_prompted() {
+        let events = drain_events(
+            &[
+                r#"{"type":"session.created","properties":{"sessionID":"ses_child","info":{"id":"ses_child","parentID":"ses_root"}}}"#,
+                r#"{"type":"message.updated","properties":{"info":{"role":"user","sessionID":"ses_child"}}}"#,
+            ],
+            |_, p| frame(p),
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, OpencodeEvent::RootSessionPrompted { .. })),
+            "a subagent's own child session must never be followed, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn session_updated_alone_populates_the_root_cache() {
+        // `session.updated` never surfaces its own `OpencodeEvent`, but
+        // it's the only signal available for a session already alive
+        // when the adapter attaches (no `session.created` to see).
+        let events = drain_events(
+            &[
+                r#"{"type":"session.updated","properties":{"sessionID":"ses_root","info":{"id":"ses_root"}}}"#,
+                r#"{"type":"message.updated","properties":{"info":{"role":"user","sessionID":"ses_root"}}}"#,
+            ],
+            |_, p| frame(p),
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, OpencodeEvent::SessionCreated { .. })),
+            "session.updated must never surface its own event, got {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, OpencodeEvent::RootSessionPrompted { session_id } if session_id == "ses_root")),
+            "session.updated should have cached root status, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn user_message_in_unknown_session_is_returned_for_lookup_not_guessed() {
+        let (_dir, db) = test_db();
+        let (tx, rx) = mpsc::channel();
+        let cb = move |e: OpencodeEvent| {
+            tx.send(e).unwrap();
+        };
+        let cache: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
+        let mut buf = frame(
+            r#"{"type":"message.updated","properties":{"info":{"role":"user","sessionID":"ses_unknown"}}}"#,
+        );
+        let unresolved = process_buffer(&mut buf, &cb, &db, None, "h-test", "r-test", "", &cache);
+        assert_eq!(unresolved, vec!["ses_unknown".to_owned()]);
+        assert!(
+            rx.try_recv().is_err(),
+            "an unknown session must never emit before the lookup resolves it"
+        );
+    }
+
+    #[test]
+    fn decide_root_session_prompted_only_fires_for_a_confirmed_root() {
+        assert!(matches!(
+            decide_root_session_prompted("ses_1", Some(true)),
+            Some(OpencodeEvent::RootSessionPrompted { session_id }) if session_id == "ses_1"
+        ));
+        assert!(decide_root_session_prompted("ses_1", Some(false)).is_none());
+        assert!(
+            decide_root_session_prompted("ses_1", None).is_none(),
+            "a failed or ambiguous lookup must never be followed on a guess"
+        );
+    }
+
+    #[test]
+    fn session_id_validation_rejects_anything_not_alnum_or_underscore() {
+        assert!(is_valid_session_id("ses_abc123"));
+        assert!(!is_valid_session_id(""));
+        assert!(!is_valid_session_id("ses/abc"));
+        assert!(!is_valid_session_id("ses abc"));
+        assert!(!is_valid_session_id("../../etc"));
+    }
+
+    #[test]
+    fn seed_own_session_root_accepts_a_valid_id_as_root() {
+        assert_eq!(
+            seed_own_session_root(Some("ses_abc123")),
+            Some(("ses_abc123".to_owned(), true))
+        );
+    }
+
+    #[test]
+    fn seed_own_session_root_rejects_absent_or_malformed_ids() {
+        assert_eq!(
+            seed_own_session_root(None),
+            None,
+            "fresh spawn, no session yet"
+        );
+        assert_eq!(seed_own_session_root(Some("")), None);
+        assert_eq!(seed_own_session_root(Some("ses/../abc")), None);
     }
 
     #[test]
@@ -862,15 +1265,16 @@ mod tests {
         let cb = move |e: OpencodeEvent| {
             tx.send(e).unwrap();
         };
+        let cache: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
         let mut buf = Vec::new();
         buf.extend_from_slice(
             br#"data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"#,
         );
-        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "");
+        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "", &cache);
         assert!(rx.try_recv().is_err(), "partial frame must not emit");
         buf.extend_from_slice(br#""idle"}}}"#);
         buf.extend_from_slice(b"\n\n");
-        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "");
+        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "", &cache);
         let mut out: Vec<OpencodeEvent> = Vec::new();
         while let Ok(e) = rx.try_recv() {
             out.push(e);
@@ -896,7 +1300,8 @@ mod tests {
         let cb = move |e: OpencodeEvent| {
             tx.send(e).unwrap();
         };
-        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "");
+        let cache: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
+        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "", &cache);
         let mut out = Vec::new();
         while let Ok(e) = rx.try_recv() {
             out.push(e);
@@ -919,7 +1324,8 @@ mod tests {
         let cb = move |e: OpencodeEvent| {
             tx.send(e).unwrap();
         };
-        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "");
+        let cache: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
+        process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "", &cache);
         let mut out: Vec<OpencodeEvent> = Vec::new();
         while let Ok(e) = rx.try_recv() {
             out.push(e);

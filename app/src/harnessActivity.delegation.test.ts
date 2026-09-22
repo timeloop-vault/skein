@@ -253,7 +253,7 @@ describe("subagent-aware end-of-turn deferral (#277)", () => {
 	});
 });
 
-describe("sessionCleared (#116)", () => {
+describe("sessionSwitched (#116)", () => {
 	beforeAll(() => {
 		vi.useFakeTimers();
 	});
@@ -268,11 +268,47 @@ describe("sessionCleared (#116)", () => {
 			if (tid === id) transitions.push({ to, source });
 		});
 
-		harnessActivity.sessionCleared(id);
+		harnessActivity.sessionSwitched(id, "clear");
 
 		expect(harnessActivity.get(id)?.phase).toBe("waiting");
 		expect(transitions).toEqual([
 			{ to: "waiting", source: TRANSITION_SOURCE.L2c1ClaudeSessionClear },
+		]);
+		unsubscribe();
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+
+	it("running moves to waiting with the session-resume source", () => {
+		const id = runningHarness();
+		const transitions: Array<{ to: string; source: string }> = [];
+		const unsubscribe = harnessActivity.subscribeTransitions((tid, _from, to, source) => {
+			if (tid === id) transitions.push({ to, source });
+		});
+
+		harnessActivity.sessionSwitched(id, "resume");
+
+		expect(harnessActivity.get(id)?.phase).toBe("waiting");
+		expect(transitions).toEqual([
+			{ to: "waiting", source: TRANSITION_SOURCE.L2c1ClaudeSessionResume },
+		]);
+		unsubscribe();
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+
+	it("running moves to waiting with the session-fork source", () => {
+		const id = runningHarness();
+		const transitions: Array<{ to: string; source: string }> = [];
+		const unsubscribe = harnessActivity.subscribeTransitions((tid, _from, to, source) => {
+			if (tid === id) transitions.push({ to, source });
+		});
+
+		harnessActivity.sessionSwitched(id, "fork");
+
+		expect(harnessActivity.get(id)?.phase).toBe("waiting");
+		expect(transitions).toEqual([
+			{ to: "waiting", source: TRANSITION_SOURCE.L2c1ClaudeSessionFork },
 		]);
 		unsubscribe();
 		harnessActivity.forget(id);
@@ -284,7 +320,7 @@ describe("sessionCleared (#116)", () => {
 		harnessActivity.setPermissionFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudePermission, "Bash");
 		expect(harnessActivity.get(id)?.phase).toBe("permission");
 
-		harnessActivity.sessionCleared(id);
+		harnessActivity.sessionSwitched(id, "clear");
 
 		expect(harnessActivity.get(id)?.phase).toBe("permission");
 		harnessActivity.forget(id);
@@ -296,19 +332,19 @@ describe("sessionCleared (#116)", () => {
 		harnessActivity.exited(id, 0);
 		expect(harnessActivity.get(id)?.phase).toBe("exited");
 
-		harnessActivity.sessionCleared(id);
+		harnessActivity.sessionSwitched(id, "clear");
 
 		expect(harnessActivity.get(id)?.phase).toBe("exited");
 		harnessActivity.forget(id);
 		subagents.forget(id);
 	});
 
-	it("forgets a subagent registered before the clear — workingCount reads 0 after", () => {
+	it("forgets a subagent registered before the switch — workingCount reads 0 after", () => {
 		const id = runningHarness();
 		startLiveSubagent(id, "a1");
 		expect(subagents.workingCount(id)).toBe(1);
 
-		harnessActivity.sessionCleared(id);
+		harnessActivity.sessionSwitched(id, "resume");
 
 		expect(subagents.workingCount(id)).toBe(0);
 		harnessActivity.forget(id);
@@ -321,7 +357,7 @@ describe("sessionCleared (#116)", () => {
 		harnessActivity.awaitingPromptFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
 		expect(harnessActivity.get(id)?.delegationDeferredAt).not.toBeNull();
 
-		harnessActivity.sessionCleared(id);
+		harnessActivity.sessionSwitched(id, "clear");
 
 		expect(harnessActivity.get(id)?.delegationDeferredAt).toBeNull();
 		harnessActivity.forget(id);
