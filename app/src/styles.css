@@ -824,6 +824,58 @@ body {
 	min-width: 14px;
 	text-align: center;
 }
+/* Room groups (#76), two-level strip. `.sk-group-tab` is the TOP-row
+   tab for a repository with two or more open rooms — visually just
+   another `.sk-tab` (same size/shape, so it reads as a tab and not a
+   different kind of chrome) plus the room-count badge that's the one
+   thing marking it as a group rather than a single room. */
+.sk-group-count {
+	color: var(--fg-3);
+	font-size: calc(var(--cfs) * 0.75);
+	font-weight: 600;
+	flex: 0 0 auto;
+}
+/* The SECOND row: the active group's own rooms, main pinned first.
+   Its own accent top border is the same color as an active tab's — a
+   deliberate echo of `.sk-tab.active::before` above, so the row reads
+   as hanging off the active group tab (a folder's contents) rather
+   than a second, unrelated strip. Individual tabs inside keep their
+   normal `.sk-tab`/`.sk-tab.active` styling, so the active room still
+   stands out against the row via `--bg-1` the same way an active tab
+   always has. */
+.sk-grouprow {
+	display: flex;
+	align-items: stretch;
+	background: var(--bg-0);
+	border-top: 2px solid var(--accent);
+	border-bottom: 1px solid var(--line);
+	padding: 0 6px;
+	gap: 1px;
+	height: calc(var(--cfs, 12px) * 3.4);
+	flex: 0 0 calc(var(--cfs, 12px) * 3.4);
+	overflow: hidden;
+}
+.sk-grouprow .sk-tab-newbtn {
+	height: calc(var(--cfs, 12px) * 3.4);
+}
+.sk-tab-placeholder {
+	opacity: 0.55;
+}
+.sk-tab-placeholder:hover {
+	opacity: 0.85;
+	background: rgba(255, 255, 255, 0.02);
+}
+.sk-light .sk-tab-placeholder:hover {
+	background: rgba(0, 0, 0, 0.02);
+}
+.tab-status-placeholder {
+	width: var(--dot, 8px);
+	height: var(--dot, 8px);
+	border-radius: 50%;
+	flex: 0 0 var(--dot, 8px);
+	border: 1px solid var(--fg-3);
+	box-sizing: border-box;
+}
 .sk-tab-newbtn {
 	height: calc(var(--cfs, 12px) * 4);
 	width: 32px;

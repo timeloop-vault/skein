@@ -73,6 +73,7 @@ fn room(id: &str, harnesses: Vec<Harness>) -> Room {
         branch: None,
         repo: None,
         archived: None,
+        repo_root: None,
     }
 }
 

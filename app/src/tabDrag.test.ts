@@ -198,6 +198,95 @@ describe("tabDrag — no-op gaps (#271)", () => {
 	});
 });
 
+// #76: group-aware room drag validity. RoomStrip mints `segId`/`role`
+// off `data-drag-seg`/`data-drag-role` and never leaves them out for a
+// group-relevant tab, but the defaulting (missing → `"segment"` / the
+// id itself) is what keeps every plain-room test above compiling and
+// passing unchanged.
+describe("tabDrag — group-aware room validity (#76)", () => {
+	it("a member refuses a target in a different group and shows no indicator", () => {
+		let state = press({ kind: "room", id: "wtA", segId: "g:/a", role: "member" }, 1, 0, 0, [
+			"main",
+			"wtA",
+			"otherWt",
+		]);
+		state = move(state, 1, 50, 0, {
+			kind: "room",
+			id: "otherWt",
+			side: "after",
+			segId: "g:/other",
+			role: "member",
+		});
+		expect(state.status).toBe("dragging");
+		if (state.status === "dragging") {
+			expect(state.refused).toBe(true);
+			expect(state.target).toBeNull();
+		}
+		const { state: next, reorder } = release(state);
+		expect(next).toEqual(idleState);
+		expect(reorder).toBeUndefined();
+	});
+
+	it("a member allows a target in its own group", () => {
+		let state = press({ kind: "room", id: "wtA", segId: "g:/a", role: "member" }, 1, 0, 0, [
+			"main",
+			"wtA",
+			"wtB",
+		]);
+		state = move(state, 1, 50, 0, {
+			kind: "room",
+			id: "wtB",
+			side: "after",
+			segId: "g:/a",
+			role: "member",
+		});
+		expect(state.status).toBe("dragging");
+		if (state.status === "dragging") {
+			expect(state.refused).toBe(false);
+			expect(state.target).toEqual({ id: "wtB", side: "after" });
+		}
+	});
+
+	it("a segment (lead) refuses a member of its OWN group — dropping inside itself", () => {
+		let state = press({ kind: "room", id: "main", segId: "g:/a", role: "segment" }, 1, 0, 0, [
+			"main",
+			"wtA",
+			"wtB",
+		]);
+		state = move(state, 1, 50, 0, {
+			kind: "room",
+			id: "wtA",
+			side: "before",
+			segId: "g:/a",
+			role: "member",
+		});
+		expect(state.status).toBe("dragging");
+		if (state.status === "dragging") {
+			expect(state.refused).toBe(true);
+			expect(state.target).toBeNull();
+		}
+	});
+
+	it("a segment allows a member of a DIFFERENT group", () => {
+		let state = press({ kind: "room", id: "main", segId: "g:/a", role: "segment" }, 1, 0, 0, [
+			"main",
+			"otherWt",
+		]);
+		state = move(state, 1, 50, 0, {
+			kind: "room",
+			id: "otherWt",
+			side: "after",
+			segId: "g:/other",
+			role: "member",
+		});
+		expect(state.status).toBe("dragging");
+		if (state.status === "dragging") {
+			expect(state.refused).toBe(false);
+			expect(state.target).toEqual({ id: "otherWt", side: "after" });
+		}
+	});
+});
+
 describe("gapToTarget", () => {
 	const order = ["a", "b", "c", "d"];
 
