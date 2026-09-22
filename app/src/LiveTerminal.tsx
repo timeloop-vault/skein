@@ -109,6 +109,13 @@ interface LiveTerminalProps {
 	// persist the captured sessionId on the harness for resume.
 	// `undefined` for non-opencode harnesses.
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
+	// #116: fired when the L2c-2 adapter decides the harness followed
+	// its TUI onto a DIFFERENT root session (`/new`, or an existing
+	// session picked via `/sessions`) — see `followedOpencodeSession`
+	// in `sessionTracking.ts`. Caller wires this to overwrite the
+	// stored sessionId, same as Claude's clear/resume/fork follow.
+	// `undefined` for non-opencode harnesses.
+	onSessionFollowed: ((sessionId: string) => void) | undefined;
 	fontSize: number;
 	// #158: copy a mouse selection to the clipboard the moment it's made
 	// (Settings → "Copy on select", default true). Read through a ref
@@ -143,6 +150,7 @@ export const LiveTerminal = ({
 	agent,
 	opencodePort,
 	onSessionCaptured,
+	onSessionFollowed,
 	fontSize,
 	copyOnSelect,
 	defaultShell,
@@ -180,7 +188,12 @@ export const LiveTerminal = ({
 	// the exhaustive-deps note below), so its attach closure must read the
 	// CURRENT sessionId at attach time — including one that lands between
 	// render and the effect actually spawning the PTY — not the value
-	// captured when the effect was defined.
+	// captured when the effect was defined. Step four reuses this same
+	// ref as the opencode adapter's LIVE getter, passed straight into
+	// `attachOpencodeEvents`: that adapter is attached once per PTY, but
+	// the harness's own sessionId changes under it whenever `/new` or a
+	// `/sessions` pick is followed, so a value closed over at attach
+	// time would go stale the first time that happens.
 	const sessionIdRef = useRef(sessionId);
 	sessionIdRef.current = sessionId;
 	// #116 step two: the Claude JSONL adapter's unsubscribe, paired with
@@ -737,6 +750,11 @@ export const LiveTerminal = ({
 						opencodePort,
 						sessionId,
 						onSessionCaptured,
+						// #116: live, not the `sessionId` closed over above —
+						// this harness's session id can change under a
+						// long-lived adapter (`/new`, a `/sessions` pick).
+						() => sessionIdRef.current,
+						onSessionFollowed,
 					);
 				}
 				dataDisposable = term.onData((data) => {
