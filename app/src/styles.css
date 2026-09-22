@@ -788,6 +788,21 @@ body {
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+/* #241: inline room rename — same slot as the static .name span. */
+.sk-tab .name-input {
+	flex: 1;
+	min-width: 0;
+	background: var(--bg-1);
+	color: var(--fg-0);
+	border: 1px solid var(--accent);
+	border-radius: 3px;
+	font: inherit;
+	font-size: 1em;
+	padding: 0 3px;
+	margin: -1px 0;
+	outline: none;
+	cursor: text;
+}
 .sk-tab-close {
 	color: var(--fg-3);
 	font-size: calc(var(--cfs) * 1.0833);

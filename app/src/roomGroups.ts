@@ -180,6 +180,16 @@ export function groupRooms(seg: StripSegment): Room[] {
 	return seg.lead ? [seg.lead, ...seg.members] : [...seg.members];
 }
 
+/// The top-row `GroupTab`'s display name (#241): the main room's own
+/// `Room.name` when it's open (`seg.lead`), the repo-derived `label`
+/// otherwise. Renaming either the GroupTab or the lead's own second-row
+/// tab writes the SAME `Room.name` field — this only decides which
+/// value currently stands in for the group as a whole, not a separate
+/// piece of state.
+export function groupDisplayName(seg: Extract<StripSegment, { kind: "group" }>): string {
+	return seg.lead ? seg.lead.name : seg.label;
+}
+
 /// Every room in strip order — a group contributes its lead (if open)
 /// then its members. Used by next/prev room and Alt+1-9: there is no
 /// collapse any more, so unlike the old `visibleRoomOrder` this never

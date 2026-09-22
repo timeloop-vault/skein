@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	allRoomOrder,
 	buildStrip,
+	groupDisplayName,
 	groupKey,
 	groupRooms,
 	resolveRowDrop,
@@ -131,6 +132,36 @@ describe("buildStrip", () => {
 		}
 		expect(seg.lead?.id).toBe("first");
 		expect(seg.members.map((m) => m.id)).toEqual(["second"]);
+	});
+});
+
+describe("groupDisplayName", () => {
+	it("is the main room's own name when main is open", () => {
+		const main = room("main", { name: "worker", repoRoot: "/repo", cwd: "/repo" });
+		const wt = room("wt", { repoRoot: "/repo", cwd: "/repo-wt/a" });
+		const segs = buildStrip([main, wt]);
+		const seg = segs[0];
+		if (seg?.kind !== "group") throw new Error("expected a group segment");
+		expect(groupDisplayName(seg)).toBe("worker");
+	});
+
+	it("falls back to the repo label when main isn't open", () => {
+		const wt = room("wt", { repoRoot: "/repo", cwd: "/repo-wt/a" });
+		const segs = buildStrip([wt]);
+		const seg = segs[0];
+		if (seg?.kind !== "group") throw new Error("expected a group segment");
+		expect(groupDisplayName(seg)).toBe(seg.label);
+		expect(groupDisplayName(seg)).toBe("repo");
+	});
+
+	it("follows a rename of the main room", () => {
+		const main = room("main", { name: "old-name", repoRoot: "/repo", cwd: "/repo" });
+		const wt = room("wt", { repoRoot: "/repo", cwd: "/repo-wt/a" });
+		const renamed = { ...main, name: "renamed" };
+		const segs = buildStrip([renamed, wt]);
+		const seg = segs[0];
+		if (seg?.kind !== "group") throw new Error("expected a group segment");
+		expect(groupDisplayName(seg)).toBe("renamed");
 	});
 });
 
