@@ -252,6 +252,23 @@ pub struct LoadOutcome {
     pub backup_rooms: Option<i64>,
 }
 
+/// Every table beyond `sessions`/`sessions_quarantine` that carries a
+/// `room_id` column, for `Database::sweep_orphans` (#237). **A new
+/// room-keyed table added to `init_schema` must be added here too**,
+/// or its orphan rows will never be swept.
+const ROOM_KEYED_TABLES: &[&str] = &[
+    "harness_events",
+    "harness_actions",
+    "review_baselines",
+    "review_threads",
+    "review_comments",
+    "review_viewed",
+    "review_settings",
+    "review_addressed",
+    "agent_tokens",
+    "review_signoff",
+];
+
 pub struct Database {
     conn: Mutex<Connection>,
     path: PathBuf,
@@ -323,6 +340,10 @@ impl Database {
     /// tables just get added here without a separate migration step.
     /// At prototype scale this is sufficient — once columns need to
     /// be altered (vs added) we'll need a version table.
+    ///
+    /// A new table with a `room_id` column also needs adding to
+    /// `ROOM_KEYED_TABLES` (#237), or `sweep_orphans` will never clean
+    /// it up after its room is deleted forever.
     fn init_schema(conn: &Connection) -> Result<(), String> {
         // `created_at` preserves room order across save/load (frontend
         // appends new rooms, we want the same order back).
@@ -695,6 +716,39 @@ impl Database {
             first_load,
             backup_rooms: None,
         })
+    }
+
+    /// Deletes rows in every room-keyed table (`ROOM_KEYED_TABLES`)
+    /// whose `room_id` no longer names a live room (issue #237). Closing
+    /// a room forever only drops its `sessions` row — see `App.tsx`'s
+    /// `deleteRoomForever` — so without this sweep every sibling table
+    /// below grows forever.
+    ///
+    /// Two #167 cautions govern this:
+    /// - Callers MUST only run this after a load has already
+    ///   succeeded. A failed load must never be allowed to read as "no
+    ///   rooms" — that would let a transient sqlite hiccup sweep away
+    ///   every room's history.
+    /// - A room parked in `sessions_quarantine` (unparseable, kept for
+    ///   recovery) keeps its rows too — they are deliberately excluded
+    ///   from the orphan check, because the room may come back once its
+    ///   blob is fixed by hand.
+    ///
+    /// One transaction; returns the total number of rows deleted across
+    /// every table.
+    pub fn sweep_orphans(&self) -> Result<usize, String> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let mut total = 0usize;
+        for table in ROOM_KEYED_TABLES {
+            let sql = format!(
+                "DELETE FROM {table} WHERE room_id NOT IN (SELECT id FROM sessions) \
+                 AND room_id NOT IN (SELECT id FROM sessions_quarantine)"
+            );
+            total += tx.execute(&sql, []).map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(total)
     }
 
     /// Cwds of every persisted room, active and archived — the scope
@@ -2971,5 +3025,161 @@ mod review_comment_tests {
             Some("feat/211-review-baseline")
         );
         assert_eq!(db.review_base_ref("r2").unwrap(), None);
+    }
+}
+
+#[cfg(test)]
+mod orphan_sweep_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn fresh() -> (TempDir, Database) {
+        let dir = TempDir::new().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        (dir, db)
+    }
+
+    fn room(id: &str) -> Room {
+        Room {
+            id: id.into(),
+            name: format!("room {id}"),
+            task: String::new(),
+            status: "idle".into(),
+            badge: 0,
+            harnesses: Vec::new(),
+            active_harness_id: String::new(),
+            cwd: None,
+            branch: None,
+            repo: None,
+            archived: None,
+            repo_root: None,
+        }
+    }
+
+    /// Inserts one row into `table` for `room_id`, with whatever dummy
+    /// values satisfy its `NOT NULL` columns — content doesn't matter,
+    /// only that a row keyed to this `room_id` exists to sweep (or not).
+    fn seed_row(db: &Database, table: &str, room_id: &str) {
+        let conn = db.conn.lock();
+        let sql = match table {
+            "harness_events" => {
+                "INSERT INTO harness_events \
+                 (harness_id, room_id, from_phase, to_phase, timestamp_ms, has_user_input, source) \
+                 VALUES ('h1', ?1, 'idle', 'running', 1, 0, NULL)"
+            }
+            "harness_actions" => {
+                "INSERT INTO harness_actions \
+                 (harness_id, room_id, timestamp_ms, kind, payload, source) \
+                 VALUES ('h1', ?1, 1, 'tool_call', '{}', NULL)"
+            }
+            "review_baselines" => {
+                "INSERT INTO review_baselines \
+                 (room_id, path, kind, content, harness_id, captured_ms, touched_ms) \
+                 VALUES (?1, 'a.rs', 'text', 'v1', 'h1', 1, 1)"
+            }
+            "review_threads" => {
+                "INSERT INTO review_threads \
+                 (id, room_id, scope, file_path, commit_sha, side, line_start, line_end, \
+                  anchor_hash, anchor_lines, resolved_ms, created_ms, updated_ms) \
+                 VALUES ('thread-' || ?1, ?1, 'branch', 'a.rs', NULL, NULL, NULL, NULL, \
+                         NULL, NULL, NULL, 1, 1)"
+            }
+            "review_comments" => {
+                "INSERT INTO review_comments \
+                 (id, thread_id, room_id, author_kind, author_id, body, created_ms, updated_ms) \
+                 VALUES ('comment-' || ?1, 'thread-' || ?1, ?1, 'human', NULL, 'hi', 1, 1)"
+            }
+            "review_viewed" => {
+                "INSERT INTO review_viewed (room_id, path, content_hash, viewed_ms) \
+                 VALUES (?1, 'a.rs', 'hash', 1)"
+            }
+            "review_settings" => {
+                "INSERT INTO review_settings (room_id, base_ref, updated_ms) \
+                 VALUES (?1, 'main', 1)"
+            }
+            "review_addressed" => {
+                "INSERT INTO review_addressed \
+                 (thread_id, room_id, commit_sha, harness_id, note, addressed_ms) \
+                 VALUES ('thread-' || ?1, ?1, NULL, 'h1', NULL, 1)"
+            }
+            "agent_tokens" => {
+                "INSERT INTO agent_tokens (token, room_id, created_ms, revoked_ms) \
+                 VALUES ('token-' || ?1, ?1, 1, NULL)"
+            }
+            "review_signoff" => {
+                "INSERT INTO review_signoff (room_id, head_sha, base_ref, note, approved_ms) \
+                 VALUES (?1, 'deadbeef', NULL, NULL, 1)"
+            }
+            other => panic!("seed_row: unhandled table {other}"),
+        };
+        conn.execute(sql, params![room_id]).unwrap();
+    }
+
+    fn row_count(db: &Database, table: &str, room_id: &str) -> i64 {
+        db.conn
+            .lock()
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE room_id = ?1"),
+                params![room_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    /// #237: every room-keyed table is swept for a room that is gone
+    /// from `sessions` entirely, while rows for a live room are left
+    /// untouched — and the returned count matches what was deleted.
+    #[test]
+    fn sweep_deletes_orphans_in_every_table_and_keeps_live_rows() {
+        let (_d, db) = fresh();
+        db.save_all(&[room("live")]).unwrap();
+        db.load_all().unwrap();
+        for table in ROOM_KEYED_TABLES {
+            seed_row(&db, table, "live");
+            seed_row(&db, table, "orphan");
+        }
+
+        let deleted = db.sweep_orphans().unwrap();
+
+        assert_eq!(
+            deleted,
+            ROOM_KEYED_TABLES.len(),
+            "one orphan row per table should have been swept"
+        );
+        for table in ROOM_KEYED_TABLES {
+            assert_eq!(row_count(&db, table, "orphan"), 0, "table {table}");
+            assert_eq!(row_count(&db, table, "live"), 1, "table {table}");
+        }
+    }
+
+    /// #237: a room parked in `sessions_quarantine` (unparseable, kept
+    /// for recovery — #167) is not an orphan. Its rows must survive the
+    /// sweep so the history is still there if the blob is fixed by hand.
+    #[test]
+    fn sweep_keeps_rows_for_a_quarantined_room() {
+        let (_d, db) = fresh();
+        db.save_all(&[room("live"), room("bad")]).unwrap();
+        db.conn
+            .lock()
+            .execute("UPDATE sessions SET data = 'not json' WHERE id = 'bad'", [])
+            .unwrap();
+        let outcome = db.load_all().unwrap();
+        assert_eq!(outcome.skipped.len(), 1, "bad should have been quarantined");
+        for table in ROOM_KEYED_TABLES {
+            seed_row(&db, table, "bad");
+            seed_row(&db, table, "orphan");
+        }
+
+        let deleted = db.sweep_orphans().unwrap();
+
+        assert_eq!(
+            deleted,
+            ROOM_KEYED_TABLES.len(),
+            "only the truly orphaned rows should have been swept"
+        );
+        for table in ROOM_KEYED_TABLES {
+            assert_eq!(row_count(&db, table, "bad"), 1, "table {table}");
+            assert_eq!(row_count(&db, table, "orphan"), 0, "table {table}");
+        }
     }
 }

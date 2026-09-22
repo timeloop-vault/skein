@@ -1099,6 +1099,21 @@ async fn db_load_rooms(db: tauri::State<'_, Arc<Database>>) -> Result<LoadOutcom
                 tracing::warn!("rooms table is empty but skein.db.bak holds {n} room(s)");
             }
         }
+        // #237: sweep rows in the sibling tables whose room was deleted
+        // forever (which only ever drops the `sessions` row). Gated on
+        // `first_load && !rooms.is_empty()` — never on a failed load
+        // (that must never read as "no rooms", #167), and an empty
+        // `sessions` table after a successful load could itself be the
+        // vanished-db case #167 guards against, so this stays
+        // conservative: the next boot with a room sweeps. A sweep
+        // failure must not fail the load.
+        if outcome.first_load && !outcome.rooms.is_empty() {
+            match db.sweep_orphans() {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("swept {n} orphaned room-keyed row(s) (#237)"),
+                Err(e) => tracing::warn!("orphan sweep failed: {e}"),
+            }
+        }
         // Refresh the last-known-good snapshot at most once per process
         // (first_load), and only for a clean, non-empty load — a marred
         // or empty load must leave the previous generations alone.
