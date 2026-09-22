@@ -381,9 +381,9 @@ async fn api_harness_permission(
 /// body that fails to parse as JSON at all still succeeds — a future
 /// Claude Code payload change must not start breaking a harness's
 /// launch. Since #116, `session_id` and `source` are forwarded (see
-/// `session_start_fields`) so the frontend can follow a `/clear` onto
-/// the new conversation id — `source == "clear"` is the only value it
-/// acts on.
+/// `session_start_fields`) so the frontend can follow a `/clear` or an
+/// in-tool `/resume` onto the new conversation id — `source == "clear"`
+/// and `source == "resume"` are the only values it acts on.
 ///
 /// Duplicate fires are expected and must stay harmless. Upstream
 /// anthropics/claude-code#78455 reports `SessionStart` firing twice
