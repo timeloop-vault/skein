@@ -22,13 +22,30 @@
 // picking between them by re-deriving fresh from current `rooms`
 // whether the dragged id is a non-lead group member.
 
-import { type PointerEvent as ReactPointerEvent, useMemo, useRef } from "react";
-import { RoomTab, StatusDot } from "./components.tsx";
+import {
+	type MouseEvent as ReactMouseEvent,
+	type PointerEvent as ReactPointerEvent,
+	useMemo,
+	useRef,
+} from "react";
+import { RoomNameInput, RoomTab, StatusDot } from "./components.tsx";
 import { useRoomActivity } from "./harnessActivity.ts";
-import { type StripSegment, groupRooms, segmentId } from "./roomGroups.ts";
+import { type StripSegment, groupDisplayName, groupRooms, segmentId } from "./roomGroups.ts";
 import type { TabDragInfo } from "./tabDrag.ts";
 import type { Room } from "./types.ts";
 import type { TabDropTarget } from "./useTabDrag.ts";
+
+/// #241: which room is mid inline-rename, and which tab currently hosts
+/// the input. A group's main room can be shown by TWO tabs at once — the
+/// top-row `GroupTab` (via `groupDisplayName`) and, when that room is
+/// active, its own pinned lead tab in the second row — so `roomId` alone
+/// can't say which one should mount the (single) `RoomNameInput`.
+/// `"group"` only ever applies to a `GroupTab`; every other room tab
+/// (plain top-level, a group's lead, a group member) is `"tab"`.
+export interface RenameTarget {
+	roomId: string;
+	host: "group" | "tab";
+}
 
 /// `rooms`, but the SAME array reference across renders as long as its
 /// content hasn't changed — membership (room ids, in order) and each
@@ -78,6 +95,10 @@ const LiveRoomTab = ({
 	dragWiring,
 	dragSegId,
 	dragRole,
+	renaming,
+	onStartRename,
+	onRename,
+	onRenameEnd,
 }: {
 	room: Room;
 	active: boolean;
@@ -86,6 +107,11 @@ const LiveRoomTab = ({
 	dragWiring?: RoomDragWiring;
 	dragSegId?: string;
 	dragRole?: "segment" | "member";
+	/** #241: threaded straight through to `RoomTab` — see its own doc. */
+	renaming?: boolean | undefined;
+	onStartRename?: (() => void) | undefined;
+	onRename?: ((name: string) => void) | undefined;
+	onRenameEnd?: (() => void) | undefined;
 }) => {
 	const stableRooms = useStableRooms([room]);
 	const harnessRefs = useMemo(
@@ -100,7 +126,18 @@ const LiveRoomTab = ({
 	const derived: Room = { ...room, status, badge };
 
 	if (!dragWiring) {
-		return <RoomTab r={derived} active={active} onClick={onClick} onClose={onClose} />;
+		return (
+			<RoomTab
+				r={derived}
+				active={active}
+				onClick={onClick}
+				onClose={onClose}
+				renaming={renaming}
+				onStartRename={onStartRename}
+				onRename={onRename}
+				onRenameEnd={onRenameEnd}
+			/>
+		);
 	}
 
 	const { drag, dropTarget, startDrag, dragHandlers, suppressClick } = dragWiring;
@@ -128,6 +165,10 @@ const LiveRoomTab = ({
 			onPointerCancel={dragHandlers.onPointerCancel}
 			onLostPointerCapture={dragHandlers.onLostPointerCapture}
 			suppressClick={suppressClick}
+			renaming={renaming}
+			onStartRename={onStartRename}
+			onRename={onRename}
+			onRenameEnd={onRenameEnd}
 		/>
 	);
 };
@@ -144,11 +185,23 @@ const GroupTab = ({
 	active,
 	onClick,
 	dragWiring,
+	renaming,
+	onStartRename,
+	onRename,
+	onRenameEnd,
 }: {
 	seg: Extract<StripSegment, { kind: "group" }>;
 	active: boolean;
 	onClick: () => void;
 	dragWiring: RoomDragWiring;
+	/** #241: renamable only when `seg.lead` is open — `RoomStrip` omits
+	 *  `onStartRename` entirely for a placeholder-led group, which is
+	 *  what keeps the "not renamable when main isn't open" rule here
+	 *  without this component re-deriving it. */
+	renaming?: boolean | undefined;
+	onStartRename?: (() => void) | undefined;
+	onRename?: ((name: string) => void) | undefined;
+	onRenameEnd?: (() => void) | undefined;
 }) => {
 	const rooms = useStableRooms(groupRooms(seg));
 	const harnessRefs = useMemo(
@@ -170,6 +223,7 @@ const GroupTab = ({
 	const { drag, dropTarget, startDrag, dragHandlers, suppressClick } = dragWiring;
 	const isDragged = drag?.kind === "room" && drag.id === segId;
 	const dropSide = dropTarget?.kind === "room" && dropTarget.id === segId ? dropTarget.side : null;
+	const displayName = groupDisplayName(seg);
 
 	return (
 		<div
@@ -188,12 +242,35 @@ const GroupTab = ({
 				if (suppressClick()) return;
 				onClick();
 			}}
+			onDoubleClick={(e: ReactMouseEvent<HTMLDivElement>) => {
+				// #241: same reasoning as `RoomTab`'s own dblclick handler —
+				// this root has pointer capture from `startDrag` above, so
+				// `e.target` can't be trusted; hit-test the real point and
+				// only start a rename if it's over this tab's `.name` span.
+				// `onStartRename` is only wired when `seg.lead` is open.
+				if (!onStartRename || renaming) return;
+				const hit = document.elementFromPoint(e.clientX, e.clientY);
+				const nameEl = hit instanceof Element ? hit.closest(".name") : null;
+				if (!nameEl || !e.currentTarget.contains(nameEl)) return;
+				onStartRename();
+			}}
 		>
 			<div className="row-1">
 				<StatusDot status={status} />
-				<span className="name" title={seg.label}>
-					{seg.label}
-				</span>
+				{renaming ? (
+					<RoomNameInput
+						initial={displayName}
+						onCommit={(name) => {
+							onRename?.(name);
+							onRenameEnd?.();
+						}}
+						onCancel={() => onRenameEnd?.()}
+					/>
+				) : (
+					<span className="name" title={displayName}>
+						{displayName}
+					</span>
+				)}
 				{badge > 0 && <span className="tab-badge">{badge}</span>}
 				<span className="sk-group-count">({roomCount})</span>
 			</div>
@@ -217,12 +294,24 @@ export const RoomStrip = ({
 	onSelectSegment,
 	onCloseRoom,
 	dragWiring,
+	renaming,
+	onStartRename,
+	onRename,
+	onRenameEnd,
 }: {
 	segments: readonly StripSegment[];
 	activeRoomId: string | null;
 	onSelectSegment: (seg: StripSegment) => void;
 	onCloseRoom: (id: string) => void;
 	dragWiring: RoomDragWiring;
+	/** #241: which room (if any) is mid-rename, and which tab hosts the
+	 *  input (see `RenameTarget`) — plain top-level tabs are always
+	 *  `"tab"`; a `GroupTab` only renames when its `host` is `"group"`
+	 *  AND its own main room is open. */
+	renaming?: RenameTarget | null | undefined;
+	onStartRename?: ((id: string, host: "group" | "tab") => void) | undefined;
+	onRename?: ((id: string, name: string) => void) | undefined;
+	onRenameEnd?: (() => void) | undefined;
 }) => (
 	<>
 		{segments.map((seg) => {
@@ -237,11 +326,16 @@ export const RoomStrip = ({
 						dragWiring={dragWiring}
 						dragSegId={segmentId(seg)}
 						dragRole="segment"
+						renaming={renaming?.roomId === seg.room.id && renaming.host === "tab"}
+						onStartRename={() => onStartRename?.(seg.room.id, "tab")}
+						onRename={(name) => onRename?.(seg.room.id, name)}
+						onRenameEnd={onRenameEnd}
 					/>
 				);
 			}
 			const active =
 				seg.lead?.id === activeRoomId || seg.members.some((m) => m.id === activeRoomId);
+			const leadId = seg.lead?.id;
 			return (
 				<GroupTab
 					key={`g:${seg.key}`}
@@ -249,6 +343,12 @@ export const RoomStrip = ({
 					active={active}
 					onClick={() => onSelectSegment(seg)}
 					dragWiring={dragWiring}
+					renaming={
+						leadId !== undefined && renaming?.roomId === leadId && renaming.host === "group"
+					}
+					onStartRename={leadId !== undefined ? () => onStartRename?.(leadId, "group") : undefined}
+					onRename={leadId !== undefined ? (name: string) => onRename?.(leadId, name) : undefined}
+					onRenameEnd={onRenameEnd}
 				/>
 			);
 		})}
@@ -271,6 +371,10 @@ export const GroupRow = ({
 	onOpenPlaceholder,
 	onNewRoom,
 	dragWiring,
+	renaming,
+	onStartRename,
+	onRename,
+	onRenameEnd,
 }: {
 	seg: Extract<StripSegment, { kind: "group" }>;
 	activeRoomId: string | null;
@@ -283,6 +387,14 @@ export const GroupRow = ({
 	onOpenPlaceholder: (key: string, folder: string) => void;
 	onNewRoom: (folder: string) => void;
 	dragWiring: RoomDragWiring;
+	/** #241: same rename wiring as `RoomStrip` — covers the lead (a real
+	 *  open main room, always `host: "tab"` here — the palette's rename
+	 *  of an active main room lands on this second-row tab, not the
+	 *  top-row `GroupTab`) and every member, never the dimmed placeholder. */
+	renaming?: RenameTarget | null | undefined;
+	onStartRename?: ((id: string, host: "group" | "tab") => void) | undefined;
+	onRename?: ((id: string, name: string) => void) | undefined;
+	onRenameEnd?: (() => void) | undefined;
 }) => {
 	const segId = segmentId(seg);
 	const lead = seg.lead;
@@ -297,6 +409,10 @@ export const GroupRow = ({
 					active={lead.id === activeRoomId}
 					onClick={() => onSwitchRoom(lead.id)}
 					onClose={() => onCloseRoom(lead.id)}
+					renaming={renaming?.roomId === lead.id && renaming.host === "tab"}
+					onStartRename={() => onStartRename?.(lead.id, "tab")}
+					onRename={(name) => onRename?.(lead.id, name)}
+					onRenameEnd={onRenameEnd}
 				/>
 			) : (
 				<div
@@ -322,6 +438,10 @@ export const GroupRow = ({
 					dragWiring={dragWiring}
 					dragSegId={segId}
 					dragRole="member"
+					renaming={renaming?.roomId === m.id && renaming.host === "tab"}
+					onStartRename={() => onStartRename?.(m.id, "tab")}
+					onRename={(name) => onRename?.(m.id, name)}
+					onRenameEnd={onRenameEnd}
 				/>
 			))}
 			<div className="sk-tab-newbtn" onClick={() => onNewRoom(folder)} title="New room">

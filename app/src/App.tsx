@@ -32,7 +32,7 @@ import { FilesBody } from "./FilesBody.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
 import { RightPane, type RightPaneTab } from "./RightPane.tsx";
-import { GroupRow, RoomStrip } from "./RoomStrip.tsx";
+import { GroupRow, type RenameTarget, RoomStrip } from "./RoomStrip.tsx";
 import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { type AgentListing, kindHasAgents } from "./agents.ts";
@@ -90,6 +90,7 @@ import {
 	segmentOfRoom,
 	topLevelTarget,
 } from "./roomGroups.ts";
+import { defaultRoomName } from "./roomName.ts";
 import { followedSession } from "./sessionTracking.ts";
 import { hints, isMac, isWindows, matchShortcut, modLabel } from "./shortcuts.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
@@ -1617,6 +1618,21 @@ export default function App() {
 	const [showPalette, setShowPalette] = useState(false);
 	const [showSettings, setShowSettings] = useState(false);
 	const [showReopen, setShowReopen] = useState(false);
+	// #241: which room (if any) is mid inline-rename, and which tab hosts
+	// the input (`RenameTarget.host` — see RoomStrip.tsx: a group's main
+	// room can be shown by both the top-row `GroupTab` and its own
+	// second-row lead tab, and only one may mount the input at a time).
+	// Display only — commit touches `Room.name` alone, never
+	// branch/cwd/worktree/repoRoot.
+	const [renaming, setRenaming] = useState<RenameTarget | null>(null);
+	const startRenameRoom = useCallback(
+		(roomId: string, host: "group" | "tab" = "tab") => setRenaming({ roomId, host }),
+		[],
+	);
+	const endRenameRoom = useCallback(() => setRenaming(null), []);
+	const commitRenameRoom = useCallback((roomId: string, name: string) => {
+		setRooms((prev) => prev.map((r) => (r.id === roomId ? { ...r, name } : r)));
+	}, []);
 	// #49 phase A: per room, the last PTY harness the user was on
 	// before Mod+E jumped to a Files harness — so Mod+E toggles back
 	// to where they came from, not just "the first terminal".
@@ -1875,6 +1891,13 @@ export default function App() {
 			const nextActive = activeRooms.find((r) => r.id !== id);
 			setActiveRoomId(nextActive ? nextActive.id : "");
 		}
+		// #241: archiving is the only path that can remove a room out from
+		// under an in-progress rename (the tab strip only ever renders
+		// active rooms, and rename is only ever started on one) — clear
+		// explicitly rather than relying on the input's own blur-on-unmount
+		// commit, which would otherwise write the room's name right back
+		// onto an archived room no tab shows any more.
+		setRenaming((cur) => (cur?.roomId === id ? null : cur));
 	};
 
 	// Fresh embedded-server ports for every opencode harness in a room
@@ -3380,12 +3403,10 @@ export default function App() {
 			}
 		}
 		// Display name from the trailing path component — `D:\code\skein`
-		// → `skein`. Cosmetic; the actual cwd is what spawns use.
-		const folderName =
-			cwd
-				.replace(/[\\/]+$/, "")
-				.split(/[\\/]/)
-				.pop() || cwd;
+		// → `skein`. Cosmetic; the actual cwd is what spawns use. #241:
+		// also the room's initial `name` (no "local · " prefix) — the user
+		// can rename it afterwards; this only sets the default.
+		const folderName = defaultRoomName(cwd);
 		// Repo / branch are only set for git-backed rooms (chapter 6
 		// phase 3). For non-git rooms the tab subtext shows just the
 		// folder name and LiveStatus is replaced by a placeholder.
@@ -3395,7 +3416,7 @@ export default function App() {
 		const agentName = startCaps.agents && agent?.trim() ? agent : undefined;
 		const newRoom: Room = {
 			id: sid,
-			name: `local · ${folderName}`,
+			name: folderName,
 			task,
 			// A files-only room has nothing running — and since a files
 			// harness never registers activity, the aggregate can't
@@ -3537,6 +3558,15 @@ export default function App() {
 			label: "Add harness to active room",
 			hint: hints.addHarness,
 			invoke: () => addHarness(activeRoomId),
+		});
+		// #241: no shortcut (out of scope) — palette-only, like reopen-room.
+		// Acts on the active room's own tab (`"tab"` host) — if that room is
+		// a group's open main room, it's the second-row lead tab, never the
+		// top-row GroupTab (see RenameTarget in RoomStrip.tsx).
+		paletteItems.push({
+			id: "cmd:rename-room",
+			label: "Rename room",
+			invoke: () => startRenameRoom(activeRoomId, "tab"),
 		});
 		paletteItems.push({
 			id: "cmd:close-room",
@@ -3775,6 +3805,10 @@ export default function App() {
 					onSelectSegment={onSelectSegment}
 					onCloseRoom={(id) => void closeRoom(id)}
 					dragWiring={{ drag, dropTarget, startDrag, dragHandlers, suppressClick }}
+					renaming={renaming}
+					onStartRename={startRenameRoom}
+					onRename={commitRenameRoom}
+					onRenameEnd={endRenameRoom}
 				/>
 				<div className="sk-tab-newbtn" onClick={() => void openNewRoom()} title="New room">
 					+
@@ -3793,6 +3827,10 @@ export default function App() {
 					onOpenPlaceholder={openGroupPlaceholder}
 					onNewRoom={openNewRoomAt}
 					dragWiring={{ drag, dropTarget, startDrag, dragHandlers, suppressClick }}
+					renaming={renaming}
+					onStartRename={startRenameRoom}
+					onRename={commitRenameRoom}
+					onRenameEnd={endRenameRoom}
 				/>
 			)}
 
