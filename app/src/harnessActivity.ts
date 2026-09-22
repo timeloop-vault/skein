@@ -334,6 +334,11 @@ export const TRANSITION_SOURCE = {
 	// itself the same way) re-points onto a different session id — see
 	// `sessionSwitched`.
 	L2c1ClaudeSessionResume: "l2c1-claude-session-resume",
+	// #116: a `/branch`, `/fork`, `--fork-session` or desktop rewind
+	// reports its own dedicated `source: "fork"` from Claude Code
+	// v2.1.214 on, carrying the newly forked session id — see
+	// `sessionSwitched`.
+	L2c1ClaudeSessionFork: "l2c1-claude-session-fork",
 	// #298: a subagent's own tool result proves the gate its permission
 	// prompt held is gone, even though the main transcript never sees
 	// it. See `clearPermission`.
@@ -787,7 +792,7 @@ export const harnessActivity = {
 	/// left alone: `permission` outranks it (#86), and `exited` /
 	/// `spawning` / `idle` / `waiting` aren't this event's business.
 	/// No-op for an unknown id.
-	sessionSwitched(id: string, source: "clear" | "resume"): void {
+	sessionSwitched(id: string, source: "clear" | "resume" | "fork"): void {
 		const cur = store.get(id);
 		if (!cur) return;
 		subagents.forget(id);
@@ -798,7 +803,9 @@ export const harnessActivity = {
 			"waiting",
 			source === "clear"
 				? TRANSITION_SOURCE.L2c1ClaudeSessionClear
-				: TRANSITION_SOURCE.L2c1ClaudeSessionResume,
+				: source === "resume"
+					? TRANSITION_SOURCE.L2c1ClaudeSessionResume
+					: TRANSITION_SOURCE.L2c1ClaudeSessionFork,
 		);
 	},
 

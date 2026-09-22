@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { followedSession } from "./sessionTracking.ts";
+import { followedOpencodeSession, followedSession } from "./sessionTracking.ts";
 
 describe("followedSession (#116)", () => {
 	it("clear with a new session id returns that id, source clear", () => {
@@ -40,7 +40,7 @@ describe("followedSession (#116)", () => {
 		expect(followedSession("old-sid", { source: "resume" })).toBeNull();
 	});
 
-	it.each(["startup", "compact", "fork", null, undefined])(
+	it.each(["startup", "compact", null, undefined])(
 		"source %s with a different session id returns null",
 		(source) => {
 			expect(
@@ -61,5 +61,106 @@ describe("followedSession (#116)", () => {
 			sessionId: "new-sid",
 			source: "resume",
 		});
+	});
+
+	it("fork with a new session id returns that id, source fork", () => {
+		expect(followedSession("old-sid", { sessionId: "new-sid", source: "fork" })).toEqual({
+			sessionId: "new-sid",
+			source: "fork",
+		});
+	});
+
+	it("fork with the same session id returns null", () => {
+		expect(followedSession("same-sid", { sessionId: "same-sid", source: "fork" })).toBeNull();
+	});
+
+	it("fork with a missing session id returns null", () => {
+		expect(followedSession("old-sid", { source: "fork" })).toBeNull();
+	});
+
+	it("current undefined + fork returns the new id", () => {
+		expect(followedSession(undefined, { sessionId: "new-sid", source: "fork" })).toEqual({
+			sessionId: "new-sid",
+			source: "fork",
+		});
+	});
+});
+
+describe("followedOpencodeSession (#116)", () => {
+	it("session_created for a child (non-null parentId) is never followed", () => {
+		expect(
+			followedOpencodeSession("root-sid", {
+				kind: "session_created",
+				sessionId: "child-sid",
+				parentId: "root-sid",
+			}),
+		).toBeNull();
+	});
+
+	it("session_created for a child is ignored even with no current session yet", () => {
+		expect(
+			followedOpencodeSession(undefined, {
+				kind: "session_created",
+				sessionId: "child-sid",
+				parentId: "root-sid",
+			}),
+		).toBeNull();
+	});
+
+	it("session_created root with no current session returns null (initial capture owns this)", () => {
+		expect(
+			followedOpencodeSession(undefined, {
+				kind: "session_created",
+				sessionId: "new-sid",
+				parentId: null,
+			}),
+		).toBeNull();
+	});
+
+	it("session_created root with a different id than current returns source new", () => {
+		expect(
+			followedOpencodeSession("old-sid", {
+				kind: "session_created",
+				sessionId: "new-sid",
+				parentId: null,
+			}),
+		).toEqual({ sessionId: "new-sid", source: "new" });
+	});
+
+	it("session_created root with the same id as current returns null", () => {
+		expect(
+			followedOpencodeSession("same-sid", {
+				kind: "session_created",
+				sessionId: "same-sid",
+				parentId: null,
+			}),
+		).toBeNull();
+	});
+
+	it("root_session_prompted with no current session returns null (treated as capture, not follow)", () => {
+		expect(
+			followedOpencodeSession(undefined, {
+				kind: "root_session_prompted",
+				sessionId: "other-sid",
+			}),
+		).toBeNull();
+	});
+
+	it("root_session_prompted with a different id than current returns source switch", () => {
+		expect(
+			followedOpencodeSession("old-sid", {
+				kind: "root_session_prompted",
+				sessionId: "other-sid",
+			}),
+		).toEqual({ sessionId: "other-sid", source: "switch" });
+	});
+
+	it("root_session_prompted with the same id as current returns null", () => {
+		expect(
+			followedOpencodeSession("same-sid", {
+				kind: "root_session_prompted",
+				sessionId: "same-sid",
+			}),
+		).toBeNull();
 	});
 });

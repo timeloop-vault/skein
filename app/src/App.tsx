@@ -396,6 +396,11 @@ interface HarnessBodyProps {
 	// sessionID from the `session.created` event. App.tsx wires it
 	// to setHarnessSessionId; `undefined` for non-opencode harnesses.
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
+	// #116: L2c-2 decided the harness followed its TUI onto a different
+	// root session (`/new` or a `/sessions` pick). App.tsx wires it to
+	// replaceHarnessSessionId, same as Claude's clear/resume/fork
+	// follow; `undefined` for non-opencode harnesses.
+	onSessionFollowed: ((sessionId: string) => void) | undefined;
 }
 
 const HarnessBody = ({
@@ -408,6 +413,7 @@ const HarnessBody = ({
 	roomId,
 	opencodePort,
 	onSessionCaptured,
+	onSessionFollowed,
 }: HarnessBodyProps) => {
 	if (harness.cmd && harness.cwd !== undefined) {
 		// mountKey changes on cmd content OR spawnGen — the trigger for a
@@ -429,6 +435,7 @@ const HarnessBody = ({
 				agent={harness.agent}
 				opencodePort={opencodePort}
 				onSessionCaptured={onSessionCaptured}
+				onSessionFollowed={onSessionFollowed}
 				fontSize={fontSize}
 				copyOnSelect={copyOnSelect}
 				defaultShell={defaultShell}
@@ -490,6 +497,9 @@ interface HarnessColumnProps {
 	// SSE-captured opencode session-id callback (per harness, room
 	// scope already bound by App).
 	onOpencodeSessionCaptured: (harnessId: string, sessionId: string) => void;
+	// #116: opencode followed its TUI onto a different root session
+	// (per harness, room scope already bound by App).
+	onOpencodeSessionFollowed: (harnessId: string, sessionId: string) => void;
 }
 
 const HarnessColumn = ({
@@ -509,6 +519,7 @@ const HarnessColumn = ({
 	onHarnessCmdChange,
 	opencodePorts,
 	onOpencodeSessionCaptured,
+	onOpencodeSessionFollowed,
 }: HarnessColumnProps) => {
 	const tablistRef = useRef<HTMLDivElement | null>(null);
 
@@ -628,6 +639,7 @@ const HarnessColumn = ({
 								roomId={room.id}
 								opencodePort={opencodePorts.get(h.id)}
 								onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
+								onSessionFollowed={(sid) => onOpencodeSessionFollowed(h.id, sid)}
 							/>
 						) : (
 							<FilesBody harnessId={h.id} cwd={h.cwd ?? room.cwd ?? ""} visible={visible} />
@@ -2406,11 +2418,12 @@ export default function App() {
 	// a no-op for an id Skein doesn't have a record for.
 	//
 	// #116: the same hook is the ONLY signal Skein gets that a
-	// mid-session `/clear` or in-tool `/resume` moved a harness onto a
+	// mid-session `/clear`, in-tool `/resume` or a fork (`/branch`,
+	// `/fork`, `--fork-session`, desktop rewind) moved a harness onto a
 	// different conversation — Claude's JSONL gives no other sign.
 	// `followedSession` (sessionTracking.ts) filters to `source ===
-	// "clear"` or `"resume"` reporting a genuinely different id; when it
-	// does, the harness's stored sessionId is overwritten
+	// "clear"`, `"resume"` or `"fork"` reporting a genuinely different
+	// id; when it does, the harness's stored sessionId is overwritten
 	// (`replaceHarnessSessionId`, first-writer-wins would never adopt it)
 	// so a future resume/reopen picks up the new conversation, and
 	// `harnessActivity.sessionSwitched` forgets the old session's
@@ -3082,12 +3095,15 @@ export default function App() {
 	};
 
 	// #116 step two: overwrite a harness's sessionId after Claude's own
-	// `/clear` hook reports the conversation moved onto a new id. This is
-	// deliberately NOT `setHarnessSessionId` above — that one is
-	// first-writer-wins to survive opencode's create-vs-poll capture
-	// race, but a `/clear` report is authoritative: the old id is
-	// definitely gone, so the new one must win even though `sessionId`
-	// is already set. `cmd` is untouched here — it's part of
+	// `/clear`/`/resume`/fork hook reports the conversation moved onto a
+	// new id — and (step four) after opencode's own adapter decides the
+	// harness followed its TUI onto a different root session (`/new` or
+	// a `/sessions` pick). This is deliberately NOT `setHarnessSessionId`
+	// above — that one is first-writer-wins to survive opencode's
+	// create-vs-poll capture race, but both these reports are
+	// authoritative: the old id is definitely gone (Claude) or definitely
+	// superseded (opencode), so the new one must win even though
+	// `sessionId` is already set. `cmd` is untouched here — it's part of
 	// LiveTerminal's mountKey, so changing it would respawn the PTY;
 	// `resumeCmd` (harnessCmd.ts) rebuilds the argv from `sessionId` on
 	// the next boot/reopen, which is what makes the new conversation the
@@ -3720,6 +3736,9 @@ export default function App() {
 							opencodePorts={opencodePorts}
 							onOpencodeSessionCaptured={(harnessId, sid) =>
 								setHarnessSessionId(r.id, harnessId, sid)
+							}
+							onOpencodeSessionFollowed={(harnessId, sid) =>
+								replaceHarnessSessionId(r.id, harnessId, sid)
 							}
 						/>
 					</div>

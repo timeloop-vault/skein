@@ -297,6 +297,24 @@ describe("sessionSwitched (#116)", () => {
 		subagents.forget(id);
 	});
 
+	it("running moves to waiting with the session-fork source", () => {
+		const id = runningHarness();
+		const transitions: Array<{ to: string; source: string }> = [];
+		const unsubscribe = harnessActivity.subscribeTransitions((tid, _from, to, source) => {
+			if (tid === id) transitions.push({ to, source });
+		});
+
+		harnessActivity.sessionSwitched(id, "fork");
+
+		expect(harnessActivity.get(id)?.phase).toBe("waiting");
+		expect(transitions).toEqual([
+			{ to: "waiting", source: TRANSITION_SOURCE.L2c1ClaudeSessionFork },
+		]);
+		unsubscribe();
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+
 	it("permission stays permission", () => {
 		const id = runningHarness();
 		harnessActivity.setPermissionFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudePermission, "Bash");
