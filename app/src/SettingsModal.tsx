@@ -79,6 +79,11 @@ interface SettingsModalProps {
 	/** The folder the agent lists are asked about — the active room's.
 	 *  Project agents differ per repo; user and plugin agents do not. */
 	agentCwd: string;
+	// #227: the app-wide worktree branch template New Room proposes for a
+	// folder it has never seen. A folder's own remembered template
+	// (`FolderDefaults.branchTemplate`) still wins.
+	branchTemplate: string;
+	onBranchTemplate: (v: string) => void;
 	onClose: () => void;
 }
 
@@ -179,6 +184,8 @@ export const SettingsModal = ({
 	defaultAgents,
 	onDefaultAgent,
 	agentCwd,
+	branchTemplate,
+	onBranchTemplate,
 	onClose,
 }: SettingsModalProps) => {
 	useFocusRestore();
@@ -475,6 +482,19 @@ export const SettingsModal = ({
 								onChange={(agent) => onDefaultAgent(kind, agent)}
 							/>
 						))}
+					</div>
+
+					<div className="sk-field">
+						<label htmlFor="sk-branch-template">Branch template</label>
+						<div className="sk-help">
+							{"{slug}"} is the task; a folder remembers the last prefix you used.
+						</div>
+						<input
+							id="sk-branch-template"
+							className="sk-input"
+							value={branchTemplate}
+							onChange={(e) => onBranchTemplate(e.target.value)}
+						/>
 					</div>
 
 					<div className="sk-field">

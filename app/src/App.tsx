@@ -37,6 +37,15 @@ import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { type AgentListing, kindHasAgents } from "./agents.ts";
 import {
+	DEFAULT_BRANCH_TEMPLATE,
+	applyBranchTemplate,
+	branchFieldAttachedAfterBlur,
+	branchFieldProblem,
+	taskSlug,
+	templateFromBranch,
+	worktreeLeaf,
+} from "./branchName.ts";
+import {
 	HChip,
 	HarnessPicker,
 	HarnessTab,
@@ -71,6 +80,7 @@ import {
 	type FolderDefaults,
 	type NewRoomMemory,
 	type RecentFolder,
+	branchTemplateFor,
 	defaultAgentFor,
 	defaultsFor,
 	recentFolders,
@@ -758,6 +768,8 @@ const NewRoomDialog = ({
 	initialCwd,
 	initialDefaults,
 	defaultAgents,
+	memory,
+	appBranchTemplate,
 	recent,
 	onRemember,
 	onCommit,
@@ -771,6 +783,13 @@ const NewRoomDialog = ({
 	/** Settings' per-kind default agents (#248). A folder's own memory
 	 *  still wins — see `startingAgent`. */
 	defaultAgents: DefaultAgents;
+	/** New Room memory (#227): looked up per-folder as `cwd` resolves, so
+	 *  the proposed branch's template can follow the folder rather than
+	 *  only the one it opened on. */
+	memory: NewRoomMemory;
+	/** Settings' app-wide branch template (#227). A folder's own
+	 *  remembered template still wins — see `branchTemplateFor`. */
+	appBranchTemplate: string;
 	/** Known folders, MRU-first, for the Folder dropdown (#233). */
 	recent: RecentFolder[];
 	/** Called with the folder and its defaults after a room is created. */
@@ -838,6 +857,10 @@ const NewRoomDialog = ({
 		setBranchMode(r.defaults.branchMode);
 		// The validation effect drops this again if the branch is gone.
 		setBaseBranch(r.defaults.baseBranch);
+		// #227 review: re-attach the branch field so the picked folder's
+		// own remembered template applies, rather than carrying over
+		// whatever the previous folder's field held (typed or proposed).
+		setBranchAttached(true);
 		setShowRecent(false);
 	};
 
@@ -914,14 +937,25 @@ const NewRoomDialog = ({
 		};
 	}, [cwd]);
 
-	const slug =
-		task
-			.trim()
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, "-")
-			.replace(/^-|-$/g, "")
-			.slice(0, 28) || "task";
-	const proposedBranch = `skein/${slug}`;
+	const slug = taskSlug(task);
+	// The resolved folder, once validation has settled — falls back to
+	// the raw `cwd` before the first settle so the template has *some*
+	// folder to key on rather than always reading the app-wide default
+	// on open.
+	const branchTemplateFolder = settledCwd || cwd;
+	const proposedBranch = applyBranchTemplate(
+		branchTemplateFor(memory, branchTemplateFolder, appBranchTemplate),
+		slug,
+	);
+
+	// #227: the branch field follows `proposedBranch` until the user
+	// types in it, then detaches — typing is a deliberate override.
+	// Blurring an empty field re-attaches (`branchFieldAttachedAfterBlur`).
+	const [branch, setBranch] = useState(proposedBranch);
+	const [branchAttached, setBranchAttached] = useState(true);
+	useEffect(() => {
+		if (branchAttached) setBranch(proposedBranch);
+	}, [proposedBranch, branchAttached]);
 
 	// #247: the agents the chosen kind will accept in this folder.
 	//
@@ -952,6 +986,69 @@ const NewRoomDialog = ({
 	// `missing` is deliberately excluded: a folder that isn't there is the
 	// one unresolved state that must block submission (#226).
 	const folderResolved = repoStatus.kind === "valid" || repoStatus.kind === "not-a-repo";
+
+	// #227: the worktree folder a submit would create at the current
+	// branch name, and whether one is already sitting there — debounced
+	// and cancelled like the folder-validation effect above (#181: the
+	// cancellation there was dead code until a prefilled field made a
+	// stale response actually reachable; the same shape applies here).
+	const [worktreePath, setWorktreePath] = useState("");
+	const [worktreeFolderExists, setWorktreeFolderExists] = useState(false);
+	// #227 review: `worktreeFolderExists` only reflects the *last landed*
+	// probe, which `canCreate` read synchronously — a branch typed after
+	// the last probe answered could submit before this one comes back.
+	// Tracked separately from `busy`/`repoStatus.kind === "checking"`
+	// because it is its own async gate with its own debounce.
+	const [worktreeCheckPending, setWorktreeCheckPending] = useState(false);
+	useEffect(() => {
+		if (!isRepo || branchMode !== "worktree" || !branch.trim()) {
+			setWorktreePath("");
+			setWorktreeFolderExists(false);
+			setWorktreeCheckPending(false);
+			return undefined;
+		}
+		setWorktreeCheckPending(true);
+		let cancelled = false;
+		const handle = window.setTimeout(() => {
+			void (async () => {
+				try {
+					const path = await invoke<string>("git_propose_worktree_path", {
+						repoPath: cwd,
+						taskSlug: worktreeLeaf(branch),
+					});
+					if (cancelled) return;
+					setWorktreePath(path);
+					const info = await invoke<FolderInfoDto>("git_inspect_folder", { path });
+					if (cancelled) return;
+					setWorktreeFolderExists(info.exists);
+				} catch {
+					if (cancelled) return;
+					setWorktreePath("");
+					setWorktreeFolderExists(false);
+				} finally {
+					if (!cancelled) setWorktreeCheckPending(false);
+				}
+			})();
+		}, 200);
+		return () => {
+			cancelled = true;
+			window.clearTimeout(handle);
+		};
+	}, [isRepo, branchMode, branch, cwd]);
+
+	const branchProblem =
+		isRepo && branchMode === "worktree" && repoStatus.kind === "valid"
+			? branchFieldProblem(
+					branch,
+					repoStatus.branches.map((b) => b.name),
+					worktreeFolderExists,
+				)
+			: null;
+	// The last two path segments, e.g. `skein-wt/fix-x` — the card is too
+	// narrow for the full absolute path, which still shows in the field's
+	// `title` on hover.
+	const worktreeShortPath = worktreePath.split(/[/\\]/).filter(Boolean).slice(-2).join("/");
+
 	// Submit is fine for both git-backed and plain folders. The branch /
 	// worktree picker only gates submission when the folder *is* a repo.
 	const canCreate =
@@ -964,7 +1061,9 @@ const NewRoomDialog = ({
 		// is right there — and it is the only place that choice can be
 		// corrected without creating a room first.
 		!agentMissing &&
-		(!isRepo || branchMode === "current" || baseBranch.length > 0);
+		(!isRepo ||
+			branchMode === "current" ||
+			(baseBranch.length > 0 && branchProblem === null && !worktreeCheckPending));
 
 	const browse = async () => {
 		const start = cwd || defaultCwd;
@@ -977,6 +1076,11 @@ const NewRoomDialog = ({
 		if (typeof picked === "string") {
 			setResolvedFromWorktree(false);
 			setCwd(picked);
+			// #227 review: same as `pickRecent` — a folder picked via the OS
+			// dialog is as explicit a folder change as one from the recent
+			// list, so the branch field goes back to following that
+			// folder's own template.
+			setBranchAttached(true);
 		}
 	};
 
@@ -986,8 +1090,14 @@ const NewRoomDialog = ({
 		setError(null);
 		// Called only on a path that genuinely created the room — a create
 		// that throws must not teach the dialog anything.
-		const remember = (base: string) =>
-			onRemember(cwd, { baseBranch: base, harness, branchMode, ...(agent ? { agent } : {}) });
+		const remember = (base: string, branchTemplate?: string) =>
+			onRemember(cwd, {
+				baseBranch: base,
+				harness,
+				branchMode,
+				...(agent ? { agent } : {}),
+				...(branchTemplate ? { branchTemplate } : {}),
+			});
 		try {
 			if (!isRepo) {
 				// Non-git folder — no worktree, no branch. cwd is the
@@ -1005,23 +1115,26 @@ const NewRoomDialog = ({
 				return;
 			}
 			if (branchMode === "worktree") {
-				const worktreePath = await invoke<string>("git_propose_worktree_path", {
+				const newWorktreePath = await invoke<string>("git_propose_worktree_path", {
 					repoPath: cwd,
-					taskSlug: slug,
+					taskSlug: worktreeLeaf(branch),
 				});
 				const wt = await invoke<{ name: string; path: string }>("git_add_worktree", {
 					repoPath: cwd,
-					branch: proposedBranch,
+					branch,
 					baseBranch,
-					worktreePath,
+					worktreePath: newWorktreePath,
 				});
-				remember(baseBranch);
+				// #227: only a successful create teaches the folder its
+				// branch template — a failed one must not poison the next
+				// open with a prefix that never actually landed.
+				remember(baseBranch, templateFromBranch(branch));
 				onCommit({
 					cwd: wt.path,
 					task: task.trim(),
 					harness,
 					...(agent ? { agent } : {}),
-					branch: proposedBranch,
+					branch,
 					repoRoot: settledCwd,
 				});
 			} else {
@@ -1178,7 +1291,7 @@ const NewRoomDialog = ({
 									onClick={() => setBranchMode("worktree")}
 								>
 									<div className="top">New worktree</div>
-									<div className="desc">{proposedBranch}</div>
+									<div className="desc">own branch + folder</div>
 								</div>
 								<div
 									className={`sk-radio-card ${branchMode === "current" ? "selected" : ""}`}
@@ -1188,6 +1301,44 @@ const NewRoomDialog = ({
 									<div className="desc">{repoStatus.head ?? "HEAD"} · in place</div>
 								</div>
 							</div>
+							{branchMode === "worktree" && (
+								<div className="sk-field" style={{ marginTop: 6 }}>
+									<label htmlFor="sk-worktree-branch">Worktree branch</label>
+									<input
+										id="sk-worktree-branch"
+										className="sk-input"
+										value={branch}
+										title={worktreePath ? `→ ${worktreePath}` : undefined}
+										onChange={(e) => {
+											// Detach unconditionally, including on an edit to
+											// empty — otherwise clear-and-retype would have the
+											// proposal silently reappear before the next
+											// keystroke landed (#227 review).
+											setBranch(e.target.value);
+											setBranchAttached(false);
+										}}
+										onBlur={(e) => {
+											if (branchFieldAttachedAfterBlur(e.target.value)) setBranchAttached(true);
+										}}
+										onKeyDown={(e) => {
+											if (e.key === "Enter") void submit();
+											if (e.key === "Escape") onCancel();
+										}}
+									/>
+									{(branchProblem || worktreeShortPath) && (
+										<div
+											style={{
+												fontFamily: "var(--sk-mono)",
+												fontSize: 10.5,
+												marginTop: 2,
+												color: branchProblem ? "var(--err)" : undefined,
+											}}
+										>
+											{branchProblem ?? `→ ${worktreeShortPath}`}
+										</div>
+									)}
+								</div>
+							)}
 							{branchMode === "worktree" && (
 								<div style={{ marginTop: 6 }}>
 									<label
@@ -1567,6 +1718,12 @@ export default function App() {
 	// #248: default agent per harness kind, set in Settings. Read by the
 	// `+ harness` picker (preselected) and New room (prefilled).
 	const [defaultAgents, setDefaultAgents] = usePersistedState<DefaultAgents>("defaultAgents", {});
+	// #227: the app-wide worktree branch template, set in Settings. A
+	// folder's own remembered template still wins — see `branchTemplateFor`.
+	const [branchTemplate, setBranchTemplate] = usePersistedState<string>(
+		"branchTemplate",
+		DEFAULT_BRANCH_TEMPLATE,
+	);
 	// Which right-pane tab each room is showing (#212). Per room rather
 	// than global: a room mid-task wants the activity feed and a room
 	// whose agent has just finished wants the review, and that is a
@@ -3492,6 +3649,8 @@ export default function App() {
 		defaultAgents,
 		onDefaultAgent: (kind: HarnessKind, agent: string | undefined) =>
 			setDefaultAgents((prev) => withDefaultAgent(prev, kind, agent)),
+		branchTemplate,
+		onBranchTemplate: setBranchTemplate,
 		agentCwd: room?.cwd ?? defaultCwd,
 		onClose: () => setShowSettings(false),
 	};
@@ -3756,6 +3915,8 @@ export default function App() {
 						initialCwd={newRoomSeed.cwd}
 						initialDefaults={newRoomSeed.defaults}
 						defaultAgents={defaultAgents}
+						memory={newRoomMemory}
+						appBranchTemplate={branchTemplate}
 						recent={recentRoomFolders}
 						onRemember={rememberRoomFolder}
 						onCommit={createRoom}
@@ -4035,6 +4196,8 @@ export default function App() {
 					initialCwd={newRoomSeed.cwd}
 					initialDefaults={newRoomSeed.defaults}
 					defaultAgents={defaultAgents}
+					memory={newRoomMemory}
+					appBranchTemplate={branchTemplate}
 					recent={recentRoomFolders}
 					onRemember={rememberRoomFolder}
 					onCommit={createRoom}

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_BRANCH_TEMPLATE } from "./branchName.ts";
 import {
 	type DefaultAgents,
 	EMPTY_NEW_ROOM_MEMORY,
 	type FolderDefaults,
 	type NewRoomMemory,
+	branchTemplateFor,
 	defaultAgentFor,
 	defaultsFor,
 	recentFolders,
@@ -163,6 +165,40 @@ describe("default agents (#248)", () => {
 		expect(defaultAgentFor(junk, "claude")).toBeUndefined();
 		expect(withDefaultAgent(junk, "claude", "coder")).toEqual({ claude: "coder" });
 		expect(defaultAgentFor({ claude: 7 } as unknown as DefaultAgents, "claude")).toBeUndefined();
+	});
+});
+
+describe("branchTemplateFor (#227)", () => {
+	it("falls back to DEFAULT_BRANCH_TEMPLATE with no folder or app template", () => {
+		expect(branchTemplateFor(EMPTY_NEW_ROOM_MEMORY, "C:/git/skein", undefined)).toBe(
+			DEFAULT_BRANCH_TEMPLATE,
+		);
+	});
+
+	it("uses the app-wide template when the folder has none", () => {
+		const m = memory({ "C:/git/skein": defaults() });
+		expect(branchTemplateFor(m, "C:/git/skein", "feat/{slug}")).toBe("feat/{slug}");
+	});
+
+	it("prefers the folder's own remembered template, old blob without it falls through", () => {
+		const withTemplate = memory({
+			"C:/git/skein": defaults({ branchTemplate: "review/{slug}" }),
+		});
+		expect(branchTemplateFor(withTemplate, "C:/git/skein", "feat/{slug}")).toBe("review/{slug}");
+
+		// A blob written before #227 has no branchTemplate key at all.
+		const legacy = memory({ "C:/git/skein": defaults() });
+		expect(branchTemplateFor(legacy, "C:/git/skein", "feat/{slug}")).toBe("feat/{slug}");
+	});
+
+	it("is the default for a folder that has never been seen", () => {
+		expect(branchTemplateFor(EMPTY_NEW_ROOM_MEMORY, "C:/unknown", "feat/{slug}")).toBe(
+			"feat/{slug}",
+		);
+	});
+
+	it("keeps a deliberately blank app-wide template rather than falling to the default", () => {
+		expect(branchTemplateFor(EMPTY_NEW_ROOM_MEMORY, "C:/git/skein", "")).toBe("");
 	});
 });
 

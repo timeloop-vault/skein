@@ -6,6 +6,7 @@
 
 import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
 
+import { DEFAULT_BRANCH_TEMPLATE } from "./branchName.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { HarnessKind } from "./types";
 
@@ -67,6 +68,11 @@ export interface FolderDefaults {
 	 *  kind — one folder, one starting harness, one agent; the per-kind
 	 *  default is #248's, and it belongs in Settings, not here. */
 	agent?: string;
+	/** The worktree branch template this folder last submitted with
+	 *  (#227), e.g. `feat/{slug}` — absent for "use the app-wide
+	 *  template", which is also what every entry written before this
+	 *  field means. See `branchTemplateFor`. */
+	branchTemplate?: string;
 	/** Meaningless for a non-repo folder; kept so repos round-trip cleanly. */
 	branchMode: "worktree" | "current";
 	/** Epoch ms. Only used for MRU ordering, which has no UI yet. */
@@ -167,6 +173,25 @@ export const startingAgent = (
 	defaults: DefaultAgents,
 ): string | undefined =>
 	folder?.harness === kind && folder.agent ? folder.agent : defaultAgentFor(defaults, kind);
+
+// ── Branch template per folder (#227) ──────────────────────────────
+//
+// Mirrors `startingAgent`'s fallback chain, one level simpler: there is
+// no per-kind layer here, just folder → app-wide → the hardcoded
+// default, because a branch template isn't scoped to a harness kind.
+
+/** The worktree branch template New Room proposes for `folder`: its own
+ *  remembered template, else the app-wide one, else
+ *  `DEFAULT_BRANCH_TEMPLATE`. The app-wide fallback is `??`, not `||`:
+ *  a deliberately blank Settings template means "just the slug"
+ *  (`applyBranchTemplate("")`), not "fall through to `skein/{slug}`" —
+ *  only an *absent* app template (nothing set yet) reads as that. */
+export const branchTemplateFor = (
+	memory: NewRoomMemory,
+	folder: string,
+	appTemplate: string | undefined,
+): string =>
+	defaultsFor(memory, folder)?.branchTemplate || (appTemplate ?? DEFAULT_BRANCH_TEMPLATE);
 
 export interface RecentFolder {
 	folder: string;
