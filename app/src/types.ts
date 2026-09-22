@@ -90,6 +90,12 @@ export interface Room {
 	// Present = archived (hidden from the tab strip but listed in the
 	// reopen modal). Chapter 6 phase 2.
 	archived?: number;
+	// Canonical main-checkout path of the git repo this room belongs to
+	// (resolved from a worktree via skein-git `main_repo_root()`).
+	// Absent for non-git rooms and rooms not yet resolved. This is the
+	// room-group key (#76), and is kept even if the folder later
+	// disappears (#164).
+	repoRoot?: string;
 }
 
 export type Theme = "dark" | "light";

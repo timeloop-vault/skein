@@ -49,6 +49,12 @@ export const DRAG_KIND_ATTR = "data-drag-kind";
 export const DRAG_ID_ATTR = "data-drag-id";
 export const DRAG_ROOM_ATTR = "data-drag-room";
 export const DRAG_STRIP_ATTR = "data-drag-strip";
+// #76: room-tab-only, read by hitOnTab/hitOnStripEnd so tabDrag.ts's
+// resolveHit can refuse a group-invalid target without RoomStrip having
+// to pass business logic down into this generic DOM layer — see
+// roomGroups.ts's `resolveRoomDrop` for what these mean.
+export const DRAG_SEG_ATTR = "data-drag-seg";
+export const DRAG_ROLE_ATTR = "data-drag-role";
 
 /** Same-kind sibling tab elements, in strip (= visual) order: every
  *  room tab, or every harness tab belonging to `roomId`. Backs both
@@ -80,7 +86,12 @@ function hitOnTab(clientX: number, clientY: number): TabDragHit | null {
 	if (!id) return null;
 	const rect = target.getBoundingClientRect();
 	const side = sideFor(clientX, rect.left, rect.width);
-	if (kind === "room") return { kind: "room", id, side };
+	if (kind === "room") {
+		const segId = target.getAttribute(DRAG_SEG_ATTR) ?? id;
+		const role: "segment" | "member" =
+			target.getAttribute(DRAG_ROLE_ATTR) === "member" ? "member" : "segment";
+		return { kind: "room", id, side, segId, role };
+	}
 	if (kind === "harness") {
 		const roomId = target.getAttribute(DRAG_ROOM_ATTR);
 		if (!roomId) return null;
@@ -112,7 +123,13 @@ function hitOnStripEnd(clientX: number, clientY: number): TabDragHit | null {
 	const gap = gapForX(clientX, rects);
 	const target = gapToTarget(order, gap);
 	if (!target) return null;
-	if (kind === "room") return { kind: "room", id: target.id, side: target.side };
+	if (kind === "room") {
+		const tabEl = tabs.find((t) => t.getAttribute(DRAG_ID_ATTR) === target.id);
+		const segId = tabEl?.getAttribute(DRAG_SEG_ATTR) ?? target.id;
+		const role: "segment" | "member" =
+			tabEl?.getAttribute(DRAG_ROLE_ATTR) === "member" ? "member" : "segment";
+		return { kind: "room", id: target.id, side: target.side, segId, role };
+	}
 	return { kind: "harness", roomId: roomId ?? "", id: target.id, side: target.side };
 }
 

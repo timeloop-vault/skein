@@ -9,8 +9,16 @@
 // `elementFromPoint` hit-testing, and turning the result back into
 // React state for `.dragging` / `.drop-before` / `.drop-after` styling.
 
+/** `segId`/`role` (#76) are room-drag-only, and optional so every
+ *  existing plain-room/harness press() call keeps working unchanged: a
+ *  press with no `role` behaves as `"segment"` and no `segId` falls
+ *  back to `id` itself — exactly a plain room with no group, which is
+ *  what every caller meant before groups existed. Only RoomStrip's
+ *  group-aware tabs (a member, a real lead, a placeholder lead) set
+ *  them for real, off `data-drag-seg`/`data-drag-role` attributes it
+ *  renders on the tab (see useTabDrag's `hitOnTab`/`hitOnStripEnd`). */
 export type TabDragInfo =
-	| { kind: "room"; id: string }
+	| { kind: "room"; id: string; segId?: string; role?: "segment" | "member" }
 	| { kind: "harness"; roomId: string; id: string };
 
 export type DropSide = "before" | "after";
@@ -22,7 +30,7 @@ export type DropSide = "before" | "after";
  *  instead (see useTabDrag's `hitTest`), so a true `null` is now
  *  mostly panes and other chrome outside either tab strip. */
 export type TabDragHit =
-	| { kind: "room"; id: string; side: DropSide }
+	| { kind: "room"; id: string; side: DropSide; segId?: string; role?: "segment" | "member" }
 	| { kind: "harness"; roomId: string; id: string; side: DropSide };
 
 export interface TabDragTarget {
@@ -143,6 +151,30 @@ function resolveGap(
  *  room is refused. A same-kind, same-room hit that resolves to the
  *  source's own current position is dropped to `null` rather than
  *  refused — it's not invalid, there's just nothing to indicate (#271). */
+/** Group-aware validity for a room-kind drag (#76): a MEMBER may only
+ *  target another member of its OWN group; everything else (a plain
+ *  room, a real lead, or a placeholder lead — all `"segment"`) may
+ *  target any other segment, including one of a DIFFERENT group's
+ *  members (resolved to that group's whole segment at drop time — see
+ *  roomGroups.ts's `resolveTopDrop`), but not a member of the SAME
+ *  group it's already in ("inside a group" isn't a move). Missing
+ *  `role`/`segId` (a plain room/harness press from before groups
+ *  existed) default to `"segment"` / the id itself, which never trips
+ *  either refusal. */
+function roomDropRefused(
+	info: { id: string; segId?: string; role?: "segment" | "member" },
+	hit: { id: string; segId?: string; role?: "segment" | "member" },
+): boolean {
+	const infoRole = info.role ?? "segment";
+	const infoSeg = info.segId ?? info.id;
+	const hitRole = hit.role ?? "segment";
+	const hitSeg = hit.segId ?? hit.id;
+	if (infoRole === "member") {
+		return hitRole !== "member" || hitSeg !== infoSeg;
+	}
+	return hitRole === "member" && hitSeg === infoSeg;
+}
+
 function resolveHit(
 	info: TabDragInfo,
 	order: string[],
@@ -150,7 +182,9 @@ function resolveHit(
 ): { target: TabDragTarget | null; refused: boolean } {
 	if (info.kind !== hit.kind) return { target: null, refused: false };
 	if (info.kind === "room") {
-		return hit.kind === "room" ? resolveGap(info.id, order, hit) : { target: null, refused: false };
+		if (hit.kind !== "room") return { target: null, refused: false };
+		if (roomDropRefused(info, hit)) return { target: null, refused: true };
+		return resolveGap(info.id, order, hit);
 	}
 	if (hit.kind !== "harness") return { target: null, refused: false };
 	if (hit.roomId !== info.roomId) return { target: null, refused: true };

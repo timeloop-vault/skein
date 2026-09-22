@@ -32,6 +32,7 @@ import { FilesBody } from "./FilesBody.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
 import { RightPane, type RightPaneTab } from "./RightPane.tsx";
+import { GroupRow, RoomStrip } from "./RoomStrip.tsx";
 import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { type AgentListing, kindHasAgents } from "./agents.ts";
@@ -40,7 +41,6 @@ import {
 	HarnessPicker,
 	HarnessTab,
 	NO_REVIEW_TOOLS_TITLE,
-	RoomTab,
 	StatusDot,
 	useAgentListing,
 } from "./components.tsx";
@@ -55,7 +55,6 @@ import {
 	statusLabel,
 	useHarnessActivity,
 	usePermissionHarnessIds,
-	useRoomActivity,
 } from "./harnessActivity.ts";
 import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
 import { cmdForKind, unarchiveRoomTransform, withResumeCmds } from "./harnessCmd.ts";
@@ -80,6 +79,17 @@ import {
 	usePersistedState,
 	withDefaultAgent,
 } from "./prefs.ts";
+import {
+	type StripSegment,
+	allRoomOrder,
+	buildStrip,
+	resolveRowDrop,
+	resolveTopDrop,
+	roomIsGroupMain,
+	segmentId,
+	segmentOfRoom,
+	topLevelTarget,
+} from "./roomGroups.ts";
 import { followedSession } from "./sessionTracking.ts";
 import { hints, isMac, isWindows, matchShortcut, modLabel } from "./shortcuts.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
@@ -296,35 +306,9 @@ const LiveHarnessTab = (props: Parameters<typeof HarnessTab>[0]) => {
 	return <HarnessTab {...props} agent={agent} h={{ ...props.h, status }} />;
 };
 
-// L4 — per-room aggregate. Subscribes to every harness in the
-// room; the aggregate priority is waiting > running > idle >
-// exited so the dot surfaces the most "alive" state across the
-// room's harnesses. `waiting` lands once L2b pattern-matching
-// ships.
-// L5a — derived badge. The persisted `r.badge` field is vestigial
-// now; the visible badge is the sum of each harness's pending
-// counter. Overriding it here means every room tab path
-// (active, archived list, etc.) shows the right value without
-// having to update `r.badge` from notification logic.
-const LiveRoomTab = (props: Parameters<typeof RoomTab>[0]) => {
-	// Pass the full harness records (not just ids) so the aggregate
-	// can apply the same acknowledged-downgrade per harness — a room
-	// dot shouldn't pulse for a waiting-but-seen harness.
-	const harnessRefs = useMemo(
-		() =>
-			props.r.harnesses.map((h) => ({ id: h.id, pendingNotifications: h.pendingNotifications })),
-		[props.r.harnesses],
-	);
-	const aggregate = useRoomActivity(harnessRefs);
-	const badge = props.r.harnesses.reduce((acc, h) => acc + (h.pendingNotifications ?? 0), 0);
-	// #290: status always comes from the harness aggregate, never the
-	// persisted `r.status` field — that field is written once at room
-	// creation and never updated, so falling back to it on a `null`
-	// aggregate made a room with no harness activity record (e.g. only
-	// a `files` harness) show "running" forever.
-	const derived = { ...props.r, badge, status: aggregate };
-	return <RoomTab {...props} r={derived} />;
-};
+// L4/L5a — per-room aggregate status + derived badge now live in
+// RoomStrip.tsx (#76): `LiveRoomTab` for one room, `GroupTab` for a
+// repo group's top-level tab, which folds over all its rooms' harnesses.
 
 const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
 	const activity = useHarnessActivity(harness.id);
@@ -687,6 +671,10 @@ interface CreateRoomArgs {
 	 *  the tool's own default. */
 	agent?: string;
 	branch?: string;
+	/** The resolved repo root (#76's room-group key), when the folder is
+	 *  a git repo — the main checkout even when the picked folder was a
+	 *  worktree. Absent for non-git rooms. */
+	repoRoot?: string;
 }
 
 // What `git_inspect_folder` answers, mirroring `FolderInfoDto` in
@@ -1033,6 +1021,7 @@ const NewRoomDialog = ({
 					harness,
 					...(agent ? { agent } : {}),
 					branch: proposedBranch,
+					repoRoot: settledCwd,
 				});
 			} else {
 				remember(baseBranch);
@@ -1042,6 +1031,7 @@ const NewRoomDialog = ({
 					harness,
 					...(agent ? { agent } : {}),
 					branch: repoStatus.kind === "valid" ? (repoStatus.head ?? "HEAD") : "HEAD",
+					repoRoot: settledCwd,
 				});
 			}
 		} catch (err: unknown) {
@@ -1588,7 +1578,6 @@ export default function App() {
 	// Width of the harness column in px. Right pane absorbs the remainder
 	// via flex:1. Splitter clamps against window size at drag time.
 	const [harnessColWidth, setHarnessColWidth] = usePersistedState<number>("harnessColWidth", 640);
-
 	const [rooms, setRooms] = useState<Room[]>([]);
 	const [activeRoomId, setActiveRoomId] = useState<string>("");
 	// Epic #50 L2c-2: per-opencode-harness embedded-server port.
@@ -1699,6 +1688,28 @@ export default function App() {
 	// the hydrated set. A live click-listener poke that lands in that
 	// gap must not drain against the still-empty `roomsRef`.
 	const loadedRef = useRef(false);
+	// #76: rooms persisted before `repoRoot` existed have no group key.
+	// Resolve it in the background, one `git_inspect_folder` per room in
+	// parallel, and patch it in as each settles — never awaited by a
+	// caller, so a slow or failing repo can't delay or break hydrate/
+	// reopen. Never clears an existing `repoRoot`.
+	const backfillRepoRoots = useCallback((targets: Room[]) => {
+		const pending = targets.filter((r) => !r.repoRoot && r.cwd);
+		if (pending.length === 0) return;
+		void Promise.all(
+			pending.map(async (r) => {
+				try {
+					const info = await invoke<FolderInfoDto>("git_inspect_folder", { path: r.cwd });
+					if (!info.exists || !info.isRepo) return;
+					setRooms((prev) =>
+						prev.map((x) => (x.id === r.id && !x.repoRoot ? { ...x, repoRoot: info.root } : x)),
+					);
+				} catch (err) {
+					console.warn(`[skein] git_inspect_folder backfill failed for room ${r.id}:`, err);
+				}
+			}),
+		);
+	}, []);
 	const hydrateRooms = useCallback(() => {
 		// Chapter 5 phase 4: drop any stored sessionId that no longer
 		// exists on disk before resumeCmd uses it. claude --resume <id>
@@ -1792,6 +1803,7 @@ export default function App() {
 					// conversation instead of starting fresh.
 					const withResume = verified.map((r) => withResumeCmds(r, portMap));
 					setRooms(withResume);
+					backfillRepoRoots(withResume);
 					// Pick the first *active* room; archived ones aren't
 					// supposed to be the boot-time selection.
 					const first = withResume.find((r) => !r.archived);
@@ -1810,7 +1822,7 @@ export default function App() {
 				// the boot-wipe chain this issue exists to break.
 				setLoadFailed(msg);
 			});
-	}, []);
+	}, [backfillRepoRoots]);
 
 	useEffect(() => {
 		hydrateRooms();
@@ -1915,8 +1927,11 @@ export default function App() {
 			const portMap = await allocateOpencodePorts(room);
 			setRooms((prev) => prev.map((r) => (r.id === id ? unarchiveRoomTransform(r, portMap) : r)));
 			setActiveRoomId(id);
+			// #76: an archived room predating `repoRoot` gets the same
+			// background backfill hydrate does.
+			backfillRepoRoots([room]);
 		},
-		[allocateOpencodePorts],
+		[allocateOpencodePorts, backfillRepoRoots],
 	);
 	// The OS-notification listener is []-keyed (re-registering it on
 	// every render would leak native listeners), so it reaches the
@@ -2143,25 +2158,42 @@ export default function App() {
 		return () => window.removeEventListener("keydown", onKey);
 	}, [showPicker]);
 
-	// Issue #26: drag-and-drop reorder helpers. ID-based to keep the
-	// active-room and active-harness pointers correct after the move —
-	// they're already ID-keyed, so the array shuffle doesn't need any
-	// extra bookkeeping. Splicing in two steps (remove, then insert)
-	// requires the index adjustment when `from < target`: removing
-	// the source shifts every later index by one.
+	// Issue #26 / #76: room drag-and-drop reorder, two-level-strip aware.
+	// Decides, fresh against the CURRENT `rooms` (never a stale
+	// drag-time snapshot) via `buildStrip`/`segmentOfRoom`, whether
+	// `fromId` is a non-lead group MEMBER — reorders within its own
+	// group only, via `resolveRowDrop` (the second row) — or a whole
+	// top-level SEGMENT — a plain room or a group, dragged by its own
+	// id or (a group tab has no room behind it) its `segmentId` — which
+	// moves via `resolveTopDrop` (the top row), landing before/after the
+	// target's whole segment even when the drop was actually over one
+	// of that segment's second-row members. An invalid combination (a
+	// member dropped outside its group, a segment dropped "inside" the
+	// very group it's already in) is a no-op: both resolvers hand back
+	// the same array reference, so `prev` passes straight through
+	// unchanged.
 	const reorderRoom = (fromId: string, targetId: string, side: "before" | "after") => {
 		setRooms((prev) => {
-			const fromIdx = prev.findIndex((r) => r.id === fromId);
-			const targetIdx = prev.findIndex((r) => r.id === targetId);
-			if (fromIdx < 0 || targetIdx < 0 || fromId === targetId) return prev;
-			const adjustedTarget = side === "after" ? targetIdx + 1 : targetIdx;
-			const insertIdx = fromIdx < adjustedTarget ? adjustedTarget - 1 : adjustedTarget;
-			if (fromIdx === insertIdx) return prev;
-			const next = [...prev];
-			const [item] = next.splice(fromIdx, 1);
-			if (!item) return prev;
-			next.splice(insertIdx, 0, item);
-			return next;
+			if (fromId === targetId) return prev;
+			const segments = buildStrip(prev);
+			const dragSeg = segmentOfRoom(segments, fromId);
+			const dragIsMember =
+				dragSeg?.kind === "group" && dragSeg.lead?.id !== fromId
+					? dragSeg.members.some((m) => m.id === fromId)
+					: false;
+			if (dragIsMember) {
+				// `resolveRowDrop` itself refuses a target outside the
+				// drag's own group (or a lead on either end), so there's
+				// nothing more to check here.
+				return resolveRowDrop(prev, fromId, targetId, side);
+			}
+			// fromId is either a plain room, or (RoomStrip mints this as
+			// the drag id for a group tab, which has no single room of
+			// its own) already a segment id.
+			const dragSegId = dragSeg ? segmentId(dragSeg) : fromId;
+			const targetSeg = segmentOfRoom(segments, targetId);
+			const targetSegId = targetSeg ? segmentId(targetSeg) : targetId;
+			return resolveTopDrop(prev, dragSegId, targetSegId, side);
 		});
 	};
 
@@ -2242,6 +2274,54 @@ export default function App() {
 	activeRoomsRef.current = activeRooms;
 	const activeRoomIdRef = useRef(activeRoomId);
 	activeRoomIdRef.current = activeRoomId;
+	// #76: mirrors `unarchiveRoomRef` below — a placeholder-lead click
+	// needs the current archived list without becoming a dep of the
+	// callback that's stashed in a ref itself.
+	const archivedRoomsRef = useRef(archivedRooms);
+	archivedRoomsRef.current = archivedRooms;
+
+	// #76: the strip's top-level segments — plain tabs unchanged,
+	// worktree rooms grouped with their main room under one repository
+	// tab. Keyboard nav (cycleRoom, jumpRoom) and the RoomStrip/GroupRow
+	// render all walk this, not `activeRooms` directly.
+	const stripSegments = useMemo(() => buildStrip(activeRooms), [activeRooms]);
+	const visibleOrderRooms = useMemo(() => allRoomOrder(stripSegments), [stripSegments]);
+	const visibleOrderRef = useRef(visibleOrderRooms);
+	visibleOrderRef.current = visibleOrderRooms;
+	const stripSegmentsRef = useRef(stripSegments);
+	stripSegmentsRef.current = stripSegments;
+
+	// #76: which segment the active room is in — a group segment gets
+	// the second row rendered under it; a plain segment (or no match,
+	// e.g. during a brief state transition) gets none.
+	const activeSegment = useMemo(
+		() => segmentOfRoom(stripSegments, activeRoomId),
+		[stripSegments, activeRoomId],
+	);
+
+	// #76: the room last used in each group, in memory only (not
+	// persisted — see the design note). Updated whenever the active
+	// room changes to one that's in a group; every existing way of
+	// reaching a room (toasts, the urgent slot, OS notification clicks,
+	// Alt+J/L, the palette, reopen, create) already goes through
+	// `setActiveRoomId`, so this derives for free without touching any
+	// of those call sites.
+	const lastUsedByGroupRef = useRef<Map<string, string>>(new Map());
+	useEffect(() => {
+		if (activeSegment?.kind === "group") {
+			lastUsedByGroupRef.current.set(activeSegment.key, activeRoomId);
+		}
+	}, [activeSegment, activeRoomId]);
+
+	// #76: a click on a top-level tab (plain room or group) — resolved
+	// to the room last used in that group, falling back to the lead or
+	// first member (`topLevelTarget`); a plain tab always resolves to
+	// its own room. Not memoized — `switchRoom` itself isn't, and
+	// nothing downstream needs referential stability.
+	const onSelectSegment = (seg: StripSegment) => {
+		const target = topLevelTarget(seg, lastUsedByGroupRef.current, activeRoomsRef.current);
+		if (target) switchRoom(target.id);
+	};
 
 	// ── New Room memory (#226, #231) ───────────────────────────────
 	//
@@ -2286,6 +2366,31 @@ export default function App() {
 		setNewRoomSeed({ cwd: seed, defaults: defaultsFor(memory, seed) });
 		setShowNewRoom(true);
 	}, []);
+
+	// #76: open New Room already prefilled to a known folder, bypassing
+	// `openNewRoom`'s active-room resolution — the caller (a group's
+	// placeholder lead) already knows exactly which repo root it means.
+	const openNewRoomAt = useCallback((folder: string) => {
+		const memory = newRoomMemoryRef.current;
+		setNewRoomSeed({ cwd: folder, defaults: defaultsFor(memory, folder) });
+		setShowNewRoom(true);
+	}, []);
+
+	// #76: a group's placeholder-lead click. An archived room whose own
+	// cwd IS the group's main worktree reopens (the same one-path
+	// unarchive every other reopen surface uses); otherwise there's no
+	// room to reopen at all, so open New Room prefilled to the repo root.
+	const openGroupPlaceholder = useCallback(
+		(key: string, folder: string) => {
+			const archivedMain = archivedRoomsRef.current.find((r) => roomIsGroupMain(r, key));
+			if (archivedMain) {
+				void unarchiveRoomRef.current(archivedMain.id);
+				return;
+			}
+			openNewRoomAt(folder);
+		},
+		[openNewRoomAt],
+	);
 
 	const rememberRoomFolder = useCallback(
 		(folder: string, defaults: Omit<FolderDefaults, "lastUsed">) => {
@@ -2462,9 +2567,9 @@ export default function App() {
 	// the user can already see the dot change. Same harness in the
 	// active room but in a non-active harness tab WILL bump — its tab
 	// isn't visible. Room.badge is rendered as the sum across
-	// harnesses by LiveRoomTab; we don't write to it here. Counters
-	// persist via the rooms→sqlite mirror so the badge survives a
-	// restart.
+	// harnesses by RoomStrip.tsx's LiveRoomTab / GroupTab; we don't write to
+	// it here. Counters persist via the rooms→sqlite mirror so the
+	// badge survives a restart.
 	//
 	// L5b — OS notification. Same predicates as the badge bump
 	// (passive/permission transition + not the viewed harness +
@@ -2786,7 +2891,9 @@ export default function App() {
 
 	useEffect(() => {
 		const cycleRoom = (delta: number) => {
-			const list = activeRoomsRef.current;
+			// #76: walk every room in strip order (allRoomOrder), stepping
+			// into and out of groups, not the flat active-room array.
+			const list = visibleOrderRef.current;
 			if (list.length === 0) return;
 			const active = activeRoomIdRef.current;
 			const idx = list.findIndex((r) => r.id === active);
@@ -2888,8 +2995,14 @@ export default function App() {
 					setFontSize((s) => Math.max(FONT_MIN, s - 1));
 					break;
 				case "jumpRoom": {
-					const target = activeRoomsRef.current[match.roomIndex ?? 0];
-					if (target) setActiveRoomId(target.id);
+					// #76: Alt+1..9 indexes the strip's TOP-LEVEL segments — one
+					// slot per repository, not per room — landing on the same
+					// room a click on that tab would (`topLevelTarget`).
+					const seg = stripSegmentsRef.current[match.roomIndex ?? 0];
+					if (seg) {
+						const target = topLevelTarget(seg, lastUsedByGroupRef.current, activeRoomsRef.current);
+						if (target) setActiveRoomId(target.id);
+					}
 					break;
 				}
 			}
@@ -3246,7 +3359,7 @@ export default function App() {
 	};
 	toggleFilesRef.current = toggleFilesHarness;
 
-	const createRoom = async ({ cwd, task, harness, agent, branch }: CreateRoomArgs) => {
+	const createRoom = async ({ cwd, task, harness, agent, branch, repoRoot }: CreateRoomArgs) => {
 		const sid = newId("s");
 		const hid = newId("h");
 		// Phase 2a: pre-allocate Claude's conversation id (see pickHarness).
@@ -3291,6 +3404,7 @@ export default function App() {
 			badge: 0,
 			cwd,
 			...(branch ? { branch, repo: folderName } : {}),
+			...(repoRoot ? { repoRoot } : {}),
 			harnesses: [
 				{
 					id: hid,
@@ -3655,34 +3769,32 @@ export default function App() {
 			    over blank strip space or the `+` button to an end-of-strip
 			    gap, instead of finding nothing draggable there. */}
 			<div className="sk-tabstrip" data-drag-strip="room">
-				{activeRooms.map((r) => {
-					const isDraggedRoom = drag?.kind === "room" && drag.id === r.id;
-					const dropSide =
-						dropTarget?.kind === "room" && dropTarget.id === r.id ? dropTarget.side : null;
-					return (
-						<LiveRoomTab
-							key={r.id}
-							r={r}
-							active={r.id === activeRoomId}
-							onClick={() => switchRoom(r.id)}
-							onClose={() => closeRoom(r.id)}
-							dragging={isDraggedRoom}
-							dropSide={dropSide}
-							dragKind="room"
-							dragId={r.id}
-							onPointerDown={(e) => startDrag(e, { kind: "room", id: r.id })}
-							onPointerMove={dragHandlers.onPointerMove}
-							onPointerUp={dragHandlers.onPointerUp}
-							onPointerCancel={dragHandlers.onPointerCancel}
-							onLostPointerCapture={dragHandlers.onLostPointerCapture}
-							suppressClick={suppressClick}
-						/>
-					);
-				})}
+				<RoomStrip
+					segments={stripSegments}
+					activeRoomId={activeRoomId}
+					onSelectSegment={onSelectSegment}
+					onCloseRoom={(id) => void closeRoom(id)}
+					dragWiring={{ drag, dropTarget, startDrag, dragHandlers, suppressClick }}
+				/>
 				<div className="sk-tab-newbtn" onClick={() => void openNewRoom()} title="New room">
 					+
 				</div>
 			</div>
+			{/* #76: the second row — the active group's own rooms, main
+			    pinned first — only when the active room is IN a group. A
+			    repository with a single open room stays a plain top-level
+			    tab and never grows this row. */}
+			{activeSegment?.kind === "group" && (
+				<GroupRow
+					seg={activeSegment}
+					activeRoomId={activeRoomId}
+					onSwitchRoom={switchRoom}
+					onCloseRoom={(id) => void closeRoom(id)}
+					onOpenPlaceholder={openGroupPlaceholder}
+					onNewRoom={openNewRoomAt}
+					dragWiring={{ drag, dropTarget, startDrag, dragHandlers, suppressClick }}
+				/>
+			)}
 
 			<Splitter
 				className="sk-workspace"

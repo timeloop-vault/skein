@@ -35,6 +35,13 @@ export interface DragProps {
 	dragKind?: "room" | "harness";
 	dragId?: string;
 	dragRoomId?: string;
+	/** #76: group-aware room drag — which strip segment this tab's drag
+	 *  belongs to, and whether the tab IS that segment (a plain room, a
+	 *  real or placeholder group lead) or only a non-lead MEMBER of one
+	 *  (see roomGroups.ts's `resolveTopDrop`/`resolveRowDrop`). RoomTab-only; HarnessTab
+	 *  never sets these. */
+	dragSegId?: string;
+	dragRole?: "segment" | "member";
 	onPointerDown?: (e: ReactPointerEvent<HTMLDivElement>) => void;
 	onPointerMove?: (e: ReactPointerEvent<HTMLDivElement>) => void;
 	onPointerUp?: (e: ReactPointerEvent<HTMLDivElement>) => void;
@@ -97,6 +104,8 @@ export const RoomTab = ({
 	dragKind,
 	dragId,
 	dragRoomId,
+	dragSegId,
+	dragRole,
 	onPointerDown,
 	onPointerMove,
 	onPointerUp,
@@ -121,6 +130,8 @@ export const RoomTab = ({
 		data-drag-kind={dragKind}
 		data-drag-id={dragId}
 		data-drag-room={dragRoomId}
+		data-drag-seg={dragSegId}
+		data-drag-role={dragRole}
 		onPointerDown={onPointerDown}
 		onPointerMove={onPointerMove}
 		onPointerUp={onPointerUp}

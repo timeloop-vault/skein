@@ -156,9 +156,33 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   for multi-line bodies. No nudge where safety can't be
     │   │   │                        #   proven
     │   │   ├── types.ts             # Room / Harness / Status vocabulary
+    │   │   ├── roomGroups.ts        # Pure room-group model (#76), a two-level strip: group
+    │   │   │                        #   key = normalized Room.repoRoot, the main checkout;
+    │   │   │                        #   the main room leads. buildStrip → top-level
+    │   │   │                        #   StripSegment[] (plain room, or a group = lead +
+    │   │   │                        #   members); allRoomOrder/segmentOfRoom/topLevelTarget
+    │   │   │                        #   for keyboard nav and a top-tab click; resolveTopDrop
+    │   │   │                        #   (top row, whole segments) and resolveRowDrop (second
+    │   │   │                        #   row, members only) replace the old single
+    │   │   │                        #   resolveRoomDrop — no shim, App.tsx's reorderRoom picks
+    │   │   │                        #   between them itself. Table-tested, no React
     │   │   ├── components.tsx       # Shared atoms (HChip, StatusDot, tabs, the two-step
     │   │   │                        #   harness picker — kind, then agent for the kinds
     │   │   │                        #   that take one)
+    │   │   ├── RoomStrip.tsx        # The two-level room strip (#76), rewritten from a
+    │   │   │                        #   rejected single-row-with-collapse first draft: `RoomStrip`
+    │   │   │                        #   is the TOP row, one tab per StripSegment — a plain
+    │   │   │                        #   room unchanged, a group rendered as its own `GroupTab`
+    │   │   │                        #   (aggregate status/badge, room count, "main · N
+    │   │   │                        #   worktrees", no close button — same tab shape, not a
+    │   │   │                        #   bordered wrapper). `GroupRow` is the SECOND row —
+    │   │   │                        #   main pinned first (real tab, or a dimmed placeholder
+    │   │   │                        #   when it isn't open), then members — mounted by
+    │   │   │                        #   App.tsx only when the active room's segment IS a
+    │   │   │                        #   group (`segmentOfRoom`); a lone-room repo never grows
+    │   │   │                        #   one. No collapse state anywhere any more.
+    │   │   │                        #   `lastUsedByGroup` (App.tsx, in-memory only) is what a
+    │   │   │                        #   top-level click/Alt+N returns to
     │   │   ├── shortcuts.ts         # ALL keyboard shortcuts: one platform-agnostic BINDINGS
     │   │   │                        #   table (#151); LiveTerminal swallows via isAppShortcut
     │   │   ├── SettingsModal.tsx    # Settings + in-app updater UI
@@ -307,6 +331,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   first clean non-empty load per process. **Field policy: every field
   added to Room/Harness after v0.2.5 MUST be `#[serde(default)]` or
   `Option`** — a required field makes old blobs unparseable.
+  `repoRoot` (the #76 group key) is set at create and backfilled at
+  hydrate/unarchive via `git_inspect_folder`, and never cleared — a
+  room whose folder later vanishes keeps its group (#164).
 - **PTYs** live in `PtyManager`. `pty_spawn` returns an opaque id;
   output streams over a per-spawn `tauri::ipc::Channel<PtyEvent>` — a
   tagged enum `{kind:"data",chunk}` / `{kind:"exit",code}`. PTYs

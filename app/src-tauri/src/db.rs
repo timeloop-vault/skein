@@ -211,6 +211,13 @@ pub struct Room {
     /// it for tab-strip filtering and the reopen modal.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub archived: Option<i64>,
+    /// Canonical main-checkout path of the git repo this room belongs
+    /// to (resolved from a worktree via skein-git `main_repo_root()`).
+    /// `None` for non-git rooms and rooms not yet resolved. This is
+    /// the room-group key (#76), and is kept even if the folder later
+    /// disappears (#164).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub repo_root: Option<String>,
 }
 
 /// A `sessions` row whose JSON blob failed to parse at load time.
@@ -1937,6 +1944,7 @@ mod tests {
             branch: None,
             repo: None,
             archived: None,
+            repo_root: None,
         }
     }
 
@@ -2013,6 +2021,32 @@ mod tests {
             "model":"","tokens":"0"}],"activeHarnessId":"h1"}"#;
         let room: Room = serde_json::from_str(json).unwrap();
         assert_eq!(room.harnesses[0].agent, None);
+    }
+
+    /// #76: a blob written before `repoRoot` existed has no such key at
+    /// all. The field policy says that must load, not quarantine the
+    /// room, with the group key simply absent.
+    #[test]
+    fn a_pre_76_blob_loads_without_a_repo_root_field() {
+        let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+            "harnesses":[],"activeHarnessId":""}"#;
+        let room: Room = serde_json::from_str(json).unwrap();
+        assert_eq!(room.repo_root, None);
+    }
+
+    /// #76: `repoRoot` round-trips through save and load like the other
+    /// optional room fields.
+    #[test]
+    fn repo_root_round_trips_through_save_and_load() {
+        let (_dir, db) = fresh_db();
+        let mut r = room("r1");
+        r.repo_root = Some("/home/stefan/code/skein".into());
+        db.save_all(&[r]).unwrap();
+        let outcome = db.load_all().unwrap();
+        assert_eq!(
+            outcome.rooms[0].repo_root.as_deref(),
+            Some("/home/stefan/code/skein")
+        );
     }
 
     #[test]
