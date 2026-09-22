@@ -877,15 +877,15 @@ export const LiveTerminal = ({
 		};
 	}, [mountKey]);
 
-	// #116 step two: re-point the Claude JSONL adapter when `sessionId`
-	// changes under an already-running PTY — Claude's own `/clear`
-	// starting a new conversation, reported via App.tsx's
-	// `skein://harness-session-start` listener updating the harness
-	// record, which flows back down here as a new prop. The PTY itself
-	// is untouched: only the tail target moves. A no-op when no adapter
-	// is attached (PTY not live yet, or a non-Claude harness) — the mount
-	// effect's own attach (above) picks up the current sessionId whenever
-	// it eventually runs.
+	// #116: re-point the Claude JSONL adapter when `sessionId` changes
+	// under an already-running PTY — Claude's own `/clear` or in-tool
+	// `/resume` moving to a different conversation, reported via
+	// App.tsx's `skein://harness-session-start` listener updating the
+	// harness record, which flows back down here as a new prop. The PTY
+	// itself is untouched: only the tail target moves. A no-op when no
+	// adapter is attached (PTY not live yet, or a non-Claude harness) —
+	// the mount effect's own attach (above) picks up the current
+	// sessionId whenever it eventually runs.
 	useEffect(() => {
 		const current = claudeAdapterRef.current;
 		if (!current) return;

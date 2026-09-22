@@ -80,7 +80,7 @@ import {
 	usePersistedState,
 	withDefaultAgent,
 } from "./prefs.ts";
-import { clearedSessionId } from "./sessionTracking.ts";
+import { followedSession } from "./sessionTracking.ts";
 import { hints, isMac, isWindows, matchShortcut, modLabel } from "./shortcuts.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
 import { useWorkingSubagentCount } from "./subagents.ts";
@@ -2405,14 +2405,15 @@ export default function App() {
 	// like the permission listener above; `noteLaunchSignal` is already
 	// a no-op for an id Skein doesn't have a record for.
 	//
-	// #116 step two: the same hook is the ONLY signal Skein gets that a
-	// mid-session `/clear` started a brand-new conversation — Claude's
-	// JSONL gives no other sign. `clearedSessionId` (sessionTracking.ts)
-	// filters to `source === "clear"` reporting a genuinely different id;
-	// when it does, the harness's stored sessionId is overwritten
+	// #116: the same hook is the ONLY signal Skein gets that a
+	// mid-session `/clear` or in-tool `/resume` moved a harness onto a
+	// different conversation — Claude's JSONL gives no other sign.
+	// `followedSession` (sessionTracking.ts) filters to `source ===
+	// "clear"` or `"resume"` reporting a genuinely different id; when it
+	// does, the harness's stored sessionId is overwritten
 	// (`replaceHarnessSessionId`, first-writer-wins would never adopt it)
 	// so a future resume/reopen picks up the new conversation, and
-	// `harnessActivity.sessionCleared` forgets the old session's
+	// `harnessActivity.sessionSwitched` forgets the old session's
 	// subagents/delegation state. Per-pane re-pointing of the live JSONL
 	// tail itself happens in LiveTerminal, keyed off the `sessionId`
 	// prop — this listener only owns the persisted record. Attribution
@@ -2429,10 +2430,10 @@ export default function App() {
 			const room = roomsRef.current.find((r) => r.id === event.payload.roomId);
 			const h = room?.harnesses.find((x) => x.id === event.payload.harnessId);
 			if (!h || h.kind !== "claude") return;
-			const next = clearedSessionId(h.sessionId, event.payload);
+			const next = followedSession(h.sessionId, event.payload);
 			if (next !== null) {
-				replaceHarnessSessionId(event.payload.roomId, event.payload.harnessId, next);
-				harnessActivity.sessionCleared(event.payload.harnessId);
+				replaceHarnessSessionId(event.payload.roomId, event.payload.harnessId, next.sessionId);
+				harnessActivity.sessionSwitched(event.payload.harnessId, next.source);
 			}
 		});
 		return () => {
