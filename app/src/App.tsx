@@ -9,1771 +9,83 @@
 //     you switch agents inside the same room, the diff and status
 //     stay put.
 
-import {
-	isPermissionGranted,
-	onNotificationClicked,
-	requestPermission,
-	sendNotification,
-} from "@choochmeque/tauri-plugin-notifications-api";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
-import {
-	type PointerEvent as ReactPointerEvent,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
-import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
-import { FilesBody } from "./FilesBody.tsx";
-import { LiveTerminal } from "./LiveTerminal.tsx";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EmptyState, Titlebar, type TitlebarProps } from "./AppChrome.tsx";
+import { AppOverlays } from "./AppOverlays.tsx";
+import type { PaletteItem } from "./CommandPalette.tsx";
+import { HarnessColumn } from "./HarnessColumn.tsx";
 import { MissingFolderCard } from "./MissingFolderCard.tsx";
-import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
-import { RightPane, type RightPaneTab } from "./RightPane.tsx";
+import { RightPane } from "./RightPane.tsx";
 import { GroupRow, type RenameTarget, RoomStrip } from "./RoomStrip.tsx";
-import { SettingsModal } from "./SettingsModal.tsx";
 import { Splitter } from "./Splitter.tsx";
-import { type AgentListing, kindHasAgents } from "./agents.ts";
+import { StatusBar } from "./StatusBar.tsx";
+import { StatusDot } from "./components.tsx";
+import { usePermissionHarnessIds } from "./harnessActivity.ts";
+import { buildPaletteItems } from "./paletteItems.ts";
+import { withDefaultAgent } from "./prefs.ts";
+import { allRoomOrder } from "./roomGroups.ts";
+import { isMac } from "./shortcuts.ts";
+import type { HarnessKind, SpawnSettings, SpawnSettingsPayload } from "./types.ts";
 import {
-	DEFAULT_BRANCH_TEMPLATE,
-	applyBranchTemplate,
-	branchFieldAttachedAfterBlur,
-	branchFieldProblem,
-	taskSlug,
-	templateFromBranch,
-	worktreeLeaf,
-} from "./branchName.ts";
-import {
-	HChip,
-	HarnessPicker,
-	HarnessTab,
-	NO_REVIEW_TOOLS_TITLE,
-	StatusDot,
-	useAgentListing,
-} from "./components.tsx";
-import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
-import { filesRegistry } from "./filesRegistry.ts";
-import {
-	TRANSITION_SOURCE,
-	activityToStatus,
-	delegationSummary,
-	effectiveStatus,
-	harnessActivity,
-	statusLabel,
-	useHarnessActivity,
-	usePermissionHarnessIds,
-} from "./harnessActivity.ts";
-import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
-import { cmdForKind, unarchiveRoomTransform, withResumeCmds } from "./harnessCmd.ts";
-import {
-	ACTION_EVENT,
-	type HarnessAction,
-	apiErrorToastText,
-	parsePayload,
-} from "./liveContext/index.ts";
-import { repointRoom } from "./missingFolder.ts";
-import { type ClickTarget, resolveClickTarget, shouldDrainOnClickEvent } from "./osNotifyClick.ts";
-import {
-	type DefaultAgents,
-	EMPTY_NEW_ROOM_MEMORY,
-	type FolderDefaults,
-	type NewRoomMemory,
-	type RecentFolder,
-	branchTemplateFor,
-	defaultAgentFor,
-	defaultsFor,
-	recentFolders,
-	rememberFolder,
-	startingAgent,
-	usePersistedState,
-	withDefaultAgent,
-} from "./prefs.ts";
-import {
-	type StripSegment,
-	allRoomOrder,
-	buildStrip,
-	resolveRowDrop,
-	resolveTopDrop,
-	roomIsGroupMain,
-	segmentId,
-	segmentOfRoom,
-	topLevelTarget,
-} from "./roomGroups.ts";
-import { defaultRoomName } from "./roomName.ts";
-import { followedSession } from "./sessionTracking.ts";
-import { hints, isMac, isWindows, matchShortcut, modLabel } from "./shortcuts.ts";
-import { attachStatusPopover } from "./statusPopover.ts";
-import { useWorkingSubagentCount } from "./subagents.ts";
-import type {
-	Density,
-	Harness,
-	HarnessKind,
-	Room,
-	SpawnSettings,
-	SpawnSettingsPayload,
-	Theme,
-} from "./types.ts";
-import { useFocusRestore } from "./useFocusRestore.ts";
+	CHROME_FONT_MAX,
+	CHROME_FONT_MIN,
+	FONT_MAX,
+	FONT_MIN,
+	useAppSettings,
+} from "./useAppSettings.ts";
+import { useAppWindowEffects } from "./useAppWindowEffects.ts";
+import { useHarnessActions } from "./useHarnessActions.ts";
+import { useHarnessCreation } from "./useHarnessCreation.ts";
+import { useHarnessNotifications } from "./useHarnessNotifications.ts";
+import { useKeyboardShortcuts } from "./useKeyboardShortcuts.ts";
+import { useOsNotificationClicks } from "./useOsNotificationClicks.ts";
+import { useRoomStripNav } from "./useRoomStripNav.ts";
+import { useRoomsStore } from "./useRoomsStore.ts";
 import { useTabDrag } from "./useTabDrag.ts";
-
-// ── Toasts (in-app notifications, L5c) ─────────────────────────────
-//
-// A toast is the in-app complement to L5b's OS notification: it
-// fires when Skein has focus but the user isn't looking at the
-// source harness (e.g. they're in a different room when an agent
-// finishes). Fixed to the bottom-right corner, click to jump,
-// auto-dismiss after a few seconds.
-
-interface ToastEntry {
-	id: string;
-	roomId: string;
-	harnessId: string;
-	kind: HarnessKind;
-	roomName: string;
-	harnessName: string;
-	// "waiting" lands here once L2c-1 (Claude JSONL adapter) reports
-	// a `last-prompt` row → harness is awaiting user input. Rendered
-	// verbatim in the toast subtitle. "error" is the D2f api_error
-	// variant — red treatment plus the dim `detail` line. "permission"
-	// (#86) is a harder stop than "waiting" — the harness is blocked on
-	// an approval dialog, not merely at end-of-turn.
-	state: "idle" | "exited" | "waiting" | "error" | "permission";
-	/** Error variant only: summary under the subtitle, e.g.
-	 *  "Overloaded (529), retrying · attempt 4 of 10 · retry in 4.4s". */
-	detail?: string | undefined;
-	/** Permission variant only: the tool name when the adapter could
-	 *  say (opencode's permission-asked event carries none). */
-	tool?: string | undefined;
-	/** Permission variant only: the subagent name when the dialog
-	 *  belongs to one rather than the main session (#298). */
-	agentType?: string | undefined;
-	/** Waiting variant only (#277): `delegationSummary` of
-	 *  `HarnessActivity.delegatedCount`, when the harness delegated
-	 *  work since the user's last prompt and this end-of-turn wasn't
-	 *  flushed by the ceiling (see the `DelegationCeiling` check at the
-	 *  call site) — "Skein cannot claim the delegated work finished"
-	 *  there, so no suffix rides along. */
-	delegationNote?: string | undefined;
-}
-
-const TOAST_DISMISS_MS = 6_000;
-const TOAST_MAX_VISIBLE = 5;
-/// api_error rows within this window count as one incident (a retry
-/// burst lands as several rows seconds apart — badge once, not per row).
-const API_ERROR_INCIDENT_MS = 60_000;
-/// #84: the notification plugin (Swift) crashed (use-after-free in
-/// `saveNotification`) after long uptime — its `show` isn't safe to call
-/// concurrently, and multiple harness transitions while the user is away
-/// fire `sendNotification` from overlapping async tasks. Serialize every
-/// OS notification through one promise chain so at most one is ever in
-/// flight, removing the concurrency the race needs. Each link swallows
-/// its own rejection so one failure (e.g. plugin absent in dev) doesn't
-/// stall the chain.
-let osNotifyChain: Promise<unknown> = Promise.resolve();
-/// Monotonic 32-bit id per notification (the plugin requires a 32-bit
-/// int). On macOS the native plugin drops the `extra` payload but DOES
-/// round-trip this id to the click event (verified via skein.log, #118),
-/// so we key the jump target off the id instead of `extra`.
-let osNotifyId = 0;
-/// id → where-to-jump, populated at send time and consumed on click.
-/// Bounded so a long-running session can't grow it unboundedly; ids are
-/// monotonic so the oldest insertion is the first key.
-const osNotifyTargets = new Map<number, { roomId: string; harnessId: string }>();
-const OS_NOTIFY_TARGETS_MAX = 100;
-/// `extra` rides along as the notification's payload and comes back via
-/// `onNotificationClicked` so a click can jump to the harness that fired
-/// it (#118). Values must be strings (the click data is Record<string,
-/// string>).
-const enqueueOsNotification = (
-	title: string,
-	body: string,
-	extra?: { roomId: string; harnessId: string },
-): void => {
-	osNotifyId = (osNotifyId + 1) % 0x7fff_ffff;
-	const id = osNotifyId;
-	// #294: Windows no longer round-trips this numeric id at all — the
-	// click target is stored Rust-side, keyed off the toast itself, and
-	// handed back via `os_notify_take_pending` (a store that survives
-	// Skein being closed at click time). Only macOS's plugin still needs
-	// the id-keyed map, since it drops `extra` but echoes the id.
-	if (extra && !isWindows) {
-		osNotifyTargets.set(id, extra);
-		if (osNotifyTargets.size > OS_NOTIFY_TARGETS_MAX) {
-			const oldest = osNotifyTargets.keys().next().value;
-			if (oldest !== undefined) osNotifyTargets.delete(oldest);
-		}
-	}
-	osNotifyChain = osNotifyChain
-		.catch(() => {})
-		.then(() => {
-			// #155: the plugin's notify-rust backend never fires
-			// `onNotificationClicked` on Windows (fire-and-forget —
-			// see `os_notify.rs`), so Windows toasts go through our
-			// own command instead, which wires up a real click.
-			if (isWindows) {
-				if (!extra) {
-					console.warn("[skein] os_notify_show skipped: no roomId/harnessId (#294)");
-					return undefined;
-				}
-				return invoke("os_notify_show", {
-					roomId: extra.roomId,
-					harnessId: extra.harnessId,
-					title,
-					body,
-				});
-			}
-			return sendNotification(extra ? { id, title, body, extra } : { title, body });
-		})
-		.catch((err: unknown) => {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.warn("[skein] os notification failed:", msg);
-		});
-};
-
-/// Per-harness badge coalesce window. A burst of badge-worthy
-/// transitions inside this window (a Claude JSONL truncation-replay
-/// re-emitting old end_turns — #62; shell prompt-redraw chatter
-/// flipping running↔idle — #64) only bumps the count once. Genuine
-/// activity spaced further apart than this still increments, and a
-/// harness with no pending badge always shows the first one. The
-/// underlying replay/dedup at the source is tracked in #93.
-const BADGE_COALESCE_MS = 10_000;
-
-const Toast = ({
-	toast,
-	onClick,
-	onDismiss,
-}: {
-	toast: ToastEntry;
-	onClick: () => void;
-	onDismiss: () => void;
-}) => {
-	useEffect(() => {
-		const id = setTimeout(onDismiss, TOAST_DISMISS_MS);
-		return () => clearTimeout(id);
-	}, [onDismiss]);
-	// #86: "permission" reads as "needs permission" (+ tool when known)
-	// rather than the bare phase word — same reasoning as `statusLabel`,
-	// just phrased for a subtitle instead of a status-bar segment.
-	// #298: the subagent name (when known) joins the tool name.
-	const permissionParts = [toast.agentType, toast.tool].filter((p): p is string => p !== undefined);
-	const sub =
-		toast.state === "permission"
-			? `needs permission${permissionParts.length > 0 ? ` · ${permissionParts.join(" · ")}` : ""}`
-			: // #277: "waiting · 3 delegated agents finished" when the
-				// end-of-turn was withheld for delegated work.
-				toast.state === "waiting" && toast.delegationNote
-				? `${toast.state} · ${toast.delegationNote}`
-				: toast.state;
-	return (
-		<div
-			className={`sk-toast${toast.state === "error" ? " error" : toast.state === "permission" ? " permission" : ""}`}
-			onClick={onClick}
-			title="Go to this harness"
-		>
-			<HChip kind={toast.kind} />
-			<div className="sk-toast-body">
-				<div className="sk-toast-title">{toast.roomName}</div>
-				<div className="sk-toast-sub">
-					{toast.harnessName} · {sub}
-				</div>
-				{toast.detail && <div className="sk-toast-detail">{toast.detail}</div>}
-			</div>
-			<span
-				className="sk-toast-x"
-				title="Dismiss"
-				onClick={(e) => {
-					e.stopPropagation();
-					onDismiss();
-				}}
-			>
-				×
-			</span>
-		</div>
-	);
-};
-
-// ── Live wrappers that subscribe to the activity store ─────────────
-//
-// HarnessTab, RoomTab, and the status bar all need to reflect what
-// each harness/room is *actually* doing right now (running / idle
-// / exited) rather than the hard-coded "running" stamped at
-// creation time. Each instance subscribes via the activity hooks;
-// they only re-render on real phase changes so a harness streaming
-// output continuously doesn't churn its tab. Epic #50 (foundation
-// for #29, #12, etc.).
-
-const LiveHarnessTab = (props: Parameters<typeof HarnessTab>[0]) => {
-	const activity = useHarnessActivity(props.h.id);
-	const agent = agentLabel(props.h, useObservedAgent(props.h.id));
-	if (!activity) return <HarnessTab {...props} agent={agent} />;
-	// Apply the acknowledged-downgrade: a waiting harness with no
-	// pending notifications has already been seen, so render it as
-	// idle (grey) instead of waiting (blue pulse). The phase in
-	// the store stays `waiting` — only the visual indicator
-	// collapses.
-	const status = effectiveStatus(activity, props.h.pendingNotifications ?? 0);
-	return <HarnessTab {...props} agent={agent} h={{ ...props.h, status }} />;
-};
-
-// L4/L5a — per-room aggregate status + derived badge now live in
-// RoomStrip.tsx (#76): `LiveRoomTab` for one room, `GroupTab` for a
-// repo group's top-level tab, which folds over all its rooms' harnesses.
-
-const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
-	const activity = useHarnessActivity(harness.id);
-	// #277: reactively needed so "delegating · N agents" updates live
-	// as subagents start/finish, not just on the next unrelated
-	// harnessActivity emit.
-	const workingCount = useWorkingSubagentCount(harness.id);
-	// Dot color uses effectiveStatus so a waiting-but-acknowledged
-	// harness renders grey (no pulse) in the bottom bar. The TEXT
-	// keeps the underlying phase via activityToStatus — telling the
-	// user "idle" when Claude is sitting at a prompt would be a lie;
-	// the visual collapse to grey is a UX choice, the text isn't.
-	const dotStatus = activity
-		? effectiveStatus(activity, harness.pendingNotifications ?? 0)
-		: harness.status;
-	// #86: "permission needed" (+ tool) rather than the bare word.
-	// #277: "delegating · N agents" in place of bare "running" while
-	// subagents are working.
-	const label = activity
-		? statusLabel(
-				activityToStatus(activity),
-				activity.permissionTool,
-				activity.permissionAgentType,
-				workingCount,
-			)
-		: harness.status;
-	return (
-		<span className="seg">
-			<span className={`dot-tiny st-${dotStatus}`} />
-			{label}
-		</span>
-	);
-};
-
-// #248: which agent the active harness is on, worded by `agentLabel` so
-// an opencode harness says "started as" rather than claiming to know.
-const AgentStatusBarSeg = ({ harness }: { harness: Harness }) => {
-	const label = agentLabel(harness, useObservedAgent(harness.id));
-	if (!label) return null;
-	return (
-		<span className="seg sk-statusbar-agent" title={label.title}>
-			<span className="pk">{label.key}</span>
-			{label.value}
-		</span>
-	);
-};
-
-// ── Harness body ───────────────────────────────────────────────────
-
-interface HarnessBodyProps {
-	harness: Harness;
-	fontSize: number;
-	// #158: copy-on-select setting — read live via a ref in LiveTerminal,
-	// so toggling it applies to an already-running terminal without a
-	// respawn. Threaded down exactly like fontSize.
-	copyOnSelect: boolean;
-	defaultShell: string[];
-	visible: boolean;
-	onCmdChange: (cmd: string[]) => void;
-	// Stamped on every `harness_actions` row this harness emits
-	// (issue #80). Threaded down to LiveTerminal → attachClaudeEvents.
-	roomId: string;
-	// Epic #50 L2c-2: opencode embedded-server port allocated by App.
-	// `undefined` for non-opencode harnesses and for opencode harnesses
-	// where pick_free_port failed — in the latter case the adapter
-	// can't attach and the harness falls back to L2a.
-	opencodePort: number | undefined;
-	// SSE-capture callback: L2c-2 captures opencode's auto-allocated
-	// sessionID from the `session.created` event. App.tsx wires it
-	// to setHarnessSessionId; `undefined` for non-opencode harnesses.
-	onSessionCaptured: ((sessionId: string) => void) | undefined;
-	// #116: L2c-2 decided the harness followed its TUI onto a different
-	// root session (`/new` or a `/sessions` pick). App.tsx wires it to
-	// replaceHarnessSessionId, same as Claude's clear/resume/fork
-	// follow; `undefined` for non-opencode harnesses.
-	onSessionFollowed: ((sessionId: string) => void) | undefined;
-}
-
-const HarnessBody = ({
-	harness,
-	fontSize,
-	copyOnSelect,
-	defaultShell,
-	visible,
-	onCmdChange,
-	roomId,
-	opencodePort,
-	onSessionCaptured,
-	onSessionFollowed,
-}: HarnessBodyProps) => {
-	if (harness.cmd && harness.cwd !== undefined) {
-		// mountKey changes on cmd content OR spawnGen — the trigger for a
-		// clean unmount + remount when the user picks Enter-for-shell
-		// after a child exits. spawnGen is the explicit respawn signal:
-		// the cmd-identity part alone misses a shell→shell respawn (new
-		// cmd == old cmd → no remount → #53). Joining the array gives a
-		// value-equal string across content-identical renders, so a
-		// re-render with the same cmd + spawnGen doesn't churn the PTY.
-		return (
-			<LiveTerminal
-				cmd={harness.cmd}
-				cwd={harness.cwd}
-				mountKey={`${harness.id}:${harness.spawnGen ?? 0}:${harness.cmd.join("\x00")}`}
-				harnessId={harness.id}
-				roomId={roomId}
-				harnessKind={harness.kind}
-				sessionId={harness.sessionId}
-				agent={harness.agent}
-				opencodePort={opencodePort}
-				onSessionCaptured={onSessionCaptured}
-				onSessionFollowed={onSessionFollowed}
-				fontSize={fontSize}
-				copyOnSelect={copyOnSelect}
-				defaultShell={defaultShell}
-				visible={visible}
-				onCmdChange={onCmdChange}
-			/>
-		);
-	}
-	return null;
-};
-
-// ── Harness column (per room) ──────────────────────────────────────
-// Every room's column stays mounted at once; the App-level renderer
-// toggles visibility with display:none. PTYs survive tab switches
-// because LiveTerminal's effect is keyed on mountKey only.
-
-interface HarnessDrag {
-	draggedHarnessId: string | null;
-	dropTargetHarnessId: string | null;
-	dropSide: "before" | "after" | null;
-	// #271: pointer-based drag start, scoped to this room by the caller
-	// (App.tsx curries roomId in); the rest — move/up/cancel — doesn't
-	// need per-tab identity, so it's a single shared handler set.
-	onPointerDown: (e: ReactPointerEvent<HTMLDivElement>, roomId: string, harnessId: string) => void;
-	onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
-	onPointerUp: (e: ReactPointerEvent<HTMLDivElement>) => void;
-	onPointerCancel: (e: ReactPointerEvent<HTMLDivElement>) => void;
-	onLostPointerCapture: (e: ReactPointerEvent<HTMLDivElement>) => void;
-	suppressClick: () => boolean;
-}
-
-interface HarnessColumnProps {
-	room: Room;
-	fontSize: number;
-	copyOnSelect: boolean;
-	defaultShell: string[];
-	showPicker: boolean;
-	// True iff this column's room is the active room. Combined with
-	// `showPicker` and per-harness activeness, it tells each
-	// LiveTerminal whether it should hold keyboard focus. Issue #22.
-	roomActive: boolean;
-	// Drag-and-drop wiring for harness reorder. Pre-resolved against
-	// this column's room — `draggedHarnessId` is non-null only when
-	// the active drag belongs to *this* room (cross-room drags are
-	// rejected upstream). Issue #26.
-	harnessDrag: HarnessDrag;
-	/** Settings' per-kind default agents (#248), for the picker. */
-	defaultAgents: DefaultAgents;
-	onPick: (kind: HarnessKind, agent?: string) => void;
-	onAddHarness: (roomId: string) => void;
-	onCancelPick: () => void;
-	onSwitchHarness: (roomId: string, harnessId: string) => void;
-	onCloseHarness: (roomId: string, harnessId: string) => void;
-	onHarnessCmdChange: (roomId: string, harnessId: string, cmd: string[]) => void;
-	// Epic #50 L2c-2: per-opencode-harness embedded-server port. The
-	// column pulls each harness's port out of this map (keyed by
-	// harnessId) and forwards it to the corresponding LiveTerminal.
-	opencodePorts: Map<string, number>;
-	// SSE-captured opencode session-id callback (per harness, room
-	// scope already bound by App).
-	onOpencodeSessionCaptured: (harnessId: string, sessionId: string) => void;
-	// #116: opencode followed its TUI onto a different root session
-	// (per harness, room scope already bound by App).
-	onOpencodeSessionFollowed: (harnessId: string, sessionId: string) => void;
-}
-
-const HarnessColumn = ({
-	room,
-	fontSize,
-	copyOnSelect,
-	defaultShell,
-	showPicker,
-	roomActive,
-	harnessDrag,
-	defaultAgents,
-	onPick,
-	onAddHarness,
-	onCancelPick,
-	onSwitchHarness,
-	onCloseHarness,
-	onHarnessCmdChange,
-	opencodePorts,
-	onOpencodeSessionCaptured,
-	onOpencodeSessionFollowed,
-}: HarnessColumnProps) => {
-	const tablistRef = useRef<HTMLDivElement | null>(null);
-
-	// The tab list scrolls; the active tab follows. scrollLeft only —
-	// scrollIntoView would also scroll ancestors (design README).
-	// offsetLeft is tablist-relative because .sk-harness-tablist is
-	// position:relative (the tabs' offsetParent) — without that the
-	// values are body-relative and the follow lands ~7px off.
-	// Deps include the harness list + roomActive so closing a tab to
-	// the left of the active one, or re-showing a hidden room (which
-	// can reset the scrollport), re-follows.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: room.harnesses is a deliberate trigger — tab removals shift offsets without changing the active id
-	useEffect(() => {
-		if (!roomActive) return;
-		const list = tablistRef.current;
-		if (!list) return;
-		const el = list.querySelector<HTMLElement>(`[data-htab="${CSS.escape(room.activeHarnessId)}"]`);
-		if (!el) return;
-		if (el.offsetLeft < list.scrollLeft) {
-			list.scrollLeft = el.offsetLeft;
-		} else if (el.offsetLeft + el.offsetWidth > list.scrollLeft + list.clientWidth) {
-			list.scrollLeft = el.offsetLeft + el.offsetWidth - list.clientWidth;
-		}
-	}, [room.activeHarnessId, room.harnesses, roomActive]);
-
-	return (
-		<div className="sk-harness-col">
-			{/* #271: data-drag-strip (+ data-drag-room) covers this whole
-			    outer row — tablist, `+ harness`, and the meta text — so a
-			    drop anywhere past the last tab resolves to an end-of-strip
-			    gap. See the room strip's own data-drag-strip above. */}
-			<div className="sk-harness-tabs" data-drag-strip="harness" data-drag-room={room.id}>
-				{/* Scrollable list + PINNED add button: without the split, a
-				    room with many harnesses pushed `+ harness` off-screen at
-				    laptop width (design README — the pinning is load-bearing). */}
-				<div className="sk-harness-tablist" ref={tablistRef}>
-					{room.harnesses.map((h) => (
-						<LiveHarnessTab
-							key={h.id}
-							h={h}
-							active={h.id === room.activeHarnessId}
-							closable={room.harnesses.length > 1}
-							onClick={() => onSwitchHarness(room.id, h.id)}
-							onClose={() => onCloseHarness(room.id, h.id)}
-							dragging={harnessDrag.draggedHarnessId === h.id}
-							dropSide={harnessDrag.dropTargetHarnessId === h.id ? harnessDrag.dropSide : null}
-							dragKind="harness"
-							dragId={h.id}
-							dragRoomId={room.id}
-							onPointerDown={(e) => harnessDrag.onPointerDown(e, room.id, h.id)}
-							onPointerMove={harnessDrag.onPointerMove}
-							onPointerUp={harnessDrag.onPointerUp}
-							onPointerCancel={harnessDrag.onPointerCancel}
-							onLostPointerCapture={harnessDrag.onLostPointerCapture}
-							suppressClick={harnessDrag.suppressClick}
-						/>
-					))}
-				</div>
-				<div className="sk-harness-add" onClick={() => onAddHarness(room.id)}>
-					+ harness
-				</div>
-				<div className="sk-harness-meta">
-					<span>{room.branch ? `${room.repo} · ${room.branch}` : (room.cwd ?? "")}</span>
-				</div>
-			</div>
-
-			{/*
-			 * Mount every harness in this room at once; hide the
-			 * inactive ones via display:none so xterm scrollback,
-			 * cursor position, and PTY state survive harness-tab
-			 * switches inside the room.
-			 *
-			 * Issue #25: when the picker is up we *also* hide every
-			 * harness pane rather than unmounting them — unmounting
-			 * fires LiveTerminal's cleanup, which pty_kills the PTY,
-			 * which kills the live Claude conversation we're trying
-			 * to add a sibling to. The picker takes the flex space
-			 * while present; harness panes survive untouched.
-			 */}
-			{showPicker && (
-				<HarnessPicker
-					cwd={room.cwd ?? ""}
-					defaultAgents={defaultAgents}
-					active={roomActive}
-					onPick={onPick}
-					onCancel={onCancelPick}
-				/>
-			)}
-			{room.harnesses.map((h) => {
-				// "Visible" = user can see and interact with this body:
-				// room is active, no picker shadowing it, and this is the
-				// room's active harness. Drives the focus effect in
-				// LiveTerminal (#22).
-				const visible = roomActive && !showPicker && h.id === room.activeHarnessId;
-				return (
-					<div
-						key={h.id}
-						style={{
-							display: visible ? "flex" : "none",
-							flexDirection: "column",
-							flex: 1,
-							minHeight: 0,
-							// Pair with `.sk-harness-col`'s overflow:hidden — stops
-							// xterm's canvas from pushing this wrapper taller when
-							// the terminal font grows (#16).
-							overflow: "hidden",
-						}}
-					>
-						{HARNESS_KINDS[h.kind].capabilities.pty ? (
-							<HarnessBody
-								harness={h}
-								fontSize={fontSize}
-								copyOnSelect={copyOnSelect}
-								defaultShell={defaultShell}
-								visible={visible}
-								onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
-								roomId={room.id}
-								opencodePort={opencodePorts.get(h.id)}
-								onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
-								onSessionFollowed={(sid) => onOpencodeSessionFollowed(h.id, sid)}
-							/>
-						) : (
-							<FilesBody harnessId={h.id} cwd={h.cwd ?? room.cwd ?? ""} visible={visible} />
-						)}
-					</div>
-				);
-			})}
-		</div>
-	);
-};
-
-// xterm font size range. Outside this band the terminal looks either
-// unreadable (sub-12) or comically large (above 18) on a 1320x820 window.
-const FONT_MIN = 12;
-const FONT_MAX = 18;
-const FONT_DEFAULT = 13;
-// #17: chrome font size — scales the UI chrome (tabs, cards, feed,
-// status bar) via the --cfs variable, independent of the terminal font.
-const CHROME_FONT_MIN = 10;
-const CHROME_FONT_MAX = 20;
-const CHROME_FONT_DEFAULT = 12;
-
-// ── New room dialog ────────────────────────────────────────────────
-// The picked folder becomes the room's cwd; every harness in the
-// room spawns into it. "New worktree" mode resolves to a fresh
-// libgit2 worktree path; "Current branch" mode uses the picked path
-// as-is.
-
-interface BranchInfoDto {
-	name: string;
-	isHead: boolean;
-}
-
-// What the dialog hands back. The cwd is already the *real* directory
-// the spawn should land in — for "New worktree" mode the dialog has
-// already called git_add_worktree and resolved the worktree path; for
-// "Current branch" mode it's the picked repo path; for non-git rooms
-// (chapter 6 phase 3) it's the picked folder verbatim, with branch
-// undefined.
-interface CreateRoomArgs {
-	cwd: string;
-	task: string;
-	harness: HarnessKind;
-	/** The agent the starting harness spawns as (#247), or absent for
-	 *  the tool's own default. */
-	agent?: string;
-	branch?: string;
-	/** The resolved repo root (#76's room-group key), when the folder is
-	 *  a git repo — the main checkout even when the picked folder was a
-	 *  worktree. Absent for non-git rooms. */
-	repoRoot?: string;
-}
-
-// What `git_inspect_folder` answers, mirroring `FolderInfoDto` in
-// `app/src-tauri/src/git.rs`.
-interface FolderInfoDto {
-	exists: boolean;
-	isRepo: boolean;
-	root: string;
-	resolvedFromWorktree: boolean;
-	branches: BranchInfoDto[];
-	head: string | null;
-}
-
-// `missing` is not cosmetic (#226): a path that does not exist used to
-// land on `not-a-repo`, which is a *submittable* state ("harnesses run
-// in this folder as-is"). That was harmless while the field started
-// blank; with a remembered folder prefilled, one stale path plus one
-// Enter would create a room whose cwd does not exist.
-type RepoStatus =
-	| { kind: "empty" }
-	| { kind: "checking" }
-	| { kind: "valid"; branches: BranchInfoDto[]; head: string | null }
-	| { kind: "not-a-repo" }
-	| { kind: "missing" };
-
-/** The one line under the Agent field. At most one thing is worth
- *  saying at a time, and the order is the order of consequence:
- *  a name that is gone blocks the create; an agent that cannot see the
- *  review tools silently switches off the #52 loop; a degraded list
- *  means the field is a guess. Nothing to say = no line, because a
- *  permanent note under a field stops being read. */
-const AgentFieldNote = ({
-	agent,
-	listing,
-	missing,
-	kind,
-}: {
-	agent: string | undefined;
-	listing: AgentListing | null;
-	missing: boolean;
-	kind: HarnessKind;
-}) => {
-	const note = (() => {
-		if (missing && agent) {
-			return {
-				cls: "err" as const,
-				text: `${HARNESS_KINDS[kind].name} does not offer "${agent}" any more — pick another.`,
-			};
-		}
-		const picked = agent ? listing?.agents.find((a) => a.name === agent) : undefined;
-		if (picked && !picked.allowsReviewTools) {
-			return { cls: "warn" as const, text: NO_REVIEW_TOOLS_TITLE };
-		}
-		if (listing?.degraded) {
-			return {
-				cls: "warn" as const,
-				text: `This list may be incomplete — ${listing.degraded}`,
-			};
-		}
-		return null;
-	})();
-	if (!note) return null;
-	return (
-		<div
-			style={{
-				fontFamily: "var(--sk-mono)",
-				fontSize: 10.5,
-				marginTop: 4,
-				lineHeight: 1.5,
-				color: note.cls === "err" ? "var(--err)" : "var(--warn)",
-			}}
-		>
-			{note.text}
-		</div>
-	);
-};
-
-const NewRoomDialog = ({
-	defaultCwd,
-	initialCwd,
-	initialDefaults,
-	defaultAgents,
-	memory,
-	appBranchTemplate,
-	recent,
-	onRemember,
-	onCommit,
-	onCancel,
-}: {
-	defaultCwd: string;
-	/** Folder to open with — the active room's, or the last one used (#226). */
-	initialCwd: string;
-	/** Per-folder defaults for `initialCwd`, when we have seen it before. */
-	initialDefaults: FolderDefaults | undefined;
-	/** Settings' per-kind default agents (#248). A folder's own memory
-	 *  still wins — see `startingAgent`. */
-	defaultAgents: DefaultAgents;
-	/** New Room memory (#227): looked up per-folder as `cwd` resolves, so
-	 *  the proposed branch's template can follow the folder rather than
-	 *  only the one it opened on. */
-	memory: NewRoomMemory;
-	/** Settings' app-wide branch template (#227). A folder's own
-	 *  remembered template still wins — see `branchTemplateFor`. */
-	appBranchTemplate: string;
-	/** Known folders, MRU-first, for the Folder dropdown (#233). */
-	recent: RecentFolder[];
-	/** Called with the folder and its defaults after a room is created. */
-	onRemember: (folder: string, defaults: Omit<FolderDefaults, "lastUsed">) => void;
-	onCommit: (args: CreateRoomArgs) => void;
-	onCancel: () => void;
-}) => {
-	useFocusRestore();
-	const [cwd, setCwd] = useState<string>(initialCwd);
-	const [task, setTask] = useState("");
-	const [harness, setHarness] = useState<HarnessKind>(initialDefaults?.harness ?? "claude");
-	// `undefined` = the tool's own default, which is a selectable row in
-	// the field rather than the absence of a selection (#247).
-	const [agent, setAgent] = useState<string | undefined>(() =>
-		startingAgent(initialDefaults, initialDefaults?.harness ?? "claude", defaultAgents),
-	);
-	const [branchMode, setBranchMode] = useState<"worktree" | "current">(
-		initialDefaults?.branchMode ?? "worktree",
-	);
-	const [baseBranch, setBaseBranch] = useState<string>(initialDefaults?.baseBranch ?? "");
-	const [repoStatus, setRepoStatus] = useState<RepoStatus>({ kind: "empty" });
-	// The folder the validation effect last resolved — a repo root or a
-	// plain directory that exists. What #247's agent probe is keyed on;
-	// see `agentListing`.
-	const [settledCwd, setSettledCwd] = useState("");
-	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	// Sticky, and deliberately not part of `repoStatus`: resolving a
-	// worktree rewrites `cwd`, which re-runs the validation effect, and
-	// that second pass sees an ordinary repo. Kept out here the note
-	// survives revalidation instead of flashing once and vanishing.
-	// Cleared whenever the user picks or types a folder themselves.
-	const [resolvedFromWorktree, setResolvedFromWorktree] = useState(false);
-	// Recent-folders dropdown (#233).
-	const [showRecent, setShowRecent] = useState(false);
-	const recentRef = useRef<HTMLDivElement | null>(null);
-
-	// Close the dropdown on any pointer press outside it. Bound on
-	// mousedown rather than click so it closes before the press lands on
-	// whatever is underneath, and only while open so the listener is not
-	// carried by every dialog that never opens it.
-	useEffect(() => {
-		if (!showRecent) return undefined;
-		const onDown = (e: MouseEvent) => {
-			if (!recentRef.current?.contains(e.target as Node)) setShowRecent(false);
-		};
-		document.addEventListener("mousedown", onDown);
-		return () => document.removeEventListener("mousedown", onDown);
-	}, [showRecent]);
-
-	const pickRecent = (r: RecentFolder) => {
-		// Goes through the same state the text field and Browse… write, so
-		// validation, worktree resolution and the `missing` check all run
-		// exactly as they would for a hand-typed path.
-		setResolvedFromWorktree(false);
-		setCwd(r.folder);
-		// Picking from the list is an explicit "take me to that folder", so
-		// its remembered defaults come along — otherwise per-folder memory
-		// would apply on open but not on switch, which is the whole point
-		// of the dropdown. Typing or browsing deliberately does not do
-		// this: silently changing the harness under someone mid-edit is a
-		// surprise, and neither gesture names a folder we already know.
-		setHarness(r.defaults.harness);
-		setAgent(startingAgent(r.defaults, r.defaults.harness, defaultAgents));
-		setBranchMode(r.defaults.branchMode);
-		// The validation effect drops this again if the branch is gone.
-		setBaseBranch(r.defaults.baseBranch);
-		// #227 review: re-attach the branch field so the picked folder's
-		// own remembered template applies, rather than carrying over
-		// whatever the previous folder's field held (typed or proposed).
-		setBranchAttached(true);
-		setShowRecent(false);
-	};
-
-	// Validate the picked folder + load branches. Debounced so typing in
-	// the path field doesn't fire one round-trip per keystroke.
-	//
-	// #181: `cancelled` lives in the effect body, not inside the timeout
-	// callback, so the effect's own cleanup can actually set it. In the
-	// previous shape the cleanup was returned from the timeout callback,
-	// where nothing ever called it — harmless while the field started
-	// blank (the effect never fired on open), but a prefilled field fires
-	// it immediately, so a slow response for the remembered path could
-	// land *after* the user typed a different one and overwrite it.
-	useEffect(() => {
-		setError(null);
-		if (!cwd) {
-			setRepoStatus({ kind: "empty" });
-			setSettledCwd("");
-			return undefined;
-		}
-		setRepoStatus({ kind: "checking" });
-		let cancelled = false;
-		const handle = window.setTimeout(() => {
-			void (async () => {
-				try {
-					const info = await invoke<FolderInfoDto>("git_inspect_folder", { path: cwd });
-					if (cancelled) return;
-					if (!info.exists) {
-						setRepoStatus({ kind: "missing" });
-						// A folder that is not there has no project agents and
-						// cannot be a room. Clearing rather than leaving the last
-						// good one keeps the Agent field from describing a folder
-						// the user has navigated away from.
-						setSettledCwd("");
-						return;
-					}
-					if (!info.isRepo) {
-						setRepoStatus({ kind: "not-a-repo" });
-						setSettledCwd(cwd);
-						return;
-					}
-					// A worktree resolves to the repo it was added from —
-					// otherwise we would stack a worktree on a worktree, which
-					// is one misclick away given the `-wt` sibling dir (#226).
-					if (info.resolvedFromWorktree) {
-						setResolvedFromWorktree(true);
-						setCwd(info.root);
-					}
-					setRepoStatus({ kind: "valid", branches: info.branches, head: info.head });
-					// `info.root`, not `cwd`: a worktree resolves to the repo it
-					// was added from, and the rewrite of `cwd` above lands a
-					// render later.
-					setSettledCwd(info.root);
-					// Default base branch to HEAD on first valid load. A
-					// remembered branch survives only if the repo still has
-					// it — otherwise the <select> would sit on a value with
-					// no matching <option>, render blank, and submit it.
-					setBaseBranch((prev) => {
-						const remembered = info.branches.some((b) => b.name === prev);
-						if (prev && remembered) return prev;
-						return info.head || info.branches[0]?.name || "";
-					});
-				} catch (err: unknown) {
-					if (cancelled) return;
-					const msg = err instanceof Error ? err.message : String(err);
-					setError(`git: ${msg}`);
-					setRepoStatus({ kind: "not-a-repo" });
-				}
-			})();
-		}, 200);
-		return () => {
-			cancelled = true;
-			window.clearTimeout(handle);
-		};
-	}, [cwd]);
-
-	const slug = taskSlug(task);
-	// The resolved folder, once validation has settled — falls back to
-	// the raw `cwd` before the first settle so the template has *some*
-	// folder to key on rather than always reading the app-wide default
-	// on open.
-	const branchTemplateFolder = settledCwd || cwd;
-	const proposedBranch = applyBranchTemplate(
-		branchTemplateFor(memory, branchTemplateFolder, appBranchTemplate),
-		slug,
-	);
-
-	// #227: the branch field follows `proposedBranch` until the user
-	// types in it, then detaches — typing is a deliberate override.
-	// Blurring an empty field re-attaches (`branchFieldAttachedAfterBlur`).
-	const [branch, setBranch] = useState(proposedBranch);
-	const [branchAttached, setBranchAttached] = useState(true);
-	useEffect(() => {
-		if (branchAttached) setBranch(proposedBranch);
-	}, [proposedBranch, branchAttached]);
-
-	// #247: the agents the chosen kind will accept in this folder.
-	//
-	// Keyed on the *settled* folder, not on `cwd`: the probe runs the
-	// harness CLI, and `cwd` changes on every keystroke in the path
-	// field. `settledCwd` only moves once the folder has resolved, which
-	// the git validation below already debounces — so a typed path costs
-	// one probe, not one per character.
-	//
-	// That folder is the picked one, which for a worktree room is the
-	// repo root rather than the worktree that does not exist yet. The
-	// worktree is branched off this repo, so it carries the same
-	// `.claude/agents`; every other source (user dir, plugins) is
-	// cwd-independent anyway.
-	const agentListing = useAgentListing(kindHasAgents(harness) ? harness : null, settledCwd);
-
-	// A remembered agent the CLI no longer offers. Only ever set when
-	// the list is authoritative — a degraded list cannot prove absence,
-	// and saying "not found" on the strength of a CLI that would not run
-	// is how a user ends up retyping a name that was fine.
-	const agentMissing =
-		agent !== undefined &&
-		agentListing !== null &&
-		agentListing.degraded === null &&
-		!agentListing.agents.some((a) => a.name === agent);
-
-	const isRepo = repoStatus.kind === "valid";
-	// `missing` is deliberately excluded: a folder that isn't there is the
-	// one unresolved state that must block submission (#226).
-	const folderResolved = repoStatus.kind === "valid" || repoStatus.kind === "not-a-repo";
-
-	// #227: the worktree folder a submit would create at the current
-	// branch name, and whether one is already sitting there — debounced
-	// and cancelled like the folder-validation effect above (#181: the
-	// cancellation there was dead code until a prefilled field made a
-	// stale response actually reachable; the same shape applies here).
-	const [worktreePath, setWorktreePath] = useState("");
-	const [worktreeFolderExists, setWorktreeFolderExists] = useState(false);
-	// #227 review: `worktreeFolderExists` only reflects the *last landed*
-	// probe, which `canCreate` read synchronously — a branch typed after
-	// the last probe answered could submit before this one comes back.
-	// Tracked separately from `busy`/`repoStatus.kind === "checking"`
-	// because it is its own async gate with its own debounce.
-	const [worktreeCheckPending, setWorktreeCheckPending] = useState(false);
-	useEffect(() => {
-		if (!isRepo || branchMode !== "worktree" || !branch.trim()) {
-			setWorktreePath("");
-			setWorktreeFolderExists(false);
-			setWorktreeCheckPending(false);
-			return undefined;
-		}
-		setWorktreeCheckPending(true);
-		let cancelled = false;
-		const handle = window.setTimeout(() => {
-			void (async () => {
-				try {
-					const path = await invoke<string>("git_propose_worktree_path", {
-						repoPath: cwd,
-						taskSlug: worktreeLeaf(branch),
-					});
-					if (cancelled) return;
-					setWorktreePath(path);
-					const info = await invoke<FolderInfoDto>("git_inspect_folder", { path });
-					if (cancelled) return;
-					setWorktreeFolderExists(info.exists);
-				} catch {
-					if (cancelled) return;
-					setWorktreePath("");
-					setWorktreeFolderExists(false);
-				} finally {
-					if (!cancelled) setWorktreeCheckPending(false);
-				}
-			})();
-		}, 200);
-		return () => {
-			cancelled = true;
-			window.clearTimeout(handle);
-		};
-	}, [isRepo, branchMode, branch, cwd]);
-
-	const branchProblem =
-		isRepo && branchMode === "worktree" && repoStatus.kind === "valid"
-			? branchFieldProblem(
-					branch,
-					repoStatus.branches.map((b) => b.name),
-					worktreeFolderExists,
-				)
-			: null;
-	// The last two path segments, e.g. `skein-wt/fix-x` — the card is too
-	// narrow for the full absolute path, which still shows in the field's
-	// `title` on hover.
-	const worktreeShortPath = worktreePath.split(/[/\\]/).filter(Boolean).slice(-2).join("/");
-
-	// Submit is fine for both git-backed and plain folders. The branch /
-	// worktree picker only gates submission when the folder *is* a repo.
-	const canCreate =
-		task.trim().length > 0 &&
-		!busy &&
-		folderResolved &&
-		// #247: a name the CLI just told us it does not have would spawn
-		// a harness that refuses to start (Claude) or quietly runs as
-		// something else (opencode). Blocking here is cheap — the field
-		// is right there — and it is the only place that choice can be
-		// corrected without creating a room first.
-		!agentMissing &&
-		(!isRepo ||
-			branchMode === "current" ||
-			(baseBranch.length > 0 && branchProblem === null && !worktreeCheckPending));
-
-	const browse = async () => {
-		const start = cwd || defaultCwd;
-		const picked = await openDialog({
-			directory: true,
-			multiple: false,
-			title: "Pick a folder for this room",
-			...(start ? { defaultPath: start } : {}),
-		});
-		if (typeof picked === "string") {
-			setResolvedFromWorktree(false);
-			setCwd(picked);
-			// #227 review: same as `pickRecent` — a folder picked via the OS
-			// dialog is as explicit a folder change as one from the recent
-			// list, so the branch field goes back to following that
-			// folder's own template.
-			setBranchAttached(true);
-		}
-	};
-
-	const submit = async () => {
-		if (!canCreate) return;
-		setBusy(true);
-		setError(null);
-		// Called only on a path that genuinely created the room — a create
-		// that throws must not teach the dialog anything.
-		const remember = (base: string, branchTemplate?: string) =>
-			onRemember(cwd, {
-				baseBranch: base,
-				harness,
-				branchMode,
-				...(agent ? { agent } : {}),
-				...(branchTemplate ? { branchTemplate } : {}),
-			});
-		try {
-			if (!isRepo) {
-				// Non-git folder — no worktree, no branch. cwd is the
-				// picked folder verbatim, and it is remembered like any
-				// other folder (#231), with an empty base branch: there is
-				// no branch to carry forward, but the folder itself and the
-				// starting harness are worth exactly as much here.
-				remember("");
-				onCommit({
-					cwd,
-					task: task.trim(),
-					harness,
-					...(agent ? { agent } : {}),
-				});
-				return;
-			}
-			if (branchMode === "worktree") {
-				const newWorktreePath = await invoke<string>("git_propose_worktree_path", {
-					repoPath: cwd,
-					taskSlug: worktreeLeaf(branch),
-				});
-				const wt = await invoke<{ name: string; path: string }>("git_add_worktree", {
-					repoPath: cwd,
-					branch,
-					baseBranch,
-					worktreePath: newWorktreePath,
-				});
-				// #227: only a successful create teaches the folder its
-				// branch template — a failed one must not poison the next
-				// open with a prefix that never actually landed.
-				remember(baseBranch, templateFromBranch(branch));
-				onCommit({
-					cwd: wt.path,
-					task: task.trim(),
-					harness,
-					...(agent ? { agent } : {}),
-					branch,
-					repoRoot: settledCwd,
-				});
-			} else {
-				remember(baseBranch);
-				onCommit({
-					cwd,
-					task: task.trim(),
-					harness,
-					...(agent ? { agent } : {}),
-					branch: repoStatus.kind === "valid" ? (repoStatus.head ?? "HEAD") : "HEAD",
-					repoRoot: settledCwd,
-				});
-			}
-		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : String(err);
-			setError(msg);
-			setBusy(false);
-		}
-	};
-
-	const statusBlurb = (() => {
-		switch (repoStatus.kind) {
-			case "empty":
-				return null;
-			case "checking":
-				return <span style={{ color: "var(--fg-3)" }}>checking…</span>;
-			case "valid":
-				// The worktree's *name* is deliberately not repeated here: the
-				// blurb slot is ~82 characters wide and a real branch name eats
-				// most of it, and the user just browsed there anyway. The only
-				// thing they need told is that the field moved.
-				return (
-					<span style={{ color: "var(--ok)" }}>
-						✓ git repo{repoStatus.head ? ` (HEAD: ${repoStatus.head})` : ""}
-						{resolvedFromWorktree ? " · resolved from a worktree" : ""}
-					</span>
-				);
-			case "not-a-repo":
-				return (
-					<span style={{ color: "var(--fg-3)" }}>
-						not a git repo — harnesses run in this folder as-is.
-					</span>
-				);
-			case "missing":
-				return <span style={{ color: "var(--err)" }}>folder not found — pick another.</span>;
-		}
-	})();
-
-	return (
-		<div className="sk-modal-bg" onClick={onCancel}>
-			<div className="sk-modal" onClick={(e) => e.stopPropagation()}>
-				<div className="sk-modal-head">
-					<h2>New room</h2>
-					<div className="sub">A room is a folder + task. You can add more harnesses inside.</div>
-				</div>
-				<div className="sk-modal-body">
-					<div className="sk-field">
-						<label htmlFor="sk-task">Task</label>
-						<input
-							// biome-ignore lint/a11y/noAutofocus: modal entrypoint, focus belongs on the task field
-							autoFocus
-							id="sk-task"
-							className="sk-input"
-							placeholder="e.g. Wire up the migration runner"
-							value={task}
-							onChange={(e) => setTask(e.target.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter") void submit();
-								if (e.key === "Escape") onCancel();
-							}}
-						/>
-					</div>
-
-					<div className="sk-field">
-						<label>Folder</label>
-						{/* The row is the menu's positioning context, so the dropdown
-						    spans the whole field rather than hanging off the caret —
-						    a menu only as wide as its trigger squeezed the paths it
-						    exists to show (#233). */}
-						<div
-							className="sk-folder-row"
-							ref={recentRef}
-							onKeyDown={(e) => {
-								// On the row, not the caret: once the menu is open focus
-								// is on one of its rows, and Escape has to close it from
-								// there too.
-								if (e.key === "Escape" && showRecent) {
-									e.stopPropagation();
-									setShowRecent(false);
-								}
-							}}
-						>
-							<input
-								className="sk-input"
-								style={{ flex: 1 }}
-								placeholder="Pick a folder…"
-								value={cwd}
-								// The menu overlays the status blurb, so it gets out of
-								// the way the moment the field is being used directly.
-								onFocus={() => setShowRecent(false)}
-								onChange={(e) => {
-									setResolvedFromWorktree(false);
-									setCwd(e.target.value);
-								}}
-							/>
-							{recent.length > 0 && (
-								<button
-									className="sk-btn"
-									type="button"
-									aria-haspopup="menu"
-									aria-expanded={showRecent}
-									title="Recent folders"
-									onClick={() => setShowRecent((v) => !v)}
-								>
-									▾
-								</button>
-							)}
-							<button className="sk-btn" onClick={browse} type="button">
-								Browse…
-							</button>
-							{showRecent && (
-								<div className="sk-recent-menu" role="menu">
-									{recent.map((r) => (
-										<button
-											key={r.folder}
-											className="sk-recent-row"
-											role="menuitem"
-											type="button"
-											title={r.folder}
-											onClick={() => pickRecent(r)}
-										>
-											<span className="path">{r.folder}</span>
-											{r.defaults.baseBranch && (
-												<span className="branch">{r.defaults.baseBranch}</span>
-											)}
-										</button>
-									))}
-								</div>
-							)}
-						</div>
-						{statusBlurb && (
-							<div style={{ fontFamily: "var(--sk-mono)", fontSize: 10.5, marginTop: 2 }}>
-								{statusBlurb}
-							</div>
-						)}
-					</div>
-
-					{isRepo && (
-						<div className="sk-field">
-							<label>Branch</label>
-							<div className="sk-radio-row">
-								<div
-									className={`sk-radio-card ${branchMode === "worktree" ? "selected" : ""}`}
-									onClick={() => setBranchMode("worktree")}
-								>
-									<div className="top">New worktree</div>
-									<div className="desc">own branch + folder</div>
-								</div>
-								<div
-									className={`sk-radio-card ${branchMode === "current" ? "selected" : ""}`}
-									onClick={() => setBranchMode("current")}
-								>
-									<div className="top">Current branch</div>
-									<div className="desc">{repoStatus.head ?? "HEAD"} · in place</div>
-								</div>
-							</div>
-							{branchMode === "worktree" && (
-								<div className="sk-field" style={{ marginTop: 6 }}>
-									<label htmlFor="sk-worktree-branch">Worktree branch</label>
-									<input
-										id="sk-worktree-branch"
-										className="sk-input"
-										value={branch}
-										title={worktreePath ? `→ ${worktreePath}` : undefined}
-										onChange={(e) => {
-											// Detach unconditionally, including on an edit to
-											// empty — otherwise clear-and-retype would have the
-											// proposal silently reappear before the next
-											// keystroke landed (#227 review).
-											setBranch(e.target.value);
-											setBranchAttached(false);
-										}}
-										onBlur={(e) => {
-											if (branchFieldAttachedAfterBlur(e.target.value)) setBranchAttached(true);
-										}}
-										onKeyDown={(e) => {
-											if (e.key === "Enter") void submit();
-											if (e.key === "Escape") onCancel();
-										}}
-									/>
-									{(branchProblem || worktreeShortPath) && (
-										<div
-											style={{
-												fontFamily: "var(--sk-mono)",
-												fontSize: 10.5,
-												marginTop: 2,
-												color: branchProblem ? "var(--err)" : undefined,
-											}}
-										>
-											{branchProblem ?? `→ ${worktreeShortPath}`}
-										</div>
-									)}
-								</div>
-							)}
-							{branchMode === "worktree" && (
-								<div style={{ marginTop: 6 }}>
-									<label
-										style={{
-											fontFamily: "var(--sk-mono)",
-											fontSize: 10,
-											color: "var(--fg-2)",
-											textTransform: "uppercase",
-											letterSpacing: "0.08em",
-										}}
-									>
-										Based on
-									</label>
-									<select
-										className="sk-select"
-										style={{ marginTop: 4, width: "100%" }}
-										value={baseBranch}
-										onChange={(e) => setBaseBranch(e.target.value)}
-									>
-										{repoStatus.branches.map((b) => (
-											<option key={b.name} value={b.name}>
-												{b.name}
-												{b.isHead ? " (HEAD)" : ""}
-											</option>
-										))}
-									</select>
-								</div>
-							)}
-						</div>
-					)}
-
-					<div className="sk-field">
-						<label>Starting harness</label>
-						<div className="sk-radio-row">
-							{HARNESS_ORDER.map((id) => {
-								const k = HARNESS_KINDS[id];
-								return (
-									<div
-										key={id}
-										className={`sk-radio-card ${harness === id ? "selected" : ""}`}
-										onClick={() => {
-											if (id === harness) return;
-											setHarness(id);
-											// The agent belongs to the kind it was picked for —
-											// leaving it set would hand Claude's `--agent coder`
-											// to opencode. Switching kind takes that kind's
-											// Settings default instead (#248), which is
-											// undefined for a kind with no agents at all.
-											setAgent(defaultAgentFor(defaultAgents, id));
-										}}
-									>
-										<div className="top">
-											<HChip kind={id} /> {k.name}
-										</div>
-										<div className="desc">{k.desc}</div>
-									</div>
-								);
-							})}
-						</div>
-					</div>
-
-					{/* #247: only for kinds that bind `--agent` at launch. The
-					    field is a <select> rather than the picker's row list
-					    because the modal has one column and four fields above
-					    it; the full list with descriptions is what the `+
-					    harness` picker is for. */}
-					{kindHasAgents(harness) && (
-						<div className="sk-field">
-							<label htmlFor="sk-agent">Agent</label>
-							<select
-								id="sk-agent"
-								className="sk-select"
-								value={agent ?? ""}
-								onChange={(e) => setAgent(e.target.value || undefined)}
-							>
-								<option value="">(tool default) — no agent named</option>
-								{/* A remembered name the CLI no longer offers still
-								    renders, so the field shows what it is actually set
-								    to instead of silently sliding to (default). */}
-								{agentMissing && agent !== undefined && (
-									<option value={agent}>{agent} — not found</option>
-								)}
-								{(agentListing?.agents ?? []).map((a) => (
-									<option key={a.name} value={a.name}>
-										{a.name}
-										{a.allowsReviewTools ? "" : "  ⚠ no review tools"}
-									</option>
-								))}
-							</select>
-							<AgentFieldNote
-								agent={agent}
-								listing={agentListing}
-								missing={agentMissing}
-								kind={harness}
-							/>
-						</div>
-					)}
-
-					{error && (
-						<div
-							style={{
-								color: "var(--err)",
-								fontFamily: "var(--sk-mono)",
-								fontSize: 11,
-								padding: "8px 10px",
-								background: "color-mix(in srgb, var(--err) 8%, var(--bg-2))",
-								border: "1px solid color-mix(in srgb, var(--err) 35%, var(--line))",
-								borderRadius: 5,
-							}}
-						>
-							{error}
-						</div>
-					)}
-				</div>
-				<div className="sk-modal-foot">
-					<button className="sk-btn" onClick={onCancel}>
-						Cancel
-					</button>
-					<button
-						className="sk-btn primary"
-						disabled={!canCreate}
-						style={{ opacity: canCreate ? 1 : 0.5, cursor: canCreate ? "pointer" : "not-allowed" }}
-						onClick={() => void submit()}
-					>
-						{busy ? "Creating…" : "Create room"}
-					</button>
-				</div>
-			</div>
-		</div>
-	);
-};
-
-// ── Empty state ────────────────────────────────────────────────────
-
-interface EmptyStateProps {
-	onNew: () => void;
-	archivedCount: number;
-	onReopen: () => void;
-}
-
-const EmptyState = ({ onNew, archivedCount, onReopen }: EmptyStateProps) => (
-	<div className="sk-empty">
-		<div className="glyph">⊜</div>
-		<h1>No rooms yet</h1>
-		<div className="lede">
-			A room pins a folder and a task. Open as many harnesses inside as you want — Claude Code and
-			opencode on the same worktree, two Copilot runs on a fix, whatever shape the work takes.
-		</div>
-		<button className="start-btn" onClick={onNew}>
-			Create your first room
-		</button>
-		{archivedCount > 0 && (
-			<button type="button" className="sk-empty-reopen" onClick={onReopen}>
-				Reopen recent ({archivedCount})…
-			</button>
-		)}
-		<div className="hint-list">
-			<div className="row">
-				<span className="kbd">{hints.newRoom}</span>
-				<span>New room</span>
-			</div>
-			<div className="row">
-				<span className="kbd">{hints.addHarness}</span>
-				<span>Add harness to current room</span>
-			</div>
-			<div className="row">
-				<span className="kbd">{hints.nextRoom}</span>
-				<span>{hints.roomNavDesc}</span>
-			</div>
-			<div className="row">
-				<span className="kbd">{hints.nextHarness}</span>
-				<span>{hints.harnessNavDesc}</span>
-			</div>
-			<div className="row">
-				<span className="kbd">{hints.closeRoom}</span>
-				<span>Close active room</span>
-			</div>
-		</div>
-	</div>
-);
-
-// ── Titlebar ───────────────────────────────────────────────────────
-
-// Tauri-driven minimize / toggle-maximize / close buttons. On macOS
-// we don't render these — tauri.macos.conf.json sets titleBarStyle:
-// "Overlay" and the OS draws real traffic lights at the upper-left.
-// On Windows / Linux `decorations: false` means the OS draws nothing,
-// so these are the only way to close the window from the UI.
-const WindowControls = () => {
-	const win = getCurrentWindow();
-	return (
-		<div className="sk-window-controls" data-tauri-drag-region="false">
-			<button
-				className="sk-wc-btn"
-				onClick={() => void win.minimize()}
-				title="Minimize"
-				type="button"
-			>
-				<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-					<path d="M0 5h10" stroke="currentColor" strokeWidth="1" />
-				</svg>
-			</button>
-			<button
-				className="sk-wc-btn"
-				onClick={() => void win.toggleMaximize()}
-				title="Maximize"
-				type="button"
-			>
-				<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-					<rect
-						x="0.5"
-						y="0.5"
-						width="9"
-						height="9"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="1"
-					/>
-				</svg>
-			</button>
-			<button
-				className="sk-wc-btn sk-wc-close"
-				onClick={() => void win.close()}
-				title="Close"
-				type="button"
-			>
-				<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-					<path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" strokeWidth="1" />
-				</svg>
-			</button>
-		</div>
-	);
-};
-
-interface TitlebarProps {
-	activeRoomLabel: string | null;
-	onOpenSettings: () => void;
-}
-
-const Titlebar = ({ activeRoomLabel, onOpenSettings }: TitlebarProps) => (
-	<div className="sk-titlebar" data-tauri-drag-region>
-		<span className="sk-app-name">
-			<span className="dot">●</span> skein
-		</span>
-		{activeRoomLabel && <span className="sk-titlebar-session">{activeRoomLabel}</span>}
-		<div className="sk-titlebar-actions" data-tauri-drag-region="false">
-			<button
-				type="button"
-				className="sk-cog-btn"
-				onClick={onOpenSettings}
-				title={`Settings (${modLabel}+,)`}
-				aria-label="Settings"
-			>
-				<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-					<path
-						d="M8 5.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zm5.6 2.5l1.4-.9-1.4-2.4-1.6.5a5.5 5.5 0 00-1.5-.9l-.3-1.7h-2.8l-.3 1.7c-.55.22-1.05.52-1.5.9l-1.6-.5-1.4 2.4 1.4.9c-.07.3-.1.6-.1.9s.03.6.1.9l-1.4.9 1.4 2.4 1.6-.5c.45.38.95.68 1.5.9l.3 1.7h2.8l.3-1.7c.55-.22 1.05-.52 1.5-.9l1.6.5 1.4-2.4-1.4-.9c.07-.3.1-.6.1-.9s-.03-.6-.1-.9z"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="1.1"
-						strokeLinejoin="round"
-					/>
-				</svg>
-			</button>
-		</div>
-		{!isMac && <WindowControls />}
-	</div>
-);
 
 // ── App ────────────────────────────────────────────────────────────
 
-const newId = (prefix: string): string => prefix + Math.random().toString(36).slice(2, 7);
-
-// Mapping from harness kind → argv. Each binary must be on PATH for the
-// spawn to succeed; if it isn't, the LiveTerminal renders the error
-// inline and the user can pick another kind. The `byoh` kind is our
-// "Shell" option — it drops into the user's default shell so they can
-// run whatever they want.
-// Phase 2b: opencode has no Claude-style --session-id pre-allocation.
-// Snapshot opencode's existing sessions for this cwd, spawn the
-// harness, then poll the same query looking for an id that wasn't in
-// the snapshot AND isn't already claimed by some other Skein harness.
-// First match wins; that's this harness's session.
-//
-// Why polling at all (not a file/db watcher): the capture window is
-// short relative to a session lifetime, and opencode writes the row
-// once. Watcher's lifetime cost > polling's burst.
-//
-// Why a long timeout (5 minutes): opencode appears to write the
-// session row only on the first user input, not at spawn — so a
-// short window misses it whenever the user takes a beat to start
-// typing. 5 min covers nearly every realistic case; on timeout we
-// quietly leave sessionId undefined and resume falls back to
-// phase-5a's --continue.
-//
-// `claimedIds` returns the set of session ids any *other* harness
-// has already captured. If two opencode harnesses spawn in the same
-// cwd within seconds, the snapshot diff alone can't tell them apart;
-// excluding already-claimed ids breaks the tie deterministically.
-const captureOpencodeSessionId = async (
-	cwd: string,
-	claimedIds: () => Set<string>,
-	onCapture: (sessionId: string) => void,
-): Promise<void> => {
-	let snapshot: string[];
-	try {
-		snapshot = await invoke<string[]>("opencode_list_sessions", { cwd });
-	} catch (err) {
-		console.warn("[skein] opencode capture: snapshot failed", err);
-		return;
-	}
-	const before = new Set(snapshot);
-	const startedAt = Date.now();
-	const deadline = startedAt + 5 * 60 * 1000;
-	console.info(`[skein] opencode capture started for ${cwd} (snapshot ${before.size} sessions)`);
-	while (Date.now() < deadline) {
-		// Backoff: tight (250 ms) for the first 5 s in case opencode
-		// is fast, then 1 s for the next 25 s, then 5 s thereafter.
-		const elapsed = Date.now() - startedAt;
-		const waitMs = elapsed < 5_000 ? 250 : elapsed < 30_000 ? 1_000 : 5_000;
-		await new Promise((resolve) => setTimeout(resolve, waitMs));
-		try {
-			const current = await invoke<string[]>("opencode_list_sessions", { cwd });
-			const taken = claimedIds();
-			const fresh = current.find((id) => !before.has(id) && !taken.has(id));
-			if (fresh) {
-				console.info(`[skein] opencode capture: ${fresh} (${cwd})`);
-				onCapture(fresh);
-				return;
-			}
-		} catch {
-			// Transient — try again on the next tick.
-		}
-	}
-	console.warn(`[skein] opencode capture timed out for ${cwd}`);
-};
-
-/** Wire shape of `db_load_rooms` (#167): the rooms that parsed plus
- *  any rows the backend quarantined instead of failing the load.
- *  `backupRooms` arrives only when the live table was empty but the
- *  skein.db.bak snapshot still holds rooms. */
-interface DbLoadOutcome {
-	rooms: Room[];
-	skipped: { id: string; error: string }[];
-	backupRooms?: number;
-}
-
 export default function App() {
-	const [theme, setTheme] = usePersistedState<Theme>("theme", "dark");
-	const [density, setDensity] = usePersistedState<Density>("density", "regular");
-	const [fontSize, setFontSize] = usePersistedState<number>("fontSize", FONT_DEFAULT);
-	const [chromeFontPt, setChromeFontPt] = usePersistedState<number>(
-		"chromeFontPt",
-		CHROME_FONT_DEFAULT,
-	);
-	// #158: copy a mouse selection to the clipboard the moment it's made
-	// (drag, Shift/Option+drag over an agent's TUI, double/triple-click),
-	// on top of the explicit Ctrl+C/Cmd+C bindings. Default true on every
-	// platform — most terminal apps do this — with a toggle in Settings.
-	// Absent key (every install before this setting shipped) reads as
-	// true via `usePersistedState`'s own initial-value fallback.
-	const [copyOnSelect, setCopyOnSelect] = usePersistedState<boolean>("copyOnSelect", true);
-	// L5e — per-surface notification toggles. Defaults: in-app on,
-	// OS off (less surprising on first run; user opts in to OS
-	// banners when they want them).
-	const [notifyBadge, setNotifyBadge] = usePersistedState<boolean>("notifyBadge", true);
-	const [notifyToast, setNotifyToast] = usePersistedState<boolean>("notifyToast", true);
-	const [notifyUrgent, setNotifyUrgent] = usePersistedState<boolean>("notifyUrgent", true);
-	const [notifyOs, setNotifyOs] = usePersistedState<boolean>("notifyOs", false);
+	// #19: app-wide settings/prefs state, extracted to keep this file's
+	// growth minimal — see useAppSettings.ts.
+	const {
+		theme,
+		setTheme,
+		density,
+		setDensity,
+		fontSize,
+		setFontSize,
+		chromeFontPt,
+		setChromeFontPt,
+		copyOnSelect,
+		setCopyOnSelect,
+		notifyBadge,
+		setNotifyBadge,
+		notifyToast,
+		setNotifyToast,
+		notifyUrgent,
+		setNotifyUrgent,
+		notifyOs,
+		setNotifyOs,
+		showTurnCosts,
+		handleToggleTurnCosts,
+		defaultAgents,
+		setDefaultAgents,
+		branchTemplate,
+		setBranchTemplate,
+		rightPaneTabs,
+		setRightPaneTab,
+		harnessColWidth,
+		setHarnessColWidth,
+		liveBranches,
+		handleBranchChange,
+	} = useAppSettings();
 	// #86: every harness currently blocked on a permission dialog,
 	// across every room — the status-bar urgent slot ranks these above
 	// a plain pending-notifications backlog.
 	const permissionHarnessIds = usePermissionHarnessIds();
-	// Per-turn cost hair-lines in the Activity feed (issue #80 D2d-2).
-	// Off by default; toggled from the Activity card head. App-owned so
-	// every room's mounted LiveContext sees the same value.
-	const [showTurnCosts, setShowTurnCosts] = usePersistedState<boolean>("showTurnCosts", false);
-	// #248: default agent per harness kind, set in Settings. Read by the
-	// `+ harness` picker (preselected) and New room (prefilled).
-	const [defaultAgents, setDefaultAgents] = usePersistedState<DefaultAgents>("defaultAgents", {});
-	// #227: the app-wide worktree branch template, set in Settings. A
-	// folder's own remembered template still wins — see `branchTemplateFor`.
-	const [branchTemplate, setBranchTemplate] = usePersistedState<string>(
-		"branchTemplate",
-		DEFAULT_BRANCH_TEMPLATE,
-	);
-	// Which right-pane tab each room is showing (#212). Per room rather
-	// than global: a room mid-task wants the activity feed and a room
-	// whose agent has just finished wants the review, and that is a
-	// property of the room, not of the user. One map rather than a key
-	// per room so App can flip the active room's tab from Mod+R.
-	const [rightPaneTabs, setRightPaneTabs] = usePersistedState<Record<string, RightPaneTab>>(
-		"rightPaneTabs",
-		{},
-	);
-	// Width of the harness column in px. Right pane absorbs the remainder
-	// via flex:1. Splitter clamps against window size at drag time.
-	const [harnessColWidth, setHarnessColWidth] = usePersistedState<number>("harnessColWidth", 640);
-	const [rooms, setRooms] = useState<Room[]>([]);
-	const [activeRoomId, setActiveRoomId] = useState<string>("");
-	// Epic #50 L2c-2: per-opencode-harness embedded-server port.
-	// Ephemeral — each spawn gets a fresh port via `pick_free_port`,
-	// kept here so LiveTerminal can pass it to attachOpencodeEvents
-	// without re-allocating. Not persisted: a port is meaningless
-	// after the process that bound it dies.
-	const [opencodePorts, setOpencodePorts] = useState<Map<string, number>>(new Map());
-	// L5c — in-app toasts. Ephemeral (no DB mirror) since they
-	// represent "right now, look here" state that doesn't survive
-	// a restart. Capped at TOAST_MAX_VISIBLE so a burst of
-	// transitions doesn't cover the screen.
-	const [toasts, setToasts] = useState<ToastEntry[]>([]);
-	// Live HEAD branch per room, populated by LiveStatus on every watcher
-	// tick. `room.branch` is the *creation* branch (worktree identity);
-	// this is what's actually checked out right now. The status bar reads
-	// from here first so a `git checkout` inside a harness is visible.
-	// Issue #18.
-	const [liveBranches, setLiveBranches] = useState<Record<string, string | null>>({});
-	// Stable callbacks for the per-room LiveContext (memoized below): a
-	// room switch re-renders App, and without stable props React.memo
-	// can't skip the rooms whose `visible` didn't change — every mounted
-	// room would reconcile its whole feed. setShowTurnCosts is stable;
-	// onBranchChange takes the roomId so one callback serves all rooms.
-	const handleToggleTurnCosts = useCallback(() => setShowTurnCosts((v) => !v), [setShowTurnCosts]);
-	const setRightPaneTab = useCallback(
-		(roomId: string, tab: RightPaneTab) => {
-			setRightPaneTabs((prev) => (prev[roomId] === tab ? prev : { ...prev, [roomId]: tab }));
-		},
-		[setRightPaneTabs],
-	);
-	const handleBranchChange = useCallback((roomId: string, branch: string | null) => {
-		setLiveBranches((prev) => (prev[roomId] === branch ? prev : { ...prev, [roomId]: branch }));
-	}, []);
 	const [showPicker, setShowPicker] = useState<string | null>(null);
-	const [showNewRoom, setShowNewRoom] = useState(false);
 	const [showPalette, setShowPalette] = useState(false);
 	const [showSettings, setShowSettings] = useState(false);
 	const [showReopen, setShowReopen] = useState(false);
@@ -1784,40 +96,19 @@ export default function App() {
 	// Display only — commit touches `Room.name` alone, never
 	// branch/cwd/worktree/repoRoot.
 	const [renaming, setRenaming] = useState<RenameTarget | null>(null);
-	const startRenameRoom = useCallback(
-		(roomId: string, host: "group" | "tab" = "tab") => setRenaming({ roomId, host }),
-		[],
-	);
-	const endRenameRoom = useCallback(() => setRenaming(null), []);
-	const commitRenameRoom = useCallback((roomId: string, name: string) => {
-		setRooms((prev) => prev.map((r) => (r.id === roomId ? { ...r, name } : r)));
-	}, []);
-	// #49 phase A: per room, the last PTY harness the user was on
-	// before Mod+E jumped to a Files harness — so Mod+E toggles back
-	// to where they came from, not just "the first terminal".
-	const lastPtyHarnessRef = useRef(new Map<string, string>());
-
-	// Chapter 6 phase 2: split rooms into active (rendered as tabs) and
-	// archived (hidden, listed in the reopen modal). Tab strip, command
-	// palette, the room useMemo below, and Mod+1..9 all key off active.
-	const activeRooms = useMemo(() => rooms.filter((r) => !r.archived), [rooms]);
-	const archivedRooms = useMemo(
-		() =>
-			rooms
-				.filter((r) => r.archived)
-				.slice()
-				.sort((a, b) => (b.archived ?? 0) - (a.archived ?? 0)),
-		[rooms],
-	);
 
 	// Phase 1: pull platform defaults once at boot. New harnesses spawn
 	// into these until Phase 4 wires real worktrees / per-room cwd.
 	const [defaultShell, setDefaultShell] = useState<string[]>([]);
 	const [defaultCwd, setDefaultCwd] = useState<string>("");
-	useEffect(() => {
-		void invoke<string[]>("default_shell").then(setDefaultShell);
-		void invoke<string>("default_cwd").then(setDefaultCwd);
-	}, []);
+	// #19: six standalone window/app-level effects — the boot-time
+	// default-shell/default-cwd probe above, the quit-confirmation
+	// wiring, the Esc-closes-picker listener, the skein://open-settings
+	// listener, the #132 status-popover attach, and the #120 stray-
+	// file-drop swallow — extracted to keep this file's growth minimal;
+	// none of the six interacts with anything else here — see
+	// useAppWindowEffects.ts.
+	useAppWindowEffects(showPicker, setShowPicker, setShowSettings, setDefaultShell, setDefaultCwd);
 
 	// Shell / PATH environment (#72, #3, #1). Owned by Rust — the spawn
 	// path reads it and the shell probe runs during setup(), before this
@@ -1837,735 +128,168 @@ export default function App() {
 		setDefaultShell(await invoke<string[]>("default_shell"));
 	}, []);
 
-	// Phase 3: hydrate rooms from sqlite on boot. Until that round-trips,
-	// `loaded` stays false and the auto-save effect below stays parked —
-	// otherwise the empty initial state would clobber the DB before we read it.
-	const [loaded, setLoaded] = useState(false);
-	// #167: the boot load failed wholesale (sqlite open/read error).
-	// While set, `loaded` stays false so the autosave stays parked —
-	// the empty in-memory state must never overwrite the unread DB —
-	// and the boot shell shows a retry surface instead of a blank pane.
-	const [loadFailed, setLoadFailed] = useState<string | null>(null);
-	// #167: rows the backend quarantined during an otherwise-good load.
-	const [quarantinedCount, setQuarantinedCount] = useState(0);
-	// #167: the live table was empty but skein.db.bak holds N rooms —
-	// a vanished/recreated db must not masquerade as a fresh install.
-	const [backupRoomCount, setBackupRoomCount] = useState<number | null>(null);
-	// #164: room ids whose `cwd` does not currently exist on disk.
-	// Runtime-only — never persisted, never a `Room` field (a folder
-	// coming back doesn't change anything stored about the room) — so a
-	// missing room renders MissingFolderCard instead of HarnessColumn
-	// and nothing spawns into the wrong place. Filled during hydrate
-	// before rooms mount, on unarchive, and whenever a room becomes
-	// active.
-	const [missingFolders, setMissingFolders] = useState<Set<string>>(new Set());
-	// #164: guards `checkRoomFolder` against a stale in-flight result.
-	// It runs both on unarchive and from the active-room effect below
-	// with no ordering guarantee between them, and a slow check can
-	// resolve after a recovery action (recreateMissingWorktree /
-	// pickMissingFolder) already cleared the flag — re-adding the room
-	// to `missingFolders` and unmounting its freshly spawned
-	// LiveTerminals. Every check and every recovery action bumps this
-	// room's token first; a check applies its result only if its token
-	// is still the latest when the await returns.
-	const folderCheckTokenRef = useRef(new Map<string, number>());
-	// #167: once any hydrate has succeeded, a late rejection from a
-	// concurrent sibling call (dev StrictMode double-mount) must not
-	// set loadFailed — that would park the autosave for the whole
-	// session with no visible surface (the retry card only renders
-	// pre-load).
-	const hydratedOnceRef = useRef(false);
-	// #294: mirrors `loaded`, set at the exact same call site — unlike
-	// `hydratedOnceRef` (flipped earlier, before the resume/port-alloc
-	// await chain below), this is only true once `rooms` actually holds
-	// the hydrated set. A live click-listener poke that lands in that
-	// gap must not drain against the still-empty `roomsRef`.
-	const loadedRef = useRef(false);
-	// #164: does `cwd` exist right now? A failed invoke is treated as
-	// "unknown" rather than missing — the check is conservative in the
-	// same direction as the #153 sessionId-existence probes above: a
-	// transient rusqlite/fs hiccup must not park a perfectly good room
-	// behind a false "folder missing" card.
-	const inspectFolderMissing = useCallback(
-		async (cwd: string, roomId: string): Promise<boolean> => {
-			try {
-				const info = await invoke<FolderInfoDto>("git_inspect_folder", { path: cwd });
-				return !info.exists;
-			} catch (err) {
-				console.warn(`[skein] git_inspect_folder folder-check failed for room ${roomId}:`, err);
-				return false;
-			}
-		},
-		[],
+	// #19: room lifecycle + persistence state, extracted to keep this
+	// file's growth minimal — see useRoomsStore.ts.
+	const {
+		setRooms,
+		roomsRef,
+		activeRoomId,
+		setActiveRoomId,
+		activeRoomIdRef,
+		opencodePorts,
+		setOpencodePorts,
+		loaded,
+		loadedRef,
+		loadFailed,
+		setLoadFailed,
+		quarantinedCount,
+		setQuarantinedCount,
+		backupRoomCount,
+		setBackupRoomCount,
+		missingFolders,
+		checkRoomFolder,
+		hydrateRooms,
+		activeRooms,
+		archivedRooms,
+		archivedRoomsRef,
+		room,
+		activeHarness,
+		unarchiveRoom,
+		unarchiveRoomRef,
+		recreateMissingWorktree,
+		pickMissingFolder,
+		deleteRoomForever,
+		restoreRoom,
+		closeRoom,
+		switchRoom,
+	} = useRoomsStore(defaultShell, setRenaming);
+
+	// Keyboard nav (Mod+Tab, Mod+1..9) keys off active rooms only —
+	// archived ones aren't rendered as tabs and shouldn't be reachable
+	// via the cycle / jump shortcuts.
+	const activeRoomsRef = useRef(activeRooms);
+	activeRoomsRef.current = activeRooms;
+
+	// #19: room-strip navigation (drag-reorder, the two-level strip's
+	// segments, group "last used" memory, top-level tab click
+	// resolution) and New Room opening + its persisted per-folder
+	// memory, extracted to keep this file's growth minimal — see
+	// useRoomStripNav.ts. Called here, right after useRoomsStore
+	// (earlier than this code used to sit): `reorderRoom`/
+	// `reorderHarness` feed `useTabDrag` below, and `setShowNewRoom`
+	// feeds `useHarnessCreation` just below.
+	const {
+		reorderRoom,
+		reorderHarness,
+		stripSegments,
+		stripSegmentsRef,
+		activeSegment,
+		lastUsedByGroupRef,
+		onSelectSegment,
+		showNewRoom,
+		setShowNewRoom,
+		newRoomMemory,
+		newRoomSeed,
+		openNewRoom,
+		openNewRoomAt,
+		openGroupPlaceholder,
+		rememberRoomFolder,
+		recentRoomFolders,
+	} = useRoomStripNav(
+		activeRooms,
+		archivedRoomsRef,
+		roomsRef,
+		activeRoomId,
+		activeRoomIdRef,
+		activeRoomsRef,
+		setRooms,
+		switchRoom,
+		unarchiveRoomRef,
 	);
-	// #164: re-check a single room and flip its membership in
-	// `missingFolders` if the answer changed. Used on unarchive and
-	// whenever a room becomes active — hydrate's own initial pass
-	// below fills the whole set at once, before any room mounts.
-	const checkRoomFolder = useCallback(
-		async (room: Room) => {
-			const token = (folderCheckTokenRef.current.get(room.id) ?? 0) + 1;
-			folderCheckTokenRef.current.set(room.id, token);
-			if (!room.cwd) {
-				setMissingFolders((prev) => {
-					if (!prev.has(room.id)) return prev;
-					const next = new Set(prev);
-					next.delete(room.id);
-					return next;
-				});
-				return;
-			}
-			const missing = await inspectFolderMissing(room.cwd, room.id);
-			// A newer check or a recovery action already ran for this room
-			// while this one was in flight — its answer is stale, drop it.
-			if (folderCheckTokenRef.current.get(room.id) !== token) return;
-			setMissingFolders((prev) => {
-				if (prev.has(room.id) === missing) return prev;
-				const next = new Set(prev);
-				if (missing) next.add(room.id);
-				else next.delete(room.id);
-				return next;
-			});
-		},
-		[inspectFolderMissing],
+	// #76: derived from `stripSegments` above — kept here (not in the
+	// hook) since keyboard nav is the only consumer and it already
+	// lives in App.tsx.
+	const visibleOrderRooms = useMemo(() => allRoomOrder(stripSegments), [stripSegments]);
+	const visibleOrderRef = useRef(visibleOrderRooms);
+	visibleOrderRef.current = visibleOrderRooms;
+
+	// #19: harness/room action helpers (rename trio, switchHarnessInRoom,
+	// jumpToHarness, the alerted-room/-harness cyclers, closeHarness,
+	// updateHarnessCmd, addHarness), extracted to keep this file's
+	// growth minimal — see useHarnessActions.ts. Called here, before
+	// useHarnessCreation, which needs `switchHarnessInRoom`; none of the
+	// rest here needs anything useHarnessCreation/useHarnessNotifications
+	// return, so the whole set moved into this one call rather than
+	// splitting across two.
+	const {
+		startRenameRoom,
+		endRenameRoom,
+		commitRenameRoom,
+		switchHarnessInRoom,
+		jumpToHarness,
+		cycleAlertedRoom,
+		cycleAlertedHarness,
+		closeHarness,
+		updateHarnessCmd,
+		addHarness,
+	} = useHarnessActions(
+		setRooms,
+		setActiveRoomId,
+		activeRoomId,
+		activeRooms,
+		setShowPicker,
+		setRenaming,
 	);
-	// #76: rooms persisted before `repoRoot` existed have no group key.
-	// Resolve it in the background, one `git_inspect_folder` per room in
-	// parallel, and patch it in as each settles — never awaited by a
-	// caller, so a slow or failing repo can't delay or break hydrate/
-	// reopen. Never clears an existing `repoRoot`.
-	const backfillRepoRoots = useCallback((targets: Room[]) => {
-		const pending = targets.filter((r) => !r.repoRoot && r.cwd);
-		if (pending.length === 0) return;
-		void Promise.all(
-			pending.map(async (r) => {
-				try {
-					const info = await invoke<FolderInfoDto>("git_inspect_folder", { path: r.cwd });
-					if (!info.exists || !info.isRepo) return;
-					setRooms((prev) =>
-						prev.map((x) => (x.id === r.id && !x.repoRoot ? { ...x, repoRoot: info.root } : x)),
-					);
-				} catch (err) {
-					console.warn(`[skein] git_inspect_folder backfill failed for room ${r.id}:`, err);
-				}
-			}),
-		);
-	}, []);
-	const hydrateRooms = useCallback(() => {
-		// Chapter 5 phase 4: drop any stored sessionId that no longer
-		// exists on disk before resumeCmd uses it. claude --resume <id>
-		// or opencode --session <id> against a deleted conversation
-		// would either error or attach to nothing useful; falling back
-		// to picker / --continue is the safer default.
-		//
-		// Errors from the existence checks are conservative: keep the
-		// id (return true). The follow-up resume might fail noisily,
-		// but at least we don't drop a legitimate id over a transient
-		// rusqlite or fs hiccup.
-		const stillExists = async (h: Harness): Promise<boolean> => {
-			if (!h.sessionId) return true;
-			try {
-				if (h.kind === "claude") {
-					return await invoke<boolean>("claude_session_exists", { id: h.sessionId });
-				}
-				if (h.kind === "opencode") {
-					return await invoke<boolean>("opencode_session_exists", { id: h.sessionId });
-				}
-			} catch (err) {
-				console.warn(`[skein] ${h.kind} session_exists failed for ${h.sessionId}:`, err);
-				return true;
-			}
-			return true;
-		};
-
-		invoke<DbLoadOutcome>("db_load_rooms")
-			.then(async ({ rooms: rows, skipped, backupRooms }) => {
-				hydratedOnceRef.current = true;
-				// Clear any failure from a concurrent sibling call —
-				// success wins, and a stale loadFailed would silently
-				// park the autosave (#167 review).
-				setLoadFailed(null);
-				if (skipped.length > 0) {
-					console.warn(
-						`[skein] ${skipped.length} room row(s) failed to parse and were quarantined:`,
-						skipped,
-					);
-					setQuarantinedCount(skipped.length);
-				}
-				if (rows.length === 0 && backupRooms !== undefined && backupRooms > 0) {
-					console.warn(`[skein] rooms table is empty but skein.db.bak holds ${backupRooms}`);
-					setBackupRoomCount(backupRooms);
-				}
-				if (rows.length > 0) {
-					const verified = await Promise.all(
-						rows.map(async (s) => ({
-							...s,
-							harnesses: await Promise.all(
-								s.harnesses.map(async (h) => {
-									if (await stillExists(h)) return h;
-									console.info(
-										`[skein] dropping stale ${h.kind} sessionId ${h.sessionId} on harness ${h.id}`,
-									);
-									const { sessionId, ...rest } = h;
-									return rest;
-								}),
-							),
-						})),
-					);
-					// Epic #50 L2c-2: pre-allocate fresh embedded-server
-					// ports for every resumed opencode harness. The
-					// previous Skein run released its ports on exit;
-					// resumeCmd needs the new ones to bake into the
-					// argv. Awaiting in parallel keeps boot fast even
-					// with many opencode rooms.
-					const opencodeHarnesses = verified.flatMap((r) =>
-						r.harnesses.filter((h) => h.kind === "opencode" && h.cmd),
-					);
-					const allocations = await Promise.all(
-						opencodeHarnesses.map(async (h) => {
-							try {
-								const port = await invoke<number>("pick_free_port");
-								return [h.id, port] as const;
-							} catch (err) {
-								console.warn(
-									`[skein] pick_free_port failed for ${h.id}; L2c-2 adapter disabled for this harness`,
-									err,
-								);
-								return null;
-							}
-						}),
-					);
-					const portMap = new Map<string, number>(
-						allocations.filter((a): a is readonly [string, number] => a !== null),
-					);
-					setOpencodePorts(portMap);
-					// Rewrite each harness's cmd to its resume form before
-					// mounting, so the PTY spawn re-attaches to the prior
-					// conversation instead of starting fresh.
-					const withResume = verified.map((r) => withResumeCmds(r, portMap));
-					// #164: check every active room's folder in parallel and
-					// have the full missing-set ready BEFORE rooms mount, so
-					// a vanished folder never gets even one spawn attempt.
-					// Archived rooms aren't mounted, so they're not checked
-					// here — unarchive (below) checks on the way back in.
-					const initialMissing = new Set<string>();
-					await Promise.all(
-						withResume.map(async (r) => {
-							if (r.archived || !r.cwd) return;
-							if (await inspectFolderMissing(r.cwd, r.id)) initialMissing.add(r.id);
-						}),
-					);
-					setMissingFolders(initialMissing);
-					setRooms(withResume);
-					backfillRepoRoots(withResume);
-					// Pick the first *active* room; archived ones aren't
-					// supposed to be the boot-time selection.
-					const first = withResume.find((r) => !r.archived);
-					if (first) setActiveRoomId(first.id);
-				}
-				loadedRef.current = true;
-				setLoaded(true);
-			})
-			.catch((err: unknown) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				console.error("[skein] db_load_rooms failed:", msg);
-				if (hydratedOnceRef.current) return;
-				// #167: deliberately NOT setLoaded(true) here. Flipping
-				// `loaded` with the initial [] still in state arms the
-				// autosave, whose next write is DELETE FROM sessions —
-				// the boot-wipe chain this issue exists to break.
-				setLoadFailed(msg);
-			});
-	}, [backfillRepoRoots, inspectFolderMissing]);
-
-	useEffect(() => {
-		hydrateRooms();
-	}, [hydrateRooms]);
-
-	// Phase 3: any time `rooms` changes after the initial load, mirror
-	// the new state to sqlite. Wipe-and-insert is fine at prototype scale.
-	useEffect(() => {
-		if (!loaded || loadFailed !== null) return;
-		void invoke("db_save_rooms", { rooms }).catch((err: unknown) => {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.error("[skein] db_save_rooms failed:", msg);
-		});
-	}, [rooms, loaded, loadFailed]);
-
-	const room = useMemo(() => rooms.find((r) => r.id === activeRoomId), [rooms, activeRoomId]);
-	const activeHarness = room?.harnesses.find((h) => h.id === room.activeHarnessId);
-
-	const switchRoom = (id: string) => {
-		setActiveRoomId(id);
-		// Pending-notification clearing for the now-displayed harness
-		// is handled by a useEffect below — it covers every path
-		// that changes the (active room, active harness) tuple, not
-		// just tab clicks (Mod+1..9, Mod+Tab, palette, initial load).
-	};
-
-	const closeRoom = async (id: string) => {
-		// Confirm before close — rooms can hold a lot of state and the
-		// prototype has no undo (well, now there's the reopen modal —
-		// but the user shouldn't have to discover that). Tauri's
-		// plugin-dialog gives us a native confirm; window.confirm is
-		// silently no-op'd in WebKit without a host-side handler.
-		// #185: name unsaved editor buffers — archived rooms come back,
-		// unsaved buffer text doesn't.
-		const target = roomsRef.current.find((r) => r.id === id);
-		const dirty = filesRegistry.anyDirty(target?.harnesses.map((h) => h.id) ?? []);
-		const msg =
-			dirty.length > 0
-				? `Close this room? Any running harnesses will be killed and ${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${dirty.join(", ")}) discarded.`
-				: "Close this room? Any running harnesses will be killed.";
-		const ok = await confirm(msg, {
-			title: "Skein",
-			kind: "warning",
-		});
-		if (!ok) return;
-		// Chapter 6 phase 2: archive instead of delete. Tab strip filters
-		// archived out; reopen modal lists them.
-		setRooms((prev) => prev.map((r) => (r.id === id ? { ...r, archived: Date.now() } : r)));
-		if (id === activeRoomId) {
-			const nextActive = activeRooms.find((r) => r.id !== id);
-			setActiveRoomId(nextActive ? nextActive.id : "");
-		}
-		// #241: archiving is the only path that can remove a room out from
-		// under an in-progress rename (the tab strip only ever renders
-		// active rooms, and rename is only ever started on one) — clear
-		// explicitly rather than relying on the input's own blur-on-unmount
-		// commit, which would otherwise write the room's name right back
-		// onto an archived room no tab shows any more.
-		setRenaming((cur) => (cur?.roomId === id ? null : cur));
-	};
-
-	// Fresh embedded-server ports for every opencode harness in a room
-	// about to be (re)mounted. The ports from sqlite are dead — the run
-	// that bound them released them on exit — and resumeCmd needs the
-	// new ones to bake into the argv. Allocation failure is survivable:
-	// that harness resumes without --port and its L2c-2 SSE adapter
-	// simply doesn't attach.
-	const allocateOpencodePorts = useCallback(async (room: Room | undefined) => {
-		const portMap = new Map<string, number>();
-		if (!room) return portMap;
-		await Promise.all(
-			room.harnesses
-				.filter((h) => h.kind === "opencode" && h.cmd)
-				.map(async (h) => {
-					try {
-						portMap.set(h.id, await invoke<number>("pick_free_port"));
-					} catch (err) {
-						console.warn(`[skein] pick_free_port failed for ${h.id} on unarchive`, err);
-					}
-				}),
-		);
-		if (portMap.size > 0) {
-			setOpencodePorts((prev) => new Map([...prev, ...portMap]));
-		}
-		return portMap;
-	}, []);
-
-	// #153 / #170: un-archiving a room re-mounts it, which re-spawns
-	// every harness, so their cmds must be in resume form *before* the
-	// state change lands. A harness created this session still carries
-	// its fresh-spawn cmd (`claude --session-id <uuid>`); re-running that
-	// against an existing session makes Claude reject it with "Session ID
-	// is already in use".
-	//
-	// This is the single un-archive path. #153 fixed the reopen modal,
-	// #170 was the OS-notification click doing the same job with the
-	// resume half missing — every future caller gets both halves by
-	// construction.
-	const unarchiveRoom = useCallback(
-		async (id: string) => {
-			const room = roomsRef.current.find((r) => r.id === id);
-			// Already active: it's mounted and running, so rewriting its
-			// cmds would change LiveTerminal's mountKey and kill a live
-			// harness. Just focus it.
-			if (!room?.archived) {
-				setActiveRoomId(id);
-				return;
-			}
-			const portMap = await allocateOpencodePorts(room);
-			const transformed = unarchiveRoomTransform(room, portMap);
-			setRooms((prev) => prev.map((r) => (r.id === id ? transformed : r)));
-			setActiveRoomId(id);
-			// #76: an archived room predating `repoRoot` gets the same
-			// background backfill hydrate does.
-			backfillRepoRoots([room]);
-			// #164: an archived room's folder may have vanished while it
-			// was closed — check on the way back in, same as hydrate does
-			// for rooms that were already active.
-			void checkRoomFolder(transformed);
-		},
-		[allocateOpencodePorts, backfillRepoRoots, checkRoomFolder],
-	);
-	// The OS-notification listener is []-keyed (re-registering it on
-	// every render would leak native listeners), so it reaches the
-	// current unarchiveRoom through a ref rather than closing over it.
-	const unarchiveRoomRef = useRef(unarchiveRoom);
-	unarchiveRoomRef.current = unarchiveRoom;
 
 	const reopenRoom = async (id: string) => {
 		await unarchiveRoom(id);
 		setShowReopen(false);
 	};
 
-	// #164: "Recreate worktree" on a MissingFolderCard. Only ever called
-	// when `recoveryOptions` offered it (room.branch/repoRoot set, cwd a
-	// worktree, branch still in the repo) — `git_restore_worktree`
-	// re-attaches that branch at the room's existing `cwd`, so no argv
-	// or sessionId needs rebuilding: the folder just reappears where
-	// every harness already expects it.
-	const recreateMissingWorktree = useCallback(
-		async (room: Room): Promise<{ ok: true } | { ok: false; error: string }> => {
-			if (!room.repoRoot || !room.branch || !room.cwd) {
-				return { ok: false, error: "This room is missing a branch or repository record." };
-			}
-			try {
-				await invoke("git_restore_worktree", {
-					repoPath: room.repoRoot,
-					branch: room.branch,
-					worktreePath: room.cwd,
-				});
-				// #164: bump before clearing so an older in-flight
-				// checkRoomFolder for this room can't re-add it after.
-				folderCheckTokenRef.current.set(
-					room.id,
-					(folderCheckTokenRef.current.get(room.id) ?? 0) + 1,
-				);
-				setMissingFolders((prev) => {
-					if (!prev.has(room.id)) return prev;
-					const next = new Set(prev);
-					next.delete(room.id);
-					return next;
-				});
-				return { ok: true };
-			} catch (err) {
-				return { ok: false, error: err instanceof Error ? err.message : String(err) };
-			}
-		},
-		[],
+	// #19: harness/room creation, extracted to keep this file's growth
+	// minimal — see useHarnessCreation.ts.
+	const {
+		pickHarness,
+		toggleFilesHarness,
+		createRoom,
+		setHarnessSessionId,
+		replaceHarnessSessionId,
+	} = useHarnessCreation(
+		roomsRef,
+		setRooms,
+		setOpencodePorts,
+		setActiveRoomId,
+		activeRoomIdRef,
+		defaultShell,
+		defaultCwd,
+		showPicker,
+		setShowPicker,
+		setShowNewRoom,
+		switchHarnessInRoom,
 	);
 
-	// #164: "Pick another folder" on a MissingFolderCard. Unlike the
-	// worktree recreate above, the room's `cwd` itself changes, so every
-	// harness that resumed into the old folder needs `repointRoom`'s
-	// full treatment (dropped sessionId, fresh argv) — same port
-	// allocation unarchive already does for opencode harnesses.
-	const pickMissingFolder = useCallback(
-		async (room: Room, newCwd: string) => {
-			const portMap = await allocateOpencodePorts(room);
-			// The picked folder may belong to a different repo (or none at
-			// all) — inspect it before committing the repoint rather than
-			// clearing `repoRoot` and relying on backfill: a repo gets its
-			// own root, a plain folder gets no group, and a failed invoke
-			// keeps the room's old repoRoot rather than losing it.
-			let nextRepoRoot = room.repoRoot;
-			try {
-				const info = await invoke<FolderInfoDto>("git_inspect_folder", { path: newCwd });
-				nextRepoRoot = info.isRepo ? info.root : undefined;
-			} catch (err) {
-				console.warn(`[skein] git_inspect_folder repoint check failed for room ${room.id}:`, err);
-			}
-			const base = repointRoom(room, newCwd, {
-				fallbackShell: defaultShell,
-				opencodePorts: portMap,
-			});
-			// `exactOptionalPropertyTypes` forbids `repoRoot: undefined` —
-			// a plain (non-repo) folder, or one with no known root, must
-			// drop the key entirely rather than set it to undefined.
-			const { repoRoot: _droppedRepoRoot, ...rest } = base;
-			const repointed: Room = nextRepoRoot ? { ...rest, repoRoot: nextRepoRoot } : rest;
-			setRooms((prev) => prev.map((r) => (r.id === room.id ? repointed : r)));
-			// #164: bump before clearing so an older in-flight
-			// checkRoomFolder for this room can't re-add it after.
-			folderCheckTokenRef.current.set(room.id, (folderCheckTokenRef.current.get(room.id) ?? 0) + 1);
-			setMissingFolders((prev) => {
-				if (!prev.has(room.id)) return prev;
-				const next = new Set(prev);
-				next.delete(room.id);
-				return next;
-			});
-		},
-		[allocateOpencodePorts, defaultShell],
+	// #19: the notification engine (badge/toast/OS notifications,
+	// harness-permission + harness-session-start listeners, transition
+	// logging), extracted to keep this file's growth minimal — see
+	// useHarnessNotifications.ts. Called here because it needs
+	// `replaceHarnessSessionId` (useHarnessCreation, just above) and
+	// `jumpToHarness` (useHarnessActions, earlier still);
+	// `displayedHarnessId` is the (active room, active harness) tuple the
+	// clear-pending-on-view effect watches — `room` comes from
+	// useRoomsStore.
+	const displayedHarnessId = room?.activeHarnessId ?? null;
+	const { toasts, dismissToast, jumpToToast } = useHarnessNotifications(
+		roomsRef,
+		activeRoomIdRef,
+		setRooms,
+		activeRoomId,
+		displayedHarnessId,
+		notifyBadge,
+		notifyToast,
+		notifyOs,
+		replaceHarnessSessionId,
+		jumpToHarness,
 	);
-
-	// #89: permanently drop an archived room. `db_save_rooms` is a full
-	// DELETE + re-insert of the current `rooms` array, so removing it
-	// from state *is* the delete — the autosave effect mirrors it out.
-	// (Orphaned `harness_actions`/`harness_events` rows for the room are
-	// harmless activity-log leftovers; a later pass can vacuum them.)
-	const deleteRoomForever = (id: string) => {
-		setRooms((prev) => prev.filter((r) => r.id !== id));
-	};
-
-	// #89: undo a just-deleted room — re-insert it with its `archived`
-	// flag intact, so it returns to the reopen list (not the tab strip).
-	// The archivedRooms memo re-sorts it back into place.
-	const restoreRoom = (room: Room) => {
-		setRooms((prev) => (prev.some((r) => r.id === room.id) ? prev : [...prev, room]));
-	};
-
-	const switchHarnessInRoom = (roomId: string, harnessId: string) => {
-		setRooms((prev) =>
-			prev.map((r) => (r.id === roomId ? { ...r, activeHarnessId: harnessId } : r)),
-		);
-	};
-
-	// Jump to a specific harness: activate its room AND focus it within
-	// that room. Every click-to-jump surface (toast, status-bar urgent
-	// indicator, future inbox) should land on the harness that wanted
-	// attention, not just its room (#65).
-	const jumpToHarness = (roomId: string, harnessId: string) => {
-		setActiveRoomId(roomId);
-		switchHarnessInRoom(roomId, harnessId);
-	};
-
-	// #67: the same "highest-pending harness, ties broken by harness
-	// order" picker the urgent indicator uses (#65).
-	const topPendingHarness = (room: Room) =>
-		[...room.harnesses]
-			.filter((h) => (h.pendingNotifications ?? 0) > 0)
-			.sort((a, b) => (b.pendingNotifications ?? 0) - (a.pendingNotifications ?? 0))[0] ??
-		room.harnesses[0];
-
-	// #67: step to the next/previous room that has any pending
-	// notifications, landing on its most-pending harness. Wraps; no-op if
-	// nothing is pending. If the current room isn't alerted, a forward
-	// step starts at the first alerted room (backward at the last).
-	const cycleAlertedRoom = (delta: number) => {
-		const alerted = activeRooms.filter(
-			(r) => r.harnesses.reduce((a, h) => a + (h.pendingNotifications ?? 0), 0) > 0,
-		);
-		if (alerted.length === 0) return;
-		const idx = alerted.findIndex((r) => r.id === activeRoomId);
-		const nextIdx =
-			idx === -1
-				? delta > 0
-					? 0
-					: alerted.length - 1
-				: (idx + delta + alerted.length) % alerted.length;
-		const next = alerted[nextIdx];
-		if (!next) return;
-		const winner = topPendingHarness(next);
-		if (winner) jumpToHarness(next.id, winner.id);
-		else setActiveRoomId(next.id);
-	};
-
-	// #67: step across every alerted harness (room order × harness order),
-	// visiting each once before wrapping. Lands on the exact harness.
-	const cycleAlertedHarness = (delta: number) => {
-		const tuples: Array<{ roomId: string; harnessId: string }> = [];
-		for (const r of activeRooms) {
-			for (const h of r.harnesses) {
-				if ((h.pendingNotifications ?? 0) > 0) tuples.push({ roomId: r.id, harnessId: h.id });
-			}
-		}
-		if (tuples.length === 0) return;
-		const curRoom = activeRooms.find((r) => r.id === activeRoomId);
-		const idx = tuples.findIndex(
-			(t) => t.roomId === activeRoomId && t.harnessId === curRoom?.activeHarnessId,
-		);
-		const nextIdx =
-			idx === -1
-				? delta > 0
-					? 0
-					: tuples.length - 1
-				: (idx + delta + tuples.length) % tuples.length;
-		const next = tuples[nextIdx];
-		if (next) jumpToHarness(next.roomId, next.harnessId);
-	};
-
-	const dismissToast = (id: string) => {
-		setToasts((prev) => prev.filter((t) => t.id !== id));
-	};
-
-	const jumpToToast = (toast: ToastEntry) => {
-		jumpToHarness(toast.roomId, toast.harnessId);
-		dismissToast(toast.id);
-	};
-
-	const closeHarness = (roomId: string, harnessId: string) => {
-		const proceed = () =>
-			setRooms((prev) =>
-				prev.map((r) => {
-					if (r.id !== roomId) return r;
-					const remaining = r.harnesses.filter((h) => h.id !== harnessId);
-					if (remaining.length === 0) return r;
-					const first = remaining[0];
-					if (!first) return r;
-					return { ...r, harnesses: remaining, activeHarnessId: first.id };
-				}),
-			);
-		// #185: a files harness may hold unsaved buffers (memory-only).
-		const dirty = filesRegistry.dirtyNames(harnessId);
-		if (dirty.length > 0) {
-			void confirm(
-				`${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${dirty.join(", ")}) will be discarded. Close anyway?`,
-				{ title: "Unsaved changes", kind: "warning" },
-			).then((ok) => {
-				if (ok) proceed();
-			});
-			return;
-		}
-		proceed();
-	};
-
-	// When a harness's child exits and the user picks the shell-fallback
-	// path, LiveTerminal calls this so the new cmd persists to the DB
-	// and a Skein restart re-spawns the shell.
-	const updateHarnessCmd = (roomId: string, harnessId: string, cmd: string[]) => {
-		// Every cmd change is a deliberate respawn (Enter-for-shell), so
-		// bump spawnGen too — that's what remounts the terminal when the
-		// new cmd equals the old one (shell→shell, #53).
-		setRooms((prev) =>
-			prev.map((r) =>
-				r.id === roomId
-					? {
-							...r,
-							harnesses: r.harnesses.map((h) =>
-								h.id === harnessId ? { ...h, cmd, spawnGen: (h.spawnGen ?? 0) + 1 } : h,
-							),
-						}
-					: r,
-			),
-		);
-	};
-
-	// #189: clicking + harness again toggles the picker closed.
-	const addHarness = (roomId: string) => setShowPicker((cur) => (cur === roomId ? null : roomId));
-
-	// #185: every quit path runs through this — window close button
-	// (onCloseRequested) and the macOS Cmd+Q menu item, which lib.rs
-	// deliberately routes here as skein://quit-requested because the
-	// predefined quit item would terminate: without any prompt.
-	// destroy() bypasses onCloseRequested, so confirming quits for
-	// real; the ref guard stops stacked prompts when close is clicked
-	// twice.
-	const quitPromptOpenRef = useRef(false);
-	useEffect(() => {
-		const confirmQuit = async (): Promise<boolean> => {
-			const dirty = filesRegistry.anyDirty();
-			if (dirty.length === 0) return true;
-			if (quitPromptOpenRef.current) return false;
-			quitPromptOpenRef.current = true;
-			try {
-				const shown = dirty.slice(0, 5).join(", ") + (dirty.length > 5 ? ", …" : "");
-				return await confirm(
-					`${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${shown}) will be discarded. Quit anyway?`,
-					{ title: "Unsaved changes", kind: "warning" },
-				);
-			} finally {
-				quitPromptOpenRef.current = false;
-			}
-		};
-		const unClose = getCurrentWindow().onCloseRequested(async (event) => {
-			// Fail OPEN: any throw in here must still end in the window
-			// closing — 0.2.6 shipped unclosable when the wrapper's
-			// destroy was capability-denied (#196). Losing unsaved text
-			// beats an app you cannot exit.
-			try {
-				if (filesRegistry.anyDirty().length === 0) return;
-				event.preventDefault();
-				if (await confirmQuit()) void getCurrentWindow().destroy();
-			} catch (err) {
-				console.error("[skein] close-requested handler failed; closing anyway:", err);
-				void getCurrentWindow().destroy();
-			}
-		});
-		const unQuit = listen("skein://quit-requested", () => {
-			void confirmQuit()
-				.then((ok) => {
-					if (ok) void getCurrentWindow().destroy();
-				})
-				.catch((err: unknown) => {
-					console.error("[skein] quit handler failed; closing anyway:", err);
-					void getCurrentWindow().destroy();
-				});
-		});
-		return () => {
-			void unClose.then((f) => f());
-			void unQuit.then((f) => f());
-		};
-	}, []);
-
-	// #189: Esc dismisses the picker. The picker hides every body, so
-	// the (display:none'd) xterm can't swallow the key — a plain window
-	// listener receives it.
-	useEffect(() => {
-		if (!showPicker) return;
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				setShowPicker(null);
-			}
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [showPicker]);
-
-	// Issue #26 / #76: room drag-and-drop reorder, two-level-strip aware.
-	// Decides, fresh against the CURRENT `rooms` (never a stale
-	// drag-time snapshot) via `buildStrip`/`segmentOfRoom`, whether
-	// `fromId` is a non-lead group MEMBER — reorders within its own
-	// group only, via `resolveRowDrop` (the second row) — or a whole
-	// top-level SEGMENT — a plain room or a group, dragged by its own
-	// id or (a group tab has no room behind it) its `segmentId` — which
-	// moves via `resolveTopDrop` (the top row), landing before/after the
-	// target's whole segment even when the drop was actually over one
-	// of that segment's second-row members. An invalid combination (a
-	// member dropped outside its group, a segment dropped "inside" the
-	// very group it's already in) is a no-op: both resolvers hand back
-	// the same array reference, so `prev` passes straight through
-	// unchanged.
-	const reorderRoom = (fromId: string, targetId: string, side: "before" | "after") => {
-		setRooms((prev) => {
-			if (fromId === targetId) return prev;
-			const segments = buildStrip(prev);
-			const dragSeg = segmentOfRoom(segments, fromId);
-			const dragIsMember =
-				dragSeg?.kind === "group" && dragSeg.lead?.id !== fromId
-					? dragSeg.members.some((m) => m.id === fromId)
-					: false;
-			if (dragIsMember) {
-				// `resolveRowDrop` itself refuses a target outside the
-				// drag's own group (or a lead on either end), so there's
-				// nothing more to check here.
-				return resolveRowDrop(prev, fromId, targetId, side);
-			}
-			// fromId is either a plain room, or (RoomStrip mints this as
-			// the drag id for a group tab, which has no single room of
-			// its own) already a segment id.
-			const dragSegId = dragSeg ? segmentId(dragSeg) : fromId;
-			const targetSeg = segmentOfRoom(segments, targetId);
-			const targetSegId = targetSeg ? segmentId(targetSeg) : targetId;
-			return resolveTopDrop(prev, dragSegId, targetSegId, side);
-		});
-	};
-
-	const reorderHarness = (
-		roomId: string,
-		fromId: string,
-		targetId: string,
-		side: "before" | "after",
-	) => {
-		setRooms((prev) =>
-			prev.map((r) => {
-				if (r.id !== roomId) return r;
-				const fromIdx = r.harnesses.findIndex((h) => h.id === fromId);
-				const targetIdx = r.harnesses.findIndex((h) => h.id === targetId);
-				if (fromIdx < 0 || targetIdx < 0 || fromId === targetId) return r;
-				const adjustedTarget = side === "after" ? targetIdx + 1 : targetIdx;
-				const insertIdx = fromIdx < adjustedTarget ? adjustedTarget - 1 : adjustedTarget;
-				if (fromIdx === insertIdx) return r;
-				const harnesses = [...r.harnesses];
-				const [item] = harnesses.splice(fromIdx, 1);
-				if (!item) return r;
-				harnesses.splice(insertIdx, 0, item);
-				return { ...r, harnesses };
-			}),
-		);
-	};
 
 	// Pointer-based drag-to-reorder (#271, replacing the HTML5 DnD this
 	// used before — see tabDrag.ts's header for why). The state machine
@@ -2594,10 +318,11 @@ export default function App() {
 	cycleAlertedRoomRef.current = cycleAlertedRoom;
 	const cycleAlertedHarnessRef = useRef(cycleAlertedHarness);
 	cycleAlertedHarnessRef.current = cycleAlertedHarness;
-	// toggleFilesHarness is defined later (it depends on the harness
-	// creation path); the ref is declared here with the others and
-	// assigned down there.
+	// toggleFilesHarness comes from useHarnessCreation (#19); the ref is
+	// declared here with the others since other call sites read it
+	// through the ref, not the hook's return value directly.
 	const toggleFilesRef = useRef<() => void>(() => {});
+	toggleFilesRef.current = toggleFilesHarness;
 	// Mod+R (#212). Unlike Mod+E this needs nothing created — the review
 	// pane is always mounted — so it is assigned here rather than later.
 	// Reassigned every render so it closes over the current active room.
@@ -2609,1185 +334,57 @@ export default function App() {
 			(rightPaneTabs[activeRoomId] ?? "context") === "review" ? "context" : "review",
 		);
 	};
-	// Rooms with a files-harness creation in flight (Mod+E latch).
-	const creatingFilesRef = useRef(new Set<string>());
-	const roomsRef = useRef(rooms);
-	roomsRef.current = rooms;
 	// #164: re-check the active room's folder every time it becomes
 	// active — covers a folder deleted (or a worktree removed) while
 	// Skein was pointed at a different tab, which no watcher tells us
 	// about. Hydrate and unarchive cover the other two ways a room
 	// starts being rendered.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: roomsRef comes from useRoomsStore (#19) — a ref, stable across renders, but biome can't prove that through a destructured custom-hook return.
 	useEffect(() => {
 		const room = roomsRef.current.find((r) => r.id === activeRoomId);
 		if (room) void checkRoomFolder(room);
 	}, [activeRoomId, checkRoomFolder]);
-	// Keyboard nav (Mod+Tab, Mod+1..9) keys off active rooms only —
-	// archived ones aren't rendered as tabs and shouldn't be reachable
-	// via the cycle / jump shortcuts.
-	const activeRoomsRef = useRef(activeRooms);
-	activeRoomsRef.current = activeRooms;
-	const activeRoomIdRef = useRef(activeRoomId);
-	activeRoomIdRef.current = activeRoomId;
-	// #76: mirrors `unarchiveRoomRef` below — a placeholder-lead click
-	// needs the current archived list without becoming a dep of the
-	// callback that's stashed in a ref itself.
-	const archivedRoomsRef = useRef(archivedRooms);
-	archivedRoomsRef.current = archivedRooms;
 
-	// #76: the strip's top-level segments — plain tabs unchanged,
-	// worktree rooms grouped with their main room under one repository
-	// tab. Keyboard nav (cycleRoom, jumpRoom) and the RoomStrip/GroupRow
-	// render all walk this, not `activeRooms` directly.
-	const stripSegments = useMemo(() => buildStrip(activeRooms), [activeRooms]);
-	const visibleOrderRooms = useMemo(() => allRoomOrder(stripSegments), [stripSegments]);
-	const visibleOrderRef = useRef(visibleOrderRooms);
-	visibleOrderRef.current = visibleOrderRooms;
-	const stripSegmentsRef = useRef(stripSegments);
-	stripSegmentsRef.current = stripSegments;
+	// #19: the notification engine (window-focus/permission refs, the
+	// harness-permission + harness-session-start listeners, the
+	// badge/toast/OS-notification transition subscriber, the api_error
+	// toast effect, the db_record_harness_event log, and clear-pending-
+	// on-view) now lives in useHarnessNotifications — see the hook call
+	// above, right after useHarnessCreation (which it needs for
+	// `replaceHarnessSessionId`; `jumpToHarness` itself now comes from
+	// useHarnessActions, earlier still).
 
-	// #76: which segment the active room is in — a group segment gets
-	// the second row rendered under it; a plain segment (or no match,
-	// e.g. during a brief state transition) gets none.
-	const activeSegment = useMemo(
-		() => segmentOfRoom(stripSegments, activeRoomId),
-		[stripSegments, activeRoomId],
+	// #19: the window-level keyboard shortcut listener (cycleRoom,
+	// cycleHarness, and the Mod+… switch), extracted to keep this
+	// file's growth minimal — see useKeyboardShortcuts.ts. Called here,
+	// after every ref above has its `.current` mirror assigned and
+	// `openNewRoom` is declared.
+	useKeyboardShortcuts(
+		visibleOrderRef,
+		stripSegmentsRef,
+		activeRoomIdRef,
+		activeRoomsRef,
+		switchHarnessInRoomRef,
+		addHarnessRef,
+		closeRoomRef,
+		cycleAlertedRoomRef,
+		cycleAlertedHarnessRef,
+		toggleFilesRef,
+		toggleReviewRef,
+		lastUsedByGroupRef,
+		setActiveRoomId,
+		setShowPalette,
+		setShowSettings,
+		setFontSize,
+		openNewRoom,
 	);
 
-	// #76: the room last used in each group, in memory only (not
-	// persisted — see the design note). Updated whenever the active
-	// room changes to one that's in a group; every existing way of
-	// reaching a room (toasts, the urgent slot, OS notification clicks,
-	// Alt+J/L, the palette, reopen, create) already goes through
-	// `setActiveRoomId`, so this derives for free without touching any
-	// of those call sites.
-	const lastUsedByGroupRef = useRef<Map<string, string>>(new Map());
-	useEffect(() => {
-		if (activeSegment?.kind === "group") {
-			lastUsedByGroupRef.current.set(activeSegment.key, activeRoomId);
-		}
-	}, [activeSegment, activeRoomId]);
-
-	// #76: a click on a top-level tab (plain room or group) — resolved
-	// to the room last used in that group, falling back to the lead or
-	// first member (`topLevelTarget`); a plain tab always resolves to
-	// its own room. Not memoized — `switchRoom` itself isn't, and
-	// nothing downstream needs referential stability.
-	const onSelectSegment = (seg: StripSegment) => {
-		const target = topLevelTarget(seg, lastUsedByGroupRef.current, activeRoomsRef.current);
-		if (target) switchRoom(target.id);
-	};
-
-	// ── New Room memory (#226, #231) ───────────────────────────────
-	//
-	// Opening the dialog is async because the seed has to be resolved
-	// first: the active room's `cwd` may be a *worktree* path, and the
-	// defaults are keyed on the folder it resolves to. Resolving here
-	// rather than inside the dialog means the fields are already right
-	// on the first paint — no blank frame, no jump.
-	const [newRoomMemory, setNewRoomMemory] = usePersistedState<NewRoomMemory>(
-		"newRoomMemory",
-		EMPTY_NEW_ROOM_MEMORY,
-	);
-	const newRoomMemoryRef = useRef(newRoomMemory);
-	newRoomMemoryRef.current = newRoomMemory;
-	const [newRoomSeed, setNewRoomSeed] = useState<{
-		cwd: string;
-		defaults: FolderDefaults | undefined;
-	}>({ cwd: "", defaults: undefined });
-
-	const openNewRoom = useCallback(async () => {
-		const memory = newRoomMemoryRef.current;
-		// The room you are in is the strongest signal of where you mean
-		// to work; the last folder used is the fallback when no room is
-		// open. A git room contributes its repo root — every room in a
-		// repo then shares one entry — and a plain folder contributes
-		// itself (#231): "another room in the folder I am in" is the same
-		// journey either way, and dropping the non-git case made those
-		// rooms prefill nothing, or worse, an unrelated repo.
-		const active = roomsRef.current.find((r) => r.id === activeRoomIdRef.current);
-		let seed = memory.last ?? "";
-		if (active?.cwd) {
-			try {
-				const info = await invoke<FolderInfoDto>("git_inspect_folder", {
-					path: active.cwd,
-				});
-				if (info.exists) seed = info.isRepo ? info.root : active.cwd;
-			} catch {
-				// Resolution is a convenience, never a gate — fall back to
-				// the remembered folder and let the dialog validate it.
-			}
-		}
-		setNewRoomSeed({ cwd: seed, defaults: defaultsFor(memory, seed) });
-		setShowNewRoom(true);
-	}, []);
-
-	// #76: open New Room already prefilled to a known folder, bypassing
-	// `openNewRoom`'s active-room resolution — the caller (a group's
-	// placeholder lead) already knows exactly which repo root it means.
-	const openNewRoomAt = useCallback((folder: string) => {
-		const memory = newRoomMemoryRef.current;
-		setNewRoomSeed({ cwd: folder, defaults: defaultsFor(memory, folder) });
-		setShowNewRoom(true);
-	}, []);
-
-	// #76: a group's placeholder-lead click. An archived room whose own
-	// cwd IS the group's main worktree reopens (the same one-path
-	// unarchive every other reopen surface uses); otherwise there's no
-	// room to reopen at all, so open New Room prefilled to the repo root.
-	const openGroupPlaceholder = useCallback(
-		(key: string, folder: string) => {
-			const archivedMain = archivedRoomsRef.current.find((r) => roomIsGroupMain(r, key));
-			if (archivedMain) {
-				void unarchiveRoomRef.current(archivedMain.id);
-				return;
-			}
-			openNewRoomAt(folder);
-		},
-		[openNewRoomAt],
-	);
-
-	const rememberRoomFolder = useCallback(
-		(folder: string, defaults: Omit<FolderDefaults, "lastUsed">) => {
-			setNewRoomMemory((prev) => rememberFolder(prev, folder, defaults));
-		},
-		[setNewRoomMemory],
-	);
-	const recentRoomFolders = useMemo(() => recentFolders(newRoomMemory), [newRoomMemory]);
-	// L5e — notification toggles read inside the transition listener
-	// (mounted once with empty deps); refs let preference toggles
-	// take effect without re-subscribing.
-	const notifyBadgeRef = useRef(notifyBadge);
-	notifyBadgeRef.current = notifyBadge;
-	const notifyToastRef = useRef(notifyToast);
-	notifyToastRef.current = notifyToast;
-	const notifyOsRef = useRef(notifyOs);
-	notifyOsRef.current = notifyOs;
-	// D2f — last api_error arrival per harness, for coalescing a retry
-	// burst into one badge-worthy incident.
-	const lastApiErrorAtRef = useRef<Map<string, number>>(new Map());
-	// Per-harness time of the last badge bump, for the coalesce window
-	// (#62/#64 — collapse a burst/chatter of transitions into one badge).
-	const lastBadgeAtRef = useRef<Map<string, number>>(new Map());
-
-	// L5b — window-focus state + OS-notification permission. The
-	// notification logic below skips firing an OS banner when Skein
-	// is the focused app, because the user is already looking at
-	// the badge update in real time and an extra OS-level banner is
-	// just noise. Refs (not state) since the transition callback
-	// reads these synchronously and we don't want them to retrigger
-	// the subscription effect on every focus change.
-	const windowFocusedRef = useRef(true);
-	const notificationPermissionRef = useRef<"unknown" | "granted" | "denied">("unknown");
-	useEffect(() => {
-		const win = getCurrentWindow();
-		let unlisten: (() => void) | null = null;
-		// Clear the badge on the currently-displayed harness. Used
-		// both by the (activeRoomId, displayedHarnessId) effect below
-		// AND by the focus listener — coming back to Skein on the
-		// same harness you alt+tabbed away from also counts as
-		// "viewing it now," but that effect doesn't re-fire because
-		// neither tuple value changed. Hook the focus→true edge
-		// instead.
-		const clearDisplayedHarnessPending = () => {
-			const room = roomsRef.current.find((r) => r.id === activeRoomIdRef.current);
-			if (!room) return;
-			const displayedH = room.activeHarnessId;
-			if (!displayedH) return;
-			setRooms((prev) =>
-				prev.map((r) => {
-					if (r.id !== room.id) return r;
-					const target = r.harnesses.find((h) => h.id === displayedH);
-					if (!target || (target.pendingNotifications ?? 0) === 0) return r;
-					return {
-						...r,
-						harnesses: r.harnesses.map((h) =>
-							h.id === displayedH ? { ...h, pendingNotifications: 0 } : h,
-						),
-					};
-				}),
-			);
-		};
-		void win.isFocused().then((f) => {
-			windowFocusedRef.current = f;
-		});
-		void win
-			.onFocusChanged(({ payload }) => {
-				windowFocusedRef.current = payload;
-				if (payload) clearDisplayedHarnessPending();
-			})
-			.then((u) => {
-				unlisten = u;
-			});
-		// Permission flow: prompt once on first run if the user
-		// hasn't decided yet. The OS remembers the choice and
-		// future `isPermissionGranted` calls return granted/denied
-		// without re-prompting.
-		void (async () => {
-			try {
-				const granted = await isPermissionGranted();
-				if (granted) {
-					notificationPermissionRef.current = "granted";
-					return;
-				}
-				const result = await requestPermission();
-				notificationPermissionRef.current = result === "granted" ? "granted" : "denied";
-			} catch (err: unknown) {
-				const msg = err instanceof Error ? err.message : String(err);
-				console.warn("[skein] notification permission flow failed:", msg);
-			}
-		})();
-		return () => {
-			unlisten?.();
-		};
-	}, []);
-
-	// #86: Claude's PermissionRequest hook fires this global event the
-	// moment a permission dialog is on screen — the Rust side owns the
-	// hook wiring, this is just the frontend half of the contract.
-	// Room-agnostic by design: the harness id alone is enough to route
-	// it, and `setPermissionFromAdapter` is already a no-op for an id
-	// Skein doesn't have a record for (a stale event racing a closed
-	// harness).
-	useEffect(() => {
-		const un = listen<{
-			roomId: string;
-			harnessId: string;
-			toolName: string | null;
-			agentType: string | null;
-			agentId: string | null;
-		}>("skein://harness-permission", (event) => {
-			harnessActivity.setPermissionFromAdapter(
-				event.payload.harnessId,
-				TRANSITION_SOURCE.L2c1ClaudePermission,
-				event.payload.toolName,
-				event.payload.agentType,
-				event.payload.agentId,
-			);
-		});
-		return () => {
-			void un.then((f) => f());
-		};
-	}, []);
-
-	// #273: Claude's `SessionStart` command hook fires this global event
-	// the moment its CLI has (re)started — including before any
-	// transcript exists, which is exactly the gap that used to leave a
-	// freshly spawned harness stuck in `spawning` forever. Room-agnostic
-	// like the permission listener above; `noteLaunchSignal` is already
-	// a no-op for an id Skein doesn't have a record for.
-	//
-	// #116: the same hook is the ONLY signal Skein gets that a
-	// mid-session `/clear`, in-tool `/resume` or a fork (`/branch`,
-	// `/fork`, `--fork-session`, desktop rewind) moved a harness onto a
-	// different conversation — Claude's JSONL gives no other sign.
-	// `followedSession` (sessionTracking.ts) filters to `source ===
-	// "clear"`, `"resume"` or `"fork"` reporting a genuinely different
-	// id; when it does, the harness's stored sessionId is overwritten
-	// (`replaceHarnessSessionId`, first-writer-wins would never adopt it)
-	// so a future resume/reopen picks up the new conversation, and
-	// `harnessActivity.sessionSwitched` forgets the old session's
-	// subagents/delegation state. Per-pane re-pointing of the live JSONL
-	// tail itself happens in LiveTerminal, keyed off the `sessionId`
-	// prop — this listener only owns the persisted record. Attribution
-	// for which pane the hook fired in comes from `SKEIN_HARNESS_ID` via
-	// the `X-Skein-Harness` header, not from anything computed here.
-	useEffect(() => {
-		const un = listen<{
-			roomId: string;
-			harnessId: string;
-			sessionId: string | null;
-			source: string | null;
-		}>("skein://harness-session-start", (event) => {
-			harnessActivity.noteLaunchSignal(event.payload.harnessId);
-			const room = roomsRef.current.find((r) => r.id === event.payload.roomId);
-			const h = room?.harnesses.find((x) => x.id === event.payload.harnessId);
-			if (!h || h.kind !== "claude") return;
-			const next = followedSession(h.sessionId, event.payload);
-			if (next !== null) {
-				replaceHarnessSessionId(event.payload.roomId, event.payload.harnessId, next.sessionId);
-				harnessActivity.sessionSwitched(event.payload.harnessId, next.source);
-			}
-		});
-		return () => {
-			void un.then((f) => f());
-		};
-	}, []);
-
-	// L5a — pending-notification accounting. A harness transitioning
-	// from working (spawning|running) to passive (idle|exited), or
-	// into `permission` (#86), bumps its own `pendingNotifications`
-	// counter — unless it's the harness the user is currently viewing
-	// (active room's active harness), in which case we skip because
-	// the user can already see the dot change. Same harness in the
-	// active room but in a non-active harness tab WILL bump — its tab
-	// isn't visible. Room.badge is rendered as the sum across
-	// harnesses by RoomStrip.tsx's LiveRoomTab / GroupTab; we don't write to
-	// it here. Counters persist via the rooms→sqlite mirror so the
-	// badge survives a restart.
-	//
-	// L5b — OS notification. Same predicates as the badge bump
-	// (passive/permission transition + not the viewed harness +
-	// hasUserInput where required), PLUS Skein is not the focused app.
-	// If Skein is focused the badge update is already visible and an
-	// OS banner would just duplicate it. Permission is granted lazily
-	// on first launch.
-	useEffect(() => {
-		const unsub = harnessActivity.subscribeTransitions((harnessId, from, to, source) => {
-			// Three trigger classes:
-			// • `running|idle → waiting` — a harness-native adapter
-			//   (L2c) reported the agent went from doing work to
-			//   awaiting user input. Notify-worthy regardless of
-			//   hasUserInput, since "Claude is now blocked on you"
-			//   is real news even for a freshly-spawned harness
-			//   (e.g. first-launch trust prompts).
-			//   `spawning → waiting` is excluded: that's the
-			//   synthetic initial-state transition the adapter
-			//   emits when probing the JSONL on attach. Pre-existing
-			//   waiting state isn't a notification — it was true
-			//   before Skein started and the blue dot itself
-			//   conveys it. Without this gate every Skein restart
-			//   would badge every Claude room that was sitting at
-			//   a prompt before shutdown.
-			// • `* → permission` (#86) — a harness is now blocked on a
-			//   permission dialog. Notify-worthy unconditionally, same
-			//   as becameWaiting and for the same reason: there's no
-			//   replayed permission on boot (Claude's PermissionRequest
-			//   hook only fires live, mid-session; opencode's pending
-			//   sets start empty on every fresh connect), so there's no
-			//   spawning-exclusion case to guard against here.
-			// • working → passive (running|spawning → idle|exited).
-			//   The pre-L2c surface: agent went quiet. We keep the
-			//   hasUserInput gate so the spawn-banner cycle on
-			//   every Skein restart doesn't light up every room.
-			const becameWaiting = to === "waiting" && (from === "running" || from === "idle");
-			const becamePermission = to === "permission";
-			const wasWorking = from === "running" || from === "spawning";
-			const becamePassive = to === "idle" || to === "exited";
-			if (!becameWaiting && !becamePermission && !(wasWorking && becamePassive)) return;
-			const a = harnessActivity.get(harnessId);
-			if (!a) return;
-			// #277: the end-of-turn notification explains itself when it
-			// was withheld for delegated work — but only when Skein can
-			// still claim the delegation "finished". The `DelegationCeiling`
-			// path flushes because a subagent signal was presumed lost
-			// after 15 min of silence, not because the work actually
-			// completed, so no suffix rides along there; every other route
-			// into `waiting` (including `DelegationSettled`) can say so
-			// honestly.
-			const delegationNote =
-				to === "waiting" && source !== TRANSITION_SOURCE.DelegationCeiling
-					? delegationSummary(a.delegatedCount)
-					: null;
-			// hasUserInput gate applies only to the passive transition.
-			// `→ waiting` and `→ permission` are both unconditional.
-			if (!becameWaiting && !becamePermission && !a.hasUserInput) return;
-			const activeRoom = roomsRef.current.find((r) => r.id === activeRoomIdRef.current);
-			const isViewedHarness = Boolean(activeRoom && activeRoom.activeHarnessId === harnessId);
-			const isWindowFocused = windowFocusedRef.current;
-			const owningRoom = roomsRef.current.find((r) => r.harnesses.some((h) => h.id === harnessId));
-			// #127: shells aren't agents — an idle/exited shell is just a
-			// prompt sitting there (or an `exit` you typed), never
-			// notification-worthy, and L2a idle-timeout / prompt-redraw
-			// chatter made them pop up spuriously. Suppress every surface
-			// (badge / toast / OS) for kinds without the notify capability
-			// (byoh, files); the status dot still reflects running/idle.
-			// Agents (claude/opencode/copilot) notify as before.
-			const kind = owningRoom?.harnesses.find((h) => h.id === harnessId)?.kind;
-			if (kind && !HARNESS_KINDS[kind].capabilities.notify) return;
-			// Badge: skip when the user is staring at this exact
-			// harness — the tab dot color change tells them what
-			// happened. If they alt+tabbed away, though, bump
-			// anyway so they see "something happened while I was
-			// gone" when they come back. Also skip when the badge
-			// surface is disabled in Settings (L5e).
-			//
-			// pendingNotifications is a capped boolean (#159): 0 or 1, so
-			// no transition can push it past 1 (it previously accumulated
-			// unbounded — a room hit 38). The coalesce window (#62/#64)
-			// additionally skips redundant state updates when a burst of
-			// badge-worthy transitions lands within BADGE_COALESCE_MS.
-			// Record the time on every badge-worthy transition (skipped or
-			// not) so continuous sub-window chatter never re-triggers a set.
-			const nowMs = Date.now();
-			const curPending =
-				owningRoom?.harnesses.find((h) => h.id === harnessId)?.pendingNotifications ?? 0;
-			const lastBadgeAt = lastBadgeAtRef.current.get(harnessId) ?? 0;
-			const coalesced = curPending > 0 && nowMs - lastBadgeAt < BADGE_COALESCE_MS;
-			lastBadgeAtRef.current.set(harnessId, nowMs);
-			if (notifyBadgeRef.current && !(isViewedHarness && isWindowFocused) && !coalesced) {
-				setRooms((prev) =>
-					prev.map((r) => {
-						if (!r.harnesses.some((h) => h.id === harnessId)) return r;
-						return {
-							...r,
-							harnesses: r.harnesses.map((h) =>
-								h.id === harnessId ? { ...h, pendingNotifications: 1 } : h,
-							),
-						};
-					}),
-				);
-			}
-			const harness = owningRoom?.harnesses.find((h) => h.id === harnessId);
-			const kindName = harness ? HARNESS_KINDS[harness.kind].name : "harness";
-			// "waiting"/"permission" wording surfaces the L2c case in
-			// toast / OS banner so the user knows the agent wants
-			// something from them — not that it finished. The
-			// ToastEntry's `state` field flows into the existing toast
-			// component, which renders "permission" as "needs
-			// permission" (+ tool) rather than verbatim (#86).
-			const stateLabel: "idle" | "exited" | "waiting" | "permission" =
-				to === "waiting"
-					? "waiting"
-					: to === "permission"
-						? "permission"
-						: to === "idle"
-							? "idle"
-							: "exited";
-			// L5c — in-app toast. Fires when window IS focused but
-			// the user isn't looking at the source harness (they're
-			// in Skein, but in a different room or different tab).
-			// Skipped when window is unfocused (OS notification
-			// handles that case), when viewing the harness (badge
-			// dot + tab color already tell the story), or when
-			// disabled in Settings (L5e).
-			if (notifyToastRef.current && isWindowFocused && !isViewedHarness && owningRoom && harness) {
-				const entry: ToastEntry = {
-					id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-					roomId: owningRoom.id,
-					harnessId,
-					kind: harness.kind,
-					roomName: owningRoom.name,
-					harnessName: harness.name,
-					state: stateLabel,
-					...(stateLabel === "permission"
-						? { tool: a.permissionTool ?? undefined, agentType: a.permissionAgentType ?? undefined }
-						: {}),
-					...(delegationNote ? { delegationNote } : {}),
-				};
-				setToasts((prev) => [...prev, entry].slice(-TOAST_MAX_VISIBLE));
-			}
-			// OS notification — fire whenever the window isn't
-			// focused, regardless of which harness was "viewed"
-			// inside Skein. The user alt+tabbed away; they need
-			// the OS-level signal to know to come back. When
-			// focused, the badge update is already on screen and
-			// an OS banner would just duplicate it. Also gated on
-			// the per-surface Settings toggle (L5e).
-			if (isWindowFocused) return;
-			if (!notifyOsRef.current) return;
-			if (notificationPermissionRef.current !== "granted") return;
-			if (!owningRoom) return;
-			// Serialized through the module-level chain (#84) so concurrent
-			// transitions never call the plugin's `show` at the same time.
-			// The helper also catches plugin-absent rejections (dev builds
-			// skip it — see app/src-tauri/src/lib.rs).
-			const osPermissionParts = [a.permissionAgentType, a.permissionTool].filter(
-				(p): p is string => p !== null,
-			);
-			const osLabel =
-				stateLabel === "permission"
-					? `needs permission${osPermissionParts.length > 0 ? ` (${osPermissionParts.join(" · ")})` : ""}`
-					: stateLabel === "waiting" && delegationNote
-						? `${stateLabel} (${delegationNote})`
-						: stateLabel;
-			enqueueOsNotification("Skein", `${owningRoom.name} · ${kindName}: ${osLabel}`, {
-				roomId: owningRoom.id,
-				harnessId,
-			});
-		});
-		return unsub;
-	}, []);
-
-	// D2f (#80) — graduated error treatment, steps 2+3 (handover §6).
-	// api_error rows don't flow through harnessActivity (they're
-	// harness_actions rows), so this dedicated listener feeds the
-	// existing notification surfaces: an error-variant toast when the
-	// error lands in a room the user isn't looking at, and a
-	// pendingNotifications bump so the tab badge + status-bar urgent
-	// segment persist until the room gets attention (the stream carries
-	// no "resolved" signal — attention is the only clearing semantic).
-	// A retry burst is one incident (real data: 4 rows in 11 s) — the
-	// badge bumps once per window, and the toast updates in place while
-	// it's still showing rather than stacking.
-	useEffect(() => {
-		const unlistenPromise = listen<HarnessAction>(ACTION_EVENT, (event) => {
-			const a = event.payload;
-			if (a.kind !== "api_error") return;
-			// §6: the inline ApiErrorRow covers the active room; the toast
-			// exists for errors the user can't currently see.
-			if (a.roomId === activeRoomIdRef.current) return;
-			const owningRoom = roomsRef.current.find((r) => r.id === a.roomId);
-			const harness = owningRoom?.harnesses.find((h) => h.id === a.harnessId);
-			if (!owningRoom || !harness) return;
-			const now = Date.now();
-			const last = lastApiErrorAtRef.current.get(a.harnessId) ?? 0;
-			const newIncident = now - last > API_ERROR_INCIDENT_MS;
-			lastApiErrorAtRef.current.set(a.harnessId, now);
-			if (notifyBadgeRef.current && newIncident) {
-				setRooms((prev) =>
-					prev.map((r) => {
-						if (!r.harnesses.some((h) => h.id === a.harnessId)) return r;
-						return {
-							...r,
-							harnesses: r.harnesses.map((h) =>
-								h.id === a.harnessId ? { ...h, pendingNotifications: 1 } : h,
-							),
-						};
-					}),
-				);
-			}
-			if (!notifyToastRef.current || !windowFocusedRef.current) return;
-			const detail = apiErrorToastText(parsePayload(a.payload));
-			setToasts((prev) => {
-				const i = prev.findIndex((t) => t.state === "error" && t.harnessId === a.harnessId);
-				const existing = i === -1 ? undefined : prev[i];
-				if (existing) {
-					// Coalesce onto the live toast (same id) with fresh detail,
-					// so a fast burst is one toast, not a stack. Retries that
-					// outpace the 6s dismiss (529 backoff spaces them out:
-					// ~0.5/1/2/4s and growing) let the toast lapse between
-					// rows, so the next retry re-surfaces a fresh one — the
-					// incident keeps re-announcing itself, which is fine; the
-					// badge (one bump per incident) is the persistent signal.
-					const next = [...prev];
-					next[i] = { ...existing, detail };
-					return next;
-				}
-				const entry: ToastEntry = {
-					id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-					roomId: owningRoom.id,
-					harnessId: a.harnessId,
-					kind: harness.kind,
-					roomName: owningRoom.name,
-					harnessName: harness.name,
-					state: "error",
-					detail,
-				};
-				return [...prev, entry].slice(-TOAST_MAX_VISIBLE);
-			});
-		});
-		return () => {
-			void unlistenPromise.then((un) => un());
-		};
-	}, []);
-
-	// L6 — append every real phase transition to the sqlite event
-	// log. Per-transition fire-and-forget; errors warn but don't
-	// surface UX. The log feeds (eventually) the L7 cross-harness
-	// activity feed; in the meantime the data exists for any
-	// "since last visit" surface to build on. Epic #50 L6.
-	useEffect(() => {
-		const unsub = harnessActivity.subscribeTransitions((harnessId, from, to, source) => {
-			const owningRoom = roomsRef.current.find((r) => r.harnesses.some((h) => h.id === harnessId));
-			if (!owningRoom) {
-				// Transition for a harness that's no longer in
-				// state — e.g. exit firing after the room was
-				// archived. Without a roomId we can't usefully log;
-				// skip.
-				return;
-			}
-			const activity = harnessActivity.get(harnessId);
-			void invoke("db_record_harness_event", {
-				harnessId,
-				roomId: owningRoom.id,
-				fromPhase: from,
-				toPhase: to,
-				timestampMs: Date.now(),
-				hasUserInput: activity?.hasUserInput ?? false,
-				// L7a (#73): per-transition attribution.
-				// Identifies which strategy fired it (`l2a-idle`,
-				// `l2b-pattern`, `l2c1-claude-end-turn`, etc.) for
-				// the eventual L7c activity feed.
-				source,
-			}).catch((err: unknown) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				console.warn(`[skein] db_record_harness_event failed for ${harnessId}:`, msg);
-			});
-		});
-		return unsub;
-	}, []);
-
-	// L5a — clear pending on view. Runs every time the (active room,
-	// active harness of active room) tuple changes — covers tab
-	// click, keyboard nav (Mod+1..9, Mod+Tab), command palette,
-	// initial load. Only the harness that's now displayed gets
-	// cleared; other harnesses in the same room keep their pending
-	// counts so a multi-harness room only loses badges as the user
-	// visits each tab.
-	const displayedHarnessId = room?.activeHarnessId ?? null;
-	useEffect(() => {
-		if (!activeRoomId || !displayedHarnessId) return;
-		setRooms((prev) =>
-			prev.map((r) => {
-				if (r.id !== activeRoomId) return r;
-				const target = r.harnesses.find((h) => h.id === displayedHarnessId);
-				if (!target || (target.pendingNotifications ?? 0) === 0) return r;
-				return {
-					...r,
-					harnesses: r.harnesses.map((h) =>
-						h.id === displayedHarnessId ? { ...h, pendingNotifications: 0 } : h,
-					),
-				};
-			}),
-		);
-		// Landing on a harness means you're now looking at it, so drop any
-		// lingering toast for it — regardless of how you got here (Mod+J/L,
-		// palette, tab, Mod+1..9). Clicking a toast already dismisses it via
-		// jumpToToast; this covers every other path. Return the same array
-		// when nothing matches so we don't trigger a needless re-render.
-		setToasts((prev) => {
-			const next = prev.filter(
-				(t) => !(t.roomId === activeRoomId && t.harnessId === displayedHarnessId),
-			);
-			return next.length === prev.length ? prev : next;
-		});
-	}, [activeRoomId, displayedHarnessId]);
-
-	useEffect(() => {
-		const cycleRoom = (delta: number) => {
-			// #76: walk every room in strip order (allRoomOrder), stepping
-			// into and out of groups, not the flat active-room array.
-			const list = visibleOrderRef.current;
-			if (list.length === 0) return;
-			const active = activeRoomIdRef.current;
-			const idx = list.findIndex((r) => r.id === active);
-			if (idx === -1) {
-				const first = list[0];
-				if (first) setActiveRoomId(first.id);
-				return;
-			}
-			const nextIdx = (idx + delta + list.length) % list.length;
-			const next = list[nextIdx];
-			if (next) setActiveRoomId(next.id);
-		};
-
-		const cycleHarness = (delta: number) => {
-			const list = activeRoomsRef.current;
-			const active = activeRoomIdRef.current;
-			const room = list.find((r) => r.id === active);
-			if (!room || room.harnesses.length === 0) return;
-			const idx = room.harnesses.findIndex((h) => h.id === room.activeHarnessId);
-			const baseIdx = idx === -1 ? 0 : idx;
-			const nextIdx = (baseIdx + delta + room.harnesses.length) % room.harnesses.length;
-			const next = room.harnesses[nextIdx];
-			if (next) switchHarnessInRoomRef.current(room.id, next.id);
-		};
-
-		const onKey = (e: KeyboardEvent) => {
-			// #185: the CodeMirror editor claims chords like Mod+Arrow
-			// (line start/end) with preventDefault; a claimed key must
-			// not ALSO drive app navigation. xterm never preventDefaults
-			// app shortcuts (the isAppShortcut gate returns them to us),
-			// so terminal-originated chords still arrive here unclaimed.
-			if (e.defaultPrevented) return;
-			const match = matchShortcut(e);
-			if (!match) return;
-			e.preventDefault();
-
-			const active = activeRoomIdRef.current;
-			switch (match.action) {
-				case "newRoom":
-					void openNewRoom();
-					break;
-				case "closeRoom":
-					if (active) closeRoomRef.current(active);
-					break;
-				case "palette":
-					setShowPalette(true);
-					break;
-				case "files":
-					// #49 phase A: jump to (or create) the room's Files
-					// harness, or bounce back to the last terminal.
-					toggleFilesRef.current();
-					break;
-				case "review":
-					// #212: flip the active room's right pane to Review, and
-					// back again — the same there-and-back shape as Mod+E,
-					// so the chord is a toggle rather than a one-way door.
-					toggleReviewRef.current();
-					break;
-				case "settings":
-					setShowSettings(true);
-					break;
-				case "addHarness":
-					if (active) addHarnessRef.current(active);
-					break;
-				case "reloadWindow":
-					// #121: recover from a wedged webview (and the #120 black
-					// screen on older builds). Rust-side PTYs survive the
-					// reload; boot re-hydrates and resumes.
-					window.location.reload();
-					break;
-				case "nextRoom":
-					cycleRoom(1);
-					break;
-				case "prevRoom":
-					cycleRoom(-1);
-					break;
-				case "nextHarness":
-					cycleHarness(1);
-					break;
-				case "prevHarness":
-					cycleHarness(-1);
-					break;
-				case "nextAlertedRoom":
-					cycleAlertedRoomRef.current(1); // #67
-					break;
-				case "prevAlertedRoom":
-					cycleAlertedRoomRef.current(-1); // #67
-					break;
-				case "nextAlertedHarness":
-					cycleAlertedHarnessRef.current(1); // #67
-					break;
-				case "prevAlertedHarness":
-					cycleAlertedHarnessRef.current(-1); // #67
-					break;
-				case "fontInc":
-					setFontSize((s) => Math.min(FONT_MAX, s + 1));
-					break;
-				case "fontDec":
-					setFontSize((s) => Math.max(FONT_MIN, s - 1));
-					break;
-				case "jumpRoom": {
-					// #76: Alt+1..9 indexes the strip's TOP-LEVEL segments — one
-					// slot per repository, not per room — landing on the same
-					// room a click on that tab would (`topLevelTarget`).
-					const seg = stripSegmentsRef.current[match.roomIndex ?? 0];
-					if (seg) {
-						const target = topLevelTarget(seg, lastUsedByGroupRef.current, activeRoomsRef.current);
-						if (target) setActiveRoomId(target.id);
-					}
-					break;
-				}
-			}
-		};
-
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-		// `openNewRoom` is a stable useCallback([]) — listed to satisfy
-		// exhaustive-deps, and it never causes a re-subscribe.
-	}, [setFontSize, openNewRoom]);
-
-	// Phase 4: listen for the macOS app menu's Preferences… item.
-	// lib.rs's on_menu_event emits skein://open-settings when the user
-	// picks Skein → Preferences… from the menu bar; we open the same
-	// modal as the cog icon and Mod+,.
-	useEffect(() => {
-		const promise = listen("skein://open-settings", () => setShowSettings(true));
-		return () => {
-			void promise.then((un) => un());
-		};
-	}, []);
-
-	// #132: shared hover popover for status dots / harness chips (replaces
-	// the native title=). One delegated listener for the whole app.
-	useEffect(() => attachStatusPopover(), []);
-
-	// #120: this window-level swallow predates #271. Back when
-	// `dragDropEnabled` was `false` (kept off so the in-webview
-	// harness-reorder DnD of #26 would work), a stray OS file drop hit
-	// the webview's default handler and navigated to the `file://` URL —
-	// a black screen with no way back. #271 rebuilt tab reorder on
-	// pointer events precisely so `dragDropEnabled: true` could go on —
-	// Tauri's native handler now owns OS file drops before the webview
-	// ever sees them, which should make this redundant. It stays as
-	// belt-and-braces until that's verified on both macOS and Windows
-	// (can't be done from here); #41 will consume real file drops via
-	// `getCurrentWebview().onDragDropEvent` rather than this listener.
-	// Gated to actual file drags (`dataTransfer` carries "Files") so it
-	// doesn't interfere with anything else.
-	useEffect(() => {
-		const swallow = (e: WindowEventMap["drop"]) => {
-			if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
-		};
-		window.addEventListener("dragover", swallow);
-		window.addEventListener("drop", swallow);
-		return () => {
-			window.removeEventListener("dragover", swallow);
-			window.removeEventListener("drop", swallow);
-		};
-	}, []);
-
-	// #294: the decision + side-effect shared by every OS-notification
-	// click path (macOS's id-keyed map lookup below, Windows's live
-	// event, and Windows's post-hydrate pending-click drain further
-	// down) — un-archive the room if needed and switch to the harness
-	// that fired the toast. Stable identity ([] deps): only reads refs
-	// and calls stable setState setters, so sharing it across effects
-	// never forces a re-registration.
-	const jumpToTarget = useCallback((target: ClickTarget) => {
-		const decision = resolveClickTarget(roomsRef.current, target);
-		if (!decision.found) return; // closed-and-deleted since the banner fired
-		const { roomId, harnessId } = target;
-		// #170: un-archive it if it was archived in the meantime, so
-		// it's reachable. This used to strip `archived` inline and stop
-		// there — no resume rewrite, no fresh opencode port — so the
-		// remount respawned the stored fresh-form cmd and Claude died
-		// with "Session ID is already in use". unarchiveRoom does both
-		// halves (and focuses the room, archived or not).
-		void unarchiveRoomRef.current(roomId);
-		if (decision.hasHarness) {
-			setRooms((prev) =>
-				prev.map((r) => (r.id === roomId ? { ...r, activeHarnessId: harnessId } : r)),
-			);
-		}
-	}, []);
-
-	// #294: Windows only — the click target for a toast clicked while
-	// Skein was closed lives Rust-side (crates/skein-winnotify) rather
-	// than riding an event, so both the live listener below and the
-	// post-hydrate effect further down read it through this one call.
-	// Idempotent: once one caller has drained it, a second call just
-	// gets `null` back.
-	const drainPendingClick = useCallback(() => {
-		invoke<ClickTarget | null>("os_notify_take_pending")
-			.then((target) => {
-				if (target) jumpToTarget(target);
-			})
-			.catch((err: unknown) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				console.warn("[skein] os_notify_take_pending failed:", msg);
-			});
-	}, [jumpToTarget]);
-
-	// #118: clicking the OS notification brings Skein to the front and
-	// jumps to the harness that fired it. macOS's native plugin delivers
-	// the click as `{ id }` and drops the `extra` payload, so we resolve
-	// the jump target from the id-keyed `osNotifyTargets` map populated at
-	// send time. #155/#294: Windows delivers clicks too, through Skein's
-	// own `os_notify.rs` path — both while the toast banner is still on
-	// screen AND later from Action Center (or a cold `-Embedding` launch
-	// with Skein closed), via a registered unpackaged-app AUMID + COM
-	// `CustomActivator` (`crates/skein-winnotify`). The Windows event now
-	// carries no payload — it's just a poke — because a cold launch has
-	// nowhere to have stashed one client-side; the real target comes from
-	// `os_notify_take_pending` (`drainPendingClick` above). Rust itself
-	// brings the window to the foreground on that path
-	// (`skein_winnotify::bring_to_front`, the `AttachThreadInput` trick —
-	// plain `SetForegroundWindow` loses to the foreground lock for a
-	// click that didn't originate in this process); the calls below are
-	// harmless belt-and-braces once that's already happened. Linux still
-	// has no click path at all (notify-rust, #108). Wrapped so a
-	// missing-permission rejection doesn't surface as an unhandled error.
-	useEffect(() => {
-		const focusWindow = () => {
-			// Always surface the window — the user clicked a Skein banner.
-			const win = getCurrentWindow();
-			void win.show();
-			void win.unminimize();
-			void win.setFocus();
-		};
-
-		const focusAndJump = (id: number) => {
-			focusWindow();
-			const target = osNotifyTargets.get(id);
-			osNotifyTargets.delete(id);
-			if (!target) return;
-			jumpToTarget(target);
-		};
-
-		const pluginPromise = onNotificationClicked((clicked) => focusAndJump(clicked.id)).catch(
-			(err: unknown) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				console.warn("[skein] onNotificationClicked unavailable:", msg);
-				return null;
-			},
-		);
-		// #294: before hydrate, ignore the poke — draining now would jump
-		// into the still-empty boot-time rooms list; the post-hydrate
-		// effect below drains once real rooms exist instead.
-		const winPromise = isWindows
-			? listen("skein://os-notification-clicked", () => {
-					focusWindow();
-					if (shouldDrainOnClickEvent(loadedRef.current)) drainPendingClick();
-				}).catch((err: unknown) => {
-					const msg = err instanceof Error ? err.message : String(err);
-					console.warn("[skein] os-notification-clicked listener unavailable:", msg);
-					return null;
-				})
-			: null;
-
-		return () => {
-			void pluginPromise.then((listener) => listener?.unregister());
-			void winPromise?.then((unlisten) => unlisten?.());
-		};
-	}, [jumpToTarget, drainPendingClick]);
-
-	// #294: the click arrived before Skein finished booting — Rust
-	// queued it instead of firing a live event, so pick it up once
-	// hydrate has produced a real rooms list to jump into. `loaded`
-	// flips false→true at most once per boot and only on a *successful*
-	// load (#167 — a failed load must not consume the click), so this
-	// fires exactly once, right after that first success.
-	useEffect(() => {
-		if (!isWindows || !loaded) return;
-		drainPendingClick();
-	}, [loaded, drainPendingClick]);
-
-	// All session ids any harness has already captured. captureOpencode
-	// excludes these so a fresh capture can't claim someone else's id
-	// when two opencode harnesses race in the same cwd.
-	const claimedSessionIds = (): Set<string> =>
-		new Set(
-			roomsRef.current
-				.flatMap((s) => s.harnesses.map((h) => h.sessionId))
-				.filter((id): id is string => typeof id === "string"),
-		);
-
-	// Update one harness's sessionId after phase 2b's async capture
-	// finds the new opencode row. Wrapped here so both creation paths
-	// (pickHarness, createRoom) share the same setRooms shape.
-	const setHarnessSessionId = (targetRoomId: string, harnessId: string, captured: string) => {
-		setRooms((prev) =>
-			prev.map((r) => {
-				if (r.id !== targetRoomId) return r;
-				return {
-					...r,
-					harnesses: r.harnesses.map((h) => {
-						if (h.id !== harnessId) return h;
-						// Idempotent: first-writer wins. Epic #50 L2c-2
-						// races the SSE adapter's `session.created`
-						// against the chapter-5 sqlite poll; whichever
-						// fires first sets sessionId, the other becomes
-						// a no-op. Without this guard, the sqlite poll
-						// could find a *different* session (e.g. user
-						// ran opencode in the same cwd from a shell
-						// alongside) and overwrite the right id.
-						if (h.sessionId) return h;
-						return { ...h, sessionId: captured };
-					}),
-				};
-			}),
-		);
-	};
-
-	// #116 step two: overwrite a harness's sessionId after Claude's own
-	// `/clear`/`/resume`/fork hook reports the conversation moved onto a
-	// new id — and (step four) after opencode's own adapter decides the
-	// harness followed its TUI onto a different root session (`/new` or
-	// a `/sessions` pick). This is deliberately NOT `setHarnessSessionId`
-	// above — that one is first-writer-wins to survive opencode's
-	// create-vs-poll capture race, but both these reports are
-	// authoritative: the old id is definitely gone (Claude) or definitely
-	// superseded (opencode), so the new one must win even though
-	// `sessionId` is already set. `cmd` is untouched here — it's part of
-	// LiveTerminal's mountKey, so changing it would respawn the PTY;
-	// `resumeCmd` (harnessCmd.ts) rebuilds the argv from `sessionId` on
-	// the next boot/reopen, which is what makes the new conversation the
-	// one resumed.
-	const replaceHarnessSessionId = (targetRoomId: string, harnessId: string, sessionId: string) => {
-		setRooms((prev) =>
-			prev.map((r) => {
-				if (r.id !== targetRoomId) return r;
-				return {
-					...r,
-					harnesses: r.harnesses.map((h) => (h.id === harnessId ? { ...h, sessionId } : h)),
-				};
-			}),
-		);
-	};
-
-	// #49 phase A: harness creation, callable from both the + harness
-	// menu (pickHarness) and the Mod+E files jump. Kind-specific setup
-	// branches on capabilities — `files` is a surface, not a process:
-	// no session id, no port, no cmd, and it starts (and stays) idle.
-	const createHarnessInRoom = async (targetRoomId: string, kind: HarnessKind, agent?: string) => {
-		const targetRoom = roomsRef.current.find((r) => r.id === targetRoomId);
-		if (!targetRoom) return;
-		const caps = HARNESS_KINDS[kind].capabilities;
-		// The agent only survives onto the record for kinds that take it.
-		// Every other path reads it back from there, so a name that got
-		// this far on a shell harness would ride into the argv.
-		const agentName = caps.agents && agent?.trim() ? agent : undefined;
-		const id = newId("h");
-		const cwd = targetRoom.cwd ?? defaultCwd;
-		// Phase 2a: pre-allocate Claude's conversation id so the harness
-		// resumes to *this* conversation on Skein restart — no picker.
-		const sessionId = kind === "claude" ? crypto.randomUUID() : undefined;
-		// Epic #50 L2c-2: allocate the opencode embedded-server port
-		// *before* we set the cmd into state — LiveTerminal mounts the
-		// PTY synchronously off the new harness record, so the port has
-		// to be baked into the argv at that moment.
-		let opencodePort: number | undefined;
-		if (kind === "opencode") {
-			try {
-				opencodePort = await invoke<number>("pick_free_port");
-				setOpencodePorts((prev) => {
-					const m = new Map(prev);
-					m.set(id, opencodePort as number);
-					return m;
-				});
-			} catch (err) {
-				console.warn("[skein] pick_free_port failed; falling back to L2a:", err);
-			}
-		}
-		const cmd = caps.pty
-			? cmdForKind(kind, defaultShell, sessionId, opencodePort, agentName)
-			: undefined;
-		setRooms((prev) =>
-			prev.map((r) => {
-				if (r.id !== targetRoomId) return r;
-				const newH: Harness = {
-					id,
-					kind,
-					// The ◇ label makes a poor name stem — files harnesses
-					// read better as "files-2" than "◇-2".
-					name: `${kind === "files" ? "files" : HARNESS_KINDS[kind].label}-${r.harnesses.length + 1}`,
-					status: caps.pty ? "running" : "idle",
-					model: caps.pty ? (kind === "copilot" ? "gpt-5" : "sonnet-4.5") : "",
-					tokens: "0",
-					...(caps.pty ? { live: true } : {}),
-					...(cmd ? { cmd } : {}),
-					cwd,
-					...(sessionId ? { sessionId } : {}),
-					...(agentName ? { agent: agentName } : {}),
-				};
-				return { ...r, harnesses: [...r.harnesses, newH], activeHarnessId: id };
-			}),
-		);
-		// Phase 2b: kick off async capture for opencode harnesses. The
-		// snapshot has to happen *before* opencode writes its session
-		// row, which it doesn't do until LiveTerminal mounts and spawns
-		// the binary — fine to fire-and-forget here, the React render
-		// cycle keeps us ahead of the spawn.
-		//
-		// Epic #50 L2c-2: this is the sqlite-poll *fallback*. The
-		// primary path is the SSE adapter capturing `session.created`
-		// (wired in LiveTerminal). If the adapter beats this poll,
-		// `setHarnessSessionId` is idempotent — the second write sees
-		// `sessionId` already populated and the diff lookup in
-		// `captureOpencodeSessionId` excludes it via `claimedSessionIds`.
-		if (kind === "opencode") {
-			void captureOpencodeSessionId(cwd, claimedSessionIds, (captured) => {
-				setHarnessSessionId(targetRoomId, id, captured);
-			});
-		}
-	};
-
-	const pickHarness = (kind: HarnessKind, agent?: string) => {
-		const targetRoomId = showPicker;
-		setShowPicker(null);
-		if (!targetRoomId) return;
-		void createHarnessInRoom(targetRoomId, kind, agent);
-	};
-
-	// #49 phase A: Mod+E = jump to the room's Files harness (creating
-	// one if none exists — decided on the epic) ⇄ back to the PTY
-	// harness the user came from. Reads through refs so the []-dep'd
-	// keydown dispatcher can call it.
-	const toggleFilesHarness = () => {
-		const rid = activeRoomIdRef.current;
-		if (!rid) return;
-		const r = roomsRef.current.find((x) => x.id === rid);
-		if (!r) return;
-		// The picker pane hides every body — a jump would succeed
-		// invisibly behind it. Dismiss it so the result is seen.
-		setShowPicker(null);
-		const activeH = r.harnesses.find((h) => h.id === r.activeHarnessId);
-		if (activeH && !HARNESS_KINDS[activeH.kind].capabilities.pty) {
-			// On a Files harness: bounce back to where the user came
-			// from (falls back to the room's first PTY harness when the
-			// remembered one is gone or the jump was never recorded).
-			// Deliberately not gated on cwd — bouncing out never needs one.
-			const backId = lastPtyHarnessRef.current.get(rid);
-			const back =
-				(backId ? r.harnesses.find((h) => h.id === backId) : undefined) ??
-				r.harnesses.find((h) => HARNESS_KINDS[h.kind].capabilities.pty);
-			if (back) switchHarnessInRoom(rid, back.id);
-			return;
-		}
-		if (!r.cwd) return; // creating/jumping to Files needs a folder
-		if (activeH) lastPtyHarnessRef.current.set(rid, activeH.id);
-		const files = r.harnesses.find((h) => !HARNESS_KINDS[h.kind].capabilities.pty);
-		if (files) {
-			switchHarnessInRoom(rid, files.id);
-			return;
-		}
-		// Synchronous latch: Mod+E key-repeats faster than a React
-		// commit under load — without it a held key creates duplicates.
-		if (creatingFilesRef.current.has(rid)) return;
-		creatingFilesRef.current.add(rid);
-		void createHarnessInRoom(rid, "files").finally(() => {
-			creatingFilesRef.current.delete(rid);
-		});
-	};
-	toggleFilesRef.current = toggleFilesHarness;
-
-	const createRoom = async ({ cwd, task, harness, agent, branch, repoRoot }: CreateRoomArgs) => {
-		const sid = newId("s");
-		const hid = newId("h");
-		// Phase 2a: pre-allocate Claude's conversation id (see pickHarness).
-		const sessionId = harness === "claude" ? crypto.randomUUID() : undefined;
-		// Epic #50 L2c-2: pre-allocate opencode's embedded-server port
-		// before we bake the cmd into the harness record.
-		let opencodePort: number | undefined;
-		if (harness === "opencode") {
-			try {
-				opencodePort = await invoke<number>("pick_free_port");
-				setOpencodePorts((prev) => {
-					const m = new Map(prev);
-					m.set(hid, opencodePort as number);
-					return m;
-				});
-			} catch (err) {
-				console.warn("[skein] pick_free_port failed; falling back to L2a:", err);
-			}
-		}
-		// Display name from the trailing path component — `D:\code\skein`
-		// → `skein`. Cosmetic; the actual cwd is what spawns use. #241:
-		// also the room's initial `name` (no "local · " prefix) — the user
-		// can rename it afterwards; this only sets the default.
-		const folderName = defaultRoomName(cwd);
-		// Repo / branch are only set for git-backed rooms (chapter 6
-		// phase 3). For non-git rooms the tab subtext shows just the
-		// folder name and LiveStatus is replaced by a placeholder.
-		const startCaps = HARNESS_KINDS[harness].capabilities;
-		// Same gate as `createHarnessInRoom`: a kind that does not take
-		// `--agent` never carries a name onto its record.
-		const agentName = startCaps.agents && agent?.trim() ? agent : undefined;
-		const newRoom: Room = {
-			id: sid,
-			name: folderName,
-			task,
-			// A files-only room has nothing running — and since a files
-			// harness never registers activity, the aggregate can't
-			// correct a wrong persisted "running" later.
-			status: startCaps.pty ? "running" : "idle",
-			badge: 0,
-			cwd,
-			...(branch ? { branch, repo: folderName } : {}),
-			...(repoRoot ? { repoRoot } : {}),
-			harnesses: [
-				{
-					id: hid,
-					kind: harness,
-					name: "main",
-					status: startCaps.pty ? "running" : "idle",
-					model: startCaps.pty ? (harness === "copilot" ? "gpt-5" : "sonnet-4.5") : "",
-					tokens: "0",
-					...(startCaps.pty ? { live: true } : {}),
-					...(startCaps.pty
-						? { cmd: cmdForKind(harness, defaultShell, sessionId, opencodePort, agentName) }
-						: {}),
-					cwd,
-					...(sessionId ? { sessionId } : {}),
-					...(agentName ? { agent: agentName } : {}),
-				},
-			],
-			activeHarnessId: hid,
-		};
-		setRooms((prev) => [...prev, newRoom]);
-		setActiveRoomId(sid);
-		setShowNewRoom(false);
-		// Phase 2b sqlite-poll fallback (see pickHarness comment for
-		// the relationship with L2c-2's SSE capture).
-		if (harness === "opencode") {
-			void captureOpencodeSessionId(cwd, claimedSessionIds, (captured) => {
-				setHarnessSessionId(sid, hid, captured);
-			});
-		}
-	};
+	// #19: OS-notification click handling (jumpToTarget,
+	// drainPendingClick, the live click listener, and the post-hydrate
+	// drain), extracted to keep this file's growth minimal — see
+	// useOsNotificationClicks.ts. NOT here: `jumpToToast`, which
+	// already lives in useHarnessNotifications.
+	useOsNotificationClicks(roomsRef, unarchiveRoomRef, setRooms, loaded, loadedRef);
 
 	const titlebarProps: TitlebarProps = {
 		activeRoomLabel: room ? room.name : null,
@@ -3830,196 +427,29 @@ export default function App() {
 		onClose: () => setShowSettings(false),
 	};
 
-	// Phase 4: items the command palette offers. Built every render
-	// from current state — cheap at prototype scale (a few dozen rows).
-	// Plain array, not useMemo: the cost of one filter+map per Ctrl+K
-	// open is invisible, and useMemo here would mean tracking every
-	// callback as a dep.
-	const paletteItems: PaletteItem[] = [];
-	for (const r of activeRooms) {
-		paletteItems.push({
-			id: `room:${r.id}`,
-			label: `${r.name}`,
-			hint: `room · ${r.branch}`,
-			invoke: () => setActiveRoomId(r.id),
-		});
-	}
-	for (const r of activeRooms) {
-		for (const h of r.harnesses) {
-			paletteItems.push({
-				id: `harness:${h.id}`,
-				label: `${HARNESS_KINDS[h.kind].name} · ${h.name}`,
-				hint: `harness in ${r.name}`,
-				invoke: () => {
-					setActiveRoomId(r.id);
-					setRooms((prev) =>
-						prev.map((p) => (p.id === r.id ? { ...p, activeHarnessId: h.id } : p)),
-					);
-				},
-			});
-		}
-	}
-	paletteItems.push({
-		id: "cmd:new-room",
-		label: "New room",
-		hint: hints.newRoom,
-		invoke: () => void openNewRoom(),
+	// Phase 4 / #19: items the command palette offers, built out to
+	// paletteItems.ts (buildPaletteItems) to keep this file's growth
+	// minimal. Still called as a plain function every render, not
+	// useMemo'd — see that module's header for why.
+	const paletteItems: PaletteItem[] = buildPaletteItems({
+		activeRooms,
+		archivedRooms,
+		room,
+		activeRoomId,
+		theme,
+		setActiveRoomId,
+		setRooms,
+		setTheme,
+		setShowReopen,
+		openNewRoom,
+		toggleFilesRef,
+		toggleReviewRef,
+		addHarness,
+		startRenameRoom,
+		closeRoom,
+		cycleAlertedRoom,
+		cycleAlertedHarness,
 	});
-	if (room?.cwd) {
-		paletteItems.push({
-			id: "cmd:browse-files",
-			label: "Files harness",
-			hint: hints.files,
-			invoke: () => toggleFilesRef.current(),
-		});
-		paletteItems.push({
-			id: "cmd:review",
-			label: "Review this branch",
-			hint: hints.review,
-			invoke: () => toggleReviewRef.current(),
-		});
-	}
-	if (archivedRooms.length > 0) {
-		paletteItems.push({
-			id: "cmd:reopen-room",
-			label: `Reopen room… (${archivedRooms.length})`,
-			invoke: () => setShowReopen(true),
-		});
-	}
-	if (activeRoomId) {
-		paletteItems.push({
-			id: "cmd:add-harness",
-			label: "Add harness to active room",
-			hint: hints.addHarness,
-			invoke: () => addHarness(activeRoomId),
-		});
-		// #241: no shortcut (out of scope) — palette-only, like reopen-room.
-		// Acts on the active room's own tab (`"tab"` host) — if that room is
-		// a group's open main room, it's the second-row lead tab, never the
-		// top-row GroupTab (see RenameTarget in RoomStrip.tsx).
-		paletteItems.push({
-			id: "cmd:rename-room",
-			label: "Rename room",
-			invoke: () => startRenameRoom(activeRoomId, "tab"),
-		});
-		paletteItems.push({
-			id: "cmd:close-room",
-			label: "Close active room",
-			hint: hints.closeRoom,
-			invoke: () => closeRoom(activeRoomId),
-		});
-	}
-	paletteItems.push({
-		id: "cmd:toggle-theme",
-		label: `Toggle theme (currently ${theme})`,
-		invoke: () => setTheme(theme === "dark" ? "light" : "dark"),
-	});
-	paletteItems.push({
-		id: "cmd:reload-window",
-		label: "Reload window",
-		hint: hints.reload,
-		invoke: () => window.location.reload(),
-	});
-	// #67: inbox navigation — only surfaced when something is actually
-	// pending, so Cmd+K stays uncluttered otherwise.
-	const otherAlertedRooms = activeRooms.filter(
-		(r) =>
-			r.id !== activeRoomId &&
-			r.harnesses.reduce((a, h) => a + (h.pendingNotifications ?? 0), 0) > 0,
-	);
-	if (otherAlertedRooms.length > 0) {
-		paletteItems.push({
-			id: "cmd:next-alerted-room",
-			label: `Jump to next alerted room (${otherAlertedRooms.length})`,
-			hint: hints.nextAlertedRoom,
-			invoke: () => cycleAlertedRoom(1),
-		});
-		paletteItems.push({
-			id: "cmd:prev-alerted-room",
-			label: `Jump to previous alerted room (${otherAlertedRooms.length})`,
-			hint: hints.prevAlertedRoom,
-			invoke: () => cycleAlertedRoom(-1),
-		});
-	}
-	const alertedHarnessCount = activeRooms.reduce(
-		(a, r) => a + r.harnesses.filter((h) => (h.pendingNotifications ?? 0) > 0).length,
-		0,
-	);
-	if (alertedHarnessCount > 0) {
-		paletteItems.push({
-			id: "cmd:next-alerted-harness",
-			label: `Jump to next alerted harness (${alertedHarnessCount})`,
-			hint: hints.nextAlertedHarness,
-			invoke: () => cycleAlertedHarness(1),
-		});
-		paletteItems.push({
-			id: "cmd:prev-alerted-harness",
-			label: `Jump to previous alerted harness (${alertedHarnessCount})`,
-			hint: hints.prevAlertedHarness,
-			invoke: () => cycleAlertedHarness(-1),
-		});
-	}
-
-	// L5c — toast stack rendered identically in both branches below
-	// (empty state and the normal app layout). Floats above
-	// everything via `position: fixed`; pointer-events on the
-	// container is `none` so it doesn't catch clicks on the
-	// underlying app, while each toast re-enables them.
-	const toastStack = toasts.length > 0 && (
-		<div className="sk-toast-stack">
-			{toasts.map((t) => (
-				<Toast
-					key={t.id}
-					toast={t}
-					onClick={() => jumpToToast(t)}
-					onDismiss={() => dismissToast(t.id)}
-				/>
-			))}
-		</div>
-	);
-
-	// #167: some persisted rooms couldn't be parsed and were moved to
-	// the quarantine table. Everything else loaded — surface that
-	// instead of letting the shrunken room list masquerade as normal.
-	const quarantineBanner = quarantinedCount > 0 && (
-		<div className="sk-quarantine-banner">
-			<span>
-				{quarantinedCount === 1
-					? "1 saved room couldn't be read and was quarantined"
-					: `${quarantinedCount} saved rooms couldn't be read and were quarantined`}
-				{" — the rest loaded fine. The raw rows are preserved in skein.db "}
-				(sessions_quarantine).
-			</span>
-			<span
-				className="sk-quarantine-banner-x"
-				title="Dismiss"
-				onClick={() => setQuarantinedCount(0)}
-			>
-				×
-			</span>
-		</div>
-	);
-
-	// #167: the live rooms table came back empty but the backup next
-	// to it still holds rooms — say so instead of rendering first-run
-	// onboarding over recoverable data.
-	const backupBanner = backupRoomCount !== null && (
-		<div className="sk-quarantine-banner">
-			<span>
-				{`Your rooms database is empty, but a backup holding ${backupRoomCount} room${
-					backupRoomCount === 1 ? "" : "s"
-				} sits next to it as skein.db.bak. To restore: quit Skein, copy skein.db.bak over `}
-				skein.db, and delete skein.db-wal / skein.db-shm.
-			</span>
-			<span
-				className="sk-quarantine-banner-x"
-				title="Dismiss"
-				onClick={() => setBackupRoomCount(null)}
-			>
-				×
-			</span>
-		</div>
-	);
 
 	// Empty state — no *active* rooms. Archived rooms still in the list
 	// show via the reopen modal (linked from the empty state too).
@@ -4084,36 +514,36 @@ export default function App() {
 					archivedCount={archivedRooms.length}
 					onReopen={() => setShowReopen(true)}
 				/>
-				{showNewRoom && (
-					<NewRoomDialog
-						defaultCwd={defaultCwd}
-						initialCwd={newRoomSeed.cwd}
-						initialDefaults={newRoomSeed.defaults}
-						defaultAgents={defaultAgents}
-						memory={newRoomMemory}
-						appBranchTemplate={branchTemplate}
-						recent={recentRoomFolders}
-						onRemember={rememberRoomFolder}
-						onCommit={createRoom}
-						onCancel={() => setShowNewRoom(false)}
-					/>
-				)}
-				{showPalette && (
-					<CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />
-				)}
-				{showSettings && <SettingsModal {...settingsProps} />}
-				{showReopen && (
-					<ReopenRoomModal
-						rooms={archivedRooms}
-						onReopen={reopenRoom}
-						onDelete={deleteRoomForever}
-						onRestore={restoreRoom}
-						onClose={() => setShowReopen(false)}
-					/>
-				)}
-				{toastStack}
-				{quarantineBanner}
-				{backupBanner}
+				<AppOverlays
+					showNewRoom={showNewRoom}
+					defaultCwd={defaultCwd}
+					newRoomSeed={newRoomSeed}
+					defaultAgents={defaultAgents}
+					newRoomMemory={newRoomMemory}
+					branchTemplate={branchTemplate}
+					recentRoomFolders={recentRoomFolders}
+					rememberRoomFolder={rememberRoomFolder}
+					createRoom={createRoom}
+					setShowNewRoom={setShowNewRoom}
+					showPalette={showPalette}
+					paletteItems={paletteItems}
+					setShowPalette={setShowPalette}
+					showSettings={showSettings}
+					settingsProps={settingsProps}
+					showReopen={showReopen}
+					archivedRooms={archivedRooms}
+					reopenRoom={reopenRoom}
+					deleteRoomForever={deleteRoomForever}
+					restoreRoom={restoreRoom}
+					setShowReopen={setShowReopen}
+					toasts={toasts}
+					jumpToToast={jumpToToast}
+					dismissToast={dismissToast}
+					quarantinedCount={quarantinedCount}
+					setQuarantinedCount={setQuarantinedCount}
+					backupRoomCount={backupRoomCount}
+					setBackupRoomCount={setBackupRoomCount}
+				/>
 			</div>
 		);
 	}
@@ -4275,137 +705,48 @@ export default function App() {
 				))}
 			/>
 
-			<div className="sk-statusbar">
-				<span className="seg">
-					<HChip kind={activeHarness.kind} />
-					<span>{HARNESS_KINDS[activeHarness.kind].name}</span>
-				</span>
-				<AgentStatusBarSeg harness={activeHarness} />
-				{/* #49 phase A: name the keyboard holder. Bodies are
-				    mutually exclusive, so this is purely informative —
-				    but "who has the keyboard" should never need guessing. */}
-				<span className="seg" title="Keyboard input goes to the active body">
-					⌨ {HARNESS_KINDS[activeHarness.kind].capabilities.pty ? "terminal" : "editor"}
-				</span>
-				<LiveStatusBarChip harness={activeHarness} />
-				{(() => {
-					// Prefer the live branch (updated on every watcher tick) but
-					// fall back to room.branch on first render before LiveStatus
-					// has had a chance to refresh. Issue #18.
-					const live = liveBranches[room.id];
-					const branch = live === undefined ? room.branch : (live ?? undefined);
-					if (!branch) return null;
-					const drifted =
-						live !== undefined && live !== null && room.branch && live !== room.branch;
-					return (
-						<span
-							className="seg"
-							title={drifted ? `worktree branch was ${room.branch}` : undefined}
-						>
-							{branch}
-							{drifted && <span style={{ color: "var(--warn)", marginLeft: 4 }}>•</span>}
-						</span>
-					);
-				})()}
-				{room.cwd && (
-					<span className="seg sk-statusbar-cwd" title={room.cwd}>
-						{room.cwd}
-					</span>
-				)}
-				<span className="spacer" />
-				{notifyUrgent &&
-					(() => {
-						// #86: a harness blocked on permission ranks above a
-						// plain pending-notifications backlog — it's a
-						// harder stop, and the room order it's found in
-						// breaks ties the same way L5d's own scan does.
-						for (const r of activeRooms) {
-							if (r.id === activeRoomId) continue;
-							const h = r.harnesses.find((hh) => permissionHarnessIds.has(hh.id));
-							if (!h) continue;
-							// #298: name the subagent when the dialog belongs to
-							// one, same wording as `statusLabel` (tool omitted
-							// here, as before this change).
-							const permAgentType = harnessActivity.get(h.id)?.permissionAgentType;
-							return (
-								<span
-									className="seg sk-statusbar-urgent"
-									title={`Jump to ${r.name}`}
-									onClick={() => jumpToHarness(r.id, h.id)}
-								>
-									<span className="dot-tiny st-permission" />
-									{r.name} · {h.name} {statusLabel("permission", undefined, permAgentType)}
-								</span>
-							);
-						}
-						// L5d — urgent segment. Scan active (non-archived,
-						// non-active) rooms for any pending notifications;
-						// surface the room with the biggest backlog so
-						// the user has a one-click jump to whatever
-						// needs attention most. Ties broken by room
-						// order. Hidden when no room has anything pending,
-						// or when the surface is disabled in Settings (L5e).
-						let target: { room: Room; total: number } | null = null;
-						for (const r of activeRooms) {
-							if (r.id === activeRoomId) continue;
-							const total = r.harnesses.reduce((acc, h) => acc + (h.pendingNotifications ?? 0), 0);
-							if (total === 0) continue;
-							if (!target || total > target.total) target = { room: r, total };
-						}
-						if (!target) return null;
-						return (
-							<span
-								className="seg sk-statusbar-urgent"
-								title={`Jump to ${target.room.name}`}
-								onClick={() => {
-									// Land on the harness that drove the room to the top —
-									// most pending, ties broken by harness order (#65).
-									const winner =
-										[...target.room.harnesses]
-											.filter((h) => (h.pendingNotifications ?? 0) > 0)
-											.sort(
-												(a, b) => (b.pendingNotifications ?? 0) - (a.pendingNotifications ?? 0),
-											)[0] ?? target.room.harnesses[0];
-									if (winner) jumpToHarness(target.room.id, winner.id);
-									else switchRoom(target.room.id);
-								}}
-							>
-								<span className="dot-tiny st-waiting" />
-								{target.room.name}
-								<span className="sk-statusbar-urgent-count">{target.total}</span>
-							</span>
-						);
-					})()}
-			</div>
+			<StatusBar
+				activeHarness={activeHarness}
+				room={room}
+				liveBranches={liveBranches}
+				notifyUrgent={notifyUrgent}
+				activeRooms={activeRooms}
+				activeRoomId={activeRoomId}
+				permissionHarnessIds={permissionHarnessIds}
+				jumpToHarness={jumpToHarness}
+				switchRoom={switchRoom}
+			/>
 
-			{showNewRoom && (
-				<NewRoomDialog
-					defaultCwd={defaultCwd}
-					initialCwd={newRoomSeed.cwd}
-					initialDefaults={newRoomSeed.defaults}
-					defaultAgents={defaultAgents}
-					memory={newRoomMemory}
-					appBranchTemplate={branchTemplate}
-					recent={recentRoomFolders}
-					onRemember={rememberRoomFolder}
-					onCommit={createRoom}
-					onCancel={() => setShowNewRoom(false)}
-				/>
-			)}
-			{showPalette && <CommandPalette items={paletteItems} onClose={() => setShowPalette(false)} />}
-			{showSettings && <SettingsModal {...settingsProps} />}
-			{showReopen && (
-				<ReopenRoomModal
-					rooms={archivedRooms}
-					onReopen={reopenRoom}
-					onDelete={deleteRoomForever}
-					onRestore={restoreRoom}
-					onClose={() => setShowReopen(false)}
-				/>
-			)}
-			{toastStack}
-			{quarantineBanner}
-			{backupBanner}
+			<AppOverlays
+				showNewRoom={showNewRoom}
+				defaultCwd={defaultCwd}
+				newRoomSeed={newRoomSeed}
+				defaultAgents={defaultAgents}
+				newRoomMemory={newRoomMemory}
+				branchTemplate={branchTemplate}
+				recentRoomFolders={recentRoomFolders}
+				rememberRoomFolder={rememberRoomFolder}
+				createRoom={createRoom}
+				setShowNewRoom={setShowNewRoom}
+				showPalette={showPalette}
+				paletteItems={paletteItems}
+				setShowPalette={setShowPalette}
+				showSettings={showSettings}
+				settingsProps={settingsProps}
+				showReopen={showReopen}
+				archivedRooms={archivedRooms}
+				reopenRoom={reopenRoom}
+				deleteRoomForever={deleteRoomForever}
+				restoreRoom={restoreRoom}
+				setShowReopen={setShowReopen}
+				toasts={toasts}
+				jumpToToast={jumpToToast}
+				dismissToast={dismissToast}
+				quarantinedCount={quarantinedCount}
+				setQuarantinedCount={setQuarantinedCount}
+				backupRoomCount={backupRoomCount}
+				setBackupRoomCount={setBackupRoomCount}
+			/>
 		</div>
 	);
 }
