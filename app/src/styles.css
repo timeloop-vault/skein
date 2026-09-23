@@ -194,6 +194,7 @@ body {
 .sk-boot-error-actions {
 	display: flex;
 	justify-content: flex-end;
+	gap: 8px;
 }
 .sk-quarantine-banner {
 	position: fixed;

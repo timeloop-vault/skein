@@ -120,6 +120,133 @@ fn add_worktree_rejects_unknown_base_branch() {
 }
 
 #[test]
+fn restore_worktree_after_directory_deleted_metadata_left() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    let wt_path = propose_worktree_path(&path, "feat-foo");
+    repo.add_worktree("feat/foo", "main", &wt_path).unwrap();
+
+    let raw_repo = Repository::open(&path).unwrap();
+    let oid_before = raw_repo
+        .find_branch("feat/foo", git2::BranchType::Local)
+        .unwrap()
+        .get()
+        .target()
+        .unwrap();
+
+    // Directory gone, but `.git/worktrees/feat-foo` metadata is left
+    // behind — exactly the #164 symptom.
+    fs::remove_dir_all(&wt_path).unwrap();
+
+    let info = repo
+        .restore_worktree("feat/foo", &wt_path)
+        .expect("restore_worktree");
+    assert_eq!(info.path, wt_path);
+    assert!(wt_path.exists(), "worktree dir should exist: {wt_path:?}");
+
+    let restored = Repository::open(&wt_path).unwrap();
+    assert_eq!(restored.head().unwrap().shorthand(), Some("feat/foo"));
+
+    let oid_after = raw_repo
+        .find_branch("feat/foo", git2::BranchType::Local)
+        .unwrap()
+        .get()
+        .target()
+        .unwrap();
+    assert_eq!(
+        oid_before, oid_after,
+        "restore must not move the branch tip"
+    );
+}
+
+#[test]
+fn restore_worktree_after_metadata_also_pruned() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    let wt_path = propose_worktree_path(&path, "feat-foo");
+    repo.add_worktree("feat/foo", "main", &wt_path).unwrap();
+
+    fs::remove_dir_all(&wt_path).unwrap();
+    let name = wt_path.file_name().unwrap().to_str().unwrap();
+    repo.remove_worktree(name).unwrap();
+    assert!(
+        repo.list_worktrees().unwrap().is_empty(),
+        "metadata should be gone after prune"
+    );
+
+    let info = repo
+        .restore_worktree("feat/foo", &wt_path)
+        .expect("restore_worktree");
+    assert_eq!(info.path, wt_path);
+    assert!(wt_path.exists(), "worktree dir should exist: {wt_path:?}");
+
+    let restored = Repository::open(&wt_path).unwrap();
+    assert_eq!(restored.head().unwrap().shorthand(), Some("feat/foo"));
+}
+
+#[test]
+fn restore_worktree_refuses_when_parent_dir_also_gone() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    let wt_path = propose_worktree_path(&path, "feat-foo");
+    repo.add_worktree("feat/foo", "main", &wt_path).unwrap();
+
+    // Remove the whole `<repo>-wt` parent directory, not just the leaf
+    // worktree dir — this is indistinguishable from an unmounted drive
+    // or an offline share from `symlink_metadata`'s point of view, so
+    // the entry must be refused, not pruned (#164 review).
+    let parent = wt_path.parent().unwrap();
+    fs::remove_dir_all(parent).unwrap();
+
+    let name = wt_path.file_name().unwrap().to_str().unwrap().to_owned();
+    match repo.restore_worktree("feat/foo", &wt_path) {
+        Err(skein_git::GitError::WorktreeUnreachable(_, _)) => {}
+        Err(other) => panic!("expected WorktreeUnreachable, got {other:?}"),
+        Ok(_) => panic!("expected WorktreeUnreachable, got Ok"),
+    }
+    let names: Vec<String> = repo
+        .list_worktrees()
+        .unwrap()
+        .into_iter()
+        .map(|w| w.name)
+        .collect();
+    assert!(
+        names.contains(&name),
+        "stale-looking entry must not be pruned when it can't be confirmed absent: {names:?}"
+    );
+}
+
+#[test]
+fn restore_worktree_rejects_unknown_branch() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    let wt_path = propose_worktree_path(&path, "feat-foo");
+    match repo.restore_worktree("does-not-exist", &wt_path) {
+        Err(skein_git::GitError::BranchNotFound(_)) => {}
+        Err(other) => panic!("expected BranchNotFound, got {other:?}"),
+        Ok(_) => panic!("expected BranchNotFound, got Ok"),
+    }
+}
+
+#[test]
+fn restore_worktree_rejects_branch_checked_out_live() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    let wt_path = propose_worktree_path(&path, "feat-foo");
+    repo.add_worktree("feat/foo", "main", &wt_path).unwrap();
+
+    // The branch is still checked out live at `wt_path` — restoring it
+    // at a second, different path must be refused, not forced.
+    let other_path = propose_worktree_path(&path, "feat-foo-2");
+    match repo.restore_worktree("feat/foo", &other_path) {
+        Err(skein_git::GitError::BranchCheckedOut(_)) => {}
+        Err(other) => panic!("expected BranchCheckedOut, got {other:?}"),
+        Ok(_) => panic!("expected BranchCheckedOut, got Ok"),
+    }
+    assert!(!other_path.exists());
+}
+
+#[test]
 fn open_rejects_non_repo() {
     let tmp = TempDir::new().unwrap();
     match Repo::open(tmp.path()) {

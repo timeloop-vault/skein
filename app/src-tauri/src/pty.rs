@@ -132,6 +132,24 @@ pub struct SpawnRequest<'a> {
     pub harness_config: Option<&'a HarnessConfig>,
 }
 
+/// #164: refuse a spawn whose cwd doesn't exist (or isn't a directory)
+/// rather than let the OS silently fall back to some ancestor — the
+/// symptom that sent a harness to `C:\` when its worktree had been
+/// removed out from under it.
+fn check_cwd(cwd: &Path) -> Result<(), PtyError> {
+    match std::fs::metadata(cwd) {
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(_) => Err(PtyError(format!(
+            "working directory is not a directory: {}",
+            cwd.display()
+        ))),
+        Err(_) => Err(PtyError(format!(
+            "working directory does not exist: {}",
+            cwd.display()
+        ))),
+    }
+}
+
 #[derive(Default)]
 pub struct PtyManager {
     inner: Mutex<HashMap<String, Pty>>,
@@ -147,6 +165,11 @@ impl PtyManager {
     /// waiter threads — once per output chunk and once on child exit.
     /// Must be `Send + Sync` because both threads share access via an
     /// `Arc`.
+    ///
+    /// `req.cwd` is enforced, never an OS fallback (#164): a cwd that no
+    /// longer exists (a removed worktree, say) fails the spawn instead
+    /// of silently landing the child in whatever ancestor directory the
+    /// OS falls back to.
     ///
     /// The id in `req` is what you pass to `write` / `resize` / `kill`.
     /// Returns whether #215's config injection was non-empty for this
@@ -168,6 +191,7 @@ impl PtyManager {
             kind,
             harness_config,
         } = req;
+        check_cwd(cwd)?;
         let Some((program, stored_args)) = cmd.split_first() else {
             return Err(PtyError("pty_spawn: empty cmd".into()));
         };
@@ -570,6 +594,54 @@ fn spawn_pty_writer(id: String, mut writer: Box<dyn Write + Send>) -> mpsc::Send
         tracing::info!(id = %id, "pty writer exit");
     });
     tx
+}
+
+#[cfg(test)]
+mod cwd_tests {
+    use super::check_cwd;
+
+    #[test]
+    fn an_existing_directory_is_fine() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(check_cwd(dir.path()).is_ok());
+    }
+
+    #[test]
+    fn a_missing_path_errors_with_the_path_in_the_message() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("removed-worktree");
+
+        let err = check_cwd(&missing).expect_err("missing cwd must be refused");
+        assert!(
+            err.0.contains(&missing.display().to_string()),
+            "error should name the missing path, got: {}",
+            err.0
+        );
+        assert!(
+            err.0.contains("does not exist"),
+            "error should say the path is missing, got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn a_file_path_is_refused_as_not_a_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("not-a-dir");
+        std::fs::write(&file, "hi").expect("write file");
+
+        let err = check_cwd(&file).expect_err("a file cwd must be refused");
+        assert!(
+            err.0.contains(&file.display().to_string()),
+            "error should name the file path, got: {}",
+            err.0
+        );
+        assert!(
+            err.0.contains("is not a directory"),
+            "error should say it isn't a directory, got: {}",
+            err.0
+        );
+    }
 }
 
 #[cfg(test)]

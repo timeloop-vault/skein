@@ -333,7 +333,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   `Option`** — a required field makes old blobs unparseable.
   `repoRoot` (the #76 group key) is set at create and backfilled at
   hydrate/unarchive via `git_inspect_folder`, and never cleared — a
-  room whose folder later vanishes keeps its group (#164).
+  room whose folder later vanishes keeps its group (#164). The one
+  exception is the user repointing a missing room to another folder,
+  which re-derives it from the new folder.
 - **PTYs** live in `PtyManager`. `pty_spawn` returns an opaque id;
   output streams over a per-spawn `tauri::ipc::Channel<PtyEvent>` — a
   tagged enum `{kind:"data",chunk}` / `{kind:"exit",code}`. PTYs

@@ -222,6 +222,41 @@ fn git_add_worktree_impl(
     Ok(info.into())
 }
 
+/// Re-attach an existing branch as a worktree at `worktree_path` (#164):
+/// the room's worktree directory was deleted but its branch survives.
+/// Never creates or moves a branch — see `Repo::restore_worktree`.
+///
+/// Async + `ADD_WORKTREE_LOCK`: same reasoning as `git_add_worktree` —
+/// this also does real libgit2 + filesystem work, and shares the same
+/// `.git/worktrees/` namespace it would race on.
+#[tauri::command]
+pub async fn git_restore_worktree(
+    repo_path: String,
+    branch: String,
+    worktree_path: String,
+) -> Result<WorktreeDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_restore_worktree_impl(&repo_path, &branch, &worktree_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Guarded by `ADD_WORKTREE_LOCK` for its whole body — see
+/// `git_add_worktree_impl`'s doc comment, same reasoning applies here.
+fn git_restore_worktree_impl(
+    repo_path: &str,
+    branch: &str,
+    worktree_path: &str,
+) -> Result<WorktreeDto, String> {
+    let _guard = ADD_WORKTREE_LOCK.lock();
+    let repo = Repo::open(Path::new(repo_path)).map_err(|e| e.to_string())?;
+    let info = repo
+        .restore_worktree(branch, &PathBuf::from(worktree_path))
+        .map_err(|e| e.to_string())?;
+    Ok(info.into())
+}
+
 #[derive(Debug, Serialize)]
 pub struct StatusDto {
     pub path: String,
@@ -431,6 +466,31 @@ mod tests {
             1,
             "exactly one candidate worktree path should exist on disk"
         );
+    }
+
+    /// `git_restore_worktree_impl` is thin glue over
+    /// `Repo::restore_worktree`, which has its own thorough coverage in
+    /// `crates/skein-git/tests/repo.rs` — this just checks the wrapper
+    /// wires it up correctly (#164).
+    #[test]
+    fn restore_worktree_impl_reattaches_after_directory_deleted() {
+        let (dir, base_branch) = repo_with_commit();
+        let wt_parent = TempDir::new().unwrap();
+        let repo_path = dir.path().to_string_lossy().into_owned();
+        let worktree_path = wt_parent
+            .path()
+            .join("wt-restore")
+            .to_string_lossy()
+            .into_owned();
+
+        git_add_worktree_impl(&repo_path, "feature/restore", &base_branch, &worktree_path)
+            .expect("add_worktree_impl");
+        std::fs::remove_dir_all(&worktree_path).unwrap();
+
+        let dto = git_restore_worktree_impl(&repo_path, "feature/restore", &worktree_path)
+            .expect("restore_worktree_impl");
+        assert_eq!(dto.path, worktree_path);
+        assert!(Path::new(&worktree_path).exists());
     }
 }
 

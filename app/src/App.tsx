@@ -30,6 +30,7 @@ import {
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
 import { FilesBody } from "./FilesBody.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
+import { MissingFolderCard } from "./MissingFolderCard.tsx";
 import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
 import { RightPane, type RightPaneTab } from "./RightPane.tsx";
 import { GroupRow, type RenameTarget, RoomStrip } from "./RoomStrip.tsx";
@@ -73,6 +74,7 @@ import {
 	apiErrorToastText,
 	parsePayload,
 } from "./liveContext/index.ts";
+import { repointRoom } from "./missingFolder.ts";
 import { type ClickTarget, resolveClickTarget, shouldDrainOnClickEvent } from "./osNotifyClick.ts";
 import {
 	type DefaultAgents,
@@ -1849,6 +1851,24 @@ export default function App() {
 	// #167: the live table was empty but skein.db.bak holds N rooms —
 	// a vanished/recreated db must not masquerade as a fresh install.
 	const [backupRoomCount, setBackupRoomCount] = useState<number | null>(null);
+	// #164: room ids whose `cwd` does not currently exist on disk.
+	// Runtime-only — never persisted, never a `Room` field (a folder
+	// coming back doesn't change anything stored about the room) — so a
+	// missing room renders MissingFolderCard instead of HarnessColumn
+	// and nothing spawns into the wrong place. Filled during hydrate
+	// before rooms mount, on unarchive, and whenever a room becomes
+	// active.
+	const [missingFolders, setMissingFolders] = useState<Set<string>>(new Set());
+	// #164: guards `checkRoomFolder` against a stale in-flight result.
+	// It runs both on unarchive and from the active-room effect below
+	// with no ordering guarantee between them, and a slow check can
+	// resolve after a recovery action (recreateMissingWorktree /
+	// pickMissingFolder) already cleared the flag — re-adding the room
+	// to `missingFolders` and unmounting its freshly spawned
+	// LiveTerminals. Every check and every recovery action bumps this
+	// room's token first; a check applies its result only if its token
+	// is still the latest when the await returns.
+	const folderCheckTokenRef = useRef(new Map<string, number>());
 	// #167: once any hydrate has succeeded, a late rejection from a
 	// concurrent sibling call (dev StrictMode double-mount) must not
 	// set loadFailed — that would park the autosave for the whole
@@ -1861,6 +1881,54 @@ export default function App() {
 	// the hydrated set. A live click-listener poke that lands in that
 	// gap must not drain against the still-empty `roomsRef`.
 	const loadedRef = useRef(false);
+	// #164: does `cwd` exist right now? A failed invoke is treated as
+	// "unknown" rather than missing — the check is conservative in the
+	// same direction as the #153 sessionId-existence probes above: a
+	// transient rusqlite/fs hiccup must not park a perfectly good room
+	// behind a false "folder missing" card.
+	const inspectFolderMissing = useCallback(
+		async (cwd: string, roomId: string): Promise<boolean> => {
+			try {
+				const info = await invoke<FolderInfoDto>("git_inspect_folder", { path: cwd });
+				return !info.exists;
+			} catch (err) {
+				console.warn(`[skein] git_inspect_folder folder-check failed for room ${roomId}:`, err);
+				return false;
+			}
+		},
+		[],
+	);
+	// #164: re-check a single room and flip its membership in
+	// `missingFolders` if the answer changed. Used on unarchive and
+	// whenever a room becomes active — hydrate's own initial pass
+	// below fills the whole set at once, before any room mounts.
+	const checkRoomFolder = useCallback(
+		async (room: Room) => {
+			const token = (folderCheckTokenRef.current.get(room.id) ?? 0) + 1;
+			folderCheckTokenRef.current.set(room.id, token);
+			if (!room.cwd) {
+				setMissingFolders((prev) => {
+					if (!prev.has(room.id)) return prev;
+					const next = new Set(prev);
+					next.delete(room.id);
+					return next;
+				});
+				return;
+			}
+			const missing = await inspectFolderMissing(room.cwd, room.id);
+			// A newer check or a recovery action already ran for this room
+			// while this one was in flight — its answer is stale, drop it.
+			if (folderCheckTokenRef.current.get(room.id) !== token) return;
+			setMissingFolders((prev) => {
+				if (prev.has(room.id) === missing) return prev;
+				const next = new Set(prev);
+				if (missing) next.add(room.id);
+				else next.delete(room.id);
+				return next;
+			});
+		},
+		[inspectFolderMissing],
+	);
 	// #76: rooms persisted before `repoRoot` existed have no group key.
 	// Resolve it in the background, one `git_inspect_folder` per room in
 	// parallel, and patch it in as each settles — never awaited by a
@@ -1975,6 +2043,19 @@ export default function App() {
 					// mounting, so the PTY spawn re-attaches to the prior
 					// conversation instead of starting fresh.
 					const withResume = verified.map((r) => withResumeCmds(r, portMap));
+					// #164: check every active room's folder in parallel and
+					// have the full missing-set ready BEFORE rooms mount, so
+					// a vanished folder never gets even one spawn attempt.
+					// Archived rooms aren't mounted, so they're not checked
+					// here — unarchive (below) checks on the way back in.
+					const initialMissing = new Set<string>();
+					await Promise.all(
+						withResume.map(async (r) => {
+							if (r.archived || !r.cwd) return;
+							if (await inspectFolderMissing(r.cwd, r.id)) initialMissing.add(r.id);
+						}),
+					);
+					setMissingFolders(initialMissing);
 					setRooms(withResume);
 					backfillRepoRoots(withResume);
 					// Pick the first *active* room; archived ones aren't
@@ -1995,7 +2076,7 @@ export default function App() {
 				// the boot-wipe chain this issue exists to break.
 				setLoadFailed(msg);
 			});
-	}, [backfillRepoRoots]);
+	}, [backfillRepoRoots, inspectFolderMissing]);
 
 	useEffect(() => {
 		hydrateRooms();
@@ -2105,13 +2186,18 @@ export default function App() {
 				return;
 			}
 			const portMap = await allocateOpencodePorts(room);
-			setRooms((prev) => prev.map((r) => (r.id === id ? unarchiveRoomTransform(r, portMap) : r)));
+			const transformed = unarchiveRoomTransform(room, portMap);
+			setRooms((prev) => prev.map((r) => (r.id === id ? transformed : r)));
 			setActiveRoomId(id);
 			// #76: an archived room predating `repoRoot` gets the same
 			// background backfill hydrate does.
 			backfillRepoRoots([room]);
+			// #164: an archived room's folder may have vanished while it
+			// was closed — check on the way back in, same as hydrate does
+			// for rooms that were already active.
+			void checkRoomFolder(transformed);
 		},
-		[allocateOpencodePorts, backfillRepoRoots],
+		[allocateOpencodePorts, backfillRepoRoots, checkRoomFolder],
 	);
 	// The OS-notification listener is []-keyed (re-registering it on
 	// every render would leak native listeners), so it reaches the
@@ -2123,6 +2209,86 @@ export default function App() {
 		await unarchiveRoom(id);
 		setShowReopen(false);
 	};
+
+	// #164: "Recreate worktree" on a MissingFolderCard. Only ever called
+	// when `recoveryOptions` offered it (room.branch/repoRoot set, cwd a
+	// worktree, branch still in the repo) — `git_restore_worktree`
+	// re-attaches that branch at the room's existing `cwd`, so no argv
+	// or sessionId needs rebuilding: the folder just reappears where
+	// every harness already expects it.
+	const recreateMissingWorktree = useCallback(
+		async (room: Room): Promise<{ ok: true } | { ok: false; error: string }> => {
+			if (!room.repoRoot || !room.branch || !room.cwd) {
+				return { ok: false, error: "This room is missing a branch or repository record." };
+			}
+			try {
+				await invoke("git_restore_worktree", {
+					repoPath: room.repoRoot,
+					branch: room.branch,
+					worktreePath: room.cwd,
+				});
+				// #164: bump before clearing so an older in-flight
+				// checkRoomFolder for this room can't re-add it after.
+				folderCheckTokenRef.current.set(
+					room.id,
+					(folderCheckTokenRef.current.get(room.id) ?? 0) + 1,
+				);
+				setMissingFolders((prev) => {
+					if (!prev.has(room.id)) return prev;
+					const next = new Set(prev);
+					next.delete(room.id);
+					return next;
+				});
+				return { ok: true };
+			} catch (err) {
+				return { ok: false, error: err instanceof Error ? err.message : String(err) };
+			}
+		},
+		[],
+	);
+
+	// #164: "Pick another folder" on a MissingFolderCard. Unlike the
+	// worktree recreate above, the room's `cwd` itself changes, so every
+	// harness that resumed into the old folder needs `repointRoom`'s
+	// full treatment (dropped sessionId, fresh argv) — same port
+	// allocation unarchive already does for opencode harnesses.
+	const pickMissingFolder = useCallback(
+		async (room: Room, newCwd: string) => {
+			const portMap = await allocateOpencodePorts(room);
+			// The picked folder may belong to a different repo (or none at
+			// all) — inspect it before committing the repoint rather than
+			// clearing `repoRoot` and relying on backfill: a repo gets its
+			// own root, a plain folder gets no group, and a failed invoke
+			// keeps the room's old repoRoot rather than losing it.
+			let nextRepoRoot = room.repoRoot;
+			try {
+				const info = await invoke<FolderInfoDto>("git_inspect_folder", { path: newCwd });
+				nextRepoRoot = info.isRepo ? info.root : undefined;
+			} catch (err) {
+				console.warn(`[skein] git_inspect_folder repoint check failed for room ${room.id}:`, err);
+			}
+			const base = repointRoom(room, newCwd, {
+				fallbackShell: defaultShell,
+				opencodePorts: portMap,
+			});
+			// `exactOptionalPropertyTypes` forbids `repoRoot: undefined` —
+			// a plain (non-repo) folder, or one with no known root, must
+			// drop the key entirely rather than set it to undefined.
+			const { repoRoot: _droppedRepoRoot, ...rest } = base;
+			const repointed: Room = nextRepoRoot ? { ...rest, repoRoot: nextRepoRoot } : rest;
+			setRooms((prev) => prev.map((r) => (r.id === room.id ? repointed : r)));
+			// #164: bump before clearing so an older in-flight
+			// checkRoomFolder for this room can't re-add it after.
+			folderCheckTokenRef.current.set(room.id, (folderCheckTokenRef.current.get(room.id) ?? 0) + 1);
+			setMissingFolders((prev) => {
+				if (!prev.has(room.id)) return prev;
+				const next = new Set(prev);
+				next.delete(room.id);
+				return next;
+			});
+		},
+		[allocateOpencodePorts, defaultShell],
+	);
 
 	// #89: permanently drop an archived room. `db_save_rooms` is a full
 	// DELETE + re-insert of the current `rooms` array, so removing it
@@ -2447,6 +2613,15 @@ export default function App() {
 	const creatingFilesRef = useRef(new Set<string>());
 	const roomsRef = useRef(rooms);
 	roomsRef.current = rooms;
+	// #164: re-check the active room's folder every time it becomes
+	// active — covers a folder deleted (or a worktree removed) while
+	// Skein was pointed at a different tab, which no watcher tells us
+	// about. Hydrate and unarchive cover the other two ways a room
+	// starts being rendered.
+	useEffect(() => {
+		const room = roomsRef.current.find((r) => r.id === activeRoomId);
+		if (room) void checkRoomFolder(room);
+	}, [activeRoomId, checkRoomFolder]);
 	// Keyboard nav (Mod+Tab, Mod+1..9) keys off active rooms only —
 	// archived ones aren't rendered as tabs and shouldn't be reachable
 	// via the cycle / jump shortcuts.
@@ -4012,46 +4187,59 @@ export default function App() {
 							minHeight: 0,
 						}}
 					>
-						<HarnessColumn
-							room={r}
-							fontSize={fontSize}
-							copyOnSelect={copyOnSelect}
-							defaultShell={defaultShell}
-							showPicker={showPicker === r.id}
-							roomActive={r.id === activeRoomId}
-							harnessDrag={{
-								draggedHarnessId: drag?.kind === "harness" && drag.roomId === r.id ? drag.id : null,
-								dropTargetHarnessId:
-									dropTarget?.kind === "harness" && dropTarget.roomId === r.id
-										? dropTarget.id
-										: null,
-								dropSide:
-									dropTarget?.kind === "harness" && dropTarget.roomId === r.id
-										? dropTarget.side
-										: null,
-								onPointerDown: (e, roomId, harnessId) =>
-									startDrag(e, { kind: "harness", roomId, id: harnessId }),
-								onPointerMove: dragHandlers.onPointerMove,
-								onPointerUp: dragHandlers.onPointerUp,
-								onPointerCancel: dragHandlers.onPointerCancel,
-								onLostPointerCapture: dragHandlers.onLostPointerCapture,
-								suppressClick,
-							}}
-							defaultAgents={defaultAgents}
-							onPick={pickHarness}
-							onAddHarness={addHarness}
-							onCancelPick={() => setShowPicker(null)}
-							onSwitchHarness={switchHarnessInRoom}
-							onCloseHarness={closeHarness}
-							onHarnessCmdChange={updateHarnessCmd}
-							opencodePorts={opencodePorts}
-							onOpencodeSessionCaptured={(harnessId, sid) =>
-								setHarnessSessionId(r.id, harnessId, sid)
-							}
-							onOpencodeSessionFollowed={(harnessId, sid) =>
-								replaceHarnessSessionId(r.id, harnessId, sid)
-							}
-						/>
+						{missingFolders.has(r.id) ? (
+							// #164: no HarnessColumn mounts here, so no LiveTerminal
+							// spawns anywhere — a missing folder never silently runs
+							// its harnesses somewhere else.
+							<MissingFolderCard
+								room={r}
+								onRecreateWorktree={() => recreateMissingWorktree(r)}
+								onPickFolder={(newCwd) => void pickMissingFolder(r, newCwd)}
+								onClose={() => void closeRoom(r.id)}
+							/>
+						) : (
+							<HarnessColumn
+								room={r}
+								fontSize={fontSize}
+								copyOnSelect={copyOnSelect}
+								defaultShell={defaultShell}
+								showPicker={showPicker === r.id}
+								roomActive={r.id === activeRoomId}
+								harnessDrag={{
+									draggedHarnessId:
+										drag?.kind === "harness" && drag.roomId === r.id ? drag.id : null,
+									dropTargetHarnessId:
+										dropTarget?.kind === "harness" && dropTarget.roomId === r.id
+											? dropTarget.id
+											: null,
+									dropSide:
+										dropTarget?.kind === "harness" && dropTarget.roomId === r.id
+											? dropTarget.side
+											: null,
+									onPointerDown: (e, roomId, harnessId) =>
+										startDrag(e, { kind: "harness", roomId, id: harnessId }),
+									onPointerMove: dragHandlers.onPointerMove,
+									onPointerUp: dragHandlers.onPointerUp,
+									onPointerCancel: dragHandlers.onPointerCancel,
+									onLostPointerCapture: dragHandlers.onLostPointerCapture,
+									suppressClick,
+								}}
+								defaultAgents={defaultAgents}
+								onPick={pickHarness}
+								onAddHarness={addHarness}
+								onCancelPick={() => setShowPicker(null)}
+								onSwitchHarness={switchHarnessInRoom}
+								onCloseHarness={closeHarness}
+								onHarnessCmdChange={updateHarnessCmd}
+								opencodePorts={opencodePorts}
+								onOpencodeSessionCaptured={(harnessId, sid) =>
+									setHarnessSessionId(r.id, harnessId, sid)
+								}
+								onOpencodeSessionFollowed={(harnessId, sid) =>
+									replaceHarnessSessionId(r.id, harnessId, sid)
+								}
+							/>
+						)}
 					</div>
 				))}
 				second={activeRooms.map((r) => (

@@ -412,6 +412,7 @@ pub fn run() {
             git::git_head_branch,
             git::git_propose_worktree_path,
             git::git_add_worktree,
+            git::git_restore_worktree,
             git::git_status,
             git::git_watch_start,
             git::git_watch_stop,
