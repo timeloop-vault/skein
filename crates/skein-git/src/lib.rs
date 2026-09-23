@@ -37,6 +37,12 @@ pub enum GitError {
     #[error("worktree {0} already exists")]
     WorktreeExists(String),
 
+    #[error("branch {0} is already checked out in another worktree")]
+    BranchCheckedOut(String),
+
+    #[error("worktree {0} could not be confirmed absent: {1}")]
+    WorktreeUnreachable(String, String),
+
     #[error("git: {0}")]
     Git(#[from] git2::Error),
 
@@ -295,6 +301,133 @@ impl Repo {
             name,
             path: path.to_path_buf(),
         })
+    }
+
+    /// Re-attach an *existing* local branch as a worktree at `path`
+    /// (#164): the room's worktree directory was deleted out from under
+    /// Skein but its branch survives, and the fix is a checkout, not a
+    /// new branch. Unlike [`Repo::add_worktree`], this never creates or
+    /// moves a branch.
+    ///
+    /// If `path`'s leaf name still has a `.git/worktrees/` entry (the
+    /// original `add_worktree` call, or an earlier `restore_worktree`),
+    /// a directory-gone entry is stale and gets pruned first — that's
+    /// exactly the #164 case, metadata surviving a deleted directory.
+    /// An entry whose directory is still there is left alone:
+    /// [`GitError::WorktreeExists`]. `validate()` failing is not itself
+    /// proof of "gone" — an unmounted drive or offline share fails it
+    /// too — so pruning additionally requires `symlink_metadata` on the
+    /// recorded path to return `NotFound` with its parent directory
+    /// still reachable; anything less certain is refused as
+    /// [`GitError::WorktreeUnreachable`] rather than pruned. A branch
+    /// already checked out live elsewhere — the main checkout or
+    /// another linked worktree — is also refused
+    /// ([`GitError::BranchCheckedOut`]) rather than forced; two working
+    /// directories on one branch is exactly what git's own worktree
+    /// lock exists to prevent.
+    pub fn restore_worktree(&self, branch_name: &str, path: &Path) -> Result<WorktreeInfo> {
+        let branch = self
+            .repo
+            .find_branch(branch_name, BranchType::Local)
+            .map_err(|e| {
+                if e.code() == git2::ErrorCode::NotFound {
+                    GitError::BranchNotFound(branch_name.to_owned())
+                } else {
+                    GitError::Git(e)
+                }
+            })?;
+        let reference = branch.into_reference();
+
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| {
+                GitError::Git(git2::Error::from_str(
+                    "worktree path must end in a UTF-8 component",
+                ))
+            })?
+            .to_owned();
+
+        if self.repo.worktrees()?.iter().flatten().any(|n| n == name) {
+            let existing = self.repo.find_worktree(&name)?;
+            if existing.validate().is_ok() {
+                return Err(GitError::WorktreeExists(name));
+            }
+            // `validate()` failing only means git2 couldn't confirm the
+            // worktree directory is there — that's also what an
+            // unmounted drive, an offline share or a permission error
+            // looks like, and pruning on THAT would delete the admin
+            // entry of a worktree that still exists, leaving its
+            // `.git` file dangling (#164 review). Only prune when the
+            // recorded path is provably gone: `symlink_metadata` on it
+            // returns `NotFound`, AND its parent directory is itself
+            // reachable, so a missing parent (the whole `<repo>-wt`
+            // dir unmounted) doesn't get misread as "directory gone".
+            // Anything else — path present, parent unreachable, any
+            // other io error — is refused without touching the entry.
+            let existing_path = existing.path();
+            let path_confirmed_absent = match std::fs::symlink_metadata(existing_path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    existing_path.parent().is_some_and(Path::is_dir)
+                }
+                Ok(_) | Err(_) => false,
+            };
+            if !path_confirmed_absent {
+                return Err(GitError::WorktreeUnreachable(
+                    name,
+                    existing_path.display().to_string(),
+                ));
+            }
+            existing.prune(None)?;
+        }
+
+        if self.branch_checked_out_elsewhere(branch_name)? {
+            return Err(GitError::BranchCheckedOut(branch_name.to_owned()));
+        }
+
+        let mut opts = WorktreeAddOptions::new();
+        opts.reference(Some(&reference));
+
+        // libgit2 won't create intermediate directories (see the same
+        // note in `add_worktree`).
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        self.repo.worktree(&name, path, Some(&opts))?;
+        Ok(WorktreeInfo {
+            name,
+            path: path.to_path_buf(),
+        })
+    }
+
+    /// `true` if `branch_name` is currently checked out — HEAD, not
+    /// detached — in the main checkout or in any linked worktree whose
+    /// directory still validates. A worktree whose directory is gone
+    /// can't be "checked out" in any sense that matters here.
+    fn branch_checked_out_elsewhere(&self, branch_name: &str) -> Result<bool> {
+        let main_repo = Repository::open(self.main_repo_root())?;
+        if Self::head_is_branch(&main_repo, branch_name) {
+            return Ok(true);
+        }
+        for other_name in self.repo.worktrees()?.iter().flatten() {
+            let other = self.repo.find_worktree(other_name)?;
+            if other.validate().is_err() {
+                continue;
+            }
+            let other_repo = Repository::open(other.path())?;
+            if Self::head_is_branch(&other_repo, branch_name) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn head_is_branch(repo: &Repository, branch_name: &str) -> bool {
+        let Ok(head) = repo.head() else {
+            return false;
+        };
+        head.is_branch() && head.shorthand() == Some(branch_name)
     }
 
     pub fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
