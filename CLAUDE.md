@@ -81,10 +81,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   Disk parsing is enrichment ONLY (description + the tools
     │                                #   allowlist), because globbing the config dirs drifts silently
     ├── crates/skein-git/            # Pure-Rust libgit2 wrapper. Tauri-free, sync, local-only
-    │   └── src/lib.rs               # Repo: open, branches, head_branch, add_worktree,
-    │                                #   list/remove_worktree, status, diff_workdir, head_blob
-    │                                #   (the review baseline's source, #211);
-    │                                #   propose_worktree_path → sibling dir <repo>-wt/<slug>.
+    │   └── src/lib.rs               # Re-exports only (#19 split): repo (open, branches,
+    │       {repo,worktree,status,   #   head_branch), worktree (add/list/remove_worktree,
+    │        diff,error,range}.rs    #   propose_worktree_path → sibling dir <repo>-wt/<slug>),
+    │                                #   status (worktree status), diff (diff_workdir, head_blob
+    │                                #   — the review baseline's source, #211), error (the one
+    │                                #   GitError/Result), range (commit-range queries, #212).
+    │                                #   Every public symbol still imports from the crate root.
     │                                #   READS ONLY, deliberately: Skein performs no git
     │                                #   mutations (D9 corrected, #182 closed not planned).
     │                                #   A tested git-CLI write layer sits unshipped in
@@ -111,16 +114,37 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   calls its safe functions
     ├── app/
     │   ├── src/                     # React + TS UI
-    │   │   ├── App.tsx              # The single React tree (~3.2k LOC hotspot; #19 tracks
-    │   │   │                        #   the split): rooms/harness tabs, boot resume,
-    │   │   │                        #   notifications, palette items, DnD, keydown dispatch
+    │   │   ├── App.tsx              # The root component (~750 LOC) — hook wiring
+    │   │   │                        #   + layout; its own state and effects moved
+    │   │   │                        #   into use*.ts hooks (#19): useRoomsStore
+    │   │   │                        #   (rooms state, hydrate/autosave #167,
+    │   │   │                        #   archive/unarchive, missing folders #164),
+    │   │   │                        #   useHarnessCreation, useHarnessActions,
+    │   │   │                        #   useHarnessNotifications (badge/toast/OS
+    │   │   │                        #   notify), useOsNotificationClicks,
+    │   │   │                        #   useRoomStripNav, useKeyboardShortcuts,
+    │   │   │                        #   useAppSettings, useAppWindowEffects — plus
+    │   │   │                        #   paletteItems.ts and the split-out
+    │   │   │                        #   components NewRoomDialog.tsx (+
+    │   │   │                        #   useNewRoomForm.tsx), HarnessColumn.tsx,
+    │   │   │                        #   StatusBar.tsx, AppOverlays.tsx,
+    │   │   │                        #   AppChrome.tsx, notifications.tsx
     │   │   ├── LiveTerminal.tsx     # xterm.js ↔ PTY binding; spawns/kills on (cmd, spawnGen)
-    │   │   │                        #   mountKey; attaches the L2c event adapters
+    │   │   │                        #   mountKey; attaches the L2c event adapters. Split (#19)
+    │   │   │                        #   into useTerminalSpawn.ts (the mount effect — PTY
+    │   │   │                        #   lifecycle + L2c adapter attach), terminalInteractions.ts
+    │   │   │                        #   (keys/clipboard/post-exit shell gate), terminalSetup.ts
+    │   │   │                        #   (xterm.js Terminal + addon construction)
     │   │   ├── harnessActivity.ts   # Source of truth for harness phase (spawning/running/
     │   │   │                        #   idle/waiting/exited); L2a idle heuristic + L2b
     │   │   │                        #   patterns + L2c authoritative adapters. #277 defers
     │   │   │                        #   a main session's end-of-turn while its subagents
-    │   │   │                        #   are still working, rather than adding a phase
+    │   │   │                        #   are still working, rather than adding a phase.
+    │   │   │                        #   Split (#19) into the public entry (store object +
+    │   │   │                        #   re-exports; importers keep using ./harnessActivity)
+    │   │   │                        #   over harnessActivityCore.ts (the single mutable
+    │   │   │                        #   store + tick/watchdogs), …Types.ts, …Constants.ts,
+    │   │   │                        #   …Labels.ts, and useHarnessActivity.ts (the React hooks)
     │   │   ├── subagents.ts         # Per-harness live-Claude-subagent registry + useLiveSubagents
     │   │   │                        #   (#276, epic #298). Disk is the source of truth: the
     │   │   │                        #   adapter re-derives the live set from the transcripts on
@@ -164,11 +188,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   for keyboard nav and a top-tab click; resolveTopDrop
     │   │   │                        #   (top row, whole segments) and resolveRowDrop (second
     │   │   │                        #   row, members only) replace the old single
-    │   │   │                        #   resolveRoomDrop — no shim, App.tsx's reorderRoom picks
-    │   │   │                        #   between them itself. Table-tested, no React
-    │   │   ├── components.tsx       # Shared atoms (HChip, StatusDot, tabs, the two-step
-    │   │   │                        #   harness picker — kind, then agent for the kinds
-    │   │   │                        #   that take one)
+    │   │   │                        #   resolveRoomDrop — no shim, useRoomStripNav.ts's
+    │   │   │                        #   reorderRoom picks between them itself. Table-tested,
+    │   │   │                        #   no React
+    │   │   ├── components.tsx       # Shared atoms (HChip, StatusDot, tabs). The two-step
+    │   │   │                        #   harness picker (kind, then agent for the kinds
+    │   │   │                        #   that take one) moved to HarnessPicker.tsx (#19),
+    │   │   │                        #   re-exported here unchanged
     │   │   ├── RoomStrip.tsx        # The two-level room strip (#76), rewritten from a
     │   │   │                        #   rejected single-row-with-collapse first draft: `RoomStrip`
     │   │   │                        #   is the TOP row, one tab per StripSegment — a plain
@@ -181,8 +207,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   App.tsx only when the active room's segment IS a
     │   │   │                        #   group (`segmentOfRoom`); a lone-room repo never grows
     │   │   │                        #   one. No collapse state anywhere any more.
-    │   │   │                        #   `lastUsedByGroup` (App.tsx, in-memory only) is what a
-    │   │   │                        #   top-level click/Alt+N returns to
+    │   │   │                        #   `lastUsedByGroup` (useRoomStripNav.ts, in-memory
+    │   │   │                        #   only) is what a top-level click/Alt+N returns to
     │   │   ├── shortcuts.ts         # ALL keyboard shortcuts: one platform-agnostic BINDINGS
     │   │   │                        #   table (#151); LiveTerminal swallows via isAppShortcut
     │   │   ├── SettingsModal.tsx    # Settings + in-app updater UI
@@ -211,7 +237,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   named seam movable panes will need
     │   │   └── review/              # The review surface (#212, epic #52 B). api.ts (DTO mirror
     │   │                            #   of review_surface.rs + invoke wrappers), ReviewPane
-    │   │                            #   (header/base picker/scope switch/orchestration),
+    │   │                            #   (scope switch/orchestration) + ReviewHeader.tsx (#19:
+    │   │                            #   base picker, scope switch, counts, accept-all/nudge/
+    │   │                            #   sign-off controls, split out of ReviewPane.tsx),
     │   │                            #   FileList, CommitList, DiffBody (one unified-diff
     │   │                            #   renderer for all three scopes, hover-to-comment,
     │   │                            #   shift-click to extend), Thread (threads + composer),
@@ -320,10 +348,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
 ## Data flow
 
 - **Rooms** persist in sqlite at `<APP_DATA>/skein.db`, one row per
-  room, the whole Room as a camelCase JSON blob. `App.tsx` hydrates
-  once on mount (`db_load_rooms`); every `rooms` state change after a
-  successful load mirrors back wholesale (`db_save_rooms`, wipe +
-  re-insert in one transaction). **#167 hardening:** unparseable rows
+  room, the whole Room as a camelCase JSON blob. `useRoomsStore.ts`
+  hydrates once on mount (`db_load_rooms`); every `rooms` state change
+  after a successful load mirrors back wholesale (`db_save_rooms`,
+  wipe + re-insert in one transaction). **#167 hardening:** unparseable rows
   are quarantined to `sessions_quarantine` (never silently dropped);
   a wholesale load failure parks the autosave and shows a retry card;
   `save_all` refuses an empty commit before a successful load; WAL +
