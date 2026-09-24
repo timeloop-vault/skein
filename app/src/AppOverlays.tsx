@@ -4,6 +4,7 @@
 // and the normal layout), so this one component covers both.
 
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
+import { ConfirmDialogHost } from "./ConfirmDialog.tsx";
 import { NewRoomDialog } from "./NewRoomDialog.tsx";
 import type { CreateRoomArgs } from "./NewRoomDialogTypes.ts";
 import { ReopenRoomModal } from "./ReopenRoomModal.tsx";
@@ -156,6 +157,10 @@ export const AppOverlays = ({
 					</span>
 				</div>
 			)}
+			{/* #242: mounted last so it paints above every other overlay
+			    above — same z-index (.sk-modal-bg), later DOM sibling wins
+			    the paint order. Renders nothing when its queue is empty. */}
+			<ConfirmDialogHost />
 		</>
 	);
 };
