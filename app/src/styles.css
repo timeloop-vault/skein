@@ -1594,7 +1594,11 @@ html.tab-dragging.tab-drag-refused * {
 
 /* Empty harness picker */
 
-/* New session modal */
+/* Modal scrim — shared by New room, the command palette, Reopen room and
+ * Settings. Deliberately NO backdrop-filter, departing from the design
+ * archive's blur(6px) (#235): you often read something behind a modal to
+ * type it into it, and blur destroys glyphs. The scrim alone keeps the
+ * layering cue while leaving text behind dimmed but legible. */
 .sk-modal-bg {
 	position: fixed;
 	inset: 0;
@@ -1603,7 +1607,6 @@ html.tab-dragging.tab-drag-refused * {
 	align-items: center;
 	justify-content: center;
 	z-index: 100;
-	backdrop-filter: blur(6px);
 }
 .sk-light .sk-modal-bg {
 	background: rgba(20, 18, 14, 0.32);
