@@ -20,6 +20,24 @@ import type { Harness, HarnessKind, Room } from "./types.ts";
 
 const newId = (prefix: string): string => prefix + Math.random().toString(36).slice(2, 7);
 
+// #330: what `createRoom` hands back — everything the `create_room`
+// agent verb reports to the caller. `null`, not an absent key, for
+// every field that has no value right now: this crosses into a
+// `serde_json::Value` on its way back to Rust, where an absent object
+// key and an explicit JSON `null` are NOT the same "I don't know" the
+// rest of this codebase treats them as.
+export interface CreateRoomResult {
+	roomId: string;
+	name: string;
+	cwd: string;
+	repo: string | null;
+	branch: string | null;
+	harnessId: string;
+	kind: HarnessKind;
+	agent: string | null;
+	sessionId: string | null;
+}
+
 // Mapping from harness kind → argv. Each binary must be on PATH for the
 // spawn to succeed; if it isn't, the LiveTerminal renders the error
 // inline and the user can pick another kind. The `byoh` kind is our
@@ -297,13 +315,16 @@ export function useHarnessCreation(
 	// the first one that needs this. `activate: false` leaves
 	// `activeRoomId`/`showNewRoom` alone and marks the room `attention`
 	// instead (see the field's doc in types.ts), which is what puts a
-	// dot on its tab until the user visits it. Returns the new room id
-	// either way, so a caller that doesn't care about activation can
-	// still find the room it just made.
+	// dot on its tab until the user visits it. Returns the new room's
+	// identifying fields (#330: the `create_room` agent verb reports
+	// these back to the caller), not just the id — every field a caller
+	// can't otherwise reconstruct (kind/agent are on the record but
+	// `sessionId` for an opencode room isn't settled until the async
+	// capture below lands).
 	const createRoom = async (
-		{ cwd, task, harness, agent, branch, repoRoot }: CreateRoomArgs,
+		{ cwd, task, harness, agent, branch, repoRoot, createdBy }: CreateRoomArgs,
 		opts?: { activate?: boolean },
-	): Promise<string> => {
+	): Promise<CreateRoomResult> => {
 		const activate = opts?.activate ?? true;
 		const sid = newId("s");
 		const hid = newId("h");
@@ -367,6 +388,7 @@ export function useHarnessCreation(
 			],
 			activeHarnessId: hid,
 			...(activate ? {} : { attention: true }),
+			...(createdBy ? { createdBy } : {}),
 		};
 		setRooms((prev) => [...prev, newRoom]);
 		if (activate) {
@@ -380,7 +402,20 @@ export function useHarnessCreation(
 				setHarnessSessionId(sid, hid, captured);
 			});
 		}
-		return sid;
+		return {
+			roomId: sid,
+			name: folderName,
+			cwd,
+			repo: branch ? folderName : null,
+			branch: branch ?? null,
+			harnessId: hid,
+			kind: harness,
+			agent: agentName ?? null,
+			// Claude's is pre-allocated above and settled by construction;
+			// opencode's isn't captured until the async poll/SSE race above
+			// resolves, well after this function returns.
+			sessionId: sessionId ?? null,
+		};
 	};
 
 	return {

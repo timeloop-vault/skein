@@ -8,7 +8,7 @@ so an agent in a room can read the comments on its own work, answer
 them, and say what it did about them.
 
 It **cannot resolve a thread.** That is the point, not an omission —
-see [The one thing it will not do](#the-one-thing-it-will-not-do).
+see [What it will not do](#what-it-will-not-do).
 
 ## Shape
 
@@ -27,6 +27,7 @@ Skein process
      ├─ GET    /api/diff               get_diff
      ├─ POST   /api/messages           send_message
      ├─ GET    /api/messages           read_messages
+     ├─ POST   /api/rooms              create_room
      ├─ POST   /api/harness/permission     see below — not an agent verb
      └─ POST   /api/harness/session-start  see below — not an agent verb
 ```
@@ -279,6 +280,93 @@ refuse the review tools when off.
   the way it would weigh anything else it did not write itself — a
   request from another agent, never an instruction from the reviewer.
 
+## Opening a room (#330)
+
+A third shape, past review and mail: `create_room` is the one verb that
+lets an agent start *another* agent working, unattended, in a room of
+its own. It is guarded more heavily than anything else in this API —
+see "Caps and the kill switch" just below.
+
+### `create_room`
+
+```
+{ path?, branchMode?, branch?, baseBranch?, task, kind?, agent?, prompt? }
+```
+
+| arg | default when omitted |
+| :-- | :-- |
+| `path` | the calling room's own repo root, falling back to its cwd |
+| `branchMode` | `"worktree"` (the other choice is `"current"`) |
+| `branch` | the frontend's own branch template applied to `task` |
+| `baseBranch` | the repo's `HEAD` |
+| `task` | required — short label for the room's tab |
+| `kind` | the user's own default for this folder |
+| `agent` | the tool's own default, or the folder's remembered agent (#247/#248) |
+| `prompt` | omitted → the room opens idle. Given → queued as the new harness's first mailbox message the moment it exists |
+
+Returns `roomId`, `name`, `cwd`, `repo`, `branch`, `harnessId`, `kind`,
+`agent`, `sessionId` (nullable — a non-git folder has no repo or
+branch, and an opencode harness's session id is only captured
+asynchronously after spawn), and `messageId` (present only when
+`prompt` was given and successfully queued). HTTP route: `POST
+/api/rooms`, taking `CreateRoomArgs` directly as the body.
+
+**The flow** mirrors the New Room dialog rather than reinventing it,
+so a room an agent opens looks exactly like one a human would have
+gotten for the same folder:
+
+1. Rust validates what it can locally — `task` non-empty, `branchMode`
+   one of the two known values, `kind` one of the known harness kinds,
+   `path` absolute and a real directory, a git checkout when
+   `branchMode` is `"worktree"` — then checks the guards below.
+2. It round-trips `"create_room.resolve"` to the webview (#328's
+   `AgentApiState::request_frontend`): the frontend applies the user's
+   own default kind for the folder, the per-kind default agent (#248),
+   the folder's own remembered agent, and #247's agent validation —
+   the same defaulting `useNewRoomForm.tsx` runs for a human typing
+   into New Room.
+3. If a `prompt` was given, the #327 mailbox "who can read mail" rule
+   is checked against the *resolved* `(kind, agent)` — before anything
+   is created, so a prompt that could never be delivered (an
+   unreachable kind, injection turned off) is refused as
+   `"cannot queue the prompt: the new harness …"` rather than leaving
+   an idle room behind.
+4. Only then does it round-trip `"create_room"`, which runs the New
+   Room dialog's own shared worktree-creation path with
+   `activate: false` — the room opens in the background and does not
+   take over the user's screen.
+5. If `prompt` was given, it is queued as a mailbox message *from the
+   calling harness* once the room exists, and delivered the way any
+   mailbox message is delivered: #329's nudge, once the new harness is
+   `waiting`.
+
+Refused, with the exact reason as text (a representative, not
+exhaustive, list):
+
+- `"task can't be empty"`
+- `"unknown branchMode …"` / `"unknown kind …"`
+- `"agent room creation is turned off in Settings"` — the kill switch, below
+- `"rate limit: this room has attempted 5 room creations in the last minute (cap 5)"`
+- `"Skein already has N open rooms (cap 20); close or archive some before opening another"`
+- `"{path} is not a git checkout, so branchMode \"worktree\" cannot be used (try \"current\")"`
+- `"a prompt was given, but agent messaging is turned off in Settings, so it could never be delivered"`
+- `"cannot queue the prompt: the new harness …"` — the #327 "who can read mail" check, run against the resolved kind/agent
+- whatever the frontend round trip itself refuses for — an unresolvable folder, a colliding branch name, an unknown agent name — surfaces verbatim
+
+### Caps and the kill switch
+
+| cap | value |
+| :-- | :-- |
+| room creations | 5 per calling room per rolling minute |
+| open (non-archived) rooms | 20, agent-opened or not |
+| prompt | refused outright when agent messaging is off in Settings |
+
+Settings → Shell & environment has **"Let agents open rooms"**
+(`allowAgentRoomCreation` in `settings.json`, default on), right
+beside the messaging toggle: off refuses `create_room` by name, with
+the reason, the same way the messaging and #215 injection toggles
+refuse their own verbs.
+
 ## The permission-required signal (#86)
 
 `POST /api/harness/permission` is not an agent verb — it carries no MCP
@@ -354,7 +442,7 @@ twice is fine.
 A successful call emits `skein://harness-session-start` —
 `{ roomId, harnessId }` — and answers `204 No Content`.
 
-## The two things it will not do
+## What it will not do
 
 There is no `resolve` and no `approve`, and there never will be here.
 An agent that can close its own comments removes the only gate in the
@@ -373,6 +461,21 @@ Each is refused three ways, on purpose:
 - `POST /api/comments/{id}/resolve` and `POST /api/status` exist and
   answer `403`, so the answer reads as design rather than as "not
   implemented yet".
+
+**Creating a room is allowed; destroying one is not.** `create_room`
+(#330) is deliberately not a symmetric pair with some `close_room` or
+`archive_room` — the line it draws is *whose decision it is*, not read
+vs write. Opening a room is reversible and visible: it lands as an
+ordinary room the user can see, close, or ignore. Closing one is not
+the caller's call to make, least of all the room's own occupant.
+`archive_room`, `remove_worktree`, `delete_room` and `close_room` are
+refused **by name** in `tools/call`, the same three-way treatment as
+`resolve`/`approve` above — the reason names whose decision it is
+rather than leaving a model to go looking for another way to tear a
+worktree down (a raw `rm -rf`, say). This is the same standing rule
+the rest of Skein already follows: it performs no git mutations of its
+own (`CLAUDE.md`), and #330 does not carve out an exception just
+because the *thing* being destroyed is a room instead of a commit.
 
 ## Errors
 

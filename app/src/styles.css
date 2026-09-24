@@ -2257,6 +2257,11 @@ html.tab-dragging.tab-drag-refused * {
 .sk-toast.permission .sk-toast-sub {
 	color: var(--st-permission);
 }
+/* #330: the create_room receipt — same border treatment, the app's
+   accent hue rather than a status color since this isn't a status. */
+.sk-toast.created {
+	border-left: 3px solid var(--accent);
+}
 .sk-toast-detail {
 	font-family: var(--sk-mono);
 	font-size: calc(var(--cfs) * 0.7917);

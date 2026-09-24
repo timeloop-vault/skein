@@ -1,10 +1,14 @@
 //! What an agent can actually do.
 //!
-//! Five verbs, all plain functions over a [`Database`] and a
-//! [`Caller`]. Nothing here knows about HTTP or MCP, which is what
-//! makes the interesting properties — room scoping, the resolve
-//! prohibition, attribution — testable without a server or a Tauri
-//! runtime.
+//! Mostly plain functions over a [`Database`] and a [`Caller`]. Nothing
+//! here knows about HTTP or MCP, which is what makes the interesting
+//! properties — room scoping, the resolve prohibition, attribution —
+//! testable without a server or a Tauri runtime. [`create_room`] (#330)
+//! is the one exception that needs more than that: opening a room means
+//! asking the webview to do it (#328's `request_frontend`), so it also
+//! takes an [`super::state::AgentApiState`] — itself usable with no
+//! Tauri runtime via `AgentApiState::for_test`, so the "no server
+//! needed" property still holds in tests.
 //!
 //! Two rules run through all of them:
 //!
@@ -19,11 +23,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use skein_review::{FileState, Hunk, LineKind};
 
 use super::auth::Caller;
+use super::state::AgentApiState;
 use crate::db::{
     Database, Harness, HarnessMessageRow, ReviewAddressedRow, ReviewCommentRow, ReviewThreadRow,
     Room,
@@ -877,6 +883,474 @@ pub fn unread_mail(messages: &[HarnessMessageRow], rooms: &[Room]) -> MailUnread
     }
 }
 
+// ── opening a room (issue #330) ──────────────────────────────────────
+
+/// The harness kinds Skein knows how to spawn. Mirrors the TS
+/// `HarnessKind` union in `app/src/data.tsx`'s `HARNESS_KINDS` — kept as
+/// a plain list here rather than imported, since nothing on the Rust
+/// side otherwise needs that registry; `create_room` only needs to
+/// reject a typo loudly rather than pass it through to the frontend.
+const KNOWN_HARNESS_KINDS: &[&str] = &["claude", "opencode", "copilot", "byoh", "files"];
+
+/// How long to wait for the frontend to resolve a `(kind, agent)` — a
+/// folder lookup plus a couple of `localStorage` reads, so this should
+/// never be close.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How long to wait for the frontend to actually create the room —
+/// generous because worktree mode runs `git worktree add`, which can be
+/// slow on a large repo or a cold disk cache.
+const CREATE_ROOM_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How many `create_room` attempts (successful or refused past this
+/// point) one calling room may make in [`ROOM_CREATION_WINDOW`] — a
+/// runaway loop has to hit a wall before it can spawn an unbounded
+/// number of agent processes.
+const ROOM_CREATION_RATE_LIMIT: usize = 5;
+const ROOM_CREATION_WINDOW: Duration = Duration::from_secs(60);
+
+/// How many open (non-archived) rooms Skein will hold before
+/// `create_room` refuses outright, agent-opened or not — each is a real
+/// worktree and, once its harness spawns, a real process.
+const MAX_OPEN_ROOMS: usize = 20;
+
+/// `deny_unknown_fields`: a wrong key here — `branch_mode` instead of
+/// `branchMode`, say — must be a loud error, not a silently dropped
+/// argument the caller has no way to notice (the exact bug the advertised
+/// `inputSchema` in `mcp.rs`'s `tool_specs` had until it was caught: the
+/// schema advertised the `snake_case` Rust field names, and a client that
+/// followed it faithfully had its `branchMode`/`baseBranch` vanish).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateRoomArgs {
+    /// Absolute path to an existing folder. Omitted → the calling
+    /// room's own repo root, falling back to its cwd.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// `"worktree"` (default) or `"current"` — the same two choices the
+    /// New Room dialog offers.
+    #[serde(default)]
+    pub branch_mode: Option<String>,
+    /// Worktree mode only. Omitted → the frontend's own branch template
+    /// applied to `task`.
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// Worktree mode only. Omitted → the repo's HEAD.
+    #[serde(default)]
+    pub base_branch: Option<String>,
+    pub task: String,
+    /// Omitted → the frontend applies the user's own default for the
+    /// folder. When given, must be one of [`KNOWN_HARNESS_KINDS`].
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Omitted → the tool's own default, or the folder's remembered
+    /// agent (#247/#248) — the same rule the New Room dialog follows.
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// Queue this as the new harness's first message (#327's mailbox),
+    /// once the room exists. Refused up front, before anything is
+    /// created, if the resolved harness could never read it.
+    #[serde(default)]
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateRoomOut {
+    pub room_id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub harness_id: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Present only when `prompt` was given and successfully queued.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+}
+
+/// The frontend's answer to a `"create_room.resolve"` request — the
+/// `(kind, agent)` it would actually spawn for `path`, after applying
+/// the user's default kind, the per-kind default agent (#248), the
+/// folder's own remembered agent, and #247's agent validation.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolveOut {
+    kind: String,
+    #[serde(default)]
+    agent: Option<String>,
+}
+
+/// The frontend's answer to a `"create_room"` request — the room it
+/// actually made. `cwd`/`repo`/`branch`/`agent`/`session_id` are
+/// nullable: a non-git folder has no repo or branch, and an opencode
+/// harness's session id is only captured asynchronously after spawn
+/// (see `useHarnessCreation.ts`), so it may still be unknown when this
+/// answers.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatedRoomOut {
+    room_id: String,
+    name: String,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    repo: Option<String>,
+    #[serde(default)]
+    branch: Option<String>,
+    harness_id: String,
+    kind: String,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+/// Open a whole new room — a new worktree, a new spawned harness, and
+/// optionally a queued first prompt (#330).
+///
+/// This is the one verb an agent can use to start *another* agent
+/// working unattended, so it is guarded more heavily than anything else
+/// in this file: a dedicated Settings kill switch
+/// (`allow_agent_room_creation`), a per-room rate cap, and a ceiling on
+/// how many open rooms Skein will hold at all — on top of the frontend
+/// round trips themselves, which can refuse for reasons only the UI
+/// knows (an unreadable folder, a colliding branch name, …).
+///
+/// Two round trips to the webview, via [`AgentApiState::request_frontend`]:
+/// `"create_room.resolve"` first asks what `(kind, agent)` would
+/// actually spawn for `path` — the same folder-memory and validation
+/// logic `useNewRoomForm.tsx` runs — and only once that answer is in
+/// hand does `"create_room"` ask for the room itself, so a prompt that
+/// could never be delivered (an unreachable kind, injection turned off)
+/// is caught *before* anything is created, never partially.
+///
+/// `room_creation_enabled` is `allow_agent_room_creation` off the live
+/// `SpawnSettings`, read by the caller (`mcp.rs`/`http.rs`) the same way
+/// `mail.policy` is — passed in rather than read from `state` here, so
+/// this verb stays testable with a plain bool and no managed
+/// `SpawnEnvState`, the one piece of Tauri-only state `AgentApiState::
+/// for_test` has no way to fake.
+#[allow(clippy::too_many_lines)]
+pub async fn create_room(
+    state: &AgentApiState,
+    caller: &Caller,
+    args: &CreateRoomArgs,
+    mail: &MailContext,
+    room_creation_enabled: bool,
+) -> VerbResult<CreateRoomOut> {
+    let db = &state.db;
+
+    let task = args.task.trim();
+    if task.is_empty() {
+        return Err(VerbError::Refused("task can't be empty".into()));
+    }
+
+    let branch_mode = match args.branch_mode.as_deref() {
+        None | Some("worktree") => "worktree",
+        Some("current") => "current",
+        Some(other) => {
+            return Err(VerbError::Refused(format!(
+                "unknown branchMode {other:?} — use worktree or current"
+            )));
+        }
+    };
+
+    if let Some(kind) = args.kind.as_deref() {
+        if !KNOWN_HARNESS_KINDS.contains(&kind) {
+            return Err(VerbError::Refused(format!(
+                "unknown kind {kind:?} — use one of {KNOWN_HARNESS_KINDS:?}"
+            )));
+        }
+    }
+
+    if let Some(prompt) = args.prompt.as_deref() {
+        if prompt.is_empty() {
+            return Err(VerbError::Refused(
+                "prompt was given but empty — omit it or give it a body".into(),
+            ));
+        }
+        if prompt.len() > MAX_MESSAGE_BYTES {
+            return Err(VerbError::Refused(format!(
+                "prompt is capped at {MAX_MESSAGE_BYTES} bytes; this one is {} bytes",
+                prompt.len()
+            )));
+        }
+        if !mail.policy.messaging_enabled {
+            return Err(VerbError::Refused(
+                "a prompt was given, but agent messaging is turned off in Settings, \
+                 so it could never be delivered"
+                    .into(),
+            ));
+        }
+    }
+
+    let rooms = db.all_rooms().map_err(internal)?;
+    let caller_room = rooms
+        .iter()
+        .find(|r| r.id == caller.room_id)
+        .cloned()
+        .ok_or_else(|| VerbError::Unavailable("the calling room no longer exists".into()))?;
+
+    let path = match args.path.as_deref().map(str::trim) {
+        Some(p) if !p.is_empty() => p.to_owned(),
+        _ => caller_room
+            .repo_root
+            .clone()
+            .or_else(|| caller_room.cwd.clone())
+            .ok_or_else(|| {
+                VerbError::Refused(
+                    "path was omitted and the calling room has no folder to default to".into(),
+                )
+            })?,
+    };
+    let path_buf = std::path::Path::new(&path);
+    if !path_buf.is_absolute() {
+        return Err(VerbError::Refused(format!(
+            "path must be absolute: {path:?}"
+        )));
+    }
+    if !path_buf.is_dir() {
+        return Err(VerbError::Refused(format!(
+            "path does not exist or is not a directory: {path:?}"
+        )));
+    }
+    if branch_mode == "worktree" && !skein_git::Repo::is_repo(path_buf) {
+        return Err(VerbError::Refused(format!(
+            "{path} is not a git checkout, so branchMode \"worktree\" cannot be used \
+             (try \"current\")"
+        )));
+    }
+
+    if !room_creation_enabled {
+        return Err(VerbError::Refused(
+            "agent room creation is turned off in Settings".into(),
+        ));
+    }
+    if !state.check_room_creation_rate(
+        &caller.room_id,
+        ROOM_CREATION_WINDOW,
+        ROOM_CREATION_RATE_LIMIT,
+    ) {
+        return Err(VerbError::Refused(format!(
+            "rate limit: this room has attempted {ROOM_CREATION_RATE_LIMIT} room \
+             creations in the last minute"
+        )));
+    }
+    let open_rooms = rooms.iter().filter(|r| r.archived.is_none()).count();
+    if open_rooms >= MAX_OPEN_ROOMS {
+        return Err(VerbError::Refused(format!(
+            "Skein already has {open_rooms} open rooms (cap {MAX_OPEN_ROOMS}); close \
+             or archive some before opening another"
+        )));
+    }
+
+    let resolved = state
+        .request_frontend(
+            "create_room.resolve",
+            serde_json::json!({
+                "path": path,
+                "kind": args.kind,
+                "agent": args.agent,
+            }),
+            RESOLVE_TIMEOUT,
+        )
+        .await
+        .map_err(|e| frontend_error(&e))?;
+    let resolved: ResolveOut = serde_json::from_value(resolved).map_err(|e| {
+        VerbError::Unavailable(format!(
+            "the app returned an unexpected answer for create_room.resolve: {e}"
+        ))
+    })?;
+    if !KNOWN_HARNESS_KINDS.contains(&resolved.kind.as_str()) {
+        return Err(VerbError::Unavailable(format!(
+            "the app resolved an unknown harness kind {:?}",
+            resolved.kind
+        )));
+    }
+
+    if args.prompt.is_some() {
+        if let Some(reason) = mail_refusal_for(
+            &resolved.kind,
+            resolved.agent.as_deref(),
+            Some(&path),
+            mail.policy,
+            mail.agent_sees_mcp,
+        ) {
+            return Err(VerbError::Refused(format!(
+                "cannot queue the prompt: the new harness {reason}"
+            )));
+        }
+    }
+
+    let created = state
+        .request_frontend(
+            "create_room",
+            serde_json::json!({
+                "path": path,
+                "branchMode": branch_mode,
+                "branch": args.branch,
+                "baseBranch": args.base_branch,
+                "task": task,
+                "kind": resolved.kind,
+                "agent": resolved.agent,
+                "createdBy": {
+                    "roomId": caller.room_id,
+                    // A `String`, never `null` — the frontend's
+                    // `createdBy` contract only requires `roomId`, but
+                    // `harnessId` still has to be *a string* to satisfy
+                    // its type check when the caller's own
+                    // `X-Skein-Harness` was absent, same fallback
+                    // `queue_first_prompt`/`send_message` use elsewhere
+                    // in this file.
+                    "harnessId": caller.harness_id.clone().unwrap_or_default(),
+                },
+                "requesterRoomName": caller_room.name,
+            }),
+            CREATE_ROOM_TIMEOUT,
+        )
+        .await
+        .map_err(|e| frontend_error(&e))?;
+    let created: CreatedRoomOut = serde_json::from_value(created).map_err(|e| {
+        VerbError::Unavailable(format!(
+            "the app returned an unexpected answer for create_room: {e}"
+        ))
+    })?;
+
+    let message_id = args
+        .prompt
+        .as_deref()
+        .and_then(|prompt| queue_first_prompt(db, state, caller, &caller_room, &created, prompt));
+
+    Ok(CreateRoomOut {
+        room_id: created.room_id,
+        name: created.name,
+        cwd: created.cwd,
+        repo: created.repo,
+        branch: created.branch,
+        harness_id: created.harness_id,
+        kind: created.kind,
+        agent: created.agent,
+        session_id: created.session_id,
+        message_id,
+    })
+}
+
+/// Queue `prompt` as the new harness's first mailbox message (#327),
+/// once `create_room`'s second round trip has actually made it. Returns
+/// the message id, or `None` if the insert itself failed — a caller
+/// must never see a `messageId` in the response for a message that does
+/// not exist in `harness_messages`.
+///
+/// Deliberately does not go through [`send_message`] — this is not
+/// counted against [`SEND_RATE_LIMIT`], since the room that just made
+/// the request already paid [`ROOM_CREATION_RATE_LIMIT`], and the new
+/// harness's unread count is trivially zero. Mirrors
+/// [`record_mail_actions`]'s payload shape, built by hand rather than
+/// reusing that helper: it takes real `Room`/`Harness` rows for the
+/// recipient, and the room `create_room` just made is not yet one — the
+/// frontend has not autosaved it (see the module docs on why that is
+/// safe).
+fn queue_first_prompt(
+    db: &Database,
+    state: &AgentApiState,
+    caller: &Caller,
+    caller_room: &Room,
+    created: &CreatedRoomOut,
+    prompt: &str,
+) -> Option<String> {
+    let now = now_ms();
+    let row = HarnessMessageRow {
+        id: uuid::Uuid::new_v4().to_string(),
+        room_id: created.room_id.clone(),
+        harness_id: created.harness_id.clone(),
+        from_room_id: caller.room_id.clone(),
+        from_harness_id: caller.harness_id.clone(),
+        body: prompt.to_owned(),
+        created_ms: now,
+        read_ms: None,
+    };
+    if let Err(e) = db.insert_harness_message(&row) {
+        // The room itself was already created — reporting this as a
+        // `create_room` failure would be worse than the prompt simply
+        // not arriving, the same call `send_message` makes for the
+        // harness_actions rows below. But the caller must not be told a
+        // `messageId` for a row that was never written, so this is the
+        // one path that returns `None` rather than `Some(row.id)`.
+        tracing::warn!(
+            room_id = %created.room_id, harness_id = %created.harness_id, error = %e,
+            "agent_api: create_room's first-prompt message failed to insert"
+        );
+        return None;
+    }
+
+    let from_harness_label = caller.harness_id.as_deref().and_then(|hid| {
+        caller_room
+            .harnesses
+            .iter()
+            .find(|h| h.id == hid)
+            .map(|h| format!("{} · {}", h.kind, h.name))
+    });
+    let payload = serde_json::json!({
+        "message_id": row.id,
+        "from_room_id": caller.room_id,
+        "from_room_name": caller_room.name,
+        "from_harness_id": caller.harness_id,
+        "from_harness_label": from_harness_label,
+        "to_room_id": created.room_id,
+        "to_room_name": created.name,
+        "to_harness_id": created.harness_id,
+        "to_harness_label": created.kind,
+    })
+    .to_string();
+    record_and_emit(
+        db,
+        state.app.as_ref(),
+        &created.harness_id,
+        &created.room_id,
+        now,
+        crate::db::action_kind::MESSAGE_IN,
+        &payload,
+    );
+    record_and_emit(
+        db,
+        state.app.as_ref(),
+        caller.harness_id.as_deref().unwrap_or(""),
+        &caller.room_id,
+        now,
+        crate::db::action_kind::MESSAGE_OUT,
+        &payload,
+    );
+    state.notify_mail_changed(&created.room_id, &created.harness_id);
+    Some(row.id)
+}
+
+/// Map a [`AgentApiState::request_frontend`] error string to the right
+/// [`VerbError`]. Infrastructure problems — no webview, a timeout, a
+/// disconnect mid-wait (see `PendingRequestGuard`'s doc for why that one
+/// is possible at all) — are [`VerbError::Unavailable`]: not the
+/// caller's fault, and plausibly transient. Anything else is the
+/// frontend actively saying no to this exact request (an unresolvable
+/// folder, a bad branch, …), which the caller could fix and retry, so
+/// it is [`VerbError::Refused`].
+fn frontend_error(message: &str) -> VerbError {
+    if message.contains("no webview is listening")
+        || message.contains("timed out after")
+        || message.contains("dropped the request")
+    {
+        VerbError::Unavailable(message.to_owned())
+    } else {
+        VerbError::Refused(message.to_owned())
+    }
+}
+
 /// Resolve `to` into a concrete `(room, harness)` — a harness id first,
 /// searched across every room, then a room id resolved to its lead
 /// harness. Takes the room list rather than a `Database` so
@@ -932,25 +1406,38 @@ fn mail_refusal(
     cwd: Option<&str>,
     agent_sees_mcp: AgentSeesMcp,
 ) -> Option<String> {
-    let injected = match h.kind.as_str() {
+    mail_refusal_for(&h.kind, h.agent.as_deref(), cwd, policy, agent_sees_mcp)
+}
+
+/// The core of [`mail_refusal`], over a bare `(kind, agent)` pair rather
+/// than a `Harness` — [`create_room`] (#330) needs the identical rule
+/// applied to a harness that does not exist yet: the prompt-messaging
+/// check has to run *before* the room (and so the harness row) is
+/// created, using the kind/agent the frontend resolved.
+fn mail_refusal_for(
+    kind: &str,
+    agent: Option<&str>,
+    cwd: Option<&str>,
+    policy: MailPolicy,
+    agent_sees_mcp: AgentSeesMcp,
+) -> Option<String> {
+    let injected = match kind {
         "claude" => policy.claude_injected,
         "opencode" => policy.opencode_injected,
         _ => {
             return Some(format!(
-                "{} harnesses have no MCP connection to receive messages on",
-                h.kind
+                "{kind} harnesses have no MCP connection to receive messages on"
             ));
         }
     };
     if !injected {
         return Some(format!(
-            "config injection for {} is turned off in Settings, so it cannot see \
-             the messaging tool",
-            h.kind
+            "config injection for {kind} is turned off in Settings, so it cannot see \
+             the messaging tool"
         ));
     }
-    if let (Some(agent), Some(cwd)) = (h.agent.as_deref(), cwd) {
-        if !agent_sees_mcp(&h.kind, agent, cwd) {
+    if let (Some(agent), Some(cwd)) = (agent, cwd) {
+        if !agent_sees_mcp(kind, agent, cwd) {
             return Some(format!(
                 "the agent {agent:?} this harness runs hides MCP tools behind its \
                  own tool allowlist"

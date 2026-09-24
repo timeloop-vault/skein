@@ -531,6 +531,19 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 							</span>
 						</span>
 					</label>
+					<label className="sk-toggle">
+						<input
+							type="checkbox"
+							checked={draft.allowAgentRoomCreation}
+							onChange={(e) => setDraft({ ...draft, allowAgentRoomCreation: e.target.checked })}
+						/>
+						<span className="sk-toggle-label">
+							<span className="sk-toggle-title">Let agents open rooms</span>
+							<span className="sk-toggle-sub">
+								When off, an agent's <code>create_room</code> calls are refused with the reason.
+							</span>
+						</span>
+					</label>
 				</div>
 			</div>
 
