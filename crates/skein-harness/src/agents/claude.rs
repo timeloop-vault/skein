@@ -182,6 +182,17 @@ pub fn plugin_agents_dirs(home: &Path) -> BTreeMap<String, PathBuf> {
     out
 }
 
+/// One definition by name, straight from disk — no CLI spawn.
+///
+/// Used by the agent-messaging mailbox (#327) to ask "would this agent
+/// even see the MCP tools", which has to be cheap enough to run on
+/// every `send_message`. `None` covers both "no such agent" and "no
+/// file behind a builtin name" — the caller treats either as "cannot
+/// tell, so allow" rather than as a refusal.
+pub fn find_definition(home: &Path, cwd: &Path, name: &str) -> Option<AgentDef> {
+    definitions(home, cwd).get(name).cloned()
+}
+
 /// Every agent definition on disk, keyed by the name the CLI would use.
 fn definitions(home: &Path, cwd: &Path) -> BTreeMap<String, AgentDef> {
     let mut out = BTreeMap::new();

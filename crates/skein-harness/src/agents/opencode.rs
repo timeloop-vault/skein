@@ -114,6 +114,12 @@ fn probe(program: &OsStr, cwd: &Path) -> Result<Vec<String>, String> {
     Ok(selectable(pairs))
 }
 
+/// One definition by name, straight from disk — no CLI spawn. See
+/// [`super::claude::find_definition`] for why this exists (#327).
+pub fn find_definition(home: &Path, cwd: &Path, name: &str) -> Option<AgentDef> {
+    definitions(home, cwd).get(name).cloned()
+}
+
 /// `<home>/.config/opencode/agent` and `<cwd>/.opencode/agent`, plus
 /// the `agent` object in either `opencode.json`.
 fn definitions(home: &Path, cwd: &Path) -> BTreeMap<String, AgentDef> {

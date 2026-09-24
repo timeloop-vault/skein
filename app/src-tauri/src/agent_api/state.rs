@@ -7,6 +7,7 @@ use serde::Serialize;
 use tauri::Emitter;
 
 use crate::db::Database;
+use crate::spawn_settings::SpawnSettings;
 
 /// The event the review pane listens for.
 ///
@@ -36,6 +37,14 @@ pub const HARNESS_PERMISSION_EVENT: &str = "skein://harness-permission";
 /// payload also carries Claude's own `session_id` and `source`, so the
 /// frontend can follow a `/clear` onto the new conversation id.
 pub const HARNESS_SESSION_START_EVENT: &str = "skein://harness-session-start";
+
+/// The event a harness's mailbox badge listens for (#327, feeding
+/// #329's unread indicator). Fired on a successful `send_message` (for
+/// the *recipient*, which is usually not the caller's own room) and on
+/// a `read_messages` call that actually marked something read (for the
+/// caller). A mailbox write touches only sqlite — no file changes, so
+/// nothing else would tell a room its inbox moved.
+pub const MAIL_CHANGED_EVENT: &str = "skein://mail-changed";
 
 /// Shared by every route.
 ///
@@ -73,6 +82,14 @@ pub struct HarnessPermission {
     /// main-session dialog, and injection (#215) can be switched off
     /// entirely.
     pub agent_id: Option<String>,
+}
+
+/// Payload of [`MAIL_CHANGED_EVENT`].
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailChanged {
+    pub room_id: String,
+    pub harness_id: String,
 }
 
 /// Payload of [`HARNESS_SESSION_START_EVENT`]. Frontend contract — do
@@ -145,6 +162,38 @@ impl AgentApiState {
         ) {
             tracing::warn!(room_id, harness_id, error = %e, "agent api: harness-permission emit failed");
         }
+    }
+
+    /// Tell the frontend that a harness's mailbox moved (#327) — a
+    /// message just landed for it, or it just read some of its own.
+    /// `room_id`/`harness_id` name whoever's inbox changed, which for a
+    /// send is almost always a different room than the caller's.
+    pub fn notify_mail_changed(&self, room_id: &str, harness_id: &str) {
+        let Some(app) = self.app.as_ref() else { return };
+        if let Err(e) = app.emit(
+            MAIL_CHANGED_EVENT,
+            MailChanged {
+                room_id: room_id.to_owned(),
+                harness_id: harness_id.to_owned(),
+            },
+        ) {
+            tracing::warn!(room_id, harness_id, error = %e, "agent api: mail-changed emit failed");
+        }
+    }
+
+    /// The live spawn settings, for the mailbox's [`MailPolicy`]
+    /// (#327) — read fresh on every request rather than cached, since
+    /// the Settings pane can flip the injection or messaging toggles at
+    /// any time. `None` in a unit test (`for_test` has no `AppHandle`,
+    /// so no managed [`crate::SpawnEnvState`] to read) falls back to
+    /// `SpawnSettings::default()`, whose defaults are exactly as
+    /// permissive as `MailPolicy`'s own test default.
+    pub fn spawn_settings(&self) -> SpawnSettings {
+        self.app
+            .as_ref()
+            .and_then(tauri::Manager::try_state::<crate::SpawnEnvState>)
+            .map(|s| s.snapshot())
+            .unwrap_or_default()
     }
 
     /// Tell the frontend that this harness has (re)started a session

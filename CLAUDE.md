@@ -304,10 +304,11 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       ├── src/agent_api/       # The agent-facing review API (#213, epic #52 D8):
     │       │   {state,auth,verbs,   #   an axum server on 127.0.0.1:<ephemeral> inside the
     │       │    mcp,http,commands,  #   Tauri process, exposed as MCP over HTTP so Claude
-    │       │    tests}.rs           #   Code and opencode both consume it. verbs = the six
+    │       │    tests}.rs           #   Code and opencode both consume it. verbs = the eight
     │       │                        #   agent verbs (list/get_comment/get_diff/reply/
-    │       │                        #   mark_addressed/review_status) — and NO resolve and
-    │       │                        #   NO approve, both refused BY NAME; auth = the
+    │       │                        #   mark_addressed/review_status, plus #327's
+    │       │                        #   send_message/read_messages mailbox) — and NO resolve
+    │       │                        #   and NO approve, both refused BY NAME; auth = the
     │       │                        #   per-room bearer token, which IS the scope.
     │       │                        #   See docs/agent-api.md
     │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1). Since #276,
@@ -553,7 +554,17 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   only gate. Writes emit `skein://review-changed` — a comment touches
   only sqlite, so no watcher would otherwise fire. Verbs reuse
   `review_surface::query::file_impl` rather than re-anchoring
-  themselves. Full contract: `docs/agent-api.md`.
+  themselves. **A per-harness mailbox** (#327, epic #275) rides the same
+  server: a `harness_messages` table, and two verbs, `send_message`
+  (`{to, body}`) and `read_messages` (unread first, oldest first, marks
+  read). `to` is a harness id or a room id; a room id resolves *at send
+  time* to that room's lead harness — the first harness in room order
+  that can read mail — so the stored row names someone concrete.
+  Messaging has its own kill switch in Settings
+  (`allowAgentMessaging` in `settings.json`, default on) plus per-token
+  rate and per-receiver unread caps. Delivering mail into a waiting
+  harness — the nudge through the #238 seam — is #329; this issue only
+  stores and serves the queue. Full contract: `docs/agent-api.md`.
 - **Harness config injection** (#215, epic #52 E): the variables above
   are useless until the CLI knows there is a server at that address, so
   `pty_spawn` also appends `--plugin-dir <resources>/harness-config/`

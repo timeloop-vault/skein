@@ -517,6 +517,20 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 							</span>
 						</span>
 					</label>
+					<label className="sk-toggle">
+						<input
+							type="checkbox"
+							checked={draft.allowAgentMessaging}
+							onChange={(e) => setDraft({ ...draft, allowAgentMessaging: e.target.checked })}
+						/>
+						<span className="sk-toggle-label">
+							<span className="sk-toggle-title">Let agents message other harnesses</span>
+							<span className="sk-toggle-sub">
+								When off, an agent's <code>send_message</code> and <code>read_messages</code> calls
+								are refused with the reason.
+							</span>
+						</span>
+					</label>
 				</div>
 			</div>
 

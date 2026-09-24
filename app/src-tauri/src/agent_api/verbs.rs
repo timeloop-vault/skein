@@ -24,7 +24,10 @@ use serde::{Deserialize, Serialize};
 use skein_review::{FileState, Hunk, LineKind};
 
 use super::auth::Caller;
-use crate::db::{Database, ReviewAddressedRow, ReviewCommentRow, ReviewThreadRow};
+use crate::db::{
+    Database, Harness, HarnessMessageRow, ReviewAddressedRow, ReviewCommentRow, ReviewThreadRow,
+    Room,
+};
 use crate::review::{abs_path, now_ms};
 use crate::review_surface::Scope;
 use crate::review_surface::query::{ScopeFiles, file_impl, scope_impl};
@@ -36,6 +39,21 @@ const MAX_DIFF_BYTES: usize = 256 * 1024;
 
 /// How many lines of today's file to show either side of a comment.
 const CONTEXT_RADIUS: usize = 6;
+
+/// The largest a mailbox message body may be (#327). A message is a
+/// nudge, not a document.
+const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+
+/// How many messages one room may send in a rolling minute (#327), and
+/// the window it is measured over — a runaway loop has to hit a wall
+/// before it can flood a sibling harness.
+const SEND_RATE_LIMIT: i64 = 30;
+const SEND_RATE_WINDOW_MS: i64 = 60_000;
+
+/// How many unread messages one harness may accumulate before a sender
+/// is refused (#327) — an inbox nobody is reading is not a queue, it is
+/// a leak.
+const MAX_UNREAD_MESSAGES: i64 = 100;
 
 /// Why a verb refused. The HTTP and MCP layers each map these into
 /// their own vocabulary; the verbs themselves only say what went wrong.
@@ -531,6 +549,371 @@ pub fn review_status(db: &Database, caller: &Caller) -> VerbResult<StatusOut> {
         unaddressed_count: s.unaddressed_count,
         guidance,
     })
+}
+
+// ── the mailbox (issue #327) ────────────────────────────────────────
+
+/// Whether the named agent, run as `kind` in `cwd`, would see Skein's
+/// review MCP tools at all — and, by extension, this mailbox's own
+/// tools, since they ride the same connection. A plain function
+/// pointer rather than a boxed closure: the real implementation
+/// (`crate::agents::agent_sees_mcp`) needs no captures, so the mail
+/// verbs pay no lifetime parameter for a seam that exists purely so
+/// tests can drive both answers without agent files on disk.
+pub type AgentSeesMcp = fn(kind: &str, agent: &str, cwd: &str) -> bool;
+
+/// The parts of the user's spawn settings the mailbox verbs need to
+/// decide anything, passed in rather than read from live state (#327).
+/// A plain `Copy` value keeps `send_message`/`read_messages` testable
+/// with no settings file and no Tauri runtime; the MCP and HTTP call
+/// sites build one from the live `SpawnSettings` on every request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MailPolicy {
+    pub messaging_enabled: bool,
+    pub claude_injected: bool,
+    pub opencode_injected: bool,
+}
+
+impl MailPolicy {
+    /// Every reachable kind, messaging on — a fresh install's defaults,
+    /// and what a test reaches for when the case under test isn't about
+    /// the policy at all. Production builds one from the live
+    /// `SpawnSettings` instead (`http::mail_context`), so this is
+    /// test-only.
+    #[cfg(test)]
+    pub fn permissive() -> Self {
+        Self {
+            messaging_enabled: true,
+            claude_injected: true,
+            opencode_injected: true,
+        }
+    }
+}
+
+/// [`MailPolicy`] plus the disk-lookup seam, bundled for the MCP and
+/// HTTP layers that carry both from one request to `call_tool`.
+#[derive(Debug, Clone, Copy)]
+pub struct MailContext {
+    pub policy: MailPolicy,
+    pub agent_sees_mcp: AgentSeesMcp,
+}
+
+impl MailContext {
+    /// The same defaults as [`MailPolicy::permissive`], for tests that
+    /// have no opinion on messaging at all.
+    #[cfg(test)]
+    pub fn permissive() -> Self {
+        Self {
+            policy: MailPolicy::permissive(),
+            agent_sees_mcp: |_, _, _| true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SendMessageArgs {
+    /// A harness id (searched across every room) or a room id, resolved
+    /// at send time to that room's lead harness.
+    pub to: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendMessageOut {
+    pub message_id: String,
+    pub to_room_id: String,
+    pub to_harness_id: String,
+    pub to_room_name: String,
+    pub to_harness_name: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ReadMessagesArgs {
+    /// Return the whole history, oldest first, instead of only what is
+    /// unread. Still marks anything unread as read.
+    #[serde(default)]
+    pub include_read: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentMessage {
+    pub id: String,
+    pub from_room_id: String,
+    /// `None` when the sending room no longer exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_room_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_harness_id: Option<String>,
+    /// `None` when the sender had no `X-Skein-Harness`, or its room or
+    /// that harness no longer exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_harness_name: Option<String>,
+    pub body: String,
+    pub created_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadMessagesOut {
+    pub messages: Vec<AgentMessage>,
+    /// How many of `messages` were unread before this call and just got
+    /// marked — the signal the MCP/HTTP layer uses to decide whether to
+    /// fire `skein://mail-changed`, without re-deriving it from the
+    /// list (a message already read before `include_read` asked for
+    /// history must not count again).
+    pub newly_marked_read: usize,
+}
+
+/// Send a message to another harness's mailbox.
+///
+/// `X-Skein-Harness` is attribution here exactly as it is everywhere
+/// else in this API (#213): addressing a harness inside a room is
+/// routing, not a security boundary, so any harness in any room may
+/// send to any other. The lead harness is resolved *now*, not read
+/// later, so the stored row names a concrete recipient rather than a
+/// room whose lead harness might change before anyone reads it.
+pub fn send_message(
+    db: &Database,
+    caller: &Caller,
+    args: &SendMessageArgs,
+    policy: MailPolicy,
+    agent_sees_mcp: AgentSeesMcp,
+) -> VerbResult<SendMessageOut> {
+    if !policy.messaging_enabled {
+        return Err(VerbError::Refused(
+            "agent messaging is turned off in Settings".into(),
+        ));
+    }
+    if args.body.is_empty() {
+        return Err(VerbError::Refused("a message needs a body".into()));
+    }
+    if args.body.len() > MAX_MESSAGE_BYTES {
+        return Err(VerbError::Refused(format!(
+            "a message body is capped at {MAX_MESSAGE_BYTES} bytes; this one is {} bytes",
+            args.body.len()
+        )));
+    }
+    let to = args.to.trim();
+    if to.is_empty() {
+        return Err(VerbError::Refused("send_message needs a to".into()));
+    }
+
+    let (room, harness) = resolve_mail_target(db, to, policy, agent_sees_mcp)?;
+
+    // The rate check, the unread check and the insert below are three
+    // separate lock acquisitions, so concurrent sends can push a count
+    // slightly past its cap. Accepted: these are anti-runaway caps, not
+    // a security boundary.
+    let now = now_ms();
+    let sent = db
+        .harness_messages_sent_since(&caller.room_id, now - SEND_RATE_WINDOW_MS)
+        .map_err(internal)?;
+    if sent >= SEND_RATE_LIMIT {
+        return Err(VerbError::Refused(format!(
+            "rate limit: this room has sent {sent} messages in the last minute \
+             (cap {SEND_RATE_LIMIT})"
+        )));
+    }
+    let unread = db
+        .unread_harness_message_count(&room.id, &harness.id)
+        .map_err(internal)?;
+    if unread >= MAX_UNREAD_MESSAGES {
+        return Err(VerbError::Refused(format!(
+            "{} already has {unread} unread messages (cap {MAX_UNREAD_MESSAGES}); \
+             it needs to read before it can receive more",
+            harness.name
+        )));
+    }
+
+    let row = HarnessMessageRow {
+        id: uuid::Uuid::new_v4().to_string(),
+        room_id: room.id.clone(),
+        harness_id: harness.id.clone(),
+        from_room_id: caller.room_id.clone(),
+        from_harness_id: caller.harness_id.clone(),
+        body: args.body.clone(),
+        created_ms: now,
+        read_ms: None,
+    };
+    db.insert_harness_message(&row).map_err(internal)?;
+
+    Ok(SendMessageOut {
+        message_id: row.id,
+        to_room_id: room.id,
+        to_harness_id: harness.id,
+        to_room_name: room.name,
+        to_harness_name: harness.name,
+    })
+}
+
+/// Every unread message for the calling harness, oldest first — or, with
+/// `include_read`, the whole history. Marks the unread ones read.
+pub fn read_messages(
+    db: &Database,
+    caller: &Caller,
+    args: &ReadMessagesArgs,
+    policy: MailPolicy,
+) -> VerbResult<ReadMessagesOut> {
+    if !policy.messaging_enabled {
+        return Err(VerbError::Refused(
+            "agent messaging is turned off in Settings".into(),
+        ));
+    }
+    let Some(harness_id) = caller.harness_id.as_deref() else {
+        return Err(VerbError::Refused(
+            "read_messages needs X-Skein-Harness to say which harness is asking".into(),
+        ));
+    };
+    let include_read = args.include_read.unwrap_or(false);
+    let rows = if include_read {
+        db.all_harness_messages(&caller.room_id, harness_id)
+    } else {
+        db.unread_harness_messages(&caller.room_id, harness_id)
+    }
+    .map_err(internal)?;
+
+    let now = now_ms();
+    let mut to_mark = Vec::new();
+    let rooms = db.all_rooms().map_err(internal)?;
+    let messages: Vec<AgentMessage> = rows
+        .into_iter()
+        .map(|m| {
+            let read_ms = if let Some(r) = m.read_ms {
+                Some(r)
+            } else {
+                to_mark.push(m.id.clone());
+                Some(now)
+            };
+            let sender_room = rooms.iter().find(|r| r.id == m.from_room_id);
+            let from_room_name = sender_room.map(|r| r.name.clone());
+            let from_harness_name = m.from_harness_id.as_deref().and_then(|hid| {
+                sender_room
+                    .and_then(|r| r.harnesses.iter().find(|h| h.id == hid))
+                    .map(|h| format!("{} · {}", h.kind, h.name))
+            });
+            AgentMessage {
+                id: m.id,
+                from_room_id: m.from_room_id,
+                from_room_name,
+                from_harness_id: m.from_harness_id,
+                from_harness_name,
+                body: m.body,
+                created_ms: m.created_ms,
+                read_ms,
+            }
+        })
+        .collect();
+
+    if !to_mark.is_empty() {
+        db.mark_harness_messages_read(&to_mark, now)
+            .map_err(internal)?;
+    }
+
+    Ok(ReadMessagesOut {
+        newly_marked_read: to_mark.len(),
+        messages,
+    })
+}
+
+/// Resolve `to` into a concrete `(room, harness)` — a harness id first,
+/// searched across every room, then a room id resolved to its lead
+/// harness.
+fn resolve_mail_target(
+    db: &Database,
+    to: &str,
+    policy: MailPolicy,
+    agent_sees_mcp: AgentSeesMcp,
+) -> VerbResult<(Room, Harness)> {
+    let rooms = db.all_rooms().map_err(internal)?;
+
+    for room in &rooms {
+        if let Some(h) = room.harnesses.iter().find(|h| h.id == to) {
+            if room.archived.is_some() {
+                return Err(VerbError::Refused(format!(
+                    "{} is archived and cannot receive messages",
+                    room.name
+                )));
+            }
+            return match mail_refusal(h, policy, room.cwd.as_deref(), agent_sees_mcp) {
+                None => Ok((room.clone(), h.clone())),
+                Some(reason) => Err(VerbError::Refused(format!(
+                    "{} cannot read messages: {reason}",
+                    h.name
+                ))),
+            };
+        }
+    }
+
+    if let Some(room) = rooms.iter().find(|r| r.id == to) {
+        if room.archived.is_some() {
+            return Err(VerbError::Refused(format!(
+                "{} is archived and cannot receive messages",
+                room.name
+            )));
+        }
+        return match mail_lead_harness(room, policy, agent_sees_mcp) {
+            Some(h) => Ok((room.clone(), h.clone())),
+            None => Err(VerbError::Refused(format!(
+                "{} has no harness that can read messages",
+                room.name
+            ))),
+        };
+    }
+
+    Err(VerbError::NotFound(format!("no harness or room {to:?}")))
+}
+
+/// Why `h` cannot read mail right now, or `None` when it can.
+fn mail_refusal(
+    h: &Harness,
+    policy: MailPolicy,
+    cwd: Option<&str>,
+    agent_sees_mcp: AgentSeesMcp,
+) -> Option<String> {
+    let injected = match h.kind.as_str() {
+        "claude" => policy.claude_injected,
+        "opencode" => policy.opencode_injected,
+        _ => {
+            return Some(format!(
+                "{} harnesses have no MCP connection to receive messages on",
+                h.kind
+            ));
+        }
+    };
+    if !injected {
+        return Some(format!(
+            "config injection for {} is turned off in Settings, so it cannot see \
+             the messaging tool",
+            h.kind
+        ));
+    }
+    if let (Some(agent), Some(cwd)) = (h.agent.as_deref(), cwd) {
+        if !agent_sees_mcp(&h.kind, agent, cwd) {
+            return Some(format!(
+                "the agent {agent:?} this harness runs hides MCP tools behind its \
+                 own tool allowlist"
+            ));
+        }
+    }
+    None
+}
+
+/// The first harness in room order that can read mail — "lead" in the
+/// sense that resolving a room id has to name someone concrete.
+fn mail_lead_harness(
+    room: &Room,
+    policy: MailPolicy,
+    agent_sees_mcp: AgentSeesMcp,
+) -> Option<&Harness> {
+    room.harnesses
+        .iter()
+        .find(|h| mail_refusal(h, policy, room.cwd.as_deref(), agent_sees_mcp).is_none())
 }
 
 // ── shared plumbing ───────────────────────────────────────────────
