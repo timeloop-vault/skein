@@ -27,7 +27,10 @@ use serde_json::{Value, json};
 use super::auth::{self, AuthError, Caller, HARNESS_HEADER};
 use super::mcp;
 use super::state::AgentApiState;
-use super::verbs::{self, AddressedArgs, DiffArgs, GetCommentArgs, ListArgs, ReplyArgs, VerbError};
+use super::verbs::{
+    self, AddressedArgs, DiffArgs, GetCommentArgs, ListArgs, MailContext, MailPolicy,
+    ReadMessagesArgs, ReplyArgs, SendMessageArgs, VerbError,
+};
 
 /// Header the MCP spec has clients send on every request after
 /// `initialize`.
@@ -50,6 +53,10 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
         .route("/api/diff", get(api_diff))
         // POST is present and always refuses — see `api_signoff`.
         .route("/api/status", get(api_status).post(api_signoff))
+        .route(
+            "/api/messages",
+            post(api_send_message).get(api_read_messages),
+        )
         .route("/api/harness/permission", post(api_harness_permission))
         .route(
             "/api/harness/session-start",
@@ -94,13 +101,15 @@ async fn mcp_post(
             .and_then(Value::as_str)
             .map(str::to_owned)
     });
-    let outcome = mcp::handle(&state.db, &caller, &body);
+    let mail = mail_context(&state);
+    let outcome = mcp::handle(&state.db, &caller, &body, mail);
     // Only a write that actually landed. A refused `reply` changes
     // nothing, and a pane that flickers on every failed call teaches
     // the user to distrust the ones that mean something.
     if tool.as_deref().is_some_and(mcp::is_write) && succeeded(&outcome) {
         state.notify_review_changed(&caller.room_id);
     }
+    notify_mail_tools(&state, &caller, tool.as_deref(), &outcome);
     match outcome {
         mcp::Outcome::Json(v) => (StatusCode::OK, axum::Json(*v)).into_response(),
         mcp::Outcome::Accepted => StatusCode::ACCEPTED.into_response(),
@@ -117,6 +126,70 @@ fn succeeded(outcome: &mcp::Outcome) -> bool {
         }
         _ => false,
     }
+}
+
+/// The mailbox policy (#327), read fresh from the live spawn settings
+/// on every request — see `AgentApiState::spawn_settings`.
+fn mail_context(state: &AgentApiState) -> MailContext {
+    let settings = state.spawn_settings();
+    MailContext {
+        policy: MailPolicy {
+            messaging_enabled: settings.allow_agent_messaging,
+            claude_injected: settings.inject_claude_plugin,
+            opencode_injected: settings.inject_opencode_config,
+        },
+        agent_sees_mcp: crate::agents::agent_sees_mcp,
+    }
+}
+
+/// `send_message`/`read_messages` notify a *different* inbox than the
+/// generic `is_write` path does (that one always tells the caller's own
+/// room; a send's target is almost always someone else's). Rather than
+/// re-run the verb, this re-parses the tool result MCP already wrapped
+/// into text — the same JSON `to_room_id`/`to_harness_id` /
+/// `newly_marked_read` fields the plain `/api/messages` handlers below
+/// read directly off the typed struct.
+fn notify_mail_tools(
+    state: &AgentApiState,
+    caller: &Caller,
+    tool: Option<&str>,
+    outcome: &mcp::Outcome,
+) {
+    if !succeeded(outcome) {
+        return;
+    }
+    let Some(name) = tool.map(|n| n.rsplit("__").next().unwrap_or(n)) else {
+        return;
+    };
+    let Some(result) = tool_result_value(outcome) else {
+        return;
+    };
+    match name {
+        "send_message" => {
+            if let (Some(room_id), Some(harness_id)) =
+                (result["toRoomId"].as_str(), result["toHarnessId"].as_str())
+            {
+                state.notify_mail_changed(room_id, harness_id);
+            }
+        }
+        "read_messages" if result["newlyMarkedRead"].as_u64().is_some_and(|n| n > 0) => {
+            if let Some(harness_id) = caller.harness_id.as_deref() {
+                state.notify_mail_changed(&caller.room_id, harness_id);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Pull the structured tool result back out of an MCP `Outcome` — the
+/// same value `call_tool` produced before `tool_content` wrapped it as
+/// pretty-printed text inside the JSON-RPC envelope.
+fn tool_result_value(outcome: &mcp::Outcome) -> Option<Value> {
+    let mcp::Outcome::Json(v) = outcome else {
+        return None;
+    };
+    let text = v["result"]["content"][0]["text"].as_str()?;
+    serde_json::from_str(text).ok()
 }
 
 /// The spec allows a server to decline the server-to-client SSE stream
@@ -258,6 +331,99 @@ async fn api_addressed(
         )
         .and_then(json_of)
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct SendMessageBody {
+    to: String,
+    body: String,
+}
+
+/// `POST /api/messages` — the plain-JSON mirror of `send_message`.
+async fn api_send_message(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    axum::Json(input): axum::Json<SendMessageBody>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let mail = mail_context(&state);
+    let out = verbs::send_message(
+        &state.db,
+        &caller,
+        &SendMessageArgs {
+            to: input.to,
+            body: input.body,
+        },
+        mail.policy,
+        mail.agent_sees_mcp,
+    );
+    match out {
+        Ok(v) => {
+            state.notify_mail_changed(&v.to_room_id, &v.to_harness_id);
+            match json_of(v) {
+                Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
+                Err(e) => error_body(StatusCode::INTERNAL_SERVER_ERROR, e.message()),
+            }
+        }
+        Err(e) => error_body(
+            StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            e.message(),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadMessagesQuery {
+    /// `includeRead` on the wire — unlike every other query param on
+    /// this API (`commit_sha` and friends stay `snake_case`, matching
+    /// the MCP `arguments` shape), because the brief for #327 names
+    /// this exact spelling and there is no MCP argument here for it to
+    /// mirror.
+    #[serde(default)]
+    include_read: Option<bool>,
+}
+
+/// `GET /api/messages?includeRead=true` — the plain-JSON mirror of
+/// `read_messages`.
+async fn api_read_messages(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    Query(q): Query<ReadMessagesQuery>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let mail = mail_context(&state);
+    let out = verbs::read_messages(
+        &state.db,
+        &caller,
+        &ReadMessagesArgs {
+            include_read: q.include_read,
+        },
+        mail.policy,
+    );
+    match out {
+        Ok(v) => {
+            if v.newly_marked_read > 0 {
+                if let Some(harness_id) = caller.harness_id.as_deref() {
+                    state.notify_mail_changed(&caller.room_id, harness_id);
+                }
+            }
+            match json_of(v) {
+                Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
+                Err(e) => error_body(StatusCode::INTERNAL_SERVER_ERROR, e.message()),
+            }
+        }
+        Err(e) => error_body(
+            StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            e.message(),
+        ),
+    }
 }
 
 /// Whether the reviewer has signed off (#214) — the gate to read

@@ -64,6 +64,10 @@ pub struct EnvVar {
 /// — or hand-edited down to `{}` — still parses. A required field here
 /// would make a stale file unloadable, and the failure mode of *that*
 /// is a harness with no `PATH`.
+// Four independent on/off toggles a user sees as four separate
+// Settings switches, not a state machine — `struct_excessive_bools`'
+// alternative (two-variant enums) would just rename the same booleans.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SpawnSettings {
@@ -90,6 +94,11 @@ pub struct SpawnSettings {
     pub inject_claude_plugin: bool,
     /// Point opencode at the shipped config, same server (#215).
     pub inject_opencode_config: bool,
+    /// Let a harness send another harness a message through the agent
+    /// API's mailbox (#327). Off refuses both `send_message` and
+    /// `read_messages`, with the reason. Default on, like the two
+    /// injection flags above.
+    pub allow_agent_messaging: bool,
 }
 
 impl Default for SpawnSettings {
@@ -103,6 +112,7 @@ impl Default for SpawnSettings {
             strip_host_env: true,
             inject_claude_plugin: true,
             inject_opencode_config: true,
+            allow_agent_messaging: true,
         }
     }
 }
@@ -347,6 +357,27 @@ mod tests {
             ..SpawnSettings::default()
         };
         assert_eq!(settings.valid_shell(), Some("/bin/sh"));
+    }
+
+    #[test]
+    fn an_old_settings_file_without_the_messaging_key_defaults_to_allowed() {
+        // #327 added the field after settings.json was already shipping
+        // in the wild — a file written by an older Skein must still
+        // load, and the mailbox must default open like the two
+        // injection flags it sits beside.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            file_path(dir.path()),
+            r#"{"schema":1,"injectClaudePlugin":true,"injectOpencodeConfig":false}"#,
+        )
+        .expect("write");
+        let (loaded, degraded) = load(dir.path());
+        assert!(degraded.is_none());
+        assert!(loaded.allow_agent_messaging);
+        // And the fields that *were* present still round-trip, so this
+        // is genuinely the old-file case and not just an empty object.
+        assert!(loaded.inject_claude_plugin);
+        assert!(!loaded.inject_opencode_config);
     }
 
     #[test]

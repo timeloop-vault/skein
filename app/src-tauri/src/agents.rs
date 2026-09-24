@@ -152,6 +152,32 @@ fn claude_probe_args(settings: &SpawnSettings, config: Option<&HarnessConfig>) -
         .unwrap_or_default()
 }
 
+/// Whether the named agent, run as `kind` in `cwd`, would see Skein's
+/// review MCP tools at all — the same question [`allows_mcp_tools`]
+/// answers for the picker, but from a plain disk lookup rather than a
+/// CLI probe (#327's `send_message` needs an answer on every call, not
+/// once per picker open).
+///
+/// Only `claude` and `opencode` have an agent concept; any other kind
+/// answers `true` because there is nothing to hide behind. Likewise, an
+/// agent whose definition cannot be found or read answers `true` — a
+/// degraded lookup must never be the reason a message gets refused.
+pub(crate) fn agent_sees_mcp(kind: &str, agent: &str, cwd: &str) -> bool {
+    let Some(home) = skein_harness::home_dir() else {
+        return true;
+    };
+    let cwd_path = Path::new(cwd);
+    let def = match kind {
+        "claude" => skein_harness::agents::claude::find_definition(&home, cwd_path, agent),
+        "opencode" => skein_harness::agents::opencode::find_definition(&home, cwd_path, agent),
+        _ => return true,
+    };
+    match def {
+        Some(def) => allows_mcp_tools(def.tools.as_deref()),
+        None => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +241,46 @@ mod tests {
         let open = to_dto(def("open", None, AgentSource::User));
         assert!(open.allows_review_tools);
         assert!(open.tools.is_none());
+    }
+
+    #[test]
+    fn agent_sees_mcp_allows_a_kind_with_no_agent_concept() {
+        assert!(agent_sees_mcp("copilot", "anything", "."));
+        assert!(agent_sees_mcp("byoh", "anything", "."));
+        assert!(agent_sees_mcp("files", "anything", "."));
+    }
+
+    #[test]
+    fn agent_sees_mcp_allows_a_name_it_cannot_find() {
+        // Not found — or no home directory to look under — is "cannot
+        // tell", and #327's mailbox treats that as allowed rather than
+        // as a refusal.
+        assert!(agent_sees_mcp("claude", "no-such-agent", "."));
+        assert!(agent_sees_mcp("opencode", "no-such-agent", "."));
+    }
+
+    #[test]
+    fn agent_sees_mcp_reads_a_restricted_allowlist_off_disk() {
+        // The project-local `.claude/agents` dir is relative to `cwd`
+        // alone, so this needs no real `$HOME` to be meaningful — only
+        // that `skein_harness::home_dir()` resolves to *some* path,
+        // which is true on every box this runs on.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cwd = tmp.path();
+        std::fs::create_dir_all(cwd.join(".claude").join("agents")).expect("mkdir");
+        std::fs::write(
+            cwd.join(".claude").join("agents").join("narrow.md"),
+            "---\nname: narrow\ntools: Read, Glob\n---\n",
+        )
+        .expect("write");
+        assert!(!agent_sees_mcp("claude", "narrow", cwd.to_str().unwrap()));
+        // Same directory, no restriction: unrestricted always sees MCP.
+        std::fs::write(
+            cwd.join(".claude").join("agents").join("open.md"),
+            "---\nname: open\n---\n",
+        )
+        .expect("write");
+        assert!(agent_sees_mcp("claude", "open", cwd.to_str().unwrap()));
     }
 
     #[test]

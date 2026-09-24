@@ -25,13 +25,15 @@ Skein process
      ├─ POST   /api/comments/{id}/addressed
      ├─ POST   /api/comments/{id}/resolve   403, always
      ├─ GET    /api/diff               get_diff
+     ├─ POST   /api/messages           send_message
+     ├─ GET    /api/messages           read_messages
      ├─ POST   /api/harness/permission     see below — not an agent verb
      └─ POST   /api/harness/session-start  see below — not an agent verb
 ```
 
 `/mcp` is what Claude Code and opencode talk to. `/api/*` is the same
-five verbs as ordinary JSON, for the `skein` CLI epic #52 D10 defers;
-both go through the same functions in `agent_api/verbs.rs`.
+verbs as ordinary JSON, for the `skein` CLI epic #52 D10 defers; both go
+through the same functions in `agent_api/verbs.rs`.
 
 The port is **ephemeral** and changes every launch. Nothing has to agree
 on a number in advance because the URL reaches the harness in its
@@ -69,7 +71,7 @@ at the next boot.
 
 ## The verbs
 
-All five are room-scoped by the token. MCP tool names; Claude Code
+All six are room-scoped by the token. MCP tool names; Claude Code
 presents them as `mcp__plugin_skein_review__<name>` — the server is
 registered by the plugin Skein injects (#215), and plugin-provided MCP
 servers carry a `plugin_<plugin>_<server>` prefix.
@@ -155,6 +157,117 @@ pull request: which strategy, which forge, and what a PR body looks like
 are things this repository already says — in `.claude/skills/`, in
 `CLAUDE.md` — and the agent reads them. Skein owns the one fact that
 lives nowhere else, which is whether the human said yes.
+
+## The mailbox (#327, epic #275)
+
+Two more verbs, and a different shape from the six above: they are not
+about review at all, and a `send_message` almost always targets a room
+that is not the caller's own. A sqlite table, `harness_messages`, holds
+one row per message: `id`, the recipient (`room_id`, `harness_id`) and
+the sender (`from_room_id`, `from_harness_id` — the latter `NULL` when
+the sender's request carried no `X-Skein-Harness`), `body`,
+`created_ms` and `read_ms`.
+
+### `send_message`
+
+`{ to, body }` — send a short message to another harness: a sibling in
+this room, or a room named by its id. A room id is resolved **at send
+time** to that room's **lead harness** — the first harness in the
+room's order that can read mail (see below) — so the stored row names a
+concrete recipient rather than a room whose lead harness might change
+before anyone reads it. Returns `message_id`, the resolved
+`to_room_id`/`to_harness_id`, and `to_room_name`/`to_harness_name` for a
+readable confirmation.
+
+Refused, with the exact reason as text:
+
+- `"agent messaging is turned off in Settings"` — the kill switch, below
+- `"a message needs a body"` — an empty body
+- `"a message body is capped at 65536 bytes; this one is N bytes"`
+- `"send_message needs a to"` — an empty or whitespace `to`
+- `"no harness or room \"<to>\""` — `to` matches neither a harness id
+  (searched across every room) nor a room id
+- `"<room> is archived and cannot receive messages"`
+- `"<harness> cannot read messages: <reason>"` — the target exists but
+  fails the "who can read mail" check below
+- `"<room> has no harness that can read messages"` — `to` was a room id
+  and no harness in it qualifies
+- `"rate limit: this room has sent N messages in the last minute (cap 30)"`
+- `"<harness> already has N unread messages (cap 100); it needs to read
+  before it can receive more"`
+
+A successful send emits `skein://mail-changed { roomId, harnessId }`
+naming the **recipient's** room and harness.
+
+### `read_messages`
+
+`{ include_read? }` — every unread message for the *calling* harness,
+oldest first, marked read as they are returned. `X-Skein-Harness` is
+**required** here, unlike everywhere else it is attribution-only: this
+verb has to know whose inbox to read, not just whose byline to stamp on
+a reply, so a missing header is refused rather than silently reading
+nobody's mail (`"read_messages needs X-Skein-Harness to say which
+harness is asking"`). Pass `include_read: true` to get the whole
+history instead of only the unread tail — still-unread rows in that set
+are marked read the same as a normal call.
+
+Each message carries `from_room_id`/`from_harness_id` and, when the
+sender still exists, `from_room_name`/`from_harness_name`; a `null`
+harness fields means the sender's own request carried no
+`X-Skein-Harness`, or that harness or its room is gone since. Refused
+the same way as `send_message` when messaging is off in Settings.
+
+A call that actually marks something read emits `skein://mail-changed
+{ roomId, harnessId }` for the **caller's own** mailbox; a poll that
+finds nothing new fires nothing.
+
+### Who can read mail
+
+A harness can receive a message only if all of this holds:
+
+- its kind is `claude` or `opencode` — any other kind has no MCP
+  connection at all, so there is nothing to receive on;
+- #215 config injection is switched on **for that kind** in Settings;
+- if it runs a named agent (#246/#247), that agent's own `tools`
+  allowlist does not hide MCP tools. An agent whose definition cannot be
+  found or read on disk is **not** refused for it — a degraded lookup
+  must never be the reason a message is silently refused.
+
+The same check picks a room's lead harness: the first harness in room
+order that passes it, not necessarily the first harness in the room.
+
+### Caps and the kill switch
+
+| cap | value |
+| :-- | :-- |
+| message body | 64 KiB |
+| sends | 30 per token (i.e. per room) per rolling minute |
+| unread per receiver | 100 |
+
+Each cap errors loudly, as text above, rather than queueing or
+truncating. Settings → Shell & environment has a toggle beside the #215
+injection switches, **"Let agents message other harnesses"**
+(`allowAgentMessaging` in `settings.json`, default on): off refuses both
+verbs by name, with the reason, exactly like the injection toggles
+refuse the review tools when off.
+
+### Two things worth writing down
+
+- **`X-Skein-Harness` is attribution and routing here, not authority** —
+  the same rule as everywhere else in this API (#213). Any harness
+  holding the room's bearer token can present any harness id in that
+  room and read that harness's mail; there is no per-harness secret
+  underneath the room token. This is accepted: the token's *room* is
+  the scope, and addressing a harness inside it was never meant to be a
+  security boundary.
+- **A message body is attacker-reachable text.** An agent that has just
+  read an issue, a PR comment or a web page can forward some or all of
+  it verbatim in a `send_message` call. Nothing on the receiving end
+  auto-approves or auto-acts on a message because it arrived over this
+  API; every message is stored with its sender so a bad one is
+  traceable; and a harness reading its mailbox should weigh a message
+  the way it would weigh anything else it did not write itself — a
+  request from another agent, never an instruction from the reviewer.
 
 ## The permission-required signal (#86)
 
@@ -324,11 +437,11 @@ Settings → About shows the bound port, or says why there is none.
 
 | file | what it owns |
 | :-- | :-- |
-| `agent_api/state.rs` | shared state, the `skein://review-changed`, `skein://harness-permission` and `skein://harness-session-start` events, `HarnessIdentity` |
+| `agent_api/state.rs` | shared state, the `skein://review-changed`, `skein://harness-permission`, `skein://harness-session-start` and `skein://mail-changed` (#327) events, `HarnessIdentity` |
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
-| `agent_api/verbs.rs` | the six verbs — the whole testable core |
+| `agent_api/verbs.rs` | the eight verbs — the whole testable core, including the mailbox (#327) |
 | `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve and approve refusals |
-| `agent_api/http.rs` | the routes, including `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
+| `agent_api/http.rs` | the routes, including `/api/messages` (#327), `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
 | `agent_api/tests.rs` | scoping, both prohibitions, lifecycle, real HTTP |
 | `review_surface/signoff.rs` | the sign-off itself, and the staleness rule (#214) |
 | `harness_config.rs` | what Skein injects at spawn so a CLI finds all this (#215) |

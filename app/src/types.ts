@@ -129,6 +129,9 @@ export interface SpawnSettings {
 	injectClaudePlugin: boolean;
 	/** Point opencode at the shipped config, same server (#215). */
 	injectOpencodeConfig: boolean;
+	/** Let agents call the agent-messaging verbs to reach other harnesses
+	 *  in the room (#327). Absent on old persisted data — treat as true. */
+	allowAgentMessaging: boolean;
 }
 
 export interface SpawnSettingsPayload {

@@ -267,6 +267,7 @@ const ROOM_KEYED_TABLES: &[&str] = &[
     "review_addressed",
     "agent_tokens",
     "review_signoff",
+    "harness_messages",
 ];
 
 pub struct Database {
@@ -650,6 +651,48 @@ impl Database {
                 base_ref TEXT NOT NULL,
                 updated_ms INTEGER NOT NULL
             )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Issue #327: the per-harness mailbox. `room_id`/`harness_id`
+        // are the *recipient* — named plainly, not `to_*`, so this
+        // table fits `ROOM_KEYED_TABLES`/`sweep_orphans` (#237) without
+        // a special case: that sweep deletes by a column literally
+        // called `room_id`. The sender travels as `from_room_id` /
+        // `from_harness_id` for attribution only — a message survives
+        // its sender room being deleted forever, the same way a review
+        // comment survives the room that wrote it.
+        //
+        // `from_harness_id` is nullable: a caller can send with no
+        // `X-Skein-Harness`, same as a review reply.
+        //
+        // No foreign keys, matching every other table here: closing a
+        // room archives it rather than deleting it, so there is no
+        // cascade to model.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS harness_messages (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                harness_id TEXT NOT NULL,
+                from_room_id TEXT NOT NULL,
+                from_harness_id TEXT,
+                body TEXT NOT NULL,
+                created_ms INTEGER NOT NULL,
+                read_ms INTEGER
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_harness_messages_inbox \
+             ON harness_messages(room_id, harness_id, read_ms)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_harness_messages_sender \
+             ON harness_messages(from_room_id, created_ms)",
             [],
         )
         .map_err(|e| e.to_string())?;
@@ -1784,6 +1827,157 @@ impl Database {
         .map_err(|e| e.to_string())?;
         Ok(())
     }
+
+    // ── the mailbox (issue #327) ───────────────────────────────────
+
+    /// Every parseable room, active and archived. Unlike `load_all`
+    /// this never quarantines — a mailbox lookup that hit a corrupt row
+    /// should simply not find that room, not mutate the table on the
+    /// side of an unrelated `send_message` call.
+    pub fn all_rooms(&self) -> Result<Vec<Room>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare("SELECT data FROM sessions")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            let data = row.map_err(|e| e.to_string())?;
+            if let Ok(room) = serde_json::from_str::<Room>(&data) {
+                out.push(room);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn insert_harness_message(&self, m: &HarnessMessageRow) -> Result<(), String> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO harness_messages \
+             (id, room_id, harness_id, from_room_id, from_harness_id, body, \
+              created_ms, read_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                m.id,
+                m.room_id,
+                m.harness_id,
+                m.from_room_id,
+                m.from_harness_id,
+                m.body,
+                m.created_ms,
+                m.read_ms,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// A harness's unread mail, oldest first.
+    pub fn unread_harness_messages(
+        &self,
+        room_id: &str,
+        harness_id: &str,
+    ) -> Result<Vec<HarnessMessageRow>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, room_id, harness_id, from_room_id, from_harness_id, body, \
+                        created_ms, read_ms \
+                 FROM harness_messages \
+                 WHERE room_id = ?1 AND harness_id = ?2 AND read_ms IS NULL \
+                 ORDER BY created_ms, rowid",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![room_id, harness_id], row_to_message)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// A harness's whole mail history, oldest first — `include_read`.
+    pub fn all_harness_messages(
+        &self,
+        room_id: &str,
+        harness_id: &str,
+    ) -> Result<Vec<HarnessMessageRow>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, room_id, harness_id, from_room_id, from_harness_id, body, \
+                        created_ms, read_ms \
+                 FROM harness_messages \
+                 WHERE room_id = ?1 AND harness_id = ?2 \
+                 ORDER BY created_ms, rowid",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![room_id, harness_id], row_to_message)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Mark a batch of messages read. Only ever called with ids this
+    /// same call just read as unread, so there is nothing to reconcile
+    /// against a concurrent read.
+    pub fn mark_harness_messages_read(&self, ids: &[String], now_ms: i64) -> Result<(), String> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock();
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE harness_messages SET read_ms = ? WHERE id IN ({placeholders}) \
+             AND read_ms IS NULL"
+        );
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&now_ms];
+        for id in ids {
+            params.push(id);
+        }
+        conn.execute(&sql, params.as_slice())
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// How many messages are sitting unread for a harness — the #327
+    /// inbox cap.
+    pub fn unread_harness_message_count(
+        &self,
+        room_id: &str,
+        harness_id: &str,
+    ) -> Result<i64, String> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT COUNT(*) FROM harness_messages \
+             WHERE room_id = ?1 AND harness_id = ?2 AND read_ms IS NULL",
+            params![room_id, harness_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    /// How many messages a room has sent since `since_ms` — the #327
+    /// rate cap, counted per sending room rather than per harness so a
+    /// room cannot dodge it by spreading sends across its harnesses.
+    pub fn harness_messages_sent_since(
+        &self,
+        from_room_id: &str,
+        since_ms: i64,
+    ) -> Result<i64, String> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT COUNT(*) FROM harness_messages \
+             WHERE from_room_id = ?1 AND created_ms >= ?2",
+            params![from_room_id, since_ms],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())
+    }
 }
 
 /// A row of `review_signoff` — the reviewer said yes to `head_sha`.
@@ -1927,6 +2121,39 @@ fn row_to_baseline(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewBaseline> 
         harness_id: row.get(3)?,
         captured_ms: row.get(4)?,
         touched_ms: row.get(5)?,
+    })
+}
+
+/// One row of `harness_messages` (issue #327).
+///
+/// `room_id`/`harness_id` name the *recipient* — plain names, not
+/// `to_*`, so this table is keyed the same way every other room-scoped
+/// table is (see `ROOM_KEYED_TABLES`). `from_room_id`/`from_harness_id`
+/// are the sender, for attribution only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HarnessMessageRow {
+    pub id: String,
+    pub room_id: String,
+    pub harness_id: String,
+    pub from_room_id: String,
+    /// `None` when the sender had no `X-Skein-Harness` — attribution
+    /// only, same as a review reply's `author_id`.
+    pub from_harness_id: Option<String>,
+    pub body: String,
+    pub created_ms: i64,
+    pub read_ms: Option<i64>,
+}
+
+fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<HarnessMessageRow> {
+    Ok(HarnessMessageRow {
+        id: row.get(0)?,
+        room_id: row.get(1)?,
+        harness_id: row.get(2)?,
+        from_room_id: row.get(3)?,
+        from_harness_id: row.get(4)?,
+        body: row.get(5)?,
+        created_ms: row.get(6)?,
+        read_ms: row.get(7)?,
     })
 }
 
@@ -3109,6 +3336,11 @@ mod orphan_sweep_tests {
             "review_signoff" => {
                 "INSERT INTO review_signoff (room_id, head_sha, base_ref, note, approved_ms) \
                  VALUES (?1, 'deadbeef', NULL, NULL, 1)"
+            }
+            "harness_messages" => {
+                "INSERT INTO harness_messages \
+                 (id, room_id, harness_id, from_room_id, from_harness_id, body, created_ms, read_ms) \
+                 VALUES ('msg-' || ?1, ?1, 'h1', 'elsewhere', NULL, 'hi', 1, NULL)"
             }
             other => panic!("seed_row: unhandled table {other}"),
         };
