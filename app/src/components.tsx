@@ -99,8 +99,31 @@ export const HChip = ({
 	);
 };
 
-export const StatusDot = ({ status }: { status: Status }) => (
-	<span className={`tab-status st-${status}`} data-status={status} aria-label={status} />
+export const StatusDot = ({
+	status,
+	roomIds,
+	aggName,
+}: {
+	status: Status;
+	/** #331: room ids this dot aggregates over, so the hover popover can
+	 *  build a per-harness breakdown instead of the plain one-line
+	 *  summary. A room tab passes its own single id; a group tab passes
+	 *  every member room's id. Omitted for a harness-tab/chip dot, which
+	 *  keeps today's one-line popover (statusPopover.ts branches on
+	 *  whether this is present). */
+	roomIds?: readonly string[];
+	/** #331: the name to head the breakdown popover with — the room's
+	 *  own name, or the group's display name. Meaningless without
+	 *  `roomIds`. */
+	aggName?: string;
+}) => (
+	<span
+		className={`tab-status st-${status}`}
+		data-status={status}
+		data-room-ids={roomIds?.join(" ")}
+		data-agg-name={aggName}
+		aria-label={status}
+	/>
 );
 
 // ── Tabs / chrome ──────────────────────────────────────────────────
@@ -273,7 +296,7 @@ export const RoomTab = ({
 		onLostPointerCapture={onLostPointerCapture}
 	>
 		<div className="row-1">
-			<StatusDot status={r.status} />
+			<StatusDot status={r.status} roomIds={[r.id]} aggName={r.name} />
 			{/* #132: task tooltip lives on the name, not the whole tab, so
 			    hovering a dot/chip shows only the status popover (not the
 			    native tooltip on top of it). */}

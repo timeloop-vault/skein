@@ -256,7 +256,7 @@ const GroupTab = ({
 			}}
 		>
 			<div className="row-1">
-				<StatusDot status={status} />
+				<StatusDot status={status} roomIds={rooms.map((r) => r.id)} aggName={displayName} />
 				{renaming ? (
 					<RoomNameInput
 						initial={displayName}

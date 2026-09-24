@@ -1377,6 +1377,73 @@ html.tab-dragging.tab-drag-refused * {
 	color: var(--st-error);
 }
 
+/* #331: the aggregate status-dot breakdown popover (room tab, group
+   tab) — same box, but multi-line instead of one nowrap line. Each
+   line is its own block element so it always starts a new row; nowrap
+   only keeps a single line from wrapping mid-word. */
+.sk-pop.sk-pop-breakdown {
+	white-space: normal;
+}
+.sk-pop-breakdown .bd-header {
+	font-weight: 700;
+	white-space: nowrap;
+}
+.sk-pop-breakdown .bd-rule {
+	height: 1px;
+	background: var(--line-strong);
+	margin: 5px 0;
+}
+.sk-pop-breakdown .bd-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	white-space: nowrap;
+	padding: 1px 0;
+}
+.sk-pop-breakdown .bd-dot {
+	font-size: 8px;
+	line-height: 1;
+}
+.sk-pop-breakdown .bd-path {
+	flex: 0 0 auto;
+}
+.sk-pop-breakdown .bd-label {
+	flex: 0 0 auto;
+}
+/* Chip colour classes (.h-claude etc.) are unscoped background rules,
+   so they render fine outside `.h-chip` — this just gives the
+   popover's chip its own sizing rather than depending on `.h-chip`. */
+.sk-pop-breakdown .bd-chip {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-family: var(--sk-mono);
+	font-weight: 700;
+	color: #fff;
+	width: 13px;
+	height: 13px;
+	font-size: 8px;
+	border-radius: 3px;
+	flex: 0 0 auto;
+}
+.sk-pop-breakdown .bd-sub {
+	padding-left: 16px;
+	color: var(--fg-2);
+	white-space: nowrap;
+}
+.sk-pop-breakdown .bd-sub-pre {
+	color: var(--fg-3);
+}
+.sk-pop-breakdown .bd-more {
+	padding-left: 16px;
+	color: var(--fg-2);
+	white-space: nowrap;
+}
+.sk-pop-breakdown .bd-footer {
+	color: var(--fg-2);
+	white-space: nowrap;
+}
+
 /* Diff body — used by LiveStatus's DiffView */
 .sk-code {
 	flex: 1;
