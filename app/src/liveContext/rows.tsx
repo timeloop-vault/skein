@@ -10,7 +10,14 @@ import { useMemo } from "react";
 import type { HarnessKind } from "../types.ts";
 import { type PreviewExpansion, PreviewExpansionContext, ResultPreview } from "./ResultPreview.tsx";
 import { Row, basename, formatDuration } from "./Row.tsx";
-import { type Payload, num, parsePayload, str } from "./payload.ts";
+import {
+	type Payload,
+	messageInLabel,
+	messageOutLabel,
+	num,
+	parsePayload,
+	str,
+} from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
 import { ToolFamilyRow } from "./toolRows.tsx";
 
@@ -75,6 +82,10 @@ export const ActivityRow = ({
 				return <SlashRow payload={payload} harness={harness} timestampMs={ts} />;
 			case "subagent_end":
 				return <SubagentEndRow payload={payload} harness={harness} timestampMs={ts} />;
+			case "message_in":
+				return <MessageInRow payload={payload} harness={harness} timestampMs={ts} />;
+			case "message_out":
+				return <MessageOutRow payload={payload} harness={harness} timestampMs={ts} />;
 			case "tool_call":
 			case "patch":
 			case "plan_change":
@@ -244,6 +255,25 @@ const SubagentEndRow = ({ payload, harness, timestampMs }: SimpleRowProps) => {
 		</Row>
 	);
 };
+
+/// The room-scoped mailbox (#329): `message_in` lands in the
+/// recipient's room, `message_out` in the sender's — a room only ever
+/// sees one side of a given delivery, so these are two rows rather
+/// than one row with a direction flag. No body in the payload (#327),
+/// only routing metadata, so the gist is who-with, not what-was-said.
+/// Styled like SubagentEndRow: same Row atom, a glyph of its own so it
+/// doesn't read as a sub-agent event.
+const MessageInRow = ({ payload, harness, timestampMs }: SimpleRowProps) => (
+	<Row kind="message-in" glyph="⇇" harness={harness} timestampMs={timestampMs}>
+		<span className="target">{messageInLabel(payload)}</span>
+	</Row>
+);
+
+const MessageOutRow = ({ payload, harness, timestampMs }: SimpleRowProps) => (
+	<Row kind="message-out" glyph="⇉" harness={harness} timestampMs={timestampMs}>
+		<span className="target">{messageOutLabel(payload)}</span>
+	</Row>
+);
 
 /// Pull the command name out of a slash_command payload's `content`.
 /// Preferred form is a `<command-name>/clear</command-name>` wrapper.

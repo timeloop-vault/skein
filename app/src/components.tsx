@@ -10,6 +10,7 @@ import {
 } from "react";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { AgentLabel } from "./harnessAgent.ts";
+import { useUnreadMail } from "./mailStore.ts";
 import { commitRoomName } from "./roomName.ts";
 import type { Harness, HarnessKind, Room, Status } from "./types.ts";
 import { OVERLAY_CLOSED_EVENT } from "./useFocusRestore.ts";
@@ -74,12 +75,21 @@ export const HChip = ({
 	kind,
 	harnessId,
 	agent,
+	mailCount,
+	mailFromRoomNames,
 }: {
 	kind: HarnessKind;
 	harnessId?: string;
 	/** #248: the harness's agent label, for the popover. Omitted where the
 	 *  chip is a kind rather than one harness (pickers, room-tab row). */
 	agent?: AgentLabel | null | undefined;
+	/** #329: this harness's unread-mail count/senders, for the hover
+	 *  popover's mail segment. The chip is the one element every trigger
+	 *  in the row (chip, dot, the ✉ marker itself) can find, so it's the
+	 *  carrier — `statusPopover.ts` has no React access to `mailStore`.
+	 *  Omitted (no attribute) when there's no mail to show. */
+	mailCount?: number;
+	mailFromRoomNames?: readonly string[];
 }) => {
 	const k = HARNESS_KINDS[kind];
 	// #141: harnessId lets the popover read this harness's OWN live state
@@ -92,6 +102,10 @@ export const HChip = ({
 			data-harness-id={harnessId}
 			data-agent-key={agent?.key}
 			data-agent-value={agent?.value}
+			data-mail-count={mailCount && mailCount > 0 ? mailCount : undefined}
+			data-mail-from={
+				mailCount && mailCount > 0 ? JSON.stringify(mailFromRoomNames ?? []) : undefined
+			}
 			aria-label={k.name}
 		>
 			{k.label}
@@ -377,37 +391,53 @@ export const HarnessTab = ({
 	closable: boolean;
 	onClick: () => void;
 	onClose: () => void;
-} & DragProps) => (
-	<div
-		className={`sk-harness-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
-		data-htab={h.id}
-		onClick={() => {
-			// #271: see RoomTab's onClick — same swallow-the-post-drop-click.
-			if (suppressClick?.()) return;
-			onClick();
-		}}
-		data-drag-kind={dragKind}
-		data-drag-id={dragId}
-		data-drag-room={dragRoomId}
-		onPointerDown={onPointerDown}
-		onPointerMove={onPointerMove}
-		onPointerUp={onPointerUp}
-		onPointerCancel={onPointerCancel}
-		onLostPointerCapture={onLostPointerCapture}
-	>
-		<StatusDot status={h.status} />
-		<HChip kind={h.kind} harnessId={h.id} agent={agent} />
-		<span className="ht-name">{h.name}</span>
-		{closable && (
-			<span
-				className="ht-x"
-				onClick={(e) => {
-					e.stopPropagation();
-					onClose();
-				}}
-			>
-				×
-			</span>
-		)}
-	</div>
-);
+} & DragProps) => {
+	// #329: the mailbox unread marker — read live so a message arriving
+	// (or being read) updates the tab without a re-render trigger from
+	// anywhere else.
+	const mail = useUnreadMail(h.id);
+	return (
+		<div
+			className={`sk-harness-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
+			data-htab={h.id}
+			onClick={() => {
+				// #271: see RoomTab's onClick — same swallow-the-post-drop-click.
+				if (suppressClick?.()) return;
+				onClick();
+			}}
+			data-drag-kind={dragKind}
+			data-drag-id={dragId}
+			data-drag-room={dragRoomId}
+			onPointerDown={onPointerDown}
+			onPointerMove={onPointerMove}
+			onPointerUp={onPointerUp}
+			onPointerCancel={onPointerCancel}
+			onLostPointerCapture={onLostPointerCapture}
+		>
+			<StatusDot status={h.status} />
+			<HChip
+				kind={h.kind}
+				harnessId={h.id}
+				agent={agent}
+				mailCount={mail.count}
+				mailFromRoomNames={mail.fromRoomNames}
+			/>
+			<span className="ht-name">{h.name}</span>
+			{/* #329: no `title` here — the hover popover (statusPopover.ts)
+			 *  shows the same mail info as a segment, matching every other
+			 *  hover on this tab instead of a native tooltip. */}
+			{mail.count > 0 && <span className="tab-mail">✉ {mail.count}</span>}
+			{closable && (
+				<span
+					className="ht-x"
+					onClick={(e) => {
+						e.stopPropagation();
+						onClose();
+					}}
+				>
+					×
+				</span>
+			)}
+		</div>
+	);
+};

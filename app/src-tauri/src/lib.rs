@@ -449,6 +449,7 @@ pub fn run() {
             review_surface::commands::review_signoff_status,
             review_surface::commands::review_set_signoff,
             agent_api::commands::agent_api_status,
+            agent_api::commands::mail_unread,
             os_notify::os_notify_show,
             os_notify::os_notify_take_pending,
         ])

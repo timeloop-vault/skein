@@ -1221,6 +1221,15 @@ html.tab-dragging.tab-drag-refused * {
 	text-overflow: ellipsis;
 	max-width: 140px;
 }
+.tab-mail {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	font-size: calc(var(--cfs, 12px) * 0.78);
+	line-height: 1;
+	color: var(--warn);
+	white-space: nowrap;
+}
 .sk-harness-tab .ht-x {
 	color: var(--fg-3);
 	font-size: calc(var(--cfs) * 1);

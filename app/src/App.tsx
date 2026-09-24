@@ -39,6 +39,7 @@ import { useHarnessActions } from "./useHarnessActions.ts";
 import { useHarnessCreation } from "./useHarnessCreation.ts";
 import { useHarnessNotifications } from "./useHarnessNotifications.ts";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts.ts";
+import { useMailDelivery } from "./useMailDelivery.ts";
 import { useOsNotificationClicks } from "./useOsNotificationClicks.ts";
 import { useRoomStripNav } from "./useRoomStripNav.ts";
 import { useRoomsStore } from "./useRoomsStore.ts";
@@ -404,6 +405,12 @@ export default function App() {
 	// useOsNotificationClicks.ts. NOT here: `jumpToToast`, which
 	// already lives in useHarnessNotifications.
 	useOsNotificationClicks(roomsRef, unarchiveRoomRef, setRooms, loaded, loadedRef);
+
+	// #329: agent-mail delivery — nudges a waiting harness's mailbox and
+	// keeps the tab marker (mailStore.ts, read by HarnessTab) fresh.
+	// Scoped to active rooms only, same as the keyboard-nav cycle above —
+	// an archived room's harnesses have no live PTY to nudge.
+	useMailDelivery(activeRooms);
 
 	const titlebarProps: TitlebarProps = {
 		activeRoomLabel: room ? room.name : null,
