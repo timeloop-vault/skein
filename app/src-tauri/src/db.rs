@@ -178,6 +178,15 @@ pub mod action_kind {
     /// `Agent` `tool_call` row; this is the other end, for background
     /// subagents where nothing else ever marks completion.
     pub const SUBAGENT_END: &str = "subagent_end";
+    /// A #327 mailbox message landed for this harness (#329) — the
+    /// recipient's side of a `send_message`. Paired with
+    /// [`MESSAGE_OUT`] on the sender, same timestamp, same payload; no
+    /// message body in either, so the feed shows who talked to whom
+    /// without duplicating what `read_messages` already guards.
+    pub const MESSAGE_IN: &str = "message_in";
+    /// The sender's side of a #327 mailbox `send_message` (#329). See
+    /// [`MESSAGE_IN`].
+    pub const MESSAGE_OUT: &str = "message_out";
 }
 
 /// Mirrors the TS Room interface.

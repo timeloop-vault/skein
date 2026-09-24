@@ -592,10 +592,18 @@ impl MailPolicy {
 
 /// [`MailPolicy`] plus the disk-lookup seam, bundled for the MCP and
 /// HTTP layers that carry both from one request to `call_tool`.
-#[derive(Debug, Clone, Copy)]
+///
+/// `app` (#329) is the emitter for the `message_in`/`message_out`
+/// `harness_actions` rows `send_message` writes — `None` in a unit
+/// test (no Tauri runtime) or when the agent API's own `AgentApiState`
+/// has none (`for_test`), in which case the rows still get written,
+/// only the live broadcast is skipped, same as every other emit in
+/// this codebase. No `Copy`: an `AppHandle` is a handle, not a value.
+#[derive(Clone)]
 pub struct MailContext {
     pub policy: MailPolicy,
     pub agent_sees_mcp: AgentSeesMcp,
+    pub app: Option<tauri::AppHandle>,
 }
 
 impl MailContext {
@@ -606,6 +614,7 @@ impl MailContext {
         Self {
             policy: MailPolicy::permissive(),
             agent_sees_mcp: |_, _, _| true,
+            app: None,
         }
     }
 }
@@ -678,12 +687,22 @@ pub struct ReadMessagesOut {
 /// send to any other. The lead harness is resolved *now*, not read
 /// later, so the stored row names a concrete recipient rather than a
 /// room whose lead harness might change before anyone reads it.
+///
+/// On success, also records one `message_in` `harness_actions` row for
+/// the recipient and one `message_out` row for the sender (#329) — the
+/// Live Context feed's only way to show who talked to whom, since a
+/// mailbox write touches nothing a harness's own transcript tail would
+/// ever see. Neither carries the message body. This is the one place
+/// both `mcp.rs` and `http.rs` route a send through, so it is the only
+/// place that needs to write them. A failure to record either row is
+/// logged and swallowed — the send itself already succeeded.
 pub fn send_message(
     db: &Database,
     caller: &Caller,
     args: &SendMessageArgs,
     policy: MailPolicy,
     agent_sees_mcp: AgentSeesMcp,
+    app: Option<&tauri::AppHandle>,
 ) -> VerbResult<SendMessageOut> {
     if !policy.messaging_enabled {
         return Err(VerbError::Refused(
@@ -704,7 +723,8 @@ pub fn send_message(
         return Err(VerbError::Refused("send_message needs a to".into()));
     }
 
-    let (room, harness) = resolve_mail_target(db, to, policy, agent_sees_mcp)?;
+    let rooms = db.all_rooms().map_err(internal)?;
+    let (room, harness) = resolve_mail_target(&rooms, to, policy, agent_sees_mcp)?;
 
     // The rate check, the unread check and the insert below are three
     // separate lock acquisitions, so concurrent sends can push a count
@@ -742,6 +762,8 @@ pub fn send_message(
         read_ms: None,
     };
     db.insert_harness_message(&row).map_err(internal)?;
+
+    record_mail_actions(db, app, &rooms, caller, &room, &harness, &row);
 
     Ok(SendMessageOut {
         message_id: row.id,
@@ -790,7 +812,7 @@ pub fn read_messages(
                 to_mark.push(m.id.clone());
                 Some(now)
             };
-            let sender_room = rooms.iter().find(|r| r.id == m.from_room_id);
+            let sender_room = find_room(&rooms, &m.from_room_id);
             let from_room_name = sender_room.map(|r| r.name.clone());
             let from_harness_name = m.from_harness_id.as_deref().and_then(|hid| {
                 sender_room
@@ -821,18 +843,52 @@ pub fn read_messages(
     })
 }
 
+/// A harness's unread-mail summary (#329) — how many, and which rooms
+/// they're from, for a badge that has to answer both without reading
+/// (`read_messages` marks read, which this must never do).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailUnread {
+    pub count: i64,
+    /// Distinct sender room names, first-seen order (oldest unread
+    /// message first). A room that no longer exists falls back to its
+    /// id rather than being dropped — the same "over-report rather than
+    /// hide" call review baselines make (#221).
+    pub from_room_names: Vec<String>,
+}
+
+/// Pure derivation over already-fetched rows, so it's testable with no
+/// `Database` and reusable by both the Tauri command (`mail_unread`,
+/// #329) and, if ever needed, a verb. Never marks anything read — the
+/// caller must fetch `messages` with `unread_harness_messages`, not
+/// `all_harness_messages`.
+pub fn unread_mail(messages: &[HarnessMessageRow], rooms: &[Room]) -> MailUnread {
+    let mut from_room_names = Vec::new();
+    for m in messages {
+        let name = find_room(rooms, &m.from_room_id)
+            .map_or_else(|| m.from_room_id.clone(), |r| r.name.clone());
+        if !from_room_names.contains(&name) {
+            from_room_names.push(name);
+        }
+    }
+    MailUnread {
+        count: i64::try_from(messages.len()).unwrap_or(i64::MAX),
+        from_room_names,
+    }
+}
+
 /// Resolve `to` into a concrete `(room, harness)` — a harness id first,
 /// searched across every room, then a room id resolved to its lead
-/// harness.
+/// harness. Takes the room list rather than a `Database` so
+/// `send_message` can reuse the one `all_rooms` read for the sender's
+/// own name too (#329).
 fn resolve_mail_target(
-    db: &Database,
+    rooms: &[Room],
     to: &str,
     policy: MailPolicy,
     agent_sees_mcp: AgentSeesMcp,
 ) -> VerbResult<(Room, Harness)> {
-    let rooms = db.all_rooms().map_err(internal)?;
-
-    for room in &rooms {
+    for room in rooms {
         if let Some(h) = room.harnesses.iter().find(|h| h.id == to) {
             if room.archived.is_some() {
                 return Err(VerbError::Refused(format!(
@@ -914,6 +970,106 @@ fn mail_lead_harness(
     room.harnesses
         .iter()
         .find(|h| mail_refusal(h, policy, room.cwd.as_deref(), agent_sees_mcp).is_none())
+}
+
+/// The room named `room_id`, if it still exists. Shared by
+/// `read_messages`'s per-message sender enrichment and `unread_mail`'s
+/// room-name summary (#329) — both look up a mailbox row's `from_room_id`
+/// the same way.
+fn find_room<'a>(rooms: &'a [Room], room_id: &str) -> Option<&'a Room> {
+    rooms.iter().find(|r| r.id == room_id)
+}
+
+/// Record the two `harness_actions` rows a successful `send_message`
+/// leaves behind (#329): `message_in` for the recipient, `message_out`
+/// for the sender, same timestamp, same payload — everything a feed row
+/// needs to say who talked to whom, and nothing a mailbox reply needs
+/// hidden (no body).
+fn record_mail_actions(
+    db: &Database,
+    app: Option<&tauri::AppHandle>,
+    rooms: &[Room],
+    caller: &Caller,
+    to_room: &Room,
+    to_harness: &Harness,
+    message: &HarnessMessageRow,
+) {
+    let from_room = find_room(rooms, &caller.room_id);
+    let from_room_name = from_room.map_or_else(|| caller.room_id.clone(), |r| r.name.clone());
+    let from_harness_label = caller.harness_id.as_deref().and_then(|hid| {
+        from_room
+            .and_then(|r| r.harnesses.iter().find(|h| h.id == hid))
+            .map(|h| format!("{} · {}", h.kind, h.name))
+    });
+    let to_harness_label = format!("{} · {}", to_harness.kind, to_harness.name);
+
+    let payload = serde_json::json!({
+        "message_id": message.id,
+        "from_room_id": caller.room_id,
+        "from_room_name": from_room_name,
+        "from_harness_id": caller.harness_id,
+        "from_harness_label": from_harness_label,
+        "to_room_id": to_room.id,
+        "to_room_name": to_room.name,
+        "to_harness_id": to_harness.id,
+        "to_harness_label": to_harness_label,
+    })
+    .to_string();
+
+    record_and_emit(
+        db,
+        app,
+        &to_harness.id,
+        &to_room.id,
+        message.created_ms,
+        crate::db::action_kind::MESSAGE_IN,
+        &payload,
+    );
+    record_and_emit(
+        db,
+        app,
+        caller.harness_id.as_deref().unwrap_or(""),
+        &caller.room_id,
+        message.created_ms,
+        crate::db::action_kind::MESSAGE_OUT,
+        &payload,
+    );
+}
+
+/// Insert one `harness_actions` row and, when a Tauri runtime is
+/// attached, broadcast it live the same way every other adapter does
+/// (`harness_action_event::emit`). A write that fails is logged and
+/// dropped — the mailbox write it is describing already succeeded, and
+/// a missing feed row is recoverable, unlike a lost message.
+fn record_and_emit(
+    db: &Database,
+    app: Option<&tauri::AppHandle>,
+    harness_id: &str,
+    room_id: &str,
+    timestamp_ms: i64,
+    kind: &str,
+    payload: &str,
+) {
+    match db.record_harness_action(harness_id, room_id, timestamp_ms, kind, payload, None) {
+        Ok(id) => {
+            if let Some(app) = app {
+                crate::harness_action_event::emit(
+                    app,
+                    id,
+                    harness_id,
+                    room_id,
+                    timestamp_ms,
+                    kind,
+                    payload,
+                    None,
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(harness_id, room_id, kind, error = %e,
+                "agent_api: failed to record a mailbox harness_actions row");
+        }
+    }
 }
 
 // ── shared plumbing ───────────────────────────────────────────────

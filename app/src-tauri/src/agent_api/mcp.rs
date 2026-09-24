@@ -92,7 +92,7 @@ fn instructions() -> &'static str {
 }
 
 /// Handle one JSON-RPC message.
-pub fn handle(db: &Database, caller: &Caller, body: &str, mail: MailContext) -> Outcome {
+pub fn handle(db: &Database, caller: &Caller, body: &str, mail: &MailContext) -> Outcome {
     let parsed: Value = match serde_json::from_str(body) {
         Ok(v) => v,
         Err(e) => return Outcome::BadRequest(format!("not JSON: {e}")),
@@ -151,7 +151,7 @@ fn tools_call(
     caller: &Caller,
     id: &Value,
     params: &Value,
-    mail: MailContext,
+    mail: &MailContext,
 ) -> Value {
     let Some(name) = params.get("name").and_then(Value::as_str) else {
         return err(id, -32602, "tools/call needs a name");
@@ -173,7 +173,7 @@ pub fn call_tool(
     caller: &Caller,
     name: &str,
     args: &Value,
-    mail: MailContext,
+    mail: &MailContext,
 ) -> Result<Value, VerbError> {
     // Claude Code sends the bare name; be tolerant of a client that
     // sends its own namespaced form back to us.
@@ -208,6 +208,7 @@ pub fn call_tool(
             &parse(args)?,
             mail.policy,
             mail.agent_sees_mcp,
+            mail.app.as_ref(),
         )?),
         "read_messages" => to_value(verbs::read_messages(
             db,

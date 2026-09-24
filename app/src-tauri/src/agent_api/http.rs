@@ -102,7 +102,7 @@ async fn mcp_post(
             .map(str::to_owned)
     });
     let mail = mail_context(&state);
-    let outcome = mcp::handle(&state.db, &caller, &body, mail);
+    let outcome = mcp::handle(&state.db, &caller, &body, &mail);
     // Only a write that actually landed. A refused `reply` changes
     // nothing, and a pane that flickers on every failed call teaches
     // the user to distrust the ones that mean something.
@@ -139,6 +139,7 @@ fn mail_context(state: &AgentApiState) -> MailContext {
             opencode_injected: settings.inject_opencode_config,
         },
         agent_sees_mcp: crate::agents::agent_sees_mcp,
+        app: state.app.clone(),
     }
 }
 
@@ -359,6 +360,7 @@ async fn api_send_message(
         },
         mail.policy,
         mail.agent_sees_mcp,
+        mail.app.as_ref(),
     );
     match out {
         Ok(v) => {

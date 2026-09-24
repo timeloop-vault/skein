@@ -197,7 +197,17 @@ Refused, with the exact reason as text:
   before it can receive more"`
 
 A successful send emits `skein://mail-changed { roomId, harnessId }`
-naming the **recipient's** room and harness.
+naming the **recipient's** room and harness. It also records two
+`harness_actions` rows (#329), so the Live Context feed shows who
+talked to whom without exposing the body: `message_in` on the
+recipient (`room_id`/`harness_id` = the resolved target) and
+`message_out` on the sender (`harness_id` empty when the caller had no
+`X-Skein-Harness`), same timestamp, same payload —
+`message_id`/`from_room_id`/`from_room_name`/`from_harness_id`/
+`from_harness_label`/`to_room_id`/`to_room_name`/`to_harness_id`/
+`to_harness_label`. A separate Tauri command, `mail_unread(room_id,
+harness_id)`, gives a harness's unread count and distinct sender room
+names for a badge, without marking anything read.
 
 ### `read_messages`
 
