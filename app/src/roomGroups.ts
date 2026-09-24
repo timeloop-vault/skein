@@ -253,6 +253,64 @@ export function topLevelTarget(
 	return seg.members[0] ?? null;
 }
 
+/// Where to land after closing `closedId`, computed against `rooms`
+/// (the active list from BEFORE the close — it still contains the
+/// closed room, so its segment can be found). Closing a room inside a
+/// group that still has another open room stays in that group: the
+/// lead if it's open and isn't the one closing, else the nearest
+/// neighbour in the second row (`groupRooms(seg)` order — left, then
+/// right). Closing a plain room, or the last open room of a group,
+/// hops to the adjacent top-level segment instead (pre-close order —
+/// left, then right), resolved through `topLevelTarget` so a group
+/// neighbour honours `lastUsedByGroup`. `null` if there's no other
+/// room to land on. A `closedId` not found in any segment (shouldn't
+/// happen — the caller only calls this for a room it just saw close)
+/// falls back to the first other room in `allRoomOrder`.
+export function nextActiveAfterClose(
+	rooms: readonly Room[],
+	closedId: string,
+	lastUsedByGroup: ReadonlyMap<string, string>,
+): Room | null {
+	const segments = buildStrip(rooms);
+	const segIndex = segments.findIndex((seg) => {
+		if (seg.kind === "plain") {
+			return seg.room.id === closedId;
+		}
+		return seg.lead?.id === closedId || seg.members.some((m) => m.id === closedId);
+	});
+
+	if (segIndex === -1) {
+		const fallback = allRoomOrder(segments).find((r) => r.id !== closedId);
+		return fallback ?? null;
+	}
+
+	const seg = segments[segIndex];
+	if (seg?.kind === "group") {
+		const row = groupRooms(seg);
+		const stillOpen = row.filter((r) => r.id !== closedId);
+		if (stillOpen.length > 0) {
+			if (seg.lead && seg.lead.id !== closedId) {
+				return seg.lead;
+			}
+			const closedIdx = row.findIndex((r) => r.id === closedId);
+			return row[closedIdx - 1] ?? row[closedIdx + 1] ?? null;
+		}
+	}
+
+	// Plain segment, or the last open room of its group: hop to the
+	// nearest adjacent top-level segment instead.
+	for (const adjacent of [segments[segIndex - 1], segments[segIndex + 1]]) {
+		if (!adjacent) {
+			continue;
+		}
+		const target = topLevelTarget(adjacent, lastUsedByGroup, rooms);
+		if (target && target.id !== closedId) {
+			return target;
+		}
+	}
+	return null;
+}
+
 /// Identifier for a strip segment, stable across rebuilds as long as
 /// the underlying group key / room id doesn't change: `"g:" + key` for
 /// a group, `"r:" + room.id` for a plain tab. Used by `resolveTopDrop`

@@ -5,6 +5,7 @@ import {
 	groupDisplayName,
 	groupKey,
 	groupRooms,
+	nextActiveAfterClose,
 	resolveRowDrop,
 	resolveTopDrop,
 	roomIsGroupMain,
@@ -293,6 +294,89 @@ describe("topLevelTarget", () => {
 		}
 		const lastUsed = new Map([["/other", "wtY"]]);
 		expect(topLevelTarget(seg, lastUsed, otherRooms)?.id).toBe("wtY");
+	});
+});
+
+describe("nextActiveAfterClose", () => {
+	it("closing a plain room lands on its left neighbour", () => {
+		const a = room("a");
+		const b = room("b");
+		const c = room("c");
+		expect(nextActiveAfterClose([a, b, c], "b", new Map())?.id).toBe("a");
+	});
+
+	it("closing the leftmost plain room falls back to its right neighbour", () => {
+		const a = room("a");
+		const b = room("b");
+		expect(nextActiveAfterClose([a, b], "a", new Map())?.id).toBe("b");
+	});
+
+	it("closing a member with the lead open lands on the lead", () => {
+		const main = room("main", { repoRoot: "/repo", cwd: "/repo" });
+		const wtA = room("wtA", { repoRoot: "/repo", cwd: "/repo-wt/a" });
+		const wtB = room("wtB", { repoRoot: "/repo", cwd: "/repo-wt/b" });
+		const rooms = [main, wtA, wtB];
+		expect(nextActiveAfterClose(rooms, "wtB", new Map())?.id).toBe("main");
+	});
+
+	it("closing a member with no lead open lands on the left member", () => {
+		const wtA = room("wtA", { repoRoot: "/repo", cwd: "/repo-wt/a" });
+		const wtB = room("wtB", { repoRoot: "/repo", cwd: "/repo-wt/b" });
+		const wtC = room("wtC", { repoRoot: "/repo", cwd: "/repo-wt/c" });
+		const rooms = [wtA, wtB, wtC];
+		expect(nextActiveAfterClose(rooms, "wtB", new Map())?.id).toBe("wtA");
+	});
+
+	it("closing the first member with no lead open falls back to the right member", () => {
+		const wtA = room("wtA", { repoRoot: "/repo", cwd: "/repo-wt/a" });
+		const wtB = room("wtB", { repoRoot: "/repo", cwd: "/repo-wt/b" });
+		const rooms = [wtA, wtB];
+		expect(nextActiveAfterClose(rooms, "wtA", new Map())?.id).toBe("wtB");
+	});
+
+	it("closing the lead lands on the first member", () => {
+		const main = room("main", { repoRoot: "/repo", cwd: "/repo" });
+		const wtA = room("wtA", { repoRoot: "/repo", cwd: "/repo-wt/a" });
+		const wtB = room("wtB", { repoRoot: "/repo", cwd: "/repo-wt/b" });
+		const rooms = [main, wtA, wtB];
+		expect(nextActiveAfterClose(rooms, "main", new Map())?.id).toBe("wtA");
+	});
+
+	it("closing the last open room of a group hops to the adjacent segment", () => {
+		const solo = room("solo");
+		const wt = room("wt", { repoRoot: "/repo", cwd: "/repo-wt/a" });
+		const rooms = [solo, wt];
+		expect(nextActiveAfterClose(rooms, "wt", new Map())?.id).toBe("solo");
+	});
+
+	it("an adjacent group segment honours lastUsedByGroup", () => {
+		const solo = room("solo");
+		const main = room("main", { repoRoot: "/repo", cwd: "/repo" });
+		const wtA = room("wtA", { repoRoot: "/repo", cwd: "/repo-wt/a" });
+		const wtB = room("wtB", { repoRoot: "/repo", cwd: "/repo-wt/b" });
+		const rooms = [solo, main, wtA, wtB];
+		const lastUsed = new Map([["/repo", "wtB"]]);
+		expect(nextActiveAfterClose(rooms, "solo", lastUsed)?.id).toBe("wtB");
+	});
+
+	it("a stale lastUsedByGroup entry falls back to that group's lead", () => {
+		const solo = room("solo");
+		const main = room("main", { repoRoot: "/repo", cwd: "/repo" });
+		const wtA = room("wtA", { repoRoot: "/repo", cwd: "/repo-wt/a" });
+		const rooms = [solo, main, wtA];
+		const lastUsed = new Map([["/repo", "gone"]]);
+		expect(nextActiveAfterClose(rooms, "solo", lastUsed)?.id).toBe("main");
+	});
+
+	it("closing the only room leaves nothing to land on", () => {
+		const solo = room("solo");
+		expect(nextActiveAfterClose([solo], "solo", new Map())).toBeNull();
+	});
+
+	it("falls back to the first other room when the closed id isn't in any segment", () => {
+		const a = room("a");
+		const b = room("b");
+		expect(nextActiveAfterClose([a, b], "ghost", new Map())?.id).toBe("a");
 	});
 });
 
