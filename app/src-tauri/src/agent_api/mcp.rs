@@ -51,8 +51,11 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 /// Versions whose wire shape this server is compatible with.
 pub const SUPPORTED_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
-/// Server name, and the prefix a Claude Code tool call carries
-/// (`mcp__skein__list_comments`).
+/// Server name, echoed in `initialize`'s `serverInfo.name`. It is not
+/// the prefix a client puts on a tool call — that comes from the
+/// server *key* in the client's own MCP config (`api` for the Claude
+/// Code plugin's `.mcp.json`, `skein` for opencode's `opencode.json`),
+/// not from this constant.
 pub const SERVER_NAME: &str = "skein";
 
 /// Names that mean "close this thread". Refused explicitly so the
@@ -108,16 +111,29 @@ pub enum Outcome {
 
 /// The MCP-level description a client sees at `initialize`.
 fn instructions() -> &'static str {
-    "Skein's review surface for the room this token belongs to. \
-     Use list_comments to see the reviewer's outstanding comments, \
-     get_comment to read one together with the code it is about, and \
-     get_diff to read the change under review. Answer with reply, and \
-     use mark_addressed once you have made the change (give the commit \
-     sha when you have one). You cannot resolve threads: the reviewer \
-     closes them after reading your reply. Before you merge, push, or \
-     open a pull request, call review_status — it says whether the \
-     reviewer has signed off on the commit you are about to land. You \
-     cannot sign off yourself."
+    "This server is Skein's agent API for the room this token belongs \
+     to. It covers three things: reviewing your work, messaging other \
+     harnesses, and opening new rooms.\n\n\
+     Review: use list_comments to see the reviewer's outstanding \
+     comments, get_comment to read one together with the code it is \
+     about, and get_diff to read the change under review. Answer with \
+     reply, and use mark_addressed once you have made the change (give \
+     the commit sha when you have one). You cannot resolve threads: the \
+     reviewer closes them after reading your reply. Before you merge, \
+     push, or open a pull request, call review_status — it says whether \
+     the reviewer has signed off on the commit you are about to land. \
+     You cannot sign off yourself.\n\n\
+     Mail: send_message sends a short message to another harness — give \
+     `to` as a harness id or a room id, which is routed to that room's \
+     lead harness. read_messages returns your unread messages oldest \
+     first and marks them read; pass include_read for the whole \
+     history. When Skein tells you that you have new messages, call \
+     read_messages.\n\n\
+     Rooms: create_room opens a real Skein room and spawns a real agent \
+     in it, in the background — not a simulation. Give it a prompt and \
+     that agent starts working unattended the moment it exists. You \
+     cannot close, archive, or otherwise destroy a room: that stays the \
+     user's decision."
 }
 
 /// Handle one JSON-RPC message.
@@ -175,7 +191,7 @@ fn initialize_result(params: &Value) -> Value {
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": {
             "name": SERVER_NAME,
-            "title": "Skein review",
+            "title": "Skein agent API",
             "version": env!("CARGO_PKG_VERSION"),
         },
         "instructions": instructions(),

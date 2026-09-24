@@ -116,7 +116,7 @@ mod tests {
         assert!(!allows_mcp_tools(Some(&narrow)));
         let with_mcp = [
             "Read".to_owned(),
-            "mcp__skein_review__list_comments".to_owned(),
+            "mcp__plugin_skein_api__list_comments".to_owned(),
         ];
         assert!(allows_mcp_tools(Some(&with_mcp)));
         assert!(allows_mcp_tools(None));

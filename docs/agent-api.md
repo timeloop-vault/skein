@@ -72,10 +72,16 @@ at the next boot.
 
 ## The verbs
 
-All six are room-scoped by the token. MCP tool names; Claude Code
-presents them as `mcp__plugin_skein_review__<name>` — the server is
-registered by the plugin Skein injects (#215), and plugin-provided MCP
-servers carry a `plugin_<plugin>_<server>` prefix.
+All nine verbs are scoped by the token to the calling room. Eight of
+them read or act only within that room; `create_room` is the
+exception — it opens a *different* room, though still only from the
+calling room's token, which is what its own rate cap below is keyed
+to. MCP tool names; Claude Code
+presents them as `mcp__plugin_skein_api__<name>` — the server is
+registered by the plugin Skein injects (#215), keyed `api` in the
+plugin's `.mcp.json`, and plugin-provided MCP servers carry a
+`plugin_<plugin>_<server>` prefix. opencode presents them as
+`skein_<name>`, from the `skein` key in `opencode.json`.
 
 ### `list_comments`
 
@@ -528,12 +534,18 @@ environment** shows exactly what is injected and can switch either off
 for a config file of your own.
 
 The Claude Code plugin also carries a `skein-review` skill describing
-the loop. Skills are loaded lazily, so it costs nothing until used.
+the review loop, and a `skein-mail` skill covering the mailbox and
+`create_room`. Skills are loaded lazily, so neither costs anything
+until used.
 
 Inside a Claude Code harness, `/mcp` should list the server and
 `review_status` should answer. The tools are named
-`mcp__plugin_skein_review__<verb>` — plugin-provided MCP servers carry
-a `plugin_<plugin>_<server>` prefix.
+`mcp__plugin_skein_api__<verb>` — plugin-provided MCP servers carry
+a `plugin_<plugin>_<server>` prefix. opencode names them
+`skein_<verb>`. An agent's own `tools` allowlist (#246/#247) that still
+names the old `mcp__plugin_skein_review__…` / `skein-review_…` tools
+must be updated to the new names, or it silently hides the whole
+server.
 
 **By hand, from inside a harness** — useful for checking the server is
 actually up:
@@ -552,7 +564,7 @@ Settings → About shows the bound port, or says why there is none.
 | :-- | :-- |
 | `agent_api/state.rs` | shared state, the `skein://review-changed`, `skein://harness-permission`, `skein://harness-session-start` and `skein://mail-changed` (#327) events, `HarnessIdentity` |
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
-| `agent_api/verbs.rs` | the eight verbs — the whole testable core, including the mailbox (#327) |
+| `agent_api/verbs.rs` | the nine verbs — the whole testable core, including the mailbox (#327) |
 | `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve and approve refusals |
 | `agent_api/http.rs` | the routes, including `/api/messages` (#327), `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
 | `agent_api/tests.rs` | scoping, both prohibitions, lifecycle, real HTTP |
