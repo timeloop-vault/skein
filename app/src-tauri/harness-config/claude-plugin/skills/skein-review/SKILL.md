@@ -7,7 +7,7 @@ description: Read and address the reviewer's review comments on your work inside
 You are running inside a **Skein room**: a task with its own git
 worktree, reviewed by the human who directed you. They review in
 Skein's review pane rather than on GitHub, and their comments reach you
-through the `review` MCP server this plugin registers — the tools are
+through the `api` MCP server this plugin registers — the tools are
 named `list_comments`, `get_comment`, `get_diff`, `reply`,
 `mark_addressed` and `review_status`.
 

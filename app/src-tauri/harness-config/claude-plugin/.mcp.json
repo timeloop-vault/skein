@@ -1,6 +1,6 @@
 {
 	"mcpServers": {
-		"review": {
+		"api": {
 			"type": "http",
 			"url": "${SKEIN_REVIEW_URL}",
 			"headers": {

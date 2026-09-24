@@ -1,6 +1,6 @@
 {
 	"name": "skein",
-	"description": "Skein's review surface for the room this harness is running in — read the reviewer's comments on your work, answer them, and record what you did about them.",
+	"description": "Skein's agent API for the room this harness is running in — read the reviewer's comments on your work and answer them, send and read mail with other harnesses, and open new rooms to start agents working unattended.",
 	"version": "0.1.0",
 	"author": {
 		"name": "Skein"

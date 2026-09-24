@@ -39,6 +39,7 @@
 			"harness-config/claude-plugin/.mcp.json",
 			"harness-config/claude-plugin/hooks/hooks.json",
 			"harness-config/claude-plugin/skills/skein-review/SKILL.md",
+			"harness-config/claude-plugin/skills/skein-mail/SKILL.md",
 			"harness-config/opencode/opencode.json"
 		],
 		"icon": [
