@@ -12,6 +12,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { check } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useState } from "react";
+import { NudgesPanel } from "./NudgesPanel.tsx";
 import { SpawnEnvPanel } from "./SpawnEnvPanel.tsx";
 import { kindHasAgents } from "./agents.ts";
 import { HChip, NO_REVIEW_TOOLS_TITLE, useAgentListing } from "./components.tsx";
@@ -495,6 +496,11 @@ export const SettingsModal = ({
 							value={branchTemplate}
 							onChange={(e) => onBranchTemplate(e.target.value)}
 						/>
+					</div>
+
+					<div className="sk-field">
+						<label>Nudges</label>
+						<NudgesPanel />
 					</div>
 
 					<div className="sk-field">

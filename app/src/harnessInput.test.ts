@@ -209,6 +209,24 @@ describe("sendPrompt", () => {
 		expect(result.ok).toBe(false);
 		expect(target.paste).not.toHaveBeenCalled();
 	});
+
+	it("pastes a multi-line body as one paste call, then submits once, when bracketed paste is on", () => {
+		const bracketedTarget: HarnessInputTarget = {
+			paste: vi.fn(() => calls.push("paste")),
+			bracketedPaste: () => true,
+			submit: vi.fn(() => calls.push("submit")),
+		};
+		harnessInput.register(id, bracketedTarget);
+		const body = Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n");
+
+		const result = sendPrompt(id, "claude", body);
+
+		expect(result).toEqual({ ok: true });
+		expect(bracketedTarget.paste).toHaveBeenCalledTimes(1);
+		expect(bracketedTarget.paste).toHaveBeenCalledWith(body);
+		expect(bracketedTarget.submit).toHaveBeenCalledTimes(1);
+		expect(calls).toEqual(["paste", "submit"]);
+	});
 });
 
 // #41: canInsertText is deliberately more permissive than canSendPrompt

@@ -35,6 +35,7 @@ import { canSendPrompt, harnessInput, sendPrompt } from "../harnessInput.ts";
 import { acceptReview, attributeHunks, rejectReview } from "../liveContext/review.ts";
 import type { ReviewHunk } from "../liveContext/review.ts";
 import type { HarnessAction } from "../liveContext/store.ts";
+import { useNudgeOverrides } from "../nudgeStore.ts";
 import type { Harness, HarnessKind } from "../types.ts";
 import { CommitList } from "./CommitList.tsx";
 import { DiffBody, type LineSelection, type ThreadHandlers } from "./DiffBody.tsx";
@@ -137,7 +138,8 @@ export const ReviewPane = ({
 	// moves, without this component polling anything itself.
 	const activeCapabilities = activeHarness ? HARNESS_KINDS[activeHarness.kind].capabilities : null;
 	const activeActivity = useHarnessActivity(activeHarness?.id ?? null);
-	const nudge = selectNudge(signoffState(signoff), data?.unresolvedCount ?? 0);
+	const nudgeOverrides = useNudgeOverrides();
+	const nudge = selectNudge(signoffState(signoff), data?.unresolvedCount ?? 0, nudgeOverrides);
 	const nudgeGate =
 		activeHarness && nudge
 			? canSendPrompt({
