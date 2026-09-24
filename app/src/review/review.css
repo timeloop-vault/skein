@@ -473,6 +473,12 @@
 .rv-act.nudge:hover:not(:disabled) {
 	color: var(--accent);
 }
+/* #355: wraps the nudge button so its `data-sk-tip` hover popover still
+   works while the button is disabled (Chromium fires no mouse events on
+   a disabled form control) — a plain inline box, sized to the button. */
+.rv-act-tip {
+	display: inline-flex;
+}
 
 /* ── threads ─────────────────────────────────────────────────────── */
 

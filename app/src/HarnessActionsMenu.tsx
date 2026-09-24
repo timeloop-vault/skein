@@ -68,35 +68,50 @@ export const HarnessActionsMenu = ({ activeHarness }: { activeHarness: Harness |
 		setOpen(false);
 	};
 
+	// #355: `data-sk-tip` (statusPopover.ts's styled hover popover)
+	// replaces `title=` here, on a WRAPPING span rather than the button
+	// itself — Chromium fires no mouse events on a disabled form control
+	// at all, so the trigger for the disabled states has to live on an
+	// ancestor that stays interactive.
+	const btnTip = state.kind === "disabled" ? state.reason : undefined;
 	return (
 		<div className="sk-harness-actions" ref={rootRef}>
-			<button
-				type="button"
-				className="sk-harness-actions-btn"
-				disabled={state.kind === "disabled"}
-				title={state.kind === "disabled" ? state.reason : undefined}
-				onClick={() => setOpen((o) => !o)}
-			>
-				Actions ▾
-			</button>
+			<span className="sk-harness-actions-btn-tip" data-sk-tip={btnTip} aria-label={btnTip}>
+				<button
+					type="button"
+					className="sk-harness-actions-btn"
+					disabled={state.kind === "disabled"}
+					onClick={() => setOpen((o) => !o)}
+				>
+					Actions ▾
+				</button>
+			</span>
 			{open && state.kind === "menu" && (
 				<div className="sk-harness-actions-menu">
-					{state.items.map((item) => (
-						<button
-							type="button"
-							key={item.id}
-							className="sk-harness-actions-item"
-							disabled={!item.gate.ok}
-							title={item.gate.ok ? item.title : item.gate.reason}
-							onClick={() => onChoose(item)}
-						>
-							{item.label}
-						</button>
-					))}
+					{state.items.map((item) => {
+						const tip = item.gate.ok ? item.title : item.gate.reason;
+						return (
+							<span
+								key={item.id}
+								className="sk-harness-actions-item-tip"
+								data-sk-tip={tip}
+								aria-label={tip}
+							>
+								<button
+									type="button"
+									className="sk-harness-actions-item"
+									disabled={!item.gate.ok}
+									onClick={() => onChoose(item)}
+								>
+									{item.label}
+								</button>
+							</span>
+						);
+					})}
 				</div>
 			)}
 			{error && (
-				<div className="sk-harness-actions-error" title={error}>
+				<div className="sk-harness-actions-error" data-sk-tip={error} aria-label={error}>
 					{error}
 				</div>
 			)}

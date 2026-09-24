@@ -150,17 +150,27 @@ export const ReviewHeader = ({
 				{/* #238: pastes one of three fixed prompts into the room's
 				    active harness and submits it. No button at all when
 				    that harness has no terminal to paste into — #41's
-				    file drop will read the same seam. */}
+				    file drop will read the same seam.
+				    #355: the tooltip is `data-sk-tip` on a WRAPPING span,
+				    not `title` on the button — the styled hover popover
+				    (statusPopover.ts) replaces the native box, and a
+				    disabled button fires no mouse events at all in
+				    Chromium, so the trigger has to live on an ancestor. */}
 				{activeCapabilities?.pty && (
-					<button
-						type="button"
-						className="rv-act nudge"
-						disabled={!nudge || !nudgeGate?.ok}
-						title={nudgeDisabledReason ?? nudge?.body}
-						onClick={onNudge}
+					<span
+						className="rv-act-tip"
+						data-sk-tip={nudgeDisabledReason ?? nudge?.body}
+						aria-label={nudgeDisabledReason ?? nudge?.body}
 					>
-						{nudge?.label ?? "Nudge"}
-					</button>
+						<button
+							type="button"
+							className="rv-act nudge"
+							disabled={!nudge || !nudgeGate?.ok}
+							onClick={onNudge}
+						>
+							{nudge?.label ?? "Nudge"}
+						</button>
+					</span>
 				)}
 				{/* #214: the terminal act of a review. Not a merge and not
 				    a push — Skein does neither. This records that the

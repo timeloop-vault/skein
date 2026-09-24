@@ -22,13 +22,23 @@ import {
 	buildBreakdown,
 } from "./statusBreakdown.ts";
 import { subagents } from "./subagents.ts";
+import { truncateTip } from "./tipText.ts";
 import type { HarnessKind, Room, Status } from "./types.ts";
 
 // #329: `.tab-mail` (the harness tab's unread-mail marker) is a trigger
 // too — it sits inside a `.sk-harness-tab` row without being the row's
 // chip or dot, so it needs its own entry point into `resolve()` rather
 // than relying on bubbling to reach one.
-const TARGET_SEL = ".h-chip, .tab-status, .tab-mail";
+// #355: `[data-sk-tip]` is the generic trigger — any element carrying it
+// shows its raw attribute value verbatim (through `truncateTip`), for
+// callers that don't fit the structured {kind, status, …} shape below
+// (the review Nudge button, the Actions ▾ menu). It replaces `title=`
+// on those specifically, not every native tooltip in the app. A caller
+// whose trigger is a DISABLED button must put the attribute on a
+// wrapping element instead — Chromium fires no mouse events on a
+// disabled form control at all (the HTML spec gives it a used
+// `pointer-events: none`), so hover only ever reaches an ancestor.
+const TARGET_SEL = ".h-chip, .tab-status, .tab-mail, [data-sk-tip]";
 // Rows where a lone status dot describes the same harness as the row's
 // chip, so the dot can borrow that chip for its kind (harness tab, feed
 // row, status-bar seg). The room tab is excluded: its dot is the room
@@ -228,7 +238,7 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 	};
 
 	const render = (el: HTMLDivElement, c: Resolved) => {
-		el.classList.remove("sk-pop-breakdown");
+		el.classList.remove("sk-pop-breakdown", "sk-pop-tip");
 		el.replaceChildren();
 		const seg = (label: string, value: string, valueClass?: string) => {
 			if (el.childElementCount > 0) {
@@ -260,6 +270,17 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 		// #329: the tab's unread-mail marker, as a segment rather than its
 		// own native tooltip — same one-line style as everything else here.
 		if (c.mailCount > 0) seg("mail", mailPopoverText(c.mailCount, c.mailFrom));
+	};
+
+	// #355: the generic `[data-sk-tip]` trigger — verbatim text, capped
+	// to a sensible number of lines so a page-long override body doesn't
+	// produce a screen-sized popover. `white-space: pre-wrap` (the
+	// `sk-pop-tip` class) is what makes the preserved `\n`s show.
+	const renderTip = (el: HTMLDivElement, text: string) => {
+		el.classList.remove("sk-pop-breakdown");
+		el.classList.add("sk-pop-tip");
+		el.replaceChildren();
+		el.textContent = truncateTip(text);
 	};
 
 	// ── #331: aggregate breakdown popover ───────────────────────────
@@ -309,6 +330,7 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 	};
 
 	const renderBreakdown = (el: HTMLDivElement, aggName: string, b: Breakdown, single: boolean) => {
+		el.classList.remove("sk-pop-tip");
 		el.classList.add("sk-pop-breakdown");
 		el.replaceChildren();
 
@@ -456,14 +478,21 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 			hide();
 			return;
 		}
+		// #355: the generic trigger — checked first since a `[data-sk-tip]`
+		// element carries none of `resolve()`'s own classes and would just
+		// fail it.
+		const tipText = el.dataset.skTip || undefined;
 		// #331: an aggregate dot (room tab, group tab) carries
 		// `data-room-ids` and takes the breakdown path entirely, skipping
 		// `resolve()` — that function's `isDot` branch would otherwise
 		// happily return a bare one-line {status} for it, same as before
 		// this feature.
-		const isBreakdown = el.classList.contains("tab-status") && el.dataset.roomIds !== undefined;
-		const c = isBreakdown ? null : resolve(el);
-		if (!isBreakdown && !c) {
+		const isBreakdown =
+			tipText === undefined &&
+			el.classList.contains("tab-status") &&
+			el.dataset.roomIds !== undefined;
+		const c = tipText !== undefined || isBreakdown ? null : resolve(el);
+		if (tipText === undefined && !isBreakdown && !c) {
 			hide();
 			return;
 		}
@@ -476,7 +505,10 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 			if (!el.isConnected) return;
 			const p = ensurePop(el);
 			if (!p) return;
-			if (isBreakdown) {
+			if (tipText !== undefined) {
+				renderTip(p, tipText);
+				positionPopover(p, el);
+			} else if (isBreakdown) {
 				startBreakdown(p, el);
 			} else if (c) {
 				render(p, c);
