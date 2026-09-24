@@ -28,8 +28,8 @@ use super::auth::{self, AuthError, Caller, HARNESS_HEADER};
 use super::mcp;
 use super::state::AgentApiState;
 use super::verbs::{
-    self, AddressedArgs, CreateRoomArgs, DiffArgs, GetCommentArgs, ListArgs, MailContext,
-    MailPolicy, ReadMessagesArgs, ReplyArgs, SendMessageArgs, VerbError,
+    self, AddressedArgs, CreateRoomArgs, DiffArgs, FindRoomsForPathArgs, GetCommentArgs, ListArgs,
+    MailContext, MailPolicy, ReadMessagesArgs, ReplyArgs, SendMessageArgs, VerbError,
 };
 
 /// Header the MCP spec has clients send on every request after
@@ -58,6 +58,7 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
             post(api_send_message).get(api_read_messages),
         )
         .route("/api/rooms", post(api_create_room))
+        .route("/api/rooms/find", get(api_find_rooms_for_path))
         .route("/api/harness/permission", post(api_harness_permission))
         .route(
             "/api/harness/session-start",
@@ -455,6 +456,33 @@ async fn api_create_room(
             e.message(),
         ),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct FindRoomsQuery {
+    path: Option<String>,
+}
+
+/// `GET /api/rooms/find?path=<p>` — the plain-JSON mirror of the MCP
+/// `find_rooms_for_path` tool (#354). Unlike every route above it, the
+/// verb underneath is not scoped to the caller's own room — see the
+/// doc comment on `verbs::find_rooms_for_path` for why — so the
+/// closure below ignores the `Caller` it is handed beyond the
+/// authentication `with_caller` already did.
+async fn api_find_rooms_for_path(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    Query(q): Query<FindRoomsQuery>,
+) -> Response {
+    with_caller(&state, &headers, Notify::Never, |_caller| {
+        verbs::find_rooms_for_path(
+            &state.db,
+            &FindRoomsForPathArgs {
+                path: q.path.clone().unwrap_or_default(),
+            },
+        )
+        .and_then(json_of)
+    })
 }
 
 /// Whether the reviewer has signed off (#214) — the gate to read

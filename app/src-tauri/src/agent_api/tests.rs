@@ -22,8 +22,8 @@ use super::auth::{self, AuthError, Caller};
 use super::mcp;
 use super::state::AgentApiState;
 use super::verbs::{
-    self, AddressedArgs, DiffArgs, GetCommentArgs, ListArgs, MailContext, MailPolicy,
-    ReadMessagesArgs, ReplyArgs, SendMessageArgs, VerbError,
+    self, AddressedArgs, DiffArgs, FindRoomsForPathArgs, GetCommentArgs, ListArgs, MailContext,
+    MailPolicy, ReadMessagesArgs, ReplyArgs, SendMessageArgs, VerbError,
 };
 use crate::db::{Database, Harness, ReviewCommentRow, ReviewThreadRow, Room, TokenLookup};
 
@@ -344,7 +344,7 @@ fn a_missing_thread_and_someone_elses_thread_are_the_same_answer() {
 // ── the two prohibitions ──────────────────────────────────────────
 
 #[test]
-fn the_tool_list_offers_nine_verbs_and_nothing_that_resolves_approves_or_destroys() {
+fn the_tool_list_offers_ten_verbs_and_nothing_that_resolves_approves_or_destroys() {
     let names: Vec<String> = mcp::tool_specs()
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_owned())
@@ -365,6 +365,9 @@ fn the_tool_list_offers_nine_verbs_and_nothing_that_resolves_approves_or_destroy
             "read_messages",
             // #330: open a whole new room.
             "create_room",
+            // #354: the one verb whose answer is not scoped to the
+            // caller's own room.
+            "find_rooms_for_path",
         ]
     );
     assert!(
@@ -429,6 +432,33 @@ fn create_room_tool_schema_property_names_match_the_wire_args() {
     assert!(
         serde_json::from_value::<verbs::CreateRoomArgs>(wrong).is_err(),
         "an unknown field must be a hard error, not a silent drop"
+    );
+}
+
+#[test]
+fn find_rooms_for_path_tool_schema_matches_the_wire_args() {
+    let specs = mcp::tool_specs();
+    let tool = specs
+        .iter()
+        .find(|t| t["name"] == "find_rooms_for_path")
+        .expect("find_rooms_for_path must be in the tool list");
+    let props = tool["inputSchema"]["properties"]
+        .as_object()
+        .expect("inputSchema.properties must be an object");
+    let keys: Vec<&str> = props.keys().map(String::as_str).collect();
+    assert_eq!(keys, vec!["path"]);
+    assert_eq!(tool["inputSchema"]["required"], json!(["path"]));
+
+    let parsed: Result<verbs::FindRoomsForPathArgs, _> =
+        serde_json::from_value(json!({ "path": "C:/repo-wt/task-1" }));
+    assert!(
+        parsed.is_ok(),
+        "the advertised property must deserialize into FindRoomsForPathArgs: {parsed:?}"
+    );
+    assert_eq!(
+        tool["annotations"]["readOnlyHint"],
+        json!(true),
+        "this verb only reads, and must say so the same way list_comments/get_comment/get_diff do"
     );
 }
 
@@ -1527,6 +1557,239 @@ fn a_send_with_no_caller_harness_records_an_empty_harness_id_on_the_out_row() {
     assert_eq!(out_row.harness_id, "");
 }
 
+// ── finding rooms by path, issue #354 ───────────────────────────────
+
+fn room_with_cwd(id: &str, cwd: &str) -> Room {
+    let mut r = room(id, vec![]);
+    r.cwd = Some(cwd.to_owned());
+    r
+}
+
+fn find_paths(db: &Database, path: &str) -> Result<verbs::FindRoomsForPathOut, VerbError> {
+    verbs::find_rooms_for_path(
+        db,
+        &FindRoomsForPathArgs {
+            path: path.to_owned(),
+        },
+    )
+}
+
+#[test]
+fn find_rooms_for_path_matches_an_exact_cwd() {
+    let f = fixture();
+    save(&f.db, &[room_with_cwd("r1", "C:/repo-wt/task-1")]);
+    let out = find_paths(&f.db, "C:/repo-wt/task-1").unwrap();
+    assert_eq!(out.rooms.len(), 1);
+    assert_eq!(out.rooms[0].room_id, "r1");
+    assert_eq!(out.rooms[0].match_kind, "cwd");
+    assert!(!out.rooms[0].archived);
+    assert!(!out.rooms[0].safe_to_remove);
+    assert_eq!(out.unreadable_rooms, 0);
+}
+
+#[test]
+fn find_rooms_for_path_matches_a_parent_of_the_room_cwd() {
+    // The query is the `<repo>-wt` directory that CONTAINS the room's
+    // own worktree folder — the shape a caller checks before removing
+    // a whole `-wt` tree.
+    let f = fixture();
+    save(&f.db, &[room_with_cwd("r1", "C:/repo-wt/task-1")]);
+    let out = find_paths(&f.db, "C:/repo-wt").unwrap();
+    assert_eq!(out.rooms.len(), 1);
+    assert_eq!(out.rooms[0].match_kind, "contains");
+}
+
+#[test]
+fn find_rooms_for_path_matches_a_child_of_the_room_cwd() {
+    // The query is a subfolder underneath the room's own cwd.
+    let f = fixture();
+    save(&f.db, &[room_with_cwd("r1", "C:/repo-wt/task-1")]);
+    let out = find_paths(&f.db, "C:/repo-wt/task-1/src/lib").unwrap();
+    assert_eq!(out.rooms.len(), 1);
+    assert_eq!(out.rooms[0].match_kind, "contains");
+}
+
+#[test]
+fn find_rooms_for_path_reports_an_archived_room_as_safe_to_remove() {
+    let f = fixture();
+    let mut r = room_with_cwd("r1", "C:/repo-wt/task-1");
+    r.archived = Some(1);
+    save(&f.db, &[r]);
+    let out = find_paths(&f.db, "C:/repo-wt/task-1").unwrap();
+    assert_eq!(out.rooms.len(), 1);
+    assert!(out.rooms[0].archived);
+    assert!(out.rooms[0].safe_to_remove);
+}
+
+#[test]
+fn find_rooms_for_path_never_marks_an_open_room_safe_to_remove() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room_with_cwd("r1", "C:/repo-wt/task-1"),
+            room_with_cwd("r2", "C:/repo-wt/task-2"),
+        ],
+    );
+    let out = find_paths(&f.db, "C:/repo-wt").unwrap();
+    assert_eq!(out.rooms.len(), 2);
+    for m in &out.rooms {
+        assert!(!m.archived, "room {} should read as open", m.room_id);
+        assert!(
+            !m.safe_to_remove,
+            "an open room ({}) must never read safe_to_remove",
+            m.room_id
+        );
+    }
+}
+
+#[test]
+fn find_rooms_for_path_finds_nothing_for_an_unrelated_path() {
+    let f = fixture();
+    save(&f.db, &[room_with_cwd("r1", "C:/repo-wt/task-1")]);
+    let out = find_paths(&f.db, "C:/somewhere/else").unwrap();
+    assert!(out.rooms.is_empty());
+    assert_eq!(out.unreadable_rooms, 0);
+}
+
+#[test]
+fn find_rooms_for_path_reports_unreadable_rooms_but_still_returns_parseable_matches() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room_with_cwd("r1", "C:/repo-wt/task-1"),
+            room_with_cwd("r-bad", "C:/repo-wt/task-2"),
+        ],
+    );
+    f.db.corrupt_room_for_test("r-bad");
+
+    let out = find_paths(&f.db, "C:/repo-wt").unwrap();
+    let ids: Vec<&str> = out.rooms.iter().map(|m| m.room_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["r1"],
+        "a room Skein cannot parse must not silently appear as a match"
+    );
+    assert!(
+        out.unreadable_rooms >= 1,
+        "an unparseable room must be counted, so its absence from `rooms` is never \
+         read as permission to remove its folder"
+    );
+}
+
+#[test]
+fn find_rooms_for_path_matches_windows_case_separator_and_trailing_slash_variants() {
+    let f = fixture();
+    save(&f.db, &[room_with_cwd("r1", "C:/repo-wt/task-1")]);
+    for query in [
+        "c:/repo-wt/task-1",
+        "C:\\repo-wt\\task-1",
+        "C:/REPO-WT/TASK-1",
+        "C:/repo-wt/task-1/",
+        "c:\\Repo-Wt\\Task-1\\",
+    ] {
+        let out = find_paths(&f.db, query).unwrap();
+        assert_eq!(
+            out.rooms.len(),
+            1,
+            "expected {query:?} to match the room's cwd"
+        );
+        assert_eq!(out.rooms[0].match_kind, "cwd");
+    }
+}
+
+#[test]
+fn find_rooms_for_path_respects_path_segment_boundaries() {
+    let f = fixture();
+    save(&f.db, &[room_with_cwd("r1", "C:/repo-wt/foo")]);
+    let out = find_paths(&f.db, "C:/repo-wt/foobar").unwrap();
+    assert!(
+        out.rooms.is_empty(),
+        "foobar must not match under foo: {out:?}"
+    );
+
+    let f2 = fixture();
+    save(&f2.db, &[room_with_cwd("r1", "C:/repo-wt/foobar")]);
+    let out2 = find_paths(&f2.db, "C:/repo-wt/foo").unwrap();
+    assert!(
+        out2.rooms.is_empty(),
+        "foo must not match under foobar: {out2:?}"
+    );
+}
+
+#[test]
+fn find_rooms_for_path_refuses_an_empty_path() {
+    let f = fixture();
+    save(&f.db, &[room_with_cwd("r1", "C:/repo-wt/task-1")]);
+    for bad in ["", "   "] {
+        let err = find_paths(&f.db, bad).unwrap_err();
+        assert!(matches!(err, VerbError::Refused(_)));
+    }
+}
+
+#[test]
+fn find_rooms_for_path_skips_a_room_with_no_cwd() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[room("r1", vec![]), room_with_cwd("r2", "C:/repo-wt/task-1")],
+    );
+    let out = find_paths(&f.db, "C:/repo-wt/task-1").unwrap();
+    assert_eq!(out.rooms.len(), 1);
+    assert_eq!(out.rooms[0].room_id, "r2");
+}
+
+#[test]
+fn find_rooms_for_path_orders_exact_matches_before_contains_matches() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            // r1 only ever CONTAINS the query (query is its parent).
+            room_with_cwd("r1", "C:/repo-wt/task-1"),
+            // r2 is an EXACT match on the query itself.
+            room_with_cwd("r2", "C:/repo-wt"),
+        ],
+    );
+    let out = find_paths(&f.db, "C:/repo-wt").unwrap();
+    let ids: Vec<&str> = out.rooms.iter().map(|m| m.room_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["r2", "r1"],
+        "the exact match must sort before the contains match regardless of room order"
+    );
+}
+
+#[tokio::test]
+async fn find_rooms_for_path_call_through_mcp() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room_with_cwd("r1", "C:/repo-wt/task-1"),
+            room("r2", vec![harness("h2", "claude", "main")]),
+        ],
+    );
+    // Called from r2's token — proof the answer is NOT scoped to the
+    // caller's own room, unlike every other verb in this file.
+    let caller = caller_for(&f.db, "r2", Some("h2"));
+    let state = agent_api_state(&f);
+
+    let result = mcp::call_tool(
+        &state,
+        &caller,
+        "find_rooms_for_path",
+        &json!({ "path": "C:/repo-wt/task-1" }),
+        &MailContext::permissive(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["rooms"][0]["room_id"], "r1");
+    assert_eq!(result["rooms"][0]["match"], "cwd");
+    assert_eq!(result["rooms"][0]["safe_to_remove"], false);
+}
+
 // ── the MCP envelope ──────────────────────────────────────────────
 
 #[tokio::test]
@@ -1788,6 +2051,49 @@ async fn the_resolve_route_exists_only_to_say_no() {
             .resolved_ms
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn the_find_rooms_route_answers_across_rooms_and_needs_a_token() {
+    let f = fixture();
+    let mut room1 = room_with_cwd("r1", "C:/repo-wt/task-1");
+    room1.harnesses = vec![harness("h1", "claude", "main")];
+    room1.active_harness_id = "h1".to_owned();
+    save(
+        &f.db,
+        &[room1, room("r2", vec![harness("h2", "claude", "main")])],
+    );
+    // r2's own token, not r1's — proving the answer is cross-room.
+    let token = f.db.ensure_room_token("r2", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    let anon = http
+        .get(format!("{base}/api/rooms/find?path=C:/repo-wt/task-1"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 401);
+
+    let authed = http
+        .get(format!("{base}/api/rooms/find?path=C:/repo-wt/task-1"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(authed.status(), 200);
+    let body: Value = authed.json().await.unwrap();
+    assert_eq!(body["rooms"][0]["room_id"], "r1");
+    assert_eq!(body["rooms"][0]["match"], "cwd");
+    assert_eq!(body["rooms"][0]["safe_to_remove"], false);
+
+    let missing_path = http
+        .get(format!("{base}/api/rooms/find"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing_path.status(), 403, "an empty path must be refused");
 }
 
 // ── the permission hook route (#86) ──────────────────────────────

@@ -1884,6 +1884,56 @@ impl Database {
         Ok(out)
     }
 
+    /// Corrupt an already-saved room's blob in place, so it fails to
+    /// parse as a `Room` — for tests, in this crate, that need a room
+    /// Skein holds but cannot read (e.g. `agent_api`'s
+    /// `find_rooms_for_path` tests). `conn` is private, so this is the
+    /// only way another module can put a row into that state.
+    #[cfg(test)]
+    pub(crate) fn corrupt_room_for_test(&self, id: &str) {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE sessions SET data = 'not json' WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+    }
+
+    /// Rooms Skein holds but cannot currently produce as a `Room`: a
+    /// `sessions` row whose blob fails to parse (not yet quarantined —
+    /// `all_rooms` never quarantines, see above) plus every row already
+    /// parked in `sessions_quarantine`. A caller deciding whether a path
+    /// is safe to remove must see this and refuse to trust a zero-match
+    /// `all_rooms` result on its own.
+    pub fn unreadable_room_count(&self) -> Result<u32, String> {
+        let conn = self.conn.lock();
+        let unparsed: usize = {
+            let mut stmt = conn
+                .prepare("SELECT data FROM sessions")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            let mut count = 0usize;
+            for row in rows {
+                let data = row.map_err(|e| e.to_string())?;
+                if serde_json::from_str::<Room>(&data).is_err() {
+                    count += 1;
+                }
+            }
+            count
+        };
+        let quarantined: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions_quarantine", [], |row| {
+                row.get(0)
+            })
+            .map_err(|e| e.to_string())?;
+        let quarantined = u32::try_from(quarantined).unwrap_or(u32::MAX);
+        Ok(u32::try_from(unparsed)
+            .unwrap_or(u32::MAX)
+            .saturating_add(quarantined))
+    }
+
     pub fn insert_harness_message(&self, m: &HarnessMessageRow) -> Result<(), String> {
         let conn = self.conn.lock();
         conn.execute(
@@ -2415,6 +2465,40 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
             .unwrap();
         assert_eq!(live, 1);
+    }
+
+    #[test]
+    fn unreadable_room_count_counts_unparsed_and_quarantined_rows() {
+        let (_dir, db) = fresh_db();
+        db.save_all(&[room("good"), room("quarantined")]).unwrap();
+        assert_eq!(db.unreadable_room_count().unwrap(), 0);
+
+        // Corrupt one row and run the same load_all pass that moves it
+        // into sessions_quarantine (#167) — the row is no longer
+        // unparseable-in-place, but it is still a room Skein can't
+        // produce.
+        db.conn
+            .lock()
+            .execute(
+                "UPDATE sessions SET data = 'not json' WHERE id = 'quarantined'",
+                [],
+            )
+            .unwrap();
+        db.load_all().unwrap();
+        assert_eq!(db.unreadable_room_count().unwrap(), 1);
+
+        // A second row that is corrupt but has NOT gone through a
+        // load_all pass yet must count too — all_rooms() itself never
+        // quarantines, so a bad row can sit in `sessions` indefinitely.
+        db.conn
+            .lock()
+            .execute(
+                "INSERT INTO sessions (id, data, created_at) VALUES ('still_bad', \
+                 'also not json', 0)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(db.unreadable_room_count().unwrap(), 2);
     }
 
     #[test]
