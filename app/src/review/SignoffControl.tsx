@@ -15,12 +15,12 @@
 // body. What Skein owns is the one fact that lives nowhere else:
 // whether the human said yes, and to exactly which commit.
 //
-// Confirmation is an inline row, not `plugin-dialog`'s `confirm`. That
-// one draws a native OS message box — right for closing a room, where
-// PTYs die and unsaved buffers are discarded, and wrong here: signing
-// off is small, in-pane and reversible in a click, and a Win32 dialog
-// in the middle of a dark app is a bigger interruption than the action
-// deserves.
+// Confirmation is an inline row, not the #242 confirmDialog modal
+// (confirmDialog.ts / ConfirmDialog.tsx). That one is right for
+// closing a room, where PTYs die and unsaved buffers are discarded,
+// and wrong here: signing off is small, in-pane and reversible in a
+// click, and a modal in the middle of a dark app is a bigger
+// interruption than the action deserves.
 //
 // Presentational; `useSignoff` owns the status and `ReviewPane` owns
 // the pending intent, because the button lives in the header and the

@@ -847,11 +847,11 @@
 	font-size: 0.85em;
 }
 
-/* The confirmation, inline under the header rather than a native OS
-   message box. `plugin-dialog`'s confirm is right for closing a room —
-   PTYs die, unsaved buffers go — and wrong for this: signing off is
-   small, in-pane, and one click to undo, so a Win32 dialog over a dark
-   app is a bigger interruption than the action deserves. */
+/* The confirmation, inline under the header rather than a modal
+   dialog. The #242 confirmDialog/ConfirmDialog.tsx modal is right for
+   closing a room — PTYs die, unsaved buffers go — and wrong for this:
+   signing off is small, in-pane, and one click to undo, so a modal
+   over a dark app is a bigger interruption than the action deserves. */
 .rv-signoff-confirm {
 	display: flex;
 	align-items: flex-start;

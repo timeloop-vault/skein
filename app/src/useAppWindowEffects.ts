@@ -13,9 +13,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import type { Dispatch, SetStateAction } from "react";
 import { useEffect, useRef } from "react";
+import { confirmDialog } from "./confirmDialog.ts";
 import { filesRegistry } from "./filesRegistry.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
 import type { Room } from "./types.ts";
@@ -56,10 +56,13 @@ export function useAppWindowEffects(
 			quitPromptOpenRef.current = true;
 			try {
 				const shown = dirty.slice(0, 5).join(", ") + (dirty.length > 5 ? ", …" : "");
-				return await confirm(
-					`${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${shown}) will be discarded. Quit anyway?`,
-					{ title: "Unsaved changes", kind: "warning" },
-				);
+				return await confirmDialog({
+					title: "Unsaved changes",
+					message: `${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${shown}) will be discarded. Quit anyway?`,
+					confirmLabel: "Quit anyway",
+					cancelLabel: "Cancel",
+					kind: "warning",
+				});
 			} finally {
 				quitPromptOpenRef.current = false;
 			}

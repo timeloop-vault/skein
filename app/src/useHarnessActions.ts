@@ -20,10 +20,10 @@
 // — everything below moved into this single hook call rather than
 // splitting across two.
 
-import { confirm } from "@tauri-apps/plugin-dialog";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback } from "react";
 import type { RenameTarget } from "./RoomStrip.tsx";
+import { confirmDialog } from "./confirmDialog.ts";
 import { filesRegistry } from "./filesRegistry.ts";
 import type { Room } from "./types.ts";
 
@@ -130,14 +130,22 @@ export function useHarnessActions(
 				}),
 			);
 		// #185: a files harness may hold unsaved buffers (memory-only).
+		// #242: in-app confirm, not plugin-dialog's native one.
 		const dirty = filesRegistry.dirtyNames(harnessId);
 		if (dirty.length > 0) {
-			void confirm(
-				`${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${dirty.join(", ")}) will be discarded. Close anyway?`,
-				{ title: "Unsaved changes", kind: "warning" },
-			).then((ok) => {
-				if (ok) proceed();
-			});
+			void confirmDialog({
+				title: "Unsaved changes",
+				message: `${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${dirty.join(", ")}) will be discarded. Close anyway?`,
+				confirmLabel: "Close anyway",
+				cancelLabel: "Cancel",
+				kind: "warning",
+			})
+				.then((ok) => {
+					if (ok) proceed();
+				})
+				.catch((err: unknown) => {
+					console.error("[skein] confirmDialog failed:", err);
+				});
 			return;
 		}
 		proceed();

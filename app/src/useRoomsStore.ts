@@ -7,7 +7,6 @@
 // return value at the spot this state used to be declared.
 
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import {
 	type Dispatch,
 	type MutableRefObject,
@@ -20,6 +19,7 @@ import {
 } from "react";
 import type { FolderInfoDto } from "./NewRoomDialog.tsx";
 import type { RenameTarget } from "./RoomStrip.tsx";
+import { confirmDialog } from "./confirmDialog.ts";
 import { filesRegistry } from "./filesRegistry.ts";
 import { unarchiveRoomTransform, withResumeCmds } from "./harnessCmd.ts";
 import { repointRoom } from "./missingFolder.ts";
@@ -341,9 +341,11 @@ export function useRoomsStore(
 	const closeRoom = async (id: string) => {
 		// Confirm before close — rooms can hold a lot of state and the
 		// prototype has no undo (well, now there's the reopen modal —
-		// but the user shouldn't have to discover that). Tauri's
-		// plugin-dialog gives us a native confirm; window.confirm is
-		// silently no-op'd in WebKit without a host-side handler.
+		// but the user shouldn't have to discover that). #242: an
+		// in-app dialog (confirmDialog.ts / ConfirmDialog.tsx), not
+		// `plugin-dialog`'s native confirm() — it doesn't pick up
+		// Skein's theme, and window.confirm is silently no-op'd in
+		// WebKit without a host-side handler.
 		// #185: name unsaved editor buffers — archived rooms come back,
 		// unsaved buffer text doesn't.
 		const target = roomsRef.current.find((r) => r.id === id);
@@ -352,10 +354,19 @@ export function useRoomsStore(
 			dirty.length > 0
 				? `Close this room? Any running harnesses will be killed and ${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${dirty.join(", ")}) discarded.`
 				: "Close this room? Any running harnesses will be killed.";
-		const ok = await confirm(msg, {
-			title: "Skein",
-			kind: "warning",
-		});
+		let ok: boolean;
+		try {
+			ok = await confirmDialog({
+				title: "Close room",
+				message: msg,
+				confirmLabel: "Close room",
+				cancelLabel: "Cancel",
+				kind: "warning",
+			});
+		} catch (err) {
+			console.error("[skein] confirmDialog failed:", err);
+			return;
+		}
 		if (!ok) return;
 		// Chapter 6 phase 2: archive instead of delete. Tab strip filters
 		// archived out; reopen modal lists them.
