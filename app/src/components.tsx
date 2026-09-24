@@ -75,12 +75,21 @@ export const HChip = ({
 	kind,
 	harnessId,
 	agent,
+	mailCount,
+	mailFromRoomNames,
 }: {
 	kind: HarnessKind;
 	harnessId?: string;
 	/** #248: the harness's agent label, for the popover. Omitted where the
 	 *  chip is a kind rather than one harness (pickers, room-tab row). */
 	agent?: AgentLabel | null | undefined;
+	/** #329: this harness's unread-mail count/senders, for the hover
+	 *  popover's mail segment. The chip is the one element every trigger
+	 *  in the row (chip, dot, the ✉ marker itself) can find, so it's the
+	 *  carrier — `statusPopover.ts` has no React access to `mailStore`.
+	 *  Omitted (no attribute) when there's no mail to show. */
+	mailCount?: number;
+	mailFromRoomNames?: readonly string[];
 }) => {
 	const k = HARNESS_KINDS[kind];
 	// #141: harnessId lets the popover read this harness's OWN live state
@@ -93,6 +102,10 @@ export const HChip = ({
 			data-harness-id={harnessId}
 			data-agent-key={agent?.key}
 			data-agent-value={agent?.value}
+			data-mail-count={mailCount && mailCount > 0 ? mailCount : undefined}
+			data-mail-from={
+				mailCount && mailCount > 0 ? JSON.stringify(mailFromRoomNames ?? []) : undefined
+			}
 			aria-label={k.name}
 		>
 			{k.label}
@@ -402,18 +415,18 @@ export const HarnessTab = ({
 			onLostPointerCapture={onLostPointerCapture}
 		>
 			<StatusDot status={h.status} />
-			<HChip kind={h.kind} harnessId={h.id} agent={agent} />
+			<HChip
+				kind={h.kind}
+				harnessId={h.id}
+				agent={agent}
+				mailCount={mail.count}
+				mailFromRoomNames={mail.fromRoomNames}
+			/>
 			<span className="ht-name">{h.name}</span>
-			{mail.count > 0 && (
-				<span
-					className="tab-mail"
-					title={`${mail.count} unread message${mail.count === 1 ? "" : "s"}${
-						mail.fromRoomNames.length > 0 ? ` from ${mail.fromRoomNames.join(", ")}` : ""
-					}`}
-				>
-					✉ {mail.count}
-				</span>
-			)}
+			{/* #329: no `title` here — the hover popover (statusPopover.ts)
+			 *  shows the same mail info as a segment, matching every other
+			 *  hover on this tab instead of a native tooltip. */}
+			{mail.count > 0 && <span className="tab-mail">✉ {mail.count}</span>}
 			{closable && (
 				<span
 					className="ht-x"

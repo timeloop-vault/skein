@@ -52,3 +52,13 @@ export function mailNudgeText(count: number, fromRoomNames: string[]): string {
 	const from = fromRoomNames.length > 0 ? ` from ${fromRoomNames.join(", ")}` : "";
 	return `You have ${count} new ${noun} in Skein${from}. Call read_messages.`;
 }
+
+/// The mail segment's VALUE for the harness-tab hover popover (#329) —
+/// `statusPopover.ts` prints it as `mail <this>`. Same singular/plural and
+/// from-clause rules as `mailNudgeText`, just without the sentence/call
+/// wrapping a one-line popover segment doesn't want.
+export function mailPopoverText(count: number, fromRoomNames: readonly string[]): string {
+	const noun = count === 1 ? "message" : "messages";
+	const from = fromRoomNames.length > 0 ? ` from ${fromRoomNames.join(", ")}` : "";
+	return `${count} unread ${noun}${from}`;
+}

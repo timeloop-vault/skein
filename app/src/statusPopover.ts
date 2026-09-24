@@ -13,6 +13,7 @@
 
 import { HARNESS_KINDS } from "./data.tsx";
 import { activityToStatus, harnessActivity, statusLabel } from "./harnessActivity.ts";
+import { mailPopoverText } from "./mailNudge.ts";
 import {
 	type Breakdown,
 	type BreakdownRoomInput,
@@ -23,7 +24,11 @@ import {
 import { subagents } from "./subagents.ts";
 import type { HarnessKind, Room, Status } from "./types.ts";
 
-const TARGET_SEL = ".h-chip, .tab-status";
+// #329: `.tab-mail` (the harness tab's unread-mail marker) is a trigger
+// too — it sits inside a `.sk-harness-tab` row without being the row's
+// chip or dot, so it needs its own entry point into `resolve()` rather
+// than relying on bubbling to reach one.
+const TARGET_SEL = ".h-chip, .tab-status, .tab-mail";
 // Rows where a lone status dot describes the same harness as the row's
 // chip, so the dot can borrow that chip for its kind (harness tab, feed
 // row, status-bar seg). The room tab is excluded: its dot is the room
@@ -55,6 +60,12 @@ interface Resolved {
 	 *  "delegating · N agents" wording. Only ever populated via the
 	 *  chip's live harnessId lookup, same restriction as `tool`. */
 	workingCount: number;
+	/** #329: this harness's current unread-mail count/senders, read off
+	 *  the row's chip regardless of which element (chip, dot, or the ✉
+	 *  marker itself) was hovered — so the segment shows up no matter
+	 *  where on the tab the pointer is. 0/[] when there's none. */
+	mailCount: number;
+	mailFrom: readonly string[];
 }
 
 export function attachStatusPopover(getRooms: () => readonly Room[]): () => void {
@@ -148,7 +159,8 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 	const resolve = (el: HTMLElement): Resolved | null => {
 		const isChip = el.classList.contains("h-chip");
 		const isDot = el.classList.contains("tab-status");
-		if (!isChip && !isDot) return null;
+		const isMail = el.classList.contains("tab-mail");
+		if (!isChip && !isDot && !isMail) return null;
 		let kind = isChip ? (el.dataset.kind ?? null) : null;
 		let status = isDot ? (el.dataset.status ?? null) : null;
 		let tool: string | null = null;
@@ -168,23 +180,51 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 		// the store, so a room-tab summary chip shows its real state rather
 		// than borrowing the room's aggregate dot (#141). Also picks up
 		// `permissionTool` (#86) — only available here, since a lone dot
-		// has no harness id to ask.
-		if (isChip && el.dataset.harnessId) {
-			const a = harnessActivity.get(el.dataset.harnessId);
+		// has no harness id to ask. #329: the mail marker borrows the same
+		// chip (by id, not by the agent-key-filtered `chip` above, which
+		// would miss a Claude harness with no agent), so hovering it shows
+		// identical state to hovering the rest of the tab.
+		const stateChip = isChip
+			? el
+			: isMail
+				? el.closest<HTMLElement>(ROW_SEL)?.querySelector<HTMLElement>(".h-chip[data-harness-id]")
+				: undefined;
+		if (stateChip?.dataset.harnessId) {
+			const a = harnessActivity.get(stateChip.dataset.harnessId);
 			if (a) {
 				status = activityToStatus(a);
 				tool = a.permissionTool;
 				agentType = a.permissionAgentType;
 			}
-			workingCount = subagents.workingCount(el.dataset.harnessId);
+			workingCount = subagents.workingCount(stateChip.dataset.harnessId);
 		}
-		// A lone status dot borrows its row's chip for the kind (harness
-		// tab etc.); skipped for the room dot, which is an aggregate.
-		if (isDot && !kind) {
+		// A lone status dot (or the mail marker) borrows its row's chip for
+		// the kind (harness tab etc.); skipped for the room dot, which is
+		// an aggregate.
+		if ((isDot || isMail) && !kind) {
 			const chips = el.closest<HTMLElement>(ROW_SEL)?.querySelectorAll<HTMLElement>(".h-chip");
 			if (chips?.length === 1) kind = chips[0]?.dataset.kind ?? null;
 		}
-		return kind || status ? { kind, status, agent, tool, agentType, workingCount } : null;
+		// #329: unread-mail count/senders, carried on the chip as data
+		// attributes (mailStore's own state, but this popover is vanilla
+		// DOM with no React access to it) — read for every trigger in the
+		// row, so the segment shows whether the chip, dot or ✉ itself was
+		// hovered.
+		const mailChip = isChip
+			? el
+			: el.closest<HTMLElement>(ROW_SEL)?.querySelector<HTMLElement>(".h-chip[data-mail-count]");
+		const mailCount = mailChip?.dataset.mailCount ? Number(mailChip.dataset.mailCount) : 0;
+		let mailFrom: readonly string[] = [];
+		if (mailChip?.dataset.mailFrom) {
+			try {
+				mailFrom = JSON.parse(mailChip.dataset.mailFrom) as string[];
+			} catch {
+				mailFrom = [];
+			}
+		}
+		return kind || status
+			? { kind, status, agent, tool, agentType, workingCount, mailCount, mailFrom }
+			: null;
 	};
 
 	const render = (el: HTMLDivElement, c: Resolved) => {
@@ -217,6 +257,9 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 				statusLabel(c.status as Status, c.tool, c.agentType, c.workingCount),
 				`pv-${c.status}`,
 			);
+		// #329: the tab's unread-mail marker, as a segment rather than its
+		// own native tooltip — same one-line style as everything else here.
+		if (c.mailCount > 0) seg("mail", mailPopoverText(c.mailCount, c.mailFrom));
 	};
 
 	// ── #331: aggregate breakdown popover ───────────────────────────

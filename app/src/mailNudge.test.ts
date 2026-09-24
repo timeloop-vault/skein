@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideMailNudge, mailNudgeText } from "./mailNudge.ts";
+import { decideMailNudge, mailNudgeText, mailPopoverText } from "./mailNudge.ts";
 import type { DecideMailNudgeInput } from "./mailNudge.ts";
 
 const GATE_OK = { ok: true } as const;
@@ -97,5 +97,23 @@ describe("mailNudgeText", () => {
 		expect(mailNudgeText(2, ["Alpha", "Beta"])).toBe(
 			"You have 2 new messages in Skein from Alpha, Beta. Call read_messages.",
 		);
+	});
+});
+
+describe("mailPopoverText", () => {
+	it("uses singular wording for one message, no room names", () => {
+		expect(mailPopoverText(1, [])).toBe("1 unread message");
+	});
+
+	it("uses plural wording for more than one message", () => {
+		expect(mailPopoverText(3, [])).toBe("3 unread messages");
+	});
+
+	it("names a single room", () => {
+		expect(mailPopoverText(1, ["test-5"])).toBe("1 unread message from test-5");
+	});
+
+	it("joins multiple room names with a comma", () => {
+		expect(mailPopoverText(2, ["Alpha", "Beta"])).toBe("2 unread messages from Alpha, Beta");
 	});
 });
