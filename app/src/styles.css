@@ -1299,12 +1299,6 @@ html.tab-dragging.tab-drag-refused * {
 	opacity: 0.4;
 	cursor: default;
 }
-/* #355: wraps the button so its `data-sk-tip` hover popover still works
-   while disabled — Chromium fires no mouse events on a disabled form
-   control, so the trigger has to live on this ancestor instead. */
-.sk-harness-actions-btn-tip {
-	display: inline-flex;
-}
 .sk-harness-actions-menu {
 	position: absolute;
 	top: 100%;
@@ -1339,16 +1333,6 @@ html.tab-dragging.tab-drag-refused * {
 .sk-harness-actions-item:disabled {
 	opacity: 0.4;
 	cursor: default;
-}
-/* #355: same wrapping trick as `.sk-harness-actions-btn-tip`, one per
-   menu row — a flex item under `.sk-harness-actions-menu`'s column is
-   blockified automatically, `width: 100%` on the button inside makes it
-   fill that row exactly as it did before the wrapper existed. */
-.sk-harness-actions-item-tip {
-	display: block;
-}
-.sk-harness-actions-item-tip .sk-harness-actions-item {
-	width: 100%;
 }
 .sk-harness-actions-error {
 	position: absolute;
@@ -1488,17 +1472,6 @@ html.tab-dragging.tab-drag-refused * {
 .sk-pop .pv-error,
 .sk-pop .pv-exited {
 	color: var(--st-error);
-}
-
-/* #355: the generic `[data-sk-tip]` trigger (statusPopover.ts) — a
-   caller's raw text, e.g. a nudge/action body, in place of `title=`.
-   Multi-line bodies keep their newlines (`pre-wrap`, not `pre`, so a
-   long single line still wraps instead of overflowing); `max-width`
-   plus `tipText.ts`'s line cap are what keep a page-long override body
-   from producing a screen-sized popover. */
-.sk-pop.sk-pop-tip {
-	white-space: pre-wrap;
-	max-width: 320px;
 }
 
 /* #331: the aggregate status-dot breakdown popover (room tab, group
