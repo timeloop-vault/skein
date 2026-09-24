@@ -35,6 +35,7 @@ import {
 	type ToastEntry,
 	enqueueOsNotification,
 } from "./notifications.tsx";
+import { clearAttention } from "./roomAttention.ts";
 import { followedSession } from "./sessionTracking.ts";
 import type { Room } from "./types.ts";
 
@@ -533,6 +534,11 @@ export function useHarnessNotifications(
 	// visits each tab.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: setRooms comes from useRoomsStore (#19) — a setState setter, stable across renders, but biome can't prove that through a destructured custom-hook return.
 	useEffect(() => {
+		// #328: the room-level `attention` mark clears independently of
+		// `displayedHarnessId` below — a room becoming active is what
+		// "visited" means for it, not which harness inside it happens to
+		// be showing.
+		setRooms((prev) => clearAttention(prev, activeRoomId));
 		if (!activeRoomId || !displayedHarnessId) return;
 		setRooms((prev) =>
 			prev.map((r) => {

@@ -265,6 +265,10 @@ pub fn run() {
                         Arc::clone(&db),
                         app.handle().clone(),
                     ));
+                    // Managed so `agent_request_complete` (#328) can
+                    // reach the same pending-request map the HTTP
+                    // server's handlers register requests on.
+                    app.manage(Arc::clone(&state));
                     tauri::async_runtime::spawn(async move {
                         match tokio::net::TcpListener::from_std(listener) {
                             Ok(listener) => crate::agent_api::http::serve(listener, state).await,
@@ -450,6 +454,7 @@ pub fn run() {
             review_surface::commands::review_set_signoff,
             agent_api::commands::agent_api_status,
             agent_api::commands::mail_unread,
+            agent_api::commands::agent_request_complete,
             os_notify::os_notify_show,
             os_notify::os_notify_take_pending,
         ])

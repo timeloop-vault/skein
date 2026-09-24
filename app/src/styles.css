@@ -840,6 +840,15 @@ body {
 	min-width: 14px;
 	text-align: center;
 }
+/* #328: a room created without being switched to — a dot, not a count
+   (there's nothing to count yet), next to where `.tab-badge` would sit. */
+.tab-attention-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--accent);
+	flex: 0 0 6px;
+}
 /* Room groups (#76), two-level strip. `.sk-group-tab` is the TOP-row
    tab for a repository with two or more open rooms — visually just
    another `.sk-tab` (same size/shape, so it reads as a tab and not a

@@ -3,13 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import type { CreateRoomArgs, FolderInfoDto, RepoStatus } from "./NewRoomDialogTypes.ts";
 import { kindHasAgents } from "./agents.ts";
-import {
-	applyBranchTemplate,
-	branchFieldProblem,
-	taskSlug,
-	templateFromBranch,
-	worktreeLeaf,
-} from "./branchName.ts";
+import { applyBranchTemplate, branchFieldProblem, taskSlug, worktreeLeaf } from "./branchName.ts";
 import { useAgentListing } from "./components.tsx";
 import {
 	type DefaultAgents,
@@ -20,6 +14,7 @@ import {
 	startingAgent,
 } from "./prefs.ts";
 import type { HarnessKind } from "./types.ts";
+import { createRoomArgs } from "./worktreeRoom.ts";
 
 // Split out of `NewRoomDialog.tsx` (#19): the folder-inspection /
 // branch-validation state, its effects, and the handlers that act on it.
@@ -200,10 +195,8 @@ export const useNewRoomForm = ({
 	// folder to key on rather than always reading the app-wide default
 	// on open.
 	const branchTemplateFolder = settledCwd || cwd;
-	const proposedBranch = applyBranchTemplate(
-		branchTemplateFor(memory, branchTemplateFolder, appBranchTemplate),
-		slug,
-	);
+	const branchTemplate = branchTemplateFor(memory, branchTemplateFolder, appBranchTemplate);
+	const proposedBranch = applyBranchTemplate(branchTemplate, slug);
 
 	// #227: the branch field follows `proposedBranch` until the user
 	// types in it, then detaches — typing is a deliberate override.
@@ -346,65 +339,41 @@ export const useNewRoomForm = ({
 		setBusy(true);
 		setError(null);
 		// Called only on a path that genuinely created the room — a create
-		// that throws must not teach the dialog anything.
-		const remember = (base: string, branchTemplate?: string) =>
+		// that throws (or fails validation) must not teach the dialog
+		// anything.
+		const remember = (base: string, template?: string) =>
 			onRemember(cwd, {
 				baseBranch: base,
 				harness,
 				branchMode,
 				...(agent ? { agent } : {}),
-				...(branchTemplate ? { branchTemplate } : {}),
+				...(template ? { branchTemplate: template } : {}),
 			});
 		try {
-			if (!isRepo) {
-				// Non-git folder — no worktree, no branch. cwd is the
-				// picked folder verbatim, and it is remembered like any
-				// other folder (#231), with an empty base branch: there is
-				// no branch to carry forward, but the folder itself and the
-				// starting harness are worth exactly as much here.
-				remember("");
-				onCommit({
-					cwd,
-					task: task.trim(),
-					harness,
-					...(agent ? { agent } : {}),
-				});
+			// A non-repo folder is always a plain-folder room (#231),
+			// regardless of the (hidden, for a non-repo) branch-mode radio
+			// — `createRoomArgs` treats "worktree" on a non-repo folder as
+			// an error, so this is the one place that distinction is made.
+			const outcome = await createRoomArgs({
+				folder: cwd,
+				task,
+				harness,
+				...(agent ? { agent } : {}),
+				branchMode: isRepo ? branchMode : "current",
+				branch,
+				baseBranch,
+				branchTemplate,
+			});
+			if (!outcome.ok) {
+				setError(outcome.error);
+				setBusy(false);
 				return;
 			}
-			if (branchMode === "worktree") {
-				const newWorktreePath = await invoke<string>("git_propose_worktree_path", {
-					repoPath: cwd,
-					taskSlug: worktreeLeaf(branch),
-				});
-				const wt = await invoke<{ name: string; path: string }>("git_add_worktree", {
-					repoPath: cwd,
-					branch,
-					baseBranch,
-					worktreePath: newWorktreePath,
-				});
-				// #227: only a successful create teaches the folder its
-				// branch template — a failed one must not poison the next
-				// open with a prefix that never actually landed.
-				remember(baseBranch, templateFromBranch(branch));
-				onCommit({
-					cwd: wt.path,
-					task: task.trim(),
-					harness,
-					...(agent ? { agent } : {}),
-					branch,
-					repoRoot: settledCwd,
-				});
-			} else {
-				remember(baseBranch);
-				onCommit({
-					cwd,
-					task: task.trim(),
-					harness,
-					...(agent ? { agent } : {}),
-					branch: repoStatus.kind === "valid" ? (repoStatus.head ?? "HEAD") : "HEAD",
-					repoRoot: settledCwd,
-				});
-			}
+			// #227: only a successful create teaches the folder its branch
+			// template — a failed one must not poison the next open with a
+			// prefix that never actually landed.
+			remember(outcome.remember.baseBranch, outcome.remember.branchTemplate);
+			onCommit(outcome.args);
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
 			setError(msg);

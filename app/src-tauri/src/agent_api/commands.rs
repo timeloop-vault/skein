@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use super::state::{AgentApiEndpoint, AgentApiStatus};
+use super::state::{AgentApiEndpoint, AgentApiState, AgentApiStatus};
 use super::verbs::{self, MailUnread};
 use crate::db::Database;
 
@@ -38,4 +38,25 @@ pub async fn mail_unread(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The frontend's answer to a `skein://agent-request` it received
+/// (#328). `error` wins over `ok` when both are somehow present — an
+/// error is the frontend actively saying something went wrong, and
+/// that must not be masked by whatever placeholder `ok` value came
+/// along with it. `ok: None` with no `error` completes with `null`,
+/// for requests whose answer is "done", not a value.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn agent_request_complete(
+    id: String,
+    ok: Option<serde_json::Value>,
+    error: Option<String>,
+    state: tauri::State<'_, Arc<AgentApiState>>,
+) -> Result<(), String> {
+    let result = match error {
+        Some(e) => Err(e),
+        None => Ok(ok.unwrap_or(serde_json::Value::Null)),
+    };
+    state.complete_request(&id, result)
 }

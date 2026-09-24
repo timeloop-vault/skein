@@ -218,6 +218,11 @@ const GroupTab = ({
 	);
 	const roomCount = rooms.length;
 	const worktreeCount = seg.members.length;
+	// #328: read straight off `groupRooms(seg)`, not the (intentionally
+	// stale-tolerant) `rooms` above — `useStableRooms` only re-derives on
+	// an id/harnesses-reference change, so a bare `attention` flip on an
+	// otherwise-unchanged member would go unseen through it.
+	const hasAttention = groupRooms(seg).some((r) => r.attention);
 
 	const segId = segmentId(seg);
 	const { drag, dropTarget, startDrag, dragHandlers, suppressClick } = dragWiring;
@@ -272,6 +277,7 @@ const GroupTab = ({
 					</span>
 				)}
 				{badge > 0 && <span className="tab-badge">{badge}</span>}
+				{hasAttention && <span className="tab-attention-dot" title="New room" />}
 				<span className="sk-group-count">({roomCount})</span>
 			</div>
 			<div className="row-2">
