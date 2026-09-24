@@ -106,6 +106,10 @@ export default function App() {
 	// useAppWindowEffects (which attaches the popover) mounts first;
 	// kept in sync just after useRoomsStore returns.
 	const popoverRoomsRef = useRef<readonly Room[]>([]);
+	// #76: the room last used in each group (see useRoomStripNav.ts) —
+	// created here, before useRoomsStore, so #334's closeRoom can read
+	// it too; useRoomStripNav still owns writing to it.
+	const lastUsedByGroupRef = useRef<Map<string, string>>(new Map());
 	// #19: six standalone window/app-level effects — the boot-time
 	// default-shell/default-cwd probe above, the quit-confirmation
 	// wiring, the Esc-closes-picker listener, the skein://open-settings
@@ -174,7 +178,7 @@ export default function App() {
 		restoreRoom,
 		closeRoom,
 		switchRoom,
-	} = useRoomsStore(defaultShell, setRenaming);
+	} = useRoomsStore(defaultShell, setRenaming, lastUsedByGroupRef);
 
 	// Keyboard nav (Mod+Tab, Mod+1..9) keys off active rooms only —
 	// archived ones aren't rendered as tabs and shouldn't be reachable
@@ -199,7 +203,6 @@ export default function App() {
 		stripSegments,
 		stripSegmentsRef,
 		activeSegment,
-		lastUsedByGroupRef,
 		onSelectSegment,
 		showNewRoom,
 		setShowNewRoom,
@@ -220,6 +223,7 @@ export default function App() {
 		setRooms,
 		switchRoom,
 		unarchiveRoomRef,
+		lastUsedByGroupRef,
 	);
 	// #76: derived from `stripSegments` above — kept here (not in the
 	// hook) since keyboard nav is the only consumer and it already

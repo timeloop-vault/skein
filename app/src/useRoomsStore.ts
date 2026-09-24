@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import {
 	type Dispatch,
+	type MutableRefObject,
 	type SetStateAction,
 	useCallback,
 	useEffect,
@@ -22,6 +23,7 @@ import type { RenameTarget } from "./RoomStrip.tsx";
 import { filesRegistry } from "./filesRegistry.ts";
 import { unarchiveRoomTransform, withResumeCmds } from "./harnessCmd.ts";
 import { repointRoom } from "./missingFolder.ts";
+import { nextActiveAfterClose } from "./roomGroups.ts";
 import type { Harness, Room } from "./types.ts";
 
 /** Wire shape of `db_load_rooms` (#167): the rooms that parsed plus
@@ -37,6 +39,7 @@ interface DbLoadOutcome {
 export function useRoomsStore(
 	defaultShell: string[],
 	setRenaming: Dispatch<SetStateAction<RenameTarget | null>>,
+	lastUsedByGroupRef: MutableRefObject<Map<string, string>>,
 ) {
 	const [rooms, setRooms] = useState<Room[]>([]);
 	const roomsRef = useRef(rooms);
@@ -358,8 +361,8 @@ export function useRoomsStore(
 		// archived out; reopen modal lists them.
 		setRooms((prev) => prev.map((r) => (r.id === id ? { ...r, archived: Date.now() } : r)));
 		if (id === activeRoomId) {
-			const nextActive = activeRooms.find((r) => r.id !== id);
-			setActiveRoomId(nextActive ? nextActive.id : "");
+			const nextActive = nextActiveAfterClose(activeRooms, id, lastUsedByGroupRef.current);
+			setActiveRoomId(nextActive?.id ?? "");
 		}
 		// #241: archiving is the only path that can remove a room out from
 		// under an in-progress rename (the tab strip only ever renders

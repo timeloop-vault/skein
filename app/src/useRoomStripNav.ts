@@ -51,6 +51,7 @@ export function useRoomStripNav(
 	setRooms: Dispatch<SetStateAction<Room[]>>,
 	switchRoom: (id: string) => void,
 	unarchiveRoomRef: MutableRefObject<(id: string) => Promise<void>>,
+	lastUsedByGroupRef: MutableRefObject<Map<string, string>>,
 ) {
 	const [showNewRoom, setShowNewRoom] = useState(false);
 
@@ -139,8 +140,10 @@ export function useRoomStripNav(
 	// reaching a room (toasts, the urgent slot, OS notification clicks,
 	// Alt+J/L, the palette, reopen, create) already goes through
 	// `setActiveRoomId`, so this derives for free without touching any
-	// of those call sites.
-	const lastUsedByGroupRef = useRef<Map<string, string>>(new Map());
+	// of those call sites. Created in App.tsx (issue #334: `closeRoom`,
+	// in useRoomsStore, needs to read it too, and that hook runs before
+	// this one) and passed down as a parameter rather than created here.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: lastUsedByGroupRef is a ref passed in from App.tsx — stable across renders, but biome can't prove that through a parameter.
 	useEffect(() => {
 		if (activeSegment?.kind === "group") {
 			lastUsedByGroupRef.current.set(activeSegment.key, activeRoomId);
@@ -242,7 +245,6 @@ export function useRoomStripNav(
 		stripSegments,
 		stripSegmentsRef,
 		activeSegment,
-		lastUsedByGroupRef,
 		onSelectSegment,
 		showNewRoom,
 		setShowNewRoom,
