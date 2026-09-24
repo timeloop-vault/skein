@@ -292,7 +292,19 @@ export function useHarnessCreation(
 		});
 	};
 
-	const createRoom = async ({ cwd, task, harness, agent, branch, repoRoot }: CreateRoomArgs) => {
+	// #328: `opts.activate` (default true) is what lets a caller create a
+	// room without switching to it — #330's incoming request handler is
+	// the first one that needs this. `activate: false` leaves
+	// `activeRoomId`/`showNewRoom` alone and marks the room `attention`
+	// instead (see the field's doc in types.ts), which is what puts a
+	// dot on its tab until the user visits it. Returns the new room id
+	// either way, so a caller that doesn't care about activation can
+	// still find the room it just made.
+	const createRoom = async (
+		{ cwd, task, harness, agent, branch, repoRoot }: CreateRoomArgs,
+		opts?: { activate?: boolean },
+	): Promise<string> => {
+		const activate = opts?.activate ?? true;
 		const sid = newId("s");
 		const hid = newId("h");
 		// Phase 2a: pre-allocate Claude's conversation id (see pickHarness).
@@ -354,10 +366,13 @@ export function useHarnessCreation(
 				},
 			],
 			activeHarnessId: hid,
+			...(activate ? {} : { attention: true }),
 		};
 		setRooms((prev) => [...prev, newRoom]);
-		setActiveRoomId(sid);
-		setShowNewRoom(false);
+		if (activate) {
+			setActiveRoomId(sid);
+			setShowNewRoom(false);
+		}
 		// Phase 2b sqlite-poll fallback (see pickHarness comment for
 		// the relationship with L2c-2's SSE capture).
 		if (harness === "opencode") {
@@ -365,6 +380,7 @@ export function useHarnessCreation(
 				setHarnessSessionId(sid, hid, captured);
 			});
 		}
+		return sid;
 	};
 
 	return {

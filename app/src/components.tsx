@@ -331,6 +331,11 @@ export const RoomTab = ({
 				</span>
 			)}
 			{r.badge > 0 && <span className="tab-badge">{r.badge}</span>}
+			{/* #328: a room created without switching to it (`createRoom`,
+			    `{ activate: false }`) — a dot, not a count, since there is
+			    nothing yet to count. Cleared the moment this room becomes
+			    active, so it never shows on the tab you're already on. */}
+			{r.attention && !active && <span className="tab-attention-dot" title="New room" />}
 			{/* #241: hidden mid-rename — closing out from under the input
 			    would archive the room `commit`/`onBlur` is about to write
 			    a name onto, and a stray click here is an easy miss when the

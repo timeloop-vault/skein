@@ -227,6 +227,12 @@ pub struct Room {
     /// disappears (#164).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub repo_root: Option<String>,
+    /// #328: set on a room created in the background
+    /// (`createRoom(args, { activate: false })`), cleared the moment it
+    /// becomes the active room — an unread mark on the room's own
+    /// existence, not on any harness inside it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub attention: Option<bool>,
 }
 
 /// A `sessions` row whose JSON blob failed to parse at load time.
@@ -2235,6 +2241,7 @@ mod tests {
             repo: None,
             archived: None,
             repo_root: None,
+            attention: None,
         }
     }
 
@@ -2337,6 +2344,28 @@ mod tests {
             outcome.rooms[0].repo_root.as_deref(),
             Some("/home/stefan/code/skein")
         );
+    }
+
+    /// A blob written before #328 has no `attention` key at all. The
+    /// field policy says that must load, not quarantine the room.
+    #[test]
+    fn a_pre_328_blob_loads_without_an_attention_field() {
+        let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+            "harnesses":[],"activeHarnessId":""}"#;
+        let room: Room = serde_json::from_str(json).unwrap();
+        assert_eq!(room.attention, None);
+    }
+
+    /// #328: `attention` round-trips through save and load like the
+    /// other optional room fields.
+    #[test]
+    fn attention_round_trips_through_save_and_load() {
+        let (_dir, db) = fresh_db();
+        let mut r = room("r1");
+        r.attention = Some(true);
+        db.save_all(&[r]).unwrap();
+        let outcome = db.load_all().unwrap();
+        assert_eq!(outcome.rooms[0].attention, Some(true));
     }
 
     #[test]
@@ -3289,6 +3318,7 @@ mod orphan_sweep_tests {
             repo: None,
             archived: None,
             repo_root: None,
+            attention: None,
         }
     }
 

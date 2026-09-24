@@ -96,6 +96,14 @@ export interface Room {
 	// room-group key (#76), and is kept even if the folder later
 	// disappears (#164).
 	repoRoot?: string;
+	// #328: set when a room is created without switching to it
+	// (`createRoom(args, { activate: false })`), cleared the moment it
+	// becomes the active room. A ROOM-level mark rather than a
+	// harness-level `pendingNotifications` bump: a freshly created room
+	// has no harness activity yet (nothing has run, so nothing would
+	// naturally badge it), and the thing the user hasn't looked at is
+	// the room's existence itself, not any one harness inside it.
+	attention?: true;
 }
 
 export type Theme = "dark" | "light";

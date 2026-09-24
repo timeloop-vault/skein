@@ -296,6 +296,7 @@ mod tests {
             repo: None,
             archived: None,
             repo_root: None,
+            attention: None,
         };
         db.save_all(&[room]).unwrap();
         (db_dir, db)
