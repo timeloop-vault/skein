@@ -297,11 +297,11 @@ see "Caps and the kill switch" just below.
 | :-- | :-- |
 | `path` | the calling room's own repo root, falling back to its cwd |
 | `branchMode` | `"worktree"` (the other choice is `"current"`) |
-| `branch` | the frontend's own branch template applied to `task` |
-| `baseBranch` | the repo's `HEAD` |
+| `branch` | the user's own branch-name template, applied to a slug of `task` |
+| `baseBranch` | the repo's current branch guess |
 | `task` | required — short label for the room's tab |
-| `kind` | the user's own default for this folder |
-| `agent` | the tool's own default, or the folder's remembered agent (#247/#248) |
+| `kind` | the user's own default harness kind for this folder |
+| `agent` | the user's own default agent for that kind, or the folder's remembered agent (#247/#248) — omit rather than guessing a name, since an unresolvable one refuses the whole call |
 | `prompt` | omitted → the room opens idle. Given → queued as the new harness's first mailbox message the moment it exists |
 
 Returns `roomId`, `name`, `cwd`, `repo`, `branch`, `harnessId`, `kind`,

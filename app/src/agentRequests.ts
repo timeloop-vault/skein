@@ -30,6 +30,15 @@ const asRecord = (raw: unknown): Record<string, unknown> | null =>
 		? (raw as Record<string, unknown>)
 		: null;
 
+/** `true` for an optional field that was left out entirely. Rust's
+ *  `serde_json::json!` macro serializes an absent `Option<String>` as
+ *  JSON `null`, never as a missing key, so every optional-string check
+ *  below has to treat the two as the same "not given" — the bug this
+ *  guards against shipped live: a request with only the required
+ *  fields still carried `kind: null, agent: null, ...` and was rejected
+ *  as "kind must be a string". */
+const isOmitted = (value: unknown): boolean => value === undefined || value === null;
+
 // ── create_room.resolve ──────────────────────────────────────────────
 
 export interface ResolveRequestArgs {
@@ -46,10 +55,10 @@ export function parseResolveArgs(raw: unknown): RequestResult<ResolveRequestArgs
 	const r = asRecord(raw);
 	if (!r) return { ok: false, error: "args must be an object" };
 	if (typeof r.path !== "string" || !r.path.trim()) return { ok: false, error: "path is required" };
-	if (r.kind !== undefined && typeof r.kind !== "string") {
+	if (!isOmitted(r.kind) && typeof r.kind !== "string") {
 		return { ok: false, error: "kind must be a string" };
 	}
-	if (r.agent !== undefined && typeof r.agent !== "string") {
+	if (!isOmitted(r.agent) && typeof r.agent !== "string") {
 		return { ok: false, error: "agent must be a string" };
 	}
 	return {
@@ -130,10 +139,10 @@ export function parseCreateArgs(raw: unknown): RequestResult<CreateRequestArgs> 
 	if (r.branchMode !== "worktree" && r.branchMode !== "current") {
 		return { ok: false, error: 'branchMode must be "worktree" or "current"' };
 	}
-	if (r.branch !== undefined && typeof r.branch !== "string") {
+	if (!isOmitted(r.branch) && typeof r.branch !== "string") {
 		return { ok: false, error: "branch must be a string" };
 	}
-	if (r.baseBranch !== undefined && typeof r.baseBranch !== "string") {
+	if (!isOmitted(r.baseBranch) && typeof r.baseBranch !== "string") {
 		return { ok: false, error: "baseBranch must be a string" };
 	}
 	if (typeof r.task !== "string" || !r.task.trim()) return { ok: false, error: "task is required" };

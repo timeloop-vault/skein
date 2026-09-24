@@ -67,6 +67,17 @@ describe("parseResolveArgs", () => {
 			error: "agent must be a string",
 		});
 	});
+
+	// Regression for the bug seen live: Rust's `serde_json::json!` macro
+	// serializes an absent `Option<String>` as JSON `null`, never as a
+	// missing key — this is the exact payload `create_room`'s first
+	// round trip sends for a minimal `{task}`-only call.
+	it("treats explicit null the same as absent, matching Rust's json! output", () => {
+		expect(parseResolveArgs({ path: "/repo", kind: null, agent: null })).toEqual({
+			ok: true,
+			value: { path: "/repo" },
+		});
+	});
 });
 
 describe("resolveKind", () => {
@@ -201,6 +212,14 @@ describe("parseCreateArgs", () => {
 			ok: false,
 			error: "createdBy must be {roomId, harnessId}",
 		});
+	});
+
+	// Regression: Rust's second round trip sends `branch`/`baseBranch` as
+	// explicit `null` whenever the agent omitted them — same shape as
+	// the resolve request above.
+	it("treats null branch/baseBranch the same as absent, matching Rust's json! output", () => {
+		const args = { ...valid, branch: null, baseBranch: null };
+		expect(parseCreateArgs(args)).toEqual({ ok: true, value: valid });
 	});
 
 	it("accepts an empty harnessId — the caller's own X-Skein-Harness header is optional", () => {

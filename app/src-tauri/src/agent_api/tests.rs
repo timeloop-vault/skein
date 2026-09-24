@@ -2623,6 +2623,72 @@ async fn create_room_sends_an_empty_string_harness_id_when_the_caller_has_none()
 }
 
 #[tokio::test]
+async fn create_room_resolve_and_create_payloads_use_null_for_omitted_optionals() {
+    // Pins the wire contract for a minimal `{task}`-only call: every
+    // `Option` field `create_room` didn't get goes to the frontend as
+    // JSON `null`, via `serde_json::json!`, never as an absent key.
+    // The frontend's `parseResolveArgs`/`parseCreateArgs` must treat
+    // that `null` the same as "omitted" — a real agent call hit this
+    // exact shape and was rejected with "kind must be a string" before
+    // that fix (#330 follow-up).
+    let f = fixture();
+    let (_tmp, caller) = git_room(&f);
+    let state = agent_api_state(&f);
+
+    let resolve_args = std::sync::Arc::new(std::sync::Mutex::new(None::<Value>));
+    let create_args = std::sync::Arc::new(std::sync::Mutex::new(None::<Value>));
+    let resolve_clone = std::sync::Arc::clone(&resolve_args);
+    let create_clone = std::sync::Arc::clone(&create_args);
+    state.set_test_frontend(move |kind, args| match kind {
+        "create_room.resolve" => {
+            *resolve_clone.lock().unwrap() = Some(args.clone());
+            Ok(json!({ "kind": "claude", "agent": null }))
+        }
+        "create_room" => {
+            *create_clone.lock().unwrap() = Some(args.clone());
+            Ok(json!({
+                "roomId": "new-room",
+                "name": "task name",
+                "harnessId": "new-harness",
+                "kind": "claude",
+            }))
+        }
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+
+    verbs::create_room(
+        &state,
+        &caller,
+        &create_room_args("do the thing"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap();
+
+    let resolve = resolve_args
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("resolve called");
+    assert_eq!(resolve["kind"], Value::Null, "omitted kind must be null");
+    assert_eq!(resolve["agent"], Value::Null, "omitted agent must be null");
+
+    let create = create_args.lock().unwrap().clone().expect("create called");
+    assert_eq!(create["branch"], Value::Null, "omitted branch must be null");
+    assert_eq!(
+        create["baseBranch"],
+        Value::Null,
+        "omitted baseBranch must be null"
+    );
+    assert_eq!(
+        create["agent"],
+        Value::Null,
+        "the resolved agent (still None here) must be null"
+    );
+}
+
+#[tokio::test]
 async fn create_room_happy_path_without_a_prompt() {
     let f = fixture();
     let (_tmp, caller) = git_room(&f);

@@ -494,30 +494,33 @@ pub fn tool_specs() -> Vec<Value> {
                  screen, and its dot only draws their attention once they look. After \
                  it exists you can reach it again with send_message, addressed to the \
                  harnessId or roomId this call returns. You cannot close, archive, or \
-                 otherwise destroy a room — that stays the user's decision.",
+                 otherwise destroy a room — that stays the user's decision. Omit any \
+                 argument you have no reason to set; Skein fills it with the user's \
+                 own defaults.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Absolute path to an existing folder. Omitted \
-                            → the calling room's own repo root, falling back to \
-                            its cwd.",
+                        "description": "Absolute path to an existing folder. Optional \
+                            — default: the calling room's own repo root, falling back \
+                            to its cwd.",
                     },
                     "branchMode": {
                         "type": "string",
                         "enum": ["worktree", "current"],
-                        "description": "Default worktree.",
+                        "description": "Optional — default: worktree.",
                     },
                     "branch": {
                         "type": "string",
-                        "description": "Worktree mode only. Omitted → a name \
-                            derived from task.",
+                        "description": "Worktree mode only. Optional — default: the \
+                            user's own branch-name template, applied to a slug of \
+                            task.",
                     },
                     "baseBranch": {
                         "type": "string",
-                        "description": "Worktree mode only. Omitted → the \
-                            repo's HEAD.",
+                        "description": "Worktree mode only. Optional — default: the \
+                            repo's current branch guess.",
                     },
                     "task": {
                         "type": "string",
@@ -526,19 +529,21 @@ pub fn tool_specs() -> Vec<Value> {
                     "kind": {
                         "type": "string",
                         "enum": ["claude", "opencode", "copilot", "byoh", "files"],
-                        "description": "Omitted → the user's own default for \
-                            this folder.",
+                        "description": "Optional — default: the user's own default \
+                            harness kind for this folder.",
                     },
                     "agent": {
                         "type": "string",
-                        "description": "Omitted → the tool's own default, or \
-                            the folder's remembered agent.",
+                        "description": "Optional — default: the user's own default \
+                            agent for that kind. Omit rather than guessing a name — \
+                            an unresolvable one refuses the whole call.",
                     },
                     "prompt": {
                         "type": "string",
                         "description": "Queued as the new harness's first mailbox \
                             message once it exists — it will act on this \
-                            unattended. Omit to open an idle room instead.",
+                            unattended. Optional — default: none, the room opens \
+                            idle and waits for the user.",
                     },
                 },
                 "required": ["task"],
