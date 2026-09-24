@@ -27,6 +27,9 @@ export interface CreateRoomArgs {
 	 *  a git repo — the main checkout even when the picked folder was a
 	 *  worktree. Absent for non-git rooms. */
 	repoRoot?: string;
+	/** #330: set only by the `create_room` agent-request handler — the
+	 *  New Room dialog never carries one. */
+	createdBy?: { roomId: string; harnessId: string };
 }
 
 // What `git_inspect_folder` answers, mirroring `FolderInfoDto` in

@@ -99,6 +99,13 @@ pub struct SpawnSettings {
     /// `read_messages`, with the reason. Default on, like the two
     /// injection flags above.
     pub allow_agent_messaging: bool,
+    /// Let a harness open a whole new room — a new worktree, a new
+    /// spawned process, optionally a queued first prompt — through the
+    /// agent API's `create_room` verb (#330). Off refuses it outright,
+    /// with the reason. Default on, like the mailbox flag above, but
+    /// called out separately because unlike a message this spawns a
+    /// real, unattended agent process.
+    pub allow_agent_room_creation: bool,
 }
 
 impl Default for SpawnSettings {
@@ -113,6 +120,7 @@ impl Default for SpawnSettings {
             inject_claude_plugin: true,
             inject_opencode_config: true,
             allow_agent_messaging: true,
+            allow_agent_room_creation: true,
         }
     }
 }
@@ -378,6 +386,23 @@ mod tests {
         // is genuinely the old-file case and not just an empty object.
         assert!(loaded.inject_claude_plugin);
         assert!(!loaded.inject_opencode_config);
+    }
+
+    #[test]
+    fn an_old_settings_file_without_the_room_creation_key_defaults_to_allowed() {
+        // #330 added the field after settings.json was already shipping
+        // in the wild — same story as #327's messaging flag just above.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            file_path(dir.path()),
+            r#"{"schema":1,"allowAgentMessaging":false}"#,
+        )
+        .expect("write");
+        let (loaded, degraded) = load(dir.path());
+        assert!(degraded.is_none());
+        assert!(loaded.allow_agent_room_creation);
+        // And the field that *was* present still round-trips.
+        assert!(!loaded.allow_agent_messaging);
     }
 
     #[test]

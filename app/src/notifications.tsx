@@ -25,8 +25,12 @@ export interface ToastEntry {
 	// verbatim in the toast subtitle. "error" is the D2f api_error
 	// variant — red treatment plus the dim `detail` line. "permission"
 	// (#86) is a harder stop than "waiting" — the harness is blocked on
-	// an approval dialog, not merely at end-of-turn.
-	state: "idle" | "exited" | "waiting" | "error" | "permission";
+	// an approval dialog, not merely at end-of-turn. "created" (#330) is
+	// the receipt for a room an agent's `create_room` call opened in the
+	// background — not a harness-activity transition at all, so it never
+	// comes from `harnessActivity.subscribeTransitions` the way every
+	// other variant does; `useAgentRequests.ts` pushes it directly.
+	state: "idle" | "exited" | "waiting" | "error" | "permission" | "created";
 	/** Error variant only: summary under the subtitle, e.g.
 	 *  "Overloaded (529), retrying · attempt 4 of 10 · retry in 4.4s". */
 	detail?: string | undefined;
@@ -43,6 +47,11 @@ export interface ToastEntry {
 	 *  call site) — "Skein cannot claim the delegated work finished"
 	 *  there, so no suffix rides along. */
 	delegationNote?: string | undefined;
+	/** "created" variant only: the room that asked for this one, so the
+	 *  toast can read "<requesterRoomName> opened <roomName>" — `roomName`
+	 *  here is the NEW room, the toast's own click/navigation target, same
+	 *  as every other variant. */
+	requesterRoomName?: string | undefined;
 }
 
 const TOAST_DISMISS_MS = 6_000;
@@ -153,16 +162,33 @@ export const Toast = ({
 				// end-of-turn was withheld for delegated work.
 				toast.state === "waiting" && toast.delegationNote
 				? `${toast.state} · ${toast.delegationNote}`
-				: toast.state;
+				: toast.state === "created"
+					? "opened"
+					: toast.state;
+	// #330: the "created" variant reads as a receipt for the room that
+	// asked, not as an activity update on the harness itself — its title
+	// names both rooms rather than just the target.
+	const title =
+		toast.state === "created" && toast.requesterRoomName
+			? `${toast.requesterRoomName} opened ${toast.roomName}`
+			: toast.roomName;
 	return (
 		<div
-			className={`sk-toast${toast.state === "error" ? " error" : toast.state === "permission" ? " permission" : ""}`}
+			className={`sk-toast${
+				toast.state === "error"
+					? " error"
+					: toast.state === "permission"
+						? " permission"
+						: toast.state === "created"
+							? " created"
+							: ""
+			}`}
 			onClick={onClick}
 			title="Go to this harness"
 		>
 			<HChip kind={toast.kind} />
 			<div className="sk-toast-body">
-				<div className="sk-toast-title">{toast.roomName}</div>
+				<div className="sk-toast-title">{title}</div>
 				<div className="sk-toast-sub">
 					{toast.harnessName} · {sub}
 				</div>

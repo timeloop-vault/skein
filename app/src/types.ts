@@ -104,6 +104,11 @@ export interface Room {
 	// naturally badge it), and the thing the user hasn't looked at is
 	// the room's existence itself, not any one harness inside it.
 	attention?: true;
+	// #330: which room + harness asked for this one via the `create_room`
+	// agent verb. Absent for every room created through the New Room
+	// dialog. `#[serde(default)]` on the Rust side per the post-v0.2.5
+	// field policy — an old blob has no opinion here.
+	createdBy?: { roomId: string; harnessId: string };
 }
 
 export type Theme = "dark" | "light";
@@ -140,6 +145,10 @@ export interface SpawnSettings {
 	/** Let agents call the agent-messaging verbs to reach other harnesses
 	 *  in the room (#327). Absent on old persisted data — treat as true. */
 	allowAgentMessaging: boolean;
+	/** Let agents call `create_room` to open a new room (#330). Same
+	 *  shape as `allowAgentMessaging` — absent on old persisted data,
+	 *  treat as true. */
+	allowAgentRoomCreation: boolean;
 }
 
 export interface SpawnSettingsPayload {

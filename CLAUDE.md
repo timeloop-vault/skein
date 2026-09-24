@@ -304,12 +304,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       ├── src/agent_api/       # The agent-facing review API (#213, epic #52 D8):
     │       │   {state,auth,verbs,   #   an axum server on 127.0.0.1:<ephemeral> inside the
     │       │    mcp,http,commands,  #   Tauri process, exposed as MCP over HTTP so Claude
-    │       │    tests}.rs           #   Code and opencode both consume it. verbs = the eight
+    │       │    tests}.rs           #   Code and opencode both consume it. verbs = the nine
     │       │                        #   agent verbs (list/get_comment/get_diff/reply/
-    │       │                        #   mark_addressed/review_status, plus #327's
-    │       │                        #   send_message/read_messages mailbox) — and NO resolve
-    │       │                        #   and NO approve, both refused BY NAME; auth = the
-    │       │                        #   per-room bearer token, which IS the scope.
+    │       │                        #   mark_addressed/review_status, #327's
+    │       │                        #   send_message/read_messages mailbox, and #330's
+    │       │                        #   create_room) — and NO resolve, NO approve, and NO
+    │       │                        #   way to destroy a room (archive_room and friends),
+    │       │                        #   all refused BY NAME; auth = the per-room bearer
+    │       │                        #   token, which IS the scope.
     │       │                        #   See docs/agent-api.md
     │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1). Since #276,
     │       │                                   #   tails every `subagents/agent-*.jsonl` sidecar
@@ -564,7 +566,23 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   (`allowAgentMessaging` in `settings.json`, default on) plus per-token
   rate and per-receiver unread caps. Delivering mail into a waiting
   harness — the nudge through the #238 seam — is #329; this issue only
-  stores and serves the queue. Full contract: `docs/agent-api.md`.
+  stores and serves the queue. **`create_room`** (#330) is the one verb
+  that opens a whole new room and spawns a real harness in it, in the
+  background (`activate: false`, so it never takes over the user's
+  screen) — it round-trips twice through #328's Rust→frontend request
+  mechanism (`AgentApiState::request_frontend`, a webview-must-answer
+  counterpart to the one-way `notify_*` events elsewhere in this
+  module): once to resolve `(kind, agent)` the way `useNewRoomForm.tsx`
+  would for a human typing into New Room, once to actually create it,
+  so a `prompt` that could never be delivered refuses before anything
+  exists. The new `Room` carries `createdBy`, naming the calling room
+  and harness. It is guarded harder than any other verb —
+  a Settings kill switch (`allowAgentRoomCreation`, default on), a
+  per-room rate cap, an open-room ceiling — and, though it can open a
+  room, it cannot close one: `archive_room`, `remove_worktree`,
+  `delete_room` and `close_room` are refused **by name**, the same
+  treatment as `resolve`, because destroying stays the user's decision
+  (D9). Full contract: `docs/agent-api.md`.
 - **Harness config injection** (#215, epic #52 E): the variables above
   are useless until the CLI knows there is a server at that address, so
   `pty_spawn` also appends `--plugin-dir <resources>/harness-config/`

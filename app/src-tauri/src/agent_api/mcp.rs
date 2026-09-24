@@ -9,24 +9,39 @@
 //!
 //! # The tool list is the contract
 //!
-//! Eight tools. Two things are absent from [`tool_specs`]
-//! *and* refused by name in [`call_tool`]: `resolve`, because an agent
-//! that can close its own comments removes the review's only gate, and
-//! `approve`, because one that can sign off its own work removes it a
-//! level higher. Both refusals are spelled out rather than left to the
-//! tool list being short — a model told a tool is merely missing goes
-//! looking for another way in.
+//! Nine tools. Several things are absent from [`tool_specs`] *and*
+//! refused by name in [`call_tool`]: `resolve`, because an agent that
+//! can close its own comments removes the review's only gate; `approve`,
+//! because one that can sign off its own work removes it a level higher;
+//! and, since #330, the ways to *destroy* a room it just gained the
+//! power to create (`archive_room` and friends) — destroying stays the
+//! user's decision, the same way Skein itself performs no git mutations
+//! (see `CLAUDE.md`). All three refusals are spelled out rather than
+//! left to the tool list being short — a model told a tool is merely
+//! missing goes looking for another way in.
 //!
 //! The descriptions here are the agent's documentation; they are the
 //! only thing it reads before deciding what to call, so they say what
-//! each verb is *for*, not merely what it does.
+//! each verb is *for*, not merely what it does. `create_room`'s in
+//! particular is load-bearing (#330): it says plainly that this opens a
+//! real room and spawns a real agent process, that `path` may be any
+//! checkout on the machine, and that a `prompt` starts that agent
+//! working unattended in the background.
+//!
+//! # Why `tools/call` is async
+//!
+//! Every other verb is a plain, synchronous function over a
+//! [`crate::db::Database`] — [`call_tool`] only needed to be async once `create_room`
+//! landed, since opening a room means round-tripping to the webview
+//! (`AgentApiState::request_frontend`). The other eight branches below
+//! await nothing; only `create_room`'s does.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::auth::Caller;
+use super::state::AgentApiState;
 use super::verbs::{self, MailContext, VerbError};
-use crate::db::Database;
 
 /// What we advertise. Older clients negotiate down by sending their own
 /// version in `initialize`; we echo anything we know rather than
@@ -66,6 +81,20 @@ const SIGNOFF_ALIASES: &[&str] = &[
     "mark_approved",
 ];
 
+/// Names that would destroy or close a room `create_room` (#330) just
+/// gained the power to open. Refused for the same reason as
+/// [`RESOLVE_ALIASES`] and [`SIGNOFF_ALIASES`]: Skein performs no git
+/// mutations and destroys nothing on its own — that stays the user's
+/// decision (`CLAUDE.md`) — and an agent told these tools are simply
+/// missing would go looking for another way to do it (a raw `rm -rf`
+/// on the worktree, say).
+const DESTROY_ALIASES: &[&str] = &[
+    "archive_room",
+    "remove_worktree",
+    "delete_room",
+    "close_room",
+];
+
 /// What the HTTP layer should do with a parsed message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -92,7 +121,12 @@ fn instructions() -> &'static str {
 }
 
 /// Handle one JSON-RPC message.
-pub fn handle(db: &Database, caller: &Caller, body: &str, mail: &MailContext) -> Outcome {
+pub async fn handle(
+    state: &AgentApiState,
+    caller: &Caller,
+    body: &str,
+    mail: &MailContext,
+) -> Outcome {
     let parsed: Value = match serde_json::from_str(body) {
         Ok(v) => v,
         Err(e) => return Outcome::BadRequest(format!("not JSON: {e}")),
@@ -118,7 +152,9 @@ pub fn handle(db: &Database, caller: &Caller, body: &str, mail: &MailContext) ->
         "initialize" => Outcome::Json(Box::new(ok(&id, &initialize_result(&params)))),
         "ping" => Outcome::Json(Box::new(ok(&id, &json!({})))),
         "tools/list" => Outcome::Json(Box::new(ok(&id, &json!({ "tools": tool_specs() })))),
-        "tools/call" => Outcome::Json(Box::new(tools_call(db, caller, &id, &params, mail))),
+        "tools/call" => Outcome::Json(Box::new(
+            tools_call(state, caller, &id, &params, mail).await,
+        )),
         other => Outcome::Json(Box::new(err(
             &id,
             -32601,
@@ -146,8 +182,8 @@ fn initialize_result(params: &Value) -> Value {
     })
 }
 
-fn tools_call(
-    db: &Database,
+async fn tools_call(
+    state: &AgentApiState,
     caller: &Caller,
     id: &Value,
     params: &Value,
@@ -157,7 +193,7 @@ fn tools_call(
         return err(id, -32602, "tools/call needs a name");
     };
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
-    match call_tool(db, caller, name, &args, mail) {
+    match call_tool(state, caller, name, &args, mail).await {
         Ok(value) => ok(id, &tool_content(&value, false)),
         // A tool that ran and refused is *not* a protocol error: the
         // model has to see the reason, and a JSON-RPC error is
@@ -168,13 +204,17 @@ fn tools_call(
 
 /// Dispatch one tool by name. Public so the resolve prohibition can be
 /// tested without a JSON-RPC envelope around it.
-pub fn call_tool(
-    db: &Database,
+///
+/// Async only because `create_room` is: every other branch awaits
+/// nothing, and dispatch happens before any of them run.
+pub async fn call_tool(
+    state: &AgentApiState,
     caller: &Caller,
     name: &str,
     args: &Value,
     mail: &MailContext,
 ) -> Result<Value, VerbError> {
+    let db = &state.db;
     // Claude Code sends the bare name; be tolerant of a client that
     // sends its own namespaced form back to us.
     let name = name.rsplit("__").next().unwrap_or(name);
@@ -195,6 +235,14 @@ pub fn call_tool(
                 .into(),
         ));
     }
+    if DESTROY_ALIASES.contains(&name) {
+        return Err(VerbError::Refused(
+            "destroying a room is the user's decision, not yours. Skein \
+             performs no git mutations and closes nothing on its own — \
+             say what you'd like closed and why, and let them do it."
+                .into(),
+        ));
+    }
     match name {
         "list_comments" => to_value(verbs::list_comments(db, caller, &parse(args)?)?),
         "get_comment" => to_value(verbs::get_comment(db, caller, &parse(args)?)?),
@@ -210,6 +258,16 @@ pub fn call_tool(
             mail.agent_sees_mcp,
             mail.app.as_ref(),
         )?),
+        "create_room" => to_value(
+            verbs::create_room(
+                state,
+                caller,
+                &parse(args)?,
+                mail,
+                state.spawn_settings().allow_agent_room_creation,
+            )
+            .await?,
+        ),
         "read_messages" => to_value(verbs::read_messages(
             db,
             caller,
@@ -418,6 +476,77 @@ pub fn tool_specs() -> Vec<Value> {
                             what is unread. Default false.",
                     },
                 },
+                "additionalProperties": false,
+            },
+        }),
+        json!({
+            "name": "create_room",
+            "title": "Open a new room and spawn an agent in it",
+            "description":
+                "Opens a real Skein room and spawns a real, separate agent process in \
+                 it — this is not a simulation or a preview. `path` may be any folder \
+                 on this machine, not only the one you are running in; in the default \
+                 worktree branchMode it must be a git checkout, and a new worktree and \
+                 branch are created there. If you pass `prompt`, that new agent starts \
+                 working on it completely unattended the moment it spawns — write it \
+                 the way you would brief another engineer, because that is what it is. \
+                 The room opens in the background: it does not take over the user's \
+                 screen, and its dot only draws their attention once they look. After \
+                 it exists you can reach it again with send_message, addressed to the \
+                 harnessId or roomId this call returns. You cannot close, archive, or \
+                 otherwise destroy a room — that stays the user's decision. Omit any \
+                 argument you have no reason to set; Skein fills it with the user's \
+                 own defaults.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to an existing folder. Optional \
+                            — default: the calling room's own repo root, falling back \
+                            to its cwd.",
+                    },
+                    "branchMode": {
+                        "type": "string",
+                        "enum": ["worktree", "current"],
+                        "description": "Optional — default: worktree.",
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Worktree mode only. Optional — default: the \
+                            user's own branch-name template, applied to a slug of \
+                            task.",
+                    },
+                    "baseBranch": {
+                        "type": "string",
+                        "description": "Worktree mode only. Optional — default: the \
+                            repo's current branch guess.",
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "Short label for the room's tab. Required.",
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["claude", "opencode", "copilot", "byoh", "files"],
+                        "description": "Optional — default: the user's own default \
+                            harness kind for this folder.",
+                    },
+                    "agent": {
+                        "type": "string",
+                        "description": "Optional — default: the user's own default \
+                            agent for that kind. Omit rather than guessing a name — \
+                            an unresolvable one refuses the whole call.",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Queued as the new harness's first mailbox \
+                            message once it exists — it will act on this \
+                            unattended. Optional — default: none, the room opens \
+                            idle and waits for the user.",
+                    },
+                },
+                "required": ["task"],
                 "additionalProperties": false,
             },
         }),

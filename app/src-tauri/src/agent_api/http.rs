@@ -28,8 +28,8 @@ use super::auth::{self, AuthError, Caller, HARNESS_HEADER};
 use super::mcp;
 use super::state::AgentApiState;
 use super::verbs::{
-    self, AddressedArgs, DiffArgs, GetCommentArgs, ListArgs, MailContext, MailPolicy,
-    ReadMessagesArgs, ReplyArgs, SendMessageArgs, VerbError,
+    self, AddressedArgs, CreateRoomArgs, DiffArgs, GetCommentArgs, ListArgs, MailContext,
+    MailPolicy, ReadMessagesArgs, ReplyArgs, SendMessageArgs, VerbError,
 };
 
 /// Header the MCP spec has clients send on every request after
@@ -57,6 +57,7 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
             "/api/messages",
             post(api_send_message).get(api_read_messages),
         )
+        .route("/api/rooms", post(api_create_room))
         .route("/api/harness/permission", post(api_harness_permission))
         .route(
             "/api/harness/session-start",
@@ -102,7 +103,7 @@ async fn mcp_post(
             .map(str::to_owned)
     });
     let mail = mail_context(&state);
-    let outcome = mcp::handle(&state.db, &caller, &body, &mail);
+    let outcome = mcp::handle(&state, &caller, &body, &mail).await;
     // Only a write that actually landed. A refused `reply` changes
     // nothing, and a pane that flickers on every failed call teaches
     // the user to distrust the ones that mean something.
@@ -421,6 +422,34 @@ async fn api_read_messages(
                 Err(e) => error_body(StatusCode::INTERNAL_SERVER_ERROR, e.message()),
             }
         }
+        Err(e) => error_body(
+            StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            e.message(),
+        ),
+    }
+}
+
+/// `POST /api/rooms` — the plain-JSON mirror of the MCP `create_room`
+/// tool (#330). Takes `CreateRoomArgs` directly as the request body: it
+/// already carries the camelCase wire shape the tool's own
+/// `arguments` object does, so there is no separate body struct to keep
+/// in sync the way `SendMessageBody` mirrors `SendMessageArgs`.
+async fn api_create_room(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    axum::Json(args): axum::Json<CreateRoomArgs>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let mail = mail_context(&state);
+    let room_creation_enabled = state.spawn_settings().allow_agent_room_creation;
+    match verbs::create_room(&state, &caller, &args, &mail, room_creation_enabled).await {
+        Ok(v) => match json_of(v) {
+            Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
+            Err(e) => error_body(StatusCode::INTERNAL_SERVER_ERROR, e.message()),
+        },
         Err(e) => error_body(
             StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             e.message(),

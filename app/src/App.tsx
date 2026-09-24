@@ -27,6 +27,7 @@ import { withDefaultAgent } from "./prefs.ts";
 import { allRoomOrder } from "./roomGroups.ts";
 import { isMac } from "./shortcuts.ts";
 import type { HarnessKind, Room, SpawnSettings, SpawnSettingsPayload } from "./types.ts";
+import { useAgentRequests } from "./useAgentRequests.ts";
 import {
 	CHROME_FONT_MAX,
 	CHROME_FONT_MIN,
@@ -298,7 +299,7 @@ export default function App() {
 	// clear-pending-on-view effect watches — `room` comes from
 	// useRoomsStore.
 	const displayedHarnessId = room?.activeHarnessId ?? null;
-	const { toasts, dismissToast, jumpToToast } = useHarnessNotifications(
+	const { toasts, dismissToast, jumpToToast, pushToast } = useHarnessNotifications(
 		roomsRef,
 		activeRoomIdRef,
 		setRooms,
@@ -411,6 +412,12 @@ export default function App() {
 	// Scoped to active rooms only, same as the keyboard-nav cycle above —
 	// an archived room's harnesses have no live PTY to nudge.
 	useMailDelivery(activeRooms);
+
+	// #330: the `create_room` agent verb's frontend half — answers
+	// #328's `skein://agent-request` round trip. Unlike `useMailDelivery`
+	// this isn't scoped to `activeRooms`: a request can name any folder
+	// on the machine, not just an already-open room.
+	useAgentRequests(createRoom, newRoomMemory, defaultAgents, branchTemplate, pushToast);
 
 	const titlebarProps: TitlebarProps = {
 		activeRoomLabel: room ? room.name : null,

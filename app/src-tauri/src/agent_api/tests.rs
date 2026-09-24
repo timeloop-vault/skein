@@ -78,6 +78,7 @@ fn room(id: &str, harnesses: Vec<Harness>) -> Room {
         archived: None,
         repo_root: None,
         attention: None,
+        created_by: None,
     }
 }
 
@@ -343,7 +344,7 @@ fn a_missing_thread_and_someone_elses_thread_are_the_same_answer() {
 // ── the two prohibitions ──────────────────────────────────────────
 
 #[test]
-fn the_tool_list_offers_eight_verbs_and_nothing_that_resolves_or_approves() {
+fn the_tool_list_offers_nine_verbs_and_nothing_that_resolves_approves_or_destroys() {
     let names: Vec<String> = mcp::tool_specs()
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_owned())
@@ -362,6 +363,8 @@ fn the_tool_list_offers_eight_verbs_and_nothing_that_resolves_or_approves() {
             // #327: the mailbox.
             "send_message",
             "read_messages",
+            // #330: open a whole new room.
+            "create_room",
         ]
     );
     assert!(
@@ -374,16 +377,70 @@ fn the_tool_list_offers_eight_verbs_and_nothing_that_resolves_or_approves() {
             .any(|n| n.contains("approve") || n.contains("sign")),
         "signing off is the reviewer's — an agent that approves itself is no gate"
     );
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.contains("archive") || n.contains("delete") || n.contains("close")),
+        "destroying a room stays the user's decision, same as #330's DESTROY_ALIASES refusal"
+    );
 }
 
 #[test]
-fn approving_is_refused_by_name_and_nothing_is_signed_off() {
+fn create_room_tool_schema_property_names_match_the_wire_args() {
+    // The bug this guards against: the advertised `inputSchema` once
+    // named `branch_mode`/`base_branch` — the Rust field names — while
+    // `CreateRoomArgs` only ever deserializes the camelCase wire shape.
+    // A client that followed the schema faithfully had those two
+    // arguments silently vanish rather than erroring.
+    let specs = mcp::tool_specs();
+    let create_room = specs
+        .iter()
+        .find(|t| t["name"] == "create_room")
+        .expect("create_room must be in the tool list");
+    let props = create_room["inputSchema"]["properties"]
+        .as_object()
+        .expect("inputSchema.properties must be an object");
+    let keys: Vec<&str> = props.keys().map(String::as_str).collect();
+
+    assert!(keys.contains(&"branchMode"), "{keys:?}");
+    assert!(keys.contains(&"baseBranch"), "{keys:?}");
+    assert!(
+        !keys.contains(&"branch_mode") && !keys.contains(&"base_branch"),
+        "the schema must not advertise the Rust field spelling: {keys:?}"
+    );
+
+    // Every advertised property must actually be a field `CreateRoomArgs`
+    // accepts — build one object naming all of them (as plain strings;
+    // `CreateRoomArgs` validates enum-ish values like `kind`/`branchMode`
+    // itself, not serde) and confirm the whole thing parses.
+    let mut sample = serde_json::Map::new();
+    for key in &keys {
+        sample.insert((*key).to_owned(), json!("x"));
+    }
+    let parsed: Result<verbs::CreateRoomArgs, _> = serde_json::from_value(Value::Object(sample));
+    assert!(
+        parsed.is_ok(),
+        "every advertised schema key must deserialize into CreateRoomArgs: {parsed:?}"
+    );
+
+    // And the old, wrong spelling must now fail loudly — `deny_unknown_fields`
+    // turns a silently-dropped argument into a refused call.
+    let wrong = json!({ "task": "hi", "branch_mode": "current" });
+    assert!(
+        serde_json::from_value::<verbs::CreateRoomArgs>(wrong).is_err(),
+        "an unknown field must be a hard error, not a silent drop"
+    );
+}
+
+#[tokio::test]
+async fn approving_is_refused_by_name_and_nothing_is_signed_off() {
     // The gate has to be refused the way `resolve` is: a model told a
     // tool is merely missing goes looking for another way in, so the
     // answer is a reason rather than "unknown tool".
     let f = fixture();
     save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
     let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
 
     for name in [
         "approve",
@@ -394,12 +451,13 @@ fn approving_is_refused_by_name_and_nothing_is_signed_off() {
         "mcp__skein__approve",
     ] {
         let err = mcp::call_tool(
-            &f.db,
+            &state,
             &caller,
             name,
             &serde_json::json!({}),
             &MailContext::permissive(),
         )
+        .await
         .expect_err("an agent must not be able to approve its own work");
         assert!(
             matches!(&err, VerbError::Refused(m) if m.contains("reviewer")),
@@ -413,8 +471,8 @@ fn approving_is_refused_by_name_and_nothing_is_signed_off() {
     );
 }
 
-#[test]
-fn review_status_carries_the_signoff_and_its_staleness_to_the_agent() {
+#[tokio::test]
+async fn review_status_carries_the_signoff_and_its_staleness_to_the_agent() {
     // The verb exists so the agent can gate landing on it, so the
     // answer has to survive the round trip through MCP — including the
     // stale case, which is the one that must never read as approved.
@@ -427,18 +485,9 @@ fn review_status_carries_the_signoff_and_its_staleness_to_the_agent() {
     r.cwd = Some(cwd.clone());
     save(&f.db, &[r]);
     let caller = caller_for(&f.db, "r1", Some("h1"));
-    let call = |db: &Database| {
-        mcp::call_tool(
-            db,
-            &caller,
-            "review_status",
-            &serde_json::json!({}),
-            &MailContext::permissive(),
-        )
-        .unwrap()
-    };
+    let state = agent_api_state(&f);
 
-    let before = call(&f.db);
+    let before = call_review_status(&state, &caller).await;
     assert_eq!(before["approved"], serde_json::json!(false));
     assert_eq!(before["stale"], serde_json::json!(false));
     assert!(
@@ -450,7 +499,7 @@ fn review_status_carries_the_signoff_and_its_staleness_to_the_agent() {
     );
 
     crate::review_surface::signoff::set_impl(&f.db, "r1", &cwd, true, None, 1_000).unwrap();
-    let approved = call(&f.db);
+    let approved = call_review_status(&state, &caller).await;
     assert_eq!(approved["approved"], serde_json::json!(true));
     assert!(
         approved["guidance"].as_str().unwrap().contains("may land"),
@@ -459,7 +508,7 @@ fn review_status_carries_the_signoff_and_its_staleness_to_the_agent() {
 
     // The agent commits. Its own clearance has to lapse.
     commit_file(tmp.path(), "b.txt", "more\n", "feat: more");
-    let after = call(&f.db);
+    let after = call_review_status(&state, &caller).await;
     assert_eq!(after["approved"], serde_json::json!(false));
     assert_eq!(after["stale"], serde_json::json!(true));
     assert!(
@@ -482,6 +531,18 @@ fn a_room_with_no_worktree_says_so_rather_than_answering_unapproved() {
         matches!(&err, VerbError::Unavailable(m) if m.contains("no worktree")),
         "got {err:?}"
     );
+}
+
+async fn call_review_status(state: &AgentApiState, caller: &Caller) -> Value {
+    mcp::call_tool(
+        state,
+        caller,
+        "review_status",
+        &serde_json::json!({}),
+        &MailContext::permissive(),
+    )
+    .await
+    .unwrap()
 }
 
 /// A repository with one commit.
@@ -515,12 +576,13 @@ fn commit_file(dir: &std::path::Path, name: &str, body: &str, msg: &str) {
         .unwrap();
 }
 
-#[test]
-fn resolving_is_refused_by_name_and_the_thread_stays_open() {
+#[tokio::test]
+async fn resolving_is_refused_by_name_and_the_thread_stays_open() {
     let f = fixture();
     save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
     seed_thread(&f.db, "r1", "t1", "please rename this");
     let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
 
     for name in [
         "resolve",
@@ -531,12 +593,13 @@ fn resolving_is_refused_by_name_and_the_thread_stays_open() {
         "mcp__skein__resolve",
     ] {
         let err = mcp::call_tool(
-            &f.db,
+            &state,
             &caller,
             name,
             &json!({ "thread_id": "t1" }),
             &MailContext::permissive(),
         )
+        .await
         .unwrap_err();
         assert!(
             matches!(err, VerbError::Refused(_)),
@@ -559,20 +622,56 @@ fn resolving_is_refused_by_name_and_the_thread_stays_open() {
     );
 }
 
-#[test]
-fn an_unknown_tool_is_reported_missing_rather_than_refused() {
+#[tokio::test]
+async fn destroying_a_room_is_refused_by_name() {
+    // #330's mirror of the test above, one level up: `create_room` gave
+    // an agent the power to open a room, and these names must not let
+    // it close, archive or otherwise destroy one — that stays the
+    // user's decision (see `CLAUDE.md`'s "no git mutations" note).
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+
+    for name in [
+        "archive_room",
+        "remove_worktree",
+        "delete_room",
+        "close_room",
+        "mcp__skein__archive_room",
+    ] {
+        let err = mcp::call_tool(
+            &state,
+            &caller,
+            name,
+            &json!({}),
+            &MailContext::permissive(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, VerbError::Refused(m) if m.contains("user")),
+            "{name} gave {err:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_unknown_tool_is_reported_missing_rather_than_refused() {
     // The counterpart of the test above: "refused" has to mean
     // something, so it cannot be the answer to every unknown name.
     let f = fixture();
     save(&f.db, &[room("r1", vec![])]);
     let caller = caller_for(&f.db, "r1", None);
+    let state = agent_api_state(&f);
     let err = mcp::call_tool(
-        &f.db,
+        &state,
         &caller,
         "delete_everything",
         &json!({}),
         &MailContext::permissive(),
     )
+    .await
     .unwrap_err();
     assert!(matches!(err, VerbError::NotFound(_)));
 }
@@ -1430,20 +1529,22 @@ fn a_send_with_no_caller_harness_records_an_empty_harness_id_on_the_out_row() {
 
 // ── the MCP envelope ──────────────────────────────────────────────
 
-#[test]
-fn initialize_echoes_a_version_it_knows_and_states_its_own_otherwise() {
+#[tokio::test]
+async fn initialize_echoes_a_version_it_knows_and_states_its_own_otherwise() {
     let f = fixture();
     save(&f.db, &[room("r1", vec![])]);
     let caller = caller_for(&f.db, "r1", None);
+    let state = agent_api_state(&f);
 
     let old = handled(
-        &f.db,
+        &state,
         &caller,
         &json!({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": { "protocolVersion": "2024-11-05" }
         }),
-    );
+    )
+    .await;
     assert_eq!(old["result"]["protocolVersion"], "2024-11-05");
     assert_eq!(old["result"]["serverInfo"]["name"], "skein");
     assert!(
@@ -1455,32 +1556,35 @@ fn initialize_echoes_a_version_it_knows_and_states_its_own_otherwise() {
     );
 
     let future = handled(
-        &f.db,
+        &state,
         &caller,
         &json!({
             "jsonrpc": "2.0", "id": 2, "method": "initialize",
             "params": { "protocolVersion": "2099-01-01" }
         }),
-    );
+    )
+    .await;
     assert_eq!(future["result"]["protocolVersion"], mcp::PROTOCOL_VERSION);
 }
 
-#[test]
-fn a_notification_is_accepted_with_no_body_and_no_answer() {
+#[tokio::test]
+async fn a_notification_is_accepted_with_no_body_and_no_answer() {
     let f = fixture();
     save(&f.db, &[room("r1", vec![])]);
     let caller = caller_for(&f.db, "r1", None);
+    let state = agent_api_state(&f);
     let out = mcp::handle(
-        &f.db,
+        &state,
         &caller,
         &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }).to_string(),
         &MailContext::permissive(),
-    );
+    )
+    .await;
     assert_eq!(out, mcp::Outcome::Accepted);
 }
 
-#[test]
-fn a_refused_tool_answers_the_model_rather_than_the_plumbing() {
+#[tokio::test]
+async fn a_refused_tool_answers_the_model_rather_than_the_plumbing() {
     // isError inside a *successful* JSON-RPC result: a protocol-level
     // error is handled by the client and never shown to the model, and
     // a model that cannot see the reason will simply try again.
@@ -1488,36 +1592,40 @@ fn a_refused_tool_answers_the_model_rather_than_the_plumbing() {
     save(&f.db, &[room("r1", vec![])]);
     seed_thread(&f.db, "r1", "t1", "hi");
     let caller = caller_for(&f.db, "r1", None);
+    let state = agent_api_state(&f);
     let out = handled(
-        &f.db,
+        &state,
         &caller,
         &json!({
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": { "name": "resolve", "arguments": { "thread_id": "t1" } }
         }),
-    );
+    )
+    .await;
     assert!(out.get("error").is_none());
     assert_eq!(out["result"]["isError"], true);
     let text = out["result"]["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("reviewer"));
 }
 
-#[test]
-fn an_unknown_method_is_a_json_rpc_error_and_junk_is_a_bad_request() {
+#[tokio::test]
+async fn an_unknown_method_is_a_json_rpc_error_and_junk_is_a_bad_request() {
     let f = fixture();
     save(&f.db, &[room("r1", vec![])]);
     let caller = caller_for(&f.db, "r1", None);
+    let state = agent_api_state(&f);
     let out = handled(
-        &f.db,
+        &state,
         &caller,
         &json!({
             "jsonrpc": "2.0", "id": 4, "method": "resources/list"
         }),
-    );
+    )
+    .await;
     assert_eq!(out["error"]["code"], -32601);
 
     assert!(matches!(
-        mcp::handle(&f.db, &caller, "{not json", &MailContext::permissive()),
+        mcp::handle(&state, &caller, "{not json", &MailContext::permissive()).await,
         mcp::Outcome::BadRequest(_)
     ));
 }
@@ -1531,8 +1639,8 @@ fn only_the_two_writing_verbs_ask_the_pane_to_refresh() {
     assert!(!mcp::is_write("get_diff"));
 }
 
-fn handled(db: &Database, caller: &Caller, body: &Value) -> Value {
-    match mcp::handle(db, caller, &body.to_string(), &MailContext::permissive()) {
+async fn handled(state: &AgentApiState, caller: &Caller, body: &Value) -> Value {
+    match mcp::handle(state, caller, &body.to_string(), &MailContext::permissive()).await {
         mcp::Outcome::Json(v) => *v,
         other => panic!("expected a JSON-RPC response, got {other:?}"),
     }
@@ -2085,4 +2193,573 @@ async fn request_frontend_with_no_app_handle_fails_immediately_and_leaves_the_ma
         .await;
     assert!(got.is_err());
     assert!(state.pending_requests.lock().is_empty());
+}
+
+// ── opening a room (issue #330) ──────────────────────────────────────
+//
+// `create_room` is exercised as a plain function (`verbs::create_room`),
+// not through `mcp::call_tool` — the properties under test here are the
+// verb's own guards and round trips, already covered end to end for the
+// dispatch layer by `destroying_a_room_is_refused_by_name` and the tool
+// list test above. `AgentApiState::set_test_frontend` (test-only) stands
+// in for the webview: `create_room.resolve` and `create_room` answer
+// from a closure instead of a real `AppHandle` emit.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+fn create_room_args(task: &str) -> verbs::CreateRoomArgs {
+    verbs::CreateRoomArgs {
+        path: None,
+        branch_mode: None,
+        branch: None,
+        base_branch: None,
+        task: task.to_owned(),
+        kind: None,
+        agent: None,
+        prompt: None,
+    }
+}
+
+/// A caller room whose folder is a real git checkout with one commit —
+/// what the default (worktree) `branchMode` needs at minimum.
+fn git_room(f: &Fixture) -> (TempDir, Caller) {
+    let tmp = TempDir::new().unwrap();
+    git_repo_with_commit(tmp.path());
+    let mut r = room("r1", vec![harness("h1", "claude", "main")]);
+    r.cwd = Some(tmp.path().to_str().unwrap().to_owned());
+    save(&f.db, &[r]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    (tmp, caller)
+}
+
+#[tokio::test]
+async fn create_room_rejects_an_empty_task() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::create_room(
+        &state,
+        &caller,
+        &create_room_args("   "),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("task")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_room_rejects_an_unknown_branch_mode() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let args = verbs::CreateRoomArgs {
+        branch_mode: Some("yolo".to_owned()),
+        ..create_room_args("hi")
+    };
+    let err = verbs::create_room(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("branchMode")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_room_rejects_an_unknown_kind() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let args = verbs::CreateRoomArgs {
+        kind: Some("frobnicator".to_owned()),
+        ..create_room_args("hi")
+    };
+    let err = verbs::create_room(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("kind")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_room_rejects_a_relative_path() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let args = verbs::CreateRoomArgs {
+        path: Some("relative/path".to_owned()),
+        ..create_room_args("hi")
+    };
+    let err = verbs::create_room(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("absolute")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_room_rejects_a_path_that_does_not_exist() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let bogus = std::env::temp_dir().join("skein-330-does-not-exist");
+    let args = verbs::CreateRoomArgs {
+        path: Some(bogus.to_str().unwrap().to_owned()),
+        ..create_room_args("hi")
+    };
+    let err = verbs::create_room(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("does not exist")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_room_worktree_mode_refuses_a_non_checkout_folder() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let tmp = TempDir::new().unwrap(); // exists, but never `git init`-ed
+    let args = verbs::CreateRoomArgs {
+        path: Some(tmp.path().to_str().unwrap().to_owned()),
+        ..create_room_args("hi")
+    };
+    let err = verbs::create_room(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("git checkout")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_room_current_mode_is_allowed_on_a_non_git_folder() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let tmp = TempDir::new().unwrap();
+    state.set_test_frontend(|kind, _args| match kind {
+        "create_room.resolve" => Ok(json!({ "kind": "byoh", "agent": null })),
+        "create_room" => Ok(json!({
+            "roomId": "r2", "name": "n", "harnessId": "h2", "kind": "byoh",
+        })),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let args = verbs::CreateRoomArgs {
+        path: Some(tmp.path().to_str().unwrap().to_owned()),
+        branch_mode: Some("current".to_owned()),
+        ..create_room_args("hi")
+    };
+    let out = verbs::create_room(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap();
+    assert_eq!(out.room_id, "r2");
+}
+
+#[tokio::test]
+async fn create_room_is_refused_when_the_kill_switch_is_off() {
+    let f = fixture();
+    let (_tmp, caller) = git_room(&f);
+    let state = agent_api_state(&f);
+    let err = verbs::create_room(
+        &state,
+        &caller,
+        &create_room_args("hi"),
+        &MailContext::permissive(),
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("Settings")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_room_is_rate_limited_to_five_attempts_a_minute() {
+    let f = fixture();
+    let (_tmp, caller) = git_room(&f);
+    let state = agent_api_state(&f);
+    // No frontend hook wired: each attempt clears the local guards and
+    // only then fails at the (unanswerable) round trip — proof the rate
+    // counter is charged before that point, not after.
+    for n in 0..5 {
+        let err = verbs::create_room(
+            &state,
+            &caller,
+            &create_room_args("hi"),
+            &MailContext::permissive(),
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, VerbError::Unavailable(_)),
+            "attempt {n}: expected the guards to pass, got {err:?}"
+        );
+    }
+    let err = verbs::create_room(
+        &state,
+        &caller,
+        &create_room_args("hi"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("rate limit")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_room_refuses_once_the_open_room_ceiling_is_hit() {
+    let f = fixture();
+    let tmp = TempDir::new().unwrap();
+    git_repo_with_commit(tmp.path());
+    let mut r1 = room("r1", vec![harness("h1", "claude", "main")]);
+    r1.cwd = Some(tmp.path().to_str().unwrap().to_owned());
+    let mut rooms = vec![r1];
+    for n in 0..19 {
+        rooms.push(room(&format!("extra-{n}"), vec![]));
+    }
+    save(&f.db, &rooms); // 20 open rooms total, none archived
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::create_room(
+        &state,
+        &caller,
+        &create_room_args("hi"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("cap")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_room_with_a_prompt_refuses_up_front_when_messaging_is_off() {
+    let f = fixture();
+    let (_tmp, caller) = git_room(&f);
+    let state = agent_api_state(&f);
+    let mail = MailContext {
+        policy: MailPolicy {
+            messaging_enabled: false,
+            ..MailPolicy::permissive()
+        },
+        ..MailContext::permissive()
+    };
+    let args = verbs::CreateRoomArgs {
+        prompt: Some("go".to_owned()),
+        ..create_room_args("hi")
+    };
+    // No frontend hook wired: reaching it would itself prove this guard
+    // did not fire before round-trip 1, as the brief requires.
+    let err = verbs::create_room(&state, &caller, &args, &mail, true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("messaging")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_room_with_a_prompt_refuses_an_unreachable_resolved_kind_before_creating_anything() {
+    // The brief's own example: `copilot` has no MCP connection at all,
+    // so a queued prompt could never be delivered. The resolve round
+    // trip has to run to learn that — the *creation* round trip must
+    // not.
+    let f = fixture();
+    let (_tmp, caller) = git_room(&f);
+    let state = agent_api_state(&f);
+    let round2_called = std::sync::Arc::new(AtomicBool::new(false));
+    let round2_flag = std::sync::Arc::clone(&round2_called);
+    state.set_test_frontend(move |kind, _args| match kind {
+        "create_room.resolve" => Ok(json!({ "kind": "copilot", "agent": null })),
+        "create_room" => {
+            round2_flag.store(true, Ordering::SeqCst);
+            Ok(json!({}))
+        }
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let args = verbs::CreateRoomArgs {
+        prompt: Some("go".to_owned()),
+        ..create_room_args("hi")
+    };
+    let err = verbs::create_room(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("copilot")),
+        "{err:?}"
+    );
+    assert!(
+        !round2_called.load(Ordering::SeqCst),
+        "round-trip 2 must never be requested once the prompt is unreachable"
+    );
+}
+
+#[tokio::test]
+async fn create_room_maps_a_frontend_refusal_to_refused() {
+    let f = fixture();
+    let (_tmp, caller) = git_room(&f);
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "create_room.resolve" => Err("that folder is not readable".to_owned()),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let err = verbs::create_room(
+        &state,
+        &caller,
+        &create_room_args("hi"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("not readable")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_room_maps_a_missing_webview_to_unavailable() {
+    let f = fixture();
+    let (_tmp, caller) = git_room(&f);
+    let state = agent_api_state(&f); // no test_frontend hook, no AppHandle
+    let err = verbs::create_room(
+        &state,
+        &caller,
+        &create_room_args("hi"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Unavailable(m) if m.contains("no webview")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_room_sends_an_empty_string_harness_id_when_the_caller_has_none() {
+    // `Caller.harness_id` is `None` whenever the request carried no
+    // `X-Skein-Harness`. `createdBy.harnessId` still has to be *a
+    // string* — the frontend's `parseCreateArgs` requires the type, even
+    // though it accepts it empty — so this must send `""`, never `null`.
+    let f = fixture();
+    let tmp = TempDir::new().unwrap();
+    git_repo_with_commit(tmp.path());
+    let mut r = room("r1", vec![]);
+    r.cwd = Some(tmp.path().to_str().unwrap().to_owned());
+    save(&f.db, &[r]);
+    let caller = caller_for(&f.db, "r1", None);
+    assert_eq!(
+        caller.harness_id, None,
+        "test setup: no harness to attribute to"
+    );
+    let state = agent_api_state(&f);
+
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<Value>));
+    let captured_clone = std::sync::Arc::clone(&captured);
+    state.set_test_frontend(move |kind, args| match kind {
+        "create_room.resolve" => Ok(json!({ "kind": "claude", "agent": null })),
+        "create_room" => {
+            *captured_clone.lock().unwrap() = Some(args.clone());
+            Ok(json!({ "roomId": "r2", "name": "n", "harnessId": "h2", "kind": "claude" }))
+        }
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+
+    verbs::create_room(
+        &state,
+        &caller,
+        &create_room_args("hi"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap();
+
+    let args = captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the create_room round trip must have been called");
+    assert_eq!(args["createdBy"]["roomId"], json!("r1"));
+    assert_eq!(
+        args["createdBy"]["harnessId"],
+        json!(""),
+        "harnessId must be an empty string, never null"
+    );
+}
+
+#[tokio::test]
+async fn create_room_resolve_and_create_payloads_use_null_for_omitted_optionals() {
+    // Pins the wire contract for a minimal `{task}`-only call: every
+    // `Option` field `create_room` didn't get goes to the frontend as
+    // JSON `null`, via `serde_json::json!`, never as an absent key.
+    // The frontend's `parseResolveArgs`/`parseCreateArgs` must treat
+    // that `null` the same as "omitted" — a real agent call hit this
+    // exact shape and was rejected with "kind must be a string" before
+    // that fix (#330 follow-up).
+    let f = fixture();
+    let (_tmp, caller) = git_room(&f);
+    let state = agent_api_state(&f);
+
+    let resolve_args = std::sync::Arc::new(std::sync::Mutex::new(None::<Value>));
+    let create_args = std::sync::Arc::new(std::sync::Mutex::new(None::<Value>));
+    let resolve_clone = std::sync::Arc::clone(&resolve_args);
+    let create_clone = std::sync::Arc::clone(&create_args);
+    state.set_test_frontend(move |kind, args| match kind {
+        "create_room.resolve" => {
+            *resolve_clone.lock().unwrap() = Some(args.clone());
+            Ok(json!({ "kind": "claude", "agent": null }))
+        }
+        "create_room" => {
+            *create_clone.lock().unwrap() = Some(args.clone());
+            Ok(json!({
+                "roomId": "new-room",
+                "name": "task name",
+                "harnessId": "new-harness",
+                "kind": "claude",
+            }))
+        }
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+
+    verbs::create_room(
+        &state,
+        &caller,
+        &create_room_args("do the thing"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap();
+
+    let resolve = resolve_args
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("resolve called");
+    assert_eq!(resolve["kind"], Value::Null, "omitted kind must be null");
+    assert_eq!(resolve["agent"], Value::Null, "omitted agent must be null");
+
+    let create = create_args.lock().unwrap().clone().expect("create called");
+    assert_eq!(create["branch"], Value::Null, "omitted branch must be null");
+    assert_eq!(
+        create["baseBranch"],
+        Value::Null,
+        "omitted baseBranch must be null"
+    );
+    assert_eq!(
+        create["agent"],
+        Value::Null,
+        "the resolved agent (still None here) must be null"
+    );
+}
+
+#[tokio::test]
+async fn create_room_happy_path_without_a_prompt() {
+    let f = fixture();
+    let (_tmp, caller) = git_room(&f);
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "create_room.resolve" => Ok(json!({ "kind": "claude", "agent": null })),
+        "create_room" => Ok(json!({
+            "roomId": "new-room",
+            "name": "task name",
+            "cwd": "/some/wt",
+            "repo": "repo",
+            "branch": "agent/task",
+            "harnessId": "new-harness",
+            "kind": "claude",
+            "agent": null,
+            "sessionId": "sess-1",
+        })),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let out = verbs::create_room(
+        &state,
+        &caller,
+        &create_room_args("do the thing"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.room_id, "new-room");
+    assert_eq!(out.harness_id, "new-harness");
+    assert_eq!(out.kind, "claude");
+    assert_eq!(out.session_id.as_deref(), Some("sess-1"));
+    assert_eq!(out.message_id, None, "no prompt was given");
+    assert!(
+        f.db.all_harness_messages("new-room", "new-harness")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn create_room_happy_path_with_a_prompt_queues_the_first_message() {
+    let f = fixture();
+    let (_tmp, caller) = git_room(&f);
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "create_room.resolve" => Ok(json!({ "kind": "claude", "agent": null })),
+        "create_room" => Ok(json!({
+            "roomId": "new-room", "name": "task name",
+            "harnessId": "new-harness", "kind": "claude",
+        })),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let args = verbs::CreateRoomArgs {
+        prompt: Some("start working on the thing".to_owned()),
+        ..create_room_args("do the thing")
+    };
+    let out = verbs::create_room(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap();
+    let message_id = out
+        .message_id
+        .clone()
+        .expect("a prompt should queue a message");
+
+    let messages =
+        f.db.all_harness_messages("new-room", "new-harness")
+            .unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, message_id);
+    assert_eq!(messages[0].body, "start working on the thing");
+    assert_eq!(messages[0].from_room_id, caller.room_id);
+    assert!(messages[0].read_ms.is_none());
 }

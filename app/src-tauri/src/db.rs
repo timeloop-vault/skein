@@ -233,6 +233,23 @@ pub struct Room {
     /// existence, not on any harness inside it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub attention: Option<bool>,
+    /// Who asked an agent to make this room (#330's `create_room` verb)
+    /// — `None` for every room made through the New Room dialog.
+    /// Round-tripped only: nothing on the Rust side reads it back, the
+    /// same as `Harness.agent` round-trips argv it never interprets.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub created_by: Option<CreatedBy>,
+}
+
+/// Who asked for a room `create_room` (#330) made, so the UI can say so.
+/// `harness_id` is the specific harness that called `create_room`, not
+/// merely the room — attribution the same way `X-Skein-Harness` is
+/// everywhere else in the agent API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedBy {
+    pub room_id: String,
+    pub harness_id: String,
 }
 
 /// A `sessions` row whose JSON blob failed to parse at load time.
@@ -2242,6 +2259,7 @@ mod tests {
             archived: None,
             repo_root: None,
             attention: None,
+            created_by: None,
         }
     }
 
@@ -3319,6 +3337,7 @@ mod orphan_sweep_tests {
             archived: None,
             repo_root: None,
             attention: None,
+            created_by: None,
         }
     }
 

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::Emitter;
@@ -54,17 +54,12 @@ pub const MAIL_CHANGED_EVENT: &str = "skein://mail-changed";
 /// module is one-way (Skein tells the UI something changed); this one
 /// is a call the UI is expected to reply to via `agent_request_complete`,
 /// which is why it is paired with a pending-request map rather than
-/// just another `notify_*` emit.
-///
-/// `#[allow(dead_code)]` because #328 lands the request/response
-/// plumbing ahead of the verb PRs that call [`AgentApiState::request_frontend`]
-/// with a real `kind`.
-#[allow(dead_code)]
+/// just another `notify_*` emit. #330's `create_room` verb is the first
+/// caller, with `kind`s `"create_room.resolve"` and `"create_room"`.
 pub const AGENT_REQUEST_EVENT: &str = "skein://agent-request";
 
 /// Payload of [`AGENT_REQUEST_EVENT`]. Frontend contract — do not
 /// rename a field without checking `app/src/` for the listener.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRequest {
@@ -124,7 +119,25 @@ pub struct AgentApiState {
     /// a `oneshot::Sender` nobody will ever use, not a stuck UI.
     /// `pub(crate)` so tests can assert it drains on every exit path.
     pub(crate) pending_requests: parking_lot::Mutex<HashMap<String, PendingSender>>,
+    /// #330's in-memory rate limiter for `create_room`: recent attempt
+    /// timestamps per calling room id. Not persisted — a Skein restart
+    /// is itself already a harder reset than this cap represents, and
+    /// there is no `Database` write here to race against `sweep_orphans`
+    /// or anything else.
+    room_creation_attempts: parking_lot::Mutex<HashMap<String, Vec<Instant>>>,
+    /// Test-only bypass for [`Self::request_frontend`] (#330): lets a
+    /// verb's frontend round-trip be driven deterministically —
+    /// keyed answers per `kind`, no real `AppHandle` required. Production
+    /// code never populates this; only [`Self::set_test_frontend`] does,
+    /// and that is `#[cfg(test)]` too.
+    #[cfg(test)]
+    test_frontend: parking_lot::Mutex<Option<TestFrontend>>,
 }
+
+/// See [`AgentApiState::test_frontend`].
+#[cfg(test)]
+type TestFrontend =
+    Box<dyn Fn(&str, &serde_json::Value) -> Result<serde_json::Value, String> + Send + Sync>;
 
 /// Payload of [`REVIEW_CHANGED_EVENT`].
 #[derive(Debug, Clone, Serialize)]
@@ -186,6 +199,9 @@ impl AgentApiState {
             db,
             app: Some(app),
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
+            room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            test_frontend: parking_lot::Mutex::new(None),
         }
     }
 
@@ -197,7 +213,23 @@ impl AgentApiState {
             db,
             app: None,
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
+            room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
+            test_frontend: parking_lot::Mutex::new(None),
         }
+    }
+
+    /// Give this state a canned answer per `request_frontend` `kind`
+    /// (#330), so `create_room`'s round-trips run deterministically in a
+    /// test with no webview to emit to. Overwrites any previous hook.
+    #[cfg(test)]
+    pub(crate) fn set_test_frontend(
+        &self,
+        f: impl Fn(&str, &serde_json::Value) -> Result<serde_json::Value, String>
+        + Send
+        + Sync
+        + 'static,
+    ) {
+        *self.test_frontend.lock() = Some(Box::new(f));
     }
 
     /// Tell the frontend that this room's review moved.
@@ -303,12 +335,6 @@ impl AgentApiState {
     /// half. Split out of [`Self::request_frontend`] so a test can
     /// exercise the map (double-complete, unknown id, timeout leaving
     /// it empty) without a real `AppHandle` to emit through.
-    ///
-    /// `#[allow(dead_code)]` on this and the two methods below because
-    /// #328 lands the request/response plumbing itself ahead of the
-    /// verb PRs that will call [`Self::request_frontend`] with a real
-    /// `kind` — today only the test module reaches this cluster.
-    #[allow(dead_code)]
     pub(crate) fn register(
         &self,
     ) -> (
@@ -329,7 +355,6 @@ impl AgentApiState {
     /// cancelled by client disconnect, #330). Leaving a sender nobody
     /// will ever complete would make a later [`Self::complete_request`]
     /// for the same id look like it worked.
-    #[allow(dead_code)]
     pub(crate) async fn await_response(
         &self,
         id: &str,
@@ -368,13 +393,22 @@ impl AgentApiState {
     /// axum handler cancelled by client disconnect (#330) — the pending
     /// entry is still cleaned up, via [`PendingRequestGuard`] inside
     /// [`Self::await_response`].
-    #[allow(dead_code)]
+    ///
+    /// In a test with [`Self::set_test_frontend`] set, this answers
+    /// straight from that hook instead of touching `app` or the pending
+    /// map at all — there is no webview to cancel mid-wait, so none of
+    /// that plumbing is exercised on this path (it has its own direct
+    /// coverage elsewhere in this module's tests).
     pub async fn request_frontend(
         &self,
         kind: &str,
         args: serde_json::Value,
         timeout: Duration,
     ) -> Result<serde_json::Value, String> {
+        #[cfg(test)]
+        if let Some(f) = self.test_frontend.lock().as_ref() {
+            return f(kind, &args);
+        }
         let Some(app) = self.app.as_ref() else {
             return Err("no webview is listening for agent requests".to_owned());
         };
@@ -412,6 +446,29 @@ impl AgentApiState {
                 .map_err(|_| format!("agent request {id} is no longer being awaited")),
             None => Err(format!("unknown or expired agent request {id}")),
         }
+    }
+
+    /// Record one `create_room` attempt for `room_id` and say whether it
+    /// is still under the #330 rate cap — prune, check and record in one
+    /// lock acquisition, so two concurrent attempts can't both slip
+    /// through mid-prune the way `send_message`'s separate check and
+    /// insert can (accepted there as an anti-runaway cap, not a security
+    /// boundary; same reasoning applies here).
+    pub(crate) fn check_room_creation_rate(
+        &self,
+        room_id: &str,
+        window: Duration,
+        cap: usize,
+    ) -> bool {
+        let mut map = self.room_creation_attempts.lock();
+        let now = Instant::now();
+        let entry = map.entry(room_id.to_owned()).or_default();
+        entry.retain(|t| now.duration_since(*t) < window);
+        if entry.len() >= cap {
+            return false;
+        }
+        entry.push(now);
+        true
     }
 }
 

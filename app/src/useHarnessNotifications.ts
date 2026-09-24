@@ -66,6 +66,14 @@ export function useHarnessNotifications(
 		dismissToast(toast.id);
 	};
 
+	// #330: lets a caller outside this hook (the `create_room` agent
+	// request handler, which has no harness-activity transition to key
+	// off) push a toast of its own onto the same stack, capped the same
+	// way every transition-driven toast already is.
+	const pushToast = (entry: ToastEntry) => {
+		setToasts((prev) => [...prev, entry].slice(-TOAST_MAX_VISIBLE));
+	};
+
 	// L5e — notification toggles read inside the transition listener
 	// (mounted once with empty deps); refs let preference toggles
 	// take effect without re-subscribing.
@@ -570,5 +578,6 @@ export function useHarnessNotifications(
 		toasts,
 		dismissToast,
 		jumpToToast,
+		pushToast,
 	};
 }
