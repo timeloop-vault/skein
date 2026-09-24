@@ -8,6 +8,7 @@ import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
 
 import { DEFAULT_BRANCH_TEMPLATE } from "./branchName.ts";
 import { HARNESS_KINDS } from "./data.tsx";
+import type { NudgeOverrides } from "./nudgeRegistry.ts";
 import type { HarnessKind } from "./types";
 
 const KEY_PREFIX = "skein:";
@@ -214,3 +215,45 @@ export const recentFolders = (memory: NewRoomMemory, limit = 8): RecentFolder[] 
 		.sort(([, a], [, b]) => b.lastUsed - a.lastUsed)
 		.slice(0, limit)
 		.map(([folder, defaults]) => ({ folder, defaults }));
+
+// ── Nudge body overrides (#355) ─────────────────────────────────────
+//
+// localStorage and not sqlite, same reasoning as `DefaultAgents` above:
+// the frontend builds the pasted prompt (`review/nudges.ts`), Rust never
+// reads it. One key holds the whole override map rather than one key
+// per nudge id, so adding a nudge in `nudgeRegistry.ts` never touches
+// this file.
+
+const NUDGE_OVERRIDES_KEY = `${KEY_PREFIX}nudgeBodies`;
+
+/**
+ * The stored nudge-body overrides, or `{}`.
+ *
+ * Tolerant of a missing key, unparseable JSON, JSON that parsed into
+ * something other than an object, and a value that parsed into an
+ * object but holds non-string entries (an id whose value isn't a
+ * string, e.g. from a shape change) — each of those degrades to "no
+ * override for that id" rather than throwing, the same recovery
+ * `usePersistedState` gives every other pref.
+ */
+export const loadNudgeOverrides = (): NudgeOverrides => {
+	try {
+		const raw = localStorage.getItem(NUDGE_OVERRIDES_KEY);
+		if (raw === null) return {};
+		const parsed: unknown = JSON.parse(raw);
+		if (typeof parsed !== "object" || parsed === null) return {};
+		const out: Record<string, string> = {};
+		for (const [id, body] of Object.entries(parsed as Record<string, unknown>)) {
+			if (typeof body === "string") out[id] = body;
+		}
+		return out;
+	} catch {
+		return {};
+	}
+};
+
+/** Persist `overrides` wholesale — the same "load once, save the whole
+ *  map" shape every other pref here uses. */
+export const saveNudgeOverrides = (overrides: NudgeOverrides): void => {
+	localStorage.setItem(NUDGE_OVERRIDES_KEY, JSON.stringify(overrides));
+};

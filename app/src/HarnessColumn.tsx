@@ -1,5 +1,6 @@
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef } from "react";
 import { FilesBody } from "./FilesBody.tsx";
+import { HarnessActionsMenu } from "./HarnessActionsMenu.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import { HarnessPicker, HarnessTab } from "./components.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
@@ -296,6 +297,9 @@ export const HarnessColumn = ({
 				<div className="sk-harness-add" onClick={() => onAddHarness(room.id)}>
 					+ harness
 				</div>
+				<HarnessActionsMenu
+					activeHarness={room.harnesses.find((h) => h.id === room.activeHarnessId)}
+				/>
 				<div className="sk-harness-meta">
 					<span>{room.branch ? `${room.repo} · ${room.branch}` : (room.cwd ?? "")}</span>
 				</div>

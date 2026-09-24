@@ -1,20 +1,37 @@
-// Nudge bodies + selection (#238).
+// Nudge bodies + selection (#238, registry-backed since #355).
 //
-// Fixed, one-line prompts pasted into the room's active harness and
-// submitted — no settings UI, no persistence, the three bodies are
-// constants shipped in code. Which one applies is a pure function of
-// the review's own state (sign-off + unresolved-thread count), so it is
-// testable without a harness, a PTY, or React.
+// Three prompts, pasted into the room's active harness and submitted.
+// Which one applies is a pure function of the review's own state
+// (sign-off + unresolved-thread count) — testable without a harness, a
+// PTY, or React. The bodies themselves now live as data in
+// `nudgeRegistry.ts`, with an optional per-nudge override the user can
+// set in Settings (persisted in `prefs.ts`, reactive via
+// `nudgeStore.ts`) — this module resolves a def against the caller's
+// overrides rather than hard-coding a string.
 
+import { NUDGES, type NudgeDef, type NudgeOverrides, nudgeBody } from "../nudgeRegistry.ts";
 import type { SignoffState } from "./signoff.ts";
 
-export const NUDGE_LAND = "The review is signed off. Land this branch per this repo's conventions.";
+/// Look up one of the three fixed review nudges by id, throwing at
+/// module init (never at call time) if the registry is ever edited out
+/// from under this module — a bug loud enough to fail immediately
+/// rather than a `selectNudge` that silently returns `undefined`.
+function requireDef(id: string): NudgeDef {
+	const found = NUDGES.find((d) => d.id === id);
+	if (!found) throw new Error(`nudgeRegistry.NUDGES is missing expected nudge "${id}"`);
+	return found;
+}
 
-export const NUDGE_LAPSED =
-	"I approved an earlier commit; review has lapsed since you committed. Check review_status.";
+const landDef = requireDef("review-land");
+const lapsedDef = requireDef("review-lapsed");
+const addressCommentsDef = requireDef("review-address-comments");
 
-export const NUDGE_ADDRESS_COMMENTS =
-	"Read the open review comments in Skein (list_comments) and address them.";
+/// The three review nudges' default bodies — still exported by name for
+/// anything (tests included) that wants the shipped-in-code text rather
+/// than a possibly-overridden one.
+export const NUDGE_LAND = landDef.defaultBody;
+export const NUDGE_LAPSED = lapsedDef.defaultBody;
+export const NUDGE_ADDRESS_COMMENTS = addressCommentsDef.defaultBody;
 
 export interface Nudge {
 	label: string;
@@ -24,16 +41,21 @@ export interface Nudge {
 /// Which nudge (if any) applies right now. `undefined` means there is
 /// nothing to nudge about — the caller renders a disabled button rather
 /// than omitting it, so "no nudge available" reads as a state rather
-/// than as a missing feature.
-export function selectNudge(signoff: SignoffState, unresolvedCount: number): Nudge | undefined {
+/// than as a missing feature. `overrides` defaults to none, so every
+/// existing call site keeps returning the shipped-in-code bodies.
+export function selectNudge(
+	signoff: SignoffState,
+	unresolvedCount: number,
+	overrides: NudgeOverrides = {},
+): Nudge | undefined {
 	if (signoff === "approved") {
-		return { label: "Nudge: land", body: NUDGE_LAND };
+		return { label: landDef.label, body: nudgeBody(landDef, overrides) };
 	}
 	if (signoff === "stale") {
-		return { label: "Nudge: lapsed", body: NUDGE_LAPSED };
+		return { label: lapsedDef.label, body: nudgeBody(lapsedDef, overrides) };
 	}
 	if (unresolvedCount > 0) {
-		return { label: "Nudge: address comments", body: NUDGE_ADDRESS_COMMENTS };
+		return { label: addressCommentsDef.label, body: nudgeBody(addressCommentsDef, overrides) };
 	}
 	return undefined;
 }

@@ -1272,6 +1272,85 @@ html.tab-dragging.tab-drag-refused * {
 	background: var(--bg-2);
 }
 
+/* #355: the Actions ▾ button beside `+ harness` — lists the non-review
+ * nudges (empty, and disabled with "no actions yet", until #358 adds
+ * the first) and pastes the chosen one into the room's active harness. */
+.sk-harness-actions {
+	position: relative;
+	align-self: center;
+}
+.sk-harness-actions-btn {
+	height: calc(var(--cfs, 12px) * 2);
+	padding: 0 8px;
+	color: var(--fg-3);
+	font: inherit;
+	font-family: var(--sk-mono);
+	font-size: 0.92em;
+	background: none;
+	border: none;
+	cursor: pointer;
+	border-radius: 4px;
+}
+.sk-harness-actions-btn:hover:not(:disabled) {
+	color: var(--fg-1);
+	background: var(--bg-2);
+}
+.sk-harness-actions-btn:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.sk-harness-actions-menu {
+	position: absolute;
+	top: 100%;
+	left: 0;
+	z-index: 20;
+	display: flex;
+	flex-direction: column;
+	min-width: 180px;
+	margin-top: 2px;
+	padding: 4px;
+	background: var(--bg-1);
+	border: 1px solid var(--line-strong);
+	border-radius: 4px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.sk-harness-actions-item {
+	padding: 5px 8px;
+	color: var(--fg-1);
+	font: inherit;
+	font-family: var(--sk-mono);
+	font-size: 0.9em;
+	text-align: left;
+	background: none;
+	border: none;
+	border-radius: 3px;
+	cursor: pointer;
+}
+.sk-harness-actions-item:hover:not(:disabled) {
+	background: var(--bg-2);
+	color: var(--accent);
+}
+.sk-harness-actions-item:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.sk-harness-actions-error {
+	position: absolute;
+	top: 100%;
+	left: 0;
+	z-index: 20;
+	margin-top: 2px;
+	padding: 4px 8px;
+	max-width: 240px;
+	color: var(--err);
+	font-family: var(--sk-mono);
+	font-size: 0.8em;
+	background: var(--bg-1);
+	border: 1px solid var(--line-strong);
+	border-radius: 4px;
+	white-space: normal;
+}
+
 .sk-harness-meta {
 	margin-left: auto;
 	align-self: center;
@@ -1711,8 +1790,57 @@ html.tab-dragging.tab-drag-refused * {
 	color: var(--fg-3);
 	line-height: 1.4;
 }
+.sk-nudges {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.sk-nudge-group {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.sk-nudge-group-label {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.8333);
+	color: var(--fg-3);
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+}
+.sk-nudge {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 8px 10px;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	background: var(--bg-2);
+}
+.sk-nudge-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.sk-nudge-label {
+	font-size: calc(var(--cfs) * 1);
+	color: var(--fg-0);
+	font-weight: 500;
+}
+.sk-nudge-edited {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.8333);
+	color: var(--fg-3);
+}
+.sk-nudge-reset {
+	margin-left: auto;
+}
+.sk-nudge-body {
+	resize: vertical;
+	min-height: 4.5em;
+}
 .sk-input,
-.sk-select {
+.sk-select,
+.sk-textarea {
 	background: var(--bg-2);
 	border: 1px solid var(--line);
 	border-radius: 5px;
@@ -1724,7 +1852,8 @@ html.tab-dragging.tab-drag-refused * {
 	outline: none;
 }
 .sk-input:focus,
-.sk-select:focus {
+.sk-select:focus,
+.sk-textarea:focus {
 	border-color: var(--accent);
 }
 .sk-radio-row {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_BRANCH_TEMPLATE } from "./branchName.ts";
 import {
 	type DefaultAgents,
@@ -8,8 +8,10 @@ import {
 	branchTemplateFor,
 	defaultAgentFor,
 	defaultsFor,
+	loadNudgeOverrides,
 	recentFolders,
 	rememberFolder,
+	saveNudgeOverrides,
 	startingAgent,
 	withDefaultAgent,
 } from "./prefs.ts";
@@ -199,6 +201,69 @@ describe("branchTemplateFor (#227)", () => {
 
 	it("keeps a deliberately blank app-wide template rather than falling to the default", () => {
 		expect(branchTemplateFor(EMPTY_NEW_ROOM_MEMORY, "C:/git/skein", "")).toBe("");
+	});
+});
+
+// A Map-backed fake — this suite runs under vitest's "node" environment
+// (see vitest.config.ts), which has no browser `localStorage`, and
+// `loadNudgeOverrides`/`saveNudgeOverrides` read/write it directly
+// rather than going through `usePersistedState`'s React effect.
+class FakeStorage implements Storage {
+	private readonly map = new Map<string, string>();
+	get length(): number {
+		return this.map.size;
+	}
+	clear(): void {
+		this.map.clear();
+	}
+	getItem(key: string): string | null {
+		return this.map.has(key) ? (this.map.get(key) ?? null) : null;
+	}
+	key(index: number): string | null {
+		return [...this.map.keys()][index] ?? null;
+	}
+	removeItem(key: string): void {
+		this.map.delete(key);
+	}
+	setItem(key: string, value: string): void {
+		this.map.set(key, value);
+	}
+}
+
+describe("nudge overrides persistence (#355)", () => {
+	beforeEach(() => {
+		globalThis.localStorage = new FakeStorage();
+	});
+
+	it("is empty with nothing stored yet", () => {
+		expect(loadNudgeOverrides()).toEqual({});
+	});
+
+	it("round-trips a saved map", () => {
+		saveNudgeOverrides({ "review-land": "custom land body" });
+		expect(loadNudgeOverrides()).toEqual({ "review-land": "custom land body" });
+	});
+
+	it("tolerates corrupt JSON", () => {
+		localStorage.setItem("skein:nudgeBodies", "{not json");
+		expect(loadNudgeOverrides()).toEqual({});
+	});
+
+	it("tolerates JSON that parsed into the wrong shape", () => {
+		localStorage.setItem("skein:nudgeBodies", "[1,2,3]");
+		expect(loadNudgeOverrides()).toEqual({});
+		localStorage.setItem("skein:nudgeBodies", "null");
+		expect(loadNudgeOverrides()).toEqual({});
+		localStorage.setItem("skein:nudgeBodies", '"just a string"');
+		expect(loadNudgeOverrides()).toEqual({});
+	});
+
+	it("drops non-string entries rather than throwing", () => {
+		localStorage.setItem(
+			"skein:nudgeBodies",
+			JSON.stringify({ "review-land": "kept", "review-lapsed": 7 }),
+		);
+		expect(loadNudgeOverrides()).toEqual({ "review-land": "kept" });
 	});
 });
 
