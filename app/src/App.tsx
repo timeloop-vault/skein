@@ -26,7 +26,7 @@ import { buildPaletteItems } from "./paletteItems.ts";
 import { withDefaultAgent } from "./prefs.ts";
 import { allRoomOrder } from "./roomGroups.ts";
 import { isMac } from "./shortcuts.ts";
-import type { HarnessKind, SpawnSettings, SpawnSettingsPayload } from "./types.ts";
+import type { HarnessKind, Room, SpawnSettings, SpawnSettingsPayload } from "./types.ts";
 import {
 	CHROME_FONT_MAX,
 	CHROME_FONT_MIN,
@@ -101,6 +101,11 @@ export default function App() {
 	// into these until Phase 4 wires real worktrees / per-room cwd.
 	const [defaultShell, setDefaultShell] = useState<string[]>([]);
 	const [defaultCwd, setDefaultCwd] = useState<string>("");
+	// #331: `rooms` (below, via useRoomsStore) for the status-popover
+	// breakdown — created here, before useRoomsStore runs, because
+	// useAppWindowEffects (which attaches the popover) mounts first;
+	// kept in sync just after useRoomsStore returns.
+	const popoverRoomsRef = useRef<readonly Room[]>([]);
 	// #19: six standalone window/app-level effects — the boot-time
 	// default-shell/default-cwd probe above, the quit-confirmation
 	// wiring, the Esc-closes-picker listener, the skein://open-settings
@@ -108,7 +113,14 @@ export default function App() {
 	// file-drop swallow — extracted to keep this file's growth minimal;
 	// none of the six interacts with anything else here — see
 	// useAppWindowEffects.ts.
-	useAppWindowEffects(showPicker, setShowPicker, setShowSettings, setDefaultShell, setDefaultCwd);
+	useAppWindowEffects(
+		showPicker,
+		setShowPicker,
+		setShowSettings,
+		setDefaultShell,
+		setDefaultCwd,
+		() => popoverRoomsRef.current,
+	);
 
 	// Shell / PATH environment (#72, #3, #1). Owned by Rust — the spawn
 	// path reads it and the shell probe runs during setup(), before this
@@ -169,6 +181,9 @@ export default function App() {
 	// via the cycle / jump shortcuts.
 	const activeRoomsRef = useRef(activeRooms);
 	activeRoomsRef.current = activeRooms;
+	// #331: keep in sync for the status-popover breakdown — see
+	// popoverRoomsRef's declaration above useAppWindowEffects.
+	popoverRoomsRef.current = roomsRef.current;
 
 	// #19: room-strip navigation (drag-reorder, the two-level strip's
 	// segments, group "last used" memory, top-level tab click

@@ -18,6 +18,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { useEffect, useRef } from "react";
 import { filesRegistry } from "./filesRegistry.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
+import type { Room } from "./types.ts";
 
 export function useAppWindowEffects(
 	showPicker: string | null,
@@ -25,6 +26,11 @@ export function useAppWindowEffects(
 	setShowSettings: Dispatch<SetStateAction<boolean>>,
 	setDefaultShell: Dispatch<SetStateAction<string[]>>,
 	setDefaultCwd: Dispatch<SetStateAction<string>>,
+	/** #331: read the latest `rooms` for the status-popover breakdown.
+	 *  A function rather than the array itself — this hook mounts
+	 *  before `useRoomsStore` runs, so App.tsx passes a closure over a
+	 *  ref it keeps in sync afterwards, not the rooms themselves. */
+	getRooms: () => readonly Room[],
 ) {
 	// Phase 1: pull platform defaults once at boot. New harnesses spawn
 	// into these until Phase 4 wires real worktrees / per-room cwd.
@@ -118,7 +124,10 @@ export function useAppWindowEffects(
 
 	// #132: shared hover popover for status dots / harness chips (replaces
 	// the native title=). One delegated listener for the whole app.
-	useEffect(() => attachStatusPopover(), []);
+	// #331: `getRooms` closes over a ref App.tsx keeps in sync — stable
+	// for the component's life, so it's safe to capture once here too.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: getRooms closes over a stable ref (App.tsx's popoverRoomsRef), same reasoning as the setters above.
+	useEffect(() => attachStatusPopover(getRooms), []);
 
 	// #120: this window-level swallow predates #271. Back when
 	// `dragDropEnabled` was `false` (kept off so the in-webview
