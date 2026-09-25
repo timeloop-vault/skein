@@ -13,9 +13,14 @@ pub struct WorktreeInfo {
 
 impl Repo {
     /// Add a worktree at `path` on a fresh branch `branch_name` based on
-    /// `base_branch`. The worktree is named after the path's last
-    /// component — git uses this name internally under
-    /// `.git/worktrees/<name>/`.
+    /// `base_branch`. `base_branch` is resolved as a local branch first;
+    /// when no local branch by that name exists, a remote-tracking
+    /// branch is tried instead (e.g. "origin/main") — the base picked in
+    /// the New Room dialog can be one nobody has ever checked out
+    /// locally, and Skein never fetches to fix that up first (D9: no git
+    /// mutations, reads only). `GitError::BranchNotFound` when neither
+    /// resolves. The worktree is named after the path's last component —
+    /// git uses this name internally under `.git/worktrees/<name>/`.
     ///
     /// The new branch lives in the main repo's branch namespace. The
     /// worktree's HEAD points at it on creation; switching branches
@@ -26,17 +31,7 @@ impl Repo {
         base_branch: &str,
         path: &Path,
     ) -> Result<WorktreeInfo> {
-        let base = self
-            .repo
-            .find_branch(base_branch, BranchType::Local)
-            .map_err(|e| {
-                if e.code() == git2::ErrorCode::NotFound {
-                    GitError::BranchNotFound(base_branch.to_owned())
-                } else {
-                    GitError::Git(e)
-                }
-            })?;
-        let base_commit = base.get().peel_to_commit()?;
+        let base_commit = self.resolve_base_branch_commit(base_branch)?;
 
         // `force = false` — fail if `branch_name` already exists rather
         // than silently overwriting. The new-session UI should already
@@ -79,6 +74,27 @@ impl Repo {
             name,
             path: path.to_path_buf(),
         })
+    }
+
+    /// Resolve `base_branch` to the commit a new branch should start
+    /// from: a local branch by that name first, falling back to a
+    /// remote-tracking branch (e.g. "origin/main") when no local branch
+    /// exists. This is a pure ref lookup — no fetch, no ref write, no
+    /// upstream configuration (D9).
+    fn resolve_base_branch_commit(&self, base_branch: &str) -> Result<git2::Commit<'_>> {
+        match self.repo.find_branch(base_branch, BranchType::Local) {
+            Ok(branch) => Ok(branch.get().peel_to_commit()?),
+            Err(e) if e.code() == git2::ErrorCode::NotFound => {
+                match self.repo.find_branch(base_branch, BranchType::Remote) {
+                    Ok(branch) => Ok(branch.get().peel_to_commit()?),
+                    Err(e2) if e2.code() == git2::ErrorCode::NotFound => {
+                        Err(GitError::BranchNotFound(base_branch.to_owned()))
+                    }
+                    Err(e2) => Err(GitError::Git(e2)),
+                }
+            }
+            Err(e) => Err(GitError::Git(e)),
+        }
     }
 
     /// Re-attach an *existing* local branch as a worktree at `path`

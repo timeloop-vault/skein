@@ -28,13 +28,26 @@ pub struct BranchDto {
     pub name: String,
     #[serde(rename = "isHead")]
     pub is_head: bool,
+    /// Commits on the branch's upstream not reachable locally — a lower
+    /// bound only as fresh as the last fetch (Skein never fetches).
+    /// `None` when there's no upstream configured or it can't be
+    /// resolved.
+    #[serde(rename = "behindUpstream", skip_serializing_if = "Option::is_none")]
+    pub behind_upstream: Option<usize>,
 }
 
-impl From<BranchInfo> for BranchDto {
-    fn from(b: BranchInfo) -> Self {
+impl BranchDto {
+    /// Builds a DTO from a name-only `BranchInfo`, filling
+    /// `behind_upstream` with its own `graph_ahead_behind` walk. Only
+    /// called from `git_inspect_folder`, on room open/create — never
+    /// from the review surface's per-tick `Repo::branches` call, which
+    /// only needs names and would pay this walk for nothing.
+    fn from_info(repo: &Repo, b: BranchInfo) -> Self {
+        let behind_upstream = repo.behind_upstream(&b.name).ok().flatten();
         Self {
             name: b.name,
             is_head: b.is_head,
+            behind_upstream,
         }
     }
 }
@@ -92,6 +105,11 @@ pub struct FolderInfoDto {
     pub resolved_from_worktree: bool,
     pub branches: Vec<BranchDto>,
     pub head: Option<String>,
+    /// Shorthand remote-tracking branch names (e.g. "origin/main"), for
+    /// offering a base that only exists upstream. Empty on error or for
+    /// a non-repo/missing path — never fails the whole call.
+    #[serde(rename = "remoteBranches")]
+    pub remote_branches: Vec<String>,
 }
 
 /// Inspect a folder for the New Room dialog: existence, repo-ness,
@@ -117,6 +135,7 @@ fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
         resolved_from_worktree: false,
         branches: Vec::new(),
         head: None,
+        remote_branches: Vec::new(),
     };
     if !exists {
         return Ok(info);
@@ -142,9 +161,10 @@ fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
                 .branches()
                 .map_err(|e| e.to_string())?
                 .into_iter()
-                .map(BranchDto::from)
+                .map(|b| BranchDto::from_info(&main, b))
                 .collect();
             info.head = main.head_branch();
+            info.remote_branches = main.remote_branches().unwrap_or_default();
             return Ok(info);
         }
     }
@@ -152,9 +172,10 @@ fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
         .branches()
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(BranchDto::from)
+        .map(|b| BranchDto::from_info(&repo, b))
         .collect();
     info.head = repo.head_branch();
+    info.remote_branches = repo.remote_branches().unwrap_or_default();
     Ok(info)
 }
 

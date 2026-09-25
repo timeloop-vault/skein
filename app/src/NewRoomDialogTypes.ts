@@ -7,6 +7,10 @@ import type { HarnessKind } from "./types.ts";
 export interface BranchInfoDto {
 	name: string;
 	isHead: boolean;
+	/** How many commits behind its upstream, if it has one (#367). Absent
+	 *  when the branch tracks nothing; a lower bound even when present —
+	 *  Skein never fetches, so this is only as fresh as the last fetch. */
+	behindUpstream?: number;
 }
 
 // What the dialog hands back. The cwd is already the *real* directory
@@ -41,6 +45,10 @@ export interface FolderInfoDto {
 	resolvedFromWorktree: boolean;
 	branches: BranchInfoDto[];
 	head: string | null;
+	/** Remote-tracking refs (e.g. "origin/main"), never origin/HEAD (#367).
+	 *  A valid `baseBranch` for worktree creation alongside `branches` — a
+	 *  local branch of the same short name wins if both exist. */
+	remoteBranches: string[];
 }
 
 // `missing` is not cosmetic (#226): a path that does not exist used to

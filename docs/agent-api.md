@@ -308,7 +308,7 @@ see "Caps and the kill switch" just below.
 | `path` | the calling room's own repo root, falling back to its cwd |
 | `branchMode` | `"worktree"` (the other choice is `"current"`) |
 | `branch` | the user's own branch-name template, applied to a slug of `task` |
-| `baseBranch` | the repo's current branch guess |
+| `baseBranch` | the repo's current branch guess. May name a local branch or a remote-tracking ref (e.g. `"origin/main"`), read as of Skein's last fetch — Skein never fetches on its own; a local branch of the same name wins if both exist |
 | `task` | required — short label for the room's tab |
 | `kind` | the user's own default harness kind for this folder |
 | `agent` | the user's own default agent for that kind, or the folder's remembered agent (#247/#248) — omit rather than guessing a name, since an unresolvable one refuses the whole call |
@@ -317,9 +317,14 @@ see "Caps and the kill switch" just below.
 Returns `roomId`, `name`, `cwd`, `repo`, `branch`, `harnessId`, `kind`,
 `agent`, `sessionId` (nullable — a non-git folder has no repo or
 branch, and an opencode harness's session id is only captured
-asynchronously after spawn), and `messageId` (present only when
-`prompt` was given and successfully queued). HTTP route: `POST
-/api/rooms`, taking `CreateRoomArgs` directly as the body.
+asynchronously after spawn), `messageId` (present only when `prompt`
+was given and successfully queued), and `baseBehindUpstream` (present
+only when the worktree's base was a *local* branch behind its
+upstream — a lower bound, since Skein never fetches; a remote-tracking
+base has nothing to be behind). Seeing it means: pull first, or pass
+a remote-tracking ref such as `"origin/main"` as `baseBranch` and
+retry. HTTP route: `POST /api/rooms`, taking `CreateRoomArgs` directly
+as the body.
 
 **The flow** mirrors the New Room dialog rather than reinventing it,
 so a room an agent opens looks exactly like one a human would have

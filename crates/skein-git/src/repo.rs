@@ -72,6 +72,51 @@ impl Repo {
         Ok(out)
     }
 
+    /// How many commits `local_branch`'s configured upstream has that
+    /// `local_branch` itself doesn't — how far behind a `git fetch` would
+    /// find it. An up-to-date branch returns `Some(0)`; `None` means
+    /// there is no upstream configured, or it can't be resolved. This is
+    /// a lower bound only as fresh as the last fetch — Skein never
+    /// fetches (D9), so a long-idle room can under-report. Any lookup
+    /// error here is swallowed to `None` rather than propagated.
+    pub fn behind_upstream(&self, local_branch: &str) -> Result<Option<usize>> {
+        let Ok(branch) = self.repo.find_branch(local_branch, BranchType::Local) else {
+            return Ok(None);
+        };
+        let Ok(upstream) = branch.upstream() else {
+            return Ok(None);
+        };
+        let (Some(local_oid), Some(upstream_oid)) =
+            (branch.get().target(), upstream.get().target())
+        else {
+            return Ok(None);
+        };
+        Ok(self
+            .repo
+            .graph_ahead_behind(local_oid, upstream_oid)
+            .map(|(_, behind)| behind)
+            .ok())
+    }
+
+    /// Shorthand names of remote-tracking branches (e.g. `"origin/main"`),
+    /// sorted, excluding symbolic refs such as `"origin/HEAD"`. Read-only
+    /// — reflects whatever was fetched last, never triggers a fetch.
+    pub fn remote_branches(&self) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        for entry in self.repo.branches(Some(BranchType::Remote))? {
+            let (branch, _) = entry?;
+            // `origin/HEAD` is a symbolic ref pointing at another
+            // remote-tracking branch, not a branch of its own.
+            if branch.get().kind() != Some(git2::ReferenceType::Direct) {
+                continue;
+            }
+            let Some(name) = branch.name()? else { continue };
+            out.push(name.to_owned());
+        }
+        out.sort();
+        Ok(out)
+    }
+
     /// Returns the current HEAD branch name (e.g. `main`), or `None` if
     /// HEAD is detached or otherwise unresolvable.
     pub fn head_branch(&self) -> Option<String> {

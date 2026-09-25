@@ -13,6 +13,7 @@ function folder(opts: Partial<FolderInfoDto> = {}): FolderInfoDto {
 			{ name: "feat/taken", isHead: false },
 		],
 		head: "main",
+		remoteBranches: [],
 		...opts,
 	};
 }
@@ -178,6 +179,67 @@ describe("createRoomArgs", () => {
 		if (noHeadOutcome.ok) {
 			expect(noHeadOutcome.args.branch).toBe("HEAD");
 			expect(noHeadOutcome.remember.baseBranch).toBe("main");
+		}
+	});
+
+	it("accepts a remote-tracking base branch and passes it to addWorktree", async () => {
+		const git = fakeGit({
+			folder: folder({ remoteBranches: ["origin/main", "origin/release"] }),
+		});
+		const outcome = await createRoomArgs({ ...baseSpec, baseBranch: "origin/main" }, git);
+		expect(outcome.ok).toBe(true);
+		expect(git.addWorktreeCalls).toEqual([
+			{
+				repoPath: "/repo",
+				branch: "feat/fix-the-thing",
+				baseBranch: "origin/main",
+				worktreePath: "/repo-wt/leaf",
+			},
+		]);
+	});
+
+	it("still rejects a base branch that is neither local nor remote-tracking", async () => {
+		const git = fakeGit({ folder: folder({ remoteBranches: ["origin/main"] }) });
+		const outcome = await createRoomArgs({ ...baseSpec, baseBranch: "origin/nope" }, git);
+		expect(outcome).toEqual({ ok: false, error: "unknown base branch" });
+	});
+
+	it("reports baseBehindUpstream when the chosen local base is behind", async () => {
+		const git = fakeGit({
+			folder: folder({
+				branches: [
+					{ name: "main", isHead: true, behindUpstream: 3 },
+					{ name: "feat/taken", isHead: false },
+				],
+			}),
+		});
+		const outcome = await createRoomArgs(baseSpec, git);
+		expect(outcome.ok).toBe(true);
+		if (outcome.ok) {
+			expect(outcome.baseBehindUpstream).toBe(3);
+		}
+	});
+
+	it("omits baseBehindUpstream when the base is up to date or has no upstream", async () => {
+		const upToDate = fakeGit({
+			folder: folder({
+				branches: [
+					{ name: "main", isHead: true, behindUpstream: 0 },
+					{ name: "feat/taken", isHead: false },
+				],
+			}),
+		});
+		const upToDateOutcome = await createRoomArgs(baseSpec, upToDate);
+		expect(upToDateOutcome.ok).toBe(true);
+		if (upToDateOutcome.ok) {
+			expect(upToDateOutcome.baseBehindUpstream).toBeUndefined();
+		}
+
+		const noUpstream = fakeGit();
+		const noUpstreamOutcome = await createRoomArgs(baseSpec, noUpstream);
+		expect(noUpstreamOutcome.ok).toBe(true);
+		if (noUpstreamOutcome.ok) {
+			expect(noUpstreamOutcome.baseBehindUpstream).toBeUndefined();
 		}
 	});
 });

@@ -519,7 +519,11 @@ pub fn tool_specs() -> Vec<Value> {
                  harnessId or roomId this call returns. You cannot close, archive, or \
                  otherwise destroy a room — that stays the user's decision. Omit any \
                  argument you have no reason to set; Skein fills it with the user's \
-                 own defaults.",
+                 own defaults. The result may carry `baseBehindUpstream`: the base \
+                 branch was behind its upstream as of Skein's last fetch (Skein never \
+                 fetches on its own, so treat it as a lower bound) — pull first, or \
+                 pass a remote-tracking ref (e.g. \"origin/main\") as baseBranch and \
+                 retry.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -543,7 +547,9 @@ pub fn tool_specs() -> Vec<Value> {
                     "baseBranch": {
                         "type": "string",
                         "description": "Worktree mode only. Optional — default: the \
-                            repo's current branch guess.",
+                            repo's current branch guess. May be a local branch name \
+                            or a remote-tracking ref such as \"origin/main\", read as \
+                            of Skein's last fetch — Skein never fetches on its own.",
                     },
                     "task": {
                         "type": "string",

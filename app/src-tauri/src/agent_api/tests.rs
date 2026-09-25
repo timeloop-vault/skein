@@ -3036,6 +3036,71 @@ async fn create_room_happy_path_without_a_prompt() {
 }
 
 #[tokio::test]
+async fn create_room_forwards_base_behind_upstream_when_the_frontend_reports_it() {
+    let f = fixture();
+    let (_tmp, caller) = git_room(&f);
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "create_room.resolve" => Ok(json!({ "kind": "claude", "agent": null })),
+        "create_room" => Ok(json!({
+            "roomId": "new-room",
+            "name": "task name",
+            "cwd": "/some/wt",
+            "repo": "repo",
+            "branch": "agent/task",
+            "harnessId": "new-harness",
+            "kind": "claude",
+            "agent": null,
+            "sessionId": "sess-1",
+            "baseBehindUpstream": 3,
+        })),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let out = verbs::create_room(
+        &state,
+        &caller,
+        &create_room_args("do the thing"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.base_behind_upstream, Some(3));
+}
+
+#[tokio::test]
+async fn create_room_omits_base_behind_upstream_when_the_frontend_does_not_report_it() {
+    let f = fixture();
+    let (_tmp, caller) = git_room(&f);
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "create_room.resolve" => Ok(json!({ "kind": "claude", "agent": null })),
+        "create_room" => Ok(json!({
+            "roomId": "new-room",
+            "name": "task name",
+            "cwd": "/some/wt",
+            "repo": "repo",
+            "branch": "agent/task",
+            "harnessId": "new-harness",
+            "kind": "claude",
+            "agent": null,
+            "sessionId": "sess-1",
+        })),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let out = verbs::create_room(
+        &state,
+        &caller,
+        &create_room_args("do the thing"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.base_behind_upstream, None);
+}
+
+#[tokio::test]
 async fn create_room_happy_path_with_a_prompt_queues_the_first_message() {
     let f = fixture();
     let (_tmp, caller) = git_room(&f);

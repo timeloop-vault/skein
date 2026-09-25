@@ -122,7 +122,14 @@ export function useAgentRequests(
 				state: "created",
 				requesterRoomName: args.requesterRoomName,
 			});
-			return complete(id, result);
+			return complete(id, {
+				...result,
+				// #367: only present when the worktree was branched from a
+				// LOCAL base branch that is behind its upstream.
+				...(outcome.baseBehindUpstream !== undefined
+					? { baseBehindUpstream: outcome.baseBehindUpstream }
+					: {}),
+			});
 		};
 
 		const unlistenPromise = listen<AgentRequestPayload>("skein://agent-request", (event) => {

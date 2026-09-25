@@ -1122,6 +1122,12 @@ pub struct CreateRoomOut {
     /// Present only when `prompt` was given and successfully queued.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
+    /// Present only when the new worktree was branched from a LOCAL base
+    /// branch that is behind its upstream (#367) — a lower bound, since
+    /// Skein never fetches. A caller that sees this should pull or pass a
+    /// remote-tracking ref (e.g. "origin/main") as `baseBranch` and retry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_behind_upstream: Option<u32>,
 }
 
 /// The frontend's answer to a `"create_room.resolve"` request — the
@@ -1159,6 +1165,10 @@ struct CreatedRoomOut {
     agent: Option<String>,
     #[serde(default)]
     session_id: Option<String>,
+    /// #367: forwarded from `createRoomArgs`'s outcome, only when the
+    /// worktree's LOCAL base branch is behind its upstream.
+    #[serde(default)]
+    base_behind_upstream: Option<u32>,
 }
 
 /// Open a whole new room — a new worktree, a new spawned harness, and
@@ -1388,6 +1398,7 @@ pub async fn create_room(
         agent: created.agent,
         session_id: created.session_id,
         message_id,
+        base_behind_upstream: created.base_behind_upstream,
     })
 }
 
