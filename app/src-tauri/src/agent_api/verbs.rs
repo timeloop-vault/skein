@@ -34,6 +34,7 @@ use crate::db::{
     Database, Harness, HarnessMessageRow, ReviewAddressedRow, ReviewCommentRow, ReviewThreadRow,
     Room,
 };
+use crate::git::repo_root_for_path;
 use crate::review::{abs_path, now_ms};
 use crate::review_surface::Scope;
 use crate::review_surface::query::{ScopeFiles, file_impl, scope_impl};
@@ -1057,10 +1058,19 @@ const CREATE_ROOM_TIMEOUT: Duration = Duration::from_secs(60);
 const ROOM_CREATION_RATE_LIMIT: usize = 5;
 const ROOM_CREATION_WINDOW: Duration = Duration::from_secs(60);
 
-/// How many open (non-archived) rooms Skein will hold before
-/// `create_room` refuses outright, agent-opened or not — each is a real
-/// worktree and, once its harness spawns, a real process.
-const MAX_OPEN_ROOMS: usize = 20;
+/// How many open (non-archived), agent-opened rooms — `created_by`
+/// [`Some`] — Skein will hold in one repository group, or in the
+/// ungrouped bucket, before `create_room` refuses outright (#375). A
+/// hand-opened room, or a room from before #330 that has no
+/// `createdBy` at all, never counts: this ceiling exists to stop a
+/// runaway *agent* from fanning out geometrically, not to cap how many
+/// rooms the user keeps open by hand. It is scoped per repository group
+/// — the same key the room strip groups on (#76) — rather than global,
+/// so one repository's runaway agent can't starve every other project
+/// of room slots; a group is a room's normalized `repoRoot`, and rooms
+/// with no `repoRoot` at all share one ungrouped bucket. Each open room
+/// is a real worktree and, once its harness spawns, a real process.
+const MAX_OPEN_ROOMS_PER_GROUP: usize = 20;
 
 /// `deny_unknown_fields`: a wrong key here — `branch_mode` instead of
 /// `branchMode`, say — must be a loud error, not a silently dropped
@@ -1177,10 +1187,11 @@ struct CreatedRoomOut {
 /// This is the one verb an agent can use to start *another* agent
 /// working unattended, so it is guarded more heavily than anything else
 /// in this file: a dedicated Settings kill switch
-/// (`allow_agent_room_creation`), a per-room rate cap, and a ceiling on
-/// how many open rooms Skein will hold at all — on top of the frontend
-/// round trips themselves, which can refuse for reasons only the UI
-/// knows (an unreadable folder, a colliding branch name, …).
+/// (`allow_agent_room_creation`), a per-room rate cap, and a per-
+/// repository-group ceiling on how many agent-opened rooms Skein will
+/// hold at once (see [`MAX_OPEN_ROOMS_PER_GROUP`]) — on top of the
+/// frontend round trips themselves, which can refuse for reasons only
+/// the UI knows (an unreadable folder, a colliding branch name, …).
 ///
 /// Two round trips to the webview, via [`AgentApiState::request_frontend`]:
 /// `"create_room.resolve"` first asks what `(kind, agent)` would
@@ -1302,12 +1313,36 @@ pub async fn create_room(
              creations in the last minute"
         )));
     }
-    let open_rooms = rooms.iter().filter(|r| r.archived.is_none()).count();
-    if open_rooms >= MAX_OPEN_ROOMS {
-        return Err(VerbError::Refused(format!(
-            "Skein already has {open_rooms} open rooms (cap {MAX_OPEN_ROOMS}); close \
-             or archive some before opening another"
-        )));
+    // The group the room being created would join — derived from the
+    // resolved `path`, before anything else exists, the same way the
+    // frontend derives `Room.repoRoot` (`worktreeRoom.ts`) — so the
+    // scoping below can't drift from what the new room will actually be
+    // grouped under (#375).
+    let new_repo_root = repo_root_for_path(path_buf);
+    let new_group_key = new_repo_root.as_deref().map(normalize_path_for_match);
+    let scoped_open_count = rooms
+        .iter()
+        .filter(|r| {
+            r.archived.is_none()
+                && r.created_by.is_some()
+                && r.repo_root.as_deref().map(normalize_path_for_match) == new_group_key
+        })
+        .count();
+    if scoped_open_count >= MAX_OPEN_ROOMS_PER_GROUP {
+        let msg = if let Some(root) = &new_repo_root {
+            format!(
+                "agents have already opened {scoped_open_count} open rooms in the \
+                 repository group {root} (cap {MAX_OPEN_ROOMS_PER_GROUP} per group); \
+                 close or archive some before opening another"
+            )
+        } else {
+            format!(
+                "agents have already opened {scoped_open_count} open rooms outside \
+                 any repository group (cap {MAX_OPEN_ROOMS_PER_GROUP} for ungrouped \
+                 rooms); close or archive some before opening another"
+            )
+        };
+        return Err(VerbError::Refused(msg));
     }
 
     let resolved = state
