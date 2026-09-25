@@ -1,6 +1,6 @@
 ---
 name: worktree-sweep
-description: Remove every git worktree and local branch whose work has already landed on main, in one pass. Use when the user asks to clean up worktrees, prune branches, or tidy the checkout after a run of merged PRs. Squash-merge aware (git branch --merged is wrong here), refuses dirty worktrees, and checks Skein's own room database so no active room loses its folder. For removing ONE worktree interactively, the generic worktree-remove skill is the better fit.
+description: Remove every git worktree and local branch whose work has already landed on main, in one pass. Use when the user asks to clean up worktrees, prune branches, or tidy the checkout after a run of merged PRs. Squash-merge aware (git branch --merged is wrong here), refuses dirty worktrees, and asks Skein (find_rooms_for_path) so no open room loses its folder. For removing ONE worktree interactively, the generic worktree-remove skill is the better fit.
 ---
 
 # Worktree Sweep
@@ -68,26 +68,38 @@ git -C <path> status --porcelain | wc -l            # dirty files
 
 ### 2. Check Skein's rooms
 
-A worktree may be the cwd of a Skein room. Removing it under an
-**active** room breaks that room; under an **archived** room it only
+A worktree may be the folder of a Skein room. Removing it under an
+**open** room breaks that room; under an **archived** room it only
 means the reopen flow reports the folder as missing, which it already
-handles. Query the daily driver's database — read-only, on a copy, so
-the running app's WAL is never touched:
+handles. Ask Skein with the `find_rooms_for_path` tool, once per
+candidate worktree, using the path `git worktree list` printed:
 
-```bash
-# Windows release profile; adjust for macOS / dev / local (see CLAUDE.md "App data dirs")
-D="$APPDATA/com.timeloop-vault.skein"
-cp "$D"/skein.db "$D"/skein.db-wal "$D"/skein.db-shm "$SCRATCH/"
-bun run .claude/skills/worktree-sweep/rooms.js "$SCRATCH/skein.db" "<repo>-wt"
+```
+find_rooms_for_path { path: "<worktree path>" }
 ```
 
-`rooms.js` (beside this file) prints `ACTIVE` / `ARCHIVED` per room
-whose cwd is under the worktree folder. **Any `ACTIVE` row excludes
-that worktree from the sweep** — say so and leave it.
+One query per worktree, rather than one on the `<repo>-wt` parent,
+because then every room in the answer belongs to that worktree — the
+room's folder is the worktree (`cwd`) or somewhere below it
+(`contains_room`) — and there is no second path comparison to get
+wrong. It also covers a worktree that lives outside `<repo>-wt`.
 
-`bun` is used because it ships `bun:sqlite`; there is no `sqlite3` or
-Python on the Windows box. On macOS `sqlite3` works too:
-`select json_extract(data,'$.cwd'), json_extract(data,'$.archived') from sessions`.
+Decide on `safe_to_remove`, never on `match` — `match` only says why a
+room came back. **Any room with `safe_to_remove: false` excludes its
+worktree from the sweep**; say so and leave it. A worktree whose rooms
+are all archived (`safe_to_remove: true`), or that has none, passes;
+name the archived rooms in the plan, since reopening them will report
+the folder as missing.
+
+Two cases stop the sweep before step 3, with nothing removed:
+
+- **`unreadable_rooms` is not 0.** Skein holds rooms it could not read,
+  so a worktree missing from `rooms` may still be an open room's
+  folder. Report the count and that the sweep cannot be decided safely.
+- **The tool is not there, or a call fails.** Outside Skein (or on a
+  Skein build older than the verb) there is no `find_rooms_for_path`.
+  Say that the room check could not run, and stop. Do not fall back to
+  reading Skein's database or its data folder.
 
 ### 3. Present the plan and confirm
 
@@ -101,7 +113,8 @@ A worktree is **excluded** (kept, and named in the report) when any of:
 - dirty files > 0
 - a commit ahead of `origin/main` with neither a MERGED PR nor a `-`
   from `git cherry`
-- an ACTIVE Skein room has it as cwd
+- `find_rooms_for_path` returned a room with `safe_to_remove: false`
+  for it (an open room)
 - `git worktree list` marks it `locked`
 
 ### 4. Remove
@@ -151,7 +164,7 @@ C:/git/skein-wt/skein-248      skein/skein-248            1      cherry: all -  
 C:/git/skein-wt/skein-215      skein/skein-215            0      0 ahead          0      archived
 
 Excluded:
-  C:/git/skein-wt/skein-270    skein/skein-270            2      cherry: 1 +      0      ACTIVE   (room open, commit not on main)
+  C:/git/skein-wt/skein-270    skein/skein-270            2      cherry: 1 +      0      open   (room open, commit not on main)
 
 Remove 3 worktrees and 3 branches? [Yes / No]
 ```
