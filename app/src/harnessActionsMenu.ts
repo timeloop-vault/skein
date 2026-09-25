@@ -13,9 +13,20 @@
 // `actionsButtonState` takes the nudge list and a gate function as
 // parameters rather than reaching for the registry/store itself, so it
 // stays testable with an empty or fake list.
+//
+// #359 adds a second source of items: the room's own repo skills
+// (`repoSkills.ts`), one per `.claude/skills/*/SKILL.md`, each typed in
+// as `skillInvocationLine(template, skill.command)` — the exact text
+// #238's seam pastes. `skillInvocation === null` (a kind with no slash
+// convention) means no skill items at all, regardless of what skills
+// were found. `source` on each item is what lets the component draw a
+// "Repo skills" divider before the first skill item without the pure
+// state needing to know anything about rendering.
 
 import type { GateResult } from "./harnessInput.ts";
 import { type NudgeDef, type NudgeOverrides, nudgeBody } from "./nudgeRegistry.ts";
+import type { RepoSkill } from "./repoSkills.ts";
+import { skillInvocationLine } from "./repoSkills.ts";
 
 export interface ActionsMenuItem {
 	id: string;
@@ -28,6 +39,10 @@ export interface ActionsMenuItem {
 	title: string;
 	body: string;
 	gate: GateResult;
+	/** `"nudge"` for a registry entry, `"skill"` for a repo skill (#359)
+	 *  — lets the component insert a "Repo skills" divider before the
+	 *  first skill item without re-deriving the split itself. */
+	source: "nudge" | "skill";
 }
 
 export type ActionsButtonState =
@@ -36,17 +51,20 @@ export type ActionsButtonState =
 	| { kind: "menu"; items: readonly ActionsMenuItem[] };
 
 /** The button's state, computed fresh from its inputs — no store reads
- *  here, so a caller (or a test) supplies the harness's nudge list and
- *  a gate function.
+ *  here, so a caller (or a test) supplies the harness's nudge list, its
+ *  loaded repo skills and a gate function.
  *
  *   - `hidden`: the active harness's kind has no terminal at all
  *     (`files`) — same rule the #238 Nudge button uses, and for the
  *     same reason: there is nowhere to paste.
- *   - `disabled`: the kind has a terminal, but the actions scope is
- *     empty — "no actions yet" (not expected today; #358 shipped the
- *     first entry, but a caller can still pass an empty list).
- *   - `menu`: one item per def, each resolved through `nudgeBody`
- *     against `overrides` and gated individually — a multi-line body
+ *   - `disabled`: the kind has a terminal, but there is nothing to show
+ *     — both the actions scope AND the skill list are empty — "no
+ *     actions yet".
+ *   - `menu`: one item per nudge def (resolved through `nudgeBody`
+ *     against `overrides`), followed by one item per skill (resolved
+ *     through `skillInvocationLine` against `skillInvocation` — skipped
+ *     entirely when `skillInvocation` is `null`, i.e. the kind has no
+ *     slash convention), each gated individually — a multi-line body
  *     can be refused (no bracketed paste) while a single-line sibling
  *     is still sendable.
  */
@@ -55,12 +73,37 @@ export function actionsButtonState(
 	nudges: readonly NudgeDef[],
 	overrides: NudgeOverrides,
 	gateFor: (body: string) => GateResult,
+	skills: readonly RepoSkill[],
+	skillInvocation: string | null,
 ): ActionsButtonState {
 	if (!hasPty) return { kind: "hidden" };
-	if (nudges.length === 0) return { kind: "disabled", reason: "no actions yet" };
-	const items = nudges.map((def) => {
+	const nudgeItems: ActionsMenuItem[] = nudges.map((def) => {
 		const body = nudgeBody(def, overrides);
-		return { id: def.id, label: def.label, title: def.description, body, gate: gateFor(body) };
+		return {
+			id: def.id,
+			label: def.label,
+			title: def.description,
+			body,
+			gate: gateFor(body),
+			source: "nudge",
+		};
 	});
-	return { kind: "menu", items };
+	const skillItems: ActionsMenuItem[] =
+		skillInvocation === null
+			? []
+			: skills.map((skill) => {
+					const body = skillInvocationLine(skillInvocation, skill.command);
+					return {
+						id: `skill:${skill.command}`,
+						label: `/${skill.command}`,
+						title: skill.description || skill.name,
+						body,
+						gate: gateFor(body),
+						source: "skill",
+					};
+				});
+	if (nudgeItems.length === 0 && skillItems.length === 0) {
+		return { kind: "disabled", reason: "no actions yet" };
+	}
+	return { kind: "menu", items: [...nudgeItems, ...skillItems] };
 }

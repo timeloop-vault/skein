@@ -299,6 +299,7 @@ export const HarnessColumn = ({
 				</div>
 				<HarnessActionsMenu
 					activeHarness={room.harnesses.find((h) => h.id === room.activeHarnessId)}
+					cwd={room.cwd}
 				/>
 				<div className="sk-harness-meta">
 					<span>{room.branch ? `${room.repo} · ${room.branch}` : (room.cwd ?? "")}</span>
