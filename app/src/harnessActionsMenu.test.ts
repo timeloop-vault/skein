@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type ActionsButtonState, actionsButtonState, firstLine } from "./harnessActionsMenu.ts";
+import { type ActionsButtonState, actionsButtonState } from "./harnessActionsMenu.ts";
 import type { NudgeDef } from "./nudgeRegistry.ts";
 
 const ok = () => ({ ok: true as const });
@@ -12,16 +12,6 @@ const def = (over: Partial<NudgeDef> = {}): NudgeDef => ({
 	defaultBody: "Sweep the worktree.",
 	scope: "actions",
 	...over,
-});
-
-describe("firstLine", () => {
-	it("returns a single-line body unchanged", () => {
-		expect(firstLine("one line only")).toBe("one line only");
-	});
-
-	it("returns only the text before the first newline", () => {
-		expect(firstLine("first\nsecond\nthird")).toBe("first");
-	});
 });
 
 describe("actionsButtonState", () => {
@@ -48,7 +38,7 @@ describe("actionsButtonState", () => {
 				{
 					id: "sweep",
 					label: "Actions: sweep",
-					title: "Sweep the worktree.",
+					title: "a test action",
 					body: "Sweep the worktree.",
 					gate: { ok: true },
 				},
@@ -56,13 +46,13 @@ describe("actionsButtonState", () => {
 		});
 	});
 
-	it("resolves an override's body instead of the default, and its first line as the title", () => {
+	it("resolves an override's body, but keeps the def's description as the title", () => {
 		const state = actionsButtonState(true, [def()], { sweep: "Custom\nmulti-line body." }, ok);
 		expect(state.kind).toBe("menu");
 		if (state.kind !== "menu") throw new Error("expected menu");
 		expect(state.items[0]).toMatchObject({
 			body: "Custom\nmulti-line body.",
-			title: "Custom",
+			title: "a test action",
 		});
 	});
 

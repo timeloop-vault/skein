@@ -10,6 +10,7 @@ import {
 	withOverride,
 	withoutOverride,
 } from "./nudgeRegistry.ts";
+import { WORKTREE_SWEEP_BODY } from "./worktreeSweepNudge.ts";
 
 const def = (over: Partial<NudgeDef> = {}): NudgeDef => ({
 	id: "test-nudge",
@@ -94,6 +95,16 @@ describe("withOverride / withoutOverride", () => {
 	});
 });
 
+describe("worktree-sweep is editable/resettable via the same override helpers as a review nudge", () => {
+	it("stores and resolves an override, then removes it when set back to WORKTREE_SWEEP_BODY", () => {
+		const withIt = withOverride({}, "worktree-sweep", "x");
+		expect(nudgeBody(actionNudges()[0] as NudgeDef, withIt)).toBe("x");
+
+		const backToDefault = withOverride(withIt, "worktree-sweep", WORKTREE_SWEEP_BODY);
+		expect(backToDefault).toEqual({});
+	});
+});
+
 describe("unknown ids in a stored override map", () => {
 	it("are simply ignored — a removed nudge id never breaks anything reading through NUDGES", () => {
 		const overrides: NudgeOverrides = { "removed-nudge-from-an-old-version": "stale text" };
@@ -106,13 +117,27 @@ describe("unknown ids in a stored override map", () => {
 });
 
 describe("nudgesInScope / actionNudges", () => {
-	it("NUDGES today is entirely the review scope", () => {
-		expect(nudgesInScope("review")).toHaveLength(NUDGES.length);
-		expect(nudgesInScope("review").every((d) => d.scope === "review")).toBe(true);
+	it("the review scope has its three #238 nudges", () => {
+		const review = nudgesInScope("review");
+		expect(review.every((d) => d.scope === "review")).toBe(true);
+		expect(review.map((d) => d.id)).toEqual([
+			"review-land",
+			"review-lapsed",
+			"review-address-comments",
+		]);
 	});
 
-	it("the actions scope is empty today", () => {
-		expect(nudgesInScope("actions")).toEqual([]);
-		expect(actionNudges()).toEqual([]);
+	it("actionNudges is exactly the worktree-sweep def, scoped to actions", () => {
+		expect(actionNudges()).toEqual([
+			{
+				id: "worktree-sweep",
+				label: "Worktree sweep",
+				description:
+					"Asks the agent to remove worktrees and branches that already landed — shows the plan and waits for your yes first.",
+				defaultBody: WORKTREE_SWEEP_BODY,
+				scope: "actions",
+			},
+		]);
+		expect(nudgesInScope("actions")).toEqual(actionNudges());
 	});
 });

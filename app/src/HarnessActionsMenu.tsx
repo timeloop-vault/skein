@@ -1,6 +1,6 @@
 // The harness tab row's Actions ▾ button (#355 step 2), beside `+
 // harness` in HarnessColumn.tsx. Lists the non-review nudges
-// (`nudgeRegistry.ts`'s "actions" scope — empty until #358 adds the
+// (`nudgeRegistry.ts`'s "actions" scope — #358's worktree sweep is the
 // first) and pastes the chosen one into the room's ACTIVE harness,
 // through the same `harnessInput.ts` seam #238's Nudge button uses.
 //

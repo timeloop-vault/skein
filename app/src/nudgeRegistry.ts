@@ -9,13 +9,16 @@
 // the registry and the (still pure, still testable-without-React)
 // resolution logic over it.
 //
-// `scope` is here so a later "Actions" nudge (#358's worktree sweep,
-// say) is a one-entry addition to `NUDGES` rather than a second parallel
-// list: `nudgesInScope` is the only thing a caller needs to add support
-// for a new scope.
+// `scope` is here so an "Actions" nudge (#358's worktree sweep is the
+// first) is a one-entry addition to `NUDGES` rather than a second
+// parallel list: `nudgesInScope` is the only thing a caller needs to
+// add support for a new scope.
+
+import { WORKTREE_SWEEP_BODY } from "./worktreeSweepNudge.ts";
 
 /// Which surface offers a nudge: `review` is #238's existing three,
-/// `actions` is reserved for #358 and returns nothing yet.
+/// `actions` is #358's, general-purpose ones triggered by the user
+/// rather than by review state.
 export type NudgeScope = "review" | "actions";
 
 export interface NudgeDef {
@@ -62,6 +65,14 @@ export const NUDGES: readonly NudgeDef[] = [
 		defaultBody: "Read the open review comments in Skein (list_comments) and address them.",
 		scope: "review",
 	},
+	{
+		id: "worktree-sweep",
+		label: "Worktree sweep",
+		description:
+			"Asks the agent to remove worktrees and branches that already landed — shows the plan and waits for your yes first.",
+		defaultBody: WORKTREE_SWEEP_BODY,
+		scope: "actions",
+	},
 ];
 
 /// `def`'s body: `overrides[def.id]` if present and non-blank, else
@@ -104,18 +115,14 @@ export function withoutOverride(overrides: NudgeOverrides, id: string): NudgeOve
 	return next;
 }
 
-/// Every def in `scope`, in registry order. `NUDGES` today is entirely
-/// `"review"`; `nudgesInScope("actions")` is `[]` until #358 adds one —
-/// deliberately not an error, since an empty Actions surface is exactly
-/// what "no actions nudges yet" should look like to a caller.
+/// Every def in `scope`, in registry order.
 export function nudgesInScope(scope: NudgeScope): readonly NudgeDef[] {
 	return NUDGES.filter((d) => d.scope === scope);
 }
 
-/// Convenience alias for the one scope #355 defers: today's Actions
-/// surface, always empty. Kept as its own export because the brief for
-/// #358 will want a single call site to extend, not a scope string to
-/// remember.
+/// Convenience alias for the Actions surface — its own export because
+/// callers (the Actions ▾ menu) want a single call site, not a scope
+/// string to remember.
 export function actionNudges(): readonly NudgeDef[] {
 	return nudgesInScope("actions");
 }
