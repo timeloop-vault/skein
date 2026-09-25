@@ -26,7 +26,11 @@
 //
 // `sendPrompt` re-evaluates the gate at call time rather than trusting
 // a value a caller rendered a moment earlier — the phase can flip
-// between a render and the click that follows it.
+// between a render and the click that follows it. It also arms the
+// #259 silent-adapter watchdog (#363) the same way a typed Enter does
+// — this seam's submit never reaches xterm's `onKey`, so without it a
+// harness prompted only through here (create_room, a mail nudge) would
+// never fall back to the idle heuristic if its adapter stayed silent.
 
 import { HARNESS_KINDS } from "./data.tsx";
 import type { HarnessCapabilities } from "./data.tsx";
@@ -266,6 +270,11 @@ export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): 
 	// `target` is set here by construction.
 	target?.paste(body);
 	target?.submit();
+	// #363: this submit never touches xterm's `onKey`, so without this
+	// call the #259 silent-adapter watchdog would never arm for a prompt
+	// that arrived through this seam — `create_room`'s first prompt, a
+	// mail nudge.
+	harnessActivity.notePromptSubmitted(harnessId);
 	return gate;
 }
 

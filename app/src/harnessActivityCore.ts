@@ -104,6 +104,19 @@ export const setPhase = (
 	}
 };
 
+/// Shared arm-guard for the #259 silent-adapter watchdog, factored out
+/// so `harnessActivity.recordInput` (a keystroke) and
+/// `harnessActivity.notePromptSubmitted` (#363, a seam-submitted
+/// prompt) can't drift apart: true only when an authoritative adapter
+/// is attached, has said nothing yet, and no timer is already running
+/// for this spawn. Each caller adds its own proof a prompt was actually
+/// submitted on top of this — `recordInput` checks `data` for a
+/// `\r`/`\n`; `notePromptSubmitted`'s caller, `sendPrompt`, IS the
+/// submit, so it needs nothing further.
+export function shouldArmWatchdog(cur: HarnessActivity): boolean {
+	return cur.authoritative && !cur.adapterHeard && cur.promptSubmittedAt === null;
+}
+
 /// The adapter never spoke after a prompt was submitted: give up on it.
 /// Without this an adapter watching the wrong place freezes the harness
 /// for good — authority silences PTY output, the tick skips it, and it
