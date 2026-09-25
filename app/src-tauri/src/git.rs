@@ -125,6 +125,25 @@ pub async fn git_inspect_folder(path: String) -> Result<FolderInfoDto, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// The `repoRoot` a room created at `path` would get: `Some` when
+/// `path` is inside a git checkout — the main checkout's path when
+/// `path` is itself a linked worktree, else `path` unchanged — and
+/// `None` when it is not a repo at all. Mirrors the frontend's
+/// `worktreeRoom.ts` (`info.root` when `info.isRepo`, otherwise no
+/// `repoRoot`) and is what [`git_inspect_folder_impl`] uses for that
+/// same resolution below, so the two can't drift (issue #375's
+/// per-repository-group room cap needs this outside the New Room
+/// dialog's own round trip).
+pub(crate) fn repo_root_for_path(path: &Path) -> Option<String> {
+    let repo = Repo::open(path).ok()?;
+    let root = repo.main_repo_root();
+    if repo.is_worktree() && root != *repo.workdir() {
+        Some(root.to_string_lossy().into_owned())
+    } else {
+        Some(path.to_string_lossy().into_owned())
+    }
+}
+
 fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
     let picked = Path::new(path);
     let exists = picked.is_dir();
@@ -150,22 +169,23 @@ fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
     // Resolve a linked worktree back to its main checkout, then re-open
     // there: the branch list and HEAD the user picks from must describe
     // the repo the worktree will actually be created in.
-    let root = repo.main_repo_root();
-    if repo.is_worktree() && root != *repo.workdir() {
-        info.resolved_from_worktree = true;
-        info.root = root.to_string_lossy().into_owned();
-        // If the resolved root somehow will not open, keep the branches
-        // of the worktree we did open rather than reporting none.
-        if let Ok(main) = Repo::open(&root) {
-            info.branches = main
-                .branches()
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .map(|b| BranchDto::from_info(&main, b))
-                .collect();
-            info.head = main.head_branch();
-            info.remote_branches = main.remote_branches().unwrap_or_default();
-            return Ok(info);
+    if let Some(root) = repo_root_for_path(picked) {
+        if root != path {
+            info.resolved_from_worktree = true;
+            info.root.clone_from(&root);
+            // If the resolved root somehow will not open, keep the branches
+            // of the worktree we did open rather than reporting none.
+            if let Ok(main) = Repo::open(Path::new(&root)) {
+                info.branches = main
+                    .branches()
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .map(|b| BranchDto::from_info(&main, b))
+                    .collect();
+                info.head = main.head_branch();
+                info.remote_branches = main.remote_branches().unwrap_or_default();
+                return Ok(info);
+            }
         }
     }
     info.branches = repo

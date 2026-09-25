@@ -362,7 +362,8 @@ exhaustive, list):
 - `"unknown branchMode …"` / `"unknown kind …"`
 - `"agent room creation is turned off in Settings"` — the kill switch, below
 - `"rate limit: this room has attempted 5 room creations in the last minute (cap 5)"`
-- `"Skein already has N open rooms (cap 20); close or archive some before opening another"`
+- `"agents have already opened N open rooms in the repository group <repoRoot> (cap 20 per group); close or archive some before opening another"`
+- `"agents have already opened N open rooms outside any repository group (cap 20 for ungrouped rooms); close or archive some before opening another"`
 - `"{path} is not a git checkout, so branchMode \"worktree\" cannot be used (try \"current\")"`
 - `"a prompt was given, but agent messaging is turned off in Settings, so it could never be delivered"`
 - `"cannot queue the prompt: the new harness …"` — the #327 "who can read mail" check, run against the resolved kind/agent
@@ -373,8 +374,19 @@ exhaustive, list):
 | cap | value |
 | :-- | :-- |
 | room creations | 5 per calling room per rolling minute |
-| open (non-archived) rooms | 20, agent-opened or not |
+| open (non-archived), agent-opened rooms per repository group | 20 |
+| open (non-archived), agent-opened rooms with no repository (ungrouped bucket) | 20 |
 | prompt | refused outright when agent messaging is off in Settings |
+
+The open-room ceiling (#375) only counts rooms `create_room` itself
+opened — a room the user made by hand, or one from before #330 with no
+`createdBy` at all, never counts, and never blocks an agent — and it is
+scoped **per repository group**, the same group the room strip groups
+on: a room's normalized `repoRoot`, or one shared "ungrouped" bucket
+for rooms with none. The scope checked is the group the *new* room
+would join, resolved from `path` before anything is created, so a
+runaway agent can fan out inside one repository's group but can't
+starve every other project of room slots at the same time.
 
 Settings → Shell & environment has **"Let agents open rooms"**
 (`allowAgentRoomCreation` in `settings.json`, default on), right
