@@ -65,3 +65,12 @@ strategy, which forge, and what a PR body looks like are things this
 repository already states: read `.claude/skills/` and `CLAUDE.md` and
 follow them. Skein owns only the one fact that lives nowhere else,
 which is whether the human said yes.
+
+## Watching a delegated room
+
+`review_status` only ever answers for *your own* room. If you opened
+another room with `create_room` and need to check whether **its**
+work is signed off, use `get_room { room }` (see the skein-mail skill)
+instead — it returns that room's own sign-off block, straight from
+Skein, so you never have to take a worker's own word for "done" over
+mail.

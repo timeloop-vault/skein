@@ -108,7 +108,19 @@ export interface Room {
 	// agent verb. Absent for every room created through the New Room
 	// dialog. `#[serde(default)]` on the Rust side per the post-v0.2.5
 	// field policy — an old blob has no opinion here.
-	createdBy?: { roomId: string; harnessId: string };
+	// #356: `promptFirstLine` and `baseSha` are what `list_rooms` needs
+	// for a director rebuilding its room table after compaction — a
+	// title for a room with no `name` of its own, and the commit the
+	// worktree was cut from. Both optional: `promptFirstLine` is unset
+	// when `create_room` was given no `prompt`; `baseSha` is unset for
+	// `branchMode: "current"` (no new worktree is cut, so there is no
+	// "base" to report) or when reading it failed.
+	createdBy?: {
+		roomId: string;
+		harnessId: string;
+		promptFirstLine?: string;
+		baseSha?: string;
+	};
 }
 
 export type Theme = "dark" | "light";

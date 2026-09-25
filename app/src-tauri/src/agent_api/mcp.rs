@@ -9,7 +9,7 @@
 //!
 //! # The tool list is the contract
 //!
-//! Ten tools. Several things are absent from [`tool_specs`] *and*
+//! Thirteen tools. Several things are absent from [`tool_specs`] *and*
 //! refused by name in [`call_tool`]: `resolve`, because an agent that
 //! can close its own comments removes the review's only gate; `approve`,
 //! because one that can sign off its own work removes it a level higher;
@@ -30,11 +30,15 @@
 //!
 //! # Why `tools/call` is async
 //!
-//! Every other verb is a plain, synchronous function over a
-//! [`crate::db::Database`] — [`call_tool`] only needed to be async once `create_room`
-//! landed, since opening a room means round-tripping to the webview
-//! (`AgentApiState::request_frontend`). The other eight branches below
-//! await nothing; only `create_room`'s does.
+//! Most verbs are plain, synchronous functions over a
+//! [`crate::db::Database`] — [`call_tool`] only needed to be async once
+//! `create_room` landed, since opening a room means round-tripping to
+//! the webview (`AgentApiState::request_frontend`). #356's `list_rooms`,
+//! `get_room` and `list_harnesses` are async for the same reason: each
+//! makes its own such round trip (`"harness_phases"`) to read a live
+//! harness's activity phase, capped at a few seconds rather than
+//! `create_room`'s whole minute — a read-only listing call must never
+//! hang on a busy or absent webview.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -134,7 +138,13 @@ fn instructions() -> &'static str {
      that agent starts working unattended the moment it exists. \
      find_rooms_for_path lists every room, across all projects, whose \
      folder is, contains, or sits under a path; a room with \
-     safe_to_remove false is open, so do not touch its folder. You \
+     safe_to_remove false is open, so do not touch its folder. \
+     list_rooms (optionally created_by: \"me\" for only the rooms you \
+     opened), get_room and list_harnesses read rooms and harnesses \
+     across the whole install, including ones you did not create — use \
+     them to rebuild a picture of a room after your own context is \
+     compacted, without replaying mail. A harness's phase may read \
+     \"unknown\" when Skein cannot currently vouch for it. You \
      cannot close, archive, or otherwise destroy a room: that stays the \
      user's decision."
 }
@@ -297,6 +307,11 @@ pub async fn call_tool(
         // `find_rooms_for_path` for why this verb alone answers across
         // every room.
         "find_rooms_for_path" => to_value(verbs::find_rooms_for_path(db, &parse(args)?)?),
+        // #356: the same considered cross-room exception, extended to a
+        // director listing and inspecting the rooms it opened.
+        "list_rooms" => to_value(verbs::list_rooms(state, caller, &parse(args)?, mail).await?),
+        "get_room" => to_value(verbs::get_room(state, &parse(args)?).await?),
+        "list_harnesses" => to_value(verbs::list_harnesses(state, &parse(args)?).await?),
         other => Err(VerbError::NotFound(format!("no such tool: {other}"))),
     }
 }
@@ -606,6 +621,76 @@ pub fn tool_specs() -> Vec<Value> {
                     },
                 },
                 "required": ["path"],
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": true },
+        }),
+        json!({
+            "name": "list_rooms",
+            "title": "List Skein rooms",
+            "description":
+                "Every Skein room Skein holds, across every project — archived rooms \
+                 included, never dropped. Pass created_by: \"me\" to see only the \
+                 rooms this room opened with create_room, so you can rebuild your own \
+                 table of what you started without replaying any mail. Each room \
+                 reports its lifecycle (\"archived\", a live phase, or \"unknown\" \
+                 when Skein cannot currently vouch for it), the harness send_message \
+                 would actually reach, and — when it sent you one — the first line \
+                 and timestamp of the last message it sent you. If unreadable_rooms \
+                 is non-zero, the list may be incomplete.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "created_by": {
+                        "type": "string",
+                        "enum": ["me"],
+                        "description": "Optional — default: every room. \"me\" \
+                            restricts to rooms whose create_room call came from this \
+                            room.",
+                    },
+                },
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": true },
+        }),
+        json!({
+            "name": "get_room",
+            "title": "Read one room in detail",
+            "description":
+                "One room by id, open or created by anyone — not only rooms you \
+                 opened. Refuses loudly, naming the id, if it does not exist or is \
+                 archived; never answers with nothing. Reports every harness in the \
+                 room with its live phase (\"unknown\" when Skein cannot currently \
+                 vouch for it), and the same sign-off block review_status returns, \
+                 for that room's own review.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "room": { "type": "string", "description": "A room id." },
+                },
+                "required": ["room"],
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": true },
+        }),
+        json!({
+            "name": "list_harnesses",
+            "title": "List harnesses across rooms",
+            "description":
+                "Every harness in every open room, or — with room given — every \
+                 harness in one room, refusing loudly (naming the id) if that room \
+                 does not exist or is archived. Archived rooms are otherwise skipped \
+                 entirely: none of their harnesses have a live process to ask a \
+                 phase of. Each entry names its room and reports a live phase \
+                 (\"unknown\" when Skein cannot currently vouch for it).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "room": {
+                        "type": "string",
+                        "description": "Optional — default: every open room.",
+                    },
+                },
                 "additionalProperties": false,
             },
             "annotations": { "readOnlyHint": true },

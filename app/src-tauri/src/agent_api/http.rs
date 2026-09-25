@@ -28,8 +28,9 @@ use super::auth::{self, AuthError, Caller, HARNESS_HEADER};
 use super::mcp;
 use super::state::AgentApiState;
 use super::verbs::{
-    self, AddressedArgs, CreateRoomArgs, DiffArgs, FindRoomsForPathArgs, GetCommentArgs, ListArgs,
-    MailContext, MailPolicy, ReadMessagesArgs, ReplyArgs, SendMessageArgs, VerbError,
+    self, AddressedArgs, CreateRoomArgs, DiffArgs, FindRoomsForPathArgs, GetCommentArgs,
+    GetRoomArgs, ListArgs, ListHarnessesArgs, ListRoomsArgs, MailContext, MailPolicy,
+    ReadMessagesArgs, ReplyArgs, SendMessageArgs, VerbError,
 };
 
 /// Header the MCP spec has clients send on every request after
@@ -57,8 +58,10 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
             "/api/messages",
             post(api_send_message).get(api_read_messages),
         )
-        .route("/api/rooms", post(api_create_room))
+        .route("/api/rooms", get(api_list_rooms).post(api_create_room))
         .route("/api/rooms/find", get(api_find_rooms_for_path))
+        .route("/api/rooms/{room_id}", get(api_get_room))
+        .route("/api/harnesses", get(api_list_harnesses))
         .route("/api/harness/permission", post(api_harness_permission))
         .route(
             "/api/harness/session-start",
@@ -483,6 +486,92 @@ async fn api_find_rooms_for_path(
         )
         .and_then(json_of)
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct ListRoomsQuery {
+    created_by: Option<String>,
+}
+
+/// `GET /api/rooms?created_by=me` — the plain-JSON mirror of the MCP
+/// `list_rooms` tool (#356). Async, unlike every synchronous route
+/// above that goes through `with_caller`: the verb underneath makes its
+/// own `"harness_phases"` round trip to the webview.
+async fn api_list_rooms(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    Query(q): Query<ListRoomsQuery>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let mail = mail_context(&state);
+    let out = verbs::list_rooms(
+        &state,
+        &caller,
+        &ListRoomsArgs {
+            created_by: q.created_by,
+        },
+        &mail,
+    )
+    .await;
+    match out.and_then(json_of) {
+        Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
+        Err(e) => error_body(
+            StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            e.message(),
+        ),
+    }
+}
+
+/// `GET /api/rooms/{room_id}` — the plain-JSON mirror of the MCP
+/// `get_room` tool (#356). Not scoped to the caller's own room — see
+/// the doc comment on `verbs::get_room` for why — so authentication
+/// here is only "does this token exist at all", same as
+/// `api_find_rooms_for_path`.
+async fn api_get_room(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    Path(room_id): Path<String>,
+) -> Response {
+    if let Err(e) = authenticate(&state, &headers) {
+        return refuse(&e);
+    }
+    let out = verbs::get_room(&state, &GetRoomArgs { room: room_id }).await;
+    match out.and_then(json_of) {
+        Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
+        Err(e) => error_body(
+            StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            e.message(),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ListHarnessesQuery {
+    room: Option<String>,
+}
+
+/// `GET /api/harnesses?room=<id>` — the plain-JSON mirror of the MCP
+/// `list_harnesses` tool (#356). Same cross-room exception as
+/// `api_get_room` above.
+async fn api_list_harnesses(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    Query(q): Query<ListHarnessesQuery>,
+) -> Response {
+    if let Err(e) = authenticate(&state, &headers) {
+        return refuse(&e);
+    }
+    let out = verbs::list_harnesses(&state, &ListHarnessesArgs { room: q.room }).await;
+    match out.and_then(json_of) {
+        Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
+        Err(e) => error_body(
+            StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            e.message(),
+        ),
+    }
 }
 
 /// Whether the reviewer has signed off (#214) — the gate to read

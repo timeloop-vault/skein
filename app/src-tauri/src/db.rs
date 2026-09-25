@@ -250,6 +250,21 @@ pub struct Room {
 pub struct CreatedBy {
     pub room_id: String,
     pub harness_id: String,
+    /// First non-empty line of the `create_room` prompt, trimmed and
+    /// capped (#356) — a title a director can show for a room it opened
+    /// without re-reading the mail that made it. `None` for a room made
+    /// before this field existed, and for the rare `create_room` call
+    /// this couldn't be derived from.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub prompt_first_line: Option<String>,
+    /// The commit the new worktree was cut from (#356) — known only to
+    /// whoever actually created the worktree, so this is filled in
+    /// after the fact rather than at the point `CreatedBy` is first
+    /// built. `None` for a room made before this field existed, a
+    /// `branchMode: "current"` room (no new worktree), or one Skein
+    /// could not resolve a base commit for.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub base_sha: Option<String>,
 }
 
 /// A `sessions` row whose JSON blob failed to parse at load time.
@@ -2060,6 +2075,30 @@ impl Database {
         )
         .map_err(|e| e.to_string())
     }
+
+    /// The newest message `from_room_id` sent to `to_room_id` — `None`
+    /// if that room has never sent this one anything. Issue #356's
+    /// `list_rooms`: a director rebuilding its room table from one call
+    /// needs each child's last status without replaying its whole
+    /// mailbox history.
+    pub fn latest_message_from_room(
+        &self,
+        from_room_id: &str,
+        to_room_id: &str,
+    ) -> Result<Option<HarnessMessageRow>, String> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT id, room_id, harness_id, from_room_id, from_harness_id, body, \
+                    created_ms, read_ms \
+             FROM harness_messages \
+             WHERE from_room_id = ?1 AND room_id = ?2 \
+             ORDER BY created_ms DESC, rowid DESC LIMIT 1",
+            params![from_room_id, to_room_id],
+            row_to_message,
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
 }
 
 /// A row of `review_signoff` — the reviewer said yes to `head_sha`.
@@ -2434,6 +2473,45 @@ mod tests {
         db.save_all(&[r]).unwrap();
         let outcome = db.load_all().unwrap();
         assert_eq!(outcome.rooms[0].attention, Some(true));
+    }
+
+    /// A blob written before #356 has a `createdBy` object with only
+    /// `roomId`/`harnessId` — no `promptFirstLine` or `baseSha` keys at
+    /// all. The field policy says that must load, not quarantine the
+    /// room, with the two new fields simply absent.
+    #[test]
+    fn a_pre_356_created_by_blob_loads_without_the_new_fields() {
+        let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+            "harnesses":[],"activeHarnessId":"",
+            "createdBy":{"roomId":"r0","harnessId":"h0"}}"#;
+        let room: Room = serde_json::from_str(json).unwrap();
+        let created_by = room.created_by.expect("createdBy must still parse");
+        assert_eq!(created_by.room_id, "r0");
+        assert_eq!(created_by.harness_id, "h0");
+        assert_eq!(created_by.prompt_first_line, None);
+        assert_eq!(created_by.base_sha, None);
+    }
+
+    /// #356: `createdBy.promptFirstLine`/`baseSha` round-trip through
+    /// save and load like every other optional field.
+    #[test]
+    fn created_by_prompt_and_base_sha_round_trip_through_save_and_load() {
+        let (_dir, db) = fresh_db();
+        let mut r = room("r1");
+        r.created_by = Some(CreatedBy {
+            room_id: "r0".into(),
+            harness_id: "h0".into(),
+            prompt_first_line: Some("fix the flaky test".into()),
+            base_sha: Some("deadbeef".into()),
+        });
+        db.save_all(&[r]).unwrap();
+        let outcome = db.load_all().unwrap();
+        let created_by = outcome.rooms[0].created_by.as_ref().unwrap();
+        assert_eq!(
+            created_by.prompt_first_line.as_deref(),
+            Some("fix the flaky test")
+        );
+        assert_eq!(created_by.base_sha.as_deref(), Some("deadbeef"));
     }
 
     #[test]
