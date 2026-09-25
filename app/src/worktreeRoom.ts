@@ -69,7 +69,17 @@ export interface CreateRoomRemember {
 }
 
 export type CreateRoomOutcome =
-	| { ok: true; args: CreateRoomArgs; remember: CreateRoomRemember }
+	| {
+			ok: true;
+			args: CreateRoomArgs;
+			remember: CreateRoomRemember;
+			/** Worktree mode only, and only when the chosen `baseBranch` is a
+			 *  LOCAL branch that is behind its upstream (#367) — a remote-tracking
+			 *  base (e.g. "origin/main") is read fresh from the ref itself, so
+			 *  there's nothing to warn about. A lower bound: Skein never fetches,
+			 *  so this is only as fresh as the last fetch. */
+			baseBehindUpstream?: number;
+	  }
 	| { ok: false; error: string };
 
 /**
@@ -82,6 +92,10 @@ export type CreateRoomOutcome =
  * `{ ok: false, error }` — no throw. A failure from an underlying git call
  * itself (a network hiccup, `git_add_worktree` failing partway) propagates
  * as a thrown error, same as the inline `submit()` this replaces.
+ *
+ * `spec.baseBranch` may name either a local branch (`info.branches`) or a
+ * remote-tracking ref (`info.remoteBranches`, e.g. "origin/main") — #367.
+ * `git_add_worktree` prefers a local branch of the same name if both exist.
  */
 export async function createRoomArgs(
 	spec: CreateRoomSpec,
@@ -134,7 +148,11 @@ export async function createRoomArgs(
 	const branch = spec.branch?.trim() || applyBranchTemplate(spec.branchTemplate, taskSlug(task));
 	const baseBranch = spec.baseBranch ?? defaultBaseBranch;
 	if (!baseBranch) return { ok: false, error: "no base branch available" };
-	if (spec.baseBranch && !info.branches.some((b) => b.name === spec.baseBranch)) {
+	if (
+		spec.baseBranch &&
+		!info.branches.some((b) => b.name === spec.baseBranch) &&
+		!info.remoteBranches.includes(spec.baseBranch)
+	) {
 		return { ok: false, error: "unknown base branch" };
 	}
 
@@ -154,6 +172,14 @@ export async function createRoomArgs(
 		worktreePath,
 	});
 
+	// Only a LOCAL base branch has a `behindUpstream` to report — a
+	// remote-tracking base is the upstream (#367).
+	const baseLocalBranch = info.branches.find((b) => b.name === baseBranch);
+	const baseBehindUpstream =
+		baseLocalBranch?.behindUpstream && baseLocalBranch.behindUpstream > 0
+			? baseLocalBranch.behindUpstream
+			: undefined;
+
 	return {
 		ok: true,
 		args: {
@@ -165,5 +191,6 @@ export async function createRoomArgs(
 			repoRoot,
 		},
 		remember: { baseBranch, branchTemplate: templateFromBranch(branch) },
+		...(baseBehindUpstream !== undefined ? { baseBehindUpstream } : {}),
 	};
 }

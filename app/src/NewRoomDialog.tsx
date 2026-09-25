@@ -289,6 +289,26 @@ export const NewRoomDialog = ({
 											</option>
 										))}
 									</select>
+									{(() => {
+										const behind = repoStatus.branches.find(
+											(b) => b.name === baseBranch,
+										)?.behindUpstream;
+										if (!behind) return null;
+										return (
+											<div
+												style={{
+													fontFamily: "var(--sk-mono)",
+													fontSize: 10.5,
+													marginTop: 4,
+													lineHeight: 1.5,
+													color: "var(--warn)",
+												}}
+											>
+												{baseBranch} is {behind} commit{behind === 1 ? "" : "s"} behind its upstream
+												(as of last fetch)
+											</div>
+										);
+									})()}
 								</div>
 							)}
 						</div>
