@@ -580,10 +580,11 @@ pub struct RoomPathMatch {
     /// about it, and a caller told only `archived` would have to
     /// reconstruct that itself.
     pub safe_to_remove: bool,
-    /// `"cwd"` for an exact match, `"contains"` when the query and the
-    /// room's cwd are ancestor/descendant of each other — never a bare
-    /// bool, so a caller isn't left reconstructing which kind of
-    /// overlap it was.
+    /// `"cwd"` for an exact match, `"inside_room"` when the queried path
+    /// sits strictly under the room's cwd, `"contains_room"` when the
+    /// room's cwd sits strictly under the queried path — never a bare
+    /// bool, so a caller isn't left reconstructing which folder is
+    /// inside which.
     #[serde(rename = "match")]
     pub match_kind: String,
 }
@@ -629,15 +630,17 @@ fn is_strictly_under(a: &str, b: &str) -> bool {
     a.starts_with(&prefix)
 }
 
-/// `"cwd"` for an exact match, `"contains"` when one of the two
-/// normalized paths sits under the other (either direction — the query
-/// might be a room's parent folder, or somewhere inside it), `None`
-/// otherwise.
+/// `"cwd"` for an exact match, `"inside_room"` when the query sits
+/// strictly under the room's cwd (the query is somewhere inside the
+/// room), `"contains_room"` when the room's cwd sits strictly under the
+/// query (the query is a parent folder of the room), `None` otherwise.
 fn path_match_kind(query_norm: &str, cwd_norm: &str) -> Option<&'static str> {
     if query_norm == cwd_norm {
         Some("cwd")
-    } else if is_strictly_under(query_norm, cwd_norm) || is_strictly_under(cwd_norm, query_norm) {
-        Some("contains")
+    } else if is_strictly_under(query_norm, cwd_norm) {
+        Some("inside_room")
+    } else if is_strictly_under(cwd_norm, query_norm) {
+        Some("contains_room")
     } else {
         None
     }
@@ -670,7 +673,7 @@ pub fn find_rooms_for_path(
     let unreadable_rooms = db.unreadable_room_count().map_err(internal)?;
 
     let mut exact = Vec::new();
-    let mut contains = Vec::new();
+    let mut overlapping = Vec::new();
     for room in &rooms {
         let Some(cwd) = room.cwd.as_deref().filter(|c| !c.is_empty()) else {
             continue;
@@ -692,10 +695,10 @@ pub fn find_rooms_for_path(
         if kind == "cwd" {
             exact.push(entry);
         } else {
-            contains.push(entry);
+            overlapping.push(entry);
         }
     }
-    exact.extend(contains);
+    exact.extend(overlapping);
     Ok(FindRoomsForPathOut {
         rooms: exact,
         unreadable_rooms,

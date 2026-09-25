@@ -578,16 +578,19 @@ pub fn tool_specs() -> Vec<Value> {
             "title": "Find Skein rooms touching a path",
             "description":
                 "Every Skein room — open or archived — whose working folder is this \
-                 path, sits under it, or contains it. Use this before touching a \
-                 folder you did not create, to check whether Skein already has a \
-                 room there. An open room (safe_to_remove: false) means someone — \
-                 the user or another agent — may be actively working in that \
-                 folder right now: do not delete, move, or otherwise touch it. \
-                 This verb only reads; it cannot archive or remove anything, and \
-                 the answer covers every room on this machine, not only this \
-                 one's. If unreadable_rooms is non-zero, the list may be \
-                 incomplete — do not treat a path's absence from rooms as \
-                 permission to remove that folder.",
+                 path, sits under it, or contains it. Each result's match is \
+                 \"cwd\" for an exact folder match, \"inside_room\" when the given \
+                 path is inside the room's folder, or \"contains_room\" when the \
+                 room's folder is inside the given path. Use this before touching \
+                 a folder you did not create, to check whether Skein already has \
+                 a room there. An open room (safe_to_remove: false) means \
+                 someone — the user or another agent — may be actively working \
+                 in that folder right now: do not delete, move, or otherwise \
+                 touch it. This verb only reads; it cannot archive or remove \
+                 anything, and the answer covers every room on this machine, \
+                 not only this one's. If unreadable_rooms is non-zero, the list \
+                 may be incomplete — do not treat a path's absence from rooms \
+                 as permission to remove that folder.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

@@ -1596,7 +1596,7 @@ fn find_rooms_for_path_matches_a_parent_of_the_room_cwd() {
     save(&f.db, &[room_with_cwd("r1", "C:/repo-wt/task-1")]);
     let out = find_paths(&f.db, "C:/repo-wt").unwrap();
     assert_eq!(out.rooms.len(), 1);
-    assert_eq!(out.rooms[0].match_kind, "contains");
+    assert_eq!(out.rooms[0].match_kind, "contains_room");
 }
 
 #[test]
@@ -1606,7 +1606,7 @@ fn find_rooms_for_path_matches_a_child_of_the_room_cwd() {
     save(&f.db, &[room_with_cwd("r1", "C:/repo-wt/task-1")]);
     let out = find_paths(&f.db, "C:/repo-wt/task-1/src/lib").unwrap();
     assert_eq!(out.rooms.len(), 1);
-    assert_eq!(out.rooms[0].match_kind, "contains");
+    assert_eq!(out.rooms[0].match_kind, "inside_room");
 }
 
 #[test]
@@ -1741,12 +1741,12 @@ fn find_rooms_for_path_skips_a_room_with_no_cwd() {
 }
 
 #[test]
-fn find_rooms_for_path_orders_exact_matches_before_contains_matches() {
+fn find_rooms_for_path_orders_exact_matches_before_overlapping_matches() {
     let f = fixture();
     save(
         &f.db,
         &[
-            // r1 only ever CONTAINS the query (query is its parent).
+            // r1's cwd sits under the query (query CONTAINS_ROOM).
             room_with_cwd("r1", "C:/repo-wt/task-1"),
             // r2 is an EXACT match on the query itself.
             room_with_cwd("r2", "C:/repo-wt"),
@@ -1757,7 +1757,7 @@ fn find_rooms_for_path_orders_exact_matches_before_contains_matches() {
     assert_eq!(
         ids,
         vec!["r2", "r1"],
-        "the exact match must sort before the contains match regardless of room order"
+        "the exact match must sort before the overlapping match regardless of room order"
     );
 }
 

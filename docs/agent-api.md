@@ -408,10 +408,12 @@ as every other route.
 ```
 
 - `match` is `"cwd"` when `path` normalises to exactly the room's
-  `cwd`, or `"contains"` when one is a path-segment-boundary ancestor
-  of the other — either `path` sits under the room's `cwd` (checking a
-  file inside a worktree), or the room's `cwd` sits under `path`
-  (checking a `<repo>-wt` parent that holds several worktrees). Exact
+  `cwd`; `"inside_room"` when `path` is a path-segment-boundary
+  descendant of the room's `cwd` (checking a file inside a worktree);
+  or `"contains_room"` when the room's `cwd` is a path-segment-boundary
+  descendant of `path` (checking a `<repo>-wt` parent that holds
+  several worktrees) — the direction matters for a folder-removal
+  decision, so it is never a bare "one contains the other". Exact
   matches sort first.
 - `repo_root` is `null` for a room outside any git checkout.
 - `safe_to_remove` is `false` for every **open** room — an open room
