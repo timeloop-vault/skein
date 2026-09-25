@@ -21,6 +21,13 @@ import { type PendingPhase, pendingPrompts } from "./pendingPrompts.ts";
 import { followedOpencodeSession } from "./sessionTracking.ts";
 import { subagents } from "./subagents.ts";
 
+/// Fire-and-forget forward of one log line to Rust's `skein.log` (#362).
+/// Never throws or rejects visibly — a logging call must not become a
+/// new failure mode for the thing it's trying to make visible.
+function logToRust(level: "info" | "warn", target: string, message: string): void {
+	void invoke("frontend_log", { level, target, message }).catch(() => {});
+}
+
 /// Mirror of the Rust enum. `kind` is the serde tag from
 /// `harness_events_claude.rs`'s `ClaudeEvent`. Keep these in lock-step;
 /// new event types added on the Rust side fall into the `default`
@@ -102,6 +109,7 @@ export function attachClaudeEvents(
 	// rejects, so we fall back to L2a cleanly.
 	harnessActivity.attachAuthoritativeSource(harnessId);
 
+	logToRust("info", "claude_events", `attach invoking harness=${harnessId} session=${sessionId}`);
 	void invoke("claude_events_attach", {
 		harnessId,
 		roomId,
@@ -111,6 +119,11 @@ export function attachClaudeEvents(
 	}).catch((err: unknown) => {
 		const msg = err instanceof Error ? err.message : String(err);
 		console.warn(`[skein] claude_events_attach failed for ${harnessId}:`, msg);
+		logToRust(
+			"warn",
+			"claude_events",
+			`attach failed harness=${harnessId} session=${sessionId}: ${msg}`,
+		);
 		harnessActivity.detachAuthoritativeSource(harnessId);
 	});
 
@@ -120,6 +133,11 @@ export function attachClaudeEvents(
 		void invoke("claude_events_detach", { harnessId }).catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.warn(`[skein] claude_events_detach failed for ${harnessId}:`, msg);
+			logToRust(
+				"warn",
+				"claude_events",
+				`detach failed harness=${harnessId} session=${sessionId}: ${msg}`,
+			);
 		});
 	};
 }
