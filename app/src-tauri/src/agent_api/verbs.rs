@@ -62,6 +62,14 @@ const SEND_RATE_WINDOW_MS: i64 = 60_000;
 /// a leak.
 const MAX_UNREAD_MESSAGES: i64 = 100;
 
+/// `message_history`'s (#364) default and cap on how many rows one call
+/// returns. A director paging back through a thread after a compaction
+/// reads pages, not a firehose; `limit: 0` is treated as "use the
+/// default" rather than refused — an agent-supplied 0 almost always
+/// means "no opinion", not "give me nothing".
+const DEFAULT_HISTORY_LIMIT: u32 = 100;
+const MAX_HISTORY_LIMIT: u32 = 500;
+
 /// Why a verb refused. The HTTP and MCP layers each map these into
 /// their own vocabulary; the verbs themselves only say what went wrong.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -846,6 +854,89 @@ pub struct ReadMessagesOut {
     pub newly_marked_read: usize,
 }
 
+/// `message_history`'s (#364) paging cursor: a JSON number is a
+/// millisecond `created_ms` (exclusive), a JSON string is a message id
+/// (strictly after that message in `(created_ms, rowid)` order — see
+/// [`Database::harness_message_history`]). Never ambiguous: message ids
+/// are UUIDs, never numeric, so `untagged` always picks the right arm.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum HistorySince {
+    Ms(i64),
+    MessageId(String),
+}
+
+/// `message_history`'s (#364) `direction` argument. Defaults to `In` —
+/// the same scope `read_messages` has always had — so a caller that
+/// never heard of this argument still gets the inbox it expects.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryDirection {
+    #[default]
+    In,
+    Out,
+    Both,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MessageHistoryArgs {
+    /// A room id or harness id — only messages exchanged with that
+    /// counterpart. Optional — default: no filter.
+    #[serde(default)]
+    pub with: Option<String>,
+    #[serde(default)]
+    pub since: Option<HistorySince>,
+    /// Optional — default and cap: [`DEFAULT_HISTORY_LIMIT`] /
+    /// [`MAX_HISTORY_LIMIT`].
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub direction: Option<HistoryDirection>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryMessage {
+    pub id: String,
+    /// `"inbound"` or `"outbound"` — never both, even for the one row
+    /// shape that could read as either (a sibling harness in the
+    /// caller's own room mailing the caller): see
+    /// [`Database::harness_message_history`] for how that is resolved.
+    pub direction: &'static str,
+    pub from_room_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_room_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_harness_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_harness_name: Option<String>,
+    pub to_room_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_room_name: Option<String>,
+    pub to_harness_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_harness_name: Option<String>,
+    pub body: String,
+    pub created_ms: i64,
+    /// When the recipient read this message — for an outbound row, the
+    /// signal that the counterpart has seen it; for an inbound row,
+    /// whatever an earlier `read_messages` call already left behind.
+    /// This call never sets it: `message_history` never marks anything
+    /// read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageHistoryOut {
+    pub messages: Vec<HistoryMessage>,
+    /// Whether more rows exist after the last one returned here — the
+    /// signal for forward paging with `since` set to that row's id.
+    pub has_more: bool,
+}
+
 /// Send a message to another harness's mailbox.
 ///
 /// `X-Skein-Harness` is attribution here exactly as it is everywhere
@@ -1008,6 +1099,156 @@ pub fn read_messages(
         newly_marked_read: to_mark.len(),
         messages,
     })
+}
+
+/// Whether `m` sits in the caller's own inbox — the same scope
+/// `read_messages` reads (`room_id`/`harness_id`, the recipient
+/// columns). `false` with no harness on the caller, same as
+/// `read_messages`'s outright refusal in that case, but this function
+/// itself never refuses — [`message_history`] decides what to do with
+/// that.
+fn is_inbound(
+    m: &HarnessMessageRow,
+    caller_room_id: &str,
+    caller_harness_id: Option<&str>,
+) -> bool {
+    caller_harness_id.is_some_and(|h| m.room_id == caller_room_id && m.harness_id == h)
+}
+
+/// Whether `m` sits in the caller's ROOM's outbox (`from_room_id`, not
+/// `from_harness_id` — #364's brief is explicit that outbound scope is
+/// per room, covering every harness in it, not only the caller's own).
+/// Excludes anything [`is_inbound`] already claims, which is what keeps
+/// a sibling harness's message to the caller classified inbound rather
+/// than counted twice.
+fn is_outbound(
+    m: &HarnessMessageRow,
+    caller_room_id: &str,
+    caller_harness_id: Option<&str>,
+) -> bool {
+    m.from_room_id == caller_room_id && !is_inbound(m, caller_room_id, caller_harness_id)
+}
+
+/// [`HarnessMessageRow`] → [`HistoryMessage`], enriching both ends the
+/// way [`read_messages`] already enriches the sender — `rooms` is one
+/// `all_rooms` read shared across a whole page, not refetched per row.
+fn render_history_message(
+    m: &HarnessMessageRow,
+    rooms: &[Room],
+    caller_room_id: &str,
+    caller_harness_id: Option<&str>,
+) -> HistoryMessage {
+    let direction = if is_inbound(m, caller_room_id, caller_harness_id) {
+        "inbound"
+    } else {
+        "outbound"
+    };
+
+    let sender_room = find_room(rooms, &m.from_room_id);
+    let from_room_name = sender_room.map(|r| r.name.clone());
+    let from_harness_name = m.from_harness_id.as_deref().and_then(|hid| {
+        sender_room
+            .and_then(|r| r.harnesses.iter().find(|h| h.id == hid))
+            .map(|h| format!("{} · {}", h.kind, h.name))
+    });
+
+    let recipient_room = find_room(rooms, &m.room_id);
+    let to_room_name = recipient_room.map(|r| r.name.clone());
+    let to_harness_name = recipient_room
+        .and_then(|r| r.harnesses.iter().find(|h| h.id == m.harness_id))
+        .map(|h| format!("{} · {}", h.kind, h.name));
+
+    HistoryMessage {
+        id: m.id.clone(),
+        direction,
+        from_room_id: m.from_room_id.clone(),
+        from_room_name,
+        from_harness_id: m.from_harness_id.clone(),
+        from_harness_name,
+        to_room_id: m.room_id.clone(),
+        to_room_name,
+        to_harness_id: m.harness_id.clone(),
+        to_harness_name,
+        body: m.body.clone(),
+        created_ms: m.created_ms,
+        read_ms: m.read_ms,
+    }
+}
+
+/// A harness's (or, with `direction: "out"`/`"both"`, its whole room's)
+/// mail history — filtered by counterpart, bounded by `since`/`limit`,
+/// oldest first (#364). Unlike [`read_messages`], this **never** marks
+/// anything read: it exists so a director recovering after its own
+/// context is compacted can page back through exactly the thread it
+/// needs without touching the unread badge that call maintains.
+pub fn message_history(
+    db: &Database,
+    caller: &Caller,
+    args: &MessageHistoryArgs,
+    policy: MailPolicy,
+) -> VerbResult<MessageHistoryOut> {
+    if !policy.messaging_enabled {
+        return Err(VerbError::Refused(
+            "agent messaging is turned off in Settings".into(),
+        ));
+    }
+    let direction = args.direction.unwrap_or_default();
+    let include_inbound = matches!(direction, HistoryDirection::In | HistoryDirection::Both);
+    let include_outbound = matches!(direction, HistoryDirection::Out | HistoryDirection::Both);
+
+    if include_inbound && caller.harness_id.is_none() {
+        return Err(VerbError::Refused(
+            "message_history needs X-Skein-Harness to say which harness's inbox to \
+             read — pass direction: \"out\" for the room's own outbox without one"
+                .into(),
+        ));
+    }
+
+    let limit = match args.limit {
+        None | Some(0) => DEFAULT_HISTORY_LIMIT,
+        Some(n) => n.min(MAX_HISTORY_LIMIT),
+    };
+
+    let (since_ms, since_message_id) = match &args.since {
+        None => (None, None),
+        Some(HistorySince::Ms(ms)) => (Some(*ms), None),
+        Some(HistorySince::MessageId(id)) => {
+            let row = db.harness_message_by_id(id).map_err(internal)?;
+            let visible = row.is_some_and(|m| {
+                is_inbound(&m, &caller.room_id, caller.harness_id.as_deref())
+                    || is_outbound(&m, &caller.room_id, caller.harness_id.as_deref())
+            });
+            if !visible {
+                return Err(VerbError::Refused(
+                    "since does not name a message in this room's own mail history".into(),
+                ));
+            }
+            (None, Some(id.as_str()))
+        }
+    };
+
+    let rows = db
+        .harness_message_history(
+            &caller.room_id,
+            caller.harness_id.as_deref(),
+            include_inbound,
+            include_outbound,
+            args.with.as_deref(),
+            since_ms,
+            since_message_id,
+            limit + 1,
+        )
+        .map_err(internal)?;
+
+    let has_more = rows.len() > limit as usize;
+    let rooms = db.all_rooms().map_err(internal)?;
+    let messages = rows
+        .into_iter()
+        .take(limit as usize)
+        .map(|m| render_history_message(&m, &rooms, &caller.room_id, caller.harness_id.as_deref()))
+        .collect();
+
+    Ok(MessageHistoryOut { messages, has_more })
 }
 
 /// A harness's unread-mail summary (#329) — how many, and which rooms

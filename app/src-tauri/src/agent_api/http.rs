@@ -29,8 +29,9 @@ use super::mcp;
 use super::state::AgentApiState;
 use super::verbs::{
     self, AddressedArgs, CreateRoomArgs, DiffArgs, FindRoomsForPathArgs, GetCommentArgs,
-    GetRoomArgs, ListArgs, ListHarnessesArgs, ListRoomsArgs, MailContext, MailPolicy,
-    ReadMessagesArgs, ReplyArgs, SendMessageArgs, VerbError,
+    GetRoomArgs, HistoryDirection, HistorySince, ListArgs, ListHarnessesArgs, ListRoomsArgs,
+    MailContext, MailPolicy, MessageHistoryArgs, ReadMessagesArgs, ReplyArgs, SendMessageArgs,
+    VerbError,
 };
 
 /// Header the MCP spec has clients send on every request after
@@ -58,6 +59,7 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
             "/api/messages",
             post(api_send_message).get(api_read_messages),
         )
+        .route("/api/messages/history", get(api_message_history))
         .route("/api/rooms", get(api_list_rooms).post(api_create_room))
         .route("/api/rooms/find", get(api_find_rooms_for_path))
         .route("/api/rooms/{room_id}", get(api_get_room))
@@ -426,6 +428,70 @@ async fn api_read_messages(
                 Err(e) => error_body(StatusCode::INTERNAL_SERVER_ERROR, e.message()),
             }
         }
+        Err(e) => error_body(
+            StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            e.message(),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct MessageHistoryQuery {
+    with: Option<String>,
+    since: Option<String>,
+    limit: Option<u32>,
+    direction: Option<String>,
+}
+
+/// `GET /api/messages/history` — the plain-JSON mirror of the MCP
+/// `message_history` tool (#364). Never marks anything read, unlike
+/// `api_read_messages` above — there is nothing to notify after a call
+/// that changes nothing.
+///
+/// Query params arrive as plain strings, so `since` is resolved by hand
+/// here the way MCP's untagged `HistorySince` is resolved for free by
+/// `serde_json`: a value that parses as an integer is a millisecond
+/// timestamp, anything else is a message id — never ambiguous, since a
+/// message id is a UUID and never looks numeric.
+async fn api_message_history(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    Query(q): Query<MessageHistoryQuery>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let mail = mail_context(&state);
+    let direction = match q.direction.as_deref() {
+        None => None,
+        Some("in") => Some(HistoryDirection::In),
+        Some("out") => Some(HistoryDirection::Out),
+        Some("both") => Some(HistoryDirection::Both),
+        Some(other) => {
+            return error_body(
+                StatusCode::BAD_REQUEST,
+                &format!("unknown direction {other:?} — use in, out or both"),
+            );
+        }
+    };
+    let since = q.since.as_deref().map(|s| match s.parse::<i64>() {
+        Ok(ms) => HistorySince::Ms(ms),
+        Err(_) => HistorySince::MessageId(s.to_owned()),
+    });
+    let out = verbs::message_history(
+        &state.db,
+        &caller,
+        &MessageHistoryArgs {
+            with: q.with,
+            since,
+            limit: q.limit,
+            direction,
+        },
+        mail.policy,
+    );
+    match out.and_then(json_of) {
+        Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
         Err(e) => error_body(
             StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             e.message(),

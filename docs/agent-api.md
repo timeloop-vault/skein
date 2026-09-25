@@ -27,6 +27,7 @@ Skein process
      ├─ GET    /api/diff               get_diff
      ├─ POST   /api/messages           send_message
      ├─ GET    /api/messages           read_messages
+     ├─ GET    /api/messages/history   message_history
      ├─ POST   /api/rooms              create_room
      ├─ GET    /api/rooms              list_rooms
      ├─ GET    /api/rooms/find         find_rooms_for_path
@@ -77,8 +78,8 @@ at the next boot.
 
 ## The verbs
 
-All thirteen verbs carry the token, but not all thirteen are scoped by
-it to the calling room. Eight of them read or act only within that
+All fourteen verbs carry the token, but not all fourteen are scoped by
+it to the calling room. Nine of them read or act only within that
 room; `create_room` opens a *different* room, though still only from
 the calling room's token, which is what its own rate cap below is
 keyed to; `find_rooms_for_path`, `list_rooms`, `get_room` and
@@ -246,6 +247,51 @@ the same way as `send_message` when messaging is off in Settings.
 A call that actually marks something read emits `skein://mail-changed
 { roomId, harnessId }` for the **caller's own** mailbox; a poll that
 finds nothing new fires nothing.
+
+### `message_history` (#364)
+
+Why a sibling verb rather than teaching `read_messages` a flag: that
+verb marks mail read as a side effect, and its default — the unread
+tail — must not change out from under callers relying on it; a history
+read that never touches read state, and so never disturbs the unread
+nudge or badge, needs its own verb.
+
+`{ with?, since?, limit?, direction? }`, all optional:
+
+- `with` — a room id or harness id. Given, only mail exchanged with
+  that counterpart, both directions; omitted, everything in scope.
+- `since` — a number is `created_ms`, exclusive; a string is a message
+  id, meaning strictly after that message. The id must be one the
+  caller can already see, or the call is refused rather than silently
+  starting from the beginning.
+- `limit` — default 100, max 500.
+- `direction` — `"in"` | `"out"` | `"both"`, default `"in"`.
+
+Scope is the token's, the same as `read_messages`: inbound is the
+calling harness's own inbox (`X-Skein-Harness` required, same as
+`read_messages`); outbound is every message sent from the caller's
+**room** — never another room's outbox. A message from a sibling
+harness in the same room addressed to the caller counts once, as
+inbound, never twice.
+
+Returns `{ messages, hasMore }`, oldest first, the first `limit`
+messages after `since` — page forward by passing the last message's
+`id` as the next call's `since`. Each message: `id`, `direction`
+(`"inbound"` | `"outbound"`), `from_room_id`, `from_room_name?`,
+`from_harness_id?`, `from_harness_name?`, `to_room_id`,
+`to_room_name?`, `to_harness_id`, `to_harness_name?`, `body`,
+`created_ms`, and `read_ms?` — on an **outbound** row, `read_ms` says
+whether the recipient has read it yet.
+
+Refused the same way as `read_messages` when messaging is off in
+Settings. Never marks anything read, and emits no
+`skein://mail-changed` — nothing about the mailbox's state changed.
+
+Deliberately not built: a `latest_per_room` shape the original issue
+sketched. `list_rooms { created_by: "me" }` already carries each child
+room's `last_status` — the latest line and timestamp — so a second
+verb doing the same summary would be redundant; reach for
+`message_history` only once you want the thread itself.
 
 ### Who can read mail
 
@@ -564,9 +610,9 @@ everywhere else in this API: `resolve`, `approve`/`sign_off`/
 `close_room`. A director can watch a gate; it can never open one, on
 its own room or anyone else's.
 
-Out of scope for #356: a room's message history (filed separately,
-#364), and notifying a director when a child room's sign-off changes —
-these verbs are pull, not push.
+Out of scope for #356: a room's message history — now `message_history`
+above (#364) — and notifying a director when a child room's sign-off
+changes; these verbs are pull, not push.
 
 ## The permission-required signal (#86)
 
@@ -759,9 +805,9 @@ Settings → About shows the bound port, or says why there is none.
 | :-- | :-- |
 | `agent_api/state.rs` | shared state, the `skein://review-changed`, `skein://harness-permission`, `skein://harness-session-start` and `skein://mail-changed` (#327) events, `HarnessIdentity` |
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
-| `agent_api/verbs.rs` | the thirteen verbs — the whole testable core, including the mailbox (#327) and the cross-room reads (#354, #356) |
+| `agent_api/verbs.rs` | the fourteen verbs — the whole testable core, including the mailbox (#327, plus `message_history`, #364) and the cross-room reads (#354, #356) |
 | `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve and approve refusals |
-| `agent_api/http.rs` | the routes, including `/api/messages` (#327), `/api/rooms`/`/api/rooms/{id}`/`/api/harnesses` (#356), `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
+| `agent_api/http.rs` | the routes, including `/api/messages` and `/api/messages/history` (#327, #364), `/api/rooms`/`/api/rooms/{id}`/`/api/harnesses` (#356), `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
 | `agent_api/tests.rs` | scoping, both prohibitions, lifecycle, real HTTP |
 | `review_surface/signoff.rs` | the sign-off itself, and the staleness rule (#214) |
 | `harness_config.rs` | what Skein injects at spawn so a CLI finds all this (#215) |

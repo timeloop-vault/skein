@@ -132,7 +132,11 @@ fn instructions() -> &'static str {
      lead harness. read_messages returns your unread messages oldest \
      first and marks them read; pass include_read for the whole \
      history. When Skein tells you that you have new messages, call \
-     read_messages.\n\n\
+     read_messages. message_history is the read-only counterpart: \
+     filtered by counterpart, paged with since/limit, and — with \
+     direction — able to show what you sent as well, all without \
+     marking anything read; reach for it to rebuild a thread after \
+     your own context is compacted.\n\n\
      Rooms: create_room opens a real Skein room and spawns a real agent \
      in it, in the background — not a simulation. Give it a prompt and \
      that agent starts working unattended the moment it exists. \
@@ -298,6 +302,13 @@ pub async fn call_tool(
             .await?,
         ),
         "read_messages" => to_value(verbs::read_messages(
+            db,
+            caller,
+            &parse(args)?,
+            mail.policy,
+        )?),
+        // #364: unlike read_messages, never marks anything read.
+        "message_history" => to_value(verbs::message_history(
             db,
             caller,
             &parse(args)?,
@@ -516,6 +527,50 @@ pub fn tool_specs() -> Vec<Value> {
                 },
                 "additionalProperties": false,
             },
+        }),
+        json!({
+            "name": "message_history",
+            "title": "Read mail history without marking it read",
+            "description":
+                "Your mail history, filtered and bounded — the read-only counterpart \
+                 to read_messages, which this never affects: it does not mark \
+                 anything read, and read_messages's own unread state is untouched by \
+                 calling this. Defaults to your inbox, oldest first; pass direction: \
+                 \"out\" for what this room sent, or \"both\" for the interleaved \
+                 thread with one counterpart. `with` narrows to messages exchanged \
+                 with one room or harness id — use it to rebuild a thread with a \
+                 specific room after your own context is compacted. `since` pages \
+                 forward: a message id returns only what came strictly after it, a \
+                 number is a millisecond timestamp. `limit` caps the page (default \
+                 100, max 500); `hasMore` says whether to page again with the last \
+                 returned message's id as the next since.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "with": {
+                        "type": "string",
+                        "description": "A room id or harness id. Optional — default: \
+                            no filter.",
+                    },
+                    "since": {
+                        "type": ["string", "number"],
+                        "description": "A message id (strictly after it) or a \
+                            millisecond timestamp (exclusive). Optional — default: \
+                            the start of history.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Optional — default 100, max 500.",
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["in", "out", "both"],
+                        "description": "Optional — default: in.",
+                    },
+                },
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": true },
         }),
         json!({
             "name": "create_room",
