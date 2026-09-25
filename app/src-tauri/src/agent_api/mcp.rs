@@ -9,7 +9,7 @@
 //!
 //! # The tool list is the contract
 //!
-//! Nine tools. Several things are absent from [`tool_specs`] *and*
+//! Ten tools. Several things are absent from [`tool_specs`] *and*
 //! refused by name in [`call_tool`]: `resolve`, because an agent that
 //! can close its own comments removes the review's only gate; `approve`,
 //! because one that can sign off its own work removes it a level higher;
@@ -131,7 +131,10 @@ fn instructions() -> &'static str {
      read_messages.\n\n\
      Rooms: create_room opens a real Skein room and spawns a real agent \
      in it, in the background — not a simulation. Give it a prompt and \
-     that agent starts working unattended the moment it exists. You \
+     that agent starts working unattended the moment it exists. \
+     find_rooms_for_path lists every room, across all projects, whose \
+     folder is, contains, or sits under a path; a room with \
+     safe_to_remove false is open, so do not touch its folder. You \
      cannot close, archive, or otherwise destroy a room: that stays the \
      user's decision."
 }
@@ -290,6 +293,10 @@ pub async fn call_tool(
             &parse(args)?,
             mail.policy,
         )?),
+        // Not scoped to `caller`'s room — see the doc comment on
+        // `find_rooms_for_path` for why this verb alone answers across
+        // every room.
+        "find_rooms_for_path" => to_value(verbs::find_rooms_for_path(db, &parse(args)?)?),
         other => Err(VerbError::NotFound(format!("no such tool: {other}"))),
     }
 }
@@ -565,6 +572,37 @@ pub fn tool_specs() -> Vec<Value> {
                 "required": ["task"],
                 "additionalProperties": false,
             },
+        }),
+        json!({
+            "name": "find_rooms_for_path",
+            "title": "Find Skein rooms touching a path",
+            "description":
+                "Every Skein room — open or archived — whose working folder is this \
+                 path, sits under it, or contains it. Each result's match is \
+                 \"cwd\" for an exact folder match, \"inside_room\" when the given \
+                 path is inside the room's folder, or \"contains_room\" when the \
+                 room's folder is inside the given path. Use this before touching \
+                 a folder you did not create, to check whether Skein already has \
+                 a room there. An open room (safe_to_remove: false) means \
+                 someone — the user or another agent — may be actively working \
+                 in that folder right now: do not delete, move, or otherwise \
+                 touch it. This verb only reads; it cannot archive or remove \
+                 anything, and the answer covers every room on this machine, \
+                 not only this one's. If unreadable_rooms is non-zero, the list \
+                 may be incomplete — do not treat a path's absence from rooms \
+                 as permission to remove that folder.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to check. Required.",
+                    },
+                },
+                "required": ["path"],
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": true },
         }),
     ]
 }

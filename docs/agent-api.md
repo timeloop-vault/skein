@@ -28,6 +28,7 @@ Skein process
      ├─ POST   /api/messages           send_message
      ├─ GET    /api/messages           read_messages
      ├─ POST   /api/rooms              create_room
+     ├─ GET    /api/rooms/find         find_rooms_for_path
      ├─ POST   /api/harness/permission     see below — not an agent verb
      └─ POST   /api/harness/session-start  see below — not an agent verb
 ```
@@ -59,7 +60,8 @@ Authorization: Bearer <SKEIN_REVIEW_TOKEN>
 X-Skein-Harness: <SKEIN_HARNESS_ID>
 ```
 
-**The token is the scope.** No request names a room, so a token can only
+**The token is the scope**, with the exception of the cross-room read
+verbs below. No request names a room, so a token can only
 ever reach the room it was minted for — there is nothing to tamper with.
 `X-Skein-Harness` is *attribution only*: it decides whose byline a reply
 carries and never what may be read, so a wrong or missing value costs
@@ -72,11 +74,13 @@ at the next boot.
 
 ## The verbs
 
-All nine verbs are scoped by the token to the calling room. Eight of
-them read or act only within that room; `create_room` is the
-exception — it opens a *different* room, though still only from the
+All ten verbs carry the token, but not all ten are scoped by it to the
+calling room. Eight of them read or act only within that room;
+`create_room` opens a *different* room, though still only from the
 calling room's token, which is what its own rate cap below is keyed
-to. MCP tool names; Claude Code
+to; `find_rooms_for_path` breaks the pattern the other way — it reads
+across every room regardless of which room the token names, see the
+scope note under "Finding rooms by path" below. MCP tool names; Claude Code
 presents them as `mcp__plugin_skein_api__<name>` — the server is
 registered by the plugin Skein injects (#215), keyed `api` in the
 plugin's `.mcp.json`, and plugin-provided MCP servers carry a
@@ -373,6 +377,80 @@ beside the messaging toggle: off refuses `create_room` by name, with
 the reason, the same way the messaging and #215 injection toggles
 refuse their own verbs.
 
+## Finding rooms by path (#354, epic #266 slice A)
+
+`find_rooms_for_path` is the first verb in this API whose answer is
+**not** scoped to the calling room — read the scope note below before
+relying on it from anywhere that assumed every verb was room-local.
+
+### `find_rooms_for_path`
+
+`{ path }` — every room, open or archived, whose worktree touches
+`path`. HTTP mirror: `GET /api/rooms/find?path=<p>`, same bearer token
+as every other route.
+
+```json
+{
+  "rooms": [
+    {
+      "room_id": "…",
+      "name": "…",
+      "cwd": "…",
+      "repo_root": "…",
+      "branch": "…",
+      "archived": false,
+      "safe_to_remove": false,
+      "match": "cwd"
+    }
+  ],
+  "unreadable_rooms": 0
+}
+```
+
+- `match` is `"cwd"` when `path` normalises to exactly the room's
+  `cwd`; `"inside_room"` when `path` is a path-segment-boundary
+  descendant of the room's `cwd` (checking a file inside a worktree);
+  or `"contains_room"` when the room's `cwd` is a path-segment-boundary
+  descendant of `path` (checking a `<repo>-wt` parent that holds
+  several worktrees) — the direction matters for a folder-removal
+  decision, so it is never a bare "one contains the other". Exact
+  matches sort first.
+- `repo_root` is `null` for a room outside any git checkout.
+- `safe_to_remove` is `false` for every **open** room — an open room
+  means don't touch this folder, full stop — and `true` only for an
+  **archived** one. The verb only reads: `archive_room`,
+  `remove_worktree`, `delete_room` and `close_room` remain refused by
+  name, unchanged by this issue.
+- Path comparison uses the same normalisation room grouping already
+  relies on (`app/src/roomGroups.ts`'s `normalizePath`): backslashes to
+  forward slashes, one trailing separator stripped, case-folded, on
+  every platform, and matched on path-segment boundaries so `foo` never
+  matches `foobar`. An empty `path` is refused as an invalid argument.
+- Reads Skein's persisted room table, which the app rewrites on every
+  room change including archive, so the answer reflects live open/
+  archived state for as long as Skein keeps running.
+- `unreadable_rooms` counts rooms Skein holds but could not read as
+  this response was built — a persisted row that failed to parse, or
+  one already parked in quarantine (#167) — and so could not be
+  checked against `path` at all. It is non-zero only when Skein's own
+  room table has damage; a healthy install always reports 0. When it
+  is non-zero, `rooms` may be missing an entry: do not read a path's
+  absence from `rooms` as permission to remove that folder.
+
+### Scope note
+
+Every other verb's scope **is** the calling token — see Identity,
+above. `find_rooms_for_path` is deliberately the exception, settled on
+epic #266 by #275: the bearer token guards against a replay from a
+leaked log, not against the user's own agents, and a single director
+room spanning several projects is a wanted shape, not a hole to close.
+The rest of #266 slice A — `list_rooms` / `get_room`, #356 — reuses
+this same rule, so this note will end up describing three verbs, not
+one.
+
+Consumer: the `worktree-sweep` skill's "which rooms own this folder"
+check is switching to this verb (#357).
+
 ## The permission-required signal (#86)
 
 `POST /api/harness/permission` is not an agent verb — it carries no MCP
@@ -564,7 +642,7 @@ Settings → About shows the bound port, or says why there is none.
 | :-- | :-- |
 | `agent_api/state.rs` | shared state, the `skein://review-changed`, `skein://harness-permission`, `skein://harness-session-start` and `skein://mail-changed` (#327) events, `HarnessIdentity` |
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
-| `agent_api/verbs.rs` | the nine verbs — the whole testable core, including the mailbox (#327) |
+| `agent_api/verbs.rs` | the ten verbs — the whole testable core, including the mailbox (#327) and the cross-room reads (#354) |
 | `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve and approve refusals |
 | `agent_api/http.rs` | the routes, including `/api/messages` (#327), `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
 | `agent_api/tests.rs` | scoping, both prohibitions, lifecycle, real HTTP |
