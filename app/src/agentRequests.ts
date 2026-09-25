@@ -125,6 +125,33 @@ export interface CreateRequestArgs {
 	 *  through rather than looked up here, so this module never needs
 	 *  `rooms` state to shape a response. */
 	requesterRoomName: string;
+	/** #356: the first mailbox message queued for the new harness, when
+	 *  one was given (`docs/agent-api.md`'s `create_room` `prompt` arg).
+	 *  Only ever used here to derive `promptFirstLine` below — the
+	 *  message itself is queued Rust-side, not by this round trip. */
+	prompt?: string;
+	/** #356: Rust's own first-line extraction, when it already computed
+	 *  one. Wins over deriving one from `prompt` — see
+	 *  `derivePromptFirstLine`. */
+	promptFirstLine?: string;
+}
+
+/** #356: `Room.createdBy.promptFirstLine` — a director's `list_rooms`
+ *  needs a title for a room that was never given a `name`, and the
+ *  Room record doesn't store the prompt itself. `explicit` (Rust's own
+ *  extraction) wins outright when it isn't blank; otherwise the first
+ *  non-empty trimmed line of `prompt` is used. `undefined` when
+ *  neither yields anything — an unset field, never an empty string, to
+ *  match the rest of this module's "absent means absent" convention. */
+export const PROMPT_FIRST_LINE_MAX = 200;
+
+export function derivePromptFirstLine(
+	explicit: string | undefined,
+	prompt: string | undefined,
+): string | undefined {
+	if (explicit?.trim()) return explicit.trim().slice(0, PROMPT_FIRST_LINE_MAX);
+	const line = prompt?.split(/\r?\n/).find((l) => l.trim().length > 0);
+	return line ? line.trim().slice(0, PROMPT_FIRST_LINE_MAX) : undefined;
 }
 
 /** Parse+validate the raw JSON `args` of a `create_room` request. Unlike
@@ -168,6 +195,12 @@ export function parseCreateArgs(raw: unknown): RequestResult<CreateRequestArgs> 
 	if (typeof r.requesterRoomName !== "string" || !r.requesterRoomName.trim()) {
 		return { ok: false, error: "requesterRoomName is required" };
 	}
+	if (!isOmitted(r.prompt) && typeof r.prompt !== "string") {
+		return { ok: false, error: "prompt must be a string" };
+	}
+	if (!isOmitted(r.promptFirstLine) && typeof r.promptFirstLine !== "string") {
+		return { ok: false, error: "promptFirstLine must be a string" };
+	}
 	return {
 		ok: true,
 		value: {
@@ -180,6 +213,8 @@ export function parseCreateArgs(raw: unknown): RequestResult<CreateRequestArgs> 
 			agent: r.agent === null ? null : r.agent,
 			createdBy: { roomId: createdByRaw.roomId, harnessId: createdByRaw.harnessId },
 			requesterRoomName: r.requesterRoomName,
+			...(typeof r.prompt === "string" ? { prompt: r.prompt } : {}),
+			...(typeof r.promptFirstLine === "string" ? { promptFirstLine: r.promptFirstLine } : {}),
 		},
 	};
 }

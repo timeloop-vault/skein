@@ -22,6 +22,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef } from "react";
 import type { CreateRoomArgs } from "./NewRoomDialogTypes.ts";
 import {
+	derivePromptFirstLine,
 	parseCreateArgs,
 	parseResolveArgs,
 	resolveAgent,
@@ -29,8 +30,10 @@ import {
 	specFromCreateArgs,
 } from "./agentRequests.ts";
 import { listHarnessAgents } from "./agents.ts";
+import { harnessActivity } from "./harnessActivity.ts";
 import type { ToastEntry } from "./notifications.tsx";
 import { type DefaultAgents, type NewRoomMemory, branchTemplateFor, defaultsFor } from "./prefs.ts";
+import { fetchScope } from "./review/api.ts";
 import type { CreateRoomResult } from "./useHarnessCreation.ts";
 import { createRoomArgs } from "./worktreeRoom.ts";
 
@@ -102,6 +105,33 @@ export function useAgentRequests(
 			const spec = specFromCreateArgs(args, branchTemplate);
 			const outcome = await createRoomArgs(spec);
 			if (!outcome.ok) return complete(id, undefined, outcome.error);
+			// #356: the base commit the new worktree was cut from is just
+			// its own fresh HEAD — nothing has been committed onto it yet.
+			// Reuse the review pane's own `review_scope` read rather than
+			// adding a new Rust command for one sha: `head_sha` there is
+			// `repo.resolve_commit("HEAD")` on `cwd` alone (see
+			// `review_surface/git.rs`'s `resolve_range`), so the room id
+			// the command takes plays no part in it — the request `id` is
+			// passed through as an otherwise-unused placeholder. Only
+			// meaningful for `branchMode: "worktree"`: `"current"` reuses
+			// an existing checkout rather than cutting anything, so there
+			// is no "base" to report. Best-effort — a failed read leaves
+			// `baseSha` unset rather than failing the whole room creation.
+			let baseSha: string | undefined;
+			if (args.branchMode === "worktree") {
+				try {
+					const scope = await fetchScope(id, outcome.args.cwd, "branch");
+					baseSha = scope.headSha;
+				} catch (err: unknown) {
+					console.warn(`[skein] create_room: could not read the new worktree's HEAD sha:`, err);
+				}
+			}
+			const promptFirstLine = derivePromptFirstLine(args.promptFirstLine, args.prompt);
+			const createdBy = {
+				...args.createdBy,
+				...(promptFirstLine ? { promptFirstLine } : {}),
+				...(baseSha ? { baseSha } : {}),
+			};
 			// #330: deliberately does NOT call `onRemember`/`rememberFolder`
 			// — that per-folder memory feeds the New Room DIALOG's own
 			// prefill, and an agent's one-off choice for this call is not
@@ -109,7 +139,7 @@ export function useAgentRequests(
 			// would let an agent silently steer what the user sees next
 			// time they open New Room by hand.
 			const result = await createRoomRef.current(
-				{ ...outcome.args, createdBy: args.createdBy },
+				{ ...outcome.args, createdBy },
 				{ activate: false },
 			);
 			pushToastRef.current({
@@ -132,6 +162,16 @@ export function useAgentRequests(
 			});
 		};
 
+		// #356: `list_harnesses`'s phase column — the backend has no
+		// authority of its own on this (the doc comment on
+		// `harnessActivityCore.ts`'s `phaseSnapshot` says why), so it asks
+		// the frontend store via the same #328 round trip `create_room`
+		// uses. `args` is unused: every harness this process knows about
+		// answers at once, and the caller picks out the ids it cares
+		// about.
+		const handlePhases = async (id: string): Promise<void> =>
+			complete(id, { phases: harnessActivity.phaseSnapshot() });
+
 		const unlistenPromise = listen<AgentRequestPayload>("skein://agent-request", (event) => {
 			const { id, kind, args } = event.payload;
 			void (async () => {
@@ -140,6 +180,8 @@ export function useAgentRequests(
 						await handleResolve(id, args);
 					} else if (kind === "create_room") {
 						await handleCreate(id, args);
+					} else if (kind === "harness_phases") {
+						await handlePhases(id);
 					} else {
 						await complete(id, undefined, `unknown agent request kind "${kind}"`);
 					}

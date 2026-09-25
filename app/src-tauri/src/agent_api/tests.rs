@@ -346,7 +346,7 @@ fn a_missing_thread_and_someone_elses_thread_are_the_same_answer() {
 // ── the two prohibitions ──────────────────────────────────────────
 
 #[test]
-fn the_tool_list_offers_ten_verbs_and_nothing_that_resolves_approves_or_destroys() {
+fn the_tool_list_offers_thirteen_verbs_and_nothing_that_resolves_approves_or_destroys() {
     let names: Vec<String> = mcp::tool_specs()
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_owned())
@@ -367,9 +367,12 @@ fn the_tool_list_offers_ten_verbs_and_nothing_that_resolves_approves_or_destroys
             "read_messages",
             // #330: open a whole new room.
             "create_room",
-            // #354: the one verb whose answer is not scoped to the
+            // #354/#356: the verbs whose answer is not scoped to the
             // caller's own room.
             "find_rooms_for_path",
+            "list_rooms",
+            "get_room",
+            "list_harnesses",
         ]
     );
     assert!(
@@ -501,6 +504,42 @@ async fn approving_is_refused_by_name_and_nothing_is_signed_off() {
         None,
         "nothing was written"
     );
+}
+
+#[tokio::test]
+async fn approving_is_refused_by_name_even_when_it_names_another_room() {
+    // #356 added `room`-taking verbs to this same dispatch table. Proof
+    // that the by-name refusal still runs before any argument is even
+    // looked at: naming a different room's id in `room` must not let
+    // `approve`/`sign_off` slip through as if it were one of the new
+    // cross-room reads.
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room("r2", vec![harness("h2", "claude", "main")]),
+        ],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+
+    for name in ["approve", "sign_off"] {
+        let err = mcp::call_tool(
+            &state,
+            &caller,
+            name,
+            &serde_json::json!({ "room": "r2" }),
+            &MailContext::permissive(),
+        )
+        .await
+        .expect_err("an agent must not be able to approve another room's work either");
+        assert!(
+            matches!(&err, VerbError::Refused(m) if m.contains("reviewer")),
+            "{name} gave {err:?}"
+        );
+    }
+    assert_eq!(f.db.review_signoff("r2").unwrap(), None);
 }
 
 #[tokio::test]
@@ -1050,6 +1089,36 @@ fn a_sent_message_shows_up_in_the_recipients_mailbox() {
     assert_eq!(m.from_harness_id.as_deref(), Some("h1"));
     assert_eq!(m.from_harness_name.as_deref(), Some("claude · main"));
     assert!(m.read_ms.is_some());
+}
+
+/// #356's `list_rooms` reads this directly off the `Database`, not
+/// through a verb — worth its own test independent of that plumbing.
+#[test]
+fn latest_message_from_room_picks_the_newest_and_only_toward_the_right_recipient() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room("r2", vec![harness("h2", "claude", "main")]),
+            room("r3", vec![harness("h3", "claude", "main")]),
+        ],
+    );
+    let child = caller_for(&f.db, "r1", Some("h1"));
+    send(&f.db, &child, "r2", "status: first").unwrap();
+    send(&f.db, &child, "r3", "status: to the wrong director").unwrap();
+    send(&f.db, &child, "r2", "status: second, and newer").unwrap();
+
+    let latest =
+        f.db.latest_message_from_room("r1", "r2")
+            .unwrap()
+            .expect("r1 has sent r2 something");
+    assert_eq!(latest.body, "status: second, and newer");
+
+    assert!(
+        f.db.latest_message_from_room("r2", "r1").unwrap().is_none(),
+        "the direction matters — r2 never sent r1 anything"
+    );
 }
 
 #[test]
@@ -1792,6 +1861,422 @@ async fn find_rooms_for_path_call_through_mcp() {
     assert_eq!(result["rooms"][0]["safe_to_remove"], false);
 }
 
+// ── cross-room room and harness listing, issue #356 ─────────────────
+
+async fn call_list_rooms(
+    state: &AgentApiState,
+    caller: &Caller,
+    created_by: Option<&str>,
+) -> Result<verbs::ListRoomsOut, VerbError> {
+    verbs::list_rooms(
+        state,
+        caller,
+        &verbs::ListRoomsArgs {
+            created_by: created_by.map(str::to_owned),
+        },
+        &MailContext::permissive(),
+    )
+    .await
+}
+
+fn created_by(room_id: &str, harness_id: &str) -> CreatedBy {
+    CreatedBy {
+        room_id: room_id.to_owned(),
+        harness_id: harness_id.to_owned(),
+        prompt_first_line: None,
+        base_sha: None,
+    }
+}
+
+#[tokio::test]
+async fn list_rooms_created_by_me_scopes_to_the_calling_director_and_carries_the_last_status() {
+    // Two directors, each with a room `create_room` made for them —
+    // proof that "me" scopes to the *caller's* room, one it created
+    // stays visible after being archived, and `lastStatus` only ever
+    // reports what was sent to the director asking, never a sibling's.
+    let f = fixture();
+    let mut child_a = room("child-a", vec![harness("ha", "claude", "main")]);
+    child_a.created_by = Some(CreatedBy {
+        prompt_first_line: Some("fix the flaky test".to_owned()),
+        base_sha: Some("abc123".to_owned()),
+        ..created_by("director-a", "da")
+    });
+    let mut child_a_done = room("child-a-done", vec![harness("ha2", "claude", "main")]);
+    child_a_done.archived = Some(1_000);
+    child_a_done.created_by = Some(created_by("director-a", "da"));
+    let mut child_b = room("child-b", vec![harness("hb", "claude", "main")]);
+    child_b.created_by = Some(created_by("director-b", "db"));
+    save(
+        &f.db,
+        &[
+            room("director-a", vec![harness("da", "claude", "main")]),
+            room("director-b", vec![harness("db", "claude", "main")]),
+            child_a,
+            child_a_done,
+            child_b,
+        ],
+    );
+    let child_a_caller = caller_for(&f.db, "child-a", Some("ha"));
+    send(
+        &f.db,
+        &child_a_caller,
+        "director-a",
+        "status: review — done",
+    )
+    .unwrap();
+    let state = agent_api_state(&f);
+
+    let director_a = caller_for(&f.db, "director-a", Some("da"));
+    let out_a = call_list_rooms(&state, &director_a, Some("me"))
+        .await
+        .unwrap();
+    let ids: Vec<&str> = out_a.rooms.iter().map(|r| r.room_id.as_str()).collect();
+    assert_eq!(
+        ids.len(),
+        2,
+        "director-a must see only its own two rooms: {ids:?}"
+    );
+    assert!(ids.contains(&"child-a"));
+    assert!(
+        ids.contains(&"child-a-done"),
+        "an archived child must still be listed, marked archived"
+    );
+    assert!(!ids.contains(&"child-b"), "not another director's room");
+
+    let done = out_a
+        .rooms
+        .iter()
+        .find(|r| r.room_id == "child-a-done")
+        .unwrap();
+    assert!(done.archived);
+    assert_eq!(done.lifecycle, "archived");
+
+    let open = out_a.rooms.iter().find(|r| r.room_id == "child-a").unwrap();
+    assert!(!open.archived);
+    assert_eq!(
+        open.lifecycle, "unknown",
+        "no webview is wired up in this test"
+    );
+    assert_eq!(open.lead_harness_id.as_deref(), Some("ha"));
+    assert_eq!(
+        open.prompt_first_line.as_deref(),
+        Some("fix the flaky test")
+    );
+    assert_eq!(open.base_sha.as_deref(), Some("abc123"));
+    let status = open
+        .last_status
+        .as_ref()
+        .expect("child-a sent director-a a status");
+    assert_eq!(status.first_line, "status: review — done");
+
+    let director_b = caller_for(&f.db, "director-b", Some("db"));
+    let out_b = call_list_rooms(&state, &director_b, Some("me"))
+        .await
+        .unwrap();
+    assert_eq!(
+        out_b
+            .rooms
+            .iter()
+            .map(|r| r.room_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["child-b"],
+        "director-b must see only its own room"
+    );
+    assert!(
+        out_b.rooms[0].last_status.is_none(),
+        "child-b never sent director-b anything"
+    );
+}
+
+#[tokio::test]
+async fn list_rooms_with_no_filter_lists_every_room() {
+    let f = fixture();
+    let mut child = room("child", vec![harness("h", "claude", "main")]);
+    child.created_by = Some(created_by("director", "d"));
+    save(
+        &f.db,
+        &[
+            room("director", vec![harness("d", "claude", "main")]),
+            child,
+        ],
+    );
+    let caller = caller_for(&f.db, "director", Some("d"));
+    let state = agent_api_state(&f);
+    let out = call_list_rooms(&state, &caller, None).await.unwrap();
+    let ids: Vec<&str> = out.rooms.iter().map(|r| r.room_id.as_str()).collect();
+    assert_eq!(ids.len(), 2, "no filter must list every room: {ids:?}");
+}
+
+#[tokio::test]
+async fn list_rooms_rejects_an_unknown_created_by_value() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = call_list_rooms(&state, &caller, Some("mine"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("mine")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn get_room_refuses_an_unknown_room_id_by_name() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let state = agent_api_state(&f);
+    let err = verbs::get_room(
+        &state,
+        &verbs::GetRoomArgs {
+            room: "ghost".to_owned(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::NotFound(m) if m.contains("ghost")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn get_room_refuses_an_archived_room_naming_it_and_never_answers_none() {
+    let f = fixture();
+    let mut r = room("r1", vec![harness("h1", "claude", "main")]);
+    r.archived = Some(1_000);
+    save(&f.db, &[r]);
+    let state = agent_api_state(&f);
+    let err = verbs::get_room(
+        &state,
+        &verbs::GetRoomArgs {
+            room: "r1".to_owned(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("r1") && m.contains("archived")),
+        "{err:?}"
+    );
+}
+
+async fn assert_get_room_signoff_matches_review_status(
+    f: &Fixture,
+    state: &AgentApiState,
+    caller: &Caller,
+) {
+    let status = verbs::review_status(&f.db, caller).unwrap();
+    let room_out = verbs::get_room(
+        state,
+        &verbs::GetRoomArgs {
+            room: caller.room_id.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&room_out.signoff).unwrap(),
+        serde_json::to_value(Some(status)).unwrap()
+    );
+    assert!(room_out.signoff_unavailable.is_none());
+}
+
+#[tokio::test]
+async fn get_room_signoff_block_matches_review_status_across_signoff_states() {
+    // The shared `signoff_block` fn is the whole point: whatever
+    // `review_status` says about a room's own sign-off, `get_room` must
+    // say the identical thing when asked about that same room.
+    let f = fixture();
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cwd = tmp.path().to_str().unwrap().to_owned();
+    git_repo_with_commit(tmp.path());
+    let mut r = room("r1", vec![harness("h1", "claude", "main")]);
+    r.cwd = Some(cwd.clone());
+    save(&f.db, &[r]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+
+    // none
+    assert_get_room_signoff_matches_review_status(&f, &state, &caller).await;
+
+    // approved
+    crate::review_surface::signoff::set_impl(&f.db, "r1", &cwd, true, None, 1_000).unwrap();
+    assert_get_room_signoff_matches_review_status(&f, &state, &caller).await;
+
+    // stale
+    commit_file(tmp.path(), "b.txt", "more\n", "feat: more");
+    assert_get_room_signoff_matches_review_status(&f, &state, &caller).await;
+}
+
+#[tokio::test]
+async fn get_room_reports_signoff_unavailable_when_the_room_has_no_worktree() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let state = agent_api_state(&f);
+    let out = verbs::get_room(
+        &state,
+        &verbs::GetRoomArgs {
+            room: "r1".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(out.signoff.is_none());
+    assert!(
+        out.signoff_unavailable
+            .as_deref()
+            .unwrap()
+            .contains("no worktree")
+    );
+}
+
+#[tokio::test]
+async fn get_room_maps_a_known_phase_the_frontend_reports() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "harness_phases" => Ok(json!({ "phases": { "h1": "waiting" } })),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let out = verbs::get_room(
+        &state,
+        &verbs::GetRoomArgs {
+            room: "r1".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.harnesses[0].phase, "waiting");
+}
+
+#[tokio::test]
+async fn get_room_treats_a_bogus_phase_value_as_unknown() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "harness_phases" => Ok(json!({ "phases": { "h1": "vibing" } })),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let out = verbs::get_room(
+        &state,
+        &verbs::GetRoomArgs {
+            room: "r1".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.harnesses[0].phase, "unknown");
+}
+
+#[tokio::test]
+async fn get_room_reports_unknown_when_the_webview_never_answers() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    // `for_test` has no `AppHandle` and no `set_test_frontend` hook — the
+    // same "no webview" case `request_frontend_with_no_app_handle_fails_
+    // immediately_and_leaves_the_map_empty` exercises directly.
+    let state = agent_api_state(&f);
+    let out = verbs::get_room(
+        &state,
+        &verbs::GetRoomArgs {
+            room: "r1".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.harnesses[0].phase, "unknown");
+}
+
+#[tokio::test]
+async fn list_harnesses_refuses_an_unknown_room_id_by_name() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let state = agent_api_state(&f);
+    let err = verbs::list_harnesses(
+        &state,
+        &verbs::ListHarnessesArgs {
+            room: Some("ghost".to_owned()),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::NotFound(m) if m.contains("ghost")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn list_harnesses_refuses_an_archived_room_id_by_name() {
+    let f = fixture();
+    let mut r = room("r1", vec![harness("h1", "claude", "main")]);
+    r.archived = Some(1_000);
+    save(&f.db, &[r]);
+    let state = agent_api_state(&f);
+    let err = verbs::list_harnesses(
+        &state,
+        &verbs::ListHarnessesArgs {
+            room: Some("r1".to_owned()),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("r1") && m.contains("archived")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn list_harnesses_with_no_room_filter_skips_archived_rooms() {
+    let f = fixture();
+    let mut archived = room("r1", vec![harness("h1", "claude", "main")]);
+    archived.archived = Some(1_000);
+    save(
+        &f.db,
+        &[archived, room("r2", vec![harness("h2", "claude", "main")])],
+    );
+    let state = agent_api_state(&f);
+    let out = verbs::list_harnesses(&state, &verbs::ListHarnessesArgs { room: None })
+        .await
+        .unwrap();
+    let ids: Vec<&str> = out
+        .harnesses
+        .iter()
+        .map(|h| h.harness_id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["h2"]);
+}
+
+#[tokio::test]
+async fn list_harnesses_skips_the_round_trip_when_nothing_needs_a_phase() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![])]); // no harnesses at all
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| {
+        panic!("request_frontend must not be called when no harness needs a phase: {kind}")
+    });
+    let out = verbs::list_harnesses(&state, &verbs::ListHarnessesArgs { room: None })
+        .await
+        .unwrap();
+    assert!(out.harnesses.is_empty());
+}
+
+#[tokio::test]
+async fn list_rooms_get_room_and_list_harnesses_are_in_the_mcp_tool_list() {
+    let names: Vec<String> = mcp::tool_specs()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    for name in ["list_rooms", "get_room", "list_harnesses"] {
+        assert!(names.contains(&name.to_owned()), "{names:?}");
+    }
+}
+
 // ── the MCP envelope ──────────────────────────────────────────────
 
 #[tokio::test]
@@ -2096,6 +2581,158 @@ async fn the_find_rooms_route_answers_across_rooms_and_needs_a_token() {
         .await
         .unwrap();
     assert_eq!(missing_path.status(), 403, "an empty path must be refused");
+}
+
+#[tokio::test]
+async fn the_rooms_find_route_still_wins_over_the_dynamic_room_id_route() {
+    // #356 added `GET /api/rooms/{room_id}` beside the pre-existing
+    // `GET /api/rooms/find` — proof the literal segment still wins over
+    // the dynamic one, whatever order axum's router happens to try them.
+    let f = fixture();
+    let mut room1 = room_with_cwd("r1", "C:/repo-wt/task-1");
+    room1.harnesses = vec![harness("h1", "claude", "main")];
+    room1.active_harness_id = "h1".to_owned();
+    save(&f.db, &[room1]);
+    let token = f.db.ensure_room_token("r1", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    let find = http
+        .get(format!("{base}/api/rooms/find?path=C:/repo-wt/task-1"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(find.status(), 200);
+    let body: Value = find.json().await.unwrap();
+    assert_eq!(
+        body["rooms"][0]["room_id"], "r1",
+        "must be find_rooms_for_path's shape, not get_room's: {body}"
+    );
+}
+
+#[tokio::test]
+async fn the_list_rooms_route_answers_across_rooms_and_needs_a_token() {
+    let f = fixture();
+    let mut child = room("child", vec![harness("h", "claude", "main")]);
+    child.created_by = Some(created_by("director", "d"));
+    save(
+        &f.db,
+        &[
+            room("director", vec![harness("d", "claude", "main")]),
+            child,
+        ],
+    );
+    let token = f.db.ensure_room_token("director", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    let anon = http.get(format!("{base}/api/rooms")).send().await.unwrap();
+    assert_eq!(anon.status(), 401);
+
+    let authed = http
+        .get(format!("{base}/api/rooms?created_by=me"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(authed.status(), 200);
+    let body: Value = authed.json().await.unwrap();
+    let rooms = body["rooms"].as_array().unwrap();
+    assert_eq!(rooms.len(), 1);
+    assert_eq!(rooms[0]["room_id"], "child");
+}
+
+#[tokio::test]
+async fn the_get_room_route_refuses_an_unknown_id() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let token = f.db.ensure_room_token("r1", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    let anon = http
+        .get(format!("{base}/api/rooms/ghost"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 401);
+
+    let authed = http
+        .get(format!("{base}/api/rooms/ghost"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(authed.status(), 404);
+}
+
+#[tokio::test]
+async fn the_get_room_route_answers_across_rooms() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room("r2", vec![harness("h2", "claude", "main")]),
+        ],
+    );
+    // r2's own token, not r1's — proving the answer is cross-room, the
+    // same considered exception `find_rooms_for_path` documents.
+    let token = f.db.ensure_room_token("r2", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    let authed = http
+        .get(format!("{base}/api/rooms/r1"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(authed.status(), 200);
+    let body: Value = authed.json().await.unwrap();
+    assert_eq!(body["room_id"], "r1");
+    assert_eq!(body["harnesses"][0]["harness_id"], "h1");
+}
+
+#[tokio::test]
+async fn the_list_harnesses_route_answers_across_rooms_and_needs_a_token() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room("r2", vec![harness("h2", "claude", "main")]),
+        ],
+    );
+    // r2's own token — proving the answer is cross-room.
+    let token = f.db.ensure_room_token("r2", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    let anon = http
+        .get(format!("{base}/api/harnesses"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 401);
+
+    let authed = http
+        .get(format!("{base}/api/harnesses"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(authed.status(), 200);
+    let body: Value = authed.json().await.unwrap();
+    let harnesses = body["harnesses"].as_array().unwrap();
+    let ids: Vec<&str> = harnesses
+        .iter()
+        .map(|h| h["harness_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids.len(), 2, "both rooms' harnesses, cross-room: {ids:?}");
+    assert!(ids.contains(&"h1"));
+    assert!(ids.contains(&"h2"));
 }
 
 // ── the permission hook route (#86) ──────────────────────────────
@@ -2538,6 +3175,8 @@ fn agent_opened_room(id: &str, repo_root: Option<&str>) -> Room {
     r.created_by = Some(CreatedBy {
         room_id: "creator".to_owned(),
         harness_id: "h".to_owned(),
+        prompt_first_line: None,
+        base_sha: None,
     });
     r
 }
@@ -3251,6 +3890,11 @@ async fn create_room_resolve_and_create_payloads_use_null_for_omitted_optionals(
         Value::Null,
         "the resolved agent (still None here) must be null"
     );
+    assert_eq!(
+        create["promptFirstLine"],
+        Value::Null,
+        "omitted prompt must leave promptFirstLine null, never absent"
+    );
 }
 
 #[tokio::test]
@@ -3364,12 +4008,17 @@ async fn create_room_happy_path_with_a_prompt_queues_the_first_message() {
     let f = fixture();
     let (_tmp, caller) = git_room(&f);
     let state = agent_api_state(&f);
-    state.set_test_frontend(|kind, _args| match kind {
+    let create_args = std::sync::Arc::new(std::sync::Mutex::new(None::<Value>));
+    let create_clone = std::sync::Arc::clone(&create_args);
+    state.set_test_frontend(move |kind, args| match kind {
         "create_room.resolve" => Ok(json!({ "kind": "claude", "agent": null })),
-        "create_room" => Ok(json!({
-            "roomId": "new-room", "name": "task name",
-            "harnessId": "new-harness", "kind": "claude",
-        })),
+        "create_room" => {
+            *create_clone.lock().unwrap() = Some(args.clone());
+            Ok(json!({
+                "roomId": "new-room", "name": "task name",
+                "harnessId": "new-harness", "kind": "claude",
+            }))
+        }
         other => Err(format!("unexpected request_frontend kind {other:?}")),
     });
     let args = verbs::CreateRoomArgs {
@@ -3392,4 +4041,15 @@ async fn create_room_happy_path_with_a_prompt_queues_the_first_message() {
     assert_eq!(messages[0].body, "start working on the thing");
     assert_eq!(messages[0].from_room_id, caller.room_id);
     assert!(messages[0].read_ms.is_none());
+
+    // #356: `promptFirstLine` is a TOP-LEVEL field of the "create_room"
+    // request, not nested under `createdBy` — `parseCreateArgs`
+    // (`app/src/agentRequests.ts`) reads it there.
+    let sent = create_args.lock().unwrap().clone().expect("create called");
+    assert_eq!(sent["promptFirstLine"], json!("start working on the thing"));
+    assert_eq!(
+        sent["createdBy"].get("promptFirstLine"),
+        None,
+        "must not also be nested under createdBy"
+    );
 }

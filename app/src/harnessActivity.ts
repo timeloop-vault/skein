@@ -42,6 +42,7 @@ import {
 	isDecisiveInput,
 	listeners,
 	muteUntil,
+	phaseSnapshot,
 	recomputePermissionIds,
 	setPhase,
 	shouldArmWatchdog,
@@ -51,6 +52,7 @@ import {
 } from "./harnessActivityCore.ts";
 import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
 import type {
+	ActivityPhase,
 	HarnessActivity,
 	TransitionListener,
 	TransitionSource,
@@ -66,7 +68,7 @@ export type {
 	TransitionSource,
 } from "./harnessActivityTypes.ts";
 export { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
-export { isDecisiveInput } from "./harnessActivityCore.ts";
+export { isDecisiveInput, phaseSnapshot } from "./harnessActivityCore.ts";
 export {
 	activityToStatus,
 	aggregateRoomStatus,
@@ -681,6 +683,13 @@ export const harnessActivity = {
 
 	get(id: string): HarnessActivity | null {
 		return store.get(id) ?? null;
+	},
+
+	/// #356: every harness id this process has a phase for, for the
+	/// `harness_phases` agent-request kind. See `phaseSnapshot`'s own
+	/// doc for why an id can be missing from the result.
+	phaseSnapshot(): Record<string, ActivityPhase> {
+		return phaseSnapshot(store);
 	},
 
 	subscribe(id: string, cb: () => void): () => void {

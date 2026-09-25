@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	derivePromptFirstLine,
 	parseCreateArgs,
 	parseResolveArgs,
 	resolveAgent,
@@ -238,6 +239,91 @@ describe("parseCreateArgs", () => {
 			ok: false,
 			error: "requesterRoomName is required",
 		});
+	});
+
+	// #356: `prompt`/`promptFirstLine` are both optional — absent from
+	// `valid` above, so every other case in this describe block already
+	// covers "omitted entirely". These cover present/null explicitly.
+	it("carries prompt and promptFirstLine through only when given", () => {
+		expect(parseCreateArgs({ ...valid, prompt: "fix the thing\n\nsee #1" })).toEqual({
+			ok: true,
+			value: { ...valid, prompt: "fix the thing\n\nsee #1" },
+		});
+		expect(parseCreateArgs({ ...valid, promptFirstLine: "fix the thing" })).toEqual({
+			ok: true,
+			value: { ...valid, promptFirstLine: "fix the thing" },
+		});
+		expect(
+			parseCreateArgs({
+				...valid,
+				prompt: "fix the thing\n\nsee #1",
+				promptFirstLine: "fix the thing",
+			}),
+		).toEqual({
+			ok: true,
+			value: {
+				...valid,
+				prompt: "fix the thing\n\nsee #1",
+				promptFirstLine: "fix the thing",
+			},
+		});
+	});
+
+	// Same null-tolerance regression as branch/baseBranch above — Rust's
+	// `json!` macro sends an absent `Option<String>` as explicit `null`.
+	it("treats null prompt/promptFirstLine the same as absent", () => {
+		expect(parseCreateArgs({ ...valid, prompt: null, promptFirstLine: null })).toEqual({
+			ok: true,
+			value: valid,
+		});
+	});
+
+	it("rejects a prompt or promptFirstLine that is neither a string nor null", () => {
+		expect(parseCreateArgs({ ...valid, prompt: 42 })).toEqual({
+			ok: false,
+			error: "prompt must be a string",
+		});
+		expect(parseCreateArgs({ ...valid, promptFirstLine: 42 })).toEqual({
+			ok: false,
+			error: "promptFirstLine must be a string",
+		});
+	});
+});
+
+describe("derivePromptFirstLine", () => {
+	it("is undefined when neither explicit nor prompt is given", () => {
+		expect(derivePromptFirstLine(undefined, undefined)).toBeUndefined();
+	});
+
+	it("derives the first non-empty trimmed line of prompt when explicit is absent", () => {
+		expect(derivePromptFirstLine(undefined, "fix the thing\n\nsee #1")).toBe("fix the thing");
+	});
+
+	it("skips leading blank lines to find the first non-empty one", () => {
+		expect(derivePromptFirstLine(undefined, "\n  \nfix the thing\nsee #1")).toBe("fix the thing");
+	});
+
+	it("is undefined when prompt is only blank lines", () => {
+		expect(derivePromptFirstLine(undefined, "\n  \n\t\n")).toBeUndefined();
+	});
+
+	it("explicit wins outright over prompt, even a non-blank one", () => {
+		expect(derivePromptFirstLine("the real title", "fix the thing\nsee #1")).toBe("the real title");
+	});
+
+	it("falls through to prompt when explicit is blank", () => {
+		expect(derivePromptFirstLine("   ", "fix the thing")).toBe("fix the thing");
+	});
+
+	it("caps at 200 chars, from explicit and from a derived line alike", () => {
+		const long = "x".repeat(250);
+		expect(derivePromptFirstLine(long, undefined)).toBe("x".repeat(200));
+		expect(derivePromptFirstLine(undefined, long)).toBe("x".repeat(200));
+	});
+
+	it("trims surrounding whitespace on both paths", () => {
+		expect(derivePromptFirstLine("  the real title  ", undefined)).toBe("the real title");
+		expect(derivePromptFirstLine(undefined, "  fix the thing  \nsee #1")).toBe("fix the thing");
 	});
 });
 

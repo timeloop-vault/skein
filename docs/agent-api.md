@@ -28,7 +28,10 @@ Skein process
      ├─ POST   /api/messages           send_message
      ├─ GET    /api/messages           read_messages
      ├─ POST   /api/rooms              create_room
+     ├─ GET    /api/rooms              list_rooms
      ├─ GET    /api/rooms/find         find_rooms_for_path
+     ├─ GET    /api/rooms/{room_id}    get_room
+     ├─ GET    /api/harnesses          list_harnesses
      ├─ POST   /api/harness/permission     see below — not an agent verb
      └─ POST   /api/harness/session-start  see below — not an agent verb
 ```
@@ -74,13 +77,15 @@ at the next boot.
 
 ## The verbs
 
-All ten verbs carry the token, but not all ten are scoped by it to the
-calling room. Eight of them read or act only within that room;
-`create_room` opens a *different* room, though still only from the
-calling room's token, which is what its own rate cap below is keyed
-to; `find_rooms_for_path` breaks the pattern the other way — it reads
-across every room regardless of which room the token names, see the
-scope note under "Finding rooms by path" below. MCP tool names; Claude Code
+All thirteen verbs carry the token, but not all thirteen are scoped by
+it to the calling room. Eight of them read or act only within that
+room; `create_room` opens a *different* room, though still only from
+the calling room's token, which is what its own rate cap below is
+keyed to; `find_rooms_for_path`, `list_rooms`, `get_room` and
+`list_harnesses` break the pattern the other way — each reads across
+every room regardless of which room the token names, see the scope
+note under "Finding rooms by path" below and "Listing rooms and
+harnesses" further down. MCP tool names; Claude Code
 presents them as `mcp__plugin_skein_api__<name>` — the server is
 registered by the plugin Skein injects (#215), keyed `api` in the
 plugin's `.mcp.json`, and plugin-provided MCP servers carry a
@@ -468,6 +473,101 @@ one.
 Consumer: the `worktree-sweep` skill's "which rooms own this folder"
 check is switching to this verb (#357).
 
+## Listing rooms and harnesses (#356, epic #266 slice A)
+
+Three more read-only verbs, cross-room for the same reason
+`find_rooms_for_path` is: a director that opened several rooms with
+`create_room` needs to see them, and no single room's token could
+scope that question. `list_rooms` alone takes a room-scoped filter,
+`created_by: "me"`, checked against the *caller's* room rather than
+widening what the token can see.
+
+Every phase these three verbs report (`lifecycle` on `list_rooms`,
+`phase` on `get_room` and `list_harnesses`) comes from the same
+round trip to the webview `create_room` uses (#328), asked fresh on
+every call with a 3-second timeout. Anything the backend cannot vouch
+for — no webview, a timeout, a harness the answer never named, an
+archived room, or a value outside the phases the frontend's own
+activity store defines — reads `"unknown"`, never a guess and never
+`"idle"`: that is a real phase, and reporting it without an answer
+would be a lie Skein never told itself.
+
+### `list_rooms`
+
+`{ created_by?: "me" }` — every room Skein holds, across every
+project, archived rooms included and never dropped: "that room landed
+and was archived" is exactly what a director needs to see after its
+own context is compacted. Any `created_by` value other than `"me"` is
+refused rather than silently ignored, since a typo here would
+otherwise read as "show me everything" and a director would never
+notice its filter never applied.
+
+Each room reports `room_id`, `name`, `cwd`, `repo_root`, `branch`,
+`archived`, `harness_count`, `created_by` (`{ room_id, harness_id }`,
+present only for a room `create_room` opened), `base_sha` and
+`prompt_first_line` (both recorded at create time by `create_room`,
+so absent on a room from before #330 or one the user opened by hand),
+`lead_harness_id` (the harness `send_message` would actually reach if
+addressed to this room id — absent when nothing in the room can read
+mail), `lifecycle` (`"archived"`, a live phase, or `"unknown"`), and
+`last_status` — the first line and timestamp of the **last message
+that room sent the caller**, absent if it never has. `last_status`
+alone is enough for a director to rebuild its table without replaying
+any mail.
+
+`unreadable_rooms` counts persisted rooms Skein holds but could not
+parse (the same count `find_rooms_for_path` reports) — non-zero only
+when Skein's own room table has damage, and a sign that `rooms` may be
+short.
+
+### `get_room`
+
+`{ room }` — one room by id, open or archived, created by anyone, not
+only rooms the caller opened. An id nobody recognises, or one that
+resolves to an archived room, is refused loudly and by name — never a
+bare empty result, since #356's whole point is a director inspecting a
+room it does not own.
+
+Reports the same room fields as `list_rooms` (minus `lifecycle` and
+`last_status`, which are cross-room-specific), plus `harnesses` — each
+with `harness_id`, `name`, `kind`, `agent`, `session_id` and its live
+`phase` — and a `signoff` block: the **same sign-off `review_status`
+returns**, produced by the same function, so `get_room` can never
+report a different answer than that room would give about itself.
+`signoff_unavailable` (with `signoff` then absent) explains why there
+is none — today, only because the room has no worktree.
+
+There is no `review_status { room }` alias: `get_room` is the one
+read path for another room's sign-off.
+
+### `list_harnesses`
+
+`{ room? }` — every harness in every open room, or, with `room` given,
+every harness in that one room, refused loudly by name if it does not
+exist or is archived. Archived rooms are otherwise skipped entirely
+when `room` is omitted: none of their harnesses have a live process to
+ask a phase of. Each entry names its `room_id`/`room_name` alongside
+the same per-harness fields `get_room` reports.
+
+### Scope note
+
+`list_rooms`, `get_room` and `list_harnesses` all read across every
+room the same way `find_rooms_for_path` does — see the scope note
+under "Finding rooms by path" above, which this reuses rather than
+restating. `list_rooms`'s `created_by: "me"` is a filter on the
+result, not a narrowing of the token's own reach: an unfiltered call
+still lists every room on the machine.
+
+Still refused for every room these three can see, the same as
+everywhere else in this API: `resolve`, `approve`/`sign_off`/
+`mark_approved`, and `archive_room`/`remove_worktree`/`delete_room`/
+`close_room`. A director can watch a gate; it can never open one, on
+its own room or anyone else's.
+
+Out of scope for #356: a room's message history (filed separately,
+#364), and notifying a director when a child room's sign-off changes —
+these verbs are pull, not push.
+
 ## The permission-required signal (#86)
 
 `POST /api/harness/permission` is not an agent verb — it carries no MCP
@@ -659,9 +759,9 @@ Settings → About shows the bound port, or says why there is none.
 | :-- | :-- |
 | `agent_api/state.rs` | shared state, the `skein://review-changed`, `skein://harness-permission`, `skein://harness-session-start` and `skein://mail-changed` (#327) events, `HarnessIdentity` |
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
-| `agent_api/verbs.rs` | the ten verbs — the whole testable core, including the mailbox (#327) and the cross-room reads (#354) |
+| `agent_api/verbs.rs` | the thirteen verbs — the whole testable core, including the mailbox (#327) and the cross-room reads (#354, #356) |
 | `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve and approve refusals |
-| `agent_api/http.rs` | the routes, including `/api/messages` (#327), `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
+| `agent_api/http.rs` | the routes, including `/api/messages` (#327), `/api/rooms`/`/api/rooms/{id}`/`/api/harnesses` (#356), `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
 | `agent_api/tests.rs` | scoping, both prohibitions, lifecycle, real HTTP |
 | `review_surface/signoff.rs` | the sign-off itself, and the staleness rule (#214) |
 | `harness_config.rs` | what Skein injects at spawn so a CLI finds all this (#215) |

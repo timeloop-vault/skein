@@ -65,3 +65,14 @@ holding 20 open (non-archived) rooms. The refusal comes back as text
 explaining which one. Report it to whoever asked rather than retrying
 in a loop; retrying will not change a switch that is off or a ceiling
 that is full.
+
+## Watching a delegated room
+
+If your own context gets compacted, `list_rooms { created_by: "me" }`
+rebuilds your table of rooms you opened in one call — no need to
+replay mail: each entry carries its `lead_harness_id`, `lifecycle`,
+and `last_status` (the last thing that room told you). `get_room {
+room }` reads a child's sign-off (approved / stale / none) straight
+from Skein, which is more trustworthy than the child's own word for
+it. A `lifecycle` or `phase` of `"unknown"` means exactly that — Skein
+could not check, not that the room is idle.

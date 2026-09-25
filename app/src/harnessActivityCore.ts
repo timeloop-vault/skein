@@ -29,6 +29,23 @@ export const listeners = new Map<string, Set<() => void>>();
 export const muteUntil = new Map<string, number>();
 let tickHandle: ReturnType<typeof setInterval> | null = null;
 
+/// #356: pure snapshot for the `harness_phases` agent-request kind —
+/// every harness id currently in `activity`, mapped to its phase. Takes
+/// the map as a parameter rather than closing over the module's own
+/// `store` so it's testable with a bare `Map` and no spawn/tick
+/// machinery; `harnessActivity.phaseSnapshot()` in harnessActivity.ts is
+/// the real call site, bound to the live store. A harness this process
+/// never spawned (or has since `forget`-ten) is simply absent from the
+/// result — the request handler reads that omission as "unknown" per
+/// issue #356's phase rule, rather than this guessing at one.
+export function phaseSnapshot(
+	activity: ReadonlyMap<string, HarnessActivity>,
+): Record<string, ActivityPhase> {
+	const phases: Record<string, ActivityPhase> = {};
+	for (const [id, a] of activity) phases[id] = a.phase;
+	return phases;
+}
+
 export const transitionListeners = new Set<TransitionListener>();
 
 export const emit = (id: string): void => {

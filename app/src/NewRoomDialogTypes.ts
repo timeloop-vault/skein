@@ -32,8 +32,14 @@ export interface CreateRoomArgs {
 	 *  worktree. Absent for non-git rooms. */
 	repoRoot?: string;
 	/** #330: set only by the `create_room` agent-request handler — the
-	 *  New Room dialog never carries one. */
-	createdBy?: { roomId: string; harnessId: string };
+	 *  New Room dialog never carries one. #356 adds `promptFirstLine` /
+	 *  `baseSha`, mirrored from `Room.createdBy` in types.ts. */
+	createdBy?: {
+		roomId: string;
+		harnessId: string;
+		promptFirstLine?: string;
+		baseSha?: string;
+	};
 }
 
 // What `git_inspect_folder` answers, mirroring `FolderInfoDto` in
