@@ -44,6 +44,7 @@ import {
 	muteUntil,
 	recomputePermissionIds,
 	setPhase,
+	shouldArmWatchdog,
 	stopTickIfIdle,
 	store,
 	transitionListeners,
@@ -413,11 +414,7 @@ export const harnessActivity = {
 	recordInput(id: string, data: string): void {
 		const cur = store.get(id);
 		if (!cur) return;
-		const armWatchdog =
-			cur.authoritative &&
-			!cur.adapterHeard &&
-			cur.promptSubmittedAt === null &&
-			(data.includes("\r") || data.includes("\n"));
+		const armWatchdog = shouldArmWatchdog(cur) && (data.includes("\r") || data.includes("\n"));
 		if (!cur.hasUserInput || armWatchdog) {
 			store.set(id, {
 				...cur,
@@ -428,6 +425,36 @@ export const harnessActivity = {
 		if (cur.phase === "permission" && isDecisiveInput(data)) {
 			setPhase(id, "running", TRANSITION_SOURCE.UserInputPermission);
 		}
+	},
+
+	/// #363: arm the #259 silent-adapter watchdog for a prompt submitted
+	/// through the `sendPrompt` seam — `create_room`'s first prompt, a
+	/// mail nudge, anything that pastes and submits without ever
+	/// touching xterm's `onKey` and so never reaches `recordInput` above.
+	/// Shares `recordInput`'s arm guard (`shouldArmWatchdog`, factored
+	/// into `harnessActivityCore.ts` so the two can't drift apart) minus
+	/// the "does `data` contain a newline" check — a `sendPrompt` call
+	/// IS the submit, unconditionally, the same as a typed Enter.
+	///
+	/// Deliberately narrow: it only arms the timer. Doesn't touch
+	/// `hasUserInput` — that flag means a human typed something, and a
+	/// programmatic submit isn't that. Refuses to arm at all while
+	/// `phase === "permission"` — an armed timer would eventually strip
+	/// authority (`degradeSilentAdapter`) out from under a harness whose
+	/// dialog is simply still open, not silent — and never clears
+	/// `permission` or moves phase either way: #86 established that only
+	/// a decisive user keystroke is proof a dialog was answered, and a
+	/// programmatic submit is not one. `canSendPrompt` already refuses to
+	/// send into `permission`, but this method doesn't lean on that; it
+	/// makes the same call on its own terms, independently, since nothing
+	/// stops a future caller from invoking it directly. No emit, matching
+	/// `recordInput`'s own arm path — `promptSubmittedAt` is bookkeeping
+	/// the tick reads, not a phase change any subscriber needs to hear
+	/// about.
+	notePromptSubmitted(id: string): void {
+		const cur = store.get(id);
+		if (!cur || cur.phase === "permission" || !shouldArmWatchdog(cur)) return;
+		store.set(id, { ...cur, promptSubmittedAt: Date.now() });
 	},
 
 	/// Leave `permission` for `running`, and touch no other phase. For
