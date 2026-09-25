@@ -652,16 +652,74 @@ async fn claude_events_attach(
     on_event: Channel<ClaudeEvent>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    // #362: the frontend only `console.warn`s an Err from this command
+    // (see harnessEvents.ts) and otherwise falls back silently to the
+    // L2a idle heuristic — so an attach that fails, or never happens,
+    // has been invisible on the Rust side. Every line below carries
+    // `harness_id` so one harness's attach/detach/tick history can be
+    // grepped out of a log with many rooms interleaved.
+    tracing::info!(
+        harness_id,
+        room_id,
+        session_id,
+        "claude_events_attach: called"
+    );
+    let started = std::time::Instant::now();
+    let log_harness_id = harness_id.clone();
+    let send_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let send_failed_cb = Arc::clone(&send_failed);
+    let send_failed_harness_id = harness_id.clone();
+    let join_result = tauri::async_runtime::spawn_blocking(move || {
         let manager = app.state::<ClaudeEventsManager>();
-        manager
-            .attach(harness_id, room_id, &session_id, &cwd, move |event| {
-                let _ = on_event.send(event);
-            })
-            .map_err(|e| e.to_string())
+        manager.attach(harness_id, room_id, &session_id, &cwd, move |event| {
+            if on_event.send(event).is_err()
+                && !send_failed_cb.swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                // Only logged once per attach — a dead webview channel
+                // (window closed, harness torn down) fails on every
+                // subsequent event otherwise, and that's noise, not
+                // new information.
+                tracing::warn!(
+                    harness_id = %send_failed_harness_id,
+                    "claude_events_attach: channel send failed; webview likely gone"
+                );
+            }
+        })
     })
-    .await
-    .map_err(|e| e.to_string())?
+    .await;
+
+    match join_result {
+        Ok(Ok(info)) => {
+            tracing::info!(
+                harness_id = %log_harness_id,
+                path = %info.path.display(),
+                already_existed = info.already_existed,
+                subagents_armed = info.subagents_armed,
+                duration_ms = started.elapsed().as_millis(),
+                "claude_events_attach: attached"
+            );
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(
+                harness_id = %log_harness_id,
+                error = %e,
+                "claude_events_attach: failed"
+            );
+            Err(e.to_string())
+        }
+        Err(join_error) => {
+            // The blocking closure panicked — `attach`'s own error
+            // path never runs, so without this the frontend just sees
+            // its request hang, then error out with no explanation.
+            tracing::warn!(
+                harness_id = %log_harness_id,
+                error = %join_error,
+                "claude_events_attach: spawn_blocking join failed (panic inside attach?)"
+            );
+            Err(join_error.to_string())
+        }
+    }
 }
 
 /// Stop tailing the JSONL for `harness_id`. No-op if unknown.

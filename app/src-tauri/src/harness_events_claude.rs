@@ -209,11 +209,29 @@ struct SubagentTail {
     /// own timestamp when the terminal row itself carries no
     /// `timestamp`, rather than inventing `now`.
     last_ts_ms: i64,
+    /// Whether the last attempt to open/seek this transcript failed and
+    /// was already warned about (#362). A subagent file that becomes
+    /// permanently unreadable would otherwise warn on every single
+    /// tick forever — the entry is never removed and the metadata
+    /// fast-path (`meta.len() == tail.last_pos`) can't short-circuit a
+    /// broken file either. Set on the transition into failing, cleared
+    /// (with a debug! line) the moment an open succeeds again.
+    open_failure_logged: bool,
 }
 
 /// Mutable state shared with the watcher callback. The callback runs
 /// on the debouncer thread — every field it touches lives in here.
+// Four independent flags, each tracking a distinct one-shot condition
+// (attach/parse state vs. two separate #362 log-dedup guards) rather
+// than variants of one state machine — `struct_excessive_bools`'s
+// alternative would just rename the same booleans.
+#[allow(clippy::struct_excessive_bools)]
 struct TailState {
+    /// Stamped on every diagnostic log line this state's tick/detach
+    /// path emits, so one harness's tail can be grepped out of a log
+    /// that interleaves many rooms and harnesses (#362). Independent
+    /// of `actions`, which is `None` in phase-only tests.
+    harness_id: String,
     path: PathBuf,
     /// Byte offset into the file we've already consumed. Bumped on
     /// every read so the next tick only sees fresh bytes.
@@ -241,6 +259,21 @@ struct TailState {
     subagents_dir: Option<PathBuf>,
     /// Per-subagent tail state, keyed by agent id.
     subagents: HashMap<String, SubagentTail>,
+    /// One-shot guard for the "could not read subagents dir this tick"
+    /// warn (#362) — without it, a subagents dir that becomes
+    /// permanently unreadable (deleted, permissions) warns on every
+    /// tick forever. Set on the transition into failing, cleared once
+    /// a read succeeds again.
+    subagents_dir_read_failure_logged: bool,
+    /// Set the first time a tick reads any bytes from the MAIN
+    /// transcript since this `TailState` was created (#362) — i.e.
+    /// once per attach, including a resumed session where the file
+    /// already existed (it then fires on the first *appended* bytes
+    /// after attach, since `attach_at` seeks straight to EOF). Backs
+    /// the one `tracing::info!` line in `tick` that distinguishes
+    /// "attached but nothing has ever come through the tail" from
+    /// "tailing fine" at the default info filter.
+    first_read_logged: bool,
 }
 
 /// Action-extraction context bundled per attached harness. The
@@ -260,6 +293,23 @@ struct ActionPersistence {
     /// emits (the frontend loads history via its initial query); only
     /// the live tail broadcasts. Issue #80 D1.
     app: Option<tauri::AppHandle>,
+}
+
+/// Diagnostics returned from a successful `attach`/`attach_at`, for the
+/// caller (`claude_events_attach` in lib.rs) to log without either side
+/// having to reach into the other's internals (#362).
+pub struct AttachInfo {
+    /// The transcript path actually tailed — the computed path unless
+    /// `session_jsonl_path` fell back to a scan (see its doc comment).
+    pub path: PathBuf,
+    /// Whether the transcript already existed on disk at attach time
+    /// (resume) as opposed to a fresh spawn that hasn't written
+    /// anything yet.
+    pub already_existed: bool,
+    /// Whether the subagents-dir watch armed successfully. `false`
+    /// means subagent telemetry is disabled for this attach — see the
+    /// `tracing::warn!` sites in `attach_at` for why.
+    pub subagents_armed: bool,
 }
 
 /// Manager — registry of live Claude adapters keyed by harness id.
@@ -311,7 +361,7 @@ impl ClaudeEventsManager {
         session_id: &str,
         cwd: &str,
         on_event: F,
-    ) -> Result<(), ClaudeEventsError>
+    ) -> Result<AttachInfo, ClaudeEventsError>
     where
         F: Fn(ClaudeEvent) + Send + Sync + 'static,
     {
@@ -342,7 +392,7 @@ impl ClaudeEventsManager {
         path: PathBuf,
         on_event: F,
         actions: Option<ActionPersistence>,
-    ) -> Result<(), ClaudeEventsError>
+    ) -> Result<AttachInfo, ClaudeEventsError>
     where
         F: Fn(ClaudeEvent) + Send + Sync + 'static,
     {
@@ -464,12 +514,15 @@ impl ClaudeEventsManager {
                         started_ms: None,
                         started_ms_resolved: true,
                         last_ts_ms: 0,
+                        open_failure_logged: false,
                     },
                 );
             }
         }
 
+        let attach_info_path = path.clone();
         let state = Arc::new(Mutex::new(TailState {
+            harness_id: harness_id.clone(),
             path,
             last_pos,
             partial: String::new(),
@@ -478,10 +531,13 @@ impl ClaudeEventsManager {
             actions,
             subagents_dir: subagents_dir_opt.clone(),
             subagents: initial_subagents,
+            subagents_dir_read_failure_logged: false,
+            first_read_logged: false,
         }));
         let cb_state = Arc::clone(&state);
         let on_event = Arc::new(on_event);
         let cb_on_event = Arc::clone(&on_event);
+        let cb_harness_id = harness_id.clone();
         // Create the parent dir if it doesn't exist yet. Claude
         // creates project dirs lazily on first spawn for that cwd;
         // if Skein attaches before Claude has written anything, the
@@ -502,9 +558,32 @@ impl ClaudeEventsManager {
                 // (rare, but possible during heavy filesystem activity).
                 // Treat that exactly like a normal tick — we'll read
                 // up to the current EOF and catch up. Better
-                // stale-but-honest than silently miss events.
-                let _ = result;
-                tick(&cb_state, cb_on_event.as_ref());
+                // stale-but-honest than silently miss events. Still
+                // worth a warn: a run of these means we may be missing
+                // debounce coalescing, not just losing one event (#362).
+                if let Err(errors) = &result {
+                    tracing::warn!(
+                        harness_id = %cb_harness_id,
+                        ?errors,
+                        "claude_events: debouncer reported error(s); ticking anyway"
+                    );
+                }
+                // A panic inside `tick` would otherwise unwind straight
+                // through the notify callback and silently kill the
+                // watcher thread — no more events, ever, for this
+                // harness, with nothing in the log to say why (#362).
+                // `parking_lot::Mutex` doesn't poison, so the lock
+                // stays usable for the next tick even if this one
+                // panicked mid-hold.
+                if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    tick(&cb_state, cb_on_event.as_ref());
+                })) {
+                    tracing::error!(
+                        harness_id = %cb_harness_id,
+                        panic = %panic_message(&panic),
+                        "claude_events: tick panicked; watcher stays alive"
+                    );
+                }
             },
         )
         .map_err(ClaudeEventsError::from_err)?;
@@ -561,18 +640,54 @@ impl ClaudeEventsManager {
         // keep it alive for the watcher's lifetime. Dropping the
         // debouncer drops the closure drops the Arc.
         drop(state);
-        self.inner.lock().insert(
-            harness_id,
-            Adapter {
-                _debouncer: debouncer,
-            },
-        );
-        Ok(())
+        let subagents_armed = subagents_dir_opt.is_some();
+        let log_harness_id = harness_id.clone();
+        let replaced = self
+            .inner
+            .lock()
+            .insert(
+                harness_id,
+                Adapter {
+                    _debouncer: debouncer,
+                },
+            )
+            .is_some();
+        if replaced {
+            tracing::info!(
+                harness_id = %log_harness_id,
+                "claude_events: attach replaced an existing adapter for this harness"
+            );
+        }
+        Ok(AttachInfo {
+            path: attach_info_path,
+            already_existed: attached,
+            subagents_armed,
+        })
     }
 
-    /// Stop the adapter for `harness_id`. No-op if unknown.
-    pub fn detach(&self, harness_id: &str) {
-        self.inner.lock().remove(harness_id);
+    /// Stop the adapter for `harness_id`. No-op if unknown. Returns
+    /// whether an adapter was actually removed, so the caller (and the
+    /// `#362` unit test below) can tell a real detach from a stale one
+    /// firing against an id that already went away.
+    pub fn detach(&self, harness_id: &str) -> bool {
+        let removed = self.inner.lock().remove(harness_id).is_some();
+        tracing::info!(harness_id, removed, "claude_events: detach");
+        removed
+    }
+}
+
+/// Format a `catch_unwind` panic payload for a log line. Panics carry
+/// either a `&str` (the common `panic!("literal")` / `unwrap` case) or
+/// a `String` (`panic!("{}", x)`); anything else is a payload type we
+/// can't stringify without `Any::downcast` guessing, so name that
+/// honestly rather than pretend.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
     }
 }
 
@@ -589,6 +704,11 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
             s.attached = true;
             // Start at 0 — file is fresh, all bytes are new.
             s.last_pos = 0;
+            tracing::info!(
+                harness_id = %s.harness_id,
+                path = %s.path.display(),
+                "claude_events: transcript appeared"
+            );
         } else {
             // Still not there. Maybe the watcher fired for an
             // unrelated file in the project dir; keep waiting.
@@ -601,17 +721,39 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     // Claude ever rotates the file. Reopening every tick is robust
     // and the file sizes we're dealing with (kilobytes of JSON per
     // event) are trivial to seek into.
-    let Ok(mut file) = fs::File::open(&s.path) else {
-        // File vanished — Claude was uninstalled mid-session, or
-        // the user wiped ~/.claude. Surface as SessionEnd once and
-        // detach from this run (the adapter stays alive in case the
-        // file comes back, but we don't keep re-emitting).
-        if s.attached {
-            s.attached = false;
-            drop(s);
-            on_event(ClaudeEvent::SessionEnd);
+    let mut file = match fs::File::open(&s.path) {
+        Ok(f) => f,
+        Err(e) => {
+            // File vanished — Claude was uninstalled mid-session, or
+            // the user wiped ~/.claude. Surface as SessionEnd once and
+            // detach from this run (the adapter stays alive in case the
+            // file comes back, but we don't keep re-emitting).
+            if s.attached {
+                s.attached = false;
+                let harness_id = s.harness_id.clone();
+                let path = s.path.clone();
+                drop(s);
+                tracing::warn!(
+                    harness_id = %harness_id,
+                    path = %path.display(),
+                    error = %e,
+                    "claude_events: transcript vanished; emitting SessionEnd"
+                );
+                on_event(ClaudeEvent::SessionEnd);
+            } else if e.kind() != std::io::ErrorKind::NotFound {
+                // NotFound while `!attached` is the expected "still
+                // waiting for Claude to write the first row" case —
+                // anything else (permissions, IO error) is worth a
+                // line since it means this harness may never attach.
+                tracing::warn!(
+                    harness_id = %s.harness_id,
+                    path = %s.path.display(),
+                    error = %e,
+                    "claude_events: unexpected error opening transcript"
+                );
+            }
+            return;
         }
-        return;
     };
 
     // Defensive: file size dropped below last_pos (rotation /
@@ -625,22 +767,61 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
         s.in_assistant_turn = false;
     }
 
-    if file.seek(SeekFrom::Start(s.last_pos)).is_err() {
+    if let Err(e) = file.seek(SeekFrom::Start(s.last_pos)) {
+        tracing::warn!(
+            harness_id = %s.harness_id,
+            path = %s.path.display(),
+            pos = s.last_pos,
+            error = %e,
+            "claude_events: seek failed"
+        );
         return;
     }
     let mut buf = String::new();
-    let Ok(bytes) = file.read_to_string(&mut buf) else {
-        // UTF-8 decode failed somewhere mid-file. JSONL is ASCII for
-        // the keys + UTF-8 content; the only way this fires is if
-        // we landed in the middle of a multi-byte char. Bump
-        // last_pos by what we did read (zero in this case) and
-        // wait for the next tick to pick up a full line. Logged as
-        // trace so it's diagnosable without being noisy.
-        tracing::trace!(path = %s.path.display(), "claude_events: utf8 mid-line; retrying next tick");
-        return;
+    let bytes = match file.read_to_string(&mut buf) {
+        Ok(b) => b,
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::InvalidData {
+                // UTF-8 decode failed somewhere mid-file. JSONL is
+                // ASCII for the keys + UTF-8 content; the only way
+                // this fires is if we landed in the middle of a
+                // multi-byte char. Bump last_pos by what we did read
+                // (zero in this case) and wait for the next tick to
+                // pick up a full line. Expected transient state, not
+                // an error — logged at debug.
+                tracing::debug!(
+                    harness_id = %s.harness_id,
+                    path = %s.path.display(),
+                    "claude_events: utf8 mid-line; retrying next tick"
+                );
+            } else {
+                tracing::warn!(
+                    harness_id = %s.harness_id,
+                    path = %s.path.display(),
+                    error = %e,
+                    "claude_events: read failed"
+                );
+            }
+            return;
+        }
     };
     let advance: u64 = u64::try_from(bytes).unwrap_or(u64::MAX);
     s.last_pos = s.last_pos.saturating_add(advance);
+
+    // First bytes ever read off the MAIN transcript since this attach
+    // (#362) — once per attach, logged at info so "attached but the
+    // watcher never fires / nothing read" is distinguishable from
+    // "tailing fine" without cranking RUST_LOG. Fires on the first
+    // *appended* bytes for a resumed session too, since `attach_at`
+    // seeks straight to EOF before this tick ever runs.
+    if bytes > 0 && !s.first_read_logged {
+        s.first_read_logged = true;
+        tracing::info!(
+            harness_id = %s.harness_id,
+            bytes,
+            "claude_events: first transcript bytes read since attach"
+        );
+    }
 
     // Prepend any leftover partial line from last tick, then split on
     // newlines. The trailing chunk (anything after the last '\n') is
@@ -652,6 +833,7 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     let mut lines = drained.split('\n').peekable();
     let mut events = Vec::new();
     let mut in_assistant_turn = s.in_assistant_turn;
+    let mut lines_parsed: usize = 0;
     while let Some(line) = lines.next() {
         if lines.peek().is_none() {
             // Final segment — either the last line was incomplete
@@ -665,6 +847,7 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
         if trimmed.is_empty() {
             continue;
         }
+        lines_parsed += 1;
         // Parse once, fan out to both consumers: phase (the
         // pre-existing path) and actions (issue #80). Action
         // persistence is best-effort — a single failed insert
@@ -685,7 +868,17 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     // Subagent transcripts, after the main file — same lock, same
     // events vec, so consumers see main-session events first and
     // subagent events second within one tick.
+    let main_events = events.len();
     tick_subagents(&mut s, &mut events);
+    let subagent_events = events.len() - main_events;
+    tracing::debug!(
+        harness_id = %s.harness_id,
+        bytes,
+        lines_parsed,
+        events = main_events,
+        subagent_events,
+        "claude_events: tick"
+    );
     drop(s);
 
     for event in events {
@@ -717,10 +910,33 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
     let Some(dir) = s.subagents_dir.clone() else {
         return;
     };
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return;
+    let entries = match fs::read_dir(&dir) {
+        Ok(e) => {
+            if s.subagents_dir_read_failure_logged {
+                s.subagents_dir_read_failure_logged = false;
+                tracing::debug!(
+                    harness_id = %s.harness_id,
+                    dir = %dir.display(),
+                    "claude_events: subagents dir readable again"
+                );
+            }
+            e
+        }
+        Err(e) => {
+            if !s.subagents_dir_read_failure_logged {
+                s.subagents_dir_read_failure_logged = true;
+                tracing::warn!(
+                    harness_id = %s.harness_id,
+                    dir = %dir.display(),
+                    error = %e,
+                    "claude_events: could not read subagents dir this tick"
+                );
+            }
+            return;
+        }
     };
     let mut seen: HashSet<String> = HashSet::new();
+    let mut new_count: usize = 0;
     let mut subagent_end_actions: Vec<crate::harness_actions_claude::ExtractedAction> = Vec::new();
     for entry in entries.flatten() {
         let sub_path = entry.path();
@@ -732,6 +948,7 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
         if !s.subagents.contains_key(&agent_id) {
             // A transcript we haven't seen before — a fresh
             // delegation since attach (or since the last tick).
+            new_count += 1;
             let meta = skein_harness::claude::read_subagent_meta(&sub_path);
             let (agent_type, description) =
                 meta.map_or((None, None), |m| (m.agent_type, m.description));
@@ -753,6 +970,7 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
                     started_ms: None,
                     started_ms_resolved: false,
                     last_ts_ms: 0,
+                    open_failure_logged: false,
                 },
             );
         }
@@ -781,16 +999,45 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
             continue;
         }
 
-        let Ok(mut file) = fs::File::open(&tail.path) else {
-            continue;
+        let mut file = match fs::File::open(&tail.path) {
+            Ok(f) => f,
+            Err(e) => {
+                if !tail.open_failure_logged {
+                    tail.open_failure_logged = true;
+                    tracing::warn!(
+                        harness_id = %s.harness_id,
+                        path = %tail.path.display(),
+                        error = %e,
+                        "claude_events: could not open subagent transcript"
+                    );
+                }
+                continue;
+            }
         };
+        if tail.open_failure_logged {
+            tail.open_failure_logged = false;
+            tracing::debug!(
+                harness_id = %s.harness_id,
+                path = %tail.path.display(),
+                "claude_events: subagent transcript readable again"
+            );
+        }
         if let Ok(meta) = file.metadata()
             && meta.len() < tail.last_pos
         {
             tail.last_pos = 0;
             tail.partial.clear();
         }
-        if file.seek(SeekFrom::Start(tail.last_pos)).is_err() {
+        if let Err(e) = file.seek(SeekFrom::Start(tail.last_pos)) {
+            if !tail.open_failure_logged {
+                tail.open_failure_logged = true;
+                tracing::warn!(
+                    harness_id = %s.harness_id,
+                    path = %tail.path.display(),
+                    error = %e,
+                    "claude_events: subagent seek failed"
+                );
+            }
             continue;
         }
         let mut buf = String::new();
@@ -897,6 +1144,13 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
     // whether it was live or finished.
     s.subagents.retain(|id, _| seen.contains(id));
 
+    tracing::debug!(
+        harness_id = %s.harness_id,
+        seen = seen.len(),
+        new = new_count,
+        "claude_events: tick_subagents"
+    );
+
     // Persist (and, live, broadcast) any `subagent_end` rows collected
     // above — same sink and same `emit` semantics as the main tail's
     // `persist_extracted(ap, extracted, true)` call in `tick`. `None`
@@ -999,8 +1253,10 @@ fn scan_history(
 
 /// Insert every action in `extracted` into `harness_actions`. When
 /// `emit` is set (live tail), broadcast each inserted row to the
-/// frontend. Logs at trace on insert failure (sqlite locked, disk
-/// full) but doesn't propagate — the tail loop continues.
+/// frontend. Logs at warn on insert failure (sqlite locked, disk
+/// full) but doesn't propagate — the tail loop continues; a swallowed
+/// failure here previously left no trace at the default log level
+/// (#362).
 fn persist_extracted(
     ap: &ActionPersistence,
     extracted: Vec<crate::harness_actions_claude::ExtractedAction>,
@@ -1044,7 +1300,7 @@ fn persist_extracted(
                 }
             }
             Err(e) => {
-                tracing::trace!(harness_id = %ap.harness_id, kind = %action.kind, error = %e,
+                tracing::warn!(harness_id = %ap.harness_id, kind = %action.kind, error = %e,
                     "claude_events: record_harness_action failed");
             }
         }
@@ -1345,6 +1601,7 @@ fn parse_value(value: &serde_json::Value, in_assistant_turn: &mut bool) -> Optio
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::Barrier;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
@@ -1386,6 +1643,25 @@ mod tests {
             )
             .unwrap();
         (manager, path, rx)
+    }
+
+    #[test]
+    fn detach_reports_whether_an_adapter_was_removed() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, _path, _rx) = make_adapter(&dir);
+
+        assert!(
+            !mgr.detach("no-such-harness"),
+            "detach of an unknown id should report false"
+        );
+        assert!(
+            mgr.detach("harness-1"),
+            "detach of the attached id should report true"
+        );
+        assert!(
+            !mgr.detach("harness-1"),
+            "detaching the same id twice should report false the second time"
+        );
     }
 
     /// Collect events that arrive within a 2 s window. Returns
@@ -2163,6 +2439,253 @@ mod tests {
         }
     }
 
+    // ── concurrent attach across many harnesses (#362) ──────────────
+    //
+    // Production shape: 5 Claude harnesses spawned within ~4 s, each
+    // in a brand-new worktree, so each project dir under
+    // `~/.claude/projects` did not exist yet. `claude_events_attach`
+    // (lib.rs) runs every `attach` call on tokio's `spawn_blocking`
+    // pool against ONE shared `ClaudeEventsManager` — i.e. concurrently,
+    // on different OS threads. 4 of 5 adapters never read their
+    // transcript: zero rows persisted, no events, ever. These tests
+    // reproduce that shape directly against `attach_at` with plain
+    // `std::thread`s released together by a `Barrier`, skipping tokio
+    // entirely; one manager and one on-disk `Database` shared across
+    // all harnesses, action persistence ON (production always runs
+    // with it on, #80).
+
+    /// One harness's fixture for a concurrent-attach run.
+    struct ConcurrentHarness {
+        harness_id: String,
+        room_id: String,
+        path: PathBuf,
+        rx: mpsc::Receiver<ClaudeEvent>,
+    }
+
+    /// Attach `N` harnesses to `N` distinct transcript paths — each
+    /// under its own never-before-seen project dir, mirroring one dir
+    /// per brand-new worktree — releasing all `N` `attach_at` calls
+    /// together via a `Barrier` so they race on parent-dir creation and
+    /// `notify` watcher setup the way five simultaneous worktree spawns
+    /// did in production. Then, from `N` more threads released the same
+    /// way, mimics Claude actually writing each transcript: a user
+    /// prompt row, a tool call + its result, and a terminal `end_turn`
+    /// row, each write separated by a short sleep so the watcher has to
+    /// fire more than once per harness — same as a real turn, and the
+    /// path most likely to race a debounced tick against a fresh
+    /// `attach_at` still setting up its `TailState`.
+    ///
+    /// `precreate_parent` / `precreate_file` select which of #362's
+    /// real timings this run reproduces:
+    ///   - neither: the project dir doesn't exist yet at attach time —
+    ///     the production incident itself
+    ///   - `precreate_parent` only: the dir exists (an earlier session
+    ///     wrote there already) but this session's `.jsonl` doesn't
+    ///   - both: the file already has a row in it before `attach_at`
+    ///     runs — Claude won the race and wrote first
+    ///
+    /// Returns one `bool` per harness: whether it observed its
+    /// `AwaitingPrompt` end-of-turn within a single 5 s budget shared
+    /// across all `N` (not 5 s each serially, which would let a
+    /// handful of stuck harnesses blow the test out to `N * 5` s).
+    fn run_concurrent_attach_variant(precreate_parent: bool, precreate_file: bool) -> Vec<bool> {
+        const N: usize = 6;
+        let root = TempDir::new().unwrap();
+        let db = Arc::new(crate::db::Database::open(&root.path().join("t.db")).unwrap());
+        let manager = Arc::new(ClaudeEventsManager::new_for_test(Arc::clone(&db)));
+
+        let mut senders = Vec::with_capacity(N);
+        let mut harnesses = Vec::with_capacity(N);
+        for i in 0..N {
+            let harness_id = format!("h{i}");
+            let room_id = format!("r{i}");
+            // A distinct, never-before-seen project dir per harness.
+            let parent = root.path().join("projects").join(format!("proj-{i}"));
+            let path = parent.join(format!("{}.jsonl", uuid::Uuid::new_v4()));
+            if precreate_parent || precreate_file {
+                fs::create_dir_all(&parent).unwrap();
+            }
+            if precreate_file {
+                let mut f = fs::File::create(&path).unwrap();
+                writeln!(
+                    f,
+                    r#"{{"type":"user","sessionId":"s{i}","message":{{"content":[{{"type":"text","text":"hi"}}]}}}}"#
+                )
+                .unwrap();
+                f.sync_all().unwrap();
+            }
+            let (tx, rx) = mpsc::channel();
+            senders.push((harness_id.clone(), room_id.clone(), path.clone(), tx));
+            harnesses.push(ConcurrentHarness {
+                harness_id,
+                room_id,
+                path,
+                rx,
+            });
+        }
+
+        // Attach all N together, released by a barrier — the race is
+        // inside `attach_at` (parent-dir creation, `notify` watcher
+        // setup), not in anything downstream.
+        let attach_barrier = Arc::new(Barrier::new(N));
+        let attach_results: Vec<Result<AttachInfo, ClaudeEventsError>> = thread::scope(|scope| {
+            let handles: Vec<_> = senders
+                .into_iter()
+                .map(|(harness_id, room_id, path, tx)| {
+                    let manager = Arc::clone(&manager);
+                    let db = Arc::clone(&db);
+                    let barrier = Arc::clone(&attach_barrier);
+                    scope.spawn(move || {
+                        let persistence = Some(ActionPersistence {
+                            extractor: ActionExtractor::new(),
+                            db,
+                            harness_id: harness_id.clone(),
+                            room_id,
+                            cwd: String::new(),
+                            app: None,
+                        });
+                        barrier.wait();
+                        manager.attach_at(
+                            harness_id,
+                            path,
+                            move |e| {
+                                let _ = tx.send(e);
+                            },
+                            persistence,
+                        )
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        for (i, result) in attach_results.iter().enumerate() {
+            assert!(
+                result.is_ok(),
+                "harness {i} failed to attach: {:?}",
+                result.as_ref().err().map(ToString::to_string)
+            );
+        }
+
+        // Now mimic Claude actually writing the transcript.
+        let write_barrier = Arc::new(Barrier::new(N));
+        thread::scope(|scope| {
+            for (i, h) in harnesses.iter().enumerate() {
+                let path = h.path.clone();
+                let barrier = Arc::clone(&write_barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    if !precreate_file {
+                        let mut f = fs::File::create(&path).unwrap();
+                        writeln!(
+                            f,
+                            r#"{{"type":"user","sessionId":"s{i}","message":{{"content":[{{"type":"text","text":"hi"}}]}}}}"#
+                        )
+                        .unwrap();
+                        f.sync_all().unwrap();
+                    }
+                    thread::sleep(Duration::from_millis(120));
+                    {
+                        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+                        writeln!(
+                            f,
+                            r#"{{"type":"assistant","uuid":"a{i}","timestamp":"2026-05-15T21:16:{:02}.000Z","message":{{"content":[{{"type":"tool_use","id":"toolu_{i}","name":"Bash","input":{{"command":"echo hi"}}}}]}}}}"#,
+                            20 + i
+                        )
+                        .unwrap();
+                        f.sync_all().unwrap();
+                    }
+                    thread::sleep(Duration::from_millis(120));
+                    {
+                        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+                        writeln!(
+                            f,
+                            r#"{{"type":"user","timestamp":"2026-05-15T21:16:{:02}.000Z","toolUseResult":{{"stdout":"hi"}},"message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_{i}","content":"hi","is_error":false}}]}}}}"#,
+                            40 + i
+                        )
+                        .unwrap();
+                        f.sync_all().unwrap();
+                    }
+                    thread::sleep(Duration::from_millis(120));
+                    {
+                        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+                        writeln!(
+                            f,
+                            r#"{{"type":"assistant","sessionId":"s{i}","message":{{"stop_reason":"end_turn","content":[{{"type":"text","text":"done"}}]}}}}"#
+                        )
+                        .unwrap();
+                        f.sync_all().unwrap();
+                    }
+                });
+            }
+        });
+
+        // Poll every harness's receiver in round-robin against ONE
+        // shared 5 s deadline.
+        let mut satisfied = vec![false; N];
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline && satisfied.iter().any(|s| !s) {
+            for (i, h) in harnesses.iter().enumerate() {
+                if satisfied[i] {
+                    continue;
+                }
+                while let Ok(event) = h.rx.try_recv() {
+                    if matches!(event, ClaudeEvent::AwaitingPrompt) {
+                        satisfied[i] = true;
+                    }
+                }
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        // Action persistence (#80): every harness that reached
+        // AwaitingPrompt must also have its tool-call row recorded.
+        for (i, h) in harnesses.iter().enumerate() {
+            if !satisfied[i] {
+                continue;
+            }
+            let rows = db
+                .recent_harness_actions_by_room(&h.room_id, -1, 100)
+                .unwrap();
+            assert!(
+                rows.iter().any(|a| a.harness_id == h.harness_id),
+                "harness {i} reached AwaitingPrompt but persisted no action row"
+            );
+        }
+
+        satisfied
+    }
+
+    #[test]
+    fn concurrent_attach_fresh_parent_dirs_all_succeed() {
+        let satisfied = run_concurrent_attach_variant(false, false);
+        assert!(
+            satisfied.iter().all(|s| *s),
+            "not every harness completed its turn (index -> ok): {:?}",
+            satisfied.iter().enumerate().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn concurrent_attach_existing_parent_missing_file_all_succeed() {
+        let satisfied = run_concurrent_attach_variant(true, false);
+        assert!(
+            satisfied.iter().all(|s| *s),
+            "not every harness completed its turn (index -> ok): {:?}",
+            satisfied.iter().enumerate().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn concurrent_attach_preexisting_file_all_succeed() {
+        let satisfied = run_concurrent_attach_variant(true, true);
+        assert!(
+            satisfied.iter().all(|s| *s),
+            "not every harness completed its turn (index -> ok): {:?}",
+            satisfied.iter().enumerate().collect::<Vec<_>>()
+        );
+    }
+
     // ── subagent tailing (#276) ────────────────────────────────────
 
     /// Like `make_adapter`, but the main transcript already has one
@@ -2645,5 +3168,50 @@ mod tests {
                 .any(|e| matches!(e, ClaudeEvent::AwaitingPrompt)),
             "main-transcript AwaitingPrompt must still fire with a subagents dir present, got {events:?}"
         );
+    }
+
+    /// #362: `TailState::first_read_logged` flips exactly once, on the
+    /// first tick that actually reads bytes off the main transcript —
+    /// not on an empty-file tick, and not again on a later tick once
+    /// it's already true. Drives `tick` directly against a hand-built
+    /// `TailState` rather than through `attach_at`'s watcher, since
+    /// what's under test is the flag flip, not the debouncer plumbing;
+    /// no tracing-subscriber harness needed because the assertion is
+    /// on the state field the log line guards, not on emitted output.
+    #[test]
+    fn first_read_logged_flips_once_per_attach() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        fs::write(&path, "").unwrap();
+        let state = Arc::new(Mutex::new(TailState {
+            harness_id: "h".into(),
+            path: path.clone(),
+            last_pos: 0,
+            partial: String::new(),
+            attached: true,
+            in_assistant_turn: false,
+            actions: None,
+            subagents_dir: None,
+            subagents: HashMap::new(),
+            subagents_dir_read_failure_logged: false,
+            first_read_logged: false,
+        }));
+
+        // Nothing written yet — a tick that reads zero bytes must not
+        // flip the flag.
+        tick(&state, &|_| {});
+        assert!(!state.lock().first_read_logged);
+
+        // Append a row — this tick's read is the first non-empty one.
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(f, r#"{{"type":"user"}}"#).unwrap();
+        f.sync_all().unwrap();
+
+        tick(&state, &|_| {});
+        assert!(state.lock().first_read_logged);
+
+        // A later empty tick must leave it set, not toggle it back.
+        tick(&state, &|_| {});
+        assert!(state.lock().first_read_logged);
     }
 }
