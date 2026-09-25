@@ -47,7 +47,7 @@ one of the two. Zero commits ahead passes trivially.
 
 ```bash
 git fetch --prune origin
-git worktree list
+git worktree list --porcelain      # one `worktree <path>` line each, unpadded
 git branch --format='%(refname:short)'
 ```
 
@@ -72,17 +72,20 @@ A worktree may be the folder of a Skein room. Removing it under an
 **open** room breaks that room; under an **archived** room it only
 means the reopen flow reports the folder as missing, which it already
 handles. Ask Skein with the `find_rooms_for_path` tool, once per
-candidate worktree, using the path `git worktree list` printed:
+candidate worktree, using the path exactly as its `worktree <path>`
+line in the porcelain listing gives it:
 
 ```
 find_rooms_for_path { path: "<worktree path>" }
 ```
 
 One query per worktree, rather than one on the `<repo>-wt` parent,
-because then every room in the answer belongs to that worktree — the
-room's folder is the worktree (`cwd`) or somewhere below it
-(`contains_room`) — and there is no second path comparison to get
-wrong. It also covers a worktree that lives outside `<repo>-wt`.
+because then every room in the answer bears on that worktree — its
+folder is the worktree (`cwd`), sits below it (`contains_room`), or
+sits above it (`inside_room`, such as a room on the main checkout
+when the worktree is nested inside it) — and there is no second path
+comparison to get wrong. It also covers a worktree that lives outside
+`<repo>-wt`.
 
 Decide on `safe_to_remove`, never on `match` — `match` only says why a
 room came back. **Any room with `safe_to_remove: false` excludes its
@@ -118,6 +121,11 @@ A worktree is **excluded** (kept, and named in the report) when any of:
 - `git worktree list` marks it `locked`
 
 ### 4. Remove
+
+Just before removing each approved worktree, repeat its dirty check
+and its `find_rooms_for_path` call — the confirmation was a wait, and a
+room may have opened on it since. If either result has changed, skip
+that worktree and say so.
 
 ```bash
 for wt in <each approved path>; do git worktree remove "$wt"; done
