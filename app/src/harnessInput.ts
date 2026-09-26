@@ -49,7 +49,7 @@
 
 import { HARNESS_KINDS } from "./data.tsx";
 import type { HarnessCapabilities } from "./data.tsx";
-import { harnessActivity } from "./harnessActivity.ts";
+import { atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
 import type { HarnessActivity } from "./harnessActivity.ts";
 import { SUBMIT_GAP_MS, SUBMIT_RETRY_SCHEDULE_MS, decideSubmitRetry } from "./submitRetry.ts";
 import type { HarnessKind } from "./types.ts";
@@ -193,9 +193,15 @@ function checkWatched(activity: HarnessActivity): GateResult | null {
 ///  - the harness kind has a terminal (`capabilities.pty`);
 ///  - it is registered in the seam (a live PTY, not a Files body or a
 ///    just-exited one);
-///  - its phase is `waiting` — end of turn, the one moment a paste is
-///    unambiguously safe to submit. `permission` gets its own reason:
-///    it is a harder stop than "not waiting", not a variant of it;
+///  - it is at a safe stopping point (`atSafeStoppingPoint`, #381): phase
+///    `waiting` — end of turn, the moment a paste is unambiguously safe
+///    to submit — or phase `running` with an armed #277 delegation
+///    deferral, where the main session already ended its own turn and
+///    only stayed `running` because background subagents were still
+///    working. `permission` gets its own reason: it is a harder stop
+///    than "not at a stopping point", not a variant of it, and outranks
+///    the deferral too — `atSafeStoppingPoint` never treats a
+///    `permission` phase as safe even with a deferral armed underneath;
 ///  - an L2c adapter is attached, has not gone silent, and has proven
 ///    itself either by speaking or by the harness's own launch signal
 ///    (`authoritative && (adapterHeard || launchSignalAt !== null) &&
@@ -217,7 +223,7 @@ export function canSendPrompt(input: CanSendPromptInput): GateResult {
 	if (a.phase === "permission") {
 		return { ok: false, reason: "the harness is waiting on a permission dialog" };
 	}
-	if (a.phase !== "waiting") {
+	if (!atSafeStoppingPoint(a)) {
 		return {
 			ok: false,
 			reason: `the harness isn't at a safe stopping point (currently ${a.phase})`,
@@ -317,19 +323,30 @@ export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): 
 	const t = target as HarnessInputTarget;
 	t.paste(body);
 
+	// #381: snapshot which stopping point the paste landed at — a plain
+	// `waiting` (`null`) or a specific armed #277 delegation deferral
+	// (that deferral's own `delegationDeferredAt` timestamp). The
+	// submit-time recheck below requires the SAME one, not just "still
+	// `waiting`": a `waiting` recheck alone would let a submit through
+	// after the harness left the deferral it was pasted under, started a
+	// fresh turn, and got re-deferred — a different arm than the one this
+	// paste is about.
+	const deferredAtPaste = harnessActivity.get(harnessId)?.delegationDeferredAt ?? null;
+
 	const inputCountAtPaste = userInputCount(harnessId);
 	setTimeout(() => {
 		// Skip the submit outright — leaving the pasted text unsent
 		// rather than risk it — if anything about the target changed in
 		// the gap: a respawn (registration moved on), the user now
 		// typing (a machine "\r" landing on top of a human's own input
-		// is never safe), or the phase having moved off `waiting` at
-		// all. That last check mirrors `canSendPrompt` itself rather
-		// than singling out `permission` — a blind "\r" is just as
-		// wrong after any other phase drift (the turn ended and started
-		// a new one, the harness exited) as it is into an open dialog;
-		// `permission` only gets its own message because it's the
-		// common, nameable case (#86's territory, not this one's).
+		// is never safe), or the harness having left the stopping point
+		// it was pasted at. That last check mirrors `canSendPrompt`
+		// itself rather than singling out `permission` — a blind "\r" is
+		// just as wrong after any other stopping-point drift (the turn
+		// ended and started a new one, the deferral changed arm, the
+		// harness exited) as it is into an open dialog; `permission` only
+		// gets its own message because it's the common, nameable case
+		// (#86's territory, not this one's).
 		if (targets.get(harnessId) !== t) {
 			console.warn(
 				`[skein] sendPrompt: harness ${harnessId}'s terminal changed before the submit — leaving the paste unsent (#380)`,
@@ -342,14 +359,21 @@ export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): 
 			);
 			return;
 		}
-		const phaseAtSubmit = harnessActivity.get(harnessId)?.phase;
-		if (phaseAtSubmit !== "waiting") {
+		const activityAtSubmit = harnessActivity.get(harnessId);
+		const stillAtStoppingPoint =
+			activityAtSubmit !== null &&
+			atSafeStoppingPoint(activityAtSubmit) &&
+			activityAtSubmit.delegationDeferredAt === deferredAtPaste;
+		if (!stillAtStoppingPoint) {
+			const phaseAtSubmit = activityAtSubmit?.phase;
 			const why =
 				phaseAtSubmit === "permission"
 					? "opened a permission dialog"
-					: `moved to ${phaseAtSubmit ?? "no activity record"}`;
+					: activityAtSubmit !== null && atSafeStoppingPoint(activityAtSubmit)
+						? "moved to a different delegation deferral than the one it was pasted under"
+						: `moved to ${phaseAtSubmit ?? "no activity record"}`;
 			console.warn(
-				`[skein] sendPrompt: harness ${harnessId} ${why} before the submit — leaving the paste unsent (#380)`,
+				`[skein] sendPrompt: harness ${harnessId} ${why} before the submit — leaving the paste unsent (#380, #381)`,
 			);
 			return;
 		}
@@ -372,10 +396,13 @@ export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): 
 		// keep retrying blind.
 		if (!HARNESS_KINDS[kind].capabilities.submitRetry) return;
 		// One subscription for the whole retry window — see
-		// `decideSubmitRetry`'s `leftWaitingSinceSend` docs for why a
-		// single transition out of `waiting`, anywhere in the window,
-		// ends the sequence for every attempt still to come.
-		let leftWaitingSinceSend = false;
+		// `decideSubmitRetry`'s `leftStoppingPointSinceSend` docs for
+		// why a single transition out of `waiting`, anywhere in the
+		// window, ends the sequence for every attempt still to come.
+		// This only ever fires for the plain-`waiting` arm — see
+		// `deferredAtPaste` below for how a delegation-deferred arm's
+		// equivalent is caught instead.
+		let leftStoppingPointSinceSend = false;
 		// Deliberately not tied to this harness's unmount/respawn: each
 		// attempt below self-cleans on its own schedule regardless of
 		// what happens to the harness in between, and a target that goes
@@ -384,7 +411,7 @@ export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): 
 		// that fully exits shows up there as `phase: null`) — no extra
 		// unsubscribe-on-teardown path needed.
 		const unsubscribe = harnessActivity.subscribeTransitions((id, from) => {
-			if (id === harnessId && from === "waiting") leftWaitingSinceSend = true;
+			if (id === harnessId && from === "waiting") leftStoppingPointSinceSend = true;
 		});
 		const attemptTimers: Array<ReturnType<typeof setTimeout>> = [];
 		const attempt = (attemptIndex: number) => {
@@ -393,8 +420,17 @@ export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): 
 			const decision = decideSubmitRetry({
 				capable: true,
 				watched: a === null ? false : a.authoritative && !a.adapterSilent,
-				leftWaitingSinceSend,
+				leftStoppingPointSinceSend,
 				phase: a?.phase ?? null,
+				// #381: `deferredAtPaste` (`null` for a plain-`waiting` send)
+				// is the arm this submit belongs to; `a`'s current
+				// `delegationDeferredAt` is compared against it on every
+				// attempt — a disarm, a flush to `waiting`, or a fresh
+				// re-arm with a different timestamp all read as "changed" and
+				// end the sequence, same as `sendPrompt`'s own submit-time
+				// recheck above.
+				deferredAtSend: deferredAtPaste,
+				deferredAtNow: a?.delegationDeferredAt ?? null,
 				// Measured from the paste, same snapshot the gap-check
 				// above already required to be unchanged by submit time
 				// — so this is equally "since the submit" in practice.

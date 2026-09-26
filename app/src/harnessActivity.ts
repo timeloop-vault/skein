@@ -36,6 +36,7 @@
 
 import { INDUCED_MUTE_MS, TAIL_MAX_CHARS } from "./harnessActivityConstants.ts";
 import {
+	delegationDeferredListeners,
 	disarmDelegation,
 	emit,
 	ensureTick,
@@ -68,7 +69,7 @@ export type {
 	TransitionSource,
 } from "./harnessActivityTypes.ts";
 export { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
-export { isDecisiveInput, phaseSnapshot } from "./harnessActivityCore.ts";
+export { atSafeStoppingPoint, isDecisiveInput, phaseSnapshot } from "./harnessActivityCore.ts";
 export {
 	activityToStatus,
 	aggregateRoomStatus,
@@ -363,6 +364,11 @@ export const harnessActivity = {
 		}
 		if (cur.delegationDeferredAt === null) {
 			cur.delegationDeferredAt = Date.now();
+			// #381: notify arm-only listeners — see
+			// `subscribeDelegationDeferred` below. Must sit inside this
+			// guard, not after it, so the idempotent re-arm case (a second
+			// end-of-turn while already deferred) never fires it twice.
+			for (const cb of delegationDeferredListeners) cb(id);
 		}
 	},
 
@@ -715,6 +721,22 @@ export const harnessActivity = {
 		transitionListeners.add(cb);
 		return () => {
 			transitionListeners.delete(cb);
+		};
+	},
+
+	/// #381: subscribe to #277 delegation deferrals ARMING — `cb(id)`
+	/// fires the instant a harness's end-of-turn is deferred for
+	/// background subagents (`awaitingPromptFromAdapter`'s
+	/// `delegationDeferredAt` going null → non-null), never on the
+	/// idempotent re-arm and never on disarm. Step B (mail delivery
+	/// during a deferral) is the intended caller — see
+	/// `atSafeStoppingPoint` for the companion "is it still safe to send
+	/// into right now" check. Returns an unsubscribe, same shape as
+	/// `subscribeTransitions`.
+	subscribeDelegationDeferred(cb: (id: string) => void): () => void {
+		delegationDeferredListeners.add(cb);
+		return () => {
+			delegationDeferredListeners.delete(cb);
 		};
 	},
 };

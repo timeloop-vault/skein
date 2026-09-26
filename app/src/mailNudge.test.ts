@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { decideMailNudge, mailNudgeText, mailPopoverText } from "./mailNudge.ts";
+import {
+	decideMailNudge,
+	mailNudgeText,
+	mailPopoverText,
+	shouldCheckOnTransition,
+} from "./mailNudge.ts";
 import type { DecideMailNudgeInput } from "./mailNudge.ts";
 
 const GATE_OK = { ok: true } as const;
 const GATE_CLOSED = { ok: false, reason: "not ready" } as const;
 
 const input = (over: Partial<DecideMailNudgeInput> = {}): DecideMailNudgeInput => ({
-	phase: "waiting",
+	atStoppingPoint: true,
 	unread: 1,
 	lastNudged: 0,
 	gate: GATE_OK,
@@ -28,10 +33,29 @@ describe("decideMailNudge", () => {
 		});
 	});
 
-	it("does not nudge, and records nothing, when the phase isn't waiting", () => {
-		expect(decideMailNudge(input({ phase: "running", unread: 3, lastNudged: 1 }))).toEqual({
+	// #381: `atStoppingPoint` collapses `waiting` and a deferred `running`
+	// into one bool at this layer — the caller (`atSafeStoppingPoint`,
+	// tested separately in harnessActivityCore.test.ts) is what tells
+	// `running` with a deferral armed apart from plain `running` or
+	// `permission`, both of which pass `false` here.
+	it("does not nudge, and records nothing, when not at a safe stopping point (running, no deferral)", () => {
+		expect(decideMailNudge(input({ atStoppingPoint: false, unread: 3, lastNudged: 1 }))).toEqual({
 			nudge: false,
 			lastNudged: 1,
+		});
+	});
+
+	it("does not nudge, and records nothing, when not at a safe stopping point (permission)", () => {
+		expect(decideMailNudge(input({ atStoppingPoint: false, unread: 2, lastNudged: 0 }))).toEqual({
+			nudge: false,
+			lastNudged: 0,
+		});
+	});
+
+	it("nudges when running with a #277 delegation deferral armed", () => {
+		expect(decideMailNudge(input({ atStoppingPoint: true, unread: 3, lastNudged: 1 }))).toEqual({
+			nudge: true,
+			lastNudged: 3,
 		});
 	});
 
@@ -75,6 +99,33 @@ describe("decideMailNudge", () => {
 			nudge: false,
 			lastNudged: 0,
 		});
+	});
+});
+
+describe("shouldCheckOnTransition (#381)", () => {
+	it("always checks on a transition into waiting", () => {
+		expect(shouldCheckOnTransition("waiting", false)).toBe(true);
+		expect(shouldCheckOnTransition("waiting", true)).toBe(true);
+	});
+
+	it("checks a transition to running when now at a safe stopping point (a deferral is armed)", () => {
+		expect(shouldCheckOnTransition("running", true)).toBe(true);
+	});
+
+	it("does not check a transition to running with no deferral armed", () => {
+		expect(shouldCheckOnTransition("running", false)).toBe(false);
+	});
+
+	it("does not check a transition to permission", () => {
+		// `atStoppingPointNow` is derived from `atSafeStoppingPoint`, which
+		// is never true while `phase === "permission"` — only the `false`
+		// case is a real combination.
+		expect(shouldCheckOnTransition("permission", false)).toBe(false);
+	});
+
+	it("does not check a transition to idle or exited", () => {
+		expect(shouldCheckOnTransition("idle", false)).toBe(false);
+		expect(shouldCheckOnTransition("exited", false)).toBe(false);
 	});
 });
 

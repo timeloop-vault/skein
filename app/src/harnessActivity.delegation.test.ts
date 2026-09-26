@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { HARNESS_KINDS } from "./data.tsx";
 import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
+import { canSendPrompt } from "./harnessInput.ts";
 import { subagents } from "./subagents.ts";
 
 // #277 (epic #298) — the subagent-aware end-of-turn deferral. Its own
@@ -248,6 +250,94 @@ describe("subagent-aware end-of-turn deferral (#277)", () => {
 
 		harnessActivity.noteUserPrompt(id);
 		expect(harnessActivity.get(id)?.delegatedCount).toBe(0);
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+});
+
+describe("subscribeDelegationDeferred (#381)", () => {
+	beforeAll(() => {
+		vi.useFakeTimers();
+	});
+	afterAll(() => {
+		vi.useRealTimers();
+	});
+
+	it("fires once when a deferral arms, not on the idempotent re-arm", () => {
+		const id = runningHarness();
+		startLiveSubagent(id, "a1");
+		const armed: string[] = [];
+		const unsubscribe = harnessActivity.subscribeDelegationDeferred((tid) => armed.push(tid));
+
+		harnessActivity.awaitingPromptFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
+		expect(armed).toEqual([id]);
+
+		// A second end-of-turn while already deferred is a no-op re-arm
+		// — must not fire again.
+		harnessActivity.awaitingPromptFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
+		expect(armed).toEqual([id]);
+
+		unsubscribe();
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+
+	it("does not fire when workingCount is 0 — that path goes straight to waiting", () => {
+		const id = runningHarness();
+		const armed: string[] = [];
+		const unsubscribe = harnessActivity.subscribeDelegationDeferred((tid) => armed.push(tid));
+
+		harnessActivity.awaitingPromptFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
+
+		expect(armed).toEqual([]);
+		expect(harnessActivity.get(id)?.phase).toBe("waiting");
+
+		unsubscribe();
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+
+	it("does not fire on disarm", () => {
+		const id = runningHarness();
+		startLiveSubagent(id, "a1");
+		harnessActivity.awaitingPromptFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
+
+		const armed: string[] = [];
+		const unsubscribe = harnessActivity.subscribeDelegationDeferred((tid) => armed.push(tid));
+		harnessActivity.setRunningFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeToolUse);
+		expect(harnessActivity.get(id)?.delegationDeferredAt).toBeNull();
+		expect(armed).toEqual([]);
+
+		unsubscribe();
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+
+	it("a delivered prompt disarms an armed deferral and canSendPrompt now refuses", () => {
+		const id = runningHarness();
+		harnessActivity.adapterDelivered(id);
+		harnessActivity.setInjected(id, true);
+		startLiveSubagent(id, "a1");
+		harnessActivity.awaitingPromptFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
+		expect(harnessActivity.get(id)?.delegationDeferredAt).not.toBeNull();
+
+		const sendInput = {
+			capabilities: HARNESS_KINDS.claude.capabilities,
+			activity: harnessActivity.get(id),
+			registered: true,
+			bracketedPasteOn: false,
+			body: "hello",
+		};
+		// While armed, the harness IS a safe stopping point (#381).
+		expect(canSendPrompt(sendInput)).toEqual({ ok: true });
+
+		// The main transcript's own next user/assistant row — the
+		// dominant real-world resolution (#277).
+		harnessActivity.setRunningFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeUserPrompt);
+
+		expect(harnessActivity.get(id)?.delegationDeferredAt).toBeNull();
+		expect(harnessActivity.get(id)?.phase).toBe("running");
+		expect(canSendPrompt({ ...sendInput, activity: harnessActivity.get(id) }).ok).toBe(false);
 		harnessActivity.forget(id);
 		subagents.forget(id);
 	});

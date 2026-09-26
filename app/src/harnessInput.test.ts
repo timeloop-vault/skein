@@ -85,6 +85,34 @@ describe("canSendPrompt", () => {
 		if (!r.ok) expect(r.reason).toContain("running");
 	});
 
+	// #381: a #277 delegation-deferred `running` is the OTHER safe
+	// stopping point `atSafeStoppingPoint` allows — the main session
+	// already ended its own turn and only stayed `running` because
+	// background subagents were still working.
+	it("allows a running harness with an armed delegation deferral", () => {
+		const r = canSendPrompt(
+			baseInput({ activity: activity({ phase: "running", delegationDeferredAt: Date.now() }) }),
+		);
+		expect(r).toEqual({ ok: true });
+	});
+
+	it("still refuses a running harness with no deferral armed", () => {
+		const r = canSendPrompt(
+			baseInput({ activity: activity({ phase: "running", delegationDeferredAt: null }) }),
+		);
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.reason).toContain("running");
+	});
+
+	it("gives permission its own reason even with a deferral armed underneath it", () => {
+		const r = canSendPrompt(
+			baseInput({
+				activity: activity({ phase: "permission", delegationDeferredAt: Date.now() }),
+			}),
+		);
+		expect(r).toEqual({ ok: false, reason: expect.stringContaining("permission dialog") });
+	});
+
 	it("refuses without a source that has proven it's watching the harness", () => {
 		expect(canSendPrompt(baseInput({ activity: activity({ authoritative: false }) })).ok).toBe(
 			false,

@@ -7,7 +7,12 @@ import type { ActivityPhase } from "./harnessActivityTypes.ts";
 import type { GateResult } from "./harnessInput.ts";
 
 export interface DecideMailNudgeInput {
-	phase: ActivityPhase;
+	/// #381: whether the harness is at a safe stopping point right now —
+	/// `atSafeStoppingPoint`'s own predicate (`waiting`, or `running`
+	/// with a #277 delegation deferral armed). A caller has this already
+	/// wherever it has an activity snapshot; passing the bool rather than
+	/// the whole `HarnessActivity` keeps this module DOM/store-free.
+	atStoppingPoint: boolean;
 	/// Current unread count for this harness's mailbox.
 	unread: number;
 	/// The unread count as of the last nudge actually sent (or 0, e.g.
@@ -24,24 +29,40 @@ export interface DecideMailNudgeResult {
 }
 
 /// One nudge per arrival: nudges only when `unread` has grown past
-/// `lastNudged`, `phase === "waiting"` and `gate.ok`. A read lowers
-/// `unread` below `lastNudged`, which resets the remembered value down
-/// to the new (lower) `unread` — so mail arriving after a full read
-/// nudges again, and mail arriving after a partial read only nudges once
-/// the count exceeds what is left unread. The reset applies regardless
-/// of phase or gate, since it reflects the mailbox being read, not
-/// anything about whether a nudge could be sent right now.
+/// `lastNudged`, the harness is at a safe stopping point
+/// (`atStoppingPoint`, #381 — `waiting`, or `running` with a #277
+/// delegation deferral armed) and `gate.ok`. A read lowers `unread`
+/// below `lastNudged`, which resets the remembered value down to the
+/// new (lower) `unread` — so mail arriving after a full read nudges
+/// again, and mail arriving after a partial read only nudges once the
+/// count exceeds what is left unread. The reset applies regardless of
+/// stopping point or gate, since it reflects the mailbox being read,
+/// not anything about whether a nudge could be sent right now.
 ///
-/// When the phase isn't `waiting` or the gate refuses, nothing is
-/// recorded as nudged beyond that reset — the next time the harness
-/// reaches `waiting` with mail still outstanding, it nudges.
+/// When the harness isn't at a safe stopping point or the gate refuses,
+/// nothing is recorded as nudged beyond that reset — the next time it
+/// reaches one with mail still outstanding, it nudges.
 export function decideMailNudge(input: DecideMailNudgeInput): DecideMailNudgeResult {
-	const { phase, unread, gate } = input;
+	const { atStoppingPoint, unread, gate } = input;
 	const lastNudged = unread < input.lastNudged ? unread : input.lastNudged;
-	if (phase === "waiting" && gate.ok && unread > lastNudged && unread > 0) {
+	if (atStoppingPoint && gate.ok && unread > lastNudged && unread > 0) {
 		return { nudge: true, lastNudged: unread };
 	}
 	return { nudge: false, lastNudged };
+}
+
+/// #381: the transitions listener's trigger predicate — whether a
+/// transition landing on `to`, with the harness's freshly-read
+/// `atStoppingPointNow` (`atSafeStoppingPoint(harnessActivity.get(id))`
+/// at the caller), is worth running a mail `check` for. `to === "waiting"`
+/// is the original #329 trigger, kept unconditional since it's always a
+/// safe stopping point; `atStoppingPointNow` is what additionally covers
+/// `permission → running` while a #277 delegation deferral is still
+/// armed — the permission dialog closing can itself be the event that
+/// re-enters the deferred state, with no transition into `waiting` at
+/// all.
+export function shouldCheckOnTransition(to: ActivityPhase, atStoppingPointNow: boolean): boolean {
+	return to === "waiting" || atStoppingPointNow;
 }
 
 /// One-line nudge text, never the message bodies. Singular "message" for

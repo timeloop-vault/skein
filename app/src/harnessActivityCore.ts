@@ -48,6 +48,35 @@ export function phaseSnapshot(
 
 export const transitionListeners = new Set<TransitionListener>();
 
+/// #381: fires exactly when an armed #277 delegation deferral first
+/// arms — `awaitingPromptFromAdapter` calls every listener the moment
+/// `delegationDeferredAt` moves null → non-null, never on the idempotent
+/// re-arm (a second end-of-turn while already deferred) and never on
+/// disarm. Step B (mail delivery during a deferral) is the reason this
+/// exists — a mail nudge wants to know the instant a harness becomes
+/// safely nudgeable without polling. Kept as its own listener set,
+/// mirroring `transitionListeners`, rather than piggy-backing on it:
+/// arming is not a phase transition (the phase doesn't change), so
+/// `subscribeTransitions` never fires for it.
+export const delegationDeferredListeners = new Set<(id: string) => void>();
+
+/// #381: is this harness at a point where pasting and submitting a
+/// prompt through the #238 seam (`canSendPrompt`/`sendPrompt`) is safe?
+/// `waiting` (end of turn) always is. So is `running` with an armed
+/// #277 delegation deferral — the main session already ended its own
+/// turn and only stayed `running` because background subagents were
+/// still working (see `awaitingPromptFromAdapter`); a prompt landing
+/// now is exactly as safe as one landing once the deferral flushes to
+/// `waiting` on its own. `permission` is never a stopping point even
+/// with the deferral armed underneath it — a dialog is a harder stop
+/// than "not waiting" everywhere else this interaction shows up (#86
+/// outranks #277), and this reads the same way: a `permission` phase
+/// fails the `phase === "running"` check below regardless of
+/// `delegationDeferredAt`.
+export function atSafeStoppingPoint(a: HarnessActivity): boolean {
+	return a.phase === "waiting" || (a.phase === "running" && a.delegationDeferredAt !== null);
+}
+
 export const emit = (id: string): void => {
 	const set = listeners.get(id);
 	if (!set) return;

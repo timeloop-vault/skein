@@ -10,8 +10,10 @@ import type { DecideSubmitRetryInput } from "./submitRetry.ts";
 const input = (over: Partial<DecideSubmitRetryInput> = {}): DecideSubmitRetryInput => ({
 	capable: true,
 	watched: true,
-	leftWaitingSinceSend: false,
+	leftStoppingPointSinceSend: false,
 	phase: "waiting",
+	deferredAtSend: null,
+	deferredAtNow: null,
 	userInputSinceSend: false,
 	sameTarget: true,
 	...over,
@@ -23,7 +25,7 @@ describe("decideSubmitRetry", () => {
 	});
 
 	it("refuses once the harness left waiting — the first Enter landed", () => {
-		const r = decideSubmitRetry(input({ leftWaitingSinceSend: true }));
+		const r = decideSubmitRetry(input({ leftStoppingPointSinceSend: true }));
 		expect(r.retry).toBe(false);
 	});
 
@@ -61,6 +63,50 @@ describe("decideSubmitRetry", () => {
 	it("refuses once nothing is confirmed to be watching (the #259 watchdog degraded the adapter)", () => {
 		const r = decideSubmitRetry(input({ watched: false }));
 		expect(r).toEqual({ retry: false, reason: expect.stringContaining("watching") });
+	});
+});
+
+describe("decideSubmitRetry — #277 delegation-deferred arm (#381)", () => {
+	it("retries a running harness whose deferral hasn't changed since send", () => {
+		const r = decideSubmitRetry(
+			input({ phase: "running", deferredAtSend: 100, deferredAtNow: 100 }),
+		);
+		expect(r).toEqual({ retry: true });
+	});
+
+	it("refuses once the deferral has been disarmed since send", () => {
+		const r = decideSubmitRetry(
+			input({ phase: "running", deferredAtSend: 100, deferredAtNow: null }),
+		);
+		expect(r.retry).toBe(false);
+	});
+
+	it("refuses once the deferral has been flushed to waiting by the tick's settle/ceiling", () => {
+		const r = decideSubmitRetry(
+			input({ phase: "waiting", deferredAtSend: 100, deferredAtNow: null }),
+		);
+		expect(r.retry).toBe(false);
+	});
+
+	it("refuses once a fresh deferral has re-armed with a different timestamp", () => {
+		const r = decideSubmitRetry(
+			input({ phase: "running", deferredAtSend: 100, deferredAtNow: 200 }),
+		);
+		expect(r.retry).toBe(false);
+	});
+
+	it("refuses a plain running phase with no deferral armed at all", () => {
+		const r = decideSubmitRetry(
+			input({ phase: "running", deferredAtSend: null, deferredAtNow: null }),
+		);
+		expect(r.retry).toBe(false);
+	});
+
+	it("refuses a permission dialog even mid-deferral", () => {
+		const r = decideSubmitRetry(
+			input({ phase: "permission", deferredAtSend: 100, deferredAtNow: 100 }),
+		);
+		expect(r.retry).toBe(false);
 	});
 });
 
