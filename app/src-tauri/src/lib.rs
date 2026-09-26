@@ -745,6 +745,8 @@ fn frontend_log(level: String, target: String, message: String) {
     let message: String = message.chars().take(MAX_LEN).collect();
     if level == "warn" {
         tracing::warn!(source = "frontend", target = %target, truncated, "{message}");
+    } else if level == "error" {
+        tracing::error!(source = "frontend", target = %target, truncated, "{message}");
     } else {
         tracing::info!(source = "frontend", target = %target, truncated, "{message}");
     }

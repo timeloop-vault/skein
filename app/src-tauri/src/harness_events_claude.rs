@@ -26,7 +26,7 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use notify_debouncer_mini::notify::RecommendedWatcher;
 use notify_debouncer_mini::{DebounceEventResult, Debouncer, new_debouncer, notify::RecursiveMode};
@@ -40,6 +40,46 @@ use crate::harness_actions_claude::ActionExtractor;
 /// about latency, and a JSONL append produces exactly one event we
 /// want to react to quickly.
 const DEBOUNCE_MS: u64 = 50;
+
+/// Minimum spacing between heartbeat log lines for one attached adapter
+/// (#362). Piggybacks on whatever tick already ran — no timer thread of
+/// its own, so a transcript with nothing nearby to trigger a tick
+/// simply gets no heartbeat until the next one does. That's fine: the
+/// heartbeat's job is to prove "the Rust side is still ticking", and a
+/// rising `last_pos` alongside `events_sent` is what distinguishes that
+/// from "Rust stalled" — a frontend-silent-but-Rust-healthy report
+/// would show both climbing while nothing arrives on the other side.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How many consecutive ticks may see a UTF-8 decode failure at the
+/// *same* `last_pos` before it's worth a warn (#362). One or two is the
+/// ordinary case — a write straddling a debounce tick, picked up whole
+/// on the very next one — logged at debug and cleared automatically the
+/// moment a read at that position succeeds. A run that survives this
+/// many ticks (1s+ of wall time at the 50ms debounce) means the file is
+/// stuck mid multi-byte character for good, not just a momentary race.
+const UTF8_STALL_WARN_THRESHOLD: u32 = 20;
+
+/// Pure decision for whether a heartbeat should fire this tick, given
+/// when the last one fired (`None` = never yet) and the current time.
+/// Factored out so the rate limit is testable without sleeping 60s
+/// (#362) — a test just constructs `now` and `now - INTERVAL - epsilon`.
+fn should_heartbeat(last: Option<Instant>, now: Instant) -> bool {
+    match last {
+        None => true,
+        Some(last) => now.saturating_duration_since(last) >= HEARTBEAT_INTERVAL,
+    }
+}
+
+/// Pure decision for whether this tick should log the UTF-8 stall warn,
+/// given the running consecutive-failure count (already incremented for
+/// this tick) and whether the warn already fired for the current run.
+/// Fires exactly once per stall run, on the tick where the count first
+/// reaches [`UTF8_STALL_WARN_THRESHOLD`] — factored out for the same
+/// clock-free testability reason as `should_heartbeat`.
+fn should_warn_utf8_stall(count: u32, already_warned: bool) -> bool {
+    count >= UTF8_STALL_WARN_THRESHOLD && !already_warned
+}
 
 /// Semantic events emitted to the frontend. The translator in
 /// `harnessEvents.ts` maps these to phase calls. We deliberately keep
@@ -274,6 +314,39 @@ struct TailState {
     /// "attached but nothing has ever come through the tail" from
     /// "tailing fine" at the default info filter.
     first_read_logged: bool,
+    /// Cumulative count of `ClaudeEvent`s handed to `on_event` since
+    /// this `TailState` was created — main and subagent events combined
+    /// (#362). One of the heartbeat's two liveness numbers, alongside
+    /// `last_pos`: both climbing means the tail is genuinely healthy
+    /// even if the frontend never shows it; both frozen while the file
+    /// grows is what a real stall looks like.
+    events_sent: u64,
+    /// Cumulative count of `on_event` dispatch batches that panicked,
+    /// caught via `catch_unwind` around the whole per-tick dispatch loop
+    /// (#362) so a bad callback can't unwind through `tick` unnoticed.
+    /// Expected to stay 0 in production — the real callback in `lib.rs`
+    /// only `.is_err()`s a dead channel, it never panics — so this
+    /// exists for the heartbeat's own honesty and for tests that use a
+    /// channel that can panic on send.
+    send_errors: u64,
+    /// Wall-clock time the last heartbeat line was logged; `None`
+    /// before the first one. Rate-limited to at most one per
+    /// `HEARTBEAT_INTERVAL` — see `should_heartbeat`.
+    last_heartbeat: Option<Instant>,
+    /// `last_pos` value the current run of consecutive UTF-8 mid-line
+    /// failures started at (#362). `None` when the main tail isn't
+    /// currently stalled at all.
+    utf8_stall_at: Option<u64>,
+    /// How many consecutive ticks have failed to decode at
+    /// `utf8_stall_at`. Reset to 0 the moment a read succeeds (which
+    /// can only happen once `last_pos` is genuinely able to advance
+    /// past the incomplete character) — see `UTF8_STALL_WARN_THRESHOLD`.
+    utf8_stall_count: u32,
+    /// Whether the stall warn already fired for the *current* run
+    /// (`utf8_stall_at`) — logged once per stall, not once per tick
+    /// once past the threshold. Rearmed by the same reset as
+    /// `utf8_stall_count`.
+    utf8_stall_warned: bool,
 }
 
 /// Action-extraction context bundled per attached harness. The
@@ -493,6 +566,17 @@ impl ClaudeEventsManager {
                 let (agent_type, description) =
                     meta.map_or((None, None), |m| (m.agent_type, m.description));
                 if !finished {
+                    // #362: one line per subagent id the moment it joins
+                    // the tailed set, so a session with subagent activity
+                    // shows up in the log even when the main transcript
+                    // itself goes quiet around the same time.
+                    tracing::info!(
+                        harness_id = %harness_id,
+                        agent_id = %agent_id,
+                        initial = true,
+                        agent_type = ?agent_type,
+                        "claude_events: subagent transcript joined the tailed set"
+                    );
                     initial_subagent_starts.push(ClaudeEvent::SubagentStart {
                         agent_id: agent_id.clone(),
                         agent_type: agent_type.clone(),
@@ -533,6 +617,12 @@ impl ClaudeEventsManager {
             subagents: initial_subagents,
             subagents_dir_read_failure_logged: false,
             first_read_logged: false,
+            events_sent: 0,
+            send_errors: 0,
+            last_heartbeat: None,
+            utf8_stall_at: None,
+            utf8_stall_count: 0,
+            utf8_stall_warned: false,
         }));
         let cb_state = Arc::clone(&state);
         let on_event = Arc::new(on_event);
@@ -794,6 +884,30 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
                     path = %s.path.display(),
                     "claude_events: utf8 mid-line; retrying next tick"
                 );
+                // #362: a one- or two-tick stall here is the ordinary
+                // case above. Count consecutive failures at the SAME
+                // last_pos — a run that survives past the threshold
+                // means the file is stuck mid multi-byte character for
+                // good, not just a write straddling a debounce tick.
+                if s.utf8_stall_at == Some(s.last_pos) {
+                    s.utf8_stall_count = s.utf8_stall_count.saturating_add(1);
+                } else {
+                    s.utf8_stall_at = Some(s.last_pos);
+                    s.utf8_stall_count = 1;
+                    s.utf8_stall_warned = false;
+                }
+                if should_warn_utf8_stall(s.utf8_stall_count, s.utf8_stall_warned) {
+                    s.utf8_stall_warned = true;
+                    let len = file.metadata().ok().map(|m| m.len());
+                    tracing::warn!(
+                        harness_id = %s.harness_id,
+                        path = %s.path.display(),
+                        pos = s.last_pos,
+                        file_len = ?len,
+                        ticks = s.utf8_stall_count,
+                        "claude_events: transcript stuck mid multi-byte character across many ticks"
+                    );
+                }
             } else {
                 tracing::warn!(
                     harness_id = %s.harness_id,
@@ -805,6 +919,13 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
             return;
         }
     };
+    // Reaching here means the read decoded cleanly — any UTF-8 stall
+    // run in progress is over. Rearm so a *future* stall gets its own
+    // fresh count and its own warn (#362).
+    s.utf8_stall_at = None;
+    s.utf8_stall_count = 0;
+    s.utf8_stall_warned = false;
+    let file_len = file.metadata().ok().map(|m| m.len());
     let advance: u64 = u64::try_from(bytes).unwrap_or(u64::MAX);
     s.last_pos = s.last_pos.saturating_add(advance);
 
@@ -871,18 +992,73 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     let main_events = events.len();
     tick_subagents(&mut s, &mut events);
     let subagent_events = events.len() - main_events;
+    // Only the subagents still being tailed live count as "watched" —
+    // a finished one is a cheap stat check, not a file whose new rows
+    // we're expecting (#362).
+    let live_subagents = s.subagents.values().filter(|t| !t.finished).count();
+    let watched_files = 1 + live_subagents;
     tracing::debug!(
         harness_id = %s.harness_id,
         bytes,
         lines_parsed,
         events = main_events,
         subagent_events,
+        watched_files,
         "claude_events: tick"
     );
+
+    // Heartbeat (#362): at most once per HEARTBEAT_INTERVAL per
+    // attached adapter, and only on a tick that actually runs — no
+    // timer thread. A rising `last_pos` alongside `events_sent` proves
+    // the Rust side is still reading and emitting even when the
+    // frontend goes quiet; both frozen while `file_len` keeps growing
+    // is what an actual stall looks like.
+    let now = Instant::now();
+    if should_heartbeat(s.last_heartbeat, now) {
+        s.last_heartbeat = Some(now);
+        tracing::info!(
+            harness_id = %s.harness_id,
+            session = %s.path.display(),
+            last_pos = s.last_pos,
+            file_len = ?file_len,
+            events_sent = s.events_sent,
+            send_errors = s.send_errors,
+            live_subagents,
+            "claude_events: heartbeat"
+        );
+    }
     drop(s);
 
-    for event in events {
-        on_event(event);
+    // A panic inside `on_event` would otherwise unwind straight through
+    // `tick` — caught here (rather than only by the debouncer callback's
+    // own `catch_unwind`) so it's counted toward `send_errors` and
+    // logged with the harness id that triggered it (#362). The
+    // production callback in `lib.rs` never panics — it only
+    // `.is_err()`s a dead channel — so this is expected to stay silent
+    // there; it exists for this counter's own honesty and for tests
+    // that use a channel that can panic on send.
+    //
+    // `dispatched` counts only events actually handed to `on_event`
+    // before any panic, matching `events_sent`'s own doc — a panic
+    // partway through the loop must not credit events that were never
+    // delivered.
+    let mut dispatched: u64 = 0;
+    let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for event in events {
+            on_event(event);
+            dispatched += 1;
+        }
+    }));
+    let mut s = state.lock();
+    s.events_sent = s.events_sent.saturating_add(dispatched);
+    if let Err(panic) = panic_result {
+        s.send_errors = s.send_errors.saturating_add(1);
+        tracing::error!(
+            harness_id = %s.harness_id,
+            panic = %panic_message(&panic),
+            total_send_errors = s.send_errors,
+            "claude_events: on_event panicked while dispatching this tick's events"
+        );
     }
 }
 
@@ -952,6 +1128,16 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
             let meta = skein_harness::claude::read_subagent_meta(&sub_path);
             let (agent_type, description) =
                 meta.map_or((None, None), |m| (m.agent_type, m.description));
+            // #362: one line per subagent id the moment it joins the
+            // tailed set — the discovery this issue's symptom traced
+            // back to (a session that had just started delegating).
+            tracing::info!(
+                harness_id = %s.harness_id,
+                agent_id = %agent_id,
+                initial = false,
+                agent_type = ?agent_type,
+                "claude_events: subagent transcript joined the tailed set"
+            );
             events.push(ClaudeEvent::SubagentStart {
                 agent_id: agent_id.clone(),
                 agent_type: agent_type.clone(),
@@ -3195,6 +3381,12 @@ mod tests {
             subagents: HashMap::new(),
             subagents_dir_read_failure_logged: false,
             first_read_logged: false,
+            events_sent: 0,
+            send_errors: 0,
+            last_heartbeat: None,
+            utf8_stall_at: None,
+            utf8_stall_count: 0,
+            utf8_stall_warned: false,
         }));
 
         // Nothing written yet — a tick that reads zero bytes must not
@@ -3213,5 +3405,388 @@ mod tests {
         // A later empty tick must leave it set, not toggle it back.
         tick(&state, &|_| {});
         assert!(state.lock().first_read_logged);
+    }
+
+    /// #362: `events_sent` must count only events actually handed to
+    /// `on_event`, not everything a tick queued — a panic partway
+    /// through the dispatch loop must not credit events that were
+    /// never delivered. Two rows queue two events; the callback panics
+    /// on the second call, so only the first should be counted, and
+    /// the panic itself must still land in `send_errors`.
+    #[test]
+    fn events_sent_counts_only_events_dispatched_before_a_panic() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let state = Arc::new(Mutex::new(TailState {
+            harness_id: "h".into(),
+            path: path.clone(),
+            last_pos: 0,
+            partial: String::new(),
+            attached: true,
+            in_assistant_turn: false,
+            actions: None,
+            subagents_dir: None,
+            subagents: HashMap::new(),
+            subagents_dir_read_failure_logged: false,
+            first_read_logged: false,
+            events_sent: 0,
+            send_errors: 0,
+            last_heartbeat: None,
+            utf8_stall_at: None,
+            utf8_stall_count: 0,
+            utf8_stall_warned: false,
+        }));
+
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        tick(&state, &|_event| {
+            let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert!(n != 1, "boom");
+        });
+
+        let s = state.lock();
+        assert_eq!(
+            s.events_sent, 1,
+            "only the event dispatched before the panic should be counted, got {}",
+            s.events_sent
+        );
+        assert_eq!(s.send_errors, 1);
+    }
+
+    // ── #362: heartbeat, sidecar discovery, utf8 stall ─────────────
+
+    /// The headline #362 scenario: a subagent sidecar appears after
+    /// attach, and the main transcript's own events must keep flowing
+    /// exactly as before — a sidecar joining the tailed set must never
+    /// starve `tick`'s main-file half.
+    #[test]
+    fn main_events_keep_flowing_after_sidecars_appear_post_attach() {
+        let dir = TempDir::new().unwrap();
+        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        fs::write(
+            sub_dir.join("agent-s1.meta.json"),
+            r#"{"agentType":"explore","description":"Look around"}"#,
+        )
+        .unwrap();
+        let mut sf = fs::File::create(sub_dir.join("agent-s1.jsonl")).unwrap();
+        writeln!(
+            sf,
+            r#"{{"type":"assistant","isSidechain":true,"agentId":"s1","message":{{"stop_reason":"tool_use","content":[]}}}}"#
+        )
+        .unwrap();
+        sf.sync_all().unwrap();
+
+        let events = drain(&rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ClaudeEvent::SubagentStart { agent_id, initial, .. }
+                    if agent_id == "s1" && !initial
+            )),
+            "expected a live SubagentStart for s1, got {events:?}"
+        );
+
+        // The main transcript must keep producing its own events with
+        // a subagent now mid-flight.
+        let mut mf = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            mf,
+            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"tool_use","content":[{{"type":"tool_use","name":"Read"}}]}}}}"#
+        )
+        .unwrap();
+        mf.sync_all().unwrap();
+
+        let events = drain(&rx);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ClaudeEvent::AssistantTurn)),
+            "expected the main transcript's tool-use row to still fire AssistantTurn, got {events:?}"
+        );
+
+        let mut mf = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            mf,
+            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+        )
+        .unwrap();
+        mf.sync_all().unwrap();
+
+        let events = drain(&rx);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ClaudeEvent::AwaitingPrompt)),
+            "expected the main transcript's end_turn row to still fire AwaitingPrompt, got {events:?}"
+        );
+
+        let mut sf = fs::OpenOptions::new()
+            .append(true)
+            .open(sub_dir.join("agent-s1.jsonl"))
+            .unwrap();
+        writeln!(
+            sf,
+            r#"{{"type":"assistant","isSidechain":true,"agentId":"s1","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+        )
+        .unwrap();
+        sf.sync_all().unwrap();
+
+        let events = drain(&rx);
+        assert!(
+            events.iter().any(
+                |e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "s1")
+            ),
+            "expected SubagentEnd for s1, got {events:?}"
+        );
+    }
+
+    /// Stress variant: five subagents churn (appear, run, finish) while
+    /// the main transcript writes its own turns, all under one attach.
+    /// Every main row must still produce its event and every subagent
+    /// must still get exactly one Start and one End — bounded by one
+    /// shared wall-clock deadline so a real regression (a stuck tail)
+    /// fails the test instead of hanging it.
+    #[test]
+    fn main_and_subagent_events_survive_concurrent_sidecar_churn() {
+        const MAIN_TURNS: usize = 5;
+        const SUBAGENTS: usize = 5;
+
+        let dir = TempDir::new().unwrap();
+        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+
+        let barrier = Arc::new(Barrier::new(1 + SUBAGENTS));
+
+        let main_path = path.clone();
+        let main_barrier = Arc::clone(&barrier);
+        let main_thread = thread::spawn(move || {
+            main_barrier.wait();
+            for i in 0..MAIN_TURNS {
+                let mut f = fs::OpenOptions::new()
+                    .append(true)
+                    .open(&main_path)
+                    .unwrap();
+                writeln!(
+                    f,
+                    r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"tool_use","content":[{{"type":"tool_use","name":"Tool{i}"}}]}}}}"#
+                )
+                .unwrap();
+                f.sync_all().unwrap();
+                thread::sleep(Duration::from_millis(15));
+                let mut f = fs::OpenOptions::new()
+                    .append(true)
+                    .open(&main_path)
+                    .unwrap();
+                writeln!(
+                    f,
+                    r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+                )
+                .unwrap();
+                f.sync_all().unwrap();
+                thread::sleep(Duration::from_millis(15));
+            }
+        });
+
+        let mut sub_threads = Vec::new();
+        for i in 0..SUBAGENTS {
+            let sub_dir = sub_dir.clone();
+            let sub_barrier = Arc::clone(&barrier);
+            sub_threads.push(thread::spawn(move || {
+                sub_barrier.wait();
+                thread::sleep(Duration::from_millis(5 * i as u64));
+                let sub_path = sub_dir.join(format!("agent-s{i}.jsonl"));
+                fs::write(
+                    &sub_path,
+                    format!(
+                        "{{\"type\":\"assistant\",\"isSidechain\":true,\"agentId\":\"s{i}\",\"message\":{{\"stop_reason\":\"end_turn\",\"content\":[]}}}}\n"
+                    ),
+                )
+                .unwrap();
+            }));
+        }
+
+        main_thread.join().unwrap();
+        for h in sub_threads {
+            h.join().unwrap();
+        }
+
+        let mut events = Vec::new();
+        let mut assistant_turns = 0usize;
+        let mut awaiting_prompts = 0usize;
+        let mut started: HashSet<String> = HashSet::new();
+        let mut ended: HashSet<String> = HashSet::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+            let Ok(ev) = rx.recv_timeout(remaining.min(Duration::from_millis(200))) else {
+                continue;
+            };
+            match &ev {
+                ClaudeEvent::AssistantTurn => assistant_turns += 1,
+                ClaudeEvent::AwaitingPrompt => awaiting_prompts += 1,
+                ClaudeEvent::SubagentStart { agent_id, .. } => {
+                    started.insert(agent_id.clone());
+                }
+                ClaudeEvent::SubagentEnd { agent_id, .. } => {
+                    ended.insert(agent_id.clone());
+                }
+                _ => {}
+            }
+            events.push(ev);
+            if assistant_turns >= MAIN_TURNS
+                && awaiting_prompts >= MAIN_TURNS
+                && started.len() >= SUBAGENTS
+                && ended.len() >= SUBAGENTS
+            {
+                break;
+            }
+        }
+
+        assert_eq!(
+            assistant_turns, MAIN_TURNS,
+            "lost a main AssistantTurn under sidecar churn, got {events:?}"
+        );
+        assert_eq!(
+            awaiting_prompts, MAIN_TURNS,
+            "lost a main AwaitingPrompt under sidecar churn, got {events:?}"
+        );
+        assert_eq!(
+            started.len(),
+            SUBAGENTS,
+            "lost a SubagentStart under sidecar churn, got {events:?}"
+        );
+        assert_eq!(
+            ended.len(),
+            SUBAGENTS,
+            "lost a SubagentEnd under sidecar churn, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn should_heartbeat_rate_limits_to_once_per_interval() {
+        let now = Instant::now();
+        assert!(
+            should_heartbeat(None, now),
+            "the very first heartbeat should fire immediately"
+        );
+        assert!(
+            !should_heartbeat(Some(now), now),
+            "must not fire again at the same instant"
+        );
+        let almost_due = now + Duration::from_secs(59);
+        assert!(
+            !should_heartbeat(Some(now), almost_due),
+            "must not fire before the interval elapses"
+        );
+        let due = now + HEARTBEAT_INTERVAL;
+        assert!(
+            should_heartbeat(Some(now), due),
+            "must fire once the interval has elapsed"
+        );
+    }
+
+    #[test]
+    fn should_warn_utf8_stall_fires_once_at_threshold() {
+        assert!(
+            !should_warn_utf8_stall(UTF8_STALL_WARN_THRESHOLD - 1, false),
+            "must not fire before the threshold"
+        );
+        assert!(
+            should_warn_utf8_stall(UTF8_STALL_WARN_THRESHOLD, false),
+            "must fire once the threshold is reached"
+        );
+        assert!(
+            !should_warn_utf8_stall(UTF8_STALL_WARN_THRESHOLD, true),
+            "must not re-fire once already warned for this run"
+        );
+        assert!(
+            should_warn_utf8_stall(UTF8_STALL_WARN_THRESHOLD + 5, false),
+            "must fire past the threshold too, as long as it hasn't warned yet"
+        );
+    }
+
+    /// End-to-end (through `tick`, not just the pure decision fn): a
+    /// main transcript stuck on the same invalid byte at the same
+    /// `last_pos` climbs the stall counter one per tick, warns exactly
+    /// once at the threshold, and a later successful read clears all
+    /// three fields — the actual field-mutating logic `tick` uses.
+    #[test]
+    fn utf8_stall_counter_tracks_consecutive_failures_and_resets_on_recovery() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        // A lone continuation byte: not a prefix of anything, so it
+        // never becomes valid UTF-8 no matter how many times it's
+        // re-read — the stall persists until the file itself changes.
+        fs::write(&path, [0x80]).unwrap();
+        let state = Arc::new(Mutex::new(TailState {
+            harness_id: "h".into(),
+            path: path.clone(),
+            last_pos: 0,
+            partial: String::new(),
+            attached: true,
+            in_assistant_turn: false,
+            actions: None,
+            subagents_dir: None,
+            subagents: HashMap::new(),
+            subagents_dir_read_failure_logged: false,
+            first_read_logged: false,
+            events_sent: 0,
+            send_errors: 0,
+            last_heartbeat: None,
+            utf8_stall_at: None,
+            utf8_stall_count: 0,
+            utf8_stall_warned: false,
+        }));
+
+        for expected in 1..UTF8_STALL_WARN_THRESHOLD {
+            tick(&state, &|_| {});
+            let s = state.lock();
+            assert_eq!(
+                s.utf8_stall_count, expected,
+                "stall count should climb by exactly one per tick"
+            );
+            assert_eq!(s.utf8_stall_at, Some(0));
+            assert!(!s.utf8_stall_warned, "must not warn before the threshold");
+        }
+
+        tick(&state, &|_| {});
+        {
+            let s = state.lock();
+            assert_eq!(s.utf8_stall_count, UTF8_STALL_WARN_THRESHOLD);
+            assert!(
+                s.utf8_stall_warned,
+                "must warn once the threshold is reached"
+            );
+        }
+
+        // Recovery: the file changes underneath the stall — the next
+        // tick decodes cleanly and must rearm every field.
+        fs::write(&path, "{\"type\":\"user\"}\n").unwrap();
+        tick(&state, &|_| {});
+        let s = state.lock();
+        assert_eq!(
+            s.utf8_stall_count, 0,
+            "a successful read must clear the stall count"
+        );
+        assert_eq!(s.utf8_stall_at, None);
+        assert!(
+            !s.utf8_stall_warned,
+            "a successful read must rearm the warn guard"
+        );
     }
 }
