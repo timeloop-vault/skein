@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, named_params, params};
 use serde::{Deserialize, Serialize};
 
 /// Mirrors the TS Harness interface. Field renames keep the wire format
@@ -2012,6 +2012,108 @@ impl Database {
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(params![room_id, harness_id], row_to_message)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// One message by id, with no scope check at all — `message_history`
+    /// (#364) uses this only to decide whether a `since` message id sits
+    /// inside the caller's own visible mail before trusting it as a
+    /// paging cursor; the caller does that check, not this method.
+    pub fn harness_message_by_id(&self, id: &str) -> Result<Option<HarnessMessageRow>, String> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT id, room_id, harness_id, from_room_id, from_harness_id, body, \
+                    created_ms, read_ms \
+             FROM harness_messages WHERE id = ?1",
+            params![id],
+            row_to_message,
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    /// `message_history`'s (#364) rows: bounded, filtered by counterpart,
+    /// in one or both directions, oldest first, never touching
+    /// `read_ms`.
+    ///
+    /// Inbound is the caller harness's own inbox — the same
+    /// `room_id`/`harness_id` scope `unread_harness_messages`/
+    /// `all_harness_messages` read. Outbound is the caller ROOM's
+    /// outbox (`from_room_id`), deliberately not narrowed to the
+    /// caller's own harness — the brief is explicit that any harness in
+    /// the room counts. That is also why a sibling harness's message
+    /// *to* the caller matches both branches: the `NOT (room_id = :room
+    /// AND harness_id = :harness)` on the outbound branch is what keeps
+    /// such a row classified inbound instead of returned twice. The
+    /// `:harness IS NOT NULL` guards on every `room_id = :room AND
+    /// harness_id = :harness` comparison exist because SQL's `NOT NULL`
+    /// is `NULL`, not `TRUE`: with no caller harness (a headless
+    /// `direction: "out"` caller), `harness_id = :harness` alone would
+    /// make the whole outbound branch's `NOT (...)` evaluate to `NULL`
+    /// and silently drop every row rather than including all of them.
+    ///
+    /// `since_ms`/`since_message_id` are mutually exclusive and already
+    /// resolved by the caller (`message_history` validates a message id
+    /// sits in scope before it gets here) — this method just ANDs both
+    /// conditions in, so passing both narrows to their intersection
+    /// rather than picking one; the verb layer never does.
+    #[allow(clippy::too_many_arguments)]
+    pub fn harness_message_history(
+        &self,
+        caller_room_id: &str,
+        caller_harness_id: Option<&str>,
+        include_inbound: bool,
+        include_outbound: bool,
+        with: Option<&str>,
+        since_ms: Option<i64>,
+        since_message_id: Option<&str>,
+        fetch_limit: u32,
+    ) -> Result<Vec<HarnessMessageRow>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, room_id, harness_id, from_room_id, from_harness_id, body, \
+                        created_ms, read_ms \
+                 FROM harness_messages \
+                 WHERE ( \
+                     (:inbound AND :harness IS NOT NULL \
+                      AND room_id = :room AND harness_id = :harness) \
+                     OR (:outbound AND from_room_id = :room \
+                         AND NOT (:harness IS NOT NULL \
+                                  AND room_id = :room AND harness_id = :harness)) \
+                 ) \
+                 AND (:with IS NULL OR ( \
+                     (:harness IS NOT NULL AND room_id = :room AND harness_id = :harness \
+                      AND (from_room_id = :with OR from_harness_id = :with)) \
+                     OR (from_room_id = :room \
+                         AND NOT (:harness IS NOT NULL \
+                                  AND room_id = :room AND harness_id = :harness) \
+                         AND (room_id = :with OR harness_id = :with)) \
+                 )) \
+                 AND (:since_ms IS NULL OR created_ms > :since_ms) \
+                 AND (:since_id IS NULL OR (created_ms, rowid) > ( \
+                     SELECT created_ms, rowid FROM harness_messages WHERE id = :since_id \
+                 )) \
+                 ORDER BY created_ms, rowid \
+                 LIMIT :limit",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(
+                named_params! {
+                    ":inbound": include_inbound,
+                    ":outbound": include_outbound,
+                    ":room": caller_room_id,
+                    ":harness": caller_harness_id,
+                    ":with": with,
+                    ":since_ms": since_ms,
+                    ":since_id": since_message_id,
+                    ":limit": fetch_limit,
+                },
+                row_to_message,
+            )
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
