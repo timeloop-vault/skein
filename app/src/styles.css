@@ -1334,6 +1334,17 @@ html.tab-dragging.tab-drag-refused * {
 	opacity: 0.4;
 	cursor: default;
 }
+/* #359: divider above the repo-skill items in the same menu, once any
+ * are found under `.claude/skills`. */
+.sk-harness-actions-divider {
+	margin: 4px 4px 2px;
+	padding: 2px 4px 0;
+	color: var(--fg-3);
+	font-size: 0.78em;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	border-top: 1px solid var(--line);
+}
 .sk-harness-actions-error {
 	position: absolute;
 	top: 100%;

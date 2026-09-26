@@ -1,31 +1,68 @@
 // The harness tab row's Actions ▾ button (#355 step 2), beside `+
 // harness` in HarnessColumn.tsx. Lists the non-review nudges
 // (`nudgeRegistry.ts`'s "actions" scope — #358's worktree sweep is the
-// first) and pastes the chosen one into the room's ACTIVE harness,
-// through the same `harnessInput.ts` seam #238's Nudge button uses.
+// first), the room's own repo skills (#359 — `repoSkills.ts`), and
+// pastes the chosen one into the room's ACTIVE harness, through the
+// same `harnessInput.ts` seam #238's Nudge button uses.
 //
 // Thin on purpose: `actionsButtonState` (harnessActionsMenu.ts) is the
 // pure "what should this button show" logic; this component only wires
-// it to the live stores (activity, registration, overrides) and the
-// menu's open/close chrome.
+// it to the live stores (activity, registration, overrides), the
+// `.claude/skills` load, and the menu's open/close chrome.
 
-import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { HARNESS_KINDS } from "./data.tsx";
 import { type ActionsMenuItem, actionsButtonState } from "./harnessActionsMenu.ts";
 import { useHarnessActivity } from "./harnessActivity.ts";
 import { canSendPrompt, harnessInput, sendPrompt } from "./harnessInput.ts";
 import { actionNudges } from "./nudgeRegistry.ts";
 import { useNudgeOverrides } from "./nudgeStore.ts";
+import { type RepoSkill, loadRepoSkills } from "./repoSkills.ts";
 import type { Harness } from "./types.ts";
 
-export const HarnessActionsMenu = ({ activeHarness }: { activeHarness: Harness | undefined }) => {
+interface TextDto {
+	content: string;
+}
+
+export const HarnessActionsMenu = ({
+	activeHarness,
+	cwd,
+}: {
+	activeHarness: Harness | undefined;
+	cwd: string | undefined;
+}) => {
 	const [open, setOpen] = useState(false);
 	const [error, setError] = useState<string | undefined>(undefined);
+	const [skills, setSkills] = useState<readonly RepoSkill[]>([]);
+	const skillsSeq = useRef(0);
 	const rootRef = useRef<HTMLDivElement | null>(null);
 
 	const activity = useHarnessActivity(activeHarness?.id ?? null);
 	const overrides = useNudgeOverrides();
 	const capabilities = activeHarness ? HARNESS_KINDS[activeHarness.kind].capabilities : null;
+	const skillInvocation = activeHarness ? HARNESS_KINDS[activeHarness.kind].skillInvocation : null;
+
+	// Reload the room's repo skills fresh every time the menu opens — no
+	// caching, since a skill directory can appear or change between
+	// opens. A sequence guard means a slow load for an earlier
+	// cwd/kind can't clobber a newer one that already resolved. Skipped
+	// entirely (and reset to empty) when there's no cwd yet or the
+	// active kind has no slash convention at all.
+	useEffect(() => {
+		if (!open) return;
+		const seq = ++skillsSeq.current;
+		if (!cwd || skillInvocation === null) {
+			setSkills([]);
+			return;
+		}
+		loadRepoSkills(cwd, {
+			listDir: (path) => invoke("list_dir", { path }),
+			readFile: async (path) => (await invoke<TextDto>("read_file_text", { path })).content,
+		}).then((loaded) => {
+			if (seq === skillsSeq.current) setSkills(loaded);
+		});
+	}, [open, cwd, skillInvocation]);
 
 	// Close on outside click / Escape, same affordance as any other
 	// lightweight popover in this app.
@@ -49,16 +86,22 @@ export const HarnessActionsMenu = ({ activeHarness }: { activeHarness: Harness |
 	// button uses: hidden entirely, not disabled-and-unexplained.
 	if (!capabilities?.pty) return null;
 
-	const state = actionsButtonState(true, actionNudges(), overrides, (body) =>
-		activeHarness
-			? canSendPrompt({
-					capabilities,
-					activity,
-					registered: harnessInput.isRegistered(activeHarness.id),
-					bracketedPasteOn: harnessInput.bracketedPaste(activeHarness.id),
-					body,
-				})
-			: { ok: false, reason: "no active harness" },
+	const state = actionsButtonState(
+		true,
+		actionNudges(),
+		overrides,
+		(body) =>
+			activeHarness
+				? canSendPrompt({
+						capabilities,
+						activity,
+						registered: harnessInput.isRegistered(activeHarness.id),
+						bracketedPasteOn: harnessInput.bracketedPaste(activeHarness.id),
+						body,
+					})
+				: { ok: false, reason: "no active harness" },
+		skills,
+		skillInvocation,
 	);
 
 	const onChoose = (item: ActionsMenuItem) => {
@@ -81,17 +124,21 @@ export const HarnessActionsMenu = ({ activeHarness }: { activeHarness: Harness |
 			</button>
 			{open && state.kind === "menu" && (
 				<div className="sk-harness-actions-menu">
-					{state.items.map((item) => (
-						<button
-							type="button"
-							key={item.id}
-							className="sk-harness-actions-item"
-							disabled={!item.gate.ok}
-							title={item.gate.ok ? item.title : item.gate.reason}
-							onClick={() => onChoose(item)}
-						>
-							{item.label}
-						</button>
+					{state.items.map((item, i) => (
+						<Fragment key={item.id}>
+							{item.source === "skill" && state.items[i - 1]?.source !== "skill" && (
+								<div className="sk-harness-actions-divider">Repo skills</div>
+							)}
+							<button
+								type="button"
+								className="sk-harness-actions-item"
+								disabled={!item.gate.ok}
+								title={item.gate.ok ? item.title : item.gate.reason}
+								onClick={() => onChoose(item)}
+							>
+								{item.label}
+							</button>
+						</Fragment>
 					))}
 				</div>
 			)}
