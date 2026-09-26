@@ -29,9 +29,10 @@ const HINT_MS_SUCCESS = 1200;
 const HINT_MS_INFO = 4000;
 
 export interface TerminalInteractionsDeps {
-	/// This harness's id — only used to note a user-driven paste
-	/// (#380's `harnessInput.noteUserInput`), never for the phase/keys
-	/// logic below.
+	/// This harness's id — used to note a user-driven paste (#380's
+	/// `harnessInput.noteUserInput`) and to fold the same events into the
+	/// composer-draft inference (#383's `harnessInput.noteDraftEvent`),
+	/// never for the phase/keys logic below.
 	harnessId: string;
 	/// Current post-exit phase, read (never written) here.
 	getPhase: () => "running" | "exited";
@@ -211,6 +212,9 @@ export function attachTerminalInteractions(
 					// #380: a human-driven paste, same as a keystroke —
 					// `sendPrompt`'s gap/retry checks need to see it.
 					harnessInput.noteUserInput(harnessId);
+					// #383: same paste, folded into the composer-draft
+					// inference.
+					harnessInput.noteDraftEvent(harnessId, { type: "userPaste" });
 				})
 				.catch((err: unknown) => {
 					console.warn("[skein] clipboard paste failed:", err);
@@ -243,6 +247,10 @@ export function attachTerminalInteractions(
 			e.preventDefault();
 			const id = ptyIdRef.current;
 			if (id) void invoke("pty_write", { id, data: "\x1b\r" });
+			// #383: this write goes straight to the PTY, never through
+			// `onKey`, so it's the only place this inserted newline is
+			// visible to the composer-draft inference.
+			harnessInput.noteDraftEvent(harnessId, { type: "key", key: "\x1b\r" });
 			return false;
 		}
 		return true;

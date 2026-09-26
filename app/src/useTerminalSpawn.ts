@@ -117,6 +117,16 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		const { term, fit } = createXterm(host, fontSize);
 		termRef.current = term;
 		fitRef.current = fit;
+		// #383 follow-up: xterm's IME composition (CJK, an emoji picker,
+		// possibly a dead-key accent) calls `_finalizeComposition`
+		// straight into `onData`, never `onKey` — this listener is the
+		// only place this store ever sees it. Both start and end fold to
+		// `userPaste` (→ `unknown`), not a guess at what was actually
+		// composed: fails safe, same principle as `composerDraft.ts`'s
+		// own header.
+		const noteComposition = () => harnessInput.noteDraftEvent(harnessId, { type: "userPaste" });
+		term.textarea?.addEventListener("compositionstart", noteComposition);
+		term.textarea?.addEventListener("compositionend", noteComposition);
 		// Initial focus is handled by the `visible` effect in
 		// LiveTerminal.tsx — that effect fires on mount as well as on
 		// every visible-flip, so a terminal mounting visible (e.g.
@@ -350,6 +360,15 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					if (data === "\x1b[I" || data === "\x1b[O") {
 						harnessActivity.muteInducedOutput(harnessId);
 					}
+					// #383: a bracketed paste (middle-click, a right-click/
+					// menu paste) never reaches `onKey` below, so it's the
+					// only paste path this store would otherwise miss
+					// entirely. The seam's own `term.paste()` lands here
+					// too — harmless, since the composer read is `unknown`
+					// either way and its own `seamSubmit` clears it.
+					if (data.startsWith("\x1b[200~")) {
+						harnessInput.noteDraftEvent(harnessId, { type: "userPaste" });
+					}
 					void invoke("pty_write", { id, data });
 				});
 				// Separate hook for "did the user actually press a
@@ -379,6 +398,9 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					// checks need to tell that apart from its own
 					// machine-written "\r".
 					harnessInput.noteUserInput(harnessId);
+					// #383: fold the same keystroke into the composer-draft
+					// inference.
+					harnessInput.noteDraftEvent(harnessId, { type: "key", key });
 				});
 				if (!resizeObserver) {
 					// Track the dims we last sent so we can skip the
@@ -435,6 +457,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 
 		return () => {
 			cancelled = true;
+			term.textarea?.removeEventListener("compositionstart", noteComposition);
+			term.textarea?.removeEventListener("compositionend", noteComposition);
 			dataDisposable?.dispose();
 			resizeObserver?.disconnect();
 			// L2c-1: detach before pty_kill so the adapter stops

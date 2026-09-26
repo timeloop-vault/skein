@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
+import type { ComposerDraft } from "./composerDraft.ts";
 import {
+	automaticGate,
 	decideMailNudge,
 	mailNudgeText,
 	mailPopoverText,
 	shouldCheckOnTransition,
 } from "./mailNudge.ts";
 import type { DecideMailNudgeInput } from "./mailNudge.ts";
+
+const CLEAN: ComposerDraft = { kind: "clean" };
+const TYPED: ComposerDraft = { kind: "typed", chars: 3 };
+const UNKNOWN: ComposerDraft = { kind: "unknown" };
 
 const GATE_OK = { ok: true } as const;
 const GATE_CLOSED = { ok: false, reason: "not ready" } as const;
@@ -99,6 +105,69 @@ describe("decideMailNudge", () => {
 			nudge: false,
 			lastNudged: 0,
 		});
+	});
+});
+
+describe("automaticGate (#383)", () => {
+	it("passes a clean draft through unchanged", () => {
+		expect(automaticGate(GATE_OK, CLEAN)).toEqual(GATE_OK);
+	});
+
+	it("holds on a typed draft", () => {
+		expect(automaticGate(GATE_OK, TYPED).ok).toBe(false);
+	});
+
+	it("holds on an unknown draft, same as typed", () => {
+		expect(automaticGate(GATE_OK, UNKNOWN).ok).toBe(false);
+	});
+
+	it("keeps the underlying gate's own reason when it's already refused, even with a clean draft", () => {
+		expect(automaticGate(GATE_CLOSED, CLEAN)).toEqual(GATE_CLOSED);
+	});
+});
+
+describe("decideMailNudge with automaticGate folded in (#383)", () => {
+	it("a typed draft holds — nudge:false, lastNudged unchanged, so it retries later", () => {
+		const gate = automaticGate(GATE_OK, TYPED);
+		expect(decideMailNudge(input({ unread: 2, lastNudged: 0, gate }))).toEqual({
+			nudge: false,
+			lastNudged: 0,
+		});
+	});
+
+	it("a clean draft nudges", () => {
+		const gate = automaticGate(GATE_OK, CLEAN);
+		expect(decideMailNudge(input({ unread: 2, lastNudged: 0, gate }))).toEqual({
+			nudge: true,
+			lastNudged: 2,
+		});
+	});
+
+	it("an unknown draft holds", () => {
+		const gate = automaticGate(GATE_OK, UNKNOWN);
+		expect(decideMailNudge(input({ unread: 2, lastNudged: 0, gate }))).toEqual({
+			nudge: false,
+			lastNudged: 0,
+		});
+	});
+
+	it("held while typed, then nudges once the draft clears — same unread count both times", () => {
+		const held = decideMailNudge(
+			input({ unread: 2, lastNudged: 0, gate: automaticGate(GATE_OK, TYPED) }),
+		);
+		expect(held).toEqual({ nudge: false, lastNudged: 0 });
+
+		const cleared = decideMailNudge(
+			input({ unread: 2, lastNudged: held.lastNudged, gate: automaticGate(GATE_OK, CLEAN) }),
+		);
+		expect(cleared).toEqual({ nudge: true, lastNudged: 2 });
+	});
+
+	it("an underlying gate refusal wins over a clean draft", () => {
+		const decision = decideMailNudge(
+			input({ unread: 2, lastNudged: 0, gate: automaticGate(GATE_CLOSED, CLEAN) }),
+		);
+		expect(decision).toEqual({ nudge: false, lastNudged: 0 });
 	});
 });
 
