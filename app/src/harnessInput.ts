@@ -31,10 +31,13 @@
 // waits `SUBMIT_GAP_MS`, then submits, skipping the submit outright
 // (logged, text left unsent) if the target, the user, or the phase
 // changed in that gap. For kinds that opt in
-// (`capabilities.submitRetry`, Claude only), it then watches for
-// `SUBMIT_RETRY_AFTER_MS` and fires one extra "\r" if nothing proves
-// the first one landed. See `submitRetry.ts` for the pure policy
-// underneath both waits.
+// (`capabilities.submitRetry`, Claude only), it then follows up with up
+// to three more retries on `SUBMIT_RETRY_SCHEDULE_MS`, all inside the
+// #259 watchdog's own `ADAPTER_SILENT_AFTER_MS` window — an unverified
+// report says Claude may sit on a dropped Enter for longer than one
+// quick recheck covers, but nothing past that window is safe to retry
+// into (see `submitRetry.ts`'s header for why). See `submitRetry.ts`
+// for the pure policy underneath both waits.
 //
 // `sendPrompt` re-evaluates the gate at call time rather than trusting
 // a value a caller rendered a moment earlier — the phase can flip
@@ -48,7 +51,7 @@ import { HARNESS_KINDS } from "./data.tsx";
 import type { HarnessCapabilities } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import type { HarnessActivity } from "./harnessActivity.ts";
-import { SUBMIT_GAP_MS, SUBMIT_RETRY_AFTER_MS, decideSubmitRetry } from "./submitRetry.ts";
+import { SUBMIT_GAP_MS, SUBMIT_RETRY_SCHEDULE_MS, decideSubmitRetry } from "./submitRetry.ts";
 import type { HarnessKind } from "./types.ts";
 
 /// What a live harness's terminal offers this seam. `LiveTerminal` is
@@ -357,15 +360,24 @@ export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): 
 		// mail nudge.
 		harnessActivity.notePromptSubmitted(harnessId);
 
-		// #380: one retry, only for kinds that opt in (Claude). Watches
-		// for proof the first Enter landed — any transition out of
-		// `waiting` — for `SUBMIT_RETRY_AFTER_MS`, well inside the #259
-		// watchdog's own `ADAPTER_SILENT_AFTER_MS` window.
+		// #380: up to three retries, only for kinds that opt in (Claude)
+		// — an unverified report says Claude may sit on a dropped Enter
+		// for longer than one quick recheck covers. Every attempt in
+		// `SUBMIT_RETRY_SCHEDULE_MS` stays inside the #259 watchdog's
+		// `ADAPTER_SILENT_AFTER_MS` window on purpose: past that point
+		// `degradeSilentAdapter` has already flipped `authoritative`
+		// false and `adapterSilent` true, so "phase left waiting" is no
+		// longer authoritative proof of anything — `decideSubmitRetry`'s
+		// `watched` check refuses the moment that happens, rather than
+		// keep retrying blind.
 		if (!HARNESS_KINDS[kind].capabilities.submitRetry) return;
-		const inputCountAtSubmit = userInputCount(harnessId);
+		// One subscription for the whole retry window — see
+		// `decideSubmitRetry`'s `leftWaitingSinceSend` docs for why a
+		// single transition out of `waiting`, anywhere in the window,
+		// ends the sequence for every attempt still to come.
 		let leftWaitingSinceSend = false;
-		// Deliberately not tied to this harness's unmount/respawn: it
-		// self-cleans below after `SUBMIT_RETRY_AFTER_MS` regardless of
+		// Deliberately not tied to this harness's unmount/respawn: each
+		// attempt below self-cleans on its own schedule regardless of
 		// what happens to the harness in between, and a target that goes
 		// away or respawns in the meantime is caught by
 		// `decideSubmitRetry`'s own `sameTarget` check (and a harness
@@ -374,21 +386,40 @@ export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): 
 		const unsubscribe = harnessActivity.subscribeTransitions((id, from) => {
 			if (id === harnessId && from === "waiting") leftWaitingSinceSend = true;
 		});
-		setTimeout(() => {
-			unsubscribe();
+		const attemptTimers: Array<ReturnType<typeof setTimeout>> = [];
+		const attempt = (attemptIndex: number) => {
+			const isLastAttempt = attemptIndex === SUBMIT_RETRY_SCHEDULE_MS.length - 1;
+			const a = harnessActivity.get(harnessId);
 			const decision = decideSubmitRetry({
 				capable: true,
+				watched: a === null ? false : a.authoritative && !a.adapterSilent,
 				leftWaitingSinceSend,
-				phase: harnessActivity.get(harnessId)?.phase ?? null,
-				userInputSinceSend: userInputCount(harnessId) !== inputCountAtSubmit,
+				phase: a?.phase ?? null,
+				// Measured from the paste, same snapshot the gap-check
+				// above already required to be unchanged by submit time
+				// — so this is equally "since the submit" in practice.
+				userInputSinceSend: userInputCount(harnessId) !== inputCountAtPaste,
 				sameTarget: targets.get(harnessId) === t,
 			});
-			if (!decision.retry) return;
-			console.info(
-				`[skein] sendPrompt: retrying the submit into harness ${harnessId} — the first Enter didn't appear to land (#380)`,
-			);
-			t.submit();
-		}, SUBMIT_RETRY_AFTER_MS);
+			if (decision.retry) {
+				console.info(
+					`[skein] sendPrompt: retry ${attemptIndex + 1}/${SUBMIT_RETRY_SCHEDULE_MS.length} into harness ${harnessId} — the first Enter didn't appear to land (#380)`,
+				);
+				t.submit();
+			} else {
+				// A refusal ends the whole sequence — cancel whatever
+				// hasn't fired yet rather than let a stale reason keep
+				// retrying on its own schedule.
+				for (let i = attemptIndex + 1; i < attemptTimers.length; i++) {
+					const pending = attemptTimers[i];
+					if (pending !== undefined) clearTimeout(pending);
+				}
+			}
+			if (isLastAttempt || !decision.retry) unsubscribe();
+		};
+		for (const [attemptIndex, delay] of SUBMIT_RETRY_SCHEDULE_MS.entries()) {
+			attemptTimers.push(setTimeout(() => attempt(attemptIndex), delay));
+		}
 	}, SUBMIT_GAP_MS);
 
 	return gate;

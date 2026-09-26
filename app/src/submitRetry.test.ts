@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { decideSubmitRetry } from "./submitRetry.ts";
+import { ADAPTER_SILENT_AFTER_MS } from "./harnessActivityConstants.ts";
+import { SUBMIT_RETRY_SCHEDULE_MS, decideSubmitRetry } from "./submitRetry.ts";
 import type { DecideSubmitRetryInput } from "./submitRetry.ts";
 
 // Pure `decideSubmitRetry` tests build the input by hand — no store,
@@ -8,6 +9,7 @@ import type { DecideSubmitRetryInput } from "./submitRetry.ts";
 
 const input = (over: Partial<DecideSubmitRetryInput> = {}): DecideSubmitRetryInput => ({
 	capable: true,
+	watched: true,
 	leftWaitingSinceSend: false,
 	phase: "waiting",
 	userInputSinceSend: false,
@@ -54,5 +56,22 @@ describe("decideSubmitRetry", () => {
 		const r = decideSubmitRetry(input({ phase: null }));
 		expect(r.retry).toBe(false);
 		if (!r.retry) expect(r.reason).toContain("no activity record");
+	});
+
+	it("refuses once nothing is confirmed to be watching (the #259 watchdog degraded the adapter)", () => {
+		const r = decideSubmitRetry(input({ watched: false }));
+		expect(r).toEqual({ retry: false, reason: expect.stringContaining("watching") });
+	});
+});
+
+describe("SUBMIT_RETRY_SCHEDULE_MS", () => {
+	it("keeps every scheduled retry inside the #259 watchdog's window", () => {
+		// `ADAPTER_SILENT_AFTER_MS` lives in harnessActivityConstants.ts,
+		// a pure constants module with no store side effects — safe to
+		// import directly rather than hardcode, so this test breaks if
+		// the two constants ever drift apart.
+		for (const delay of SUBMIT_RETRY_SCHEDULE_MS) {
+			expect(delay).toBeLessThan(ADAPTER_SILENT_AFTER_MS);
+		}
 	});
 });
