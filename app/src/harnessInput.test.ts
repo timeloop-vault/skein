@@ -441,3 +441,39 @@ describe("formatDroppedPaths", () => {
 		expect(formatDroppedPaths(["/a/b.txt", "/c/my file.txt"])).toBe('/a/b.txt "/c/my file.txt" ');
 	});
 });
+
+// #386: `useMailDelivery.ts`'s seam-registered trigger — near the other
+// `register` tests since this is the same call firing a second effect.
+describe("harnessInput.subscribeRegistered (#386)", () => {
+	it("fires with the harness id once register() has set the target", () => {
+		const id = nextId();
+		const target: HarnessInputTarget = {
+			paste: vi.fn(),
+			bracketedPaste: () => false,
+			submit: vi.fn(),
+		};
+		const seen: string[] = [];
+		const unsubscribe = harnessInput.subscribeRegistered((registeredId) => seen.push(registeredId));
+
+		harnessInput.register(id, target);
+
+		expect(seen).toEqual([id]);
+		unsubscribe();
+	});
+
+	it("stops firing after unsubscribe", () => {
+		const id = nextId();
+		const target: HarnessInputTarget = {
+			paste: vi.fn(),
+			bracketedPaste: () => false,
+			submit: vi.fn(),
+		};
+		const seen: string[] = [];
+		const unsubscribe = harnessInput.subscribeRegistered((registeredId) => seen.push(registeredId));
+		unsubscribe();
+
+		harnessInput.register(id, target);
+
+		expect(seen).toEqual([]);
+	});
+});

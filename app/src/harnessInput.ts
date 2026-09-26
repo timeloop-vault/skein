@@ -126,6 +126,15 @@ const drafts = new Map<string, ComposerDraft>();
 /// re-derive that predicate itself.
 const draftClearedSubscribers = new Set<(id: string) => void>();
 
+/// #386: subscribers notified once `register` has finished setting up
+/// `id` — target published, respawn draft event noted. This is
+/// `useMailDelivery.ts`'s seam-registered trigger: mail that landed
+/// while a fresh harness was still `spawning` and missed the one
+/// `spawning → waiting` check (the seam not registered yet at the
+/// time) gets one more chance to be re-evaluated against the unchanged
+/// send gate the moment the seam itself comes up.
+const registeredSubscribers = new Set<(id: string) => void>();
+
 export const harnessInput = {
 	/// Publish `target` for `id`. Returns the unregister function —
 	/// call it on PTY exit, on unmount, and before a respawn re-registers
@@ -136,6 +145,11 @@ export const harnessInput = {
 		// #383: a fresh PTY means an empty composer, whatever the old one
 		// last read as.
 		harnessInput.noteDraftEvent(id, { type: "respawn" });
+		// #386: notified AFTER the target is set and the respawn draft
+		// event is noted, so a subscriber that immediately re-checks
+		// `canSendPrompt`/`sendPrompt` sees this harness as already
+		// registered and its draft already reset.
+		for (const cb of registeredSubscribers) cb(id);
 		return () => {
 			// Only clear our own registration: a respawn that already
 			// registered a fresh target for the same id must not have
@@ -182,6 +196,17 @@ export const harnessInput = {
 		draftClearedSubscribers.add(cb);
 		return () => {
 			draftClearedSubscribers.delete(cb);
+		};
+	},
+	/// #386: subscribe to "a harness just finished registering in this
+	/// seam" — `useMailDelivery.ts`'s seam-registered trigger, so mail
+	/// that landed too early (before this harness had a target to paste
+	/// into at all) gets re-checked the moment one exists. Returns the
+	/// unsubscribe function.
+	subscribeRegistered(cb: (id: string) => void): () => void {
+		registeredSubscribers.add(cb);
+		return () => {
+			registeredSubscribers.delete(cb);
 		};
 	},
 };
