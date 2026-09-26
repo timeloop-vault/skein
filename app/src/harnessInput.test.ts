@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import type { HarnessActivity } from "./harnessActivity.ts";
@@ -11,6 +11,7 @@ import {
 	sendPrompt,
 } from "./harnessInput.ts";
 import type { CanInsertTextInput, CanSendPromptInput, HarnessInputTarget } from "./harnessInput.ts";
+import { SUBMIT_GAP_MS } from "./submitRetry.ts";
 
 // Pure `canSendPrompt` tests build the input by hand — no store, no
 // DOM, no xterm — exactly what the gate is supposed to allow.
@@ -170,6 +171,11 @@ describe("sendPrompt", () => {
 	let calls: string[];
 
 	beforeEach(() => {
+		// #380: paste and submit are no longer the same tick — every
+		// test here has to move the clock past `SUBMIT_GAP_MS` to see
+		// the submit land. Fake timers, not file-scope, so the rest of
+		// this file's describes (built well before #380) are untouched.
+		vi.useFakeTimers();
 		id = nextId();
 		calls = [];
 		target = {
@@ -186,12 +192,19 @@ describe("sendPrompt", () => {
 		harnessActivity.setInjected(id, true);
 	});
 
-	it("pastes then submits, in that order, when the gate allows it", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("pastes immediately, then submits only after the #380 gap — not in the same tick", () => {
 		harnessInput.register(id, target);
 
 		const result = sendPrompt(id, "claude", "do the thing");
 
 		expect(result).toEqual({ ok: true });
+		expect(calls).toEqual(["paste"]);
+
+		vi.advanceTimersByTime(SUBMIT_GAP_MS);
 		expect(calls).toEqual(["paste", "submit"]);
 	});
 
@@ -220,6 +233,7 @@ describe("sendPrompt", () => {
 		const body = Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n");
 
 		const result = sendPrompt(id, "claude", body);
+		vi.advanceTimersByTime(SUBMIT_GAP_MS);
 
 		expect(result).toEqual({ ok: true });
 		expect(bracketedTarget.paste).toHaveBeenCalledTimes(1);

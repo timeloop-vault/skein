@@ -28,6 +28,13 @@ export interface HarnessCapabilities {
 	/// which cannot change) or has to say "started as X". Meaningless
 	/// without `agents`.
 	agentSwitchable: boolean;
+	/// Does `sendPrompt` (#238) get a second, delayed "\r" if the first
+	/// one doesn't appear to have landed (#380)? True only for `claude`
+	/// — Claude Code 2.1.283 has a startup-timing bug (upstream
+	/// anthropics/claude-code#91205) where the Enter ending a first
+	/// bracketed paste into a freshly spawned harness can be dropped;
+	/// every other kind's behaviour is unchanged by this flag.
+	submitRetry: boolean;
 }
 
 export interface HarnessKindMeta {
@@ -66,7 +73,14 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		desc: "Anthropic. Direct API.",
 		program: "claude",
 		skillInvocation: "/{name}",
-		capabilities: { pty: true, resume: true, notify: true, agents: true, agentSwitchable: false },
+		capabilities: {
+			pty: true,
+			resume: true,
+			notify: true,
+			agents: true,
+			agentSwitchable: false,
+			submitRetry: true,
+		},
 	},
 	opencode: {
 		id: "opencode",
@@ -76,7 +90,14 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		desc: "Local server, OSS.",
 		program: "opencode",
 		skillInvocation: null,
-		capabilities: { pty: true, resume: true, notify: true, agents: true, agentSwitchable: true },
+		capabilities: {
+			pty: true,
+			resume: true,
+			notify: true,
+			agents: true,
+			agentSwitchable: true,
+			submitRetry: false,
+		},
 	},
 	copilot: {
 		id: "copilot",
@@ -86,7 +107,14 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		desc: "GitHub entitlement.",
 		program: "gh",
 		skillInvocation: "Use the /{name} skill.",
-		capabilities: { pty: true, resume: false, notify: true, agents: false, agentSwitchable: false },
+		capabilities: {
+			pty: true,
+			resume: false,
+			notify: true,
+			agents: false,
+			agentSwitchable: false,
+			submitRetry: false,
+		},
 	},
 	// `byoh` is the kind id we kept from the design's "bring your own
 	// harness" idea; today it spawns a plain shell (the user's pwsh/
@@ -107,6 +135,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			notify: false,
 			agents: false,
 			agentSwitchable: false,
+			submitRetry: false,
 		},
 	},
 	// #49 phase A: the file surface as a harness. Deliberately not a
@@ -125,6 +154,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			notify: false,
 			agents: false,
 			agentSwitchable: false,
+			submitRetry: false,
 		},
 	},
 };

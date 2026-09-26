@@ -134,6 +134,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		// `cancelled` are read there through getters since they're
 		// plain closure locals owned by this effect.
 		const detachInteractions = attachTerminalInteractions(term, host, {
+			harnessId,
 			getPhase: () => phase,
 			isCancelled: () => cancelled,
 			defaultShellRef,
@@ -374,6 +375,10 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				// it matters in practice.
 				term.onKey(({ key }) => {
 					harnessActivity.recordInput(harnessId, key);
+					// #380: a human is typing — `sendPrompt`'s gap/retry
+					// checks need to tell that apart from its own
+					// machine-written "\r".
+					harnessInput.noteUserInput(harnessId);
 				});
 				if (!resizeObserver) {
 					// Track the dims we last sent so we can skip the

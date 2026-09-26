@@ -11,6 +11,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { Terminal } from "@xterm/xterm";
+import { harnessInput } from "./harnessInput.ts";
 import { isAppShortcut, isMac, isWindows } from "./shortcuts.ts";
 import { decideClipboardAction, emptySelectionHint } from "./terminalClipboard.ts";
 import type { ClipboardPlatform } from "./terminalClipboard.ts";
@@ -28,6 +29,10 @@ const HINT_MS_SUCCESS = 1200;
 const HINT_MS_INFO = 4000;
 
 export interface TerminalInteractionsDeps {
+	/// This harness's id — only used to note a user-driven paste
+	/// (#380's `harnessInput.noteUserInput`), never for the phase/keys
+	/// logic below.
+	harnessId: string;
 	/// Current post-exit phase, read (never written) here.
 	getPhase: () => "running" | "exited";
 	/// Whether the owning effect has torn down — settle guards for
@@ -51,6 +56,7 @@ export function attachTerminalInteractions(
 	deps: TerminalInteractionsDeps,
 ): () => void {
 	const {
+		harnessId,
 		getPhase,
 		isCancelled,
 		defaultShellRef,
@@ -202,6 +208,9 @@ export function attachTerminalInteractions(
 				.then((text) => {
 					if (isCancelled() || getPhase() !== "running" || !text) return;
 					term.paste(text);
+					// #380: a human-driven paste, same as a keystroke —
+					// `sendPrompt`'s gap/retry checks need to see it.
+					harnessInput.noteUserInput(harnessId);
 				})
 				.catch((err: unknown) => {
 					console.warn("[skein] clipboard paste failed:", err);
