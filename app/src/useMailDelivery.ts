@@ -5,21 +5,26 @@
 // own; the tab marker lives in `components.tsx`'s `HarnessTab` via
 // `useUnreadMail`.
 //
-// Two triggers run the same `check(harnessId)`:
+// Three triggers run the same `check(harnessId)`:
 //
 //   - `skein://mail-changed` for a harness this hook knows about — a
 //     message just landed for it, or it just read some of its own
 //     (either way the count may have moved);
-//   - every phase transition INTO `waiting`
-//     (`harnessActivity.subscribeTransitions`) — mail can arrive while
-//     a harness is mid-turn, and the deliverable moment is the next
-//     time it reaches a safe stopping point, not the moment mail
-//     showed up.
+//   - a phase transition that lands on, or reveals, a safe stopping
+//     point (`harnessActivity.subscribeTransitions`, filtered by
+//     `shouldCheckOnTransition` — #381): the plain `→ waiting` case,
+//     plus `permission → running` while a #277 delegation deferral is
+//     still armed, since closing the dialog can itself be the event
+//     that re-enters the deferred state with no `waiting` transition
+//     at all;
+//   - a #277 delegation deferral ARMING with no phase change at all
+//     (`harnessActivity.subscribeDelegationDeferred`) — the harness was
+//     already `running` and stays `running`, so nothing above would
+//     otherwise fire.
 //
-// Both go through `runSerialized` per harness so a mail-changed and a
-// waiting transition landing together can't double-nudge — `decideMailNudge`
-// itself is pure and stateless per call, so the ordering has to be
-// enforced here.
+// All three go through `runSerialized` per harness so triggers landing
+// together can't double-nudge — `decideMailNudge` itself is pure and
+// stateless per call, so the ordering has to be enforced here.
 //
 // Restart replay: `lastNudgedRef` starts empty every mount, which reads
 // as "never nudged" (mailNudge.ts's own documented restart case) — a
@@ -36,9 +41,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef } from "react";
 import { HARNESS_KINDS } from "./data.tsx";
-import { harnessActivity } from "./harnessActivity.ts";
+import { atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
 import { canSendPrompt, harnessInput, sendPrompt } from "./harnessInput.ts";
-import { decideMailNudge, mailNudgeText } from "./mailNudge.ts";
+import { decideMailNudge, mailNudgeText, shouldCheckOnTransition } from "./mailNudge.ts";
 import { mailStore } from "./mailStore.ts";
 import type { HarnessKind, Room } from "./types.ts";
 
@@ -131,7 +136,7 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 		});
 		const lastNudged = lastNudgedRef.current.get(harnessId) ?? 0;
 		const decision = decideMailNudge({
-			phase: activity.phase,
+			atStoppingPoint: atSafeStoppingPoint(activity),
 			unread: res.count,
 			lastNudged,
 			gate,
@@ -186,7 +191,22 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: runSerialized closes only over refs, stable across renders.
 	useEffect(() => {
 		const unsub = harnessActivity.subscribeTransitions((harnessId, _from, to) => {
-			if (to !== "waiting") return;
+			if (!metaRef.current.has(harnessId)) return;
+			const activity = harnessActivity.get(harnessId);
+			const atStoppingPointNow = activity !== null && atSafeStoppingPoint(activity);
+			if (!shouldCheckOnTransition(to, atStoppingPointNow)) return;
+			runSerialized(harnessId);
+		});
+		return unsub;
+	}, []);
+
+	// #381: a #277 delegation deferral can arm with NO phase change at
+	// all — the harness was already `running` and stays `running` — so
+	// `subscribeTransitions` above never fires for it. This is the only
+	// trigger for that case.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: runSerialized closes only over refs, stable across renders.
+	useEffect(() => {
+		const unsub = harnessActivity.subscribeDelegationDeferred((harnessId) => {
 			if (!metaRef.current.has(harnessId)) return;
 			runSerialized(harnessId);
 		});

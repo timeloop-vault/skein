@@ -43,6 +43,22 @@
 // (stated from that behaviour, not re-verified live in this change) —
 // so each retry stays a blunt attempt rather than something that has
 // to prove the previous one was actually lost.
+//
+// #381: the "stopping point" a submit landed at isn't only `waiting` any
+// more — a #277 delegation deferral (`running` with a non-null
+// `delegationDeferredAt`) is an equally safe one, since it means the
+// main session already ended its turn and only stayed `running` because
+// background subagents were still working (see `harnessActivityCore.ts`'s
+// `atSafeStoppingPoint`). `leftWaitingSinceSend` and a bare `phase ===
+// "waiting"` check can't tell that arm apart from an ordinary mid-turn
+// `running`, so this module now also takes `deferredAtSend` (the arm
+// `sendPrompt` snapshotted at submit time — `null` for a plain-`waiting`
+// send) and `deferredAtNow` (the harness's current `delegationDeferredAt`
+// at decision time). The conservative rule: any change to the armed
+// value since send — disarmed by real work, flushed by the tick's
+// settle/ceiling to `waiting`, or a fresh re-arm with a different
+// timestamp — reads exactly like leaving `waiting` did before, and ends
+// the retry sequence with no further "\r".
 
 import type { ActivityPhase } from "./harnessActivityTypes.ts";
 
@@ -72,20 +88,37 @@ export interface DecideSubmitRetryInput {
 	/// Is anything still confirmed to be watching this harness —
 	/// `activity.authoritative && !activity.adapterSilent`, computed by
 	/// the caller? Once the #259 watchdog has degraded the adapter,
-	/// `leftWaitingSinceSend` staying false is no longer authoritative
-	/// proof the Enter didn't land — it might just mean nothing is
-	/// listening any more — so a retry past that point would be exactly
-	/// the kind of blind send `canSendPrompt` refuses everywhere else.
+	/// `leftStoppingPointSinceSend` staying false is no longer
+	/// authoritative proof the Enter didn't land — it might just mean
+	/// nothing is listening any more — so a retry past that point would
+	/// be exactly the kind of blind send `canSendPrompt` refuses
+	/// everywhere else.
 	watched: boolean;
 	/// Did any phase transition *out of* `waiting` land for this
 	/// harness between the submit and now? That's proof the Enter was
 	/// received — the CLI doesn't leave `waiting` on its own — so a
 	/// harness that ever left is never retried, even if it's back in
-	/// `waiting` again by the time a later attempt runs.
-	leftWaitingSinceSend: boolean;
+	/// `waiting` again by the time a later attempt runs. Only ever set
+	/// for the plain-`waiting` arm: a delegation-deferred arm has no such
+	/// transition to fire, since disarming it doesn't change the phase
+	/// (see `deferredAtSend`/`deferredAtNow` below for that arm's
+	/// equivalent proof).
+	leftStoppingPointSinceSend: boolean;
 	/// The harness's phase right now, or `null` if it has no activity
 	/// record at all.
 	phase: ActivityPhase | null;
+	/// #381: which #277 delegation deferral (if any) this submit was
+	/// made under — the caller's `delegationDeferredAt` snapshot taken
+	/// at submit time, or `null` for a submit made at a plain `waiting`.
+	/// Paired with `deferredAtNow` below.
+	deferredAtSend: number | null;
+	/// #381: the harness's current `delegationDeferredAt`, sampled by the
+	/// caller fresh at decision time. Retrying requires this to still
+	/// equal `deferredAtSend` — a disarm (work landed), a flush to
+	/// `waiting` (the tick's settle/ceiling), or a fresh re-arm all
+	/// change this value and each ends the sequence, the same way
+	/// `leftStoppingPointSinceSend` ends it for the plain-`waiting` arm.
+	deferredAtNow: number | null;
 	/// Did the user type anything into this harness since the submit?
 	/// A human keystroke means a machine-written Enter might land on
 	/// top of something the user typed, not the pasted prompt.
@@ -105,20 +138,29 @@ export type SubmitRetryDecision = { retry: true } | { retry: false; reason: stri
 ///    the #259 watchdog has degraded the adapter, nothing below this
 ///    check can be trusted as proof of anything;
 ///  - the harness never left `waiting` since the submit
-///    (`!leftWaitingSinceSend`) — it already proved the Enter landed,
-///    so there's nothing left to fix;
+///    (`!leftStoppingPointSinceSend`) — it already proved the Enter
+///    landed, so there's nothing left to fix. Only ever true for the
+///    plain-`waiting` arm — see the stopping-point check below for the
+///    delegation-deferred arm's own equivalent;
 ///  - the registration hasn't changed (`sameTarget`) — the terminal a
 ///    retry would write into has to be the one the paste went to;
 ///  - the user hasn't typed since the submit (`!userInputSinceSend`)
 ///    — a human is driving now, and machine-written input isn't safe
 ///    to layer on top of whatever they typed;
-///  - and its phase is `waiting` right now — explicitly NOT
-///    `permission`: a dialog opening after the submit is itself proof
-///    the Enter was seen (it's what triggered the dialog), never that
-///    it was dropped, and answering a dialog is #86's territory, not
-///    this one's. Every other phase (`running`, `idle`, `spawning`,
-///    `exited`, or no activity record at all) is refused the same way
-///    — there's nothing left to submit into.
+///  - and the harness is still at the SAME stopping point right now
+///    (#381) — either plain `waiting` (`phase === "waiting" &&
+///    deferredAtSend === null`), or the identical #277 delegation
+///    deferral it was submitted under (`phase === "running" &&
+///    deferredAtSend !== null && deferredAtNow === deferredAtSend`).
+///    Explicitly NOT `permission` in either case: a dialog opening
+///    after the submit is itself proof the Enter was seen (it's what
+///    triggered the dialog), never that it was dropped, and answering a
+///    dialog is #86's territory, not this one's. Every other case —
+///    `running`/`idle`/`spawning`/`exited` with no matching deferral, a
+///    disarm, a flush to `waiting`, a fresh re-arm with a different
+///    timestamp, or no activity record at all — is refused the same
+///    way: there's nothing left to submit into, or it isn't the same
+///    stopping point this submit was made for.
 export function decideSubmitRetry(input: DecideSubmitRetryInput): SubmitRetryDecision {
 	if (!input.capable) {
 		return { retry: false, reason: "this harness kind doesn't opt into a submit retry" };
@@ -129,7 +171,7 @@ export function decideSubmitRetry(input: DecideSubmitRetryInput): SubmitRetryDec
 			reason: "no confirmed adapter is watching this harness any more — retrying blind isn't safe",
 		};
 	}
-	if (input.leftWaitingSinceSend) {
+	if (input.leftStoppingPointSinceSend) {
 		return {
 			retry: false,
 			reason: "the harness left waiting since the submit — the first Enter landed",
@@ -141,10 +183,15 @@ export function decideSubmitRetry(input: DecideSubmitRetryInput): SubmitRetryDec
 	if (input.userInputSinceSend) {
 		return { retry: false, reason: "the user typed into the harness since the submit" };
 	}
-	if (input.phase !== "waiting") {
+	const stillAtStoppingPoint =
+		(input.phase === "waiting" && input.deferredAtSend === null) ||
+		(input.phase === "running" &&
+			input.deferredAtSend !== null &&
+			input.deferredAtNow === input.deferredAtSend);
+	if (!stillAtStoppingPoint) {
 		return {
 			retry: false,
-			reason: `the harness isn't waiting any more (currently ${input.phase ?? "no activity record"})`,
+			reason: `the harness isn't at its stopping point any more (currently ${input.phase ?? "no activity record"})`,
 		};
 	}
 	return { retry: true };

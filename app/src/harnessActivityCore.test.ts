@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { phaseSnapshot } from "./harnessActivityCore.ts";
+import { atSafeStoppingPoint, phaseSnapshot } from "./harnessActivityCore.ts";
 import type { ActivityPhase, HarnessActivity } from "./harnessActivityTypes.ts";
 
 // #356: `phaseSnapshot` backs the `harness_phases` agent-request kind
@@ -57,4 +57,34 @@ describe("phaseSnapshot", () => {
 		expect(Object.keys(result)).toEqual(["h1"]);
 		expect(result.h2).toBeUndefined();
 	});
+});
+
+// #381: `atSafeStoppingPoint` — the pure predicate behind the #238 seam
+// treating a #277 delegation-deferred `running` the same as `waiting`.
+describe("atSafeStoppingPoint", () => {
+	it("waiting is always a stopping point", () => {
+		expect(atSafeStoppingPoint(mkActivity("waiting"))).toBe(true);
+	});
+
+	it("running with an armed deferral is a stopping point", () => {
+		const a = { ...mkActivity("running"), delegationDeferredAt: 123 };
+		expect(atSafeStoppingPoint(a)).toBe(true);
+	});
+
+	it("running with no deferral armed is not a stopping point", () => {
+		expect(atSafeStoppingPoint(mkActivity("running"))).toBe(false);
+	});
+
+	it("permission is never a stopping point, even with a deferral armed underneath it", () => {
+		const a = { ...mkActivity("permission"), delegationDeferredAt: 123 };
+		expect(atSafeStoppingPoint(a)).toBe(false);
+	});
+
+	it.each(["spawning", "idle", "exited"] as const)(
+		"phase %s is not a stopping point, deferral or not",
+		(phase) => {
+			expect(atSafeStoppingPoint(mkActivity(phase))).toBe(false);
+			expect(atSafeStoppingPoint({ ...mkActivity(phase), delegationDeferredAt: 123 })).toBe(false);
+		},
+	);
 });

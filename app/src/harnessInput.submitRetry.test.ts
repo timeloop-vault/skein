@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
 import { harnessInput, sendPrompt } from "./harnessInput.ts";
 import type { HarnessInputTarget } from "./harnessInput.ts";
+import { subagents } from "./subagents.ts";
 import { SUBMIT_GAP_MS, SUBMIT_RETRY_SCHEDULE_MS } from "./submitRetry.ts";
 
 // #380 — end-to-end `sendPrompt`: the paste/gate stay synchronous, but
@@ -43,6 +44,30 @@ const sendableHarness = (): { id: string; target: HarnessInputTarget } => {
 	harnessActivity.adapterDelivered(id);
 	harnessActivity.setWaitingFromAdapter(id, "test");
 	harnessActivity.setInjected(id, true);
+	harnessInput.register(id, target);
+	return { id, target };
+};
+
+/// A registered, sendable harness sitting at the OTHER stopping point
+/// #381 adds: `running`, with a #277 delegation deferral armed because a
+/// background subagent is still working — the main session already
+/// ended its own turn (`awaitingPromptFromAdapter`), authoritative,
+/// heard-from and injected, same as `sendableHarness` otherwise.
+const deferredHarness = (): { id: string; target: HarnessInputTarget } => {
+	const id = nextId();
+	const target: HarnessInputTarget = {
+		paste: vi.fn(),
+		bracketedPaste: () => false,
+		submit: vi.fn(),
+	};
+	harnessActivity.spawned(id);
+	harnessActivity.attachAuthoritativeSource(id);
+	harnessActivity.adapterDelivered(id);
+	harnessActivity.setRunningFromAdapter(id, "test");
+	harnessActivity.setInjected(id, true);
+	subagents.record(id, { agentId: "a1", agentType: "explore", description: null }, false);
+	harnessActivity.noteSubagentStarted(id);
+	harnessActivity.awaitingPromptFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
 	harnessInput.register(id, target);
 	return { id, target };
 };
@@ -174,6 +199,68 @@ describe("sendPrompt's #380 gap + retry", () => {
 
 		sendPrompt(id, "claude", "hello");
 		harnessActivity.setRunningFromAdapter(id, "test");
+
+		vi.advanceTimersByTime(SUBMIT_GAP_MS);
+		expect(target.submit).not.toHaveBeenCalled();
+
+		vi.advanceTimersByTime(PAST_SCHEDULE_MS);
+		expect(target.submit).not.toHaveBeenCalled();
+	});
+});
+
+// #381: the same gap-then-retry policy, but sent into a harness sitting
+// at the OTHER safe stopping point — `running` with an armed #277
+// delegation deferral, rather than plain `waiting`.
+describe("sendPrompt's #380 gap + retry, sent under a #277 delegation deferral (#381)", () => {
+	it("submits after the gap the same as a plain-waiting send", () => {
+		const { id, target } = deferredHarness();
+
+		const result = sendPrompt(id, "claude", "hello");
+		expect(result).toEqual({ ok: true });
+		expect(target.paste).toHaveBeenCalledTimes(1);
+		expect(target.submit).not.toHaveBeenCalled();
+
+		vi.advanceTimersByTime(SUBMIT_GAP_MS);
+		expect(target.submit).toHaveBeenCalledTimes(1);
+		// The deferral is still armed — nothing about sending into it
+		// resolved the end-of-turn on its own.
+		expect(harnessActivity.get(id)?.phase).toBe("running");
+		expect(harnessActivity.get(id)?.delegationDeferredAt).not.toBeNull();
+	});
+
+	it("keeps retrying while the same deferral stays armed", () => {
+		const { id, target } = deferredHarness();
+
+		sendPrompt(id, "claude", "hello");
+		vi.advanceTimersByTime(SUBMIT_GAP_MS);
+		expect(target.submit).toHaveBeenCalledTimes(1);
+
+		vi.advanceTimersByTime(SUBMIT_RETRY_SCHEDULE_MS[0]);
+		expect(target.submit).toHaveBeenCalledTimes(2);
+	});
+
+	it("a disarm before a retry stops retries — the main session showed work", () => {
+		const { id, target } = deferredHarness();
+
+		sendPrompt(id, "claude", "hello");
+		vi.advanceTimersByTime(SUBMIT_GAP_MS);
+		expect(target.submit).toHaveBeenCalledTimes(1);
+
+		// A main-transcript work signal disarms the deferral (#277 Rule
+		// 2) without changing the phase — still `running`, just no
+		// longer deferred.
+		harnessActivity.setRunningFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeToolUse);
+		expect(harnessActivity.get(id)?.delegationDeferredAt).toBeNull();
+
+		vi.advanceTimersByTime(PAST_SCHEDULE_MS);
+		expect(target.submit).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not submit at all if the deferral is disarmed during the gap", () => {
+		const { id, target } = deferredHarness();
+
+		sendPrompt(id, "claude", "hello");
+		harnessActivity.setRunningFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeToolUse);
 
 		vi.advanceTimersByTime(SUBMIT_GAP_MS);
 		expect(target.submit).not.toHaveBeenCalled();
