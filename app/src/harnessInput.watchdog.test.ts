@@ -3,6 +3,7 @@ import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
 import { ADAPTER_SILENT_AFTER_MS } from "./harnessActivityConstants.ts";
 import { harnessInput, sendPrompt } from "./harnessInput.ts";
 import type { HarnessInputTarget } from "./harnessInput.ts";
+import { SUBMIT_GAP_MS } from "./submitRetry.ts";
 
 // #363 — `sendPrompt` (the #238/#327/#330 seam: nudges, mail delivery,
 // create_room's first prompt) must arm the #259 silent-adapter watchdog
@@ -49,6 +50,10 @@ describe("sendPrompt arms the #259 watchdog (#363)", () => {
 
 		const result = sendPrompt(id, "claude", "do the thing");
 		expect(result).toEqual({ ok: true });
+		// #380: the submit — and the watchdog arm that rides it — now
+		// lands `SUBMIT_GAP_MS` after the paste, not in the same tick.
+		expect(harnessActivity.get(id)?.promptSubmittedAt).toBeNull();
+		vi.advanceTimersByTime(SUBMIT_GAP_MS);
 		expect(harnessActivity.get(id)?.promptSubmittedAt).not.toBeNull();
 
 		vi.advanceTimersByTime(ADAPTER_SILENT_AFTER_MS + 1_000);

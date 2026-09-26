@@ -146,6 +146,15 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 		// actually went out; otherwise keep the pre-nudge value (the
 		// reset a `nudge: false` decision would have produced) so the
 		// next arrival or waiting transition tries again.
+		//
+		// #380: `result.ok` only means the gate passed and the body was
+		// pasted — the submit "\r" follows `SUBMIT_GAP_MS` later, and
+		// can still be skipped (the user typed, the phase moved, the
+		// terminal respawned) without `sendPrompt` reporting back here.
+		// A skipped submit still counts as nudged, deliberately: the
+		// text is now visible, sitting in the harness's own composer,
+		// and re-nudging on the next tick would paste a second copy on
+		// top of it rather than fix anything.
 		const result = sendPrompt(harnessId, meta.kind, body);
 		lastNudgedRef.current.set(harnessId, result.ok ? decision.lastNudged : lastNudged);
 	};
