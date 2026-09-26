@@ -5,7 +5,7 @@
 // own; the tab marker lives in `components.tsx`'s `HarnessTab` via
 // `useUnreadMail`.
 //
-// Three triggers run the same `check(harnessId)`:
+// Four triggers run the same `check(harnessId)`:
 //
 //   - `skein://mail-changed` for a harness this hook knows about — a
 //     message just landed for it, or it just read some of its own
@@ -20,7 +20,14 @@
 //   - a #277 delegation deferral ARMING with no phase change at all
 //     (`harnessActivity.subscribeDelegationDeferred`) — the harness was
 //     already `running` and stays `running`, so nothing above would
-//     otherwise fire.
+//     otherwise fire;
+//   - #383: a harness's composer draft CLEARING with no submit
+//     (`harnessInput.subscribeDraftCleared`) — the only way held mail
+//     gets retried once the thing holding it goes away without also
+//     firing a phase transition. A draft cleared BY a submit is not
+//     this trigger's job: the turn that submit starts is itself the
+//     next trigger, via the existing running → waiting transition
+//     above.
 //
 // All three go through `runSerialized` per harness so triggers landing
 // together can't double-nudge — `decideMailNudge` itself is pure and
@@ -43,7 +50,12 @@ import { useEffect, useRef } from "react";
 import { HARNESS_KINDS } from "./data.tsx";
 import { atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
 import { canSendPrompt, harnessInput, sendPrompt } from "./harnessInput.ts";
-import { decideMailNudge, mailNudgeText, shouldCheckOnTransition } from "./mailNudge.ts";
+import {
+	automaticGate,
+	decideMailNudge,
+	mailNudgeText,
+	shouldCheckOnTransition,
+} from "./mailNudge.ts";
 import { mailStore } from "./mailStore.ts";
 import type { HarnessKind, Room } from "./types.ts";
 
@@ -127,13 +139,16 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 		const activity = harnessActivity.get(harnessId);
 		if (!activity) return;
 		const body = mailNudgeText(res.count, res.fromRoomNames);
-		const gate = canSendPrompt({
-			capabilities: HARNESS_KINDS[meta.kind].capabilities,
-			activity,
-			registered: harnessInput.isRegistered(harnessId),
-			bracketedPasteOn: harnessInput.bracketedPaste(harnessId),
-			body,
-		});
+		const gate = automaticGate(
+			canSendPrompt({
+				capabilities: HARNESS_KINDS[meta.kind].capabilities,
+				activity,
+				registered: harnessInput.isRegistered(harnessId),
+				bracketedPasteOn: harnessInput.bracketedPaste(harnessId),
+				body,
+			}),
+			harnessInput.draft(harnessId),
+		);
 		const lastNudged = lastNudgedRef.current.get(harnessId) ?? 0;
 		const decision = decideMailNudge({
 			atStoppingPoint: atSafeStoppingPoint(activity),
@@ -160,7 +175,7 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 		// text is now visible, sitting in the harness's own composer,
 		// and re-nudging on the next tick would paste a second copy on
 		// top of it rather than fix anything.
-		const result = sendPrompt(harnessId, meta.kind, body);
+		const result = sendPrompt(harnessId, meta.kind, body, { automatic: true });
 		lastNudgedRef.current.set(harnessId, result.ok ? decision.lastNudged : lastNudged);
 	};
 
@@ -207,6 +222,18 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: runSerialized closes only over refs, stable across renders.
 	useEffect(() => {
 		const unsub = harnessActivity.subscribeDelegationDeferred((harnessId) => {
+			if (!metaRef.current.has(harnessId)) return;
+			runSerialized(harnessId);
+		});
+		return unsub;
+	}, []);
+
+	// #383: a composer draft clearing without a submit is the only
+	// signal that held mail is now safe to retry — a submit's own
+	// running → waiting transition is already covered above.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: runSerialized closes only over refs, stable across renders.
+	useEffect(() => {
+		const unsub = harnessInput.subscribeDraftCleared((harnessId) => {
 			if (!metaRef.current.has(harnessId)) return;
 			runSerialized(harnessId);
 		});

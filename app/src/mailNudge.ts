@@ -3,6 +3,8 @@
 // gate's `GateResult` rather than this module re-deriving it, the same
 // split `canSendPrompt` itself already draws from its inputs.
 
+import type { ComposerDraft } from "./composerDraft.ts";
+import { checkDraft } from "./composerDraft.ts";
 import type { ActivityPhase } from "./harnessActivityTypes.ts";
 import type { GateResult } from "./harnessInput.ts";
 
@@ -42,6 +44,17 @@ export interface DecideMailNudgeResult {
 /// When the harness isn't at a safe stopping point or the gate refuses,
 /// nothing is recorded as nudged beyond that reset — the next time it
 /// reaches one with mail still outstanding, it nudges.
+/// #383: the extra gate an AUTOMATIC nudge folds on top of `canSendPrompt`
+/// — a held draft refuses even a `gate.ok` result, so `decideMailNudge`
+/// sees the same refusal shape it already knows how to hold on. A `gate`
+/// that's already refused is returned unchanged: the underlying reason
+/// (not ready, not watched, …) is more specific than a draft guess, and
+/// there's no reason to prefer the latter.
+export function automaticGate(gate: GateResult, draft: ComposerDraft): GateResult {
+	if (!gate.ok) return gate;
+	return checkDraft(draft) ?? gate;
+}
+
 export function decideMailNudge(input: DecideMailNudgeInput): DecideMailNudgeResult {
 	const { atStoppingPoint, unread, gate } = input;
 	const lastNudged = unread < input.lastNudged ? unread : input.lastNudged;

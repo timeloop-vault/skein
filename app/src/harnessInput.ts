@@ -46,7 +46,34 @@
 // — this seam's submit never reaches xterm's `onKey`, so without it a
 // harness prompted only through here (create_room, a mail nudge) would
 // never fall back to the idle heuristic if its adapter stayed silent.
+//
+// #383: a per-harness `ComposerDraft` (`composerDraft.ts`) rides beside
+// `userInputCounts` above, fed by every place text can land in a
+// terminal — `useTerminalSpawn.ts`'s `onKey`, its bracketed-paste
+// branch in `onData`, and its `compositionstart`/`compositionend`
+// listeners on the terminal's textarea (IME composition — CJK, an
+// emoji picker, possibly a dead-key accent — calls xterm's own
+// `_finalizeComposition` straight into `onData` and never reaches
+// `onKey`, so this is the only place it's seen at all; both events
+// fold to `unknown`, same fail-safe direction as everything else here),
+// `terminalInteractions.ts`'s Ctrl+V and Shift/Alt+Enter paths, and
+// this module's own seam paste/submit. An
+// AUTOMATIC send (`sendPrompt`'s new `opts.automatic`) folds
+// `checkDraft` on top of `canSendPrompt`, so a mail nudge holds rather
+// than pastes over whatever the user is mid-typing; a manual send
+// (the Nudge button, `HarnessActionsMenu`'s prompt library) never
+// consults it; passing no `opts` at all reproduces today's behaviour
+// exactly. `useMailDelivery.ts` also fires a retry the moment a draft
+// clears (`subscribeDraftCleared`), so held mail doesn't wait for the
+// next unrelated trigger. What this can't see, by the header comment
+// on `composerDraft.ts`: text the CLI itself restores without any key
+// or paste passing through Skein's terminal at all — a resumed
+// session's own remembered input, a draft opencode/Claude keeps across
+// `/clear`, a message the CLI queues internally — and a paste that
+// reaches neither `onKey` nor the bracketed-paste branch of `onData`.
 
+import { CLEAN_DRAFT, checkDraft, draftClearedBy, reduceDraft } from "./composerDraft.ts";
+import type { ComposerDraft, DraftEvent } from "./composerDraft.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { HarnessCapabilities } from "./data.tsx";
 import { atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
@@ -88,6 +115,17 @@ function userInputCount(id: string): number {
 	return userInputCounts.get(id) ?? 0;
 }
 
+/// #383: per-harness inferred composer state, alongside `userInputCounts`
+/// above — see `composerDraft.ts` for the state machine and this file's
+/// header for how it's wired in. Missing entry reads as `CLEAN_DRAFT`,
+/// same convention as `userInputCounts`' missing-entry-is-0.
+const drafts = new Map<string, ComposerDraft>();
+
+/// Subscribers notified once per transition `draftClearedBy` calls a
+/// "cleared" — never on every event, so a caller doesn't have to
+/// re-derive that predicate itself.
+const draftClearedSubscribers = new Set<(id: string) => void>();
+
 export const harnessInput = {
 	/// Publish `target` for `id`. Returns the unregister function —
 	/// call it on PTY exit, on unmount, and before a respawn re-registers
@@ -95,6 +133,9 @@ export const harnessInput = {
 	/// is never still a nudge target.
 	register(id: string, target: HarnessInputTarget): () => void {
 		targets.set(id, target);
+		// #383: a fresh PTY means an empty composer, whatever the old one
+		// last read as.
+		harnessInput.noteDraftEvent(id, { type: "respawn" });
 		return () => {
 			// Only clear our own registration: a respawn that already
 			// registered a fresh target for the same id must not have
@@ -116,6 +157,32 @@ export const harnessInput = {
 	/// checks need to tell apart from its own machine-written "\r".
 	noteUserInput(id: string): void {
 		userInputCounts.set(id, userInputCount(id) + 1);
+	},
+	/// #383: fold `ev` into `id`'s inferred composer draft, and notify
+	/// `subscribeDraftCleared` subscribers when `draftClearedBy` says this
+	/// transition emptied it without a submit.
+	noteDraftEvent(id: string, ev: DraftEvent): void {
+		const prev = drafts.get(id) ?? CLEAN_DRAFT;
+		const next = reduceDraft(prev, ev);
+		drafts.set(id, next);
+		if (draftClearedBy(prev, ev, next)) {
+			for (const cb of draftClearedSubscribers) cb(id);
+		}
+	},
+	/// `id`'s current inferred composer draft — `CLEAN_DRAFT` for a
+	/// harness this store has never seen an event for.
+	draft(id: string): ComposerDraft {
+		return drafts.get(id) ?? CLEAN_DRAFT;
+	},
+	/// Subscribe to "a harness's draft just cleared without a submit" —
+	/// `useMailDelivery.ts`'s fourth trigger, so held mail retries the
+	/// moment it's safe rather than waiting for an unrelated event.
+	/// Returns the unsubscribe function.
+	subscribeDraftCleared(cb: (id: string) => void): () => void {
+		draftClearedSubscribers.add(cb);
+		return () => {
+			draftClearedSubscribers.delete(cb);
+		};
 	},
 };
 
@@ -308,7 +375,18 @@ export function formatDroppedPaths(paths: string[]): string {
 /// this file's header comment and `submitRetry.ts`. The paste and the
 /// gate result are still synchronous; only the "\r" (and, for a
 /// retry-capable kind, its possible retry) happen later, off a timer.
-export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): GateResult {
+///
+/// #383: `opts.automatic` folds `checkDraft` on top of `canSendPrompt`
+/// — set only by an automatic sender (a mail nudge); a manual send
+/// (the Nudge button, a prompt-library item) passes no `opts` and must
+/// not consult the draft at all, since a human choosing to send right
+/// now is not something a composer-state guess should override.
+export function sendPrompt(
+	harnessId: string,
+	kind: HarnessKind,
+	body: string,
+	opts?: { automatic?: boolean },
+): GateResult {
 	const target = targets.get(harnessId);
 	const gate = canSendPrompt({
 		capabilities: HARNESS_KINDS[kind].capabilities,
@@ -318,10 +396,15 @@ export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): 
 		body,
 	});
 	if (!gate.ok) return gate;
+	if (opts?.automatic) {
+		const draftRefusal = checkDraft(harnessInput.draft(harnessId));
+		if (draftRefusal) return draftRefusal;
+	}
 	// A passing gate required `registered: target !== undefined`, so
 	// `target` is set here by construction.
 	const t = target as HarnessInputTarget;
 	t.paste(body);
+	harnessInput.noteDraftEvent(harnessId, { type: "seamPaste" });
 
 	// #381: snapshot which stopping point the paste landed at — a plain
 	// `waiting` (`null`) or a specific armed #277 delegation deferral
@@ -378,6 +461,7 @@ export function sendPrompt(harnessId: string, kind: HarnessKind, body: string): 
 			return;
 		}
 		t.submit();
+		harnessInput.noteDraftEvent(harnessId, { type: "seamSubmit" });
 		// #363: this submit never touches xterm's `onKey`, so without this
 		// call the #259 silent-adapter watchdog would never arm for a prompt
 		// that arrived through this seam — `create_room`'s first prompt, a
