@@ -41,6 +41,7 @@ import { useHarnessCreation } from "./useHarnessCreation.ts";
 import { useHarnessNotifications } from "./useHarnessNotifications.ts";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts.ts";
 import { useMailDelivery } from "./useMailDelivery.ts";
+import { useOpenRequests } from "./useOpenRequests.ts";
 import { useOsNotificationClicks } from "./useOsNotificationClicks.ts";
 import { useRoomStripNav } from "./useRoomStripNav.ts";
 import { useRoomsStore } from "./useRoomsStore.ts";
@@ -406,6 +407,19 @@ export default function App() {
 	// useOsNotificationClicks.ts. NOT here: `jumpToToast`, which
 	// already lives in useHarnessNotifications.
 	useOsNotificationClicks(roomsRef, unarchiveRoomRef, setRooms, loaded, loadedRef);
+
+	// Epic #255: a folder opened from outside Skein — `skein .`, a
+	// `skein://open` link, a second launch with a path. Same pending-slot
+	// shape as the notification click above; see useOpenRequests.ts.
+	useOpenRequests(
+		roomsRef,
+		activeRoomIdRef,
+		unarchiveRoomRef,
+		openNewRoom,
+		openNewRoomAt,
+		loaded,
+		loadedRef,
+	);
 
 	// #329: agent-mail delivery — nudges a waiting harness's mailbox and
 	// keeps the tab marker (mailStore.ts, read by HarnessTab) fresh.

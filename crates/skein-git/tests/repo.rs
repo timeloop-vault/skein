@@ -418,6 +418,40 @@ fn open_rejects_missing_path() {
 }
 
 #[test]
+fn enclosing_workdir_walks_up_from_a_nested_folder() {
+    let (_tmp, path) = init_repo();
+    let nested = path.join("src").join("deep");
+    fs::create_dir_all(&nested).unwrap();
+
+    let found = Repo::enclosing_workdir(&nested).expect("inside a checkout");
+    // Same `/var` → `/private/var` symlink caveat as the worktree test.
+    assert_eq!(found.canonicalize().unwrap(), path.canonicalize().unwrap());
+}
+
+#[test]
+fn enclosing_workdir_names_the_linked_worktree_not_the_main_checkout() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    let wt_path = propose_worktree_path(&path, "enclosing");
+    repo.add_worktree("feat/enclosing", "main", &wt_path)
+        .unwrap();
+    let nested = wt_path.join("sub");
+    fs::create_dir_all(&nested).unwrap();
+
+    let found = Repo::enclosing_workdir(&nested).expect("inside a worktree");
+    assert_eq!(
+        found.canonicalize().unwrap(),
+        wt_path.canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn enclosing_workdir_is_none_outside_any_repo() {
+    let tmp = TempDir::new().unwrap();
+    assert_eq!(Repo::enclosing_workdir(tmp.path()), None);
+}
+
+#[test]
 fn propose_worktree_path_uses_sibling_dir() {
     let p = propose_worktree_path(Path::new("/tmp/code/skein"), "foo");
     assert_eq!(p, Path::new("/tmp/code/skein-wt/foo"));

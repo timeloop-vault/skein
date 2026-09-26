@@ -12,6 +12,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { check } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useState } from "react";
+import { CliShimPanel } from "./CliShimPanel.tsx";
 import { NudgesPanel } from "./NudgesPanel.tsx";
 import { SpawnEnvPanel } from "./SpawnEnvPanel.tsx";
 import { kindHasAgents } from "./agents.ts";
@@ -501,6 +502,11 @@ export const SettingsModal = ({
 					<div className="sk-field">
 						<label>Nudges</label>
 						<NudgesPanel />
+					</div>
+
+					<div className="sk-field">
+						<label>Command line</label>
+						<CliShimPanel />
 					</div>
 
 					<div className="sk-field">

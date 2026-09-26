@@ -42,7 +42,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
 - **Tauri v2** desktop shell (Rust, edition 2024); plugins: updater,
   dialog, clipboard-manager, opener, notifications (the notifications
   plugin is skipped in macOS debug builds — its Swift bridge needs a
-  real .app bundle)
+  real .app bundle), single-instance + deep-link (#255 — registered
+  first; a second launch forwards its path to the running Skein and
+  exits)
 - **React 18 + strict TypeScript** UI (Vite); xterm.js for terminals,
   react-virtuoso for the activity feed, CodeMirror 6 for the file
   editor (#185)
@@ -122,6 +124,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   useHarnessCreation, useHarnessActions,
     │   │   │                        #   useHarnessNotifications (badge/toast/OS
     │   │   │                        #   notify), useOsNotificationClicks,
+    │   │   │                        #   useOpenRequests (+ openRequest.ts, #255),
     │   │   │                        #   useRoomStripNav, useKeyboardShortcuts,
     │   │   │                        #   useAppSettings, useAppWindowEffects — plus
     │   │   │                        #   paletteItems.ts and the split-out
@@ -219,6 +222,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │   filesRegistry.ts     #   EVERY destroy path (close harness/room/window) must
     │   │   │                        #   consult it — unsaved text lives only in memory
     │   │   ├── SpawnEnvPanel.tsx    # Settings UI for the harness spawn environment (#197)
+    │   │   ├── CliShimPanel.tsx     # Settings → Command line: install the `skein` command (#255)
     │   │   ├── CommandPalette.tsx / statusPopover.ts / Splitter.tsx /
     │   │   │   useFocusRestore.ts / prefs.ts (localStorage UI prefs) / styles.css
     │   │   └── liveContext/         # Right-pane card stack (issue #80): store.ts (backfill
@@ -250,7 +254,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │                            #   nudges.ts (#238: the header Nudge button's three
     │   │                            #   fixed prompts, picked by sign-off state + open count)
     │   └── src-tauri/               # Tauri Rust shell
-    │       ├── src/lib.rs           # Builder + 57-command registry; tracing → daily-rotating
+    │       ├── src/lib.rs           # Builder + 69-command registry; tracing → daily-rotating
     │       │                        #   file in app_log_dir() + stderr (RUST_LOG overrides)
     │       ├── src/pty.rs           # PtyManager (portable-pty); 4 threads per spawn (raw
     │       │                        #   reader + coalescer + writer + waiter — the waiter is
@@ -286,6 +290,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   a real spawn does, and pass #215's --plugin-dir so the
     │       │                        #   list matches what the spawn will accept
     │       ├── src/resume.rs        # session-existence probes against the tools' own stores
+    │       ├── src/open_request.rs  # Opening a folder from outside Skein (#255): argv / link
+    │       │                        #   parsing, the pending slot, and path → room resolution
+    │       ├── src/room_paths.rs    # The one path → room matcher, shared with the agent
+    │       │                        #   API's find_rooms_for_path (#354). String-only; callers
+    │       │                        #   that can touch disk canonicalize first
+    │       ├── src/cli_shim.rs      # The `skein` sh script Settings installs in ~/.local/bin
     │       ├── src/review.rs        # Baseline capture + the three baseline commands (#211).
     │       │                        #   Captures from the HEAD blob the moment a LIVE patch
     │       │                        #   row lands — never on backfill, where HEAD has moved
@@ -648,6 +658,25 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   lives **only in memory** until saved, so every destroy path — close
   harness, close room, close window — must consult `filesRegistry`
   and prompt.
+- **Opening from outside** (#255): `skein .`, a
+  `skein://open?path=<abs>` link, or a second launch with a path all
+  land in `open_request.rs`'s latest-wins slot; the window is raised
+  and the frontend gets a payload-less `skein://open-request` poke,
+  then takes the slot through `open_request_take` — on the poke once
+  rooms have loaded, and once after hydrate, so a cold launch's path
+  waits for the rooms it is matched against (the #294 notification-
+  click shape). Resolution runs at take time over the stored rooms,
+  canonicalizing both sides: deepest owning folder wins, an open room
+  beats an archived one, a room *under* the path never counts. The
+  frontend keeps you in the room you are in if it is one of the equal
+  owners, otherwise focuses/reopens via `unarchiveRoom`, or opens New
+  room seeded with the enclosing checkout. Single instance matters
+  beyond this: two Skeins on one `skein.db` erase each other's rooms
+  (`save_all` replaces every row) and revoke each other's agent
+  tokens. The scheme and the command are per build profile (`skein`,
+  `skein-local`, `skein-dev`). The command installer is macOS/Linux
+  only so far: a bundled macOS app is reached through a link via
+  `open`, anything else by running the binary detached.
 - **Git ops** go through `crates/skein-git`;
   `app/src-tauri/src/git.rs` is a thin DTO layer. Anything richer
   than DTO glue belongs in the crate, where it's testable.

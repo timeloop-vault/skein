@@ -51,6 +51,22 @@ impl Repo {
         Repository::open(path).is_ok()
     }
 
+    /// The working tree that `path` sits somewhere inside — the
+    /// checkout root a `git` command run from `path` would use, whether
+    /// that is a main checkout or a linked worktree. `None` when no
+    /// parent is a repo, or the one found is bare.
+    ///
+    /// Unlike [`Repo::open`] this walks up, which is the point: opening
+    /// a folder from outside Skein (epic #255) hands over whatever
+    /// directory the user's shell was in, usually somewhere deep in a
+    /// checkout rather than at its root.
+    pub fn enclosing_workdir(path: &Path) -> Option<PathBuf> {
+        Repository::discover(path)
+            .ok()?
+            .workdir()
+            .map(Path::to_path_buf)
+    }
+
     /// Local branches, sorted alphabetically. Each entry knows whether
     /// it's HEAD so the UI can default to it.
     pub fn branches(&self) -> Result<Vec<BranchInfo>> {

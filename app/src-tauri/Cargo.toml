@@ -27,8 +27,19 @@ tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-opener = "2"
+# Opening a folder from outside Skein (epic #255): `skein .`, a
+# `skein://open?path=…` link, a second launch with a path. Single
+# instance is also what stops a second Skein from sharing skein.db with
+# the first; its `deep-link` feature routes a link that launched a
+# second process (Windows/Linux) into the deep-link plugin.
+tauri-plugin-single-instance = { version = "2.4.5", features = ["deep-link"] }
+tauri-plugin-deep-link = "2.4.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# `canonicalize` without Windows' `\\?\` prefix, so an opened folder
+# compares equal to a room's stored path and seeds New room readably
+# (#255). Already in the tree via tauri.
+dunce = "1.0.5"
 portable-pty = "0.8"
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }

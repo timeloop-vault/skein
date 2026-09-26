@@ -7,6 +7,7 @@
 //! per-spawn `tauri::ipc::Channel<PtyEvent>` (tagged data/exit).
 mod agent_api;
 mod agents;
+mod cli_shim;
 mod db;
 mod fs;
 mod git;
@@ -17,11 +18,13 @@ mod harness_config;
 mod harness_events_claude;
 mod harness_events_opencode;
 mod harness_kind;
+mod open_request;
 mod os_notify;
 mod pty;
 mod resume;
 mod review;
 mod review_surface;
+mod room_paths;
 mod spawn_env;
 mod spawn_settings;
 mod watcher;
@@ -106,6 +109,14 @@ pub fn run() {
     // added below; quiet the warning for that one path.
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
+        // Epic #255. First, as the plugin requires: a second launch must
+        // be turned away before anything else starts — two Skeins on
+        // one skein.db erase each other's rooms (see `open_request`).
+        // It hands the second launch's argv + cwd to the running one.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            crate::open_request::from_second_instance(app, &argv, &cwd);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -325,6 +336,11 @@ pub fn run() {
                 window.set_decorations(false)?;
             }
 
+            // Epic #255: a folder this process was launched with, and
+            // `<scheme>://open` links from now on. After the window
+            // exists, since a link raises it.
+            crate::open_request::init(app);
+
             // macOS expects an app menu — without one ⌘Q doesn't work,
             // there's no Edit menu for cut/copy/paste/select-all in
             // text fields, and the app feels web-shimmed. Tauri's
@@ -458,6 +474,10 @@ pub fn run() {
             agent_api::commands::agent_request_complete,
             os_notify::os_notify_show,
             os_notify::os_notify_take_pending,
+            open_request::open_request_take,
+            cli_shim::cli_shim_status,
+            cli_shim::cli_shim_install,
+            cli_shim::cli_shim_uninstall,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

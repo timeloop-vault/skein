@@ -2,5 +2,10 @@
 	"$schema": "https://schema.tauri.app/config/2",
 	"productName": "Skein (local)",
 	"identifier": "com.timeloop-vault.skein.local",
-	"mainBinaryName": "skein-app-local"
+	"mainBinaryName": "skein-app-local",
+	"plugins": {
+		"deep-link": {
+			"desktop": { "schemes": ["skein-local"] }
+		}
+	}
 }

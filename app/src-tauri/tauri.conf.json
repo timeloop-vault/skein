@@ -55,6 +55,9 @@
 		}
 	},
 	"plugins": {
+		"deep-link": {
+			"desktop": { "schemes": ["skein"] }
+		},
 		"updater": {
 			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU1QTZGODdCODEwOEE4RDkKUldUWnFBaUJlL2ltVlFlMktTaTZYODRRVUkzdXkrKzE2V2ZLR1krY1cvWWhPWFdoYkkxOUZCR2cK",
 			"endpoints": ["https://github.com/timeloop-vault/skein/releases/latest/download/latest.json"]

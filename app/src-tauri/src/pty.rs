@@ -1193,6 +1193,17 @@ fn probe_snapshot() -> ProbeOutcome {
         .clone()
 }
 
+/// The PATH the user's login shell reported, if the probe has captured
+/// one yet. Never waits. For questions about what the user's *terminal*
+/// can run — a GUI app's own PATH is launchd's on macOS, which knows
+/// nothing of `~/.local/bin` (epic #255's `skein` command).
+pub(crate) fn login_shell_path() -> Option<String> {
+    match probe_snapshot() {
+        ProbeOutcome::Captured { path, .. } => Some(path),
+        ProbeOutcome::Pending | ProbeOutcome::Failed { .. } => None,
+    }
+}
+
 fn probe_result() -> ProbeOutcome {
     let (lock, cv) = &*PROBE;
     if !PROBE_STARTED.load(Ordering::Acquire) {

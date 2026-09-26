@@ -76,6 +76,10 @@ export const AppOverlays = ({
 		<>
 			{showNewRoom && (
 				<NewRoomDialog
+					// The dialog reads its seed once, at mount. Keyed on it so
+					// a folder opened from outside Skein (#255) while the
+					// dialog is already up replaces it, not goes unseen.
+					key={newRoomSeed.cwd}
 					defaultCwd={defaultCwd}
 					initialCwd={newRoomSeed.cwd}
 					initialDefaults={newRoomSeed.defaults}

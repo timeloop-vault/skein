@@ -38,6 +38,7 @@ use crate::git::repo_root_for_path;
 use crate::review::{abs_path, now_ms};
 use crate::review_surface::Scope;
 use crate::review_surface::query::{ScopeFiles, file_impl, scope_impl};
+use crate::room_paths::{normalize_path_for_match, path_match_kind};
 
 /// Rendered diff text is capped so a whole-branch `get_diff` on a large
 /// change cannot swallow the agent's context. Truncation is reported,
@@ -623,21 +624,6 @@ pub struct FindRoomsForPathOut {
     pub unreadable_rooms: u32,
 }
 
-/// Normalize a filesystem path for comparison, mirroring the frontend's
-/// `normalizePath` (`app/src/roomGroups.ts`) exactly: backslashes
-/// become forward slashes, one trailing slash is stripped (never down
-/// to an empty string), and the result is lowercased. Kept in
-/// lock-step with that function rather than shared with it — this side
-/// reads sqlite JSON, that side reads `Room[]`, and there is no module
-/// to share across the FFI boundary.
-fn normalize_path_for_match(path: &str) -> String {
-    let mut s = path.replace('\\', "/");
-    if s.chars().count() > 1 && s.ends_with('/') {
-        s.pop();
-    }
-    s.to_lowercase()
-}
-
 /// A repository group's key for comparison: the root canonicalized
 /// while it still exists, then normalized. `repoRoot` gets stored in two
 /// spellings — `repo_root_for_path` returns a plain checkout's path
@@ -651,35 +637,6 @@ fn group_key_for_match(root: &str) -> String {
     let canonical = std::fs::canonicalize(root)
         .map_or_else(|_| root.to_owned(), |p| p.to_string_lossy().into_owned());
     normalize_path_for_match(&canonical)
-}
-
-/// Whether normalized `a` sits under normalized `b` as a strict
-/// descendant, on path-segment boundaries — `/a/foo` must never match
-/// under `/a/foobar`. `b` already ending in `/` (a normalized root)
-/// is not given a second one.
-fn is_strictly_under(a: &str, b: &str) -> bool {
-    let prefix = if b.ends_with('/') {
-        b.to_owned()
-    } else {
-        format!("{b}/")
-    };
-    a.starts_with(&prefix)
-}
-
-/// `"cwd"` for an exact match, `"inside_room"` when the query sits
-/// strictly under the room's cwd (the query is somewhere inside the
-/// room), `"contains_room"` when the room's cwd sits strictly under the
-/// query (the query is a parent folder of the room), `None` otherwise.
-fn path_match_kind(query_norm: &str, cwd_norm: &str) -> Option<&'static str> {
-    if query_norm == cwd_norm {
-        Some("cwd")
-    } else if is_strictly_under(query_norm, cwd_norm) {
-        Some("inside_room")
-    } else if is_strictly_under(cwd_norm, query_norm) {
-        Some("contains_room")
-    } else {
-        None
-    }
 }
 
 /// Every room — open or archived — whose cwd equals, sits under, or
