@@ -24,8 +24,50 @@ import { subagents } from "./subagents.ts";
 /// Fire-and-forget forward of one log line to Rust's `skein.log` (#362).
 /// Never throws or rejects visibly — a logging call must not become a
 /// new failure mode for the thing it's trying to make visible.
-function logToRust(level: "info" | "warn", target: string, message: string): void {
+function logToRust(level: "info" | "warn" | "error", target: string, message: string): void {
 	void invoke("frontend_log", { level, target, message }).catch(() => {});
+}
+
+/// How many `onmessage` throws per attach get logged before we stop
+/// bothering Rust — a hot loop throwing on every message must not
+/// flood the log file.
+const MAX_GUARDED_ERRORS_LOGGED = 5;
+
+/// Wrap a Channel's `onmessage` handler so a single throw can't wedge
+/// the whole channel (#362). `@tauri-apps/api`'s `Channel` calls
+/// `onmessage` BEFORE it advances `nextMessageIndex` (see
+/// `@tauri-apps/api/core.js` around L95–97) — an uncaught throw from
+/// one message leaves every LATER message parked in
+/// `pendingMessages` forever, silently, even though Rust keeps
+/// sending them successfully. Catching here and carrying on is what
+/// keeps later messages arriving; logging is rate-limited to the
+/// first `MAX_GUARDED_ERRORS_LOGGED` throws per attach. Exported so
+/// the wrapping is testable without a real Tauri `Channel`.
+export function guardChannelHandler<T extends { kind: string }>(
+	harnessId: string,
+	target: string,
+	handler: (event: T) => void,
+	log: (level: "error", target: string, message: string) => void = logToRust,
+): (event: T) => void {
+	let loggedErrors = 0;
+	return (event: T) => {
+		try {
+			handler(event);
+		} catch (err) {
+			loggedErrors += 1;
+			if (loggedErrors > MAX_GUARDED_ERRORS_LOGGED) return;
+			const message = err instanceof Error ? err.message : String(err);
+			const stack =
+				err instanceof Error && typeof err.stack === "string" ? err.stack.slice(0, 1500) : "";
+			log(
+				"error",
+				target,
+				`onmessage threw harness=${harnessId} kind=${event.kind}: ${message}${
+					stack ? `\nstack: ${stack}` : ""
+				}`,
+			);
+		}
+	};
 }
 
 /// Mirror of the Rust enum. `kind` is the serde tag from
@@ -83,7 +125,7 @@ export function attachClaudeEvents(
 ): () => void {
 	const channel = new Channel<ClaudeEvent>();
 	let closed = false;
-	channel.onmessage = (event) => {
+	channel.onmessage = guardChannelHandler(harnessId, "claude_events", (event) => {
 		// #259: any event at all proves the tail is on the right file.
 		// Guarded so a straggler after unsubscribe can't hand authority
 		// back to an adapter that no longer exists. #116: unsubscribe is
@@ -95,7 +137,7 @@ export function attachClaudeEvents(
 			harnessActivity.adapterDelivered(harnessId);
 			translate(harnessId, event);
 		}
-	};
+	});
 
 	// Mark authoritative *synchronously*, not on `.then()`. By the
 	// time attachClaudeEvents is called, the PTY has been streaming
@@ -323,12 +365,12 @@ export function attachOpencodeEvents(
 ): () => void {
 	const channel = new Channel<OpencodeEvent>();
 	let closed = false;
-	channel.onmessage = (event) => {
+	channel.onmessage = guardChannelHandler(harnessId, "opencode_events", (event) => {
 		// #259: see attachClaudeEvents. `connected` arrives first, so a
 		// stream that is up disarms the watchdog before any prompt.
 		if (!closed) harnessActivity.adapterDelivered(harnessId);
 		translateOpencode(harnessId, event, onSessionCaptured, getSessionId, onSessionFollowed);
-	};
+	});
 
 	// See attachClaudeEvents for why this happens synchronously.
 	harnessActivity.attachAuthoritativeSource(harnessId);
