@@ -151,6 +151,8 @@ export const createBufferState = (
 			basicSetup,
 			langFor(path) ?? [],
 			skeinTheme,
+			// Soft wrap only, the document is untouched (#303).
+			EditorView.lineWrapping,
 			syntaxHighlighting(skeinHighlight),
 			EditorView.updateListener.of((u) => {
 				if (u.docChanged) hooks.onDocChanged();
