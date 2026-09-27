@@ -31,9 +31,9 @@ import {
 } from "./agentRequests.ts";
 import { listHarnessAgents } from "./agents.ts";
 import { harnessActivity } from "./harnessActivity.ts";
-import type { ToastEntry } from "./notifications.tsx";
 import { type DefaultAgents, type NewRoomMemory, branchTemplateFor, defaultsFor } from "./prefs.ts";
 import { fetchScope } from "./review/api.ts";
+import type { NewToast } from "./toastStack.ts";
 import type { CreateRoomResult } from "./useHarnessCreation.ts";
 import { createRoomArgs } from "./worktreeRoom.ts";
 
@@ -48,7 +48,7 @@ export function useAgentRequests(
 	newRoomMemory: NewRoomMemory,
 	defaultAgents: DefaultAgents,
 	appBranchTemplate: string,
-	pushToast: (entry: ToastEntry) => void,
+	pushToast: (entry: NewToast) => void,
 ): void {
 	// Refs so the listener (mounted once, below) always reads the latest
 	// values without re-subscribing on every settings/memory change —

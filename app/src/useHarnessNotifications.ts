@@ -31,12 +31,11 @@ import {
 import {
 	API_ERROR_INCIDENT_MS,
 	BADGE_COALESCE_MS,
-	TOAST_MAX_VISIBLE,
-	type ToastEntry,
 	enqueueOsNotification,
 } from "./notifications.tsx";
 import { clearAttention } from "./roomAttention.ts";
 import { followedSession } from "./sessionTracking.ts";
+import { type NewToast, type ToastEntry, appendToast, coalesceToast } from "./toastStack.ts";
 import type { Room } from "./types.ts";
 
 export function useHarnessNotifications(
@@ -70,8 +69,8 @@ export function useHarnessNotifications(
 	// request handler, which has no harness-activity transition to key
 	// off) push a toast of its own onto the same stack, capped the same
 	// way every transition-driven toast already is.
-	const pushToast = (entry: ToastEntry) => {
-		setToasts((prev) => [...prev, entry].slice(-TOAST_MAX_VISIBLE));
+	const pushToast = (entry: NewToast) => {
+		setToasts((prev) => appendToast(prev, entry, Date.now()));
 	};
 
 	// L5e — notification toggles read inside the transition listener
@@ -375,7 +374,7 @@ export function useHarnessNotifications(
 			// dot + tab color already tell the story), or when
 			// disabled in Settings (L5e).
 			if (notifyToastRef.current && isWindowFocused && !isViewedHarness && owningRoom && harness) {
-				const entry: ToastEntry = {
+				const entry: NewToast = {
 					id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
 					roomId: owningRoom.id,
 					harnessId,
@@ -388,7 +387,7 @@ export function useHarnessNotifications(
 						: {}),
 					...(delegationNote ? { delegationNote } : {}),
 				};
-				setToasts((prev) => [...prev, entry].slice(-TOAST_MAX_VISIBLE));
+				setToasts((prev) => appendToast(prev, entry, Date.now()));
 			}
 			// OS notification — fire whenever the window isn't
 			// focused, regardless of which harness was "viewed"
@@ -465,20 +464,23 @@ export function useHarnessNotifications(
 			const detail = apiErrorToastText(parsePayload(a.payload));
 			setToasts((prev) => {
 				const i = prev.findIndex((t) => t.state === "error" && t.harnessId === a.harnessId);
-				const existing = i === -1 ? undefined : prev[i];
-				if (existing) {
-					// Coalesce onto the live toast (same id) with fresh detail,
-					// so a fast burst is one toast, not a stack. Retries that
-					// outpace the 6s dismiss (529 backoff spaces them out:
+				if (i !== -1) {
+					// #180: coalesce onto the live toast (same id, same
+					// `expiresAt`) with fresh detail, so a fast burst is one
+					// toast, not a stack — but the update does NOT extend the
+					// toast's life. It lapses TOAST_DISMISS_MS after the
+					// incident first surfaced, even mid-burst: retries that
+					// outpace that window (529 backoff spaces them out —
 					// ~0.5/1/2/4s and growing) let the toast lapse between
-					// rows, so the next retry re-surfaces a fresh one — the
-					// incident keeps re-announcing itself, which is fine; the
-					// badge (one bump per incident) is the persistent signal.
-					const next = [...prev];
-					next[i] = { ...existing, detail };
-					return next;
+					// rows, and the next retry re-surfaces a fresh one. The
+					// incident keeps re-announcing itself, which is fine —
+					// the badge (one bump per incident) is the persistent
+					// signal, not this toast. Extending the expiry here would
+					// pin an error toast for the whole of a retry storm,
+					// which is the bug #180 fixes.
+					return coalesceToast(prev, i, { detail });
 				}
-				const entry: ToastEntry = {
+				const entry: NewToast = {
 					id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
 					roomId: owningRoom.id,
 					harnessId: a.harnessId,
@@ -488,7 +490,7 @@ export function useHarnessNotifications(
 					state: "error",
 					detail,
 				};
-				return [...prev, entry].slice(-TOAST_MAX_VISIBLE);
+				return appendToast(prev, entry, Date.now());
 			});
 		});
 		return () => {
