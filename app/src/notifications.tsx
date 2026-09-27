@@ -1,9 +1,10 @@
 import { sendNotification } from "@choochmeque/tauri-plugin-notifications-api";
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { HChip } from "./components.tsx";
 import { isWindows } from "./shortcuts.ts";
-import type { HarnessKind } from "./types.ts";
+import type { ToastEntry } from "./toastStack.ts";
+import { toastRemainingMs } from "./toastStack.ts";
 
 // ── Toasts (in-app notifications, L5c) ─────────────────────────────
 //
@@ -12,50 +13,15 @@ import type { HarnessKind } from "./types.ts";
 // source harness (e.g. they're in a different room when an agent
 // finishes). Fixed to the bottom-right corner, click to jump,
 // auto-dismiss after a few seconds.
+//
+// `ToastEntry`, `NewToast`, `TOAST_DISMISS_MS` and `TOAST_MAX_VISIBLE`
+// live in `toastStack.ts` (#180) — a pure module so the stack's
+// append/coalesce/expiry rules are testable without React. Re-exported
+// here so existing importers keep working.
 
-export interface ToastEntry {
-	id: string;
-	roomId: string;
-	harnessId: string;
-	kind: HarnessKind;
-	roomName: string;
-	harnessName: string;
-	// "waiting" lands here once L2c-1 (Claude JSONL adapter) reports
-	// a `last-prompt` row → harness is awaiting user input. Rendered
-	// verbatim in the toast subtitle. "error" is the D2f api_error
-	// variant — red treatment plus the dim `detail` line. "permission"
-	// (#86) is a harder stop than "waiting" — the harness is blocked on
-	// an approval dialog, not merely at end-of-turn. "created" (#330) is
-	// the receipt for a room an agent's `create_room` call opened in the
-	// background — not a harness-activity transition at all, so it never
-	// comes from `harnessActivity.subscribeTransitions` the way every
-	// other variant does; `useAgentRequests.ts` pushes it directly.
-	state: "idle" | "exited" | "waiting" | "error" | "permission" | "created";
-	/** Error variant only: summary under the subtitle, e.g.
-	 *  "Overloaded (529), retrying · attempt 4 of 10 · retry in 4.4s". */
-	detail?: string | undefined;
-	/** Permission variant only: the tool name when the adapter could
-	 *  say (opencode's permission-asked event carries none). */
-	tool?: string | undefined;
-	/** Permission variant only: the subagent name when the dialog
-	 *  belongs to one rather than the main session (#298). */
-	agentType?: string | undefined;
-	/** Waiting variant only (#277): `delegationSummary` of
-	 *  `HarnessActivity.delegatedCount`, when the harness delegated
-	 *  work since the user's last prompt and this end-of-turn wasn't
-	 *  flushed by the ceiling (see the `DelegationCeiling` check at the
-	 *  call site) — "Skein cannot claim the delegated work finished"
-	 *  there, so no suffix rides along. */
-	delegationNote?: string | undefined;
-	/** "created" variant only: the room that asked for this one, so the
-	 *  toast can read "<requesterRoomName> opened <roomName>" — `roomName`
-	 *  here is the NEW room, the toast's own click/navigation target, same
-	 *  as every other variant. */
-	requesterRoomName?: string | undefined;
-}
+export type { NewToast, ToastEntry } from "./toastStack.ts";
+export { TOAST_DISMISS_MS, TOAST_MAX_VISIBLE } from "./toastStack.ts";
 
-const TOAST_DISMISS_MS = 6_000;
-export const TOAST_MAX_VISIBLE = 5;
 /// api_error rows within this window count as one incident (a retry
 /// burst lands as several rows seconds apart — badge once, not per row).
 export const API_ERROR_INCIDENT_MS = 60_000;
@@ -146,10 +112,22 @@ export const Toast = ({
 	onClick: () => void;
 	onDismiss: () => void;
 }) => {
+	// #180: the timer runs from `toast.expiresAt` — fixed when the toast
+	// entered the stack — not from whenever this effect happens to fire.
+	// `onDismiss` is a fresh closure every App re-render (busy activity
+	// under load re-renders constantly), so it's read through a ref
+	// rather than a dep: previously it WAS the dep, which restarted the
+	// timeout on every render and meant a toast never actually expired
+	// under load.
+	const onDismissRef = useRef(onDismiss);
+	onDismissRef.current = onDismiss;
 	useEffect(() => {
-		const id = setTimeout(onDismiss, TOAST_DISMISS_MS);
+		const id = setTimeout(
+			() => onDismissRef.current(),
+			toastRemainingMs(toast.expiresAt, Date.now()),
+		);
 		return () => clearTimeout(id);
-	}, [onDismiss]);
+	}, [toast.expiresAt]);
 	// #86: "permission" reads as "needs permission" (+ tool when known)
 	// rather than the bare phase word — same reasoning as `statusLabel`,
 	// just phrased for a subtitle instead of a status-bar segment.
