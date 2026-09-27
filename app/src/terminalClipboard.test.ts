@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ClipboardKeyLike, ClipboardPlatform } from "./terminalClipboard.ts";
-import { decideClipboardAction, emptySelectionHint } from "./terminalClipboard.ts";
+import {
+	decideClipboardAction,
+	emptySelectionHint,
+	pasteFailureHint,
+} from "./terminalClipboard.ts";
 
 const key = (over: Partial<ClipboardKeyLike> = {}): ClipboardKeyLike => ({
 	type: "keydown",
@@ -120,4 +124,51 @@ describe("emptySelectionHint", () => {
 		expect(emptySelectionHint("mac", false)).toBe("Nothing selected");
 		expect(emptySelectionHint("windows", false)).toBe("Nothing selected");
 	});
+});
+
+describe("pasteFailureHint", () => {
+	const cases: Array<{
+		platform: ClipboardPlatform;
+		imagePaste: boolean;
+		reason: "empty" | "error";
+		want: string;
+	}> = [
+		{
+			platform: "windows",
+			imagePaste: true,
+			reason: "error",
+			want: "Paste failed — press Alt+V to paste an image",
+		},
+		{
+			platform: "windows",
+			imagePaste: true,
+			reason: "empty",
+			want: "No text to paste — press Alt+V to paste an image",
+		},
+		{
+			platform: "linux",
+			imagePaste: true,
+			reason: "error",
+			want: "Paste failed — press Ctrl+V to paste an image",
+		},
+		{
+			platform: "linux",
+			imagePaste: true,
+			reason: "empty",
+			want: "No text to paste — press Ctrl+V to paste an image",
+		},
+		// mac is never intercepted (native ⌘V), but the helper still
+		// falls back sanely if it's ever asked.
+		{ platform: "mac", imagePaste: true, reason: "error", want: "Paste failed" },
+		{ platform: "mac", imagePaste: true, reason: "empty", want: "No text to paste" },
+		{ platform: "windows", imagePaste: false, reason: "error", want: "Paste failed" },
+		{ platform: "windows", imagePaste: false, reason: "empty", want: "No text to paste" },
+		{ platform: "linux", imagePaste: false, reason: "error", want: "Paste failed" },
+		{ platform: "linux", imagePaste: false, reason: "empty", want: "No text to paste" },
+	];
+	for (const { platform, imagePaste, reason, want } of cases) {
+		it(`${platform}/imagePaste=${imagePaste}/${reason} → "${want}"`, () => {
+			expect(pasteFailureHint(platform, imagePaste, reason)).toBe(want);
+		});
+	}
 });

@@ -93,3 +93,26 @@ export const emptySelectionHint = (
 	const how = platform === "mac" ? "Option+drag" : "Shift+drag";
 	return `Nothing selected — ${how} to select over the agent's UI`;
 };
+
+/** Hint text for a paste that found no readable text on the clipboard —
+ *  either the read rejected (`"error"` — what an image-only clipboard
+ *  was verified to do on Windows, #306) or resolved empty (`"empty"`,
+ *  handled defensively in case another platform or build does that
+ *  instead; not observed).
+ *  For a harness whose CLI reads an image from the OS clipboard on its
+ *  own key (`imagePaste`), the hint names that key so the failure isn't
+ *  a dead end — Alt+V on Windows, Ctrl+V on Linux (mac is never
+ *  intercepted, so it always gets the plain wording). */
+export const pasteFailureHint = (
+	platform: ClipboardPlatform,
+	imagePaste: boolean,
+	reason: "empty" | "error",
+): string => {
+	if (imagePaste && (platform === "windows" || platform === "linux")) {
+		const key = platform === "windows" ? "Alt+V" : "Ctrl+V";
+		return reason === "empty"
+			? `No text to paste — press ${key} to paste an image`
+			: `Paste failed — press ${key} to paste an image`;
+	}
+	return reason === "empty" ? "No text to paste" : "Paste failed";
+};

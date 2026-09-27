@@ -35,6 +35,12 @@ export interface HarnessCapabilities {
 	/// bracketed paste into a freshly spawned harness can be dropped;
 	/// every other kind's behaviour is unchanged by this flag.
 	submitRetry: boolean;
+	/// The CLI reads an image straight from the OS clipboard on its own
+	/// paste-image key (#306) — Skein doesn't do anything for this, it
+	/// only needs to name the key in a paste-failure hint (Alt+V on
+	/// Windows, Ctrl+V on Linux/macOS). True only for `claude`; opencode
+	/// support is unconfirmed so it's treated as false.
+	imagePaste: boolean;
 }
 
 export interface HarnessKindMeta {
@@ -80,6 +86,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			agents: true,
 			agentSwitchable: false,
 			submitRetry: true,
+			imagePaste: true,
 		},
 	},
 	opencode: {
@@ -97,6 +104,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			agents: true,
 			agentSwitchable: true,
 			submitRetry: false,
+			imagePaste: false,
 		},
 	},
 	copilot: {
@@ -114,6 +122,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			agents: false,
 			agentSwitchable: false,
 			submitRetry: false,
+			imagePaste: false,
 		},
 	},
 	// `byoh` is the kind id we kept from the design's "bring your own
@@ -136,6 +145,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			agents: false,
 			agentSwitchable: false,
 			submitRetry: false,
+			imagePaste: false,
 		},
 	},
 	// #49 phase A: the file surface as a harness. Deliberately not a
@@ -155,6 +165,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			agents: false,
 			agentSwitchable: false,
 			submitRetry: false,
+			imagePaste: false,
 		},
 	},
 };
