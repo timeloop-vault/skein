@@ -115,7 +115,11 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		if (spawnedRef.current === mountKey) return;
 		spawnedRef.current = mountKey;
 
-		const { term, fit } = createXterm(host, fontSize);
+		const { term, fit } = createXterm(
+			host,
+			fontSize,
+			HARNESS_KINDS[harnessKind].capabilities.opensClickedLinks,
+		);
 		termRef.current = term;
 		fitRef.current = fit;
 		// #383 follow-up: xterm's IME composition (CJK, an emoji picker,

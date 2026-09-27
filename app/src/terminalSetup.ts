@@ -11,14 +11,21 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { isMac } from "./shortcuts.ts";
+import { shouldHostOpenLink } from "./terminalLinks.ts";
 
 /** Creates and opens a `Terminal` into `host`, wired with the fit addon,
  *  the Unicode 11 width table (#23), and Cmd/Ctrl-click URI opening
  *  (#24). Mirrors exactly what `LiveTerminal`'s mount effect used to do
- *  inline — see the comments below, moved verbatim. */
+ *  inline — see the comments below, moved verbatim.
+ *
+ *  `opensClickedLinks` is the harness kind's
+ *  `HarnessCapabilities.opensClickedLinks` (#269) — true only for
+ *  `claude`, whose fullscreen renderer opens a Cmd/Ctrl-clicked URL
+ *  itself once mouse tracking is on. */
 export function createXterm(
 	host: HTMLDivElement,
 	fontSize: number,
+	opensClickedLinks: boolean,
 ): { term: Terminal; fit: FitAddon } {
 	const term = new Terminal({
 		fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -94,11 +101,25 @@ export function createXterm(
 	// Modifier check matches the rest of Skein: Cmd on mac, Ctrl
 	// elsewhere (see shortcuts.ts). Without modifier, the click
 	// falls through to xterm's normal selection behaviour.
+	//
+	// #269: with mouse tracking on, xterm forwards the same click to the
+	// PTY (with the ctrl modifier), and a CLI like Claude Code's
+	// fullscreen renderer opens the URL itself — so if we also open it
+	// here, the user gets two tabs, and Skein's copy is cut short
+	// because WebLinksAddon only matched the hard-wrapped visible text
+	// while the CLI had the full URL. `shouldHostOpenLink` is read at
+	// click time, not at setup, because mouse tracking flips on/off as
+	// the TUI runs.
 	const uriRegex = /\b[a-zA-Z][a-zA-Z0-9+.-]+:\/\/[^\s()[\]{}"'<>\\^`|]+/;
 	const handleUriClick = (event: MouseEvent, uri: string) => {
 		const isModifierClick = isMac ? event.metaKey : event.ctrlKey;
 		if (!isModifierClick) return;
 		event.preventDefault();
+		if (!shouldHostOpenLink(term.modes.mouseTrackingMode !== "none", opensClickedLinks)) {
+			console.debug("[skein] deferring link open to CLI:", uri);
+			return;
+		}
+		console.info("[skein] openUrl:", uri);
 		void openUrl(uri).catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.warn("[skein] openUrl failed:", uri, msg);
