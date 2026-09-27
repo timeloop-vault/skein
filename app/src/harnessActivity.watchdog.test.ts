@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
+import { store } from "./harnessActivityCore.ts";
 
 // #259 — the silent-adapter watchdog. Its own file because the idle
 // tick is a module-global `setInterval` started by the first
@@ -238,5 +239,122 @@ describe("launch signal (#273)", () => {
 		expect(harnessActivity.get(id)?.authoritative).toBe(true);
 		expect(harnessActivity.get(id)?.adapterSilent).toBe(false);
 		expect(harnessActivity.get(id)?.degradedBy).toBeNull();
+	});
+});
+
+// #404: undoing a #259 adapter-silent degrade that was actually a lost
+// mail-nudge submit, not a broken tail — `useMailDelivery.ts`'s rollback
+// branch is the real caller; these tests drive the store method
+// directly, the way the #259 suite above drives `degradeSilentAdapter`.
+describe("recoverUnheardSilence (#404)", () => {
+	/// An adapter-silent harness whose only proof of life was the launch
+	/// signal — `noteLaunchSignal` then a submitted, never-answered
+	/// prompt, degraded exactly the way `degradeSilentAdapter` leaves it
+	/// (the degrade itself never moves phase off `waiting` — only
+	/// `spawning` does — so this also plays through the ordinary L2b
+	/// drain that follows in production: once non-authoritative, ordinary
+	/// PTY output moves `waiting → running`, per this file's #404 note
+	/// and `recordOutput`'s own `cur.phase === "waiting"` branch).
+	const adapterSilentAfterLaunchSignal = (): string => {
+		const id = attachedHarness();
+		harnessActivity.noteLaunchSignal(id);
+		harnessActivity.notePromptSubmitted(id);
+		vi.advanceTimersByTime(11_000);
+		expect(harnessActivity.get(id)?.adapterSilent).toBe(true);
+		expect(harnessActivity.get(id)?.degradedBy).toBe("adapter-silent");
+		expect(harnessActivity.get(id)?.adapterHeard).toBe(false);
+		harnessActivity.recordOutput(id, "some redraw");
+		expect(harnessActivity.get(id)?.phase).toBe("running");
+		return id;
+	};
+
+	it("recovers the adapter-silent, never-heard, launch-signalled case", () => {
+		const id = adapterSilentAfterLaunchSignal();
+		const sources: string[] = [];
+		const unsubscribe = harnessActivity.subscribeTransitions((tid, _from, _to, source) => {
+			if (tid === id) sources.push(source);
+		});
+
+		expect(harnessActivity.recoverUnheardSilence(id)).toBe(true);
+
+		const a = harnessActivity.get(id);
+		expect(a?.authoritative).toBe(true);
+		expect(a?.adapterSilent).toBe(false);
+		expect(a?.degradedBy).toBeNull();
+		expect(a?.promptSubmittedAt).toBeNull();
+		expect(a?.silenceRecovered).toBe(true);
+		expect(a?.phase).toBe("waiting");
+		expect(sources).toEqual([TRANSITION_SOURCE.SilenceRecovered]);
+		unsubscribe();
+	});
+
+	it("refuses once the adapter has actually spoken (adapterHeard)", () => {
+		const id = adapterSilentAfterLaunchSignal();
+		// `adapterDelivered` would itself already clear `adapterSilent`/
+		// `degradedBy`, which would make this indistinguishable from the
+		// "not degraded" guard — write `adapterHeard` directly so this
+		// isolates only that one guard, with the degrade fields left
+		// exactly as `degradeSilentAdapter` set them.
+		const cur = store.get(id);
+		if (!cur) throw new Error("harness missing");
+		store.set(id, { ...cur, adapterHeard: true });
+		expect(harnessActivity.recoverUnheardSilence(id)).toBe(false);
+	});
+
+	it("refuses when degradedBy is launch-silent, not adapter-silent", () => {
+		const id = attachedHarness();
+		vi.advanceTimersByTime(16_000);
+		expect(harnessActivity.get(id)?.degradedBy).toBe("launch-silent");
+		expect(harnessActivity.recoverUnheardSilence(id)).toBe(false);
+	});
+
+	it("refuses when degradedBy is null (not degraded at all)", () => {
+		const id = attachedHarness();
+		harnessActivity.noteLaunchSignal(id);
+		expect(harnessActivity.get(id)?.degradedBy).toBeNull();
+		expect(harnessActivity.recoverUnheardSilence(id)).toBe(false);
+	});
+
+	it("refuses when launchSignalAt is null", () => {
+		const id = attachedHarness();
+		harnessActivity.notePromptSubmitted(id);
+		vi.advanceTimersByTime(11_000);
+		expect(harnessActivity.get(id)?.degradedBy).toBe("adapter-silent");
+		expect(harnessActivity.get(id)?.launchSignalAt).toBeNull();
+		expect(harnessActivity.recoverUnheardSilence(id)).toBe(false);
+	});
+
+	it("refuses in permission phase", () => {
+		const id = adapterSilentAfterLaunchSignal();
+		harnessActivity.setPermissionFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudePermission, "Bash");
+		expect(harnessActivity.recoverUnheardSilence(id)).toBe(false);
+	});
+
+	it("refuses once exited", () => {
+		const id = adapterSilentAfterLaunchSignal();
+		harnessActivity.exited(id, 0);
+		expect(harnessActivity.recoverUnheardSilence(id)).toBe(false);
+	});
+
+	it("refuses a second time on the same spawn", () => {
+		const id = adapterSilentAfterLaunchSignal();
+		expect(harnessActivity.recoverUnheardSilence(id)).toBe(true);
+		// Degrade it again the same way, to prove the refusal is really
+		// `silenceRecovered`, not one of the other guards.
+		harnessActivity.notePromptSubmitted(id);
+		vi.advanceTimersByTime(11_000);
+		expect(harnessActivity.get(id)?.degradedBy).toBe("adapter-silent");
+		expect(harnessActivity.recoverUnheardSilence(id)).toBe(false);
+	});
+
+	it("resets silenceRecovered on respawn", () => {
+		const id = adapterSilentAfterLaunchSignal();
+		expect(harnessActivity.recoverUnheardSilence(id)).toBe(true);
+		expect(harnessActivity.get(id)?.silenceRecovered).toBe(true);
+
+		// A fresh spawn under the same id (not realistic in practice — ids
+		// are per-spawn — but exercises the field's reset in isolation).
+		harnessActivity.spawned(id);
+		expect(harnessActivity.get(id)?.silenceRecovered).toBe(false);
 	});
 });

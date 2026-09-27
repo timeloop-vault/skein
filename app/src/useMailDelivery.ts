@@ -76,6 +76,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef } from "react";
 import { HARNESS_KINDS } from "./data.tsx";
+import { logBoth } from "./frontendLog.ts";
 import { atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
 import { canSendPrompt, harnessInput, sendPrompt } from "./harnessInput.ts";
 import type { GateResult } from "./harnessInput.ts";
@@ -86,7 +87,7 @@ import {
 	shouldCheckOnTransition,
 } from "./mailNudge.ts";
 import { mailPending, nextMailRetry } from "./mailRetry.ts";
-import { NUDGE_SETTLE_MS, settleNudge } from "./mailSettle.ts";
+import { NUDGE_SETTLE_MS, evaluateSettlement } from "./mailSettle.ts";
 import { mailStore } from "./mailStore.ts";
 import type { HarnessKind, Room } from "./types.ts";
 
@@ -139,6 +140,12 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 				sentAtMs: number;
 				deferredAtSend: number | null;
 				turnStarted: boolean;
+				/// #404: `harnessInput.userInputCount(id)` snapshotted at
+				/// paste time — compared again at rollback to tell whether a
+				/// human drove the harness in between, which
+				/// `shouldRecoverSilence` needs to decide whether a
+				/// lost-silence recovery is safe to attempt.
+				inputCountAtSend: number;
 				timer: ReturnType<typeof setTimeout>;
 			}
 		>
@@ -146,6 +153,34 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 	// False once the hook has unmounted, so a `check` still in flight at
 	// that moment can't schedule a timer the unmount cleanup already missed.
 	const mountedRef = useRef(true);
+	// #404: per-harness last-logged gate/sendPrompt refusal reason, so the
+	// #386 retry tick (every `MAIL_RETRY_INTERVAL_MS`, 2 s) doesn't spam
+	// `skein.log` with the same unchanging reason on every tick — only a
+	// CHANGE in reason is worth another line. Cleared once a nudge goes
+	// out (the reason it was tracking no longer applies) or the harness
+	// is forgotten.
+	const lastMailRefusalReasonRef = useRef<Map<string, string>>(new Map());
+
+	const logMailRefusal = (harnessId: string, reason: string): void => {
+		if (lastMailRefusalReasonRef.current.get(harnessId) === reason) return;
+		lastMailRefusalReasonRef.current.set(harnessId, reason);
+		logBoth(
+			"info",
+			"skein::mail",
+			`[skein] useMailDelivery: harness ${harnessId} nudge refused — ${reason} (#404)`,
+		);
+	};
+
+	// #404: `mailPending`'s own verdict for this run, wrapping the throttle
+	// clear so a harness that's caught up (no mail left to retry for) drops
+	// its remembered reason — a LATER refusal for a fresh batch of mail
+	// logs again even if it happens to be the same reason as last time,
+	// rather than reading as still-throttled from mail that's long gone.
+	const pendingResult = (harnessId: string, count: number, lastNudged: number): boolean => {
+		const pending = mailPending(count, lastNudged);
+		if (!pending) lastMailRefusalReasonRef.current.delete(harnessId);
+		return pending;
+	};
 
 	const clearRetry = (harnessId: string): void => {
 		const entry = retryRef.current.get(harnessId);
@@ -178,6 +213,7 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 			meta.delete(id);
 			seededRef.current.delete(id);
 			lastNudgedRef.current.delete(id);
+			lastMailRefusalReasonRef.current.delete(id);
 			mailStore.forget(id);
 			clearRetry(id);
 			clearSettlement(id);
@@ -192,7 +228,11 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 					mailStore.set(id, res.count, res.fromRoomNames);
 				})
 				.catch((err: unknown) => {
-					console.warn(`[skein] mail_unread seed failed for ${id}:`, err);
+					logBoth(
+						"warn",
+						"skein::mail",
+						`[skein] mail_unread seed failed for ${id}: ${String(err)}`,
+					);
 				});
 		}
 	}, [rooms]);
@@ -233,38 +273,66 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 		const settlement = settleRef.current.get(harnessId);
 		if (settlement) {
 			const activity = harnessActivity.get(harnessId);
-			// Not `activity?.authoritative && !activity?.adapterSilent` —
-			// that reads as `boolean | undefined`, and biome's
-			// useOptionalChain fix for the null-check form silently
-			// changes the type the same way. An explicit `if` keeps this
-			// a plain `boolean` without either.
-			let watched = false;
-			if (activity !== null) {
-				watched = activity.authoritative && !activity.adapterSilent;
-			}
-			const outcome = settleNudge({
-				elapsedMs: Date.now() - settlement.sentAtMs,
-				watched,
-				turnStartedSinceSend: settlement.turnStarted,
-				phase: activity?.phase ?? null,
-				deferredAtSend: settlement.deferredAtSend,
-				deferredAtNow: activity?.delegationDeferredAt ?? null,
+			const decision = evaluateSettlement({
+				nowMs: Date.now(),
+				settlement,
+				activity:
+					activity === null
+						? null
+						: {
+								authoritative: activity.authoritative,
+								adapterSilent: activity.adapterSilent,
+								phase: activity.phase,
+								delegationDeferredAt: activity.delegationDeferredAt,
+							},
+				inputCountNow: harnessInput.userInputCount(harnessId),
 			});
-			if (outcome === "confirmed") {
+			settlementPending = decision.settlementPending;
+			if (decision.outcome === "confirmed") {
 				clearSettlement(harnessId);
-			} else if (outcome === "rollback") {
-				lastNudgedRef.current.set(harnessId, settlement.preNudge);
+				logBoth(
+					"info",
+					"skein::mail",
+					`[skein] useMailDelivery: nudge confirmed delivered for harness ${harnessId} (#388)`,
+				);
+			} else if (decision.outcome === "rollback") {
+				// `restoreLastNudged` is always set on a rollback outcome —
+				// `evaluateSettlement` never returns `null` alongside it.
+				if (decision.restoreLastNudged !== null) {
+					lastNudgedRef.current.set(harnessId, decision.restoreLastNudged);
+				}
 				clearSettlement(harnessId);
-				console.info(
+				logBoth(
+					"info",
+					"skein::mail",
 					`[skein] useMailDelivery: rolling back nudge for harness ${harnessId} — no proof the submit landed (#388)`,
 				);
-			} else {
-				// "wait": leave the settlement armed and fall through to
-				// the normal check below — its own timer, or the next
-				// event trigger, will re-run this — but refuse a second
-				// automatic nudge until it resolves.
-				settlementPending = true;
+				// #404: this same run's rollback may itself be why a #259
+				// adapter-silent degrade fired — the nudge that armed the
+				// watchdog never landed, so the tail was never given a real
+				// prompt to answer. Recover it before the gate below runs,
+				// but only when no human has driven the harness since the
+				// nudge was pasted.
+				if (decision.attemptRecovery) {
+					if (harnessActivity.recoverUnheardSilence(harnessId)) {
+						logBoth(
+							"info",
+							"skein::mail",
+							`[skein] useMailDelivery: recovered harness ${harnessId} from a lost first paste before retrying (#404)`,
+						);
+					} else {
+						logBoth(
+							"info",
+							"skein::mail",
+							`[skein] useMailDelivery: declined to recover harness ${harnessId} from a lost first paste (#404)`,
+						);
+					}
+				}
 			}
+			// "wait": leave the settlement armed and fall through to the
+			// normal check below — its own timer, or the next event
+			// trigger, will re-run this — but refuse a second automatic
+			// nudge until it resolves (`settlementPending`, set above).
 		}
 		let res: MailUnread;
 		try {
@@ -273,7 +341,7 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 				harnessId,
 			});
 		} catch (err: unknown) {
-			console.warn(`[skein] mail_unread failed for ${harnessId}:`, err);
+			logBoth("warn", "skein::mail", `[skein] mail_unread failed for ${harnessId}: ${String(err)}`);
 			return true;
 		}
 		mailStore.set(harnessId, res.count, res.fromRoomNames);
@@ -304,8 +372,21 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 		});
 		if (!decision.nudge) {
 			lastNudgedRef.current.set(harnessId, decision.lastNudged);
-			return mailPending(res.count, decision.lastNudged);
+			// #404: only worth a log line when there's mail actually
+			// outstanding AND the gate itself is why nothing went out —
+			// "not at a stopping point yet" or "already nudged for this
+			// count" aren't refusals, just not-yet.
+			const pending = pendingResult(harnessId, res.count, decision.lastNudged);
+			if (!gate.ok && pending) {
+				logMailRefusal(harnessId, gate.reason);
+			}
+			return pending;
 		}
+		logBoth(
+			"info",
+			"skein::mail",
+			`[skein] useMailDelivery: nudging harness ${harnessId} — unread=${res.count} lastNudged=${lastNudged} (#404)`,
+		);
 		// `sendPrompt` re-checks the gate at call time — a passing
 		// `canSendPrompt` above can still lose a race to a phase flip
 		// between the two. Only count it as nudged (even provisionally)
@@ -327,8 +408,10 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 		const result = sendPrompt(harnessId, meta.kind, body, { automatic: true });
 		if (!result.ok) {
 			lastNudgedRef.current.set(harnessId, lastNudged);
-			return mailPending(res.count, lastNudged);
+			logMailRefusal(harnessId, result.reason);
+			return pendingResult(harnessId, res.count, lastNudged);
 		}
+		lastMailRefusalReasonRef.current.delete(harnessId);
 		lastNudgedRef.current.set(harnessId, decision.lastNudged);
 		const prior = settleRef.current.get(harnessId);
 		if (prior) clearTimeout(prior.timer);
@@ -341,9 +424,10 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 			sentAtMs: Date.now(),
 			deferredAtSend: activity.delegationDeferredAt,
 			turnStarted: false,
+			inputCountAtSend: harnessInput.userInputCount(harnessId),
 			timer,
 		});
-		return mailPending(res.count, decision.lastNudged);
+		return pendingResult(harnessId, res.count, decision.lastNudged);
 	};
 
 	// #386: (re-)arm this harness's bounded retry after a `check` run —

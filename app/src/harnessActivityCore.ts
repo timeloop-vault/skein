@@ -5,6 +5,7 @@
 // hooks) reads and writes through the exports below. See harnessActivity.ts
 // for the module this belongs to.
 
+import { logBoth } from "./frontendLog.ts";
 import {
 	ADAPTER_SILENT_AFTER_MS,
 	DELEGATION_CEILING_MS,
@@ -171,7 +172,9 @@ export function shouldArmWatchdog(cur: HarnessActivity): boolean {
 /// only ever acts on `running`; `lastOutputAt` restarts so the idle
 /// window is measured from here, not from spawn.
 const degradeSilentAdapter = (id: string, cur: HarnessActivity, now: number): void => {
-	console.warn(
+	logBoth(
+		"warn",
+		"skein::activity",
 		`[skein] harness ${id}: adapter delivered nothing ${ADAPTER_SILENT_AFTER_MS / 1000}s after a prompt; falling back to the idle heuristic`,
 	);
 	store.set(id, {
@@ -199,7 +202,9 @@ const degradeSilentAdapter = (id: string, cur: HarnessActivity, now: number): vo
 /// unconditional: the caller's guard already confirmed `phase ===
 /// "spawning"`.
 const degradeLaunchSilentAdapter = (id: string, cur: HarnessActivity, now: number): void => {
-	console.warn(
+	logBoth(
+		"warn",
+		"skein::activity",
 		`[skein] harness ${id}: no launch signal ${LAUNCH_SILENT_AFTER_MS / 1000}s after spawn; falling back to the idle heuristic`,
 	);
 	store.set(id, {

@@ -34,6 +34,7 @@
 // from here, so `import { ... } from "./harnessActivity.ts"` is unchanged
 // for every caller.
 
+import { logBoth } from "./frontendLog.ts";
 import { INDUCED_MUTE_MS, TAIL_MAX_CHARS } from "./harnessActivityConstants.ts";
 import {
 	delegationDeferredListeners,
@@ -111,6 +112,7 @@ export const harnessActivity = {
 			delegationActivityAt: now,
 			delegationEmptiedAt: null,
 			delegatedCount: 0,
+			silenceRecovered: false,
 		});
 		ensureTick();
 		emit(id);
@@ -148,7 +150,11 @@ export const harnessActivity = {
 		const cur = store.get(id);
 		if (!cur || (cur.adapterHeard && !cur.adapterSilent)) return;
 		if (cur.adapterSilent) {
-			console.info(`[skein] harness ${id}: adapter recovered; handing phase back to it`);
+			logBoth(
+				"info",
+				"skein::activity",
+				`[skein] harness ${id}: adapter recovered; handing phase back to it`,
+			);
 		}
 		store.set(id, {
 			...cur,
@@ -210,7 +216,11 @@ export const harnessActivity = {
 		if (!cur || cur.phase === "exited") return;
 		const recovering = cur.adapterSilent && cur.degradedBy === "launch-silent";
 		if (recovering) {
-			console.info(`[skein] harness ${id}: launch signal arrived; handing phase back to it`);
+			logBoth(
+				"info",
+				"skein::activity",
+				`[skein] harness ${id}: launch signal arrived; handing phase back to it`,
+			);
 		}
 		store.set(id, {
 			...cur,
@@ -465,6 +475,88 @@ export const harnessActivity = {
 		store.set(id, { ...cur, promptSubmittedAt: Date.now() });
 	},
 
+	/// #404: undo a #259 adapter-silent degrade that was actually caused
+	/// by a mail nudge (or any #238 seam submit) whose own submit never
+	/// landed — #388's settlement rolls that nudge back, but by then the
+	/// watchdog has already stripped authority from a harness that was
+	/// never given a real prompt to answer, and nothing else would ever
+	/// call `adapterDelivered` for it again. `useMailDelivery.ts`'s
+	/// rollback branch is the only caller, and only once it has also
+	/// confirmed no human drove the harness in the meantime
+	/// (`mailSettle.ts`'s `shouldRecoverSilence`) — a keystroke since the
+	/// nudge is evidence this diagnosis might be wrong.
+	///
+	/// Recovers only when every one of these holds — deliberately as
+	/// narrow as `noteLaunchSignal`'s own recovery guard, since restoring
+	/// authority on weak evidence reintroduces exactly the false
+	/// "watching" reading #259 exists to prevent:
+	///
+	///  - the harness still exists and isn't `exited` — nothing to
+	///    recover into; or `permission` — #86 outranks this everywhere
+	///    else this interaction shows up, and this is no exception;
+	///  - `adapterSilent && degradedBy === "adapter-silent"` — the #259
+	///    watchdog is what fired, not #273's launch-silent timer. A
+	///    harness that degraded before it ever got a launch signal has no
+	///    "lost first paste" story to recover;
+	///  - `!adapterHeard` — the tail never spoke at all since spawn, so
+	///    nothing but this one lost prompt explains the silence. A tail
+	///    that DID speak and later went silent is a different, real
+	///    failure this must not paper over;
+	///  - `launchSignalAt !== null` — the CLI proved it was alive at its
+	///    own prompt, the same proof `canSendPrompt` accepted to let the
+	///    nudge be sent in the first place;
+	///  - `!silenceRecovered` — once per spawn. A second silent seam
+	///    submit on the same spawn, after a recovery already happened, is
+	///    real evidence the tail is watching the wrong file, not another
+	///    lost race — it must stay degraded.
+	///
+	/// Effect, mirroring `adapterDelivered`/`noteLaunchSignal`'s own
+	/// recovery paths: `authoritative` back to `true`, `adapterSilent`
+	/// and `degradedBy` cleared, plus `promptSubmittedAt` cleared so the
+	/// very next seam submit re-arms the watchdog from a clean slate
+	/// (rather than reading as already-armed against a timestamp from the
+	/// lost attempt), and `silenceRecovered` set so this can't fire twice.
+	/// Moves phase to `waiting` when it isn't already there — the launch
+	/// signal already proved the CLI is sitting at its own prompt.
+	/// Returns whether it actually recovered, so the caller can log the
+	/// outcome and gate a retry on it.
+	///
+	/// "Recovered" means only that the gate is reopened — `authoritative`
+	/// back to `true` — never that the harness is actually proven idle at
+	/// its prompt. If the diagnosis is wrong (a broken tail, #362, that
+	/// was never going to report anything regardless of whether the nudge
+	/// landed) this lets one extra automatic nudge through per spawn,
+	/// bounded by `silenceRecovered` above, and `decideMailNudge` already
+	/// dedupes on the live unread count once the agent actually reads its
+	/// mail — so a wrong recovery costs at most one stray paste, not a
+	/// runaway. That is the accepted trade-off against the alternative:
+	/// a harness stuck permanently refused because its one real proof of
+	/// life was the lost nudge this exists to recover.
+	recoverUnheardSilence(id: string): boolean {
+		const cur = store.get(id);
+		if (!cur || cur.phase === "exited" || cur.phase === "permission") return false;
+		if (!cur.adapterSilent || cur.degradedBy !== "adapter-silent") return false;
+		if (cur.adapterHeard || cur.launchSignalAt === null) return false;
+		if (cur.silenceRecovered) return false;
+		logBoth(
+			"info",
+			"skein::activity",
+			`[skein] harness ${id}: recovering from a lost first paste — the silence was never the adapter's fault (#404)`,
+		);
+		store.set(id, {
+			...cur,
+			authoritative: true,
+			adapterSilent: false,
+			degradedBy: null,
+			promptSubmittedAt: null,
+			silenceRecovered: true,
+		});
+		if (store.get(id)?.phase !== "waiting") {
+			setPhase(id, "waiting", TRANSITION_SOURCE.SilenceRecovered);
+		}
+		return true;
+	},
+
 	/// Leave `permission` for `running`, and touch no other phase. For
 	/// an adapter detaching mid-dialog: nothing it would have sent can
 	/// arrive now, and the L2a tick never moves a non-running phase, so
@@ -664,6 +756,7 @@ export const harnessActivity = {
 				delegationActivityAt: Date.now(),
 				delegationEmptiedAt: null,
 				delegatedCount: 0,
+				silenceRecovered: false,
 			});
 			emit(id);
 			return;

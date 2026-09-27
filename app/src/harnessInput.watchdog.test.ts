@@ -3,6 +3,7 @@ import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
 import { ADAPTER_SILENT_AFTER_MS } from "./harnessActivityConstants.ts";
 import { harnessInput, sendPrompt } from "./harnessInput.ts";
 import type { HarnessInputTarget } from "./harnessInput.ts";
+import { LAUNCH_QUIET_MS } from "./launchReady.ts";
 import { SUBMIT_GAP_MS } from "./submitRetry.ts";
 
 // #363 — `sendPrompt` (the #238/#327/#330 seam: nudges, mail delivery,
@@ -47,6 +48,10 @@ describe("sendPrompt arms the #259 watchdog (#363)", () => {
 	it("degrades a seam-submitted prompt exactly like a typed Enter, when the adapter never speaks", () => {
 		const { id } = sendableHarness();
 		expect(harnessActivity.get(id)?.promptSubmittedAt).toBeNull();
+		// #404: this harness's only proof of life is the launch signal
+		// just set by `sendableHarness` — give it its required quiet
+		// period before pasting, or the gate below would refuse.
+		vi.advanceTimersByTime(LAUNCH_QUIET_MS);
 
 		const result = sendPrompt(id, "claude", "do the thing");
 		expect(result).toEqual({ ok: true });
