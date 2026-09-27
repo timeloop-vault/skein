@@ -3,6 +3,7 @@ import type { ClipboardKeyLike, ClipboardPlatform } from "./terminalClipboard.ts
 import {
 	decideClipboardAction,
 	emptySelectionHint,
+	isNoTextClipboardError,
 	pasteFailureHint,
 } from "./terminalClipboard.ts";
 
@@ -124,6 +125,28 @@ describe("emptySelectionHint", () => {
 		expect(emptySelectionHint("mac", false)).toBe("Nothing selected");
 		expect(emptySelectionHint("windows", false)).toBe("Nothing selected");
 	});
+});
+
+describe("isNoTextClipboardError", () => {
+	const arboardMessage =
+		"The clipboard contents were not available in the requested format or the clipboard is empty.";
+	const cases: Array<{ name: string; err: unknown; want: boolean }> = [
+		{ name: "the arboard message as a plain string", err: arboardMessage, want: true },
+		{ name: "the arboard message wrapped in an Error", err: new Error(arboardMessage), want: true },
+		{
+			name: "an unrelated Error (clipboard held by another process)",
+			err: new Error("The native clipboard is not accessible due to being held by another party."),
+			want: false,
+		},
+		{ name: "undefined", err: undefined, want: false },
+		{ name: "null", err: null, want: false },
+		{ name: "an unrelated object", err: { message: "boom" }, want: false },
+	];
+	for (const { name, err, want } of cases) {
+		it(`${name} → ${want}`, () => {
+			expect(isNoTextClipboardError(err)).toBe(want);
+		});
+	}
 });
 
 describe("pasteFailureHint", () => {

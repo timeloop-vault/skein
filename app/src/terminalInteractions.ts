@@ -16,6 +16,7 @@ import { isAppShortcut, isMac, isWindows } from "./shortcuts.ts";
 import {
 	decideClipboardAction,
 	emptySelectionHint,
+	isNoTextClipboardError,
 	pasteFailureHint,
 } from "./terminalClipboard.ts";
 import type { ClipboardPlatform } from "./terminalClipboard.ts";
@@ -218,10 +219,11 @@ export function attachTerminalInteractions(
 				.then((text) => {
 					if (isCancelled() || getPhase() !== "running") return;
 					if (!text) {
-						// #306: an image-only clipboard was verified to
-						// reject on Windows (the catch below); an empty
-						// resolve is handled the same way defensively. Both
-						// name the harness's own paste-image key if it has one.
+						// #306: an empty resolve is handled defensively in
+						// case some platform or build does that instead of
+						// rejecting — the actual Windows behaviour is the
+						// catch below. Both name the harness's own
+						// paste-image key if it has one.
 						showHint(pasteFailureHint(clipboardPlatform, imagePaste, "empty"), HINT_MS_INFO);
 						return;
 					}
@@ -236,7 +238,12 @@ export function attachTerminalInteractions(
 				.catch((err: unknown) => {
 					console.warn("[skein] clipboard paste failed:", err);
 					if (isCancelled()) return;
-					showHint(pasteFailureHint(clipboardPlatform, imagePaste, "error"), HINT_MS_INFO);
+					// #306: arboard's ContentNotAvailable — an empty OR an
+					// image-only clipboard on Windows, verified — reads as
+					// "no text" rather than a failure; anything else stays
+					// "Paste failed".
+					const reason = isNoTextClipboardError(err) ? "empty" : "error";
+					showHint(pasteFailureHint(clipboardPlatform, imagePaste, reason), HINT_MS_INFO);
 				});
 			return false;
 		}
