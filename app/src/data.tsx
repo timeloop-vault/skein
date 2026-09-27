@@ -35,6 +35,28 @@ export interface HarnessCapabilities {
 	/// bracketed paste into a freshly spawned harness can be dropped;
 	/// every other kind's behaviour is unchanged by this flag.
 	submitRetry: boolean;
+	/// The CLI reads an image straight from the OS clipboard on its own
+	/// paste-image key (#306) — Skein doesn't do anything for this, it
+	/// only needs to name the key in a paste-failure hint (Alt+V on
+	/// Windows, Ctrl+V on Linux/macOS). True only for `claude`; opencode
+	/// support is unconfirmed so it's treated as false.
+	imagePaste: boolean;
+	/// The CLI's own fullscreen renderer opens a Cmd/Ctrl-clicked URL
+	/// itself rather than deferring to the host terminal (#269): with
+	/// mouse tracking on, xterm forwards the click to the PTY with the
+	/// ctrl modifier (`CoreMouseService.ts`) and the CLI opens the link,
+	/// racing Skein's own WebLinksAddon/OSC-8 handler — two tabs, one of
+	/// them cut short because Claude opens the full URL but Skein's
+	/// regex only matched the hard-wrapped visible text. Claude Code
+	/// defers to a host link handler only for xterm.js terminals it
+	/// recognises (VS Code), which Skein isn't (TERM_PROGRAM is
+	/// stripped). Skein therefore stands aside only while mouse tracking
+	/// is live (the classic renderer has none, so Skein still opens
+	/// there). Known gap: with `CLAUDE_CODE_DISABLE_MOUSE_CLICKS` set,
+	/// tracking stays on for scrolling but Claude no longer opens links,
+	/// so a click opens nothing. True only for `claude`; every other kind
+	/// leaves link-opening to Skein.
+	opensClickedLinks: boolean;
 }
 
 export interface HarnessKindMeta {
@@ -80,6 +102,8 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			agents: true,
 			agentSwitchable: false,
 			submitRetry: true,
+			imagePaste: true,
+			opensClickedLinks: true,
 		},
 	},
 	opencode: {
@@ -97,6 +121,8 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			agents: true,
 			agentSwitchable: true,
 			submitRetry: false,
+			imagePaste: false,
+			opensClickedLinks: false,
 		},
 	},
 	copilot: {
@@ -114,6 +140,8 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			agents: false,
 			agentSwitchable: false,
 			submitRetry: false,
+			imagePaste: false,
+			opensClickedLinks: false,
 		},
 	},
 	// `byoh` is the kind id we kept from the design's "bring your own
@@ -136,6 +164,8 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			agents: false,
 			agentSwitchable: false,
 			submitRetry: false,
+			imagePaste: false,
+			opensClickedLinks: false,
 		},
 	},
 	// #49 phase A: the file surface as a harness. Deliberately not a
@@ -155,6 +185,8 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			agents: false,
 			agentSwitchable: false,
 			submitRetry: false,
+			imagePaste: false,
+			opensClickedLinks: false,
 		},
 	},
 };

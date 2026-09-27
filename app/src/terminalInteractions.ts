@@ -13,7 +13,12 @@ import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { Terminal } from "@xterm/xterm";
 import { harnessInput } from "./harnessInput.ts";
 import { isAppShortcut, isMac, isWindows } from "./shortcuts.ts";
-import { decideClipboardAction, emptySelectionHint } from "./terminalClipboard.ts";
+import {
+	decideClipboardAction,
+	emptySelectionHint,
+	isNoTextClipboardError,
+	pasteFailureHint,
+} from "./terminalClipboard.ts";
 import type { ClipboardPlatform } from "./terminalClipboard.ts";
 
 /// This platform, as far as the copy/paste key matrix cares — see
@@ -34,6 +39,10 @@ export interface TerminalInteractionsDeps {
 	/// composer-draft inference (#383's `harnessInput.noteDraftEvent`),
 	/// never for the phase/keys logic below.
 	harnessId: string;
+	/// Does this harness's CLI read an image from the OS clipboard on
+	/// its own paste-image key (#306)? Names that key in the
+	/// no-readable-text paste hint below.
+	imagePaste: boolean;
 	/// Current post-exit phase, read (never written) here.
 	getPhase: () => "running" | "exited";
 	/// Whether the owning effect has torn down — settle guards for
@@ -58,6 +67,7 @@ export function attachTerminalInteractions(
 ): () => void {
 	const {
 		harnessId,
+		imagePaste,
 		getPhase,
 		isCancelled,
 		defaultShellRef,
@@ -207,7 +217,16 @@ export function attachTerminalInteractions(
 			e.preventDefault();
 			void readText()
 				.then((text) => {
-					if (isCancelled() || getPhase() !== "running" || !text) return;
+					if (isCancelled() || getPhase() !== "running") return;
+					if (!text) {
+						// #306: an empty resolve is handled defensively in
+						// case some platform or build does that instead of
+						// rejecting — the actual Windows behaviour is the
+						// catch below. Both name the harness's own
+						// paste-image key if it has one.
+						showHint(pasteFailureHint(clipboardPlatform, imagePaste, "empty"), HINT_MS_INFO);
+						return;
+					}
 					term.paste(text);
 					// #380: a human-driven paste, same as a keystroke —
 					// `sendPrompt`'s gap/retry checks need to see it.
@@ -219,7 +238,12 @@ export function attachTerminalInteractions(
 				.catch((err: unknown) => {
 					console.warn("[skein] clipboard paste failed:", err);
 					if (isCancelled()) return;
-					showHint("Paste failed", HINT_MS_INFO);
+					// #306: arboard's ContentNotAvailable — an empty OR an
+					// image-only clipboard on Windows, verified — reads as
+					// "no text" rather than a failure; anything else stays
+					// "Paste failed".
+					const reason = isNoTextClipboardError(err) ? "empty" : "error";
+					showHint(pasteFailureHint(clipboardPlatform, imagePaste, reason), HINT_MS_INFO);
 				});
 			return false;
 		}

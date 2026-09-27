@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ClipboardKeyLike, ClipboardPlatform } from "./terminalClipboard.ts";
-import { decideClipboardAction, emptySelectionHint } from "./terminalClipboard.ts";
+import {
+	decideClipboardAction,
+	emptySelectionHint,
+	isNoTextClipboardError,
+	pasteFailureHint,
+} from "./terminalClipboard.ts";
 
 const key = (over: Partial<ClipboardKeyLike> = {}): ClipboardKeyLike => ({
 	type: "keydown",
@@ -120,4 +125,73 @@ describe("emptySelectionHint", () => {
 		expect(emptySelectionHint("mac", false)).toBe("Nothing selected");
 		expect(emptySelectionHint("windows", false)).toBe("Nothing selected");
 	});
+});
+
+describe("isNoTextClipboardError", () => {
+	const arboardMessage =
+		"The clipboard contents were not available in the requested format or the clipboard is empty.";
+	const cases: Array<{ name: string; err: unknown; want: boolean }> = [
+		{ name: "the arboard message as a plain string", err: arboardMessage, want: true },
+		{ name: "the arboard message wrapped in an Error", err: new Error(arboardMessage), want: true },
+		{
+			name: "an unrelated Error (clipboard held by another process)",
+			err: new Error("The native clipboard is not accessible due to being held by another party."),
+			want: false,
+		},
+		{ name: "undefined", err: undefined, want: false },
+		{ name: "null", err: null, want: false },
+		{ name: "an unrelated object", err: { message: "boom" }, want: false },
+	];
+	for (const { name, err, want } of cases) {
+		it(`${name} → ${want}`, () => {
+			expect(isNoTextClipboardError(err)).toBe(want);
+		});
+	}
+});
+
+describe("pasteFailureHint", () => {
+	const cases: Array<{
+		platform: ClipboardPlatform;
+		imagePaste: boolean;
+		reason: "empty" | "error";
+		want: string;
+	}> = [
+		{
+			platform: "windows",
+			imagePaste: true,
+			reason: "error",
+			want: "Paste failed — press Alt+V to paste an image",
+		},
+		{
+			platform: "windows",
+			imagePaste: true,
+			reason: "empty",
+			want: "No text to paste — press Alt+V to paste an image",
+		},
+		{
+			platform: "linux",
+			imagePaste: true,
+			reason: "error",
+			want: "Paste failed — press Ctrl+V to paste an image",
+		},
+		{
+			platform: "linux",
+			imagePaste: true,
+			reason: "empty",
+			want: "No text to paste — press Ctrl+V to paste an image",
+		},
+		// mac is never intercepted (native ⌘V), but the helper still
+		// falls back sanely if it's ever asked.
+		{ platform: "mac", imagePaste: true, reason: "error", want: "Paste failed" },
+		{ platform: "mac", imagePaste: true, reason: "empty", want: "No text to paste" },
+		{ platform: "windows", imagePaste: false, reason: "error", want: "Paste failed" },
+		{ platform: "windows", imagePaste: false, reason: "empty", want: "No text to paste" },
+		{ platform: "linux", imagePaste: false, reason: "error", want: "Paste failed" },
+		{ platform: "linux", imagePaste: false, reason: "empty", want: "No text to paste" },
+	];
+	for (const { platform, imagePaste, reason, want } of cases) {
+		it(`${platform}/imagePaste=${imagePaste}/${reason} → "${want}"`, () => {
+			expect(pasteFailureHint(platform, imagePaste, reason)).toBe(want);
+		});
+	}
 });

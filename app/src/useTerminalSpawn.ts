@@ -14,6 +14,7 @@ import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { useEffect } from "react";
 import { listHarnessAgents, unknownAgentMessage, validateAgent } from "./agents.ts";
+import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import { attachClaudeEvents, attachOpencodeEvents } from "./harnessEvents.ts";
 import { harnessInput } from "./harnessInput.ts";
@@ -114,7 +115,11 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		if (spawnedRef.current === mountKey) return;
 		spawnedRef.current = mountKey;
 
-		const { term, fit } = createXterm(host, fontSize);
+		const { term, fit } = createXterm(
+			host,
+			fontSize,
+			HARNESS_KINDS[harnessKind].capabilities.opensClickedLinks,
+		);
 		termRef.current = term;
 		fitRef.current = fit;
 		// #383 follow-up: xterm's IME composition (CJK, an emoji picker,
@@ -145,6 +150,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		// plain closure locals owned by this effect.
 		const detachInteractions = attachTerminalInteractions(term, host, {
 			harnessId,
+			imagePaste: HARNESS_KINDS[harnessKind].capabilities.imagePaste,
 			getPhase: () => phase,
 			isCancelled: () => cancelled,
 			defaultShellRef,

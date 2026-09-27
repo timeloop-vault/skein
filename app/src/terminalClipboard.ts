@@ -93,3 +93,40 @@ export const emptySelectionHint = (
 	const how = platform === "mac" ? "Option+drag" : "Shift+drag";
 	return `Nothing selected — ${how} to select over the agent's UI`;
 };
+
+/** True when a clipboard-read rejection is arboard's `ContentNotAvailable`
+ *  — "The clipboard contents were not available in the requested format
+ *  or the clipboard is empty." Tauri's `readText()` (clipboard-manager
+ *  2.3.2 → arboard 3.6.1 `get_text()`) rejects with exactly this for
+ *  BOTH an empty clipboard and an image-only one (#306, verified on
+ *  Windows); the plugin passes the message through as either a plain
+ *  string or an `Error`, so both shapes are checked. Any other rejection
+ *  (e.g. the clipboard being held by another process) is not this. */
+export const isNoTextClipboardError = (err: unknown): boolean => {
+	const message = err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
+	return message.toLowerCase().includes("not available in the requested format");
+};
+
+/** Hint text for a paste that found no readable text on the clipboard —
+ *  either the read rejected (`"empty"` — what an empty OR image-only
+ *  clipboard was verified to do on Windows, #306, per
+ *  `isNoTextClipboardError`) or resolved empty (`"empty"` too, handled
+ *  defensively in case another platform or build does that instead; not
+ *  observed) or rejected for some other reason (`"error"`).
+ *  For a harness whose CLI reads an image from the OS clipboard on its
+ *  own key (`imagePaste`), the hint names that key so the failure isn't
+ *  a dead end — Alt+V on Windows, Ctrl+V on Linux (mac is never
+ *  intercepted, so it always gets the plain wording). */
+export const pasteFailureHint = (
+	platform: ClipboardPlatform,
+	imagePaste: boolean,
+	reason: "empty" | "error",
+): string => {
+	if (imagePaste && (platform === "windows" || platform === "linux")) {
+		const key = platform === "windows" ? "Alt+V" : "Ctrl+V";
+		return reason === "empty"
+			? `No text to paste — press ${key} to paste an image`
+			: `Paste failed — press ${key} to paste an image`;
+	}
+	return reason === "empty" ? "No text to paste" : "Paste failed";
+};
