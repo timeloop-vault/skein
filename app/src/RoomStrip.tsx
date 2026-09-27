@@ -281,7 +281,7 @@ const GroupTab = ({
 				<span className="sk-group-count">({roomCount})</span>
 			</div>
 			<div className="row-2">
-				<span>
+				<span className="branch">
 					{seg.lead ? "main" : "main not open"} · {worktreeCount} worktree
 					{worktreeCount === 1 ? "" : "s"}
 				</span>
@@ -430,7 +430,7 @@ export const GroupRow = ({
 						<span className="name">{seg.label}</span>
 					</div>
 					<div className="row-2">
-						<span>main not open</span>
+						<span className="branch">main not open</span>
 					</div>
 				</div>
 			)}

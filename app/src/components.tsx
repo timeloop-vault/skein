@@ -356,7 +356,9 @@ export const RoomTab = ({
 		<div className="row-2">
 			{r.branch && (
 				<>
-					<span>{r.branch}</span>
+					<span className="branch" title={r.branch}>
+						{r.branch}
+					</span>
 					<span>·</span>
 				</>
 			)}
