@@ -781,6 +781,19 @@ body {
 	font-size: 0.79em;
 	color: var(--fg-3);
 	letter-spacing: 0.02em;
+	min-width: 0;
+	white-space: nowrap;
+}
+/* #348: truncate a long branch name with an ellipsis instead of letting
+   it wrap at a hyphen; the other row-2 children (separator, chips) stay
+   at their natural size. */
+.sk-tab .row-2 .branch {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.sk-tab .row-2 > :not(.branch) {
+	flex-shrink: 0;
 }
 .sk-tab .name {
 	flex: 1;
