@@ -34,7 +34,7 @@ use tauri::{AppHandle, Emitter, Manager, Url};
 use tauri_plugin_deep_link::DeepLinkExt;
 
 use crate::db::{Database, Room};
-use crate::room_paths::{normalize_path_for_match, path_match_kind};
+use crate::room_paths::{normalize_path_for_match, path_match_kind, strip_verbatim};
 
 /// The poke. No payload — see the module doc.
 pub(crate) const OPEN_REQUEST_EVENT: &str = "skein://open-request";
@@ -56,12 +56,24 @@ static PENDING: parking_lot::Mutex<Option<PathBuf>> = parking_lot::const_mutex(N
 /// the deep-link plugin routes to [`link_action`] instead. Of what is
 /// left the last argument wins. A relative path resolves against
 /// `cwd`, the directory the *caller* was in, never Skein's own.
+///
+/// On Windows, one trailing `"` is trimmed from the chosen argument
+/// (#393): `skein "C:\dir\"` arrives on argv as `C:\dir"`, because a
+/// trailing backslash escapes the closing quote rather than ending it. A
+/// literal trailing `"` is legal in a Unix filename, so this is
+/// Windows-only. If trimming leaves nothing, the argument is treated as
+/// no path at all rather than the cwd.
 pub(crate) fn path_from_args<S: AsRef<str>>(args: &[S], cwd: &Path) -> Option<PathBuf> {
     let arg = args
         .iter()
         .map(AsRef::as_ref)
         .filter(|a| !a.is_empty() && !a.starts_with('-') && !a.contains("://"))
         .last()?;
+    #[cfg(windows)]
+    let arg = arg.strip_suffix('"').unwrap_or(arg);
+    if arg.is_empty() {
+        return None;
+    }
     let path = Path::new(arg);
     Some(if path.is_absolute() {
         path.to_path_buf()
@@ -186,6 +198,12 @@ fn deliver_link(app: &AppHandle, url: &Url, schemes: &[String]) {
 /// A link launch on Windows/Linux arrives this way too; the deep-link
 /// plugin routes that one to [`init`]'s listener, so here it only
 /// raises the window.
+///
+/// The forward itself cannot split a path containing its own delimiter
+/// (#393): `tauri-plugin-single-instance` 2.4.5 joins argv with `|` only
+/// on Windows, where `|` is illegal in a file name anyway; macOS forwards
+/// argv joined with `\0`; Linux forwards it as a genuine string list over
+/// `DBus`, never joined at all.
 pub(crate) fn from_second_instance(app: &AppHandle, argv: &[String], cwd: &str) {
     let after_exe = argv.get(1..).unwrap_or_default();
     deliver(app, path_from_args(after_exe, Path::new(cwd)));
@@ -291,10 +309,15 @@ fn best_rooms<'a>(query_norm: &str, candidates: &[Candidate<'a>]) -> Vec<&'a Roo
     archived
 }
 
+/// Canonicalize and render as a string a caller can use — the frontend
+/// seeds New room with this, so it must never carry a Windows verbatim
+/// (`\\?\`) prefix (#393): `dunce::canonicalize` avoids that prefix for an
+/// ordinary path, but still emits it for a UNC path, one over 260
+/// characters, or one hitting a reserved name.
 fn canonical_string(path: &Path) -> Option<String> {
     dunce::canonicalize(path)
         .ok()
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|p| strip_verbatim(&p.to_string_lossy()).into_owned())
 }
 
 /// Resolve `requested` against `rooms`. Touches the disk — canonicalize
@@ -315,7 +338,10 @@ pub(crate) fn resolve(rooms: &[Room], requested: &Path) -> OpenTarget {
             .parent()
             .map_or_else(|| canon.clone(), Path::to_path_buf)
     };
-    let folder_str = folder.to_string_lossy().into_owned();
+    // Stripped before it ever leaves this function: `folder_str` reaches
+    // the frontend both directly (`Room.folder`) and via `canonical_string`
+    // below, and New room must never be seeded with a verbatim path (#393).
+    let folder_str = strip_verbatim(&folder.to_string_lossy()).into_owned();
     let query = normalize_path_for_match(&folder_str);
 
     let candidates: Vec<Candidate> = rooms
@@ -352,6 +378,47 @@ pub(crate) fn resolve(rooms: &[Room], requested: &Path) -> OpenTarget {
     OpenTarget::NewRoom { folder: seed }
 }
 
+/// Put a path back into the pending slot, but only if it is still empty
+/// (#393). A caller reaches for this after a failed load, to give the
+/// request back to whoever takes next — but a newer request may have
+/// arrived while the load was in flight, and latest-wins means that one
+/// keeps its spot rather than being clobbered by the older, failed one.
+fn restore_pending(path: PathBuf) {
+    let mut pending = PENDING.lock();
+    if pending.is_none() {
+        *pending = Some(path);
+    }
+}
+
+/// Take the pending request, if any, and resolve it via `load_rooms`.
+/// `None` when nothing was pending. On a load failure the path is *not*
+/// lost (#393): it is logged and handed back to [`restore_pending`], and
+/// the error is returned so the caller can retry — a wholesale rooms-load
+/// failure must not silently drop the folder the user asked to open.
+fn take_and_resolve(
+    load_rooms: impl FnOnce() -> Result<Vec<Room>, String>,
+) -> Result<Option<OpenTarget>, String> {
+    let Some(path) = take_pending() else {
+        return Ok(None);
+    };
+    match load_rooms() {
+        Ok(rooms) => {
+            let target = resolve(&rooms, &path);
+            tracing::info!(path = %path.display(), ?target, "open request resolved");
+            Ok(Some(target))
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "open request: loading rooms failed, restoring the pending path"
+            );
+            restore_pending(path);
+            Err(e)
+        }
+    }
+}
+
 /// Take (clearing) the pending request and resolve it against the
 /// stored rooms. `None` when nothing is pending — a second poke for a
 /// request the first one already took.
@@ -359,18 +426,10 @@ pub(crate) fn resolve(rooms: &[Room], requested: &Path) -> OpenTarget {
 pub async fn open_request_take(
     db: tauri::State<'_, Arc<Database>>,
 ) -> Result<Option<OpenTarget>, String> {
-    let Some(path) = take_pending() else {
-        return Ok(None);
-    };
     let db = Arc::clone(&db);
-    tauri::async_runtime::spawn_blocking(move || {
-        let rooms = db.all_rooms()?;
-        let target = resolve(&rooms, &path);
-        tracing::info!(path = %path.display(), ?target, "open request resolved");
-        Ok(Some(target))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || take_and_resolve(|| db.all_rooms()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -425,6 +484,26 @@ mod tests {
             path_from_args(&["a", "b"], cwd),
             Some(PathBuf::from("/home/me/code/b"))
         );
+    }
+
+    // `skein "C:\dir\"` arrives on argv with the closing quote glued onto
+    // the path, since a trailing backslash escapes it rather than ending
+    // the argument (#393).
+    #[cfg(windows)]
+    #[test]
+    fn args_trim_one_trailing_quote_from_an_escaped_backslash() {
+        let cwd = Path::new(r"C:\home\me\code");
+        assert_eq!(
+            path_from_args(&[r#"C:\dir""#], cwd),
+            Some(PathBuf::from(r"C:\dir"))
+        );
+        // Only one quote is trimmed, never two.
+        assert_eq!(
+            path_from_args(&[r#"C:\dir"""#], cwd),
+            Some(PathBuf::from(r#"C:\dir""#))
+        );
+        // Trimming down to nothing is no path at all.
+        assert_eq!(path_from_args(&[r#"""#], cwd), None);
     }
 
     #[test]
@@ -541,5 +620,70 @@ mod tests {
         };
         assert_eq!(resolve(&via_real, &link), want);
         assert_eq!(resolve(&via_link, &real), want);
+    }
+
+    /// A path long enough that `dunce::canonicalize` falls back to a
+    /// Windows verbatim (`\\?\`) spelling (#393): neither `resolve`'s
+    /// `OpenTarget::NewRoom.folder` nor a room match through it may leak
+    /// that prefix to the frontend.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_strips_a_verbatim_prefix_from_a_long_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut long = tmp.path().to_path_buf();
+        while long.to_string_lossy().len() < 260 {
+            long = long.join("a".repeat(50));
+        }
+        std::fs::create_dir_all(&long).unwrap();
+
+        let target = resolve(&[], &long);
+        let OpenTarget::NewRoom { folder } = &target else {
+            panic!("expected NewRoom, got {target:?}");
+        };
+        assert!(
+            !folder.starts_with(r"\\?\"),
+            "folder leaked a verbatim prefix: {folder}"
+        );
+
+        // A room stored with the plain (non-prefixed) long spelling still
+        // resolves as its owner.
+        let plain_cwd = long.to_string_lossy().into_owned();
+        let rooms = [room("r", &plain_cwd, None)];
+        assert_eq!(
+            resolve(&rooms, &long),
+            OpenTarget::Room {
+                room_ids: vec!["r".to_owned()],
+                archived: false,
+                folder: folder.clone(),
+            }
+        );
+    }
+
+    // `PENDING` is a process-global static; every assertion touching it
+    // lives in this one test so parallel tests can't race on it (#393).
+    #[test]
+    fn take_and_resolve_survives_a_failed_load() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let folder = canonical_string(tmp.path()).unwrap();
+
+        // A failing loader leaves the path pending rather than losing it.
+        *PENDING.lock() = Some(tmp.path().to_path_buf());
+        let err = take_and_resolve(|| Err("db locked".to_owned()));
+        assert_eq!(err, Err("db locked".to_owned()));
+        assert_eq!(*PENDING.lock(), Some(tmp.path().to_path_buf()));
+
+        // A subsequent successful call takes the restored path.
+        let ok = take_and_resolve(|| Ok(Vec::new()));
+        assert_eq!(ok, Ok(Some(OpenTarget::NewRoom { folder })));
+        assert_eq!(*PENDING.lock(), None);
+
+        // `restore_pending` never overwrites a newer pending path — a
+        // second request may have arrived while the failed load ran.
+        *PENDING.lock() = Some(PathBuf::from("/newer"));
+        restore_pending(PathBuf::from("/older"));
+        assert_eq!(*PENDING.lock(), Some(PathBuf::from("/newer")));
+
+        // Do not leak this static's state into any other test.
+        *PENDING.lock() = None;
     }
 }
