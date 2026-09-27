@@ -76,8 +76,10 @@ import { CLEAN_DRAFT, checkDraft, draftClearedBy, reduceDraft } from "./composer
 import type { ComposerDraft, DraftEvent } from "./composerDraft.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { HarnessCapabilities } from "./data.tsx";
+import { logBoth } from "./frontendLog.ts";
 import { atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
 import type { HarnessActivity } from "./harnessActivity.ts";
+import { launchSettled } from "./launchReady.ts";
 import { SUBMIT_GAP_MS, SUBMIT_RETRY_SCHEDULE_MS, decideSubmitRetry } from "./submitRetry.ts";
 import type { HarnessKind } from "./types.ts";
 
@@ -160,6 +162,15 @@ export const harnessInput = {
 	isRegistered(id: string): boolean {
 		return targets.has(id);
 	},
+	/// #404: read accessor over the module-private `userInputCount` above
+	/// — `useMailDelivery.ts` snapshots this at nudge-paste time and
+	/// compares it again at rollback, the same "has this moved since I
+	/// snapshotted it" pattern `sendPrompt`'s own gap/retry checks use, to
+	/// tell whether a human drove the harness before deciding whether a
+	/// lost-silence recovery is safe to attempt.
+	userInputCount(id: string): number {
+		return userInputCount(id);
+	},
 	bracketedPaste(id: string): boolean {
 		return targets.get(id)?.bracketedPaste() ?? false;
 	},
@@ -221,6 +232,12 @@ export interface CanSendPromptInput {
 	/// Only consulted when `body` contains a newline.
 	bracketedPasteOn: boolean;
 	body: string;
+	/// The current time, for the #404 launch-settle check below. Optional
+	/// — defaults to `Date.now()` — so the existing callers in
+	/// `review/ReviewPane.tsx` and `HarnessActionsMenu.tsx` (out of scope
+	/// here) keep compiling and behaving exactly as before without
+	/// passing it.
+	nowMs?: number;
 }
 
 export type GateResult = { ok: true } | { ok: false; reason: string };
@@ -302,11 +319,19 @@ function checkWatched(activity: HarnessActivity): GateResult | null {
 ///  - #215's config injection happened for this spawn (`injected`) —
 ///    without it there is no evidence the harness's CLI even has the
 ///    review tools wired up;
+///  - #404: if this harness's only proof of life is the launch signal
+///    (no transcript has spoken yet), its PTY must also have been quiet
+///    for `LAUNCH_QUIET_MS` since that signal (or since spawn's own
+///    launch ping, whichever cleared the cap first) — the launch ping
+///    fires before the CLI is provably able to accept a paste, so a
+///    harness whose terminal is still repainting refuses until it
+///    settles or the `LAUNCH_READY_CAP_MS` cap passes. See
+///    `launchReady.ts`;
 ///  - and, when `body` is multi-line, the terminal's own bracketed-paste
 ///    mode is on — otherwise a multi-line paste can arrive as several
 ///    separate "lines", each read as its own Enter.
 export function canSendPrompt(input: CanSendPromptInput): GateResult {
-	const { capabilities, activity, registered, bracketedPasteOn, body } = input;
+	const { capabilities, activity, registered, bracketedPasteOn, body, nowMs } = input;
 	const notReady = checkRegistered({ capabilities, activity, registered });
 	if (notReady) return notReady;
 	// `activity` is non-null here — `checkRegistered` above refused
@@ -323,6 +348,15 @@ export function canSendPrompt(input: CanSendPromptInput): GateResult {
 	}
 	const notWatched = checkWatched(a);
 	if (notWatched) return notWatched;
+	const settlement = launchSettled({
+		adapterHeard: a.adapterHeard,
+		launchSignalAt: a.launchSignalAt,
+		lastOutputAt: a.lastOutputAt,
+		nowMs: nowMs ?? Date.now(),
+	});
+	if (!settlement.settled) {
+		return { ok: false, reason: "the harness is still settling after launch (#404)" };
+	}
 	if (body.includes("\n") && !bracketedPasteOn) {
 		return {
 			ok: false,
@@ -420,15 +454,36 @@ export function sendPrompt(
 		bracketedPasteOn: target?.bracketedPaste() ?? false,
 		body,
 	});
-	if (!gate.ok) return gate;
+	if (!gate.ok) {
+		logBoth(
+			"info",
+			"skein::seam",
+			`[skein] sendPrompt: harness ${harnessId} refused — ${gate.reason} (#404)`,
+		);
+		return gate;
+	}
 	if (opts?.automatic) {
 		const draftRefusal = checkDraft(harnessInput.draft(harnessId));
-		if (draftRefusal) return draftRefusal;
+		if (draftRefusal) {
+			logBoth(
+				"info",
+				"skein::seam",
+				`[skein] sendPrompt: harness ${harnessId} automatic send refused — ${draftRefusal.reason} (#404)`,
+			);
+			return draftRefusal;
+		}
 	}
 	// A passing gate required `registered: target !== undefined`, so
 	// `target` is set here by construction.
 	const t = target as HarnessInputTarget;
 	t.paste(body);
+	logBoth(
+		"info",
+		"skein::seam",
+		`[skein] sendPrompt: pasted ${body.length} char(s) into harness ${harnessId} (${
+			opts?.automatic ? "automatic" : "manual"
+		}) (#404)`,
+	);
 	harnessInput.noteDraftEvent(harnessId, { type: "seamPaste" });
 
 	// #381: snapshot which stopping point the paste landed at — a plain
@@ -456,13 +511,17 @@ export function sendPrompt(
 		// gets its own message because it's the common, nameable case
 		// (#86's territory, not this one's).
 		if (targets.get(harnessId) !== t) {
-			console.warn(
+			logBoth(
+				"warn",
+				"skein::seam",
 				`[skein] sendPrompt: harness ${harnessId}'s terminal changed before the submit — leaving the paste unsent (#380)`,
 			);
 			return;
 		}
 		if (userInputCount(harnessId) !== inputCountAtPaste) {
-			console.warn(
+			logBoth(
+				"warn",
+				"skein::seam",
 				`[skein] sendPrompt: user typed into harness ${harnessId} before the submit — leaving the paste unsent (#380)`,
 			);
 			return;
@@ -480,12 +539,19 @@ export function sendPrompt(
 					: activityAtSubmit !== null && atSafeStoppingPoint(activityAtSubmit)
 						? "moved to a different delegation deferral than the one it was pasted under"
 						: `moved to ${phaseAtSubmit ?? "no activity record"}`;
-			console.warn(
+			logBoth(
+				"warn",
+				"skein::seam",
 				`[skein] sendPrompt: harness ${harnessId} ${why} before the submit — leaving the paste unsent (#380, #381)`,
 			);
 			return;
 		}
 		t.submit();
+		logBoth(
+			"info",
+			"skein::seam",
+			`[skein] sendPrompt: submit written into harness ${harnessId} (#404)`,
+		);
 		harnessInput.noteDraftEvent(harnessId, { type: "seamSubmit" });
 		// #363: this submit never touches xterm's `onKey`, so without this
 		// call the #259 silent-adapter watchdog would never arm for a prompt
@@ -547,7 +613,9 @@ export function sendPrompt(
 				sameTarget: targets.get(harnessId) === t,
 			});
 			if (decision.retry) {
-				console.info(
+				logBoth(
+					"info",
+					"skein::seam",
 					`[skein] sendPrompt: retry ${attemptIndex + 1}/${SUBMIT_RETRY_SCHEDULE_MS.length} into harness ${harnessId} — the first Enter didn't appear to land (#380)`,
 				);
 				t.submit();

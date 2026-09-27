@@ -11,6 +11,7 @@ import {
 	sendPrompt,
 } from "./harnessInput.ts";
 import type { CanInsertTextInput, CanSendPromptInput, HarnessInputTarget } from "./harnessInput.ts";
+import { LAUNCH_QUIET_MS } from "./launchReady.ts";
 import { SUBMIT_GAP_MS } from "./submitRetry.ts";
 
 // Pure `canSendPrompt` tests build the input by hand — no store, no
@@ -42,6 +43,7 @@ const activity = (over: Partial<HarnessActivity> = {}): HarnessActivity => ({
 	delegationActivityAt: 0,
 	delegationEmptiedAt: null,
 	delegatedCount: 0,
+	silenceRecovered: false,
 	...over,
 });
 
@@ -132,10 +134,14 @@ describe("canSendPrompt", () => {
 
 	// #273: a launch signal is proof-of-life equivalent to `adapterHeard`
 	// — the harness's CLI reaching its own prompt before the tail has
-	// ever spoken (a fresh, just-past-trust-dialog spawn).
+	// ever spoken (a fresh, just-past-trust-dialog spawn). #404: the PTY
+	// also has to have been quiet since — set well in the past here so
+	// this test is about the launch-signal equivalence, not settling.
 	it("accepts a harness whose only proof is a launch signal", () => {
 		const r = canSendPrompt(
-			baseInput({ activity: activity({ adapterHeard: false, launchSignalAt: Date.now() }) }),
+			baseInput({
+				activity: activity({ adapterHeard: false, launchSignalAt: Date.now() - 10_000 }),
+			}),
 		);
 		expect(r).toEqual({ ok: true });
 	});
@@ -190,6 +196,56 @@ describe("canSendPrompt", () => {
 	it("allows a multi-line body when bracketed paste is on", () => {
 		const r = canSendPrompt(baseInput({ body: "line one\nline two", bracketedPasteOn: true }));
 		expect(r).toEqual({ ok: true });
+	});
+
+	// #404: a freshly launch-signalled harness (no transcript heard yet)
+	// must also have gone PTY-quiet before the first paste — the launch
+	// ping alone doesn't prove the CLI can accept input yet.
+	describe("#404 launch settling", () => {
+		it("refuses the first paste while output is still recent after the launch ping", () => {
+			const launchSignalAt = 1_000_000;
+			const r = canSendPrompt(
+				baseInput({
+					activity: activity({
+						adapterHeard: false,
+						launchSignalAt,
+						lastOutputAt: launchSignalAt + 200,
+					}),
+					nowMs: launchSignalAt + 200,
+				}),
+			);
+			expect(r).toEqual({ ok: false, reason: expect.stringContaining("#404") });
+		});
+
+		it("allows the paste once nowMs is past the quiet period", () => {
+			const launchSignalAt = 1_000_000;
+			const r = canSendPrompt(
+				baseInput({
+					activity: activity({
+						adapterHeard: false,
+						launchSignalAt,
+						lastOutputAt: launchSignalAt + 200,
+					}),
+					nowMs: launchSignalAt + 200 + LAUNCH_QUIET_MS,
+				}),
+			);
+			expect(r).toEqual({ ok: true });
+		});
+
+		it("is unaffected by recent output once the adapter has heard from the transcript", () => {
+			const launchSignalAt = 1_000_000;
+			const r = canSendPrompt(
+				baseInput({
+					activity: activity({
+						adapterHeard: true,
+						launchSignalAt,
+						lastOutputAt: launchSignalAt + 200,
+					}),
+					nowMs: launchSignalAt + 200,
+				}),
+			);
+			expect(r).toEqual({ ok: true });
+		});
 	});
 });
 

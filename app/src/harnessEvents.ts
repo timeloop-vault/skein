@@ -15,18 +15,12 @@
 // that reads from the store.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { logToRust } from "./frontendLog.ts";
 import { TRANSITION_SOURCE, type TransitionSource, harnessActivity } from "./harnessActivity.ts";
 import { observedAgents } from "./harnessAgent.ts";
 import { type PendingPhase, pendingPrompts } from "./pendingPrompts.ts";
 import { followedOpencodeSession } from "./sessionTracking.ts";
 import { subagents } from "./subagents.ts";
-
-/// Fire-and-forget forward of one log line to Rust's `skein.log` (#362).
-/// Never throws or rejects visibly — a logging call must not become a
-/// new failure mode for the thing it's trying to make visible.
-function logToRust(level: "info" | "warn" | "error", target: string, message: string): void {
-	void invoke("frontend_log", { level, target, message }).catch(() => {});
-}
 
 /// How many `onmessage` throws per attach get logged before we stop
 /// bothering Rust — a hot loop throwing on every message must not

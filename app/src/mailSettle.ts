@@ -123,3 +123,130 @@ export function settleNudge(input: SettleNudgeInput): SettleNudgeDecision {
 	if (elapsedMs < NUDGE_SETTLE_MS) return "wait";
 	return "rollback";
 }
+
+/// What `shouldRecoverSilence` needs, gathered by the caller
+/// (`useMailDelivery.ts`) so this stays pure and testable with no store.
+export interface ShouldRecoverSilenceInput {
+	/// This settlement's own `settleNudge` outcome for the current check.
+	outcome: SettleNudgeDecision;
+	/// Has the user driven this harness's terminal at all since the
+	/// nudge was pasted (`harnessInput.userInputCount(id)` compared
+	/// against the snapshot taken at paste time)?
+	userInputSinceSend: boolean;
+}
+
+/// #404: pure policy over whether a rollback should also attempt
+/// recovering a #259 adapter-silent degrade that a lost first paste may
+/// have caused (`harnessActivity.recoverUnheardSilence`) — split out of
+/// `useMailDelivery.ts`'s `check()` so the decision is unit-testable
+/// without a store, mirroring the `settleNudge`/`useMailDelivery.ts`
+/// split above it. True only for a `"rollback"` outcome (a `"confirmed"`
+/// or `"wait"` nudge has nothing to recover from) with no user input
+/// since the nudge was pasted — a keystroke in between is evidence a
+/// human was driving the harness, not proof the only thing missing was
+/// this one lost prompt, so recovery is left alone rather than risk
+/// restoring authority on weak evidence. The store-side conditions
+/// (`adapterSilent`, `degradedBy`, `adapterHeard`, `launchSignalAt`,
+/// `silenceRecovered`) live in `recoverUnheardSilence` itself, not here.
+export function shouldRecoverSilence(input: ShouldRecoverSilenceInput): boolean {
+	return input.outcome === "rollback" && !input.userInputSinceSend;
+}
+
+/// The settlement state `useMailDelivery.ts`'s `check()` carries per
+/// harness for a nudge that's been pasted but not yet proven delivered
+/// — the same fields it stores in its own `settleRef` map, gathered
+/// here so `evaluateSettlement` can stay pure.
+export interface PendingSettlement {
+	/// `lastNudged` from before this nudge, restored on rollback.
+	preNudge: number;
+	/// Epoch ms when the nudge was pasted.
+	sentAtMs: number;
+	/// The #277 delegation-deferred arm this nudge was pasted under, or
+	/// `null` for a nudge pasted at a plain `waiting`.
+	deferredAtSend: number | null;
+	/// Has a transition out of `waiting` into `running` or `permission`
+	/// landed for this harness since the nudge was pasted?
+	turnStarted: boolean;
+	/// `harnessInput.userInputCount(id)` snapshotted at paste time.
+	inputCountAtSend: number;
+}
+
+/// The subset of `HarnessActivity` `evaluateSettlement` needs, sampled
+/// fresh at decision time — `null` when the harness has no activity
+/// record at all.
+export interface SettlementActivity {
+	authoritative: boolean;
+	adapterSilent: boolean;
+	phase: ActivityPhase | null;
+	delegationDeferredAt: number | null;
+}
+
+export interface EvaluateSettlementInput {
+	nowMs: number;
+	settlement: PendingSettlement;
+	activity: SettlementActivity | null;
+	/// `harnessInput.userInputCount(id)`, sampled fresh at decision time.
+	inputCountNow: number;
+}
+
+/// What `evaluateSettlement` decides, for `useMailDelivery.ts`'s
+/// `check()` to act on:
+///
+///  - `outcome` is `settleNudge`'s own verdict, unchanged;
+///  - `restoreLastNudged` is the value to write back to `lastNudged` on
+///    a rollback, or `null` when there's nothing to restore
+///    (`confirmed`/`wait`);
+///  - `attemptRecovery` is `shouldRecoverSilence`'s verdict, folded in
+///    here so the caller doesn't have to compute `userInputSinceSend`
+///    itself;
+///  - `settlementPending` is whether this settlement is still armed
+///    (`outcome === "wait"`) — the caller refuses a second automatic
+///    nudge while this is true.
+export interface EvaluateSettlementResult {
+	outcome: SettleNudgeDecision;
+	restoreLastNudged: number | null;
+	attemptRecovery: boolean;
+	settlementPending: boolean;
+}
+
+/// #404: the pure decision half of `useMailDelivery.ts`'s settlement
+/// block, built on `settleNudge` and `shouldRecoverSilence` — split out
+/// so the block is unit-testable without a store or a timer. `check()`
+/// keeps only the side effects: clearing the settlement, writing
+/// `lastNudged`, calling `harnessActivity.recoverUnheardSilence`, and
+/// logging.
+export function evaluateSettlement(input: EvaluateSettlementInput): EvaluateSettlementResult {
+	const { nowMs, settlement, activity, inputCountNow } = input;
+	// Not `activity?.authoritative && !activity?.adapterSilent` — see
+	// `useMailDelivery.ts`'s own comment on this same shape: that reads
+	// as `boolean | undefined`, and biome's useOptionalChain fix for the
+	// null-check form silently changes the type the same way.
+	let watched = false;
+	if (activity !== null) {
+		watched = activity.authoritative && !activity.adapterSilent;
+	}
+	const outcome = settleNudge({
+		elapsedMs: nowMs - settlement.sentAtMs,
+		watched,
+		turnStartedSinceSend: settlement.turnStarted,
+		phase: activity?.phase ?? null,
+		deferredAtSend: settlement.deferredAtSend,
+		deferredAtNow: activity?.delegationDeferredAt ?? null,
+	});
+	if (outcome === "confirmed") {
+		return { outcome, restoreLastNudged: null, attemptRecovery: false, settlementPending: false };
+	}
+	if (outcome === "rollback") {
+		const userInputSinceSend = inputCountNow !== settlement.inputCountAtSend;
+		return {
+			outcome,
+			restoreLastNudged: settlement.preNudge,
+			attemptRecovery: shouldRecoverSilence({ outcome, userInputSinceSend }),
+			settlementPending: false,
+		};
+	}
+	// "wait": leave the settlement armed — the caller's own timer, or
+	// the next event trigger, will re-run this — but refuse a second
+	// automatic nudge until it resolves.
+	return { outcome, restoreLastNudged: null, attemptRecovery: false, settlementPending: true };
+}

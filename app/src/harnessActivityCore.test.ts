@@ -28,6 +28,7 @@ const mkActivity = (phase: ActivityPhase): HarnessActivity => ({
 	delegationActivityAt: 0,
 	delegationEmptiedAt: null,
 	delegatedCount: 0,
+	silenceRecovered: false,
 });
 
 describe("phaseSnapshot", () => {

@@ -152,6 +152,19 @@ export interface HarnessActivity {
 	/// A future call site that flips the phase without going through
 	/// `noteUserPrompt` would silently reintroduce a stale count.
 	delegatedCount: number;
+	/// #404: has a lost-first-paste silence already been recovered once
+	/// for this spawn (`harnessActivity.recoverUnheardSilence`)? A mail
+	/// nudge (or any #238 seam submit) into a harness whose only proof of
+	/// life was the launch signal can arm the #259 watchdog and then have
+	/// its own submit rolled back by #388's settlement before the tail
+	/// ever gets a real prompt to answer — that degrade is a false
+	/// alarm, not evidence the adapter is broken, and this field is what
+	/// lets it be undone exactly once. A SECOND silent seam submit on the
+	/// same spawn, after this is already `true`, is real evidence the
+	/// tail is watching the wrong file, so `recoverUnheardSilence` refuses
+	/// once this is set — a stuck harness must still degrade for good.
+	/// In-memory only, reset to `false` on every spawn.
+	silenceRecovered: boolean;
 }
 
 /// Global transition callback: receives every real phase change
@@ -250,4 +263,8 @@ export const TRANSITION_SOURCE = {
 	// for free.
 	DelegationSettled: "delegation-settled",
 	DelegationCeiling: "delegation-ceiling",
+	// #404: `recoverUnheardSilence` undoing a #259 adapter-silent degrade
+	// that turns out to have been a lost first paste, not a broken tail —
+	// see that method's own doc for the conditions.
+	SilenceRecovered: "silence-recovered",
 } as const;
