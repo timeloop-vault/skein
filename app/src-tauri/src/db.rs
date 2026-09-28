@@ -74,6 +74,25 @@ pub struct Harness {
     /// Persisted so the badge survives Skein restarts. Epic #50 L5a.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pending_notifications: Option<i64>,
+    /// Who opened this harness through the agent API's `open_harness`
+    /// verb (#411) — `None` for every harness added by hand through
+    /// "+ harness". Round-tripped only, the same as `Room.createdBy`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub created_by: Option<HarnessCreatedBy>,
+}
+
+/// Who asked for a harness `open_harness` (#411) added, so the UI can
+/// say so. `harness_id` is `Option`, unlike [`CreatedBy::harness_id`]
+/// on a room: a room's own `create_room` call always has a caller
+/// harness attribution slot the frontend contract requires as a
+/// string (round-tripped as `""` when absent, see `verbs::create_room`),
+/// while this is a fresh field with no such wire constraint to match.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessCreatedBy {
+    pub room_id: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub harness_id: Option<String>,
 }
 
 /// One row in the `harness_events` append-only log. Epic #50 L6.
@@ -239,6 +258,12 @@ pub struct Room {
     /// same as `Harness.agent` round-trips argv it never interprets.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub created_by: Option<CreatedBy>,
+    /// Who archived this room through the agent API's `close_room` verb
+    /// (#411) — `None` for a room the user closed by hand, and cleared
+    /// on unarchive (the same "not evidence of anything once undone" call
+    /// `review_signoff` makes about its own record). Round-tripped only.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub closed_by: Option<ClosedBy>,
 }
 
 /// Who asked for a room `create_room` (#330) made, so the UI can say so.
@@ -265,6 +290,19 @@ pub struct CreatedBy {
     /// could not resolve a base commit for.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub base_sha: Option<String>,
+}
+
+/// Who closed a room through the agent API's `close_room` verb (#411).
+/// `harness_id` is `Option`, unlike [`CreatedBy::harness_id`] — see
+/// [`HarnessCreatedBy`]'s doc for why the two attribution shapes differ.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosedBy {
+    pub room_id: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub harness_id: Option<String>,
+    /// Epoch milliseconds, mirroring `Room.archived`.
+    pub at: i64,
 }
 
 /// A `sessions` row whose JSON blob failed to parse at load time.
@@ -2600,6 +2638,7 @@ mod tests {
             repo_root: None,
             attention: None,
             created_by: None,
+            closed_by: None,
         }
     }
 
@@ -2617,6 +2656,7 @@ mod tests {
             session_id: None,
             agent: None,
             pending_notifications: None,
+            created_by: None,
         }
     }
 
@@ -2687,6 +2727,57 @@ mod tests {
             "harnesses":[],"activeHarnessId":""}"#;
         let room: Room = serde_json::from_str(json).unwrap();
         assert_eq!(room.repo_root, None);
+    }
+
+    /// #411: a blob written before `closedBy`/`createdBy` (on a harness)
+    /// existed has neither key at all. The field policy says that must
+    /// load, not quarantine the room.
+    #[test]
+    fn a_pre_411_blob_loads_without_closed_by_or_harness_created_by_fields() {
+        let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+            "harnesses":[{"id":"h1","kind":"claude","name":"h1","status":"running",
+            "model":"","tokens":"0"}],"activeHarnessId":"h1"}"#;
+        let room: Room = serde_json::from_str(json).unwrap();
+        assert_eq!(room.closed_by, None);
+        assert_eq!(room.harnesses[0].created_by, None);
+    }
+
+    /// #411: both new attribution fields round-trip like every other
+    /// optional field.
+    #[test]
+    fn closed_by_and_harness_created_by_round_trip_through_save_and_load() {
+        let (_dir, db) = fresh_db();
+        let mut r = room("r1");
+        r.closed_by = Some(ClosedBy {
+            room_id: "director".into(),
+            harness_id: Some("d1".into()),
+            at: 1_234,
+        });
+        let mut h = harness("h1");
+        h.created_by = Some(HarnessCreatedBy {
+            room_id: "director".into(),
+            harness_id: Some("d1".into()),
+        });
+        r.harnesses = vec![h];
+        r.active_harness_id = "h1".into();
+        db.save_all(&[r]).unwrap();
+        let outcome = db.load_all().unwrap();
+        let loaded = &outcome.rooms[0];
+        assert_eq!(
+            loaded.closed_by,
+            Some(ClosedBy {
+                room_id: "director".into(),
+                harness_id: Some("d1".into()),
+                at: 1_234,
+            })
+        );
+        assert_eq!(
+            loaded.harnesses[0].created_by,
+            Some(HarnessCreatedBy {
+                room_id: "director".into(),
+                harness_id: Some("d1".into()),
+            })
+        );
     }
 
     /// #76: `repoRoot` round-trips through save and load like the other
@@ -3897,6 +3988,7 @@ mod orphan_sweep_tests {
             repo_root: None,
             attention: None,
             created_by: None,
+            closed_by: None,
         }
     }
 

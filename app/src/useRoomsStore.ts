@@ -19,6 +19,7 @@ import {
 } from "react";
 import type { FolderInfoDto } from "./NewRoomDialog.tsx";
 import type { RenameTarget } from "./RoomStrip.tsx";
+import { type CloseRoomAttribution, type RequestResult, decideCloseRoom } from "./agentRequests.ts";
 import { confirmDialog } from "./confirmDialog.ts";
 import { filesRegistry } from "./filesRegistry.ts";
 import { unarchiveRoomTransform, withResumeCmds } from "./harnessCmd.ts";
@@ -384,6 +385,38 @@ export function useRoomsStore(
 		setRenaming((cur) => (cur?.roomId === id ? null : cur));
 	};
 
+	// #411: `close_room` agent verb — same archive `closeRoom` above
+	// performs, but never prompts (there's no dialog for an agent call
+	// to answer) and refuses outright instead of asking. The refusal
+	// ladder (unknown room / already archived / unsaved Files buffers)
+	// lives in the pure `decideCloseRoom` so it's unit-tested without
+	// this hook; this is only the state mutation once decided.
+	const closeRoomForAgent = (
+		roomId: string,
+		closedBy: CloseRoomAttribution,
+	): RequestResult<{ roomId: string; archived: number }> => {
+		const decision = decideCloseRoom(
+			roomsRef.current,
+			roomId,
+			closedBy,
+			(ids) => filesRegistry.anyDirty(ids),
+			Date.now(),
+		);
+		if (!decision.ok) return decision;
+		const { closedBy: stamped } = decision.value;
+		setRooms((prev) =>
+			prev.map((r) => (r.id === roomId ? { ...r, archived: stamped.at, closedBy: stamped } : r)),
+		);
+		if (roomId === activeRoomIdRef.current) {
+			const nextActive = nextActiveAfterClose(activeRooms, roomId, lastUsedByGroupRef.current);
+			setActiveRoomId(nextActive?.id ?? "");
+		}
+		// Same reasoning as the user's close, above: archiving can remove
+		// a room out from under an in-progress rename.
+		setRenaming((cur) => (cur?.roomId === roomId ? null : cur));
+		return { ok: true, value: { roomId, archived: stamped.at } };
+	};
+
 	// Fresh embedded-server ports for every opencode harness in a room
 	// about to be (re)mounted. The ports from sqlite are dead — the run
 	// that bound them released them on exit — and resumeCmd needs the
@@ -580,6 +613,7 @@ export function useRoomsStore(
 		deleteRoomForever,
 		restoreRoom,
 		closeRoom,
+		closeRoomForAgent,
 		switchRoom,
 	};
 }

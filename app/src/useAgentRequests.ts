@@ -19,11 +19,19 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { MutableRefObject } from "react";
 import { useEffect, useRef } from "react";
 import type { CreateRoomArgs } from "./NewRoomDialogTypes.ts";
 import {
+	type CloseRoomAttribution,
+	type RequestResult,
+	decideOpenHarness,
 	derivePromptFirstLine,
+	parseCloseHarnessArgs,
+	parseCloseRoomArgs,
 	parseCreateArgs,
+	parseOpenHarnessArgs,
+	parseOpenHarnessResolveArgs,
 	parseResolveArgs,
 	resolveAgent,
 	resolveKind,
@@ -34,7 +42,8 @@ import { harnessActivity } from "./harnessActivity.ts";
 import { type DefaultAgents, type NewRoomMemory, branchTemplateFor, defaultsFor } from "./prefs.ts";
 import { fetchScope } from "./review/api.ts";
 import type { NewToast } from "./toastStack.ts";
-import type { CreateRoomResult } from "./useHarnessCreation.ts";
+import type { Harness, HarnessKind, Room } from "./types.ts";
+import type { CreateHarnessResult, CreateRoomResult } from "./useHarnessCreation.ts";
 import { createRoomArgs } from "./worktreeRoom.ts";
 
 interface AgentRequestPayload {
@@ -49,6 +58,31 @@ export function useAgentRequests(
 	defaultAgents: DefaultAgents,
 	appBranchTemplate: string,
 	pushToast: (entry: NewToast) => void,
+	// #411: `useRoomsStore`'s agent-close, never the user-facing
+	// `closeRoom` — this one must never prompt.
+	closeRoomForAgent: (
+		roomId: string,
+		closedBy: CloseRoomAttribution,
+	) => RequestResult<{ roomId: string; archived: number }>,
+	// #411: full room list (including archived) for `open_harness` and
+	// its resolve round trip — both need to look a target room up by id,
+	// the same shape `decideOpenHarness`/`decideCloseRoom` take.
+	roomsRef: MutableRefObject<Room[]>,
+	// #411: `useHarnessCreation`'s creation entry point, called with
+	// `{activate: false}` so opening a harness in another room never
+	// steals focus or switches that room's own active harness.
+	createHarnessInRoom: (
+		targetRoomId: string,
+		kind: HarnessKind,
+		agent?: string,
+		opts?: { activate?: boolean; createdBy?: Harness["createdBy"] },
+	) => Promise<CreateHarnessResult | undefined>,
+	// #411: `useHarnessActions`'s agent-close for one harness, never the
+	// user-facing `closeHarness` — this one must never confirm.
+	closeHarnessForAgent: (
+		roomId: string,
+		harnessId: string,
+	) => RequestResult<{ harnessId: string; phase: string }>,
 ): void {
 	// Refs so the listener (mounted once, below) always reads the latest
 	// values without re-subscribing on every settings/memory change —
@@ -64,7 +98,14 @@ export function useAgentRequests(
 	branchTemplateRef.current = appBranchTemplate;
 	const pushToastRef = useRef(pushToast);
 	pushToastRef.current = pushToast;
+	const closeRoomForAgentRef = useRef(closeRoomForAgent);
+	closeRoomForAgentRef.current = closeRoomForAgent;
+	const createHarnessInRoomRef = useRef(createHarnessInRoom);
+	createHarnessInRoomRef.current = createHarnessInRoom;
+	const closeHarnessForAgentRef = useRef(closeHarnessForAgent);
+	closeHarnessForAgentRef.current = closeHarnessForAgent;
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: roomsRef comes from useRoomsStore (#19) — a ref, stable across renders, but biome can't prove that through a parameter.
 	useEffect(() => {
 		const complete = (id: string, ok?: unknown, error?: string): Promise<void> =>
 			invoke<void>("agent_request_complete", { id, ok: ok ?? null, error: error ?? null }).catch(
@@ -172,6 +213,87 @@ export function useAgentRequests(
 		const handlePhases = async (id: string): Promise<void> =>
 			complete(id, { phases: harnessActivity.phaseSnapshot() });
 
+		// #411: `close_room` — parsing/refusal-ladder is all in the pure
+		// `parseCloseRoomArgs`/`decideCloseRoom`; this is only the plumbing
+		// (Rust has already checked creator/sign-off/rate-limit by the
+		// time this request lands).
+		const handleClose = async (id: string, raw: unknown): Promise<void> => {
+			const parsed = parseCloseRoomArgs(raw);
+			if (!parsed.ok) return complete(id, undefined, parsed.error);
+			const result = closeRoomForAgentRef.current(parsed.value.roomId, parsed.value.closedBy);
+			if (!result.ok) return complete(id, undefined, result.error);
+			return complete(id, result.value);
+		};
+
+		// #411: `open_harness.resolve` — the same `resolveKind`/`resolveAgent`
+		// defaulting `handleResolve` runs above, just against an existing
+		// room's own `cwd` (via `decideOpenHarness`) rather than a fresh
+		// folder path. The "can this kind read mail" check for `prompt`
+		// (see `agentRequests.ts`'s doc on this section) is applied Rust-
+		// side once it has this reply back, exactly like `create_room`
+		// already does with `create_room.resolve`'s — so `prompt` is read
+		// out of `raw` for validation only and never inspected here.
+		const handleOpenResolve = async (id: string, raw: unknown): Promise<void> => {
+			const parsed = parseOpenHarnessResolveArgs(raw);
+			if (!parsed.ok) return complete(id, undefined, parsed.error);
+			const { roomId, kind: requestedKind, agent: requestedAgent } = parsed.value;
+			const decision = decideOpenHarness(roomsRef.current, roomId);
+			if (!decision.ok) return complete(id, undefined, decision.error);
+			const cwd = decision.value.room.cwd ?? "";
+			const folderDefaults = defaultsFor(memoryRef.current, cwd);
+			const kindResult = resolveKind(requestedKind, folderDefaults);
+			if (!kindResult.ok) return complete(id, undefined, kindResult.error);
+			const kind = kindResult.value;
+			const listing = await listHarnessAgents(kind, cwd);
+			const agentResult = resolveAgent(
+				requestedAgent,
+				kind,
+				folderDefaults,
+				defaultAgentsRef.current,
+				listing,
+			);
+			if (!agentResult.ok) return complete(id, undefined, agentResult.error);
+			return complete(id, { kind, agent: agentResult.value });
+		};
+
+		// #411: `open_harness` — adds a harness the way "+ harness" does,
+		// in the background (`{activate: false}`): never switches rooms,
+		// never switches the target room's own active harness. The first
+		// prompt (if any) is delivered by Rust the same way `create_room`
+		// delivers its own, so there is nothing to send here.
+		const handleOpen = async (id: string, raw: unknown): Promise<void> => {
+			const parsed = parseOpenHarnessArgs(raw);
+			if (!parsed.ok) return complete(id, undefined, parsed.error);
+			const args = parsed.value;
+			const decision = decideOpenHarness(roomsRef.current, args.roomId);
+			if (!decision.ok) return complete(id, undefined, decision.error);
+			const result = await createHarnessInRoomRef.current(
+				args.roomId,
+				args.kind,
+				args.agent ?? undefined,
+				{
+					activate: false,
+					createdBy: args.createdBy,
+				},
+			);
+			if (!result) {
+				return complete(id, undefined, `not_found: room "${args.roomId}" not found`);
+			}
+			return complete(id, result);
+		};
+
+		// #411: `close_harness` — parsing/refusal-ladder is all in the pure
+		// `parseCloseHarnessArgs`/`decideCloseHarness`; this is only the
+		// plumbing (Rust has already checked scope/rate-limit by the time
+		// this request lands).
+		const handleCloseHarness = async (id: string, raw: unknown): Promise<void> => {
+			const parsed = parseCloseHarnessArgs(raw);
+			if (!parsed.ok) return complete(id, undefined, parsed.error);
+			const result = closeHarnessForAgentRef.current(parsed.value.roomId, parsed.value.harnessId);
+			if (!result.ok) return complete(id, undefined, result.error);
+			return complete(id, result.value);
+		};
+
 		const unlistenPromise = listen<AgentRequestPayload>("skein://agent-request", (event) => {
 			const { id, kind, args } = event.payload;
 			void (async () => {
@@ -182,6 +304,14 @@ export function useAgentRequests(
 						await handleCreate(id, args);
 					} else if (kind === "harness_phases") {
 						await handlePhases(id);
+					} else if (kind === "close_room") {
+						await handleClose(id, args);
+					} else if (kind === "open_harness.resolve") {
+						await handleOpenResolve(id, args);
+					} else if (kind === "open_harness") {
+						await handleOpen(id, args);
+					} else if (kind === "close_harness") {
+						await handleCloseHarness(id, args);
 					} else {
 						await complete(id, undefined, `unknown agent request kind "${kind}"`);
 					}

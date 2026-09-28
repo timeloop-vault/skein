@@ -9,16 +9,19 @@
 //!
 //! # The tool list is the contract
 //!
-//! Thirteen tools. Several things are absent from [`tool_specs`] *and*
+//! Seventeen tools. Several things are absent from [`tool_specs`] *and*
 //! refused by name in [`call_tool`]: `resolve`, because an agent that
 //! can close its own comments removes the review's only gate; `approve`,
 //! because one that can sign off its own work removes it a level higher;
-//! and, since #330, the ways to *destroy* a room it just gained the
-//! power to create (`archive_room` and friends) — destroying stays the
-//! user's decision, the same way Skein itself performs no git mutations
-//! (see `CLAUDE.md`). All three refusals are spelled out rather than
-//! left to the tool list being short — a model told a tool is merely
-//! missing goes looking for another way in.
+//! and the ways to *destroy* a room outright (`remove_worktree`,
+//! `delete_room`) — destroying stays the user's decision, the same way
+//! Skein itself performs no git mutations (see `CLAUDE.md`). `#411`
+//! narrows that third rule one level: `close_room` (archive only,
+//! creator-only, only once the target is signed off) is a real tool now,
+//! and `archive_room` is refused by name as its alias, pointing callers
+//! at the real one rather than at "no". All these refusals are spelled
+//! out rather than left to the tool list being short — a model told a
+//! tool is merely missing goes looking for another way in.
 //!
 //! The descriptions here are the agent's documentation; they are the
 //! only thing it reads before deciding what to call, so they say what
@@ -88,19 +91,20 @@ const SIGNOFF_ALIASES: &[&str] = &[
     "mark_approved",
 ];
 
-/// Names that would destroy or close a room `create_room` (#330) just
-/// gained the power to open. Refused for the same reason as
-/// [`RESOLVE_ALIASES`] and [`SIGNOFF_ALIASES`]: Skein performs no git
-/// mutations and destroys nothing on its own — that stays the user's
-/// decision (`CLAUDE.md`) — and an agent told these tools are simply
-/// missing would go looking for another way to do it (a raw `rm -rf`
-/// on the worktree, say).
-const DESTROY_ALIASES: &[&str] = &[
-    "archive_room",
-    "remove_worktree",
-    "delete_room",
-    "close_room",
-];
+/// Names that would destroy a room `create_room` (#330) just gained the
+/// power to open, refused for the same reason as [`RESOLVE_ALIASES`] and
+/// [`SIGNOFF_ALIASES`]: Skein performs no git mutations and destroys
+/// nothing on its own — that stays the user's decision (`CLAUDE.md`) —
+/// and an agent told these tools are simply missing would go looking for
+/// another way to do it (a raw `rm -rf` on the worktree, say).
+///
+/// `archive_room` sits here too, but for a narrower reason since #411:
+/// `close_room` is the real, guarded verb for that action now (archive
+/// only, creator-only, only once signed off), so `archive_room` is
+/// refused as its alias — the answer names `close_room` instead of
+/// "no", which is why [`call_tool`] gives it its own message rather than
+/// sharing `remove_worktree`'s/`delete_room`'s.
+const DESTROY_ALIASES: &[&str] = &["archive_room", "remove_worktree", "delete_room"];
 
 /// What the HTTP layer should do with a parsed message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,9 +152,19 @@ fn instructions() -> &'static str {
      across the whole install, including ones you did not create — use \
      them to rebuild a picture of a room after your own context is \
      compacted, without replaying mail. A harness's phase may read \
-     \"unknown\" when Skein cannot currently vouch for it. You \
-     cannot close, archive, or otherwise destroy a room: that stays the \
-     user's decision."
+     \"unknown\" when Skein cannot currently vouch for it. close_room \
+     archives a room you created, once its reviewer sign-off is \
+     approved for its current HEAD — that is the only way to close one: \
+     you cannot close your own room, and you cannot otherwise destroy \
+     one at all. Archiving keeps the worktree, the branch and the room \
+     record; the user can reopen it any time. open_harness adds a \
+     harness to your own room, or to one you opened, in the background — \
+     never taking focus. close_harness stops one the way closing its tab \
+     does — your own room's harnesses (never itself), or any harness in \
+     a room you opened — refusing on the room's last harness (use \
+     close_room instead), an open permission dialog, or unsaved Files \
+     buffers; closing mid-turn is allowed, and the reply names the phase \
+     it interrupted."
 }
 
 /// Handle one JSON-RPC message.
@@ -269,12 +283,17 @@ pub async fn call_tool(
         ));
     }
     if DESTROY_ALIASES.contains(&name) {
-        return Err(VerbError::Refused(
+        let message = if name == "archive_room" {
+            "archiving is close_room, with its rules: only the room that \
+             opened this room with create_room may archive it, and only \
+             once it is signed off on its current HEAD. Call close_room \
+             instead."
+        } else {
             "destroying a room is the user's decision, not yours. Skein \
              performs no git mutations and closes nothing on its own — \
-             say what you'd like closed and why, and let them do it."
-                .into(),
-        ));
+             say what you'd like removed and why, and let them do it."
+        };
+        return Err(VerbError::Refused(message.to_owned()));
     }
     match name {
         "list_comments" => to_value(verbs::list_comments(db, caller, &parse(args)?)?),
@@ -298,6 +317,34 @@ pub async fn call_tool(
                 &parse(args)?,
                 mail,
                 state.spawn_settings().allow_agent_room_creation,
+            )
+            .await?,
+        ),
+        "close_room" => to_value(
+            verbs::close_room(
+                state,
+                caller,
+                &parse(args)?,
+                state.spawn_settings().allow_agent_room_closing,
+            )
+            .await?,
+        ),
+        "open_harness" => to_value(
+            verbs::open_harness(
+                state,
+                caller,
+                &parse(args)?,
+                mail,
+                state.spawn_settings().allow_agent_harness_control,
+            )
+            .await?,
+        ),
+        "close_harness" => to_value(
+            verbs::close_harness(
+                state,
+                caller,
+                &parse(args)?,
+                state.spawn_settings().allow_agent_harness_control,
             )
             .await?,
         ),
@@ -586,8 +633,9 @@ pub fn tool_specs() -> Vec<Value> {
                  The room opens in the background: it does not take over the user's \
                  screen, and its dot only draws their attention once they look. After \
                  it exists you can reach it again with send_message, addressed to the \
-                 harnessId or roomId this call returns. You cannot close, archive, or \
-                 otherwise destroy a room — that stays the user's decision. Omit any \
+                 harnessId or roomId this call returns. Once it is signed off, close_room \
+                 can archive it — that is the only way to close a room, and there is no \
+                 way to destroy one at all; that stays the user's decision. Omit any \
                  argument you have no reason to set; Skein fills it with the user's \
                  own defaults. The result may carry `baseBehindUpstream`: the base \
                  branch was behind its upstream as of Skein's last fetch (Skein never \
@@ -646,6 +694,92 @@ pub fn tool_specs() -> Vec<Value> {
                     },
                 },
                 "required": ["task"],
+                "additionalProperties": false,
+            },
+        }),
+        json!({
+            "name": "close_room",
+            "title": "Close (archive) a room you created",
+            "description":
+                "Archives a room this room opened with create_room — nothing more. \
+                 Only the room that created it may close it: never a room closing \
+                 itself, and never a room you did not open. It also refuses unless \
+                 the target's reviewer sign-off is approved for its current HEAD — \
+                 missing or stale both refuse, naming which. Closing means \
+                 archiving, exactly like the user's own close: the worktree, the \
+                 branch and the room record all stay, and the user can reopen it \
+                 from the archived-rooms list at any time. This is not deletion, \
+                 and there is no tool that deletes a room or its worktree — that \
+                 stays the user's decision.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "room": { "type": "string", "description": "A room id." },
+                },
+                "required": ["room"],
+                "additionalProperties": false,
+            },
+        }),
+        json!({
+            "name": "open_harness",
+            "title": "Add a harness to a room, in the background",
+            "description":
+                "Adds a harness to this room, or to a room you opened with \
+                 create_room — never any other room. Works like \"+ harness\": it \
+                 opens in the background, never taking focus and never switching \
+                 that room's own active harness. `kind` and `agent` are resolved the \
+                 same way New Room resolves them — omit either to use the user's own \
+                 defaults for that folder. Refuses outright once a room already holds \
+                 8 harnesses, and shares its call budget with close_harness (10 \
+                 combined per minute). If you pass `prompt`, it is queued as the new \
+                 harness's first mailbox message the moment it exists, and this call \
+                 refuses up front — before anything is opened — if the resolved \
+                 harness could never read it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "room": { "type": "string", "description": "A room id." },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["claude", "opencode", "copilot", "byoh", "files"],
+                        "description": "Optional — default: the user's own default \
+                            harness kind for this folder.",
+                    },
+                    "agent": {
+                        "type": "string",
+                        "description": "Optional — default: the user's own default \
+                            agent for that kind. Omit rather than guessing a name — \
+                            an unresolvable one refuses the whole call.",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Queued as the new harness's first mailbox \
+                            message once it exists — it will act on this \
+                            unattended. Optional — default: none, the harness opens \
+                            idle and waits for the user.",
+                    },
+                },
+                "required": ["room"],
+                "additionalProperties": false,
+            },
+        }),
+        json!({
+            "name": "close_harness",
+            "title": "Close a harness, the way closing its tab does",
+            "description":
+                "Stops a harness in your own room (never itself), or in a room you \
+                 opened with create_room — never any other room. Refuses on the \
+                 room's only harness (close_room is the verb for that, once it's \
+                 signed off), on a harness with an open permission dialog, and on \
+                 unsaved Files buffers. Closing mid-turn is allowed — the reply \
+                 names the phase it was in when it went. Shares its call budget \
+                 with open_harness (10 combined per minute).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "harness": { "type": "string", "description": "A harness id." },
+                },
+                "required": ["harness"],
                 "additionalProperties": false,
             },
         }),

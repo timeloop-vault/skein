@@ -544,6 +544,33 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 							</span>
 						</span>
 					</label>
+					<label className="sk-toggle">
+						<input
+							type="checkbox"
+							checked={draft.allowAgentRoomClosing}
+							onChange={(e) => setDraft({ ...draft, allowAgentRoomClosing: e.target.checked })}
+						/>
+						<span className="sk-toggle-label">
+							<span className="sk-toggle-title">Let agents close rooms they created</span>
+							<span className="sk-toggle-sub">
+								When off, an agent's <code>close_room</code> calls are refused with the reason.
+							</span>
+						</span>
+					</label>
+					<label className="sk-toggle">
+						<input
+							type="checkbox"
+							checked={draft.allowAgentHarnessControl}
+							onChange={(e) => setDraft({ ...draft, allowAgentHarnessControl: e.target.checked })}
+						/>
+						<span className="sk-toggle-label">
+							<span className="sk-toggle-title">Let agents open or close harnesses</span>
+							<span className="sk-toggle-sub">
+								When off, an agent's <code>open_harness</code> and <code>close_harness</code> calls
+								are refused with the reason.
+							</span>
+						</span>
+					</label>
 				</div>
 			</div>
 

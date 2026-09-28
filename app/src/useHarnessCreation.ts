@@ -38,6 +38,19 @@ export interface CreateRoomResult {
 	sessionId: string | null;
 }
 
+// #411: what `createHarnessInRoom` hands back for the `open_harness`
+// agent verb to report — everything the caller can't otherwise
+// reconstruct from the request it sent (the resolved `agent` and the
+// name Skein picked). `undefined` when the target room didn't exist by
+// the time this ran, mirroring `createHarnessInRoom`'s existing no-op
+// early return.
+export interface CreateHarnessResult {
+	harnessId: string;
+	kind: HarnessKind;
+	agent: string | null;
+	name: string;
+}
+
 // Mapping from harness kind → argv. Each binary must be on PATH for the
 // spawn to succeed; if it isn't, the LiveTerminal renders the error
 // inline and the user can pick another kind. The `byoh` kind is our
@@ -189,9 +202,23 @@ export function useHarnessCreation(
 	// menu (pickHarness) and the Mod+E files jump. Kind-specific setup
 	// branches on capabilities — `files` is a surface, not a process:
 	// no session id, no port, no cmd, and it starts (and stays) idle.
-	const createHarnessInRoom = async (targetRoomId: string, kind: HarnessKind, agent?: string) => {
+	//
+	// #411: `opts.activate` (default true, same default/shape as
+	// `createRoom`'s below) is what lets `open_harness` add a harness in
+	// the background — the agent verb's contract is that it never steals
+	// focus or switches the room's own active harness, unlike every
+	// human-driven caller of this function. `opts.createdBy` is stamped
+	// onto the new harness record at construction, same as `createRoom`
+	// stamps `Room.createdBy` — never written after the fact.
+	const createHarnessInRoom = async (
+		targetRoomId: string,
+		kind: HarnessKind,
+		agent?: string,
+		opts?: { activate?: boolean; createdBy?: Harness["createdBy"] },
+	): Promise<CreateHarnessResult | undefined> => {
+		const activate = opts?.activate ?? true;
 		const targetRoom = roomsRef.current.find((r) => r.id === targetRoomId);
-		if (!targetRoom) return;
+		if (!targetRoom) return undefined;
 		const caps = HARNESS_KINDS[kind].capabilities;
 		// The agent only survives onto the record for kinds that take it.
 		// Every other path reads it back from there, so a name that got
@@ -199,6 +226,10 @@ export function useHarnessCreation(
 		const agentName = caps.agents && agent?.trim() ? agent : undefined;
 		const id = newId("h");
 		const cwd = targetRoom.cwd ?? defaultCwd;
+		// Computed here (off the pre-await snapshot above) rather than
+		// inside the `setRooms` updater below, so the same value can be
+		// returned to the caller — `open_harness` reports it back.
+		const name = `${kind === "files" ? "files" : HARNESS_KINDS[kind].label}-${targetRoom.harnesses.length + 1}`;
 		// Phase 2a: pre-allocate Claude's conversation id so the harness
 		// resumes to *this* conversation on Skein restart — no picker.
 		const sessionId = kind === "claude" ? crypto.randomUUID() : undefined;
@@ -228,9 +259,7 @@ export function useHarnessCreation(
 				const newH: Harness = {
 					id,
 					kind,
-					// The ◇ label makes a poor name stem — files harnesses
-					// read better as "files-2" than "◇-2".
-					name: `${kind === "files" ? "files" : HARNESS_KINDS[kind].label}-${r.harnesses.length + 1}`,
+					name,
 					status: caps.pty ? "running" : "idle",
 					model: caps.pty ? (kind === "copilot" ? "gpt-5" : "sonnet-4.5") : "",
 					tokens: "0",
@@ -239,8 +268,13 @@ export function useHarnessCreation(
 					cwd,
 					...(sessionId ? { sessionId } : {}),
 					...(agentName ? { agent: agentName } : {}),
+					...(opts?.createdBy ? { createdBy: opts.createdBy } : {}),
 				};
-				return { ...r, harnesses: [...r.harnesses, newH], activeHarnessId: id };
+				return {
+					...r,
+					harnesses: [...r.harnesses, newH],
+					...(activate ? { activeHarnessId: id } : {}),
+				};
 			}),
 		);
 		// Phase 2b: kick off async capture for opencode harnesses. The
@@ -260,6 +294,7 @@ export function useHarnessCreation(
 				setHarnessSessionId(targetRoomId, id, captured);
 			});
 		}
+		return { harnessId: id, kind, agent: agentName ?? null, name };
 	};
 
 	const pickHarness = (kind: HarnessKind, agent?: string) => {

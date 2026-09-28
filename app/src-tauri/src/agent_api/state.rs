@@ -125,6 +125,16 @@ pub struct AgentApiState {
     /// there is no `Database` write here to race against `sweep_orphans`
     /// or anything else.
     room_creation_attempts: parking_lot::Mutex<HashMap<String, Vec<Instant>>>,
+    /// Recent attempt timestamps for other rate-limited verbs, keyed by
+    /// `"<bucket>:<room_id>"` — the same anti-runaway shape as
+    /// [`Self::room_creation_attempts`], generalized with a bucket name
+    /// so a new verb doesn't need its own copy of the map or the
+    /// prune-check-record dance. #411's `close_room` is the first
+    /// caller (bucket `"close_room"`); its sibling `open_harness`/
+    /// `close_harness` share a `"harness_control"` bucket. Kept separate
+    /// from `room_creation_attempts` rather than folded into it, so
+    /// `create_room`'s own cap and tests stay untouched.
+    verb_rate_attempts: parking_lot::Mutex<HashMap<String, Vec<Instant>>>,
     /// Test-only bypass for [`Self::request_frontend`] (#330): lets a
     /// verb's frontend round-trip be driven deterministically —
     /// keyed answers per `kind`, no real `AppHandle` required. Production
@@ -200,6 +210,7 @@ impl AgentApiState {
             app: Some(app),
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
+            verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),
             #[cfg(test)]
             test_frontend: parking_lot::Mutex::new(None),
         }
@@ -214,6 +225,7 @@ impl AgentApiState {
             app: None,
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
+            verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),
             test_frontend: parking_lot::Mutex::new(None),
         }
     }
@@ -463,6 +475,29 @@ impl AgentApiState {
         let mut map = self.room_creation_attempts.lock();
         let now = Instant::now();
         let entry = map.entry(room_id.to_owned()).or_default();
+        entry.retain(|t| now.duration_since(*t) < window);
+        if entry.len() >= cap {
+            return false;
+        }
+        entry.push(now);
+        true
+    }
+
+    /// The same prune-check-record dance as
+    /// [`Self::check_room_creation_rate`], generalized with a `bucket`
+    /// name so a new rate-limited verb (#411's `close_room`, and its own
+    /// `harness_control` bucket) doesn't need its own copy of the map.
+    pub(crate) fn check_verb_rate(
+        &self,
+        bucket: &str,
+        room_id: &str,
+        window: Duration,
+        cap: usize,
+    ) -> bool {
+        let mut map = self.verb_rate_attempts.lock();
+        let now = Instant::now();
+        let key = format!("{bucket}:{room_id}");
+        let entry = map.entry(key).or_default();
         entry.retain(|t| now.duration_since(*t) < window);
         if entry.len() >= cap {
             return false;

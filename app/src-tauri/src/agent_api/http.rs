@@ -28,10 +28,10 @@ use super::auth::{self, AuthError, Caller, HARNESS_HEADER};
 use super::mcp;
 use super::state::AgentApiState;
 use super::verbs::{
-    self, AddressedArgs, CreateRoomArgs, DiffArgs, FindRoomsForPathArgs, GetCommentArgs,
-    GetRoomArgs, HistoryDirection, HistorySince, ListArgs, ListHarnessesArgs, ListRoomsArgs,
-    MailContext, MailPolicy, MessageHistoryArgs, ReadMessagesArgs, ReplyArgs, SendMessageArgs,
-    VerbError,
+    self, AddressedArgs, CloseHarnessArgs, CloseRoomArgs, CreateRoomArgs, DiffArgs,
+    FindRoomsForPathArgs, GetCommentArgs, GetRoomArgs, HistoryDirection, HistorySince, ListArgs,
+    ListHarnessesArgs, ListRoomsArgs, MailContext, MailPolicy, MessageHistoryArgs, OpenHarnessArgs,
+    ReadMessagesArgs, ReplyArgs, SendMessageArgs, VerbError,
 };
 
 /// Header the MCP spec has clients send on every request after
@@ -63,7 +63,12 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
         .route("/api/rooms", get(api_list_rooms).post(api_create_room))
         .route("/api/rooms/find", get(api_find_rooms_for_path))
         .route("/api/rooms/{room_id}", get(api_get_room))
-        .route("/api/harnesses", get(api_list_harnesses))
+        .route("/api/rooms/{room_id}/close", post(api_close_room))
+        .route(
+            "/api/harnesses",
+            get(api_list_harnesses).post(api_open_harness),
+        )
+        .route("/api/harnesses/{harness_id}/close", post(api_close_harness))
         .route("/api/harness/permission", post(api_harness_permission))
         .route(
             "/api/harness/session-start",
@@ -520,6 +525,99 @@ async fn api_create_room(
             Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
             Err(e) => error_body(StatusCode::INTERNAL_SERVER_ERROR, e.message()),
         },
+        Err(e) => error_body(
+            StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            e.message(),
+        ),
+    }
+}
+
+/// `POST /api/rooms/{room_id}/close` — the plain-JSON mirror of the MCP
+/// `close_room` tool (#411). `room_id` comes from the path, exactly like
+/// `api_get_room`; unlike that route this one is scoped to the caller's
+/// own room the normal way — `close_room` requires the caller to be the
+/// TARGET's creator, so there is no cross-room read to protect here the
+/// way `find_rooms_for_path`/`get_room`/`list_harnesses` need to.
+async fn api_close_room(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    Path(room_id): Path<String>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let closing_enabled = state.spawn_settings().allow_agent_room_closing;
+    let out = verbs::close_room(
+        &state,
+        &caller,
+        &CloseRoomArgs { room: room_id },
+        closing_enabled,
+    )
+    .await;
+    match out.and_then(json_of) {
+        Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
+        Err(e) => error_body(
+            StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            e.message(),
+        ),
+    }
+}
+
+/// `POST /api/harnesses` — the plain-JSON mirror of the MCP
+/// `open_harness` tool (#411). Same shape as `api_create_room`:
+/// `OpenHarnessArgs` already carries the camelCase wire shape and names
+/// its own target room, so the body is taken directly rather than
+/// through a separate struct.
+async fn api_open_harness(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    axum::Json(args): axum::Json<OpenHarnessArgs>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let mail = mail_context(&state);
+    let harness_control_enabled = state.spawn_settings().allow_agent_harness_control;
+    match verbs::open_harness(&state, &caller, &args, &mail, harness_control_enabled).await {
+        Ok(v) => match json_of(v) {
+            Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
+            Err(e) => error_body(StatusCode::INTERNAL_SERVER_ERROR, e.message()),
+        },
+        Err(e) => error_body(
+            StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            e.message(),
+        ),
+    }
+}
+
+/// `POST /api/harnesses/{harness_id}/close` — the plain-JSON mirror of
+/// the MCP `close_harness` tool (#411). `harness_id` comes from the
+/// path, exactly like `api_close_room`'s `room_id`; `close_harness`
+/// finds the harness's own room by searching, so there is no separate
+/// room id to take.
+async fn api_close_harness(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    Path(harness_id): Path<String>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let harness_control_enabled = state.spawn_settings().allow_agent_harness_control;
+    let out = verbs::close_harness(
+        &state,
+        &caller,
+        &CloseHarnessArgs {
+            harness: harness_id,
+        },
+        harness_control_enabled,
+    )
+    .await;
+    match out.and_then(json_of) {
+        Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
         Err(e) => error_body(
             StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             e.message(),

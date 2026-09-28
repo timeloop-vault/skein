@@ -182,6 +182,7 @@ export default function App() {
 		deleteRoomForever,
 		restoreRoom,
 		closeRoom,
+		closeRoomForAgent,
 		switchRoom,
 	} = useRoomsStore(defaultShell, setRenaming, lastUsedByGroupRef);
 
@@ -254,6 +255,7 @@ export default function App() {
 		cycleAlertedRoom,
 		cycleAlertedHarness,
 		closeHarness,
+		closeHarnessForAgent,
 		updateHarnessCmd,
 		addHarness,
 	} = useHarnessActions(
@@ -276,6 +278,7 @@ export default function App() {
 		pickHarness,
 		toggleFilesHarness,
 		createRoom,
+		createHarnessInRoom,
 		setHarnessSessionId,
 		replaceHarnessSessionId,
 	} = useHarnessCreation(
@@ -466,7 +469,17 @@ export default function App() {
 	// #328's `skein://agent-request` round trip. Unlike `useMailDelivery`
 	// this isn't scoped to `activeRooms`: a request can name any folder
 	// on the machine, not just an already-open room.
-	useAgentRequests(createRoom, newRoomMemory, defaultAgents, branchTemplate, pushToast);
+	useAgentRequests(
+		createRoom,
+		newRoomMemory,
+		defaultAgents,
+		branchTemplate,
+		pushToast,
+		closeRoomForAgent,
+		roomsRef,
+		createHarnessInRoom,
+		closeHarnessForAgent,
+	);
 
 	const titlebarProps: TitlebarProps = {
 		activeRoomLabel: room ? room.name : null,
@@ -616,6 +629,7 @@ export default function App() {
 					settingsProps={settingsProps}
 					showReopen={showReopen}
 					archivedRooms={archivedRooms}
+					allRooms={roomsRef.current}
 					reopenRoom={reopenRoom}
 					deleteRoomForever={deleteRoomForever}
 					restoreRoom={restoreRoom}
@@ -820,6 +834,7 @@ export default function App() {
 				settingsProps={settingsProps}
 				showReopen={showReopen}
 				archivedRooms={archivedRooms}
+				allRooms={roomsRef.current}
 				reopenRoom={reopenRoom}
 				deleteRoomForever={deleteRoomForever}
 				restoreRoom={restoreRoom}
