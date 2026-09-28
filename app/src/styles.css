@@ -1326,6 +1326,16 @@ html.tab-dragging.tab-drag-refused * {
 	color: var(--warn);
 	white-space: nowrap;
 }
+/* #413: mail held by the composer-draft guard; click delivers now. */
+.tab-mail--held {
+	cursor: pointer;
+	padding: 1px 4px;
+	border-radius: 3px;
+	border: 1px solid var(--warn);
+}
+.tab-mail--held:hover {
+	background: color-mix(in srgb, var(--warn) 20%, transparent);
+}
 .sk-harness-tab .ht-x {
 	color: var(--fg-3);
 	font-size: calc(var(--cfs) * 1);

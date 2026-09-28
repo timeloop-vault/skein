@@ -10,6 +10,8 @@ import {
 } from "react";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { AgentLabel } from "./harnessAgent.ts";
+import { requestDeliverNow } from "./mailDeliverNow.ts";
+import { useMailHold } from "./mailHold.ts";
 import { useUnreadMail } from "./mailStore.ts";
 import { commitRoomName } from "./roomName.ts";
 import type { Harness, HarnessKind, Room, Status } from "./types.ts";
@@ -403,6 +405,7 @@ export const HarnessTab = ({
 	// (or being read) updates the tab without a re-render trigger from
 	// anywhere else.
 	const mail = useUnreadMail(h.id);
+	const hold = useMailHold(h.id);
 	return (
 		<div
 			className={`sk-harness-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
@@ -433,7 +436,24 @@ export const HarnessTab = ({
 			{/* #329: no `title` here — the hover popover (statusPopover.ts)
 			 *  shows the same mail info as a segment, matching every other
 			 *  hover on this tab instead of a native tooltip. */}
-			{mail.count > 0 && <span className="tab-mail">✉ {mail.count}</span>}
+			{mail.count > 0 && hold.held && (
+				// #413: mail held by the composer-draft guard — click delivers now.
+				<span
+					className="tab-mail tab-mail--held"
+					title={
+						hold.releaseRefusal
+							? `Deliver now refused — ${hold.releaseRefusal}`
+							: "Mail held — the prompt may hold a draft. Click to deliver now."
+					}
+					onClick={(e) => {
+						e.stopPropagation();
+						void requestDeliverNow(h.id);
+					}}
+				>
+					✉ {mail.count} held
+				</span>
+			)}
+			{mail.count > 0 && !hold.held && <span className="tab-mail">✉ {mail.count}</span>}
 			{closable && (
 				<span
 					className="ht-x"

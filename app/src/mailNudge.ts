@@ -55,6 +55,37 @@ export function automaticGate(gate: GateResult, draft: ComposerDraft): GateResul
 	return checkDraft(draft) ?? gate;
 }
 
+/// #413: whether a refusal is the #383 draft guard's (by marker, not text).
+export function isDraftHold(refusal: GateResult | null): boolean {
+	return refusal !== null && !refusal.ok && refusal.draftHeld === true;
+}
+
+/// #413: is undelivered mail currently held by the draft guard? True
+/// exactly when unread exceeds what was last nudged AND the latest
+/// automatic attempt's refusal (null = none / a nudge went out) was the
+/// draft guard's. Any other refusal, or a caught-up mailbox, is not held.
+export function mailHeld(input: {
+	unread: number;
+	lastNudged: number;
+	refusal: GateResult | null;
+}): boolean {
+	return input.unread > 0 && input.unread > input.lastNudged && isDraftHold(input.refusal);
+}
+
+/// #413: why a "deliver now" attempt that did not send was refused, for the
+/// tab tooltip and the log. Only meaningful when no nudge went out.
+export function releaseRefusalReason(input: {
+	atStoppingPoint: boolean;
+	unread: number;
+	lastNudged: number;
+	gate: GateResult;
+}): string {
+	if (!input.gate.ok) return input.gate.reason;
+	if (input.unread <= 0 || input.unread <= input.lastNudged) return "no undelivered mail";
+	if (!input.atStoppingPoint) return "the harness isn't at a safe stopping point";
+	return "nothing to deliver";
+}
+
 export function decideMailNudge(input: DecideMailNudgeInput): DecideMailNudgeResult {
 	const { atStoppingPoint, unread, gate } = input;
 	const lastNudged = unread < input.lastNudged ? unread : input.lastNudged;

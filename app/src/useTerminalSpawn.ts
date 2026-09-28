@@ -22,6 +22,7 @@ import {
 	hasClaudeTranscriptTail,
 } from "./harnessEvents.ts";
 import { harnessInput } from "./harnessInput.ts";
+import type { ScreenCell } from "./promptScreen.ts";
 import { subagents } from "./subagents.ts";
 import { attachTerminalInteractions } from "./terminalInteractions.ts";
 import { createXterm } from "./terminalSetup.ts";
@@ -318,6 +319,27 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					bracketedPaste: () => term.modes.bracketedPasteMode,
 					submit: () => {
 						void invoke("pty_write", { id, data: "\r" });
+					},
+					kind: harnessKind,
+					// #413: the visible screen only (baseY.., not viewportY, so a
+					// user scrolled into history doesn't matter); null when any
+					// line is missing.
+					screen: () => {
+						const buf = term.buffer.active;
+						const reuse = buf.getNullCell();
+						const rows: ScreenCell[][] = [];
+						for (let y = 0; y < term.rows; y++) {
+							const line = buf.getLine(buf.baseY + y);
+							if (!line) return null;
+							const cells: ScreenCell[] = [];
+							for (let x = 0; x < term.cols; x++) {
+								const cell = line.getCell(x, reuse);
+								if (!cell) return null;
+								cells.push({ ch: cell.getChars(), dim: cell.isDim() !== 0 });
+							}
+							rows.push(cells);
+						}
+						return { rows, cursorX: buf.cursorX, cursorY: buf.cursorY };
 					},
 				});
 				// L2c-1 attach point: after PTY is alive, hook into the

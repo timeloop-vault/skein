@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { CLEAN_DRAFT, checkDraft, draftClearedBy, reduceDraft } from "./composerDraft.ts";
+import {
+	CLEAN_DRAFT,
+	checkDraft,
+	describeDraftEvent,
+	draftClearedBy,
+	reduceDraft,
+} from "./composerDraft.ts";
 import type { ComposerDraft, DraftEvent } from "./composerDraft.ts";
 
 const clean = CLEAN_DRAFT;
@@ -182,6 +188,7 @@ describe("checkDraft", () => {
 	it("holds on typed", () => {
 		expect(checkDraft(typed(3))).toEqual({
 			ok: false,
+			draftHeld: true,
 			reason:
 				"the composer holds unsent text — holding automatic delivery until it's submitted or cleared",
 		});
@@ -189,5 +196,42 @@ describe("checkDraft", () => {
 
 	it("holds on unknown, with the same reason as typed", () => {
 		expect(checkDraft(unknown)).toEqual(checkDraft(typed(1)));
+	});
+});
+
+describe("screenEmpty (#413)", () => {
+	const ev: DraftEvent = { type: "screenEmpty" };
+
+	it("releases unknown to clean and reports it as a draft-cleared trigger", () => {
+		const next = reduceDraft(unknown, ev);
+		expect(next).toEqual(clean);
+		expect(draftClearedBy(unknown, ev, next)).toBe(true);
+	});
+
+	it("never overrides typed, and leaves clean alone", () => {
+		expect(reduceDraft(typed(3), ev)).toEqual(typed(3));
+		expect(reduceDraft(clean, ev)).toEqual(clean);
+		expect(draftClearedBy(clean, ev, clean)).toBe(false);
+	});
+});
+
+describe("describeDraftEvent (#413)", () => {
+	it.each<[DraftEvent, string]>([
+		[key("a"), "printable"],
+		[key("\x7f"), "backspace"],
+		[key("\x1b[A"), "historyRecall"],
+		[key("\x1b[D"), "other escape"],
+		[key("\x1b\r"), "shiftEnter"],
+		[key("\r"), "submit"],
+		[key("\x03"), "clear"],
+		[{ type: "userPaste" }, "userPaste"],
+		[{ type: "seamPaste" }, "seamPaste"],
+		[{ type: "screenEmpty" }, "screenEmpty"],
+	])("names %j as %s", (e, expected) => {
+		expect(describeDraftEvent(e)).toBe(expected);
+	});
+
+	it("never leaks the typed bytes", () => {
+		expect(describeDraftEvent(key("secret"))).not.toContain("secret");
 	});
 });

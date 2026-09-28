@@ -815,14 +815,17 @@ async fn claude_events_reattach(
 /// release builds, so "attach never called" was indistinguishable from
 /// "invoke rejected before the Rust handler ran". This is NOT a general
 /// logging framework: it's a narrow seam for that one adapter, with a
-/// length cap so a runaway caller can't bloat the log file.
+/// length cap so a runaway caller can't bloat the log file. Levels:
+/// debug/info/warn/error (anything else logs as info).
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 fn frontend_log(level: String, target: String, message: String) {
     const MAX_LEN: usize = 2000;
     let truncated = message.chars().count() > MAX_LEN;
     let message: String = message.chars().take(MAX_LEN).collect();
-    if level == "warn" {
+    if level == "debug" {
+        tracing::debug!(source = "frontend", target = %target, truncated, "{message}");
+    } else if level == "warn" {
         tracing::warn!(source = "frontend", target = %target, truncated, "{message}");
     } else if level == "error" {
         tracing::error!(source = "frontend", target = %target, truncated, "{message}");
