@@ -25,7 +25,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use notify_debouncer_mini::notify::RecommendedWatcher;
@@ -59,6 +60,16 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 /// many ticks (1s+ of wall time at the 50ms debounce) means the file is
 /// stuck mid multi-byte character for good, not just a momentary race.
 const UTF8_STALL_WARN_THRESHOLD: u32 = 20;
+
+/// How often the background supervisor re-evaluates every attached
+/// adapter's watch set (#362) — see `ClaudeEventsManager::new`'s
+/// spawned thread and `supervise_once`/`supervise_map`. Independent of
+/// `DEBOUNCE_MS`: that's notify's own coalescing window once a watch is
+/// live, this is how long a directory that vanished and came back (the
+/// #362 failure mode — Windows delivers nothing when a watched
+/// directory is deleted, so nothing tells the tail to look again) can
+/// stay silently unwatched before the next pass notices.
+const SUPERVISE_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Pure decision for whether a heartbeat should fire this tick, given
 /// when the last one fired (`None` = never yet) and the current time.
@@ -196,12 +207,383 @@ fn session_jsonl_path(cwd: &str, session_id: &str) -> Option<PathBuf> {
     }
 }
 
-/// Per-harness adapter handle. Only role is to keep the debouncer
-/// alive — dropping it stops the watcher (which in turn drops the
-/// closure that holds the shared `TailState` Arc, so all per-harness
-/// state goes with it).
+/// Identifies a directory *instance*, not just its path (#362). A
+/// delete followed by a recreate at the same path — the failure this
+/// issue is about — must read as a change: on Windows,
+/// `ReadDirectoryChangesW` on a directory that gets deleted just stops
+/// delivering, silently and with no error, so nothing short of noticing
+/// the identity changed will ever re-arm the watch. `dev`+`ino` is the
+/// authoritative identity on Unix; Windows exposes no cheap equivalent
+/// through `std`, so birth time is the next best signal — good enough
+/// given a delete+recreate cycle is seconds apart, not
+/// sub-timestamp-resolution apart. (Also covers the symmetric inotify
+/// case: a deleted watched directory emits `IN_IGNORED` and the watch
+/// is simply gone — `rearm` treats "no longer in `armed`'s desired set"
+/// and "identity changed" the same way, so nothing extra was needed for
+/// Linux/macOS.)
+///
+/// Two known ways this identity can fail to *distinguish* a
+/// delete+recreate, both accepted because dead-tail detection
+/// (`Adapter::check_dead_tail`) is the backstop for either:
+///
+/// - `of` can't always read one at all — `meta.created()` errors on
+///   some filesystems/platforms (review finding on #410: the original
+///   version silently dropped the directory from the watch set
+///   whenever this failed, which is worse than a merely-imprecise
+///   identity — a directory that's never watched can never re-arm even
+///   on an ordinary identity change). `None` here means exactly that:
+///   "exists, but this platform/filesystem won't say when it was
+///   born" — still watched, just unable to distinguish instance A from
+///   a same-path instance B. Two `None`s compare equal, which is
+///   required for `rearm`'s `desired == armed` fast path to stay quiet
+///   on a genuinely unchanged directory whose identity simply can't be
+///   read.
+/// - On Linux, a rapid delete+recreate can hand back the exact same
+///   `(dev, ino)` pair (inode numbers get reused) — `rearm` would then
+///   see no change at all, same as the `None` case above.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DirId(
+    #[cfg(unix)] Option<(u64, u64)>,
+    #[cfg(not(unix))] Option<std::time::SystemTime>,
+);
+
+impl DirId {
+    /// Never fails for a path that exists — `desired_watches` already
+    /// checked that with `is_dir()`. A metadata read that fails anyway
+    /// (a race, or the identity simply isn't available on this
+    /// platform/filesystem) degrades to the "unknown" identity rather
+    /// than silently excluding the directory from the watch set — see
+    /// the type's own doc comment for what that costs and why it's
+    /// accepted.
+    fn of(path: &Path) -> Self {
+        let Ok(meta) = fs::metadata(path) else {
+            return Self(None);
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Self(Some((meta.dev(), meta.ino())))
+        }
+        #[cfg(not(unix))]
+        {
+            Self(meta.created().ok())
+        }
+    }
+}
+
+/// Walks `start` and its ancestors, returning the first that exists as
+/// a directory right now. Used when the transcript's own parent isn't
+/// there — the desired watch set still needs *some* existing point in
+/// the filesystem to sit on, so a later `rearm` pass can notice the
+/// real parent appear (as a direct child of whatever this returns, or
+/// closer, once Claude creates more of the path).
+fn nearest_existing_dir(start: &Path) -> Option<PathBuf> {
+    let mut cur = Some(start);
+    while let Some(p) = cur {
+        if p.is_dir() {
+            return Some(p.to_path_buf());
+        }
+        cur = p.parent();
+    }
+    None
+}
+
+/// The watch set an adapter *should* have right now, computed fresh
+/// from disk every time it's called — never carried forward (#362: that
+/// nothing ever did this after attach was the whole bug). `parent` is
+/// the main transcript's directory; `subagents_dir` is the sibling
+/// dir, when a path for it could be derived at all (see
+/// `TailState::subagents_dir`'s doc comment) — included only when it
+/// currently exists, since an armed watch on a directory that isn't
+/// there is meaningless.
+///
+/// Never creates anything: Claude owns both directories, and
+/// pre-creating them was part of #362 itself — a watch on a directory
+/// Skein invented could point at nothing Claude ever writes to, if the
+/// encoder and Claude's own layout ever drift (#259 was exactly that
+/// for the main file).
+fn desired_watches(parent: &Path, subagents_dir: Option<&Path>) -> Vec<(PathBuf, DirId)> {
+    let mut out = Vec::new();
+    let main_dir = if parent.is_dir() {
+        Some(parent.to_path_buf())
+    } else {
+        parent.parent().and_then(nearest_existing_dir)
+    };
+    if let Some(dir) = main_dir {
+        let id = DirId::of(&dir);
+        out.push((dir, id));
+    }
+    if let Some(dir) = subagents_dir
+        && dir.is_dir()
+    {
+        out.push((dir.to_path_buf(), DirId::of(dir)));
+    }
+    out
+}
+
+/// Per-harness adapter handle. Holds the debouncer — dropping it stops
+/// the watcher, which in turn drops the closure that holds the other
+/// clone of `state`, so all per-harness state goes with it — plus what
+/// `rearm` (#362) needs to recompute and reconcile the watch set from
+/// outside the debounce thread's closure: the same `state`/`on_event`
+/// the closure already holds clones of, and `armed`, the watch set as
+/// of the last successful reconciliation.
 struct Adapter {
-    _debouncer: Debouncer<RecommendedWatcher>,
+    debouncer: Debouncer<RecommendedWatcher>,
+    state: Arc<Mutex<TailState>>,
+    on_event: Arc<dyn Fn(ClaudeEvent) + Send + Sync>,
+    armed: Vec<(PathBuf, DirId)>,
+    /// One-shot guard, per path, for the "could not (re)arm watch" warn
+    /// (#410) — without it, a directory that stays permanently
+    /// unwatchable (permissions, say) warns on every single supervisor
+    /// pass forever. Same shape as `TailState`'s existing one-shot
+    /// guards: a path's entry is inserted on the transition into
+    /// failing (that's the one `warn!`) and removed the moment a watch
+    /// on it succeeds again, with later failures at debug while the
+    /// entry is already present.
+    failing_watches: HashSet<PathBuf>,
+    /// Ingredients for a fresh `ActionPersistence` on re-attach (#410).
+    /// `None` mirrors `ActionPersistence`'s own optionality in
+    /// phase-only tests (`attach_at` called with `actions: None`).
+    reattach_recipe: Option<ReattachRecipe>,
+    /// Dead-tail tracking (#410): `Some((last_pos, since))` once a
+    /// supervisor pass has observed the transcript grow past
+    /// `last_pos` without the tail's own `last_pos` moving — `since` is
+    /// when *this* stall began. Cleared the moment the file stops
+    /// growing relative to `last_pos` (the tail caught up) or vanishes
+    /// (a missing file isn't a stalled tail, it's just not there).
+    stall: Option<(u64, Instant)>,
+    /// Assigned from `Registry::next_generation` at the moment this
+    /// `Adapter` is actually installed into `Registry::adapters` — the
+    /// compare-and-swap a re-attach's insert needs (#410 review fix):
+    /// building a replacement adapter (`build_adapter`) does real I/O
+    /// and file watching entirely OUTSIDE the registry lock, so a
+    /// `detach` or a fresh caller-driven `attach()` can land on this
+    /// harness id in the gap between "a reattach was decided" and "the
+    /// replacement is ready to install". A reattach's insert only
+    /// proceeds if the harness id's CURRENT generation still matches
+    /// the one it captured when it started building — otherwise it
+    /// would either resurrect a closed harness (a leaked watcher still
+    /// writing `harness_actions` for a room that's gone) or clobber a
+    /// newer adapter that legitimately replaced it. `attach()` itself
+    /// is never subject to this check — a caller-driven attach always
+    /// wins, same as before this field existed.
+    generation: u64,
+}
+
+/// Ingredients for a from-scratch `ActionPersistence`, kept on
+/// `Adapter` so a re-attach (#410) — automatic (dead-tail) or manual
+/// (`ClaudeEventsManager::reattach`) — can rebuild one exactly the way
+/// a first attach would, rather than resurrecting the old one. That
+/// matters: the old `ActionExtractor`'s pending-tool-use buffer may be
+/// stuck mid-turn on a dead tail, and `attach_at`'s own `scan_history`
+/// already re-derives everything from disk fresh, same as a first
+/// attach or a Skein restart.
+#[derive(Clone)]
+struct ReattachRecipe {
+    db: Arc<Database>,
+    harness_id: String,
+    room_id: String,
+    cwd: String,
+    app: Option<tauri::AppHandle>,
+}
+
+impl ReattachRecipe {
+    fn fresh_persistence(&self) -> ActionPersistence {
+        ActionPersistence {
+            extractor: ActionExtractor::new(),
+            db: Arc::clone(&self.db),
+            harness_id: self.harness_id.clone(),
+            room_id: self.room_id.clone(),
+            cwd: self.cwd.clone(),
+            app: self.app.clone(),
+        }
+    }
+}
+
+impl Adapter {
+    /// Recompute the desired watch set and reconcile `armed` against
+    /// it: unwatch anything gone or replaced, watch anything new or
+    /// replaced. Returns whether anything actually changed — the
+    /// caller (`supervise_map`) only owes a catch-up `tick` when it
+    /// did. A watch that fails to (re)arm is logged and left out of
+    /// `armed`, so the next pass — recomputing the same desired entry —
+    /// retries it for free; nothing here ever gives up permanently.
+    fn rearm(&mut self, harness_id: &str) -> bool {
+        let (parent, subagents_dir) = {
+            let s = self.state.lock();
+            (
+                s.path.parent().map(Path::to_path_buf),
+                s.subagents_dir.clone(),
+            )
+        };
+        let Some(parent) = parent else {
+            return false;
+        };
+        let desired = desired_watches(&parent, subagents_dir.as_deref());
+        if desired == self.armed {
+            return false;
+        }
+
+        let mut changes: Vec<(PathBuf, &'static str)> = Vec::new();
+        for (path, id) in &self.armed {
+            if desired.iter().any(|(p, i)| p == path && i == id) {
+                continue;
+            }
+            // Ignore the error — the handle may already be dead, which
+            // is exactly the #362 failure mode (the directory it
+            // pointed at is gone).
+            let _ = self.debouncer.watcher().unwatch(path);
+            let reason = if desired.iter().any(|(p, _)| p == path) {
+                "replaced"
+            } else {
+                "vanished"
+            };
+            changes.push((path.clone(), reason));
+        }
+
+        let mut new_armed = Vec::with_capacity(desired.len());
+        for (path, id) in &desired {
+            if self.armed.iter().any(|(p, i)| p == path && i == id) {
+                new_armed.push((path.clone(), *id));
+                continue;
+            }
+            match self
+                .debouncer
+                .watcher()
+                .watch(path, RecursiveMode::NonRecursive)
+            {
+                Ok(()) => {
+                    let reason = if self.armed.iter().any(|(p, _)| p == path) {
+                        "replaced"
+                    } else {
+                        "appeared"
+                    };
+                    changes.push((path.clone(), reason));
+                    new_armed.push((path.clone(), *id));
+                    if self.failing_watches.remove(path) {
+                        tracing::debug!(
+                            harness_id = %harness_id,
+                            path = %path.display(),
+                            "claude_events: watch armed after previously failing"
+                        );
+                    }
+                }
+                Err(e) => {
+                    if self.failing_watches.insert(path.clone()) {
+                        tracing::warn!(
+                            harness_id = %harness_id,
+                            path = %path.display(),
+                            error = %e,
+                            "claude_events: could not (re)arm watch; will retry next supervise pass"
+                        );
+                    } else {
+                        tracing::debug!(
+                            harness_id = %harness_id,
+                            path = %path.display(),
+                            error = %e,
+                            "claude_events: watch still failing to arm"
+                        );
+                    }
+                }
+            }
+        }
+
+        self.armed = new_armed;
+        if changes.is_empty() {
+            return false;
+        }
+        tracing::info!(
+            harness_id = %harness_id,
+            ?changes,
+            "claude_events: re-armed watch(es)"
+        );
+        true
+    }
+
+    /// Dead-tail detection (#410): a watch can be silently gone in ways
+    /// `rearm` can never notice — nothing about the directory's own
+    /// identity changed, `notify` just stopped delivering (an
+    /// overflowed queue, a platform quirk, whatever). The only
+    /// observable symptom is the transcript growing while this
+    /// adapter's own `last_pos` doesn't. Called once per supervisor
+    /// pass, *after* that pass's re-arm and catch-up tick — so
+    /// `last_pos` reflects anything a merely-misarmed watch already
+    /// caught up on its own, and this only ever fires for a tail that
+    /// re-arming couldn't fix.
+    ///
+    /// Skips detection entirely while `tick` is mid a UTF-8 stall
+    /// (`utf8_stall_count > 0`, see `TailState`'s own doc comment on
+    /// it): the tail IS ticking there, it just can't decode a
+    /// straddled multi-byte character yet, and a re-attach cannot fix
+    /// that any better than the next ordinary tick can — `attach_at`'s
+    /// own `read_to_string` would hit the exact same byte.
+    ///
+    /// Returns the diagnostics for a `tracing::warn!` line the instant
+    /// this pass CONFIRMS a dead tail (stalled at the same `last_pos`
+    /// for at least `DEAD_TAIL_AFTER`) — not on the pass that merely
+    /// starts tracking a new stall.
+    fn check_dead_tail(&mut self, now: Instant) -> Option<DeadTail> {
+        let (path, last_pos, utf8_stalled) = {
+            let s = self.state.lock();
+            (s.path.clone(), s.last_pos, s.utf8_stall_count > 0)
+        };
+        if utf8_stalled {
+            return None;
+        }
+        // Missing file is healthy, not stalled — nothing to tail yet
+        // (or any more), and re-attaching wouldn't change that.
+        let Ok(meta) = fs::metadata(&path) else {
+            self.stall = None;
+            return None;
+        };
+        let file_len = meta.len();
+        if file_len <= last_pos {
+            self.stall = None;
+            return None;
+        }
+        match self.stall {
+            Some((stalled_last_pos, since)) if stalled_last_pos == last_pos => {
+                let stalled_for = now.saturating_duration_since(since);
+                if stalled_for >= DEAD_TAIL_AFTER {
+                    Some(DeadTail {
+                        path,
+                        last_pos,
+                        file_len,
+                        stalled_for_ms: stalled_for.as_millis(),
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => {
+                self.stall = Some((last_pos, now));
+                None
+            }
+        }
+    }
+}
+
+/// How long a transcript may grow past this adapter's own `last_pos`
+/// with zero progress before a supervisor pass calls it dead and
+/// re-attaches (#410). Comfortably above `DEBOUNCE_MS` and
+/// `SUPERVISE_INTERVAL` both — this is "the watch is gone", not "the
+/// debouncer hasn't flushed yet".
+const DEAD_TAIL_AFTER: Duration = Duration::from_secs(10);
+
+/// Minimum spacing between AUTOMATIC re-attaches for one harness
+/// (#410) — a persistently unwatchable directory (permissions, say)
+/// must not be re-attached every single supervisor pass forever. Only
+/// applies to the dead-tail path; a manual `reattach` call always runs.
+const REATTACH_BACKOFF: Duration = Duration::from_secs(60);
+
+/// What a confirmed dead tail needs to log and to act on — returned by
+/// `Adapter::check_dead_tail`.
+struct DeadTail {
+    path: PathBuf,
+    last_pos: u64,
+    file_len: u64,
+    stalled_for_ms: u128,
 }
 
 /// Per-subagent tail state, one per `agent-<id>.jsonl` under the
@@ -292,10 +674,15 @@ struct TailState {
     /// `attach_at_with_actions`. Lives in `TailState` so the watcher
     /// callback can both extract and persist on each tick. Issue #80.
     actions: Option<ActionPersistence>,
-    /// The session's `subagents` dir, when it could be created and
-    /// watched at attach time. `None` disables subagent tailing
-    /// entirely for this attach — telemetry here is strictly
-    /// additive and must never be a reason `attach` itself fails.
+    /// The session's `subagents` dir — the computed path, whenever
+    /// `skein_harness::claude::subagents_dir` can derive one, whether or
+    /// not it exists yet (#362: this used to be created eagerly at
+    /// attach time; Claude owns it, and a session that hasn't delegated
+    /// yet has no reason to have one on disk before it does). `None`
+    /// disables subagent tailing entirely for this attach — telemetry
+    /// here is strictly additive and must never be a reason `attach`
+    /// itself fails. The watch on this path (once it exists) is armed
+    /// and re-armed by `Adapter::rearm`, not by anything in here.
     subagents_dir: Option<PathBuf>,
     /// Per-subagent tail state, keyed by agent id.
     subagents: HashMap<String, SubagentTail>,
@@ -379,16 +766,45 @@ pub struct AttachInfo {
     /// (resume) as opposed to a fresh spawn that hasn't written
     /// anything yet.
     pub already_existed: bool,
-    /// Whether the subagents-dir watch armed successfully. `false`
-    /// means subagent telemetry is disabled for this attach — see the
-    /// `tracing::warn!` sites in `attach_at` for why.
+    /// Whether subagent-transcript tailing is enabled for this attach —
+    /// i.e. whether a `subagents` dir *path* could be derived from the
+    /// transcript path at all (#362: this no longer means the directory
+    /// existed, or that a watch on it was armed, at attach time — a
+    /// session that hasn't delegated yet has no such directory on disk,
+    /// and `Adapter::rearm` picks up the watch once it appears). `false`
+    /// only when `skein_harness::claude::subagents_dir` couldn't derive
+    /// a path at all, which in practice never happens.
     pub subagents_armed: bool,
 }
 
+/// Everything a supervisor pass and the manual `reattach` verb need
+/// under one lock (#410): the live adapters, plus the automatic
+/// re-attach backoff timestamps. The backoff map is deliberately
+/// separate from `Adapter` itself — a re-attach *replaces* the
+/// `Adapter` wholesale (same as any other attach), so backoff state
+/// living on it would be lost at exactly the moment it needs to
+/// survive.
+#[derive(Default)]
+struct Registry {
+    adapters: HashMap<String, Adapter>,
+    last_auto_reattach: HashMap<String, Instant>,
+    /// Source of `Adapter::generation` (#410 review fix) — bumped every
+    /// time an adapter is actually installed (a fresh `attach` or a
+    /// successful reattach), never reused. Starts at 0, so the first
+    /// real generation assigned is 1; `Adapter::generation` therefore
+    /// never needs an `Option` to mean "not yet installed" — by the
+    /// time anything can observe an `Adapter` at all, it already has
+    /// one.
+    next_generation: u64,
+}
+
 /// Manager — registry of live Claude adapters keyed by harness id.
-/// Mirrors the shape of `PtyManager` / `WatcherManager`.
+/// Mirrors the shape of `PtyManager` / `WatcherManager`. `inner` is
+/// `Arc`-wrapped (#362) so the background supervisor thread spawned by
+/// `new` can hold a `Weak` to it — it must never be the reason this
+/// manager (and everything it tails) outlives the app.
 pub struct ClaudeEventsManager {
-    inner: Mutex<HashMap<String, Adapter>>,
+    inner: Arc<Mutex<Registry>>,
     /// Shared with the per-attach persistence sink so each adapter
     /// can write `harness_actions` rows directly from its tick
     /// thread. Issue #80.
@@ -400,8 +816,10 @@ pub struct ClaudeEventsManager {
 
 impl ClaudeEventsManager {
     pub fn new(db: Arc<Database>, app: tauri::AppHandle) -> Self {
+        let inner = Arc::new(Mutex::new(Registry::default()));
+        spawn_supervisor_thread(Arc::downgrade(&inner));
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner,
             db,
             app: Some(app),
         }
@@ -409,14 +827,93 @@ impl ClaudeEventsManager {
 
     /// Test constructor — no `AppHandle`, so the live tail persists
     /// without broadcasting (nothing to assert on the emit in a unit
-    /// test, and building a real `AppHandle` needs a running app).
+    /// test, and building a real `AppHandle` needs a running app). No
+    /// background thread either (#362) — tests drive re-arming
+    /// deterministically via `supervise_once` instead of racing a 2 s
+    /// timer.
     #[cfg(test)]
     fn new_for_test(db: Arc<Database>) -> Self {
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner: Arc::new(Mutex::new(Registry::default())),
             db,
             app: None,
         }
+    }
+
+    /// Test-only entry point for the same pass the background thread
+    /// spawned by `new` runs every `SUPERVISE_INTERVAL` (#362):
+    /// `new_for_test` starts no thread, so tests drive re-arming
+    /// deterministically by calling this instead of racing a 2 s timer.
+    /// Returns how many adapters were actually re-armed, for tests to
+    /// assert against (a healthy, unchanged adapter re-arms 0).
+    #[cfg(test)]
+    pub(crate) fn supervise_once(&self) -> usize {
+        supervise_map(&self.inner)
+    }
+
+    /// Test-only: run dead-tail detection alone, without immediately
+    /// performing whatever it decides (#410 review fix) — the seam a
+    /// test uses to land a `detach` or a fresh `attach()` in the gap
+    /// between "a reattach was decided" and "the replacement is
+    /// installed", the exact race `reattach_at_impl`'s generation CAS
+    /// exists to survive, deterministically rather than via a real
+    /// thread race. Pair with `perform_reattach_jobs_for_test`.
+    #[cfg(test)]
+    fn collect_dead_tail_jobs_for_test(&self) -> Vec<ReattachJob> {
+        collect_dead_tail_jobs(&self.inner)
+    }
+
+    /// Test-only counterpart to `collect_dead_tail_jobs_for_test`: runs
+    /// exactly what `supervise_map` would have run immediately after
+    /// collecting, for each job, in order.
+    #[cfg(test)]
+    fn perform_reattach_jobs_for_test(&self, jobs: Vec<ReattachJob>) {
+        for job in jobs {
+            perform_reattach(&self.inner, job);
+        }
+    }
+
+    /// Test-only: simulate a watch dying silently (#410) — the failure
+    /// mode dead-tail detection exists for, where nothing about the
+    /// watched directories' *identity* changes (so `rearm` has nothing
+    /// to notice) but `notify` simply stops delivering. Unwatches every
+    /// path this adapter currently thinks is armed WITHOUT touching
+    /// `adapter.armed` itself, so `rearm`'s `desired == armed` fast path
+    /// still sees no change and won't repair this on its own — only
+    /// dead-tail detection can. Panics if `harness_id` isn't attached.
+    #[cfg(test)]
+    fn simulate_dead_watch_for_test(&self, harness_id: &str) {
+        let mut reg = self.inner.lock();
+        let adapter = reg
+            .adapters
+            .get_mut(harness_id)
+            .expect("simulate_dead_watch_for_test: harness not attached");
+        for (path, _) in &adapter.armed {
+            let _ = adapter.debouncer.watcher().unwatch(path);
+        }
+    }
+
+    /// Test-only: push a harness's already-recorded `Adapter::stall`
+    /// further into the past than `DEAD_TAIL_AFTER`, so a test can
+    /// confirm dead-tail detection without a real 10 s sleep — see
+    /// `Adapter::check_dead_tail`'s doc comment for the state machine
+    /// this pretends has already run its course. Panics if
+    /// `harness_id` isn't attached or hasn't recorded a stall yet (call
+    /// `supervise_once` once first to start one).
+    #[cfg(test)]
+    fn backdate_stall_for_test(&self, harness_id: &str) {
+        let mut reg = self.inner.lock();
+        let adapter = reg
+            .adapters
+            .get_mut(harness_id)
+            .expect("backdate_stall_for_test: harness not attached");
+        let (last_pos, _) = adapter
+            .stall
+            .expect("backdate_stall_for_test: no stall recorded yet");
+        let since = Instant::now()
+            .checked_sub(DEAD_TAIL_AFTER + Duration::from_secs(1))
+            .expect("backdate_stall_for_test: process clock underflow");
+        adapter.stall = Some((last_pos, since));
     }
 
     /// Start tailing the JSONL for `harness_id`. `on_event` fires on
@@ -427,6 +924,14 @@ impl ClaudeEventsManager {
     /// `room_id` is stamped on every `harness_actions` row this
     /// adapter persists (issue #80). The Live Context cards query
     /// per-room.
+    ///
+    /// Kept as an owned `harness_id: String` at this public boundary —
+    /// unlike the internal `attach_at`/`attach_at_impl`/`build_adapter`
+    /// chain below it, which all narrowed to `&str` for #410 — since
+    /// this is where a Tauri command's already-owned, freshly
+    /// deserialized `String` naturally lands; `#[allow]` below rather
+    /// than threading a borrow back out to `lib.rs` for no benefit.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn attach<F>(
         &self,
         harness_id: String,
@@ -449,7 +954,7 @@ impl ClaudeEventsManager {
             cwd: cwd.to_string(),
             app: self.app.clone(),
         });
-        self.attach_at(harness_id, path, on_event, persistence)
+        self.attach_at(&harness_id, path, on_event, persistence)
     }
 
     /// Path-injected variant — used by tests to point the adapter at
@@ -459,15 +964,48 @@ impl ClaudeEventsManager {
     ///
     /// `actions` is the persistence sink; pass `None` from phase-only
     /// tests to skip the `harness_actions` table entirely.
+    ///
+    /// Thin wrapper over `attach_at_impl` (#410): the actual body only
+    /// ever touches `self.inner`, never `self.db`/`self.app`, so it's a
+    /// free function taking `&Arc<Mutex<Registry>>` directly — that's
+    /// what lets `supervise_map`'s dead-tail re-attach and the manual
+    /// `reattach` verb call the exact same attach logic without needing
+    /// a whole `&ClaudeEventsManager` (the background supervisor thread
+    /// only ever holds a `Weak` to `inner`, not to the manager itself).
     fn attach_at<F>(
         &self,
-        harness_id: String,
+        harness_id: &str,
         path: PathBuf,
         on_event: F,
         actions: Option<ActionPersistence>,
     ) -> Result<AttachInfo, ClaudeEventsError>
     where
         F: Fn(ClaudeEvent) + Send + Sync + 'static,
+    {
+        attach_at_impl(&self.inner, harness_id, path, on_event, actions)
+    }
+}
+
+/// Builds a fully-armed `Adapter` from scratch — all the real work of
+/// an attach (reading history, arming watches, running the first
+/// catch-up tick) — WITHOUT ever touching `Registry` (#410 review fix).
+/// That split matters: installing the result needs a
+/// compare-and-swap-under-lock for a reattach (see `reattach_at_impl`)
+/// but not for a normal caller-driven attach (see `attach_at_impl`),
+/// and neither install step should hold the registry lock across this
+/// function's disk I/O and `notify` calls. `Adapter::generation` on the
+/// returned value is a placeholder (`0`) — every caller overwrites it
+/// with a real generation at the moment it actually installs the
+/// adapter, under the lock.
+fn build_adapter<F>(
+    harness_id: &str,
+    path: PathBuf,
+    on_event: F,
+    actions: Option<ActionPersistence>,
+) -> Result<(Adapter, AttachInfo), ClaudeEventsError>
+where
+    F: Fn(ClaudeEvent) + Send + Sync + 'static,
+{
     {
         // Determine starting position. Three cases:
         //   • File doesn't exist (fresh spawn before Claude has
@@ -495,6 +1033,17 @@ impl ClaudeEventsManager {
         // on every line) and the fresh actions it collects are
         // persisted with one batch insert instead of one per line.
         let mut actions = actions;
+        // Captured before `actions` is moved into `TailState` below, so
+        // a future re-attach (#410) can build a brand-new
+        // `ActionPersistence` — including a fresh `ActionExtractor` —
+        // rather than resurrecting one that may be stuck mid-turn.
+        let reattach_recipe = actions.as_ref().map(|ap| ReattachRecipe {
+            db: Arc::clone(&ap.db),
+            harness_id: ap.harness_id.clone(),
+            room_id: ap.room_id.clone(),
+            cwd: ap.cwd.clone(),
+            app: ap.app.clone(),
+        });
         let (last_pos, attached, initial_event) = match fs::read_to_string(&path) {
             Ok(content) => {
                 let (init, fresh) = scan_history(&content, actions.as_mut());
@@ -507,11 +1056,13 @@ impl ClaudeEventsManager {
             Err(_) => (0, false, None),
         };
         // Derive the parent before moving `path` into TailState.
-        // Watching the parent (not the file directly) is two-for-one:
-        // (1) attaching pre-create still notices the create event.
-        // (2) some platforms (Linux/inotify) lose the watch when the
-        //     file is replaced atomically — watching the parent
-        //     survives that.
+        // Watching the parent (not the file directly) survives some
+        // platforms (Linux/inotify) losing the watch when the file is
+        // replaced atomically. It's also `Adapter::rearm`'s (#362)
+        // starting point for the desired watch set — see
+        // `desired_watches`, which falls back to the nearest existing
+        // ancestor when this doesn't exist yet (a brand-new worktree,
+        // before Claude has written anything here at all).
         let parent = path
             .parent()
             .map(Path::to_path_buf)
@@ -519,24 +1070,16 @@ impl ClaudeEventsManager {
 
         // Subagent transcripts live in a sibling `<session-id>/subagents`
         // dir next to the main `.jsonl` (`skein_harness::claude::
-        // subagents_dir`, #209). Create it eagerly, mirroring the
-        // `parent` precedent just above — a session that hasn't
-        // delegated yet still gets a watchable directory the moment it
-        // does. This is strictly additive telemetry: any failure here
-        // degrades to no subagent tracking for this attach rather than
-        // failing `attach` itself — a working harness must never be
-        // held hostage by it.
-        let mut subagents_dir_opt = skein_harness::claude::subagents_dir(&path);
-        if let Some(dir) = &subagents_dir_opt
-            && let Err(e) = fs::create_dir_all(dir)
-        {
-            tracing::warn!(
-                dir = %dir.display(),
-                error = %e,
-                "claude_events: could not create subagents dir; subagent telemetry disabled for this attach"
-            );
-            subagents_dir_opt = None;
-        }
+        // subagents_dir`, #209). #362: this is NOT created here any
+        // more — it's Claude's directory to create, the moment (if
+        // ever) a session actually delegates, and pre-creating it ahead
+        // of that was itself part of #362's bug: a watch armed on a
+        // directory Skein invented, before anything could ever be
+        // written into it. `subagents_dir_opt` is just the computed
+        // path; whether it currently exists is checked fresh every time
+        // `desired_watches` runs — at attach below, and on every later
+        // supervisor pass (`Adapter::rearm`).
+        let subagents_dir_opt = skein_harness::claude::subagents_dir(&path);
 
         // Seed initial subagent state from disk *before* arming the
         // watcher — same reasoning as the history probe above: the
@@ -549,6 +1092,17 @@ impl ClaudeEventsManager {
         // themselves are held back to `initial_subagent_starts` and
         // emitted only after the watcher is armed, for the same
         // no-lost-window reason `initial_event` is below.
+        //
+        // Accepted gap: a subagent that started AND finished entirely
+        // within the gap this attach is closing never gets a
+        // `SubagentStart` *or* a `subagent_end` action row — it's
+        // already `finished` by the time this runs, so it's seeded
+        // silently, same as the identical gap on a plain Skein restart
+        // (a PTY, and everything running in it, dies with the process).
+        // #410 makes this reachable a second way: a dead-tail re-attach
+        // runs this exact same seeding path, so a subagent that both
+        // started and finished during the dead window is missed the
+        // same way, even though the harness itself never restarted.
         let mut initial_subagents: HashMap<String, SubagentTail> = HashMap::new();
         let mut initial_subagent_starts: Vec<ClaudeEvent> = Vec::new();
         if let Some(dir) = &subagents_dir_opt
@@ -606,7 +1160,7 @@ impl ClaudeEventsManager {
 
         let attach_info_path = path.clone();
         let state = Arc::new(Mutex::new(TailState {
-            harness_id: harness_id.clone(),
+            harness_id: harness_id.to_string(),
             path,
             last_pos,
             partial: String::new(),
@@ -625,21 +1179,9 @@ impl ClaudeEventsManager {
             utf8_stall_warned: false,
         }));
         let cb_state = Arc::clone(&state);
-        let on_event = Arc::new(on_event);
+        let on_event: Arc<dyn Fn(ClaudeEvent) + Send + Sync> = Arc::new(on_event);
         let cb_on_event = Arc::clone(&on_event);
-        let cb_harness_id = harness_id.clone();
-        // Create the parent dir if it doesn't exist yet. Claude
-        // creates project dirs lazily on first spawn for that cwd;
-        // if Skein attaches before Claude has written anything, the
-        // dir may not be there yet. notify refuses to watch a
-        // missing path, so create it ourselves (it's harmless if
-        // Claude does the same later).
-        if !parent.exists() {
-            fs::create_dir_all(&parent).map_err(ClaudeEventsError::from_err)?;
-        }
-        // notify needs a reference. The PathBuf is dropped at the
-        // end of this scope; the watcher captures the path internally.
-        let parent_ref: &Path = &parent;
+        let cb_harness_id = harness_id.to_string();
 
         let mut debouncer = new_debouncer(
             Duration::from_millis(DEBOUNCE_MS),
@@ -677,27 +1219,31 @@ impl ClaudeEventsManager {
             },
         )
         .map_err(ClaudeEventsError::from_err)?;
-        debouncer
-            .watcher()
-            .watch(parent_ref, RecursiveMode::NonRecursive)
-            .map_err(ClaudeEventsError::from_err)?;
 
-        // Arm the subagents-dir watch on the same debouncer — notify
-        // supports several watched paths on one watcher, and the same
-        // `tick` closure above fires for either. Same additive-only
-        // rule as directory creation above: a failure here disables
-        // subagent tailing for this attach (clearing the state's
-        // `subagents_dir`) rather than failing `attach`.
-        if let Some(dir) = &subagents_dir_opt
-            && let Err(e) = debouncer.watcher().watch(dir, RecursiveMode::NonRecursive)
-        {
-            tracing::warn!(
-                dir = %dir.display(),
-                error = %e,
-                "claude_events: could not watch subagents dir; subagent telemetry disabled for this attach"
-            );
-            state.lock().subagents_dir = None;
-            subagents_dir_opt = None;
+        // Arm the initial watch set (#362): `desired_watches` picks the
+        // parent if it exists or its nearest existing ancestor if it
+        // doesn't yet, plus the subagents dir when that already exists.
+        // Neither is created here — see the doc comments above on
+        // `parent`'s derivation and `subagents_dir_opt`. A watch that
+        // fails to arm is warned and simply left out of `armed`; unlike
+        // the old unconditional `?` on the main-parent watch, that must
+        // NOT fail `attach` any more — the periodic supervisor
+        // (`Adapter::rearm`) will retry it on the next pass, the same
+        // path a directory that vanishes mid-session takes.
+        let initial_desired = desired_watches(&parent, subagents_dir_opt.as_deref());
+        let mut armed: Vec<(PathBuf, DirId)> = Vec::with_capacity(initial_desired.len());
+        for (dir, id) in &initial_desired {
+            match debouncer.watcher().watch(dir, RecursiveMode::NonRecursive) {
+                Ok(()) => armed.push((dir.clone(), *id)),
+                Err(e) => {
+                    tracing::warn!(
+                        harness_id = %harness_id,
+                        path = %dir.display(),
+                        error = %e,
+                        "claude_events: could not arm watch at attach; the periodic supervisor will retry"
+                    );
+                }
+            }
         }
 
         // Emit the synthetic initial event from the history probe
@@ -710,13 +1256,13 @@ impl ClaudeEventsManager {
         if let Some(event) = initial_event {
             on_event(event);
         }
-        // Same reasoning, for the subagents discovered above: only
-        // emit if the watch actually armed (otherwise `subagents_dir`
-        // was cleared and disk state is untracked from here on).
-        if subagents_dir_opt.is_some() {
-            for event in initial_subagent_starts {
-                on_event(event);
-            }
+        // Same reasoning, for the subagents discovered above: emit
+        // unconditionally — `initial_subagent_starts` is only ever
+        // non-empty when `subagents_dir_opt` was `Some` *and* that dir
+        // already existed and was readable (see the seeding loop
+        // above), so there's nothing to gate here any more.
+        for event in initial_subagent_starts {
+            on_event(event);
         }
 
         // One immediate tick to catch anything written between the
@@ -725,44 +1271,490 @@ impl ClaudeEventsManager {
         // bytes — cheap no-op.
         tick(&state, on_event.as_ref());
 
-        // The `state` Arc isn't held in `Adapter` — the closure
-        // inside the debouncer holds one clone, and that's enough to
-        // keep it alive for the watcher's lifetime. Dropping the
-        // debouncer drops the closure drops the Arc.
-        drop(state);
         let subagents_armed = subagents_dir_opt.is_some();
-        let log_harness_id = harness_id.clone();
-        let replaced = self
-            .inner
-            .lock()
-            .insert(
-                harness_id,
-                Adapter {
-                    _debouncer: debouncer,
-                },
-            )
-            .is_some();
-        if replaced {
-            tracing::info!(
-                harness_id = %log_harness_id,
-                "claude_events: attach replaced an existing adapter for this harness"
-            );
-        }
-        Ok(AttachInfo {
-            path: attach_info_path,
-            already_existed: attached,
-            subagents_armed,
-        })
+        let adapter = Adapter {
+            debouncer,
+            // The closure captured in the debouncer above holds its own
+            // clone of each (`cb_state`/`cb_on_event`); these are a
+            // third, used by `Adapter::rearm` and its catch-up tick
+            // (#362), which run outside that closure entirely.
+            state: Arc::clone(&state),
+            on_event: Arc::clone(&on_event),
+            armed,
+            failing_watches: HashSet::new(),
+            reattach_recipe,
+            stall: None,
+            // Overwritten by whichever install step (`attach_at_impl` or
+            // `reattach_at_impl`) actually inserts this adapter — see
+            // `Adapter::generation`'s doc comment.
+            generation: 0,
+        };
+        drop(state);
+        Ok((
+            adapter,
+            AttachInfo {
+                path: attach_info_path,
+                already_existed: attached,
+                subagents_armed,
+            },
+        ))
     }
+}
 
+/// Install a freshly built adapter unconditionally (#410 review fix) —
+/// the normal caller-driven path (`ClaudeEventsManager::attach`/
+/// `attach_at`): a real `attach()` call always wins, replacing whatever
+/// was there, exactly like before generations existed. Builds the
+/// adapter (real I/O, `notify` calls) OUTSIDE the registry lock; only
+/// the assign-generation-and-insert step is under it.
+fn attach_at_impl<F>(
+    inner: &Arc<Mutex<Registry>>,
+    harness_id: &str,
+    path: PathBuf,
+    on_event: F,
+    actions: Option<ActionPersistence>,
+) -> Result<AttachInfo, ClaudeEventsError>
+where
+    F: Fn(ClaudeEvent) + Send + Sync + 'static,
+{
+    let (mut adapter, info) = build_adapter(harness_id, path, on_event, actions)?;
+    let mut reg = inner.lock();
+    reg.next_generation += 1;
+    adapter.generation = reg.next_generation;
+    let replaced = reg
+        .adapters
+        .insert(harness_id.to_string(), adapter)
+        .is_some();
+    drop(reg);
+    if replaced {
+        tracing::info!(
+            harness_id,
+            "claude_events: attach replaced an existing adapter for this harness"
+        );
+    }
+    Ok(info)
+}
+
+/// Outcome of `reattach_at_impl`'s compare-and-swap install (#410
+/// review fix).
+enum ReattachInstall {
+    /// The adapter this reattach built was installed. No payload —
+    /// neither caller (`perform_reattach`, `ClaudeEventsManager::
+    /// reattach`) needs anything from the `AttachInfo` a successful
+    /// reattach produces, only the fact that it succeeded.
+    Installed,
+    /// The CAS failed: `harness_id`'s current generation no longer
+    /// matched the one this reattach was decided against, because a
+    /// `detach` or a fresh `attach`/another reattach landed first. The
+    /// freshly built (unused) adapter — and the `notify` watches it
+    /// armed — are simply dropped. `still_present` says which: `false`
+    /// means detached (the harness is gone), `true` means replaced by
+    /// something newer.
+    Abandoned { still_present: bool },
+}
+
+/// Install a re-attached adapter under a compare-and-swap on
+/// `Adapter::generation` (#410 review fix — the fix for a real race:
+/// `supervise_map` collects dead-tail jobs, and `ClaudeEventsManager::
+/// reattach` builds its replacement, entirely outside the registry
+/// lock; either a `detach` or a fresh caller-driven `attach()` can land
+/// on the same harness id before the replacement is ready). Only
+/// installs when `harness_id`'s adapter STILL has `expected_generation`
+/// — otherwise something else already resolved this harness id and the
+/// reattach is simply abandoned, never resurrecting a closed harness or
+/// clobbering a newer adapter. Builds the adapter OUTSIDE the lock,
+/// same as `attach_at_impl`; only the compare-and-maybe-insert is under
+/// it.
+fn reattach_at_impl<F>(
+    inner: &Arc<Mutex<Registry>>,
+    harness_id: &str,
+    expected_generation: u64,
+    path: PathBuf,
+    on_event: F,
+    actions: Option<ActionPersistence>,
+) -> Result<ReattachInstall, ClaudeEventsError>
+where
+    F: Fn(ClaudeEvent) + Send + Sync + 'static,
+{
+    let (mut adapter, _info) = build_adapter(harness_id, path, on_event, actions)?;
+    let mut reg = inner.lock();
+    let current_generation = reg.adapters.get(harness_id).map(|a| a.generation);
+    if current_generation != Some(expected_generation) {
+        let still_present = current_generation.is_some();
+        drop(reg);
+        return Ok(ReattachInstall::Abandoned { still_present });
+    }
+    reg.next_generation += 1;
+    adapter.generation = reg.next_generation;
+    reg.adapters.insert(harness_id.to_string(), adapter);
+    drop(reg);
+    Ok(ReattachInstall::Installed)
+}
+
+/// Outcome of a manual `ClaudeEventsManager::reattach` call (#410) —
+/// mirrors, string for string, `ReattachOutcome` in the frontend's
+/// `harnessEvents.ts` (`reattachClaudeTelemetry`'s return type). Plain
+/// unit variants with no `#[serde(tag = ..)]`, so this serializes as a
+/// bare JSON string (`"reattached"`, not `{"kind":"reattached"}`) —
+/// exactly what `invoke<ReattachOutcome>` on the frontend expects. A
+/// `Result::Err` here collapses to a plain `String` at the
+/// `claude_events_reattach` Tauri command boundary, which the frontend
+/// treats as a rejection — the fourth outcome, not a variant of this
+/// enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReattachOutcome {
+    /// The tail was dead and is live again — the phase settles on its
+    /// own from the events that follow, same as a fresh attach.
+    Reattached,
+    /// Nothing to do; already logged on the Rust side.
+    Healthy,
+    /// No adapter at all for this harness id (attach never ran, or it
+    /// failed). Only a restart re-attaches from scratch in that case —
+    /// there's nothing here to re-arm or re-attach.
+    NotAttached,
+}
+
+impl ClaudeEventsManager {
     /// Stop the adapter for `harness_id`. No-op if unknown. Returns
     /// whether an adapter was actually removed, so the caller (and the
     /// `#362` unit test below) can tell a real detach from a stale one
-    /// firing against an id that already went away.
+    /// firing against an id that already went away. Also drops any
+    /// pending automatic-re-attach backoff for this id (#410) — a
+    /// harness that's gone has nothing left to back off from, and
+    /// reusing a harness id later (unlikely, but IDs are caller-chosen)
+    /// must not inherit a stale cooldown.
     pub fn detach(&self, harness_id: &str) -> bool {
-        let removed = self.inner.lock().remove(harness_id).is_some();
+        let mut reg = self.inner.lock();
+        let removed = reg.adapters.remove(harness_id).is_some();
+        reg.last_auto_reattach.remove(harness_id);
         tracing::info!(harness_id, removed, "claude_events: detach");
         removed
+    }
+
+    /// Manual counterpart to the automatic dead-tail path in
+    /// `supervise_map` (#410) — the `claude_events_reattach` Tauri
+    /// command's entry point. Unlike the automatic path, this never
+    /// backs off: the caller explicitly asked right now.
+    ///
+    /// First re-arms — in case the fix is as cheap as a directory
+    /// identity change `rearm` already knows how to handle — and, same
+    /// as `supervise_map`'s own phase 1, only runs a catch-up `tick`
+    /// when `rearm` reports it actually changed something. That
+    /// asymmetry matters: the failure this whole issue is about is a
+    /// watch that died with NO identity change at all, so `rearm`
+    /// returns `false` and `last_pos` is left exactly as stale as it
+    /// really is — running an unconditional tick here would silently
+    /// catch it up via a plain synchronous read (which doesn't depend
+    /// on the watch at all) and this call would report `Healthy` for a
+    /// harness whose watch is still just as dead going forward.
+    ///
+    /// Neither `reattach_at_impl` nor its CAS check ever runs while
+    /// `inner` is locked here (it locks `inner` itself, twice: once to
+    /// read the generation to compare against, once to install) —
+    /// everything needed is cloned out first. That CAS (#410 review
+    /// fix) is why this can return `Healthy` even for a tail this
+    /// function itself found dead: if a fresh `attach()` (or another
+    /// reattach) replaced the adapter while this one was busy building
+    /// its own replacement, the fresh adapter wins and this one's
+    /// result is simply discarded — silently correct rather than
+    /// clobbering something newer.
+    pub fn reattach(&self, harness_id: &str) -> Result<ReattachOutcome, ClaudeEventsError> {
+        let (generation, rearmed, path, state, on_event, recipe) = {
+            let mut reg = self.inner.lock();
+            let Some(adapter) = reg.adapters.get_mut(harness_id) else {
+                tracing::info!(
+                    harness_id,
+                    "claude_events: manual reattach requested; not attached"
+                );
+                return Ok(ReattachOutcome::NotAttached);
+            };
+            let rearmed = adapter.rearm(harness_id);
+            let path = adapter.state.lock().path.clone();
+            (
+                adapter.generation,
+                rearmed,
+                path,
+                Arc::clone(&adapter.state),
+                Arc::clone(&adapter.on_event),
+                adapter.reattach_recipe.clone(),
+            )
+        };
+        // See the doc comment above: only tick when `rearm` says it
+        // changed something, so a watch that died silently (no identity
+        // change, `rearm` reports `false`) leaves `last_pos` exactly as
+        // stale as it really is for the check below.
+        if rearmed {
+            tick(&state, on_event.as_ref());
+        }
+
+        let last_pos = state.lock().last_pos;
+        // A missing file is healthy, not dead — mirrors
+        // `Adapter::check_dead_tail`'s same rule.
+        let file_len = fs::metadata(&path).ok().map(|m| m.len());
+        if file_len.is_none_or(|len| len <= last_pos) {
+            tracing::info!(
+                harness_id,
+                "claude_events: manual reattach requested; tail is healthy, nothing to do"
+            );
+            return Ok(ReattachOutcome::Healthy);
+        }
+        let file_len = file_len.unwrap_or(last_pos);
+
+        tracing::warn!(
+            harness_id,
+            reason = "manual",
+            path = %path.display(),
+            last_pos,
+            file_len,
+            "claude_events: re-attaching a dead tail"
+        );
+        let cb = on_event;
+        let forward = move |e: ClaudeEvent| (cb.as_ref())(e);
+        let persistence = recipe.as_ref().map(ReattachRecipe::fresh_persistence);
+        match reattach_at_impl(
+            &self.inner,
+            harness_id,
+            generation,
+            path,
+            forward,
+            persistence,
+        )? {
+            ReattachInstall::Installed => Ok(ReattachOutcome::Reattached),
+            ReattachInstall::Abandoned {
+                still_present: false,
+            } => {
+                tracing::info!(
+                    harness_id,
+                    "claude_events: manual reattach abandoned: harness detached meanwhile"
+                );
+                Ok(ReattachOutcome::NotAttached)
+            }
+            ReattachInstall::Abandoned {
+                still_present: true,
+            } => {
+                tracing::info!(
+                    harness_id,
+                    "claude_events: manual reattach abandoned: a newer attach won the race"
+                );
+                Ok(ReattachOutcome::Healthy)
+            }
+        }
+    }
+}
+
+/// One adapter's `(state, on_event)` pair, carried out of the registry
+/// lock so `supervise_map` can run its catch-up `tick` after releasing
+/// it. Named purely so the `Vec` below doesn't trip
+/// `clippy::type_complexity`.
+type CatchUpTick = (
+    Arc<Mutex<TailState>>,
+    Arc<dyn Fn(ClaudeEvent) + Send + Sync>,
+);
+
+/// Everything `perform_reattach` needs for one harness, carried out of
+/// the registry lock the same way `CatchUpTick` is (#410) —
+/// `reattach_at_impl` must never run while `inner` is locked, since it
+/// locks `inner` itself (twice) to check-and-install the replacement
+/// adapter.
+struct ReattachJob {
+    harness_id: String,
+    /// The generation `Adapter::check_dead_tail` observed this harness
+    /// at, captured at collection time (#410 review fix) — the CAS
+    /// `reattach_at_impl` runs before installing the replacement. A
+    /// `detach` or a fresh `attach()` landing between collection and
+    /// install bumps or removes this, so the stale job is abandoned
+    /// instead of resurrecting or clobbering something.
+    generation: u64,
+    path: PathBuf,
+    on_event: Arc<dyn Fn(ClaudeEvent) + Send + Sync>,
+    recipe: Option<ReattachRecipe>,
+    /// Short, log-friendly cause: `"transcript grew while the tail read
+    /// nothing"` for the automatic dead-tail path, `"manual"` for
+    /// `ClaudeEventsManager::reattach`.
+    reason: &'static str,
+    last_pos: u64,
+    file_len: u64,
+    /// `None` for a manual reattach — there's no stall duration to
+    /// report when the caller asked right now, unconditionally.
+    stalled_for_ms: Option<u128>,
+}
+
+/// Dead-tail detection: phase 2 of `supervise_map` (#410), split into
+/// its own function so a test can run it and `perform_reattach` as two
+/// separate steps with an arbitrary interleaving in between — exactly
+/// the race `reattach_at_impl`'s generation CAS exists to survive,
+/// exercised deterministically instead of needing a real thread race.
+/// See `ClaudeEventsManager::collect_dead_tail_jobs_for_test` /
+/// `perform_reattach_jobs_for_test`.
+///
+/// For every adapter *still* stalled — `rearm` (phase 1, run by the
+/// caller first) couldn't have fixed it, since nothing about its
+/// watched directories' identities changed — checks the
+/// automatic-re-attach backoff (`Registry::last_auto_reattach`) and
+/// collects a `ReattachJob` for anything both dead and off backoff.
+/// Updates `last_auto_reattach` for each job collected, under the same
+/// lock acquisition — a job is "spent" against the backoff the moment
+/// it's decided, not when it's (maybe, much later) actually performed.
+fn collect_dead_tail_jobs(inner: &Arc<Mutex<Registry>>) -> Vec<ReattachJob> {
+    let mut to_reattach: Vec<ReattachJob> = Vec::new();
+    let mut reg = inner.lock();
+    let now = Instant::now();
+    // Disjoint field borrows — `adapters` and `last_auto_reattach` need
+    // to be mutated independently inside the same loop, which a single
+    // `&mut reg.adapters` (borrowing all of `reg`) can't express.
+    let Registry {
+        adapters,
+        last_auto_reattach,
+        ..
+    } = &mut *reg;
+    for (harness_id, adapter) in adapters {
+        let Some(dead) = adapter.check_dead_tail(now) else {
+            continue;
+        };
+        if let Some(last) = last_auto_reattach.get(harness_id)
+            && now.saturating_duration_since(*last) < REATTACH_BACKOFF
+        {
+            continue;
+        }
+        last_auto_reattach.insert(harness_id.clone(), now);
+        to_reattach.push(ReattachJob {
+            harness_id: harness_id.clone(),
+            generation: adapter.generation,
+            path: dead.path,
+            on_event: Arc::clone(&adapter.on_event),
+            recipe: adapter.reattach_recipe.clone(),
+            reason: "transcript grew while the tail read nothing",
+            last_pos: dead.last_pos,
+            file_len: dead.file_len,
+            stalled_for_ms: Some(dead.stalled_for_ms),
+        });
+    }
+    to_reattach
+}
+
+/// The pass both `ClaudeEventsManager::supervise_once` and the
+/// background thread spawned by `new` run (#362, extended by #410):
+///
+/// 1. Re-arm every adapter's watch set, then run one catch-up `tick`
+///    for each adapter that actually changed — this can all by itself
+///    resolve a merely-misarmed watch (a directory whose identity
+///    changed), which is why dead-tail detection runs strictly after
+///    it: `last_pos` needs to reflect anything that catch-up tick
+///    already recovered on its own.
+/// 2. Dead-tail detection (#410): `collect_dead_tail_jobs`, then
+///    `perform_reattach` each job.
+///
+/// All three phases collect their cross-adapter work into a `Vec` and
+/// run it after releasing `inner` — `tick` and `reattach_at_impl` both
+/// do real I/O and must never run while every other `attach`/`detach`
+/// call is blocked on the registry lock. Returns the number of
+/// adapters re-armed (not reattached), purely for tests and the
+/// supervisor's own bookkeeping.
+fn supervise_map(inner: &Arc<Mutex<Registry>>) -> usize {
+    let mut to_tick: Vec<CatchUpTick> = Vec::new();
+    let mut rearmed = 0usize;
+    {
+        let mut reg = inner.lock();
+        for (harness_id, adapter) in &mut reg.adapters {
+            if adapter.rearm(harness_id) {
+                rearmed += 1;
+                to_tick.push((Arc::clone(&adapter.state), Arc::clone(&adapter.on_event)));
+            }
+        }
+    }
+    for (state, on_event) in to_tick {
+        tick(&state, on_event.as_ref());
+    }
+
+    for job in collect_dead_tail_jobs(inner) {
+        perform_reattach(inner, job);
+    }
+
+    rearmed
+}
+
+/// Re-attaches one dead tail (#410), unattended — the automatic path
+/// from `supervise_map`. Warns once with the diagnostics `ReattachJob`
+/// carries, then calls `reattach_at_impl`'s generation-CAS install
+/// (#410 review fix): a failure there (a real attach error) is warned
+/// and the existing (dead) adapter is left in place; an `Abandoned`
+/// result (a `detach` or a fresh `attach()` raced this reattach) is
+/// expected and merely noted at info — there's no caller here to hand
+/// either outcome to, that's the manual
+/// `ClaudeEventsManager::reattach`'s job.
+fn perform_reattach(inner: &Arc<Mutex<Registry>>, job: ReattachJob) {
+    tracing::warn!(
+        harness_id = %job.harness_id,
+        reason = job.reason,
+        path = %job.path.display(),
+        last_pos = job.last_pos,
+        file_len = job.file_len,
+        stalled_for_ms = job.stalled_for_ms,
+        "claude_events: re-attaching a dead tail"
+    );
+    let cb = job.on_event;
+    let forward = move |e: ClaudeEvent| (cb.as_ref())(e);
+    let persistence = job.recipe.as_ref().map(ReattachRecipe::fresh_persistence);
+    match reattach_at_impl(
+        inner,
+        &job.harness_id,
+        job.generation,
+        job.path,
+        forward,
+        persistence,
+    ) {
+        Ok(ReattachInstall::Installed) => {}
+        Ok(ReattachInstall::Abandoned { .. }) => {
+            tracing::info!(
+                harness_id = %job.harness_id,
+                "claude_events: re-attach abandoned: harness detached or re-attached meanwhile"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                harness_id = %job.harness_id,
+                error = %e,
+                "claude_events: automatic re-attach failed; keeping the existing (dead) adapter"
+            );
+        }
+    }
+}
+
+/// Background thread started by `ClaudeEventsManager::new` (production
+/// only — `new_for_test` spawns none, see its doc comment). Loops
+/// forever at `SUPERVISE_INTERVAL`, upgrading `inner` fresh each pass so
+/// the thread exits cleanly the moment the manager itself is gone
+/// rather than being the reason it can't be. A panic inside one pass
+/// is caught and logged, mirroring the tick callback's own
+/// `catch_unwind` (#362) — one bad pass must not silently end
+/// supervision for every other attached harness for the rest of the
+/// process's life.
+fn spawn_supervisor_thread(inner: Weak<Mutex<Registry>>) {
+    let spawned = thread::Builder::new()
+        .name("claude-events-supervisor".to_string())
+        .spawn(move || {
+            loop {
+                thread::sleep(SUPERVISE_INTERVAL);
+                let Some(inner) = inner.upgrade() else {
+                    tracing::info!("claude_events: supervisor exiting; manager is gone");
+                    break;
+                };
+                if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    supervise_map(&inner);
+                })) {
+                    tracing::error!(
+                        panic = %panic_message(&panic),
+                        "claude_events: supervisor pass panicked; retrying next interval"
+                    );
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::error!(
+            error = %e,
+            "claude_events: failed to spawn the watch supervisor thread; #362 re-arming is disabled for this run"
+        );
     }
 }
 
@@ -1097,6 +2089,16 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
                 );
             }
             e
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // #362: normal now that `attach_at` no longer pre-creates
+            // this directory — most sessions never delegate at all, so
+            // this is the common case, not a problem to log. Leaves
+            // `subagents_dir_read_failure_logged` untouched either way:
+            // a prior *real* failure (permissions, say) still gets its
+            // "readable again" debug line once a later read actually
+            // succeeds, and this NotFound tick doesn't count as that.
+            return;
         }
         Err(e) => {
             if !s.subagents_dir_read_failure_logged {
@@ -1789,7 +2791,6 @@ mod tests {
     use std::io::Write;
     use std::sync::Barrier;
     use std::sync::mpsc;
-    use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -1820,7 +2821,7 @@ mod tests {
         let path = dir.path().join("session.jsonl");
         manager
             .attach_at(
-                "harness-1".into(),
+                "harness-1",
                 path.clone(),
                 move |event| {
                     tx.send(event).unwrap();
@@ -2083,7 +3084,7 @@ mod tests {
         let manager = test_manager();
         manager
             .attach_at(
-                "h1".into(),
+                "h1",
                 path.clone(),
                 move |e| {
                     tx.send(e).unwrap();
@@ -2189,7 +3190,7 @@ mod tests {
         let manager = test_manager();
         manager
             .attach_at(
-                "h1".into(),
+                "h1",
                 path.clone(),
                 move |e| {
                     tx.send(e).unwrap();
@@ -2256,7 +3257,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let manager = test_manager();
         manager
-            .attach_at("h1".into(), path, move |e| tx.send(e).unwrap(), None)
+            .attach_at("h1", path, move |e| tx.send(e).unwrap(), None)
             .unwrap();
 
         let events = drain_brief(&rx);
@@ -2289,7 +3290,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let manager = test_manager();
         manager
-            .attach_at("h1".into(), path, move |e| tx.send(e).unwrap(), None)
+            .attach_at("h1", path, move |e| tx.send(e).unwrap(), None)
             .unwrap();
 
         let events = drain_brief(&rx);
@@ -2451,7 +3452,7 @@ mod tests {
             app: None,
         });
         manager
-            .attach_at(harness_id.into(), jsonl, |_event| {}, persistence)
+            .attach_at(harness_id, jsonl, |_event| {}, persistence)
             .unwrap();
         manager
     }
@@ -2732,7 +3733,7 @@ mod tests {
                         });
                         barrier.wait();
                         manager.attach_at(
-                            harness_id,
+                            &harness_id,
                             path,
                             move |e| {
                                 let _ = tx.send(e);
@@ -2762,6 +3763,15 @@ mod tests {
                 scope.spawn(move || {
                     barrier.wait();
                     if !precreate_file {
+                        // #362: `attach_at` no longer pre-creates the
+                        // project dir (that was Skein inventing a
+                        // directory Claude might never write to) — so
+                        // the write side of this fixture has to do what
+                        // Claude itself does, create its own project
+                        // dir lazily on first write, or this `File::
+                        // create` fails outright when `precreate_parent`
+                        // is also false.
+                        fs::create_dir_all(path.parent().unwrap()).unwrap();
                         let mut f = fs::File::create(&path).unwrap();
                         writeln!(
                             f,
@@ -2807,10 +3817,19 @@ mod tests {
         });
 
         // Poll every harness's receiver in round-robin against ONE
-        // shared 5 s deadline.
+        // shared 5 s deadline. Also drives `supervise_once` every
+        // iteration (#362): with fresh parent dirs, the watch armed at
+        // attach time is the nearest existing ancestor, not the real
+        // project dir — production's background thread is what
+        // notices the real dir appear and re-arms onto it (see
+        // `Adapter::rearm`); `new_for_test` spawns no such thread, so
+        // this loop stands in for it, at a much tighter interval than
+        // `SUPERVISE_INTERVAL` so the fixture doesn't need anywhere
+        // near this test's 5 s budget to converge.
         let mut satisfied = vec![false; N];
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::time::Instant::now() < deadline && satisfied.iter().any(|s| !s) {
+            manager.supervise_once();
             for (i, h) in harnesses.iter().enumerate() {
                 if satisfied[i] {
                     continue;
@@ -2899,7 +3918,7 @@ mod tests {
         let manager = test_manager();
         manager
             .attach_at(
-                "harness-1".into(),
+                "harness-1",
                 path.clone(),
                 move |event| {
                     tx.send(event).unwrap();
@@ -2913,13 +3932,19 @@ mod tests {
     #[test]
     fn subagent_start_emitted_with_meta_from_sidecar() {
         let dir = TempDir::new().unwrap();
-        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
         // Drain the main-transcript bootstrap event before we care
         // about subagent ones.
         drain(&rx);
 
         let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
         fs::create_dir_all(&sub_dir).unwrap();
+        // #362: the subagents dir didn't exist at attach time, so
+        // nothing is watching it yet — `supervise_once` stands in for
+        // the background thread the production manager runs every
+        // `SUPERVISE_INTERVAL`, arming the watch now that the dir is
+        // here.
+        mgr.supervise_once();
         fs::write(
             sub_dir.join("agent-a1.meta.json"),
             r#"{"agentType":"explore","description":"Map the tailer"}"#,
@@ -2950,11 +3975,14 @@ mod tests {
     #[test]
     fn subagent_start_emitted_without_sidecar() {
         let dir = TempDir::new().unwrap();
-        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
         drain(&rx);
 
         let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
         fs::create_dir_all(&sub_dir).unwrap();
+        // #362: arm the watch on the just-created dir — see the sibling
+        // test above for why this is needed.
+        mgr.supervise_once();
         // No .meta.json sidecar written for this one.
         let mut f = fs::File::create(sub_dir.join("agent-a2.jsonl")).unwrap();
         writeln!(
@@ -2978,11 +4006,13 @@ mod tests {
     #[test]
     fn subagent_end_emitted_once_not_per_tick() {
         let dir = TempDir::new().unwrap();
-        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
         drain(&rx);
 
         let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
         fs::create_dir_all(&sub_dir).unwrap();
+        // #362: arm the watch on the just-created dir.
+        mgr.supervise_once();
         let mut f = fs::File::create(sub_dir.join("agent-a3.jsonl")).unwrap();
         writeln!(
             f,
@@ -3031,11 +4061,13 @@ mod tests {
     #[test]
     fn subagent_tail_skip_on_no_growth_does_not_wedge_later_reads() {
         let dir = TempDir::new().unwrap();
-        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
         drain(&rx);
 
         let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
         fs::create_dir_all(&sub_dir).unwrap();
+        // #362: arm the watch on the just-created dir.
+        mgr.supervise_once();
         let sub_path = sub_dir.join("agent-a6.jsonl");
         {
             let mut f = fs::File::create(&sub_path).unwrap();
@@ -3209,11 +4241,13 @@ mod tests {
     #[test]
     fn subagent_tool_result_emitted_for_tool_result_row() {
         let dir = TempDir::new().unwrap();
-        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
         drain(&rx);
 
         let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
         fs::create_dir_all(&sub_dir).unwrap();
+        // #362: arm the watch on the just-created dir.
+        mgr.supervise_once();
         let mut f = fs::File::create(sub_dir.join("agent-a4.jsonl")).unwrap();
         writeln!(
             f,
@@ -3262,7 +4296,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let manager = test_manager();
         manager
-            .attach_at("h1".into(), path, move |e| tx.send(e).unwrap(), None)
+            .attach_at("h1", path, move |e| tx.send(e).unwrap(), None)
             .unwrap();
 
         let events = drain_brief(&rx);
@@ -3291,11 +4325,13 @@ mod tests {
     #[test]
     fn subagent_line_split_across_two_ticks_is_reassembled() {
         let dir = TempDir::new().unwrap();
-        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
         drain(&rx);
 
         let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
         fs::create_dir_all(&sub_dir).unwrap();
+        // #362: arm the watch on the just-created dir.
+        mgr.supervise_once();
         let sub_path = sub_dir.join("agent-a5.jsonl");
         {
             let mut f = fs::File::create(&sub_path).unwrap();
@@ -3471,11 +4507,16 @@ mod tests {
     #[test]
     fn main_events_keep_flowing_after_sidecars_appear_post_attach() {
         let dir = TempDir::new().unwrap();
-        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
         drain(&rx);
 
         let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
         fs::create_dir_all(&sub_dir).unwrap();
+        // #362: the dir didn't exist at attach, so a supervisor pass is
+        // what notices it and arms the watch — production's background
+        // thread does this on its own timer; `supervise_once` stands in
+        // for it here.
+        mgr.supervise_once();
         fs::write(
             sub_dir.join("agent-s1.meta.json"),
             r#"{"agentType":"explore","description":"Look around"}"#,
@@ -3576,11 +4617,14 @@ mod tests {
         const SUBAGENTS: usize = 5;
 
         let dir = TempDir::new().unwrap();
-        let (_mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
         drain(&rx);
 
         let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
         fs::create_dir_all(&sub_dir).unwrap();
+        // #362: arm the watch on the just-created dir before the churn
+        // threads start writing into it.
+        mgr.supervise_once();
 
         let barrier = Arc::new(Barrier::new(1 + SUBAGENTS));
 
@@ -3688,6 +4732,529 @@ mod tests {
         );
     }
 
+    // ── #362: no eager creation, and re-arming a deleted+recreated
+    //    watched dir ─────────────────────────────────────────────────
+
+    /// A subagents dir that simply doesn't exist yet — the common case
+    /// now that `attach_at` no longer pre-creates it, since most
+    /// sessions never delegate at all — must not trip the one-shot
+    /// "could not read subagents dir" warn guard. That guard is for a
+    /// REAL failure (permissions, say), not "this session hasn't
+    /// delegated"; tripping it here would warn once per harness that
+    /// never even uses subagents.
+    #[test]
+    fn missing_subagents_dir_does_not_trip_the_read_failure_guard() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        fs::write(&path, "").unwrap();
+        // Deliberately never created.
+        let sub_dir = dir.path().join("session").join("subagents");
+        let state = Arc::new(Mutex::new(TailState {
+            harness_id: "h".into(),
+            path,
+            last_pos: 0,
+            partial: String::new(),
+            attached: true,
+            in_assistant_turn: false,
+            actions: None,
+            subagents_dir: Some(sub_dir),
+            subagents: HashMap::new(),
+            subagents_dir_read_failure_logged: false,
+            first_read_logged: false,
+            events_sent: 0,
+            send_errors: 0,
+            last_heartbeat: None,
+            utf8_stall_at: None,
+            utf8_stall_count: 0,
+            utf8_stall_warned: false,
+        }));
+
+        tick(&state, &|_| {});
+        assert!(
+            !state.lock().subagents_dir_read_failure_logged,
+            "a merely-nonexistent subagents dir must not trip the read-failure guard"
+        );
+    }
+
+    /// Windows can briefly refuse to delete or recreate a directory a
+    /// live `ReadDirectoryChangesW` watch still holds a handle open on
+    /// — the delete lands in a "pending delete" state until the handle
+    /// closes. Retries both directions of the #362 repro below rather
+    /// than assume either side succeeds on the first try.
+    fn retry_fs_op(mut op: impl FnMut() -> std::io::Result<()>, what: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match op() {
+                Ok(()) => return,
+                Err(e) if std::time::Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(20));
+                    let _ = e;
+                }
+                Err(e) => panic!("{what} still failing after retrying for 2s: {e}"),
+            }
+        }
+    }
+
+    /// `attach_at` must not create either directory Claude owns — not
+    /// the project dir the transcript lives in, and not the
+    /// `subagents` dir next to it. Once Claude (simulated here)
+    /// creates the project dir and writes the first row, a
+    /// `supervise_once` pass must still find and tail it — nothing
+    /// about not pre-creating the dir should cost a fresh spawn its
+    /// first events.
+    #[test]
+    fn attach_does_not_create_claude_owned_dirs() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path().join("projects").join("proj-x");
+        let path = parent.join("session.jsonl");
+
+        let (tx, rx) = mpsc::channel();
+        let manager = test_manager();
+        manager
+            .attach_at(
+                "h1",
+                path.clone(),
+                move |e| {
+                    let _ = tx.send(e);
+                },
+                None,
+            )
+            .unwrap();
+
+        assert!(
+            !parent.exists(),
+            "attach must not create the project dir Claude owns"
+        );
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        assert!(
+            !sub_dir.exists(),
+            "attach must not create the subagents dir Claude owns"
+        );
+
+        // Claude "arrives": creates its own project dir and writes the
+        // first row.
+        fs::create_dir_all(&parent).unwrap();
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+
+        manager.supervise_once();
+        let events = drain(&rx);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ClaudeEvent::AwaitingPrompt)),
+            "expected AwaitingPrompt once the project dir and file appeared, got {events:?}"
+        );
+    }
+
+    /// The #362 repro itself: a watched directory disappears out from
+    /// under the live watch and comes back — on Windows,
+    /// `ReadDirectoryChangesW` on a deleted directory just stops
+    /// delivering, silently, so nothing short of a supervisor pass
+    /// noticing the identity changed will ever tail it again. Exercises
+    /// both the main transcript's parent and the subagents dir.
+    #[test]
+    fn tail_survives_watched_dir_deleted_and_recreated() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path().join("proj");
+        fs::create_dir_all(&parent).unwrap();
+        let path = parent.join("session.jsonl");
+
+        let (tx, rx) = mpsc::channel();
+        let manager = test_manager();
+        manager
+            .attach_at(
+                "h1",
+                path.clone(),
+                move |e| {
+                    let _ = tx.send(e);
+                },
+                None,
+            )
+            .unwrap();
+
+        retry_fs_op(
+            || fs::remove_dir_all(&parent),
+            "remove_dir_all(main parent)",
+        );
+        retry_fs_op(
+            || fs::create_dir_all(&parent),
+            "create_dir_all(main parent)",
+        );
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+
+        manager.supervise_once();
+        let events = drain(&rx);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ClaudeEvent::AwaitingPrompt)),
+            "tail did not survive the main parent dir being deleted and recreated, got {events:?}"
+        );
+
+        // Same story, one level down: the subagents dir.
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        manager.supervise_once();
+        drain_brief(&rx); // nothing expected yet — just let the arm settle
+
+        retry_fs_op(
+            || fs::remove_dir_all(&sub_dir),
+            "remove_dir_all(subagents dir)",
+        );
+        retry_fs_op(
+            || fs::create_dir_all(&sub_dir),
+            "create_dir_all(subagents dir)",
+        );
+        let mut sf = fs::File::create(sub_dir.join("agent-x.jsonl")).unwrap();
+        writeln!(
+            sf,
+            r#"{{"type":"assistant","isSidechain":true,"agentId":"x","message":{{"stop_reason":"tool_use","content":[]}}}}"#
+        )
+        .unwrap();
+        sf.sync_all().unwrap();
+
+        manager.supervise_once();
+        let events = drain(&rx);
+        assert!(
+            events.iter().any(
+                |e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "x")
+            ),
+            "subagent tail did not survive its dir being deleted and recreated, got {events:?}"
+        );
+    }
+
+    /// A pass over an adapter whose watched directories haven't
+    /// changed at all since the last one must not touch the watcher —
+    /// `rearm`'s fast-path equality check is what keeps a healthy
+    /// harness's supervisor pass a no-op.
+    #[test]
+    fn supervise_once_does_not_rearm_a_healthy_unchanged_adapter() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, _path, rx) = make_adapter(&dir);
+        drain_brief(&rx);
+
+        let rearmed = mgr.supervise_once();
+        assert_eq!(
+            rearmed, 0,
+            "a healthy, unchanged adapter should not be re-armed"
+        );
+    }
+
+    // ── #410: dead-tail detection and reattach ─────────────────────
+
+    /// The headline #410 scenario: a watch dies in a way `rearm` can
+    /// never notice (nothing about the directory's identity changed),
+    /// the transcript keeps growing, and two supervisor passes across
+    /// the `DEAD_TAIL_AFTER` window are what it takes to confirm and
+    /// recover it — the first pass only starts tracking the stall, the
+    /// second (once it's old enough) reattaches. Exactly one
+    /// `AwaitingPrompt` proves the reattach happened exactly once, not
+    /// zero or twice.
+    #[test]
+    fn dead_tail_is_reattached_and_settles_from_transcript() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        mgr.simulate_dead_watch_for_test("harness-1");
+
+        // Grows the file while nothing is watching — the symptom.
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"end_turn","content":[{{"type":"text","text":"done"}}]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+
+        // Pass 1: notices the growth, starts tracking the stall — not
+        // dead yet, and rearm has nothing to fix (the directory itself
+        // never changed identity).
+        let rearmed = mgr.supervise_once();
+        assert_eq!(rearmed, 0, "the directory's identity never changed");
+        assert!(
+            drain_brief(&rx).is_empty(),
+            "must not reattach on the very first observation of growth"
+        );
+
+        mgr.backdate_stall_for_test("harness-1");
+
+        // Pass 2: same last_pos, now old enough — dead, reattach.
+        mgr.supervise_once();
+
+        let events = drain(&rx);
+        let awaiting_count = events
+            .iter()
+            .filter(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+            .count();
+        assert_eq!(
+            awaiting_count, 1,
+            "expected exactly one reattach's worth of AwaitingPrompt, got {events:?}"
+        );
+    }
+
+    /// A tail that keeps up with the file it's watching must never be
+    /// reattached, across several passes — the acceptance criterion is
+    /// literally "no churn" for the common, healthy case.
+    #[test]
+    fn healthy_tail_is_never_reattached() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        for i in 0..3 {
+            let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            writeln!(
+                f,
+                r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"tool_use","content":[{{"type":"tool_use","name":"Tool{i}"}}]}}}}"#
+            )
+            .unwrap();
+            f.sync_all().unwrap();
+            // Let the (still perfectly healthy) live watch catch up
+            // normally before checking — `drain` waits for it.
+            let events = drain(&rx);
+            assert!(
+                !events.is_empty(),
+                "iteration {i}: the live watch should still be delivering normally"
+            );
+            let rearmed = mgr.supervise_once();
+            assert_eq!(rearmed, 0, "iteration {i}: nothing about the watch changed");
+        }
+
+        assert!(
+            drain_brief(&rx).is_empty(),
+            "a healthy tail must never trigger a spurious reattach"
+        );
+    }
+
+    /// At most one AUTOMATIC re-attach per `REATTACH_BACKOFF`: a second
+    /// dead-tail cycle that starts (and gets confirmed) well within the
+    /// backoff window of the first must not reattach again, even though
+    /// `check_dead_tail` genuinely reports it as dead.
+    #[test]
+    fn auto_reattach_respects_backoff() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        mgr.simulate_dead_watch_for_test("harness-1");
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"tool_use","content":[]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+        mgr.supervise_once();
+        mgr.backdate_stall_for_test("harness-1");
+        mgr.supervise_once();
+        let first = drain(&rx);
+        assert!(
+            !first.is_empty(),
+            "expected the first automatic reattach to produce events"
+        );
+
+        // Break the freshly re-attached adapter's watch again right
+        // away and grow the file again — a second dead cycle, well
+        // within `REATTACH_BACKOFF` of the first.
+        mgr.simulate_dead_watch_for_test("harness-1");
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"tool_use","content":[{{"type":"tool_use","name":"X"}}]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+        mgr.supervise_once();
+        mgr.backdate_stall_for_test("harness-1");
+        mgr.supervise_once();
+
+        assert!(
+            drain_brief(&rx).is_empty(),
+            "a second automatic reattach within REATTACH_BACKOFF must not happen"
+        );
+    }
+
+    /// `ClaudeEventsManager::reattach` — the manual, backoff-free path
+    /// behind the `claude_events_reattach` Tauri command: `NotAttached`
+    /// for an id with no adapter at all, `Healthy` when nothing needs
+    /// fixing, `Reattached` when the tail actually was dead — and,
+    /// unlike the automatic path, immediately, with no
+    /// `DEAD_TAIL_AFTER` wait and no backoff.
+    #[test]
+    fn manual_reattach_outcomes() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        assert_eq!(
+            mgr.reattach("no-such-harness").unwrap(),
+            ReattachOutcome::NotAttached
+        );
+
+        assert_eq!(
+            mgr.reattach("harness-1").unwrap(),
+            ReattachOutcome::Healthy,
+            "nothing changed since attach"
+        );
+        assert!(drain_brief(&rx).is_empty());
+
+        mgr.simulate_dead_watch_for_test("harness-1");
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"end_turn","content":[{{"type":"text","text":"done"}}]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+
+        assert_eq!(
+            mgr.reattach("harness-1").unwrap(),
+            ReattachOutcome::Reattached,
+            "manual reattach must recover a dead tail immediately, no backoff or wait"
+        );
+        let events = drain(&rx);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ClaudeEvent::AwaitingPrompt)),
+            "expected the manual reattach to re-read the transcript, got {events:?}"
+        );
+    }
+
+    /// Review fix for #410: `supervise_map` collects `ReattachJob`s
+    /// under the registry lock, then installs each one — separately,
+    /// after releasing it. A `detach` landing in that gap must not let
+    /// the stale reattach resurrect the (now closed) harness. Runs the
+    /// two phases as an explicit test-only seam rather than racing real
+    /// threads — see `collect_dead_tail_jobs_for_test`'s doc comment.
+    #[test]
+    fn reattach_abandoned_when_detached_between_collect_and_perform() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        mgr.simulate_dead_watch_for_test("harness-1");
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+        mgr.supervise_once();
+        mgr.backdate_stall_for_test("harness-1");
+
+        let jobs = mgr.collect_dead_tail_jobs_for_test();
+        assert_eq!(jobs.len(), 1, "expected exactly one dead-tail job");
+
+        // The race: the harness is closed between collection and
+        // install.
+        assert!(mgr.detach("harness-1"));
+
+        mgr.perform_reattach_jobs_for_test(jobs);
+
+        assert_eq!(
+            mgr.reattach("harness-1").unwrap(),
+            ReattachOutcome::NotAttached,
+            "the abandoned reattach must not have resurrected a detached harness"
+        );
+        // The abandoned reattach's own construction (re-reading the
+        // transcript's existing history) may have already emitted a
+        // one-time synthetic event through the OLD channel before the
+        // CAS ever ran — harmless, since nothing installed it. What
+        // must NOT happen is a leaked watcher: drain whatever
+        // construction-time backlog there was, then confirm nothing
+        // MORE arrives after it, proving the abandoned adapter's
+        // debouncer was actually dropped rather than left running.
+        drain_brief(&rx);
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"tool_use","content":[{{"type":"tool_use","name":"X"}}]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+        assert!(
+            drain_brief(&rx).is_empty(),
+            "a detached harness must not keep receiving events from a leaked, abandoned watcher"
+        );
+    }
+
+    /// Same race, the other direction: a fresh caller-driven `attach()`
+    /// (a respawn — a new session on the same harness id) lands between
+    /// collection and install. The fresh adapter must survive; the
+    /// stale reattach's own (already-built) adapter is simply dropped.
+    #[test]
+    fn reattach_abandoned_when_fresh_attach_lands_between_collect_and_perform() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+
+        mgr.simulate_dead_watch_for_test("harness-1");
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+        )
+        .unwrap();
+        f.sync_all().unwrap();
+        mgr.supervise_once();
+        mgr.backdate_stall_for_test("harness-1");
+
+        let jobs = mgr.collect_dead_tail_jobs_for_test();
+        assert_eq!(jobs.len(), 1, "expected exactly one dead-tail job");
+
+        // The race: a fresh attach (respawn) lands on the same harness
+        // id before the stale reattach installs.
+        let (tx2, rx2) = mpsc::channel();
+        let fresh_path = dir.path().join("fresh-session.jsonl");
+        fs::write(&fresh_path, "").unwrap();
+        mgr.attach_at(
+            "harness-1",
+            fresh_path.clone(),
+            move |e| {
+                let _ = tx2.send(e);
+            },
+            None,
+        )
+        .unwrap();
+
+        mgr.perform_reattach_jobs_for_test(jobs);
+
+        // Confirm the FRESH adapter is the one that survived: it must
+        // still be tailing `fresh_path`, not the stale `path`.
+        let mut f2 = fs::OpenOptions::new()
+            .append(true)
+            .open(&fresh_path)
+            .unwrap();
+        writeln!(
+            f2,
+            r#"{{"type":"assistant","sessionId":"y","message":{{"stop_reason":"end_turn","content":[]}}}}"#
+        )
+        .unwrap();
+        f2.sync_all().unwrap();
+        let events = drain(&rx2);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ClaudeEvent::AwaitingPrompt)),
+            "the fresh adapter must have survived the abandoned reattach, got {events:?}"
+        );
+    }
+
     #[test]
     fn should_heartbeat_rate_limits_to_once_per_interval() {
         let now = Instant::now();
@@ -3728,6 +5295,30 @@ mod tests {
         assert!(
             should_warn_utf8_stall(UTF8_STALL_WARN_THRESHOLD + 5, false),
             "must fire past the threshold too, as long as it hasn't warned yet"
+        );
+    }
+
+    /// Review fix for #410: `DirId::of` must never fail for a path that
+    /// exists — a directory whose identity genuinely can't be read (an
+    /// unsupported filesystem, or a metadata race) degrades to an
+    /// "unknown" identity rather than dropping out of the watch set
+    /// entirely. Two "unknown" identities for the SAME still-existing
+    /// path must compare equal — otherwise `rearm`'s `desired == armed`
+    /// fast path would spuriously call every single such directory
+    /// "changed" on every pass, forever.
+    #[test]
+    fn dir_id_of_an_unreadable_path_is_an_unknown_identity_equal_to_itself() {
+        let dir = TempDir::new().unwrap();
+        // A path with no metadata to read — the simplest cross-platform
+        // stand-in for "identity unavailable" (the real-world case is a
+        // filesystem where `created()` errors on an otherwise perfectly
+        // normal, existing directory).
+        let unreadable = dir.path().join("does-not-exist");
+        let a = DirId::of(&unreadable);
+        let b = DirId::of(&unreadable);
+        assert_eq!(
+            a, b,
+            "two 'unknown' identities for the same path must compare equal"
         );
     }
 

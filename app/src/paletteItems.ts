@@ -9,13 +9,15 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { PaletteItem } from "./CommandPalette.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
+import { hasClaudeTranscriptTail } from "./harnessEvents.ts";
 import { hints } from "./shortcuts.ts";
-import type { Room, Theme } from "./types.ts";
+import type { Harness, Room, Theme } from "./types.ts";
 
 export interface BuildPaletteItemsParams {
 	activeRooms: Room[];
 	archivedRooms: Room[];
 	room: Room | undefined;
+	activeHarness: Harness | undefined;
 	activeRoomId: string;
 	theme: Theme;
 	setActiveRoomId: Dispatch<SetStateAction<string>>;
@@ -30,6 +32,9 @@ export interface BuildPaletteItemsParams {
 	closeRoom: (id: string) => Promise<void>;
 	cycleAlertedRoom: (delta: number) => void;
 	cycleAlertedHarness: (delta: number) => void;
+	// #410: "Reattach telemetry" — only offered when `activeHarness`
+	// passes `hasClaudeTranscriptTail` below.
+	onReattachTelemetry: (roomId: string, harnessId: string) => void;
 }
 
 export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[] {
@@ -37,6 +42,7 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 		activeRooms,
 		archivedRooms,
 		room,
+		activeHarness,
 		activeRoomId,
 		theme,
 		setActiveRoomId,
@@ -51,6 +57,7 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 		closeRoom,
 		cycleAlertedRoom,
 		cycleAlertedHarness,
+		onReattachTelemetry,
 	} = params;
 
 	const paletteItems: PaletteItem[] = [];
@@ -126,6 +133,15 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 			hint: hints.closeRoom,
 			invoke: () => closeRoom(activeRoomId),
 		});
+		// #410: only for the active room's active harness, and only when
+		// it's a harness `attachClaudeEvents` would ever attach to.
+		if (activeHarness && hasClaudeTranscriptTail(activeHarness.kind, activeHarness.sessionId)) {
+			paletteItems.push({
+				id: "cmd:reattach-telemetry",
+				label: `Reattach telemetry · ${activeHarness.name}`,
+				invoke: () => onReattachTelemetry(activeRoomId, activeHarness.id),
+			});
+		}
 	}
 	paletteItems.push({
 		id: "cmd:toggle-theme",

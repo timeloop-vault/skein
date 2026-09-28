@@ -16,7 +16,11 @@ import { useEffect } from "react";
 import { listHarnessAgents, unknownAgentMessage, validateAgent } from "./agents.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
-import { attachClaudeEvents, attachOpencodeEvents } from "./harnessEvents.ts";
+import {
+	attachClaudeEvents,
+	attachOpencodeEvents,
+	hasClaudeTranscriptTail,
+} from "./harnessEvents.ts";
 import { harnessInput } from "./harnessInput.ts";
 import { subagents } from "./subagents.ts";
 import { attachTerminalInteractions } from "./terminalInteractions.ts";
@@ -323,7 +327,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				// The translator marks the activity store authoritative
 				// once Rust confirms attach; until then L2a keeps
 				// ticking, so a slow attach is a graceful degradation.
-				if (harnessKind === "claude" && sessionIdRef.current) {
+				if (hasClaudeTranscriptTail(harnessKind, sessionIdRef.current)) {
 					const attachedSessionId = sessionIdRef.current;
 					claudeAdapterRef.current = {
 						detach: attachClaudeEvents(harnessId, roomId, attachedSessionId, cwd),

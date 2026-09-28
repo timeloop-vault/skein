@@ -142,7 +142,11 @@ export const Toast = ({
 				? `${toast.state} · ${toast.delegationNote}`
 				: toast.state === "created"
 					? "opened"
-					: toast.state;
+					: // #410: "info" carries its own full subtitle text — it
+						// doesn't reduce to a phase word.
+						toast.state === "info"
+						? (toast.message ?? "")
+						: toast.state;
 	// #330: the "created" variant reads as a receipt for the room that
 	// asked, not as an activity update on the harness itself — its title
 	// names both rooms rather than just the target.

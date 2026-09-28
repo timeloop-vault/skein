@@ -216,6 +216,9 @@ export interface HarnessColumnProps {
 	// #116: opencode followed its TUI onto a different root session
 	// (per harness, room scope already bound by App).
 	onOpencodeSessionFollowed: (harnessId: string, sessionId: string) => void;
+	// #410: "Reattach telemetry" — room scope already bound by App,
+	// forwarded to `HarnessActionsMenu` for the room's active harness.
+	onReattachTelemetry: (harnessId: string) => void;
 }
 
 export const HarnessColumn = ({
@@ -236,6 +239,7 @@ export const HarnessColumn = ({
 	opencodePorts,
 	onOpencodeSessionCaptured,
 	onOpencodeSessionFollowed,
+	onReattachTelemetry,
 }: HarnessColumnProps) => {
 	const tablistRef = useRef<HTMLDivElement | null>(null);
 
@@ -300,6 +304,7 @@ export const HarnessColumn = ({
 				<HarnessActionsMenu
 					activeHarness={room.harnesses.find((h) => h.id === room.activeHarnessId)}
 					cwd={room.cwd}
+					onReattachTelemetry={onReattachTelemetry}
 				/>
 				<div className="sk-harness-meta">
 					<span>{room.branch ? `${room.repo} · ${room.branch}` : (room.cwd ?? "")}</span>

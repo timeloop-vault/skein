@@ -15,6 +15,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { HARNESS_KINDS } from "./data.tsx";
 import { type ActionsMenuItem, actionsButtonState } from "./harnessActionsMenu.ts";
 import { useHarnessActivity } from "./harnessActivity.ts";
+import { hasClaudeTranscriptTail } from "./harnessEvents.ts";
 import { canSendPrompt, harnessInput, sendPrompt } from "./harnessInput.ts";
 import { actionNudges } from "./nudgeRegistry.ts";
 import { useNudgeOverrides } from "./nudgeStore.ts";
@@ -28,9 +29,15 @@ interface TextDto {
 export const HarnessActionsMenu = ({
 	activeHarness,
 	cwd,
+	onReattachTelemetry,
 }: {
 	activeHarness: Harness | undefined;
 	cwd: string | undefined;
+	// #410: manual recovery for a Claude harness whose Rust-side JSONL
+	// tail died — only ever called for a harness that passes
+	// `hasClaudeTranscriptTail` below, same as the automatic attach in
+	// `useTerminalSpawn.ts`.
+	onReattachTelemetry: (harnessId: string) => void;
 }) => {
 	const [open, setOpen] = useState(false);
 	const [error, setError] = useState<string | undefined>(undefined);
@@ -111,35 +118,64 @@ export const HarnessActionsMenu = ({
 		setOpen(false);
 	};
 
+	// #410: independent of the nudge/skill items above — this doesn't
+	// paste a prompt into the terminal, it calls Rust directly, so it
+	// carries no `canSendPrompt` gate of its own. Shown only for the
+	// harnesses `attachClaudeEvents` would ever attach to.
+	const canReattach = Boolean(
+		activeHarness && hasClaudeTranscriptTail(activeHarness.kind, activeHarness.sessionId),
+	);
+	const onReattach = () => {
+		if (!activeHarness) return;
+		onReattachTelemetry(activeHarness.id);
+		setOpen(false);
+	};
+
 	return (
 		<div className="sk-harness-actions" ref={rootRef}>
 			<button
 				type="button"
 				className="sk-harness-actions-btn"
-				disabled={state.kind === "disabled"}
-				title={state.kind === "disabled" ? state.reason : undefined}
+				disabled={state.kind === "disabled" && !canReattach}
+				title={state.kind === "disabled" && !canReattach ? state.reason : undefined}
 				onClick={() => setOpen((o) => !o)}
 			>
 				Actions ▾
 			</button>
-			{open && state.kind === "menu" && (
+			{open && (state.kind === "menu" || canReattach) && (
 				<div className="sk-harness-actions-menu">
-					{state.items.map((item, i) => (
-						<Fragment key={item.id}>
-							{item.source === "skill" && state.items[i - 1]?.source !== "skill" && (
-								<div className="sk-harness-actions-divider">Repo skills</div>
+					{state.kind === "menu" &&
+						state.items.map((item, i) => (
+							<Fragment key={item.id}>
+								{item.source === "skill" && state.items[i - 1]?.source !== "skill" && (
+									<div className="sk-harness-actions-divider">Repo skills</div>
+								)}
+								<button
+									type="button"
+									className="sk-harness-actions-item"
+									disabled={!item.gate.ok}
+									title={item.gate.ok ? item.title : item.gate.reason}
+									onClick={() => onChoose(item)}
+								>
+									{item.label}
+								</button>
+							</Fragment>
+						))}
+					{canReattach && (
+						<>
+							{state.kind === "menu" && state.items.length > 0 && (
+								<div className="sk-harness-actions-divider">Telemetry</div>
 							)}
 							<button
 								type="button"
 								className="sk-harness-actions-item"
-								disabled={!item.gate.ok}
-								title={item.gate.ok ? item.title : item.gate.reason}
-								onClick={() => onChoose(item)}
+								title="Re-attach the Claude transcript tail if it died"
+								onClick={onReattach}
 							>
-								{item.label}
+								Reattach telemetry
 							</button>
-						</Fragment>
-					))}
+						</>
+					)}
 				</div>
 			)}
 			{error && (
