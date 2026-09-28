@@ -10,7 +10,8 @@ import {
 } from "react";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { AgentLabel } from "./harnessAgent.ts";
-import { mailHold, useMailHold } from "./mailHold.ts";
+import { requestDeliverNow } from "./mailDeliverNow.ts";
+import { useMailHold } from "./mailHold.ts";
 import { useUnreadMail } from "./mailStore.ts";
 import { commitRoomName } from "./roomName.ts";
 import type { Harness, HarnessKind, Room, Status } from "./types.ts";
@@ -446,7 +447,7 @@ export const HarnessTab = ({
 					}
 					onClick={(e) => {
 						e.stopPropagation();
-						mailHold.release(h.id);
+						void requestDeliverNow(h.id);
 					}}
 				>
 					✉ {mail.count} held

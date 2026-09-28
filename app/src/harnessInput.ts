@@ -87,7 +87,7 @@ import { atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
 import type { HarnessActivity } from "./harnessActivity.ts";
 import { launchSettled } from "./launchReady.ts";
 import { readComposer } from "./promptScreen.ts";
-import type { ScreenSnapshot } from "./promptScreen.ts";
+import type { ComposerReading, ScreenSnapshot } from "./promptScreen.ts";
 import { SUBMIT_GAP_MS, SUBMIT_RETRY_SCHEDULE_MS, decideSubmitRetry } from "./submitRetry.ts";
 import type { HarnessKind } from "./types.ts";
 
@@ -309,6 +309,20 @@ export const harnessInput = {
 	/// later health view (#414) and the "nudge refused" log line.
 	draftCause(id: string): { event: string; at: number } | null {
 		return draftCauses.get(id) ?? null;
+	},
+	/// #413: a fresh screen reading right now, with NO settle window —
+	/// for a user click ("deliver now"), where the PTY echo has had time
+	/// to land. null when there is no target, screen or kind, or the read
+	/// throws. Never mutates the draft.
+	readComposerNow(id: string): ComposerReading | null {
+		const target = targets.get(id);
+		if (target?.screen === undefined || target.kind === undefined) return null;
+		try {
+			const snap = target.screen();
+			return snap === null ? null : readComposer(target.kind, snap);
+		} catch {
+			return null;
+		}
 	},
 	/// `id`'s current inferred composer draft — `CLEAN_DRAFT` for a
 	/// harness this store has never seen an event for.
