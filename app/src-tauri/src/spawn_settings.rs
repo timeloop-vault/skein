@@ -106,6 +106,17 @@ pub struct SpawnSettings {
     /// called out separately because unlike a message this spawns a
     /// real, unattended agent process.
     pub allow_agent_room_creation: bool,
+    /// Let a harness archive a room it created, once that room is
+    /// signed off, through the agent API's `close_room` verb (#411).
+    /// Off refuses it outright, with the reason. Default on, like the
+    /// room-creation flag above — its narrow counterpart, since closing
+    /// is archiving (reversible), not destroying.
+    pub allow_agent_room_closing: bool,
+    /// Let a harness open or close a *harness* — never a room — in its
+    /// own room or a room it created, through the agent API's
+    /// `open_harness`/`close_harness` verbs (#411). Off refuses both,
+    /// with the reason. Default on, like the two room flags above.
+    pub allow_agent_harness_control: bool,
 }
 
 impl Default for SpawnSettings {
@@ -121,6 +132,8 @@ impl Default for SpawnSettings {
             inject_opencode_config: true,
             allow_agent_messaging: true,
             allow_agent_room_creation: true,
+            allow_agent_room_closing: true,
+            allow_agent_harness_control: true,
         }
     }
 }
@@ -403,6 +416,25 @@ mod tests {
         assert!(loaded.allow_agent_room_creation);
         // And the field that *was* present still round-trips.
         assert!(!loaded.allow_agent_messaging);
+    }
+
+    #[test]
+    fn an_old_settings_file_without_the_411_keys_defaults_both_to_allowed() {
+        // #411 added these fields after settings.json was already
+        // shipping in the wild — same story as #327's and #330's flags
+        // just above.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            file_path(dir.path()),
+            r#"{"schema":1,"allowAgentRoomCreation":false}"#,
+        )
+        .expect("write");
+        let (loaded, degraded) = load(dir.path());
+        assert!(degraded.is_none());
+        assert!(loaded.allow_agent_room_closing);
+        assert!(loaded.allow_agent_harness_control);
+        // And the field that *was* present still round-trips.
+        assert!(!loaded.allow_agent_room_creation);
     }
 
     #[test]

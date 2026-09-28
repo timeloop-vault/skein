@@ -318,10 +318,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   agent verbs (list/get_comment/get_diff/reply/
     │       │                        #   mark_addressed/review_status, #327's
     │       │                        #   send_message/read_messages mailbox, and #330's
-    │       │                        #   create_room) — and NO resolve, NO approve, and NO
-    │       │                        #   way to destroy a room (archive_room and friends),
-    │       │                        #   all refused BY NAME; auth = the per-room bearer
-    │       │                        #   token, which IS the scope.
+    │       │                        #   create_room), plus #411's close_room (archive,
+    │       │                        #   creator-only, once signed off) and open_harness/
+    │       │                        #   close_harness — and NO resolve, NO approve, and NO
+    │       │                        #   way to actually destroy a room (archive_room,
+    │       │                        #   remove_worktree, delete_room), all refused BY
+    │       │                        #   NAME; auth = the per-room bearer token, which IS
+    │       │                        #   the scope.
     │       │                        #   See docs/agent-api.md
     │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1). Since #276,
     │       │                                   #   tails every `subagents/agent-*.jsonl` sidecar
@@ -588,11 +591,19 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   exists. The new `Room` carries `createdBy`, naming the calling room
   and harness. It is guarded harder than any other verb —
   a Settings kill switch (`allowAgentRoomCreation`, default on), a
-  per-room rate cap, an open-room ceiling — and, though it can open a
-  room, it cannot close one: `archive_room`, `remove_worktree`,
-  `delete_room` and `close_room` are refused **by name**, the same
-  treatment as `resolve`, because destroying stays the user's decision
-  (D9). Full contract: `docs/agent-api.md`.
+  per-room rate cap, an open-room ceiling. Since #411 it is no longer
+  alone: `close_room` can archive a room back closed, but only the room
+  named in the target's `createdBy` may call it, never itself, and only
+  once that room's own sign-off is approved for its current HEAD —
+  archiving stays reversible (worktree, branch and record all survive;
+  Reopen restores it), which is why this exception exists where
+  deletion still doesn't. `open_harness`/`close_harness` extend the
+  same *whose decision* line to individual harnesses, behind their own
+  kill switch (`allowAgentHarnessControl`) and rate cap. `archive_room`
+  is still refused **by name**, now pointing at `close_room` instead of
+  at "no"; `remove_worktree` and `delete_room` stay refused by name
+  outright, because destroying — unlike archiving — stays the user's
+  decision (D9, as corrected). Full contract: `docs/agent-api.md`.
 - **Harness config injection** (#215, epic #52 E): the variables above
   are useless until the CLI knows there is a server at that address, so
   `pty_spawn` also appends `--plugin-dir <resources>/harness-config/`

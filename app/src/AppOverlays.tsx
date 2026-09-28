@@ -31,6 +31,7 @@ export const AppOverlays = ({
 	settingsProps,
 	showReopen,
 	archivedRooms,
+	allRooms,
 	reopenRoom,
 	deleteRoomForever,
 	restoreRoom,
@@ -60,6 +61,9 @@ export const AppOverlays = ({
 	settingsProps: React.ComponentProps<typeof SettingsModal>;
 	showReopen: boolean;
 	archivedRooms: Room[];
+	// #411: every room, for the "closed by <room>" attribution — see
+	// ReopenRoomModal's `allRooms` doc comment.
+	allRooms: Room[];
 	reopenRoom: (id: string) => void;
 	deleteRoomForever: (id: string) => void;
 	restoreRoom: (room: Room) => void;
@@ -97,6 +101,7 @@ export const AppOverlays = ({
 			{showReopen && (
 				<ReopenRoomModal
 					rooms={archivedRooms}
+					allRooms={allRooms}
 					onReopen={reopenRoom}
 					onDelete={deleteRoomForever}
 					onRestore={restoreRoom}

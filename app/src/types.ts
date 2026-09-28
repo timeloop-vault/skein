@@ -69,6 +69,16 @@ export interface Harness {
 	// you haven't looked at yet", and a restart doesn't change that.
 	// Epic #50 L5a.
 	pendingNotifications?: number;
+	// #411: set when the `open_harness` agent verb added this harness
+	// (absent for every harness created through "+ harness"/New room by
+	// hand). Same shape and same optionality as `Room.closedBy` —
+	// `harnessId` is absent when the caller's `X-Skein-Harness` header
+	// was empty. `#[serde(default)]` on the Rust side per the
+	// post-v0.2.5 field policy: an old blob has no opinion here.
+	createdBy?: {
+		roomId: string;
+		harnessId?: string;
+	};
 }
 
 export interface Room {
@@ -121,6 +131,18 @@ export interface Room {
 		promptFirstLine?: string;
 		baseSha?: string;
 	};
+	// #411: set when the `close_room` agent verb archived this room
+	// (never for a human close, which needs no attribution — the user
+	// is looking at the tab they just clicked). `harnessId` is absent
+	// when the caller's `X-Skein-Harness` header was empty, same as
+	// `createdBy` handles it. Cleared on unarchive: a reopened room was
+	// never "closed by" anyone any more, and `closedBy` surviving a
+	// reopen would misattribute whatever happens after.
+	closedBy?: {
+		roomId: string;
+		harnessId?: string;
+		at: number;
+	};
 }
 
 export type Theme = "dark" | "light";
@@ -161,6 +183,15 @@ export interface SpawnSettings {
 	 *  shape as `allowAgentMessaging` — absent on old persisted data,
 	 *  treat as true. */
 	allowAgentRoomCreation: boolean;
+	/** Let agents call `close_room` to archive a room they created, once
+	 *  it is signed off (#411). Same shape as `allowAgentRoomCreation` —
+	 *  absent on old persisted data, treat as true. */
+	allowAgentRoomClosing: boolean;
+	/** Let agents call `open_harness`/`close_harness` on their own room
+	 *  or a room they created (#411). Same shape as
+	 *  `allowAgentRoomCreation` — absent on old persisted data, treat as
+	 *  true. */
+	allowAgentHarnessControl: boolean;
 }
 
 export interface SpawnSettingsPayload {

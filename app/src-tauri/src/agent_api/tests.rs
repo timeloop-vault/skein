@@ -60,6 +60,7 @@ fn harness(id: &str, kind: &str, name: &str) -> Harness {
         session_id: None,
         agent: None,
         pending_notifications: None,
+        created_by: None,
     }
 }
 
@@ -82,6 +83,7 @@ fn room(id: &str, harnesses: Vec<Harness>) -> Room {
         repo_root: None,
         attention: None,
         created_by: None,
+        closed_by: None,
     }
 }
 
@@ -347,7 +349,7 @@ fn a_missing_thread_and_someone_elses_thread_are_the_same_answer() {
 // ── the two prohibitions ──────────────────────────────────────────
 
 #[test]
-fn the_tool_list_offers_fourteen_verbs_and_nothing_that_resolves_approves_or_destroys() {
+fn the_tool_list_offers_seventeen_verbs_and_nothing_that_resolves_approves_or_deletes() {
     let names: Vec<String> = mcp::tool_specs()
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_owned())
@@ -370,6 +372,12 @@ fn the_tool_list_offers_fourteen_verbs_and_nothing_that_resolves_approves_or_des
             "message_history",
             // #330: open a whole new room.
             "create_room",
+            // #411: archive (only) a room this room created.
+            "close_room",
+            // #411: add a harness to this room, or one it created.
+            "open_harness",
+            // #411: stop a harness the way closing its tab does.
+            "close_harness",
             // #354/#356: the verbs whose answer is not scoped to the
             // caller's own room.
             "find_rooms_for_path",
@@ -391,8 +399,9 @@ fn the_tool_list_offers_fourteen_verbs_and_nothing_that_resolves_approves_or_des
     assert!(
         !names
             .iter()
-            .any(|n| n.contains("archive") || n.contains("delete") || n.contains("close")),
-        "destroying a room stays the user's decision, same as #330's DESTROY_ALIASES refusal"
+            .any(|n| n.contains("archive") || n.contains("delete")),
+        "destroying a room stays the user's decision, same as DESTROY_ALIASES's \
+         remaining refusals; close_room (#411) is the one narrow, guarded exception"
     );
 }
 
@@ -698,22 +707,18 @@ async fn resolving_is_refused_by_name_and_the_thread_stays_open() {
 
 #[tokio::test]
 async fn destroying_a_room_is_refused_by_name() {
-    // #330's mirror of the test above, one level up: `create_room` gave
-    // an agent the power to open a room, and these names must not let
-    // it close, archive or otherwise destroy one — that stays the
+    // `create_room` gave an agent the power to open a room, and these
+    // names must not let it destroy one outright — that stays the
     // user's decision (see `CLAUDE.md`'s "no git mutations" note).
+    // `close_room` (#411) is deliberately NOT in this list any more: it
+    // is a real, narrowly guarded verb now, covered by its own tests
+    // below.
     let f = fixture();
     save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
     let caller = caller_for(&f.db, "r1", Some("h1"));
     let state = agent_api_state(&f);
 
-    for name in [
-        "archive_room",
-        "remove_worktree",
-        "delete_room",
-        "close_room",
-        "mcp__skein__archive_room",
-    ] {
+    for name in ["remove_worktree", "delete_room"] {
         let err = mcp::call_tool(
             &state,
             &caller,
@@ -728,6 +733,109 @@ async fn destroying_a_room_is_refused_by_name() {
             "{name} gave {err:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn archive_room_is_refused_by_name_and_points_at_close_room() {
+    // #411: `archive_room` stays refused, but as an alias for the real
+    // verb now, so its refusal must name `close_room` rather than
+    // repeating the generic "that's the user's decision" of
+    // `remove_worktree`/`delete_room` above.
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+
+    for name in ["archive_room", "mcp__skein__archive_room"] {
+        let err = mcp::call_tool(
+            &state,
+            &caller,
+            name,
+            &json!({}),
+            &MailContext::permissive(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, VerbError::Refused(m) if m.contains("close_room")),
+            "{name} gave {err:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn close_room_is_dispatched_through_mcp_not_refused_by_name() {
+    // The counterpart of the two tests above: `close_room` must reach
+    // the real verb, not the alias refusal — an unknown target room
+    // proves dispatch happened, since `NotFound` only comes from inside
+    // `verbs::close_room` itself.
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = mcp::call_tool(
+        &state,
+        &caller,
+        "close_room",
+        &json!({ "room": "nope" }),
+        &MailContext::permissive(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::NotFound(m) if m.contains("nope")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_harness_is_dispatched_through_mcp_not_refused_by_name() {
+    // Same proof as `close_room`'s counterpart above: an unknown target
+    // room can only come from inside `verbs::open_harness` itself, so
+    // reaching it proves dispatch happened.
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = mcp::call_tool(
+        &state,
+        &caller,
+        "open_harness",
+        &json!({ "room": "nope" }),
+        &MailContext::permissive(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::NotFound(m) if m.contains("nope")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_harness_is_dispatched_through_mcp() {
+    // Same proof as `close_room`'s and `open_harness`'s counterparts
+    // above: an unknown target harness can only come from inside
+    // `verbs::close_harness` itself, so reaching it proves dispatch
+    // happened. (No alias refuses `close_harness` by name — it was never
+    // part of D9's blanket destroy list.)
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = mcp::call_tool(
+        &state,
+        &caller,
+        "close_harness",
+        &json!({ "harness": "nope" }),
+        &MailContext::permissive(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::NotFound(m) if m.contains("nope")),
+        "{err:?}"
+    );
 }
 
 #[tokio::test]
@@ -4506,4 +4614,1154 @@ async fn create_room_happy_path_with_a_prompt_queues_the_first_message() {
         None,
         "must not also be nested under createdBy"
     );
+}
+
+// ── closing a room (issue #411) ───────────────────────────────────────
+//
+// `close_room` is exercised as a plain function (`verbs::close_room`),
+// the same way `create_room`'s own guards are — dispatch through MCP is
+// already covered above (`close_room_is_dispatched_through_mcp_not_
+// refused_by_name`, `archive_room_is_refused_by_name_and_points_at_
+// close_room`).
+
+fn close_room_args(room: &str) -> verbs::CloseRoomArgs {
+    verbs::CloseRoomArgs {
+        room: room.to_owned(),
+    }
+}
+
+/// A room `create_room` opened for `creator_room_id` — `created_by` set,
+/// not archived, no `cwd` unless the caller sets one. Mirrors
+/// `agent_opened_room` above, but keeps the caller's given harnesses
+/// instead of an empty list, since `close_room` tests need a real room
+/// to check sign-off against.
+fn room_created_by(id: &str, harnesses: Vec<Harness>, creator_room_id: &str) -> Room {
+    let mut r = room(id, harnesses);
+    r.created_by = Some(created_by(creator_room_id, "ch"));
+    r
+}
+
+#[tokio::test]
+async fn close_room_is_refused_when_the_kill_switch_is_off() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room_created_by("r2", vec![], "r1"),
+        ],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_room(&state, &caller, &close_room_args("r2"), false)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("disabled:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_room_is_rate_limited_to_five_attempts_a_minute() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    // No target room exists at all — proof the rate counter is charged
+    // before the target is even looked up, not after.
+    for n in 0..5 {
+        let err = verbs::close_room(&state, &caller, &close_room_args("missing"), true)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, VerbError::NotFound(_)),
+            "attempt {n}: expected the guards to pass through to NotFound, got {err:?}"
+        );
+    }
+    let err = verbs::close_room(&state, &caller, &close_room_args("missing"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("rate_limited:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_room_unknown_room_is_not_found() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_room(&state, &caller, &close_room_args("nope"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::NotFound(m) if m.contains("nope")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_room_cannot_close_itself() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_room(&state, &caller, &close_room_args("r1"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("self:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_room_refuses_a_room_with_no_created_by_at_all() {
+    // A hand-created room — the New Room dialog, not create_room — has
+    // no createdBy at all, so no room may close it.
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room("r2", vec![]),
+        ],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_room(&state, &caller, &close_room_args("r2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("not_creator:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_room_refuses_a_room_created_by_a_different_room() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room_created_by("r2", vec![], "r-someone-else"),
+        ],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_room(&state, &caller, &close_room_args("r2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("not_creator:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_room_refuses_an_already_archived_room() {
+    let f = fixture();
+    let mut target = room_created_by("r2", vec![], "r1");
+    target.archived = Some(1);
+    save(
+        &f.db,
+        &[room("r1", vec![harness("h1", "claude", "main")]), target],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_room(&state, &caller, &close_room_args("r2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("archived:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_room_refuses_a_room_with_no_worktree_as_not_signed_off() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room_created_by("r2", vec![], "r1"),
+        ],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_room(&state, &caller, &close_room_args("r2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("not_signed_off:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_room_refuses_a_worktree_room_that_is_not_signed_off() {
+    let f = fixture();
+    let tmp = TempDir::new().unwrap();
+    git_repo_with_commit(tmp.path());
+    let mut target = room_created_by("r2", vec![], "r1");
+    target.cwd = Some(tmp.path().to_str().unwrap().to_owned());
+    save(
+        &f.db,
+        &[room("r1", vec![harness("h1", "claude", "main")]), target],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_room(&state, &caller, &close_room_args("r2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("not_signed_off:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_room_refuses_a_stale_signoff() {
+    let f = fixture();
+    let tmp = TempDir::new().unwrap();
+    git_repo_with_commit(tmp.path());
+    let cwd = tmp.path().to_str().unwrap().to_owned();
+    let mut target = room_created_by("r2", vec![], "r1");
+    target.cwd = Some(cwd.clone());
+    save(
+        &f.db,
+        &[room("r1", vec![harness("h1", "claude", "main")]), target],
+    );
+    crate::review_surface::signoff::set_impl(&f.db, "r2", &cwd, true, None, 1_000).unwrap();
+    // The agent commits after being approved — the approval must not
+    // silently stretch over code the reviewer never saw.
+    commit_file(tmp.path(), "b.txt", "more\n", "feat: more");
+
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_room(&state, &caller, &close_room_args("r2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("stale_signoff:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_room_frontend_unsaved_files_refusal_keeps_its_code() {
+    let f = fixture();
+    let tmp = TempDir::new().unwrap();
+    git_repo_with_commit(tmp.path());
+    let cwd = tmp.path().to_str().unwrap().to_owned();
+    let mut target = room_created_by("r2", vec![], "r1");
+    target.cwd = Some(cwd.clone());
+    save(
+        &f.db,
+        &[room("r1", vec![harness("h1", "claude", "main")]), target],
+    );
+    crate::review_surface::signoff::set_impl(&f.db, "r2", &cwd, true, None, 1_000).unwrap();
+
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "close_room" => Err("unsaved_files: notes.md".to_owned()),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let err = verbs::close_room(&state, &caller, &close_room_args("r2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("unsaved_files:")),
+        "the frontend's own code must survive frontend_error unchanged: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_room_maps_a_missing_webview_to_unavailable() {
+    let f = fixture();
+    let tmp = TempDir::new().unwrap();
+    git_repo_with_commit(tmp.path());
+    let cwd = tmp.path().to_str().unwrap().to_owned();
+    let mut target = room_created_by("r2", vec![], "r1");
+    target.cwd = Some(cwd.clone());
+    save(
+        &f.db,
+        &[room("r1", vec![harness("h1", "claude", "main")]), target],
+    );
+    crate::review_surface::signoff::set_impl(&f.db, "r2", &cwd, true, None, 1_000).unwrap();
+
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f); // no test_frontend hook, no AppHandle
+    let err = verbs::close_room(&state, &caller, &close_room_args("r2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Unavailable(m) if m.contains("no webview")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_room_happy_path_archives_via_the_frontend() {
+    let f = fixture();
+    let tmp = TempDir::new().unwrap();
+    git_repo_with_commit(tmp.path());
+    let cwd = tmp.path().to_str().unwrap().to_owned();
+    let mut target = room_created_by("r2", vec![], "r1");
+    target.cwd = Some(cwd.clone());
+    save(
+        &f.db,
+        &[room("r1", vec![harness("h1", "claude", "main")]), target],
+    );
+    crate::review_surface::signoff::set_impl(&f.db, "r2", &cwd, true, None, 1_000).unwrap();
+
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<Value>));
+    let captured_clone = std::sync::Arc::clone(&captured);
+    state.set_test_frontend(move |kind, args| match kind {
+        "close_room" => {
+            *captured_clone.lock().unwrap() = Some(args.clone());
+            Ok(json!({ "roomId": "r2", "archived": 12_345 }))
+        }
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+
+    let out = verbs::close_room(&state, &caller, &close_room_args("r2"), true)
+        .await
+        .unwrap();
+    assert_eq!(out.room_id, "r2");
+    assert_eq!(out.archived, 12_345);
+    assert_eq!(out.closed_by.room_id, "r1");
+    assert_eq!(out.closed_by.harness_id.as_deref(), Some("h1"));
+
+    let sent = captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("close_room requested");
+    assert_eq!(sent["roomId"], json!("r2"));
+    assert_eq!(sent["closedBy"]["roomId"], json!("r1"));
+    assert_eq!(sent["closedBy"]["harnessId"], json!("h1"));
+}
+
+#[tokio::test]
+async fn close_room_happy_path_with_no_caller_harness_sends_a_null_harness_id() {
+    // Unlike `create_room`'s `createdBy.harnessId` (always a string,
+    // `""` when absent — the frontend's `parseCreateArgs` requires the
+    // type), `close_room`'s `closedBy.harnessId` is a genuine optional:
+    // there is no equivalent frontend contract forcing a string here.
+    let f = fixture();
+    let tmp = TempDir::new().unwrap();
+    git_repo_with_commit(tmp.path());
+    let cwd = tmp.path().to_str().unwrap().to_owned();
+    let mut target = room_created_by("r2", vec![], "r1");
+    target.cwd = Some(cwd.clone());
+    save(&f.db, &[room("r1", vec![]), target]);
+    crate::review_surface::signoff::set_impl(&f.db, "r2", &cwd, true, None, 1_000).unwrap();
+
+    let caller = caller_for(&f.db, "r1", None);
+    assert_eq!(
+        caller.harness_id, None,
+        "test setup: no harness to attribute to"
+    );
+    let state = agent_api_state(&f);
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<Value>));
+    let captured_clone = std::sync::Arc::clone(&captured);
+    state.set_test_frontend(move |kind, args| match kind {
+        "close_room" => {
+            *captured_clone.lock().unwrap() = Some(args.clone());
+            Ok(json!({ "roomId": "r2", "archived": 1 }))
+        }
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+
+    let out = verbs::close_room(&state, &caller, &close_room_args("r2"), true)
+        .await
+        .unwrap();
+    assert_eq!(out.closed_by.harness_id, None);
+
+    let sent = captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("close_room requested");
+    assert_eq!(sent["closedBy"]["harnessId"], Value::Null);
+}
+
+// ── opening a harness (issue #411) ──────────────────────────────────────
+//
+// `open_harness` is exercised as a plain function (`verbs::open_harness`),
+// the same way `create_room`'s and `close_room`'s own guards are —
+// dispatch through MCP is already covered above
+// (`open_harness_is_dispatched_through_mcp_not_refused_by_name`).
+
+fn open_harness_args(room: &str) -> verbs::OpenHarnessArgs {
+    verbs::OpenHarnessArgs {
+        room: room.to_owned(),
+        kind: None,
+        agent: None,
+        prompt: None,
+    }
+}
+
+#[tokio::test]
+async fn open_harness_is_refused_when_the_kill_switch_is_off() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::open_harness(
+        &state,
+        &caller,
+        &open_harness_args("r1"),
+        &MailContext::permissive(),
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("disabled:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_harness_is_rate_limited_to_ten_attempts_a_minute() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    // No target room exists at all — proof the rate counter is charged
+    // before the target is even looked up, not after.
+    for n in 0..10 {
+        let err = verbs::open_harness(
+            &state,
+            &caller,
+            &open_harness_args("missing"),
+            &MailContext::permissive(),
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, VerbError::NotFound(_)),
+            "attempt {n}: expected the guards to pass through to NotFound, got {err:?}"
+        );
+    }
+    let err = verbs::open_harness(
+        &state,
+        &caller,
+        &open_harness_args("missing"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("rate_limited:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_harness_unknown_room_is_not_found() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::open_harness(
+        &state,
+        &caller,
+        &open_harness_args("nope"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::NotFound(m) if m.contains("nope")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_harness_refuses_a_room_neither_its_own_nor_one_it_created() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room_created_by("r2", vec![], "r-someone-else"),
+        ],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::open_harness(
+        &state,
+        &caller,
+        &open_harness_args("r2"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("not_in_scope:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_harness_refuses_an_already_archived_room() {
+    let f = fixture();
+    let mut target = room_created_by("r2", vec![], "r1");
+    target.archived = Some(1);
+    save(
+        &f.db,
+        &[room("r1", vec![harness("h1", "claude", "main")]), target],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::open_harness(
+        &state,
+        &caller,
+        &open_harness_args("r2"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("archived:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_harness_refuses_once_the_harness_ceiling_is_hit() {
+    let f = fixture();
+    let harnesses: Vec<Harness> = (0..8)
+        .map(|i| harness(&format!("h{i}"), "claude", "main"))
+        .collect();
+    save(&f.db, &[room("r1", harnesses)]);
+    let caller = caller_for(&f.db, "r1", Some("h0"));
+    let state = agent_api_state(&f);
+    let err = verbs::open_harness(
+        &state,
+        &caller,
+        &open_harness_args("r1"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("room_full:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_harness_maps_a_missing_webview_to_unavailable() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f); // no test_frontend hook, no AppHandle
+    let err = verbs::open_harness(
+        &state,
+        &caller,
+        &open_harness_args("r1"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Unavailable(m) if m.contains("no webview")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_harness_maps_a_frontend_resolve_refusal_to_refused() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "open_harness.resolve" => Err("unknown kind \"bogus\"".to_owned()),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let err = verbs::open_harness(
+        &state,
+        &caller,
+        &open_harness_args("r1"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("bogus")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_harness_with_a_prompt_refuses_an_unreachable_resolved_kind_before_opening_anything() {
+    // Same shape as `create_room`'s own version of this test: the
+    // resolve round trip has to run to learn the kind is unreachable,
+    // but the second (opening) round trip must never be asked for.
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let round2_called = std::sync::Arc::new(AtomicBool::new(false));
+    let round2_flag = std::sync::Arc::clone(&round2_called);
+    state.set_test_frontend(move |kind, _args| match kind {
+        "open_harness.resolve" => Ok(json!({ "kind": "copilot", "agent": null })),
+        "open_harness" => {
+            round2_flag.store(true, Ordering::SeqCst);
+            Ok(json!({}))
+        }
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let args = verbs::OpenHarnessArgs {
+        prompt: Some("go".to_owned()),
+        ..open_harness_args("r1")
+    };
+    let err = verbs::open_harness(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("copilot")),
+        "{err:?}"
+    );
+    assert!(
+        !round2_called.load(Ordering::SeqCst),
+        "round-trip 2 must never be requested once the prompt is unreachable"
+    );
+}
+
+#[tokio::test]
+async fn open_harness_happy_path_in_its_own_room() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let opened_args = std::sync::Arc::new(std::sync::Mutex::new(None::<Value>));
+    let opened_clone = std::sync::Arc::clone(&opened_args);
+    state.set_test_frontend(move |kind, args| match kind {
+        "open_harness.resolve" => Ok(json!({ "kind": "opencode", "agent": null })),
+        "open_harness" => {
+            *opened_clone.lock().unwrap() = Some(args.clone());
+            Ok(json!({
+                "harnessId": "h2",
+                "kind": "opencode",
+                "agent": null,
+                "name": "opencode",
+            }))
+        }
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let out = verbs::open_harness(
+        &state,
+        &caller,
+        &open_harness_args("r1"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.room_id, "r1");
+    assert_eq!(out.harness_id, "h2");
+    assert_eq!(out.kind, "opencode");
+    assert_eq!(out.agent, None);
+    assert_eq!(out.name, "opencode");
+    assert_eq!(out.message_id, None, "no prompt was given");
+
+    let sent = opened_args
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("open_harness requested");
+    assert_eq!(sent["roomId"], json!("r1"));
+    assert_eq!(sent["createdBy"]["roomId"], json!("r1"));
+    assert_eq!(sent["createdBy"]["harnessId"], json!("h1"));
+}
+
+#[tokio::test]
+async fn open_harness_happy_path_in_a_room_it_created() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room_created_by("r2", vec![harness("h2a", "claude", "main")], "r1"),
+        ],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "open_harness.resolve" => Ok(json!({ "kind": "claude", "agent": null })),
+        "open_harness" => Ok(json!({
+            "harnessId": "h2b",
+            "kind": "claude",
+            "agent": null,
+            "name": "claude 2",
+        })),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let out = verbs::open_harness(
+        &state,
+        &caller,
+        &open_harness_args("r2"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.room_id, "r2");
+    assert_eq!(out.harness_id, "h2b");
+}
+
+#[tokio::test]
+async fn open_harness_happy_path_with_a_prompt_queues_the_first_message() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "open_harness.resolve" => Ok(json!({ "kind": "claude", "agent": null })),
+        "open_harness" => Ok(json!({
+            "harnessId": "h2",
+            "kind": "claude",
+            "agent": null,
+            "name": "claude 2",
+        })),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let args = verbs::OpenHarnessArgs {
+        prompt: Some("start working on the thing".to_owned()),
+        ..open_harness_args("r1")
+    };
+    let out = verbs::open_harness(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap();
+    let message_id = out
+        .message_id
+        .clone()
+        .expect("a prompt should queue a message");
+
+    let messages = f.db.all_harness_messages("r1", "h2").unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, message_id);
+    assert_eq!(messages[0].body, "start working on the thing");
+    assert_eq!(messages[0].from_room_id, caller.room_id);
+    assert!(messages[0].read_ms.is_none());
+}
+
+// ── closing a harness (issue #411) ──────────────────────────────────────
+//
+// `close_harness` is exercised as a plain function (`verbs::close_harness`),
+// the same way `close_room`'s and `open_harness`'s own guards are —
+// dispatch through MCP is already covered above
+// (`close_harness_is_dispatched_through_mcp`). It shares `open_harness`'s
+// `harness_control` rate bucket, so the two verbs' rate-limit tests
+// together prove the cap is combined rather than per-verb.
+
+fn close_harness_args(harness: &str) -> verbs::CloseHarnessArgs {
+    verbs::CloseHarnessArgs {
+        harness: harness.to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn close_harness_is_refused_when_the_kill_switch_is_off() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[room(
+            "r1",
+            vec![
+                harness("h1", "claude", "main"),
+                harness("h2", "claude", "second"),
+            ],
+        )],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_harness(&state, &caller, &close_harness_args("h2"), false)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("disabled:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_harness_shares_open_harness_rate_bucket() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[room(
+            "r1",
+            vec![
+                harness("h1", "claude", "main"),
+                harness("h2", "claude", "second"),
+            ],
+        )],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    // Spend nine of the ten combined attempts through `open_harness`
+    // (proof against a missing room, same trick `open_harness`'s own
+    // rate test uses), then the tenth through `close_harness` against an
+    // unknown harness — both must reach their own NotFound, and the
+    // eleventh, on either verb, must be rate-limited.
+    for n in 0..9 {
+        let err = verbs::open_harness(
+            &state,
+            &caller,
+            &open_harness_args("missing"),
+            &MailContext::permissive(),
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, VerbError::NotFound(_)),
+            "attempt {n}: expected NotFound, got {err:?}"
+        );
+    }
+    let err = verbs::close_harness(&state, &caller, &close_harness_args("missing"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::NotFound(_)),
+        "tenth combined attempt: expected NotFound, got {err:?}"
+    );
+    let err = verbs::close_harness(&state, &caller, &close_harness_args("missing"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("rate_limited:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_harness_unknown_harness_is_not_found() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_harness(&state, &caller, &close_harness_args("nope"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::NotFound(m) if m.contains("nope")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_harness_refuses_a_harness_neither_in_its_own_room_nor_one_it_created() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room_created_by(
+                "r2",
+                vec![
+                    harness("h2a", "claude", "main"),
+                    harness("h2b", "claude", "two"),
+                ],
+                "r-someone-else",
+            ),
+        ],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_harness(&state, &caller, &close_harness_args("h2a"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("not_in_scope:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_harness_in_its_own_room_refuses_an_unidentified_caller() {
+    // No `X-Skein-Harness` at all: there is no way to prove the target
+    // isn't the caller itself, so this must refuse rather than guess.
+    let f = fixture();
+    save(
+        &f.db,
+        &[room(
+            "r1",
+            vec![
+                harness("h1", "claude", "main"),
+                harness("h2", "claude", "second"),
+            ],
+        )],
+    );
+    let caller = caller_for(&f.db, "r1", None);
+    assert_eq!(caller.harness_id, None, "test setup: no caller identity");
+    let state = agent_api_state(&f);
+    let err = verbs::close_harness(&state, &caller, &close_harness_args("h2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("caller_unknown:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_harness_cannot_close_itself() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[room(
+            "r1",
+            vec![
+                harness("h1", "claude", "main"),
+                harness("h2", "claude", "second"),
+            ],
+        )],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_harness(&state, &caller, &close_harness_args("h1"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("self:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_harness_refuses_a_harness_in_an_archived_room_it_created() {
+    let f = fixture();
+    let mut target = room_created_by(
+        "r2",
+        vec![
+            harness("h2a", "claude", "main"),
+            harness("h2b", "claude", "two"),
+        ],
+        "r1",
+    );
+    target.archived = Some(1);
+    save(
+        &f.db,
+        &[room("r1", vec![harness("h1", "claude", "main")]), target],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_harness(&state, &caller, &close_harness_args("h2a"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("archived:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_harness_refuses_the_last_harness_in_a_room_it_created() {
+    // A room's only harness can never be `self` from another room's
+    // caller — only `close_harness_cannot_close_itself` above exercises
+    // that overlap, where the caller and the room's last harness are the
+    // same id. Here the caller is a *different* room, so this is the one
+    // path that actually reaches the `last_harness` guard.
+    // Unlike the test above, the caller here is a *different* room, so
+    // `self` never applies and `last_harness` is the guard that fires.
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room_created_by("r2", vec![harness("h2", "claude", "main")], "r1"),
+        ],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::close_harness(&state, &caller, &close_harness_args("h2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("last_harness:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_harness_maps_a_missing_webview_to_unavailable() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[room(
+            "r1",
+            vec![
+                harness("h1", "claude", "main"),
+                harness("h2", "claude", "second"),
+            ],
+        )],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f); // no test_frontend hook, no AppHandle
+    let err = verbs::close_harness(&state, &caller, &close_harness_args("h2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Unavailable(m) if m.contains("no webview")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_harness_frontend_permission_open_refusal_keeps_its_code() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[room(
+            "r1",
+            vec![
+                harness("h1", "claude", "main"),
+                harness("h2", "claude", "second"),
+            ],
+        )],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "close_harness" => {
+            Err("permission_open: harness \"h2\" has an open permission dialog".to_owned())
+        }
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let err = verbs::close_harness(&state, &caller, &close_harness_args("h2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("permission_open:")),
+        "the frontend's own code must survive frontend_error unchanged: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_harness_frontend_unsaved_files_refusal_keeps_its_code() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[room(
+            "r1",
+            vec![
+                harness("h1", "claude", "main"),
+                harness("h2", "claude", "second"),
+            ],
+        )],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "close_harness" => Err("unsaved_files: notes.md".to_owned()),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let err = verbs::close_harness(&state, &caller, &close_harness_args("h2"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("unsaved_files:")),
+        "the frontend's own code must survive frontend_error unchanged: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_harness_happy_path_in_its_own_room() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[room(
+            "r1",
+            vec![
+                harness("h1", "claude", "main"),
+                harness("h2", "claude", "second"),
+            ],
+        )],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(None::<Value>));
+    let captured_clone = std::sync::Arc::clone(&captured);
+    state.set_test_frontend(move |kind, args| match kind {
+        "close_harness" => {
+            *captured_clone.lock().unwrap() = Some(args.clone());
+            Ok(json!({ "harnessId": "h2", "phase": "waiting" }))
+        }
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+
+    let out = verbs::close_harness(&state, &caller, &close_harness_args("h2"), true)
+        .await
+        .unwrap();
+    assert_eq!(out.room_id, "r1");
+    assert_eq!(out.harness_id, "h2");
+    assert_eq!(out.phase, "waiting");
+    assert_eq!(out.closed_by.room_id, "r1");
+    assert_eq!(out.closed_by.harness_id.as_deref(), Some("h1"));
+
+    let sent = captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("close_harness requested");
+    assert_eq!(sent["roomId"], json!("r1"));
+    assert_eq!(sent["harnessId"], json!("h2"));
+    assert_eq!(sent["closedBy"]["roomId"], json!("r1"));
+    assert_eq!(sent["closedBy"]["harnessId"], json!("h1"));
+}
+
+#[tokio::test]
+async fn close_harness_happy_path_in_a_room_it_created_reports_the_running_phase() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room_created_by(
+                "r2",
+                vec![
+                    harness("h2a", "claude", "main"),
+                    harness("h2b", "claude", "two"),
+                ],
+                "r1",
+            ),
+        ],
+    );
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, _args| match kind {
+        "close_harness" => Ok(json!({ "harnessId": "h2b", "phase": "running" })),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+
+    let out = verbs::close_harness(&state, &caller, &close_harness_args("h2b"), true)
+        .await
+        .unwrap();
+    assert_eq!(out.room_id, "r2");
+    assert_eq!(out.harness_id, "h2b");
+    assert_eq!(out.phase, "running");
 }

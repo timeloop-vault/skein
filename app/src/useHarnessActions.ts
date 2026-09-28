@@ -23,8 +23,10 @@
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback } from "react";
 import type { RenameTarget } from "./RoomStrip.tsx";
+import { type RequestResult, decideCloseHarness } from "./agentRequests.ts";
 import { confirmDialog } from "./confirmDialog.ts";
 import { filesRegistry } from "./filesRegistry.ts";
+import { harnessActivity } from "./harnessActivity.ts";
 import type { Room } from "./types.ts";
 
 export function useHarnessActions(
@@ -151,6 +153,43 @@ export function useHarnessActions(
 		proceed();
 	};
 
+	// #411: `close_harness` agent verb — same removal `closeHarness` above
+	// performs, but never confirms (there's no dialog for an agent call
+	// to answer) and refuses outright instead of asking. The refusal
+	// ladder (unknown harness / the room's last harness / an open
+	// permission dialog / unsaved Files buffers) lives in the pure
+	// `decideCloseHarness` so it's unit-tested without this hook; this is
+	// only the state mutation once decided, matching `proceed` above
+	// harness-for-harness — including its "always land on the first
+	// remaining harness" behaviour, since that's what "remove it exactly
+	// like closing its tab" means here.
+	const closeHarnessForAgent = (
+		roomId: string,
+		harnessId: string,
+	): RequestResult<{ harnessId: string; phase: string }> => {
+		const phases = harnessActivity.phaseSnapshot();
+		const decision = decideCloseHarness(
+			activeRooms,
+			roomId,
+			harnessId,
+			(hid) => phases[hid],
+			filesRegistry.dirtyNames,
+		);
+		if (!decision.ok) return decision;
+		const { phase } = decision.value;
+		setRooms((prev) =>
+			prev.map((r) => {
+				if (r.id !== roomId) return r;
+				const remaining = r.harnesses.filter((h) => h.id !== harnessId);
+				if (remaining.length === 0) return r;
+				const first = remaining[0];
+				if (!first) return r;
+				return { ...r, harnesses: remaining, activeHarnessId: first.id };
+			}),
+		);
+		return { ok: true, value: { harnessId, phase } };
+	};
+
 	// When a harness's child exits and the user picks the shell-fallback
 	// path, LiveTerminal calls this so the new cmd persists to the DB
 	// and a Skein restart re-spawns the shell.
@@ -184,6 +223,7 @@ export function useHarnessActions(
 		cycleAlertedRoom,
 		cycleAlertedHarness,
 		closeHarness,
+		closeHarnessForAgent,
 		updateHarnessCmd,
 		addHarness,
 	};

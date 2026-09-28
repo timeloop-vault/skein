@@ -19,6 +19,10 @@ import { useFocusRestore } from "./useFocusRestore.ts";
 
 interface ReopenRoomModalProps {
 	rooms: Room[]; // already filtered to archived + sorted newest-first
+	// #411: every room (active + archived), for resolving a `closedBy`
+	// attribution to a display name — the closing room is very often
+	// still active (a planning room), so `rooms` above isn't enough.
+	allRooms: Room[];
 	onReopen: (id: string) => void;
 	// #89: permanently remove an archived room from state (and, via the
 	// autosave, from the DB).
@@ -40,8 +44,23 @@ const formatClosed = (ms: number): string => {
 	return new Date(ms).toLocaleDateString();
 };
 
+// #411: "3 h ago" or, when the `close_room` agent verb closed it,
+// "3 h ago · closed by <room>". Folded into one string (rather than a
+// separate element) so the existing two-child `.meta` row's
+// `space-between` layout doesn't need to change for a third. Falls
+// back to the bare id if the closing room itself is gone (deleted
+// forever since).
+const closedLabel = (room: Room, allRooms: Room[]): string => {
+	if (!room.archived) return "";
+	const age = formatClosed(room.archived);
+	if (!room.closedBy) return age;
+	const name = allRooms.find((r) => r.id === room.closedBy?.roomId)?.name ?? room.closedBy.roomId;
+	return `${age} · closed by ${name}`;
+};
+
 export const ReopenRoomModal = ({
 	rooms,
+	allRooms,
 	onReopen,
 	onDelete,
 	onRestore,
@@ -183,7 +202,7 @@ export const ReopenRoomModal = ({
 									) : (
 										<span>{r.cwd ?? "no cwd"}</span>
 									)}
-									<span className="age">{r.archived ? formatClosed(r.archived) : ""}</span>
+									<span className="age">{closedLabel(r, allRooms)}</span>
 								</div>
 							</button>
 							<button

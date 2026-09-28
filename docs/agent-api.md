@@ -32,7 +32,10 @@ Skein process
      ├─ GET    /api/rooms              list_rooms
      ├─ GET    /api/rooms/find         find_rooms_for_path
      ├─ GET    /api/rooms/{room_id}    get_room
+     ├─ POST   /api/rooms/{room_id}/close   close_room
      ├─ GET    /api/harnesses          list_harnesses
+     ├─ POST   /api/harnesses          open_harness
+     ├─ POST   /api/harnesses/{harness_id}/close   close_harness
      ├─ POST   /api/harness/permission     see below — not an agent verb
      └─ POST   /api/harness/session-start  see below — not an agent verb
 ```
@@ -78,11 +81,15 @@ at the next boot.
 
 ## The verbs
 
-All fourteen verbs carry the token, but not all fourteen are scoped by
-it to the calling room. Nine of them read or act only within that
+All seventeen verbs carry the token, but not all seventeen are scoped
+by it to the calling room. Nine of them read or act only within that
 room; `create_room` opens a *different* room, though still only from
 the calling room's token, which is what its own rate cap below is
-keyed to; `find_rooms_for_path`, `list_rooms`, `get_room` and
+keyed to; `close_room`, `open_harness` and `close_harness` (#411) act
+on a room, or a harness in one, that must be either the calling room
+itself or a room it opened with `create_room` — never any other room,
+see "Closing a room, and controlling harnesses" below;
+`find_rooms_for_path`, `list_rooms`, `get_room` and
 `list_harnesses` break the pattern the other way — each reads across
 every room regardless of which room the token names, see the scope
 note under "Finding rooms by path" below and "Listing rooms and
@@ -445,6 +452,144 @@ beside the messaging toggle: off refuses `create_room` by name, with
 the reason, the same way the messaging and #215 injection toggles
 refuse their own verbs.
 
+## Closing a room, and controlling harnesses (#411)
+
+Three verbs that undo or extend what `create_room` opened, all kept to
+the same narrow scope: the calling room itself, or a room it opened
+with `create_room` — never any other room, and never a git mutation.
+`close_room` amends the standing rule in "What it will not do" below
+rather than replacing it; `open_harness` and `close_harness` reuse
+`create_room`'s own guard shape (a Settings switch, a rate cap, a
+ceiling) instead of inventing a new one.
+
+Unlike the free-text refusal reasons elsewhere in this API, every
+refusal from these three starts with a stable `snake_case` code, then
+`: `, then a sentence — a caller can branch on the code without
+parsing prose, and the HTTP mirror (`close_room`'s, so far) surfaces
+the identical string unchanged:
+
+| code | verb(s) | meaning |
+| :-- | :-- | :-- |
+| `disabled` | all three | the relevant Settings switch is off |
+| `rate_limited` | all three | the per-calling-room rate cap was hit |
+| `not_creator` | `close_room` | the caller is not the target's `createdBy.roomId` — including a target with no `createdBy` at all |
+| `self` | `close_room`, `close_harness` | `close_room` on the caller's own room; `close_harness` on the harness making the call |
+| `caller_unknown` | `close_harness` | closing a harness in the caller's own room with no `X-Skein-Harness` identity — there is no way to prove the target isn't itself |
+| `not_in_scope` | `open_harness`, `close_harness` | the target room is neither the caller's own nor one it created |
+| `archived` | `close_room`, `open_harness`, `close_harness` | the target room is already archived |
+| `not_signed_off` | `close_room` | the target has no approved reviewer sign-off |
+| `stale_signoff` | `close_room` | the target's sign-off was approved against an earlier HEAD |
+| `unsaved_files` | `close_room`, `close_harness` | a `files` harness in scope has dirty buffers (names listed) |
+| `last_harness` | `close_harness` | the target is the room's only harness — use `close_room` instead |
+| `permission_open` | `close_harness` | the target harness is in phase `permission` — a human-facing dialog is open |
+| `room_full` | `open_harness` | the room already holds the harness ceiling (8) |
+
+An unknown room or harness id is a plain `not_found`, the same as
+everywhere else in this API.
+
+### `close_room`
+
+`{ room }` — archives a room this room opened with `create_room`.
+Closing **is** archiving: the worktree, the branch and the room record
+all stay, and the user can reopen it from the archived-rooms list at
+any time. There is no way to delete a room or its worktree from here —
+see "What it will not do" below.
+
+Guards run cheapest first: the Settings switch, the rate cap, then a
+chain of facts about the *target* room that must all hold before
+anything is asked of the frontend — it exists, it isn't the caller's
+own room, the caller is the room named in its `createdBy`, it isn't
+already archived, and its reviewer sign-off is approved and not stale
+for its current HEAD. Only then does this ask the webview to archive
+it exactly like the user's own close — no confirm dialog, and refused
+as `unsaved_files` if any harness in the room has a dirty `files`
+buffer.
+
+Returns `roomId`, `archived` (the archive timestamp, epoch ms, mirroring
+`Room.archived`), and `closedBy` (`{ roomId, harnessId? }`, echoing the
+caller — written onto `Room.closedBy`, shown as "closed by …" in the
+archived-rooms list, and cleared if the room is later reopened).
+HTTP route: `POST /api/rooms/{room_id}/close`, no body.
+
+A branch's work already sitting on the base branch (squash-merge
+included) was considered as a second "landed" path alongside sign-off,
+but did not ship with #411 — sign-off is the only condition today.
+
+Settings → Shell & environment: **"Let agents close rooms they
+created"** (`allowAgentRoomClosing`, default on). Rate cap: 5 calls per
+calling room per rolling minute, its own bucket, separate from
+`create_room`'s.
+
+### `open_harness`
+
+`{ room, kind?, agent?, prompt? }` — adds a harness to this room, or to
+a room this room opened with `create_room`, the way "+ harness" does:
+in the background, `activate: false`, never switching the target
+room's own active harness. `kind` and `agent` default the same way
+`create_room`'s do — omitted, they resolve to the user's own defaults
+for that folder; given, an unresolvable `agent` refuses the whole call
+rather than guessing. `prompt`, if given, is queued as the new
+harness's first mailbox message the moment it exists.
+
+The flow mirrors `create_room`'s own two-step round trip: guards run
+first (Settings switch, the shared rate cap below, then the target
+room — exists, in scope, not archived, under the 8-harness ceiling),
+then `"open_harness.resolve"` learns what `(kind, agent)` would
+actually spawn, so a `prompt` that could never be delivered is caught
+as `"cannot queue the prompt: the new harness …"` *before* anything
+opens, exactly as `create_room` catches it. Only then does
+`"open_harness"` actually add the harness.
+
+Returns `roomId`, `harnessId`, `kind`, `agent` (when resolved), `name`,
+and `messageId` (present only when `prompt` was given and successfully
+queued). `Harness.createdBy` is set to `{ roomId, harnessId? }` naming
+the caller — the harness-level counterpart to `Room.createdBy`. HTTP
+route: `POST /api/harnesses`, taking `OpenHarnessArgs` directly as the
+body, the same shape as `api_create_room`.
+
+### `close_harness`
+
+`{ harness }` — stops one harness the way closing its tab does. The
+caller may target a harness in its own room (never the one making the
+call), or any harness in a room it opened with `create_room`.
+
+Guards run cheapest first: the Settings switch, the shared
+`harness_control` rate cap, then facts learned by searching every room
+for the target harness id — unknown (`not_found`), out of scope
+(`not_in_scope`), then, only when the target is inside the caller's
+*own* room, where "not itself" actually needs proving: no
+`X-Skein-Harness` identity on the call (`caller_unknown`) or the
+caller naming itself (`self`) — a room closing a harness in a room it
+merely *created* can never be closing itself, so neither check applies
+there. Then the target room being archived (`archived`), and the
+target being the room's only harness (`last_harness` — that's
+`close_room`'s job). Only once all of those pass does this ask the
+webview to actually remove it, exactly like the user's own close (no
+confirm dialog) — where it can still refuse as `permission_open` (an
+open permission dialog) or `unsaved_files` (a dirty `files` buffer).
+Closing a Claude or opencode harness mid-turn is otherwise allowed —
+there is no "is it a good time" check — and the reply says which phase
+it was in, so the caller knows whether it interrupted anything.
+
+Returns `roomId`, `harnessId`, `phase` (the phase the harness was in
+immediately before it closed, `"unknown"` when this process could not
+vouch for it), and `closedBy` (`{ roomId, harnessId? }`, echoing the
+caller). Unlike `close_room`, this attribution is **not** written to
+any database row — there is no `Harness.closedBy` field, and
+`harness_events` is filled exclusively from the frontend's own
+activity-transition stream, which a Rust-originated close does not go
+through. The one durable record is a `tracing::info!` line in Skein's
+own log (#176) naming caller, target and outcome — the same one every
+guard above also logs on refusal. HTTP route:
+`POST /api/harnesses/{harness_id}/close`, no body.
+
+Settings → Shell & environment: **"Let agents open or close
+harnesses"** (`allowAgentHarnessControl`, default on) gates both
+`open_harness` and `close_harness`. They also share one rate-limit
+bucket — 10 combined calls per calling room per rolling minute — since
+either one changes what harnesses a room has, which is the same amount
+of trust.
+
 ## Finding rooms by path (#354, epic #266 slice A)
 
 `find_rooms_for_path` is the first verb in this API whose answer is
@@ -486,9 +631,11 @@ as every other route.
 - `repo_root` is `null` for a room outside any git checkout.
 - `safe_to_remove` is `false` for every **open** room — an open room
   means don't touch this folder, full stop — and `true` only for an
-  **archived** one. The verb only reads: `archive_room`,
-  `remove_worktree`, `delete_room` and `close_room` remain refused by
-  name, unchanged by this issue.
+  **archived** one. This verb only reads: it does not itself archive or
+  remove anything, whatever `safe_to_remove` says. `archive_room`,
+  `remove_worktree` and `delete_room` stay refused by name; `close_room`
+  (#411) is a real verb now, but a separate, guarded one — see "Closing
+  a room, and controlling harnesses" above.
 - Path comparison uses the same normalisation room grouping already
   relies on (`app/src/roomGroups.ts`'s `normalizePath`): backslashes to
   forward slashes, one trailing separator stripped, case-folded, on
@@ -606,9 +753,14 @@ still lists every room on the machine.
 
 Still refused for every room these three can see, the same as
 everywhere else in this API: `resolve`, `approve`/`sign_off`/
-`mark_approved`, and `archive_room`/`remove_worktree`/`delete_room`/
-`close_room`. A director can watch a gate; it can never open one, on
-its own room or anyone else's.
+`mark_approved`, and `archive_room`/`remove_worktree`/`delete_room`.
+`close_room` (#411) is a real verb elsewhere in this API, but reading a
+room through `list_rooms`/`get_room`/`list_harnesses` proves nothing
+about whether closing or adding to it would succeed — that runs its
+own creator/scope/sign-off checks when `close_room`/`open_harness`/
+`close_harness` are actually called. A director can watch a gate; these
+three never open or close one themselves, on its own room or anyone
+else's.
 
 Out of scope for #356: a room's message history — now `message_history`
 above (#364) — and notifying a director when a child room's sign-off
@@ -709,20 +861,31 @@ Each is refused three ways, on purpose:
   answer `403`, so the answer reads as design rather than as "not
   implemented yet".
 
-**Creating a room is allowed; destroying one is not.** `create_room`
-(#330) is deliberately not a symmetric pair with some `close_room` or
-`archive_room` — the line it draws is *whose decision it is*, not read
-vs write. Opening a room is reversible and visible: it lands as an
-ordinary room the user can see, close, or ignore. Closing one is not
-the caller's call to make, least of all the room's own occupant.
-`archive_room`, `remove_worktree`, `delete_room` and `close_room` are
-refused **by name** in `tools/call`, the same three-way treatment as
-`resolve`/`approve` above — the reason names whose decision it is
-rather than leaving a model to go looking for another way to tear a
-worktree down (a raw `rm -rf`, say). This is the same standing rule
-the rest of Skein already follows: it performs no git mutations of its
-own (`CLAUDE.md`), and #330 does not carve out an exception just
-because the *thing* being destroyed is a room instead of a commit.
+**Creating a room is allowed; only the room that opened it may close
+it, and only once it is done.** `create_room` (#330) was deliberately
+not paired with any `close_room` at first — the line it drew was
+*whose decision it is*. #411 narrows that line rather than erasing it:
+in Skein, closing a room **is** archiving it, and archiving is
+reversible — the worktree, the branch and the room record all stay,
+and the user can reopen it from the archived-rooms list any time — so
+the decision `close_room` actually makes is smaller than tearing
+anything down. It is still guarded hard: only the room named in the
+target's `createdBy` may call it, never a room closing itself, and only
+once that room's own reviewer sign-off is approved for its current
+HEAD — the one fact Skein already owns about whether the work is
+done. `open_harness`/`close_harness` extend the same *whose decision*
+line one level down: a room may add or stop a harness in itself or in
+a room it created, never in any other room, and never the harness
+making the call. See "Closing a room, and controlling harnesses"
+above for all three.
+
+`archive_room` stays refused **by name** in `tools/call`, the same
+three-way treatment as `resolve`/`approve` above, but now points the
+caller at `close_room` instead of at "no" — there is one verb with one
+set of rules, not two names for the same refusal. `remove_worktree`
+and `delete_room` stay refused by name outright: destroying stays the
+user's decision, and #411 does not carve out an exception there —
+Skein still performs no git mutations of its own (`CLAUDE.md`).
 
 ## Errors
 
@@ -805,8 +968,8 @@ Settings → About shows the bound port, or says why there is none.
 | :-- | :-- |
 | `agent_api/state.rs` | shared state, the `skein://review-changed`, `skein://harness-permission`, `skein://harness-session-start` and `skein://mail-changed` (#327) events, `HarnessIdentity` |
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
-| `agent_api/verbs.rs` | the fourteen verbs — the whole testable core, including the mailbox (#327, plus `message_history`, #364) and the cross-room reads (#354, #356) |
-| `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve and approve refusals |
+| `agent_api/verbs.rs` | the seventeen verbs — the whole testable core, including the mailbox (#327, plus `message_history`, #364), the cross-room reads (#354, #356), and `close_room`/`open_harness`/`close_harness` (#411) |
+| `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve/approve refusals, and the `archive_room`/`remove_worktree`/`delete_room` refusals (#411) |
 | `agent_api/http.rs` | the routes, including `/api/messages` and `/api/messages/history` (#327, #364), `/api/rooms`/`/api/rooms/{id}`/`/api/harnesses` (#356), `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
 | `agent_api/tests.rs` | scoping, both prohibitions, lifecycle, real HTTP |
 | `review_surface/signoff.rs` | the sign-off itself, and the staleness rule (#214) |

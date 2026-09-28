@@ -151,8 +151,11 @@ export const withResumeCmds = (room: Room, ports: ReadonlyMap<string, number>): 
 /** Un-archive a room: drop the `archived` stamp and put every harness
  *  back into resume form. Pure, so the three callers that un-archive
  *  (the reopen modal, the palette, an OS-notification click — #170) can
- *  share one transform instead of each remembering to do both halves. */
+ *  share one transform instead of each remembering to do both halves.
+ *  #411: also drops `closedBy` — a reopened room was never "closed by"
+ *  anyone any more, and letting it survive would misattribute whatever
+ *  happens next. */
 export const unarchiveRoomTransform = (room: Room, ports: ReadonlyMap<string, number>): Room => {
-	const { archived, ...rest } = room;
+	const { archived, closedBy: _closedBy, ...rest } = room;
 	return withResumeCmds(rest, ports);
 };
