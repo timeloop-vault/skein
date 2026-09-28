@@ -122,6 +122,11 @@ A worktree is **excluded** (kept, and named in the report) when any of:
 
 ### 4. Remove
 
+Run the removals yourself, in the main session — the session that
+asked the user to confirm. Do not delegate them to scribe: its guard
+denies `git worktree remove` and `git branch -D` by design, so a
+delegated sweep removes nothing.
+
 Just before removing each approved worktree, repeat its dirty check
 and its `find_rooms_for_path` call — the confirmation was a wait, and a
 room may have opened on it since. If either result has changed, skip
@@ -129,9 +134,12 @@ that worktree and say so.
 
 ```bash
 for wt in <each approved path>; do git worktree remove "$wt"; done
-git worktree prune
 for b in <each approved branch>; do git branch -D "$b"; done
 ```
+
+Never run `git worktree prune`. It acts on every stale worktree entry
+in the repo, not on the confirmed list, and `git worktree remove`
+already drops the entry for each worktree it removes.
 
 `-D`, not `-d`: `-d` refuses squash-merged branches by design, and the
 evidence gathered in step 1 is what justifies the force. Never
@@ -145,13 +153,19 @@ it on demand.
 
 Counts removed, the exclusions with reasons, and the one-line state
 after: `git worktree list` and `git branch --list` should both show
-only `main` when the sweep is complete. Note that archived rooms whose
+`main` plus the worktrees and branches the report lists as excluded,
+and nothing else. An entry `git worktree list` marks `prunable` (its folder is
+already gone) was never on the confirmed list; name it in the report
+and leave it for the user. Note that archived rooms whose
 folder is now gone still appear in Reopen recent and will report the
 missing path if reopened.
 
 ## Safety
 
 - **Read-only until the confirmation** — steps 1 and 2 change nothing.
+- **Only the confirmed list is removed**, by the session that got the
+  confirmation. No `git worktree prune`, and no handing step 4 to
+  scribe.
 - **Dirty means excluded**, never force-removed. Unsaved `files`
   harness buffers live only in Skein's memory, not on disk, so a clean
   `git status` in the worktree is the whole check.
