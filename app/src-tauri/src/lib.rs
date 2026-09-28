@@ -37,7 +37,7 @@ use tauri::ipc::Channel;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 use crate::db::{Database, HarnessAction, HarnessEvent, LoadOutcome, Room};
-use crate::harness_events_claude::{ClaudeEvent, ClaudeEventsManager};
+use crate::harness_events_claude::{ClaudeEvent, ClaudeEventsManager, ReattachOutcome};
 use crate::harness_events_opencode::{OpencodeEvent, OpencodeEventsManager};
 use crate::pty::{PtyEvent, PtyManager};
 use crate::spawn_settings::SpawnSettings;
@@ -443,6 +443,7 @@ pub fn run() {
             resume::claude_session_exists,
             claude_events_attach,
             claude_events_detach,
+            claude_events_reattach,
             frontend_log,
             opencode_events_attach,
             opencode_events_detach,
@@ -750,6 +751,62 @@ async fn claude_events_attach(
 #[tauri::command]
 fn claude_events_detach(harness_id: String, manager: tauri::State<'_, ClaudeEventsManager>) {
     manager.detach(&harness_id);
+}
+
+/// Manually trigger the #410 dead-tail recovery check for `harness_id`
+/// — the same re-arm-then-check the background supervisor runs every
+/// `SUPERVISE_INTERVAL`, but on demand and without its automatic-path
+/// backoff. Returns which of `ReattachOutcome`'s three strings applies;
+/// the frontend (`reattachClaudeTelemetry` in `harnessEvents.ts`)
+/// matches on the exact string.
+///
+/// Modelled on `claude_events_attach` above: `async fn` +
+/// `spawn_blocking`, since a dead tail actually being reattached runs a
+/// full `attach_at`'s worth of disk I/O (`scan_history` over the whole
+/// transcript) — `ClaudeEventsManager` isn't `Arc`-wrapped, so the
+/// blocking closure re-resolves it off an owned `AppHandle`, same as
+/// `claude_events_attach` does.
+#[tauri::command]
+async fn claude_events_reattach(
+    harness_id: String,
+    app: tauri::AppHandle,
+) -> Result<ReattachOutcome, String> {
+    tracing::info!(harness_id, "claude_events_reattach: called");
+    let log_harness_id = harness_id.clone();
+    let join_result = tauri::async_runtime::spawn_blocking(move || {
+        let manager = app.state::<ClaudeEventsManager>();
+        manager.reattach(&harness_id)
+    })
+    .await;
+
+    match join_result {
+        Ok(Ok(outcome)) => {
+            tracing::info!(
+                harness_id = %log_harness_id,
+                ?outcome,
+                "claude_events_reattach: done"
+            );
+            Ok(outcome)
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(
+                harness_id = %log_harness_id,
+                error = %e,
+                "claude_events_reattach: failed"
+            );
+            Err(e.to_string())
+        }
+        Err(join_error) => {
+            // The blocking closure panicked — mirrors
+            // `claude_events_attach`'s identical handling below it.
+            tracing::warn!(
+                harness_id = %log_harness_id,
+                error = %join_error,
+                "claude_events_reattach: spawn_blocking join failed (panic inside reattach?)"
+            );
+            Err(join_error.to_string())
+        }
+    }
 }
 
 /// Forward one frontend log line into `skein.log` (#362). Exists so

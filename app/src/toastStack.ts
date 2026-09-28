@@ -21,7 +21,9 @@ export interface ToastEntry {
 	// background — not a harness-activity transition at all, so it never
 	// comes from `harnessActivity.subscribeTransitions` the way every
 	// other variant does; `useAgentRequests.ts` pushes it directly.
-	state: "idle" | "exited" | "waiting" | "error" | "permission" | "created";
+	// "info" (#410) is the same kind of direct push, for a message
+	// that doesn't reduce to a phase word — see `message` below.
+	state: "idle" | "exited" | "waiting" | "error" | "permission" | "created" | "info";
 	/** Error variant only: summary under the subtitle, e.g.
 	 *  "Overloaded (529), retrying · attempt 4 of 10 · retry in 4.4s". */
 	detail?: string | undefined;
@@ -43,6 +45,11 @@ export interface ToastEntry {
 	 *  here is the NEW room, the toast's own click/navigation target, same
 	 *  as every other variant. */
 	requesterRoomName?: string | undefined;
+	/** "info" variant only (#410): the full subtitle text, since a
+	 *  one-off notice like a "Reattach telemetry" outcome doesn't
+	 *  reduce to a phase word the way every other variant's `state`
+	 *  does. */
+	message?: string | undefined;
 	/** Absolute ms timestamp (Date.now()-comparable) the toast's
 	 *  auto-dismiss timer expires at, fixed the moment it entered the
 	 *  stack (`appendToast`). NEVER moved by a coalesce (#180) — a

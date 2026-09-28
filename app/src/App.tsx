@@ -22,8 +22,10 @@ import { Splitter } from "./Splitter.tsx";
 import { StatusBar } from "./StatusBar.tsx";
 import { StatusDot } from "./components.tsx";
 import { usePermissionHarnessIds } from "./harnessActivity.ts";
+import { reattachClaudeTelemetry } from "./harnessEvents.ts";
 import { buildPaletteItems } from "./paletteItems.ts";
 import { withDefaultAgent } from "./prefs.ts";
+import { reattachOutcomeMessage } from "./reattachOutcomeMessage.ts";
 import { allRoomOrder } from "./roomGroups.ts";
 import { isMac } from "./shortcuts.ts";
 import type { HarnessKind, Room, SpawnSettings, SpawnSettingsPayload } from "./types.ts";
@@ -313,6 +315,39 @@ export default function App() {
 		jumpToHarness,
 	);
 
+	// #410: manual "Reattach telemetry" action (HarnessActionsMenu's
+	// menu item + its command palette twin, both gated on
+	// `hasClaudeTranscriptTail`) for when the badge is visibly wrong
+	// because the Rust-side Claude JSONL tail died silently. Just an
+	// invoke + a toast reporting what happened — the phase itself
+	// settles on its own from the events a genuine reattach picks back
+	// up, same as any other attach.
+	const onReattachTelemetry = useCallback(
+		(roomId: string, harnessId: string) => {
+			const owningRoom = roomsRef.current.find((r) => r.id === roomId);
+			const harness = owningRoom?.harnesses.find((h) => h.id === harnessId);
+			if (!owningRoom || !harness) return;
+			const toast = (message: string) =>
+				pushToast({
+					id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+					roomId: owningRoom.id,
+					harnessId,
+					kind: harness.kind,
+					roomName: owningRoom.name,
+					harnessName: harness.name,
+					state: "info",
+					message,
+				});
+			void reattachClaudeTelemetry(harnessId)
+				.then((outcome) => toast(reattachOutcomeMessage({ ok: true, outcome })))
+				.catch((err: unknown) => {
+					const msg = err instanceof Error ? err.message : String(err);
+					toast(reattachOutcomeMessage({ ok: false, error: msg }));
+				});
+		},
+		[roomsRef, pushToast],
+	);
+
 	// Pointer-based drag-to-reorder (#271, replacing the HTML5 DnD this
 	// used before — see tabDrag.ts's header for why). The state machine
 	// and its DOM wiring both live outside App.tsx; `reorderRoom` /
@@ -482,6 +517,7 @@ export default function App() {
 		activeRooms,
 		archivedRooms,
 		room,
+		activeHarness,
 		activeRoomId,
 		theme,
 		setActiveRoomId,
@@ -496,6 +532,7 @@ export default function App() {
 		closeRoom,
 		cycleAlertedRoom,
 		cycleAlertedHarness,
+		onReattachTelemetry,
 	});
 
 	// Empty state — no *active* rooms. Archived rooms still in the list
@@ -715,6 +752,7 @@ export default function App() {
 								onOpencodeSessionFollowed={(harnessId, sid) =>
 									replaceHarnessSessionId(r.id, harnessId, sid)
 								}
+								onReattachTelemetry={(harnessId) => onReattachTelemetry(r.id, harnessId)}
 							/>
 						)}
 					</div>

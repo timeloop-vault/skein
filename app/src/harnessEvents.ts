@@ -21,6 +21,7 @@ import { observedAgents } from "./harnessAgent.ts";
 import { type PendingPhase, pendingPrompts } from "./pendingPrompts.ts";
 import { followedOpencodeSession } from "./sessionTracking.ts";
 import { subagents } from "./subagents.ts";
+import type { HarnessKind } from "./types.ts";
 
 /// How many `onmessage` throws per attach get logged before we stop
 /// bothering Rust — a hot loop throwing on every message must not
@@ -103,6 +104,20 @@ export type ClaudeEvent =
 			description: string | null;
 	  };
 
+/// Whether a harness is the kind of thing `attachClaudeEvents` ever
+/// attaches to: a Claude harness with a pre-allocated session uuid
+/// (chapter 5's `--session-id`). Exported so #410's "Reattach
+/// telemetry" action — the harness actions menu item and its command
+/// palette twin — can gate on exactly the same condition that decided
+/// whether there's a tail to reattach in the first place, rather than
+/// a second copy of the kind check that could drift from it.
+export function hasClaudeTranscriptTail(
+	kind: HarnessKind,
+	sessionId: string | undefined,
+): sessionId is string {
+	return kind === "claude" && typeof sessionId === "string" && sessionId.length > 0;
+}
+
 /// Subscribe a Claude harness to its JSONL event stream. Marks the
 /// activity store as authoritative-source so the L2a idle tick stops
 /// fighting the adapter. Returns an unsubscribe — callers should run
@@ -176,6 +191,37 @@ export function attachClaudeEvents(
 			);
 		});
 	};
+}
+
+/// #410: manual recovery for the case the badge is visibly wrong
+/// because the Rust-side tail died silently (issue #362's motivating
+/// bug). Mirrors the Rust `ClaudeEventsReattachOutcome` enum — keep in
+/// lock-step.
+///
+/// - `"reattached"`: the tail was dead and is live again; the phase
+///   settles on its own from the events that follow, same as a fresh
+///   attach.
+/// - `"healthy"`: nothing to do — logged on the Rust side already.
+/// - `"not_attached"`: Rust never had a tail for this harness (e.g.
+///   attach never succeeded); only a restart re-attaches it.
+export type ReattachOutcome = "reattached" | "healthy" | "not_attached";
+
+/// Invoke wrapper for `claude_events_reattach`, next to
+/// `attachClaudeEvents`'s own `claude_events_attach` call. Logs the
+/// outcome (or the failure) via `logToRust` so a reattach attempt
+/// survives in `skein.log` even from a release build with devtools
+/// closed — rejects are re-thrown for the caller to turn into
+/// user-facing feedback.
+export async function reattachClaudeTelemetry(harnessId: string): Promise<ReattachOutcome> {
+	try {
+		const outcome = await invoke<ReattachOutcome>("claude_events_reattach", { harnessId });
+		logToRust("info", "claude_events", `reattach harness=${harnessId} outcome=${outcome}`);
+		return outcome;
+	} catch (err: unknown) {
+		const msg = err instanceof Error ? err.message : String(err);
+		logToRust("warn", "claude_events", `reattach failed harness=${harnessId}: ${msg}`);
+		throw err;
+	}
 }
 
 const translate = (harnessId: string, event: ClaudeEvent): void => {

@@ -254,7 +254,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │                            #   nudges.ts (#238: the header Nudge button's three
     │   │                            #   fixed prompts, picked by sign-off state + open count)
     │   └── src-tauri/               # Tauri Rust shell
-    │       ├── src/lib.rs           # Builder + 71-command registry; tracing → daily-rotating
+    │       ├── src/lib.rs           # Builder + 72-command registry; tracing → daily-rotating
     │       │                        #   file in app_log_dir() + stderr (RUST_LOG overrides)
     │       ├── src/pty.rs           # PtyManager (portable-pty); 4 threads per spawn (raw
     │       │                        #   reader + coalescer + writer + waiter — the waiter is
