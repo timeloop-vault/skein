@@ -1,6 +1,6 @@
 //! The Tauri boundary.
 //!
-//! Nine commands, all the same shape: clone the `Database` handle, do
+//! Thirteen commands, all the same shape: clone the `Database` handle, do
 //! the work on the blocking pool, collapse the error to a `String`.
 //! Every one of them stats or reads files, walks a revision list, or
 //! touches sqlite, and the pane calls the first two on every debounced
@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use super::Scope;
 use super::dto::{CommentDto, FileDetailDto, NewThread, ReviewScopeDto, ThreadDto};
+use super::image::image_bytes_impl;
 use super::query::{file_impl, scope_impl};
 use super::signoff::{self, SignoffStatus};
 use super::write::add_thread_impl;
@@ -65,6 +66,38 @@ pub async fn review_file(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// One side of one image file's raw bytes, for the review pane's
+/// before/after preview (#409). Returns the same `ArrayBuffer` shape
+/// `fs::read_image_bytes` does — an `ipc::Response`, not JSON, since
+/// base64 doesn't scale to a multi-megabyte screenshot.
+#[tauri::command]
+pub async fn review_image_bytes(
+    room_id: String,
+    cwd: String,
+    path: String,
+    scope: Scope,
+    commit_sha: Option<String>,
+    side: String,
+    db: tauri::State<'_, Arc<Database>>,
+) -> Result<tauri::ipc::Response, String> {
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        image_bytes_impl(
+            &db,
+            &room_id,
+            &cwd,
+            &path,
+            scope,
+            commit_sha.as_deref(),
+            &side,
+            skein_review::MAX_IMAGE_BYTES,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map(tauri::ipc::Response::new)
 }
 
 /// Open a thread with its first comment.

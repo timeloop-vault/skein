@@ -177,25 +177,80 @@ fn patch_targets(payload: &str) -> Vec<String> {
 /// holding one (discovery, which processes a whole batch of paths)
 /// should use [`capture_state_with_repo`] instead so each path doesn't
 /// pay for a fresh `Repo::open`.
-fn capture_state(cwd: &str, key: &str) -> FileState {
+///
+/// The second element is the bytes worth mirroring into
+/// `review_baseline_images` (#409) — see [`image_mirror`] — or `None`
+/// when there is nothing to keep there.
+fn capture_state(cwd: &str, key: &str) -> (FileState, Option<Vec<u8>>) {
     let repo = skein_git::Repo::open(Path::new(cwd)).ok();
     capture_state_with_repo(repo.as_ref(), key)
 }
 
 /// Same as [`capture_state`], against an already-opened repo (or `None`
 /// for a non-git room).
-fn capture_state_with_repo(repo: Option<&skein_git::Repo>, key: &str) -> FileState {
+fn capture_state_with_repo(
+    repo: Option<&skein_git::Repo>,
+    key: &str,
+) -> (FileState, Option<Vec<u8>>) {
     let Some(repo) = repo else {
-        return FileState::Missing; // not a git room
+        return (FileState::Missing, None); // not a git room
     };
     match repo.head_blob(key) {
-        Ok(Some(bytes)) => skein_review::classify_bytes(&bytes),
-        Ok(None) => FileState::Missing,
+        Ok(Some(bytes)) => {
+            let state = skein_review::classify_bytes(&bytes);
+            let image = image_mirror(&state, key, &bytes);
+            (state, image)
+        }
+        Ok(None) => (FileState::Missing, None),
         Err(e) => {
             tracing::warn!(path = key, error = %e, "review: head_blob failed; baselining as new");
-            FileState::Missing
+            (FileState::Missing, None)
         }
     }
+}
+
+/// The bytes worth mirroring into `review_baseline_images` for a
+/// baseline whose classified state is `state`, with `raw` already in
+/// hand (#409).
+///
+/// `None` unless `state` is `Binary` or `TooLarge`: a `Text` baseline —
+/// SVG included, since it's valid UTF-8 — already carries its bytes as
+/// the row's own `content` column, and
+/// `Missing`/`Symlink`/`Unreadable` have no bytes to show at all. Also
+/// `None` when `key` isn't a known image extension, or `raw` is over
+/// [`skein_review::MAX_IMAGE_BYTES`] — bigger than the 1 MiB
+/// `review_baselines` cap that already forced `TooLarge`, so a mid-size
+/// screenshot can still get a mirror even though its row has no content.
+fn image_mirror(state: &FileState, key: &str, raw: &[u8]) -> Option<Vec<u8>> {
+    if !matches!(state, FileState::Binary { .. } | FileState::TooLarge { .. }) {
+        return None;
+    }
+    if !skein_review::is_image_path(key) {
+        return None;
+    }
+    if u64::try_from(raw.len()).unwrap_or(u64::MAX) > skein_review::MAX_IMAGE_BYTES {
+        return None;
+    }
+    Some(raw.to_vec())
+}
+
+/// Same as [`image_mirror`], reading the raw bytes off disk rather than
+/// from an already-fetched blob — what accept (baseline moves to match
+/// disk) needs, since [`skein_review::read_state`] discards the bytes
+/// for anything that isn't `Text`.
+fn image_mirror_on_disk(state: &FileState, cwd: &str, key: &str) -> Option<Vec<u8>> {
+    if !matches!(state, FileState::Binary { .. } | FileState::TooLarge { .. }) {
+        return None;
+    }
+    if !skein_review::is_image_path(key) {
+        return None;
+    }
+    let abs = abs_path(cwd, key);
+    let meta = std::fs::metadata(&abs).ok()?;
+    if meta.len() > skein_review::MAX_IMAGE_BYTES {
+        return None;
+    }
+    std::fs::read(&abs).ok()
 }
 
 /// Record that a harness wrote something, capturing a baseline the
@@ -220,10 +275,18 @@ pub fn note_patch(db: &Database, room_id: &str, cwd: &str, harness_id: &str, pay
                 }
             }
             Ok(None) => {
-                let (kind, content) = skein_review::encode(&capture_state(cwd, &key));
-                if let Err(e) =
-                    insert_or_attribute(db, room_id, &key, kind, content.as_deref(), harness_id, ts)
-                {
+                let (state, image) = capture_state(cwd, &key);
+                let (kind, content) = skein_review::encode(&state);
+                if let Err(e) = insert_or_attribute(
+                    db,
+                    room_id,
+                    &key,
+                    kind,
+                    content.as_deref(),
+                    harness_id,
+                    ts,
+                    image.as_deref(),
+                ) {
                     tracing::warn!(path = %key, error = %e, "review: baseline capture failed");
                 }
             }
@@ -243,6 +306,7 @@ pub fn note_patch(db: &Database, room_id: &str, cwd: &str, harness_id: &str, pay
 /// re-captured once a row exists (the #211 invariant), but `harness_id`
 /// and `touched_ms` still move, the same as the `Ok(Some(_))` arm above
 /// does for an ordinary second edit.
+#[allow(clippy::too_many_arguments)]
 fn insert_or_attribute(
     db: &Database,
     room_id: &str,
@@ -251,8 +315,10 @@ fn insert_or_attribute(
     content: Option<&str>,
     harness_id: &str,
     ts: i64,
+    image: Option<&[u8]>,
 ) -> Result<(), String> {
     if db.insert_review_baseline_if_absent(room_id, key, kind, content, harness_id, ts)? {
+        db.set_review_baseline_image(room_id, key, image)?;
         return Ok(());
     }
     db.touch_review_baseline(room_id, key, harness_id, ts)
@@ -391,7 +457,7 @@ fn discover_batch(
             continue; // not a file to baseline
         }
         let exists = meta.is_ok();
-        let base = capture_state_with_repo(repo, &key);
+        let (base, image) = capture_state_with_repo(repo, &key);
         if !exists && base == FileState::Missing {
             let was_dir_at_head = repo.is_some_and(|r| match r.head_is_dir(&key) {
                 Ok(v) => v,
@@ -417,7 +483,12 @@ fn discover_batch(
             "",
             now_ms(),
         ) {
-            Ok(true) => inserted += 1,
+            Ok(true) => {
+                if let Err(e) = db.set_review_baseline_image(room_id, &key, image.as_deref()) {
+                    tracing::warn!(path = %key, error = %e, "review: discovery image mirror failed");
+                }
+                inserted += 1;
+            }
             Ok(false) => {} // lost a race with another capture — fine
             Err(e) => {
                 tracing::warn!(path = %key, error = %e, "review: discovery baseline capture failed");
@@ -549,7 +620,12 @@ fn store_advance(
         FileState::Text(next_text.to_string())
     };
     let (kind, content) = skein_review::encode(&state);
-    db.advance_review_baseline(room_id, path, kind, content.as_deref(), now_ms())
+    db.advance_review_baseline(room_id, path, kind, content.as_deref(), now_ms())?;
+    // Reached only when both baseline and disk were diffable (`Text` or
+    // `Missing`), so `state` is never `Binary`/`TooLarge` here and there
+    // is never a mirror to write — only, in principle, a stale one to
+    // clear.
+    db.set_review_baseline_image(room_id, path, None)
 }
 
 fn accept_impl(
@@ -565,8 +641,10 @@ fn accept_impl(
         let pending = pending_impl(db, room_id, cwd)?;
         for f in &pending {
             let disk = skein_review::read_state(&abs_path(cwd, &f.path));
+            let image = image_mirror_on_disk(&disk, cwd, &f.path);
             let (kind, content) = skein_review::encode(&disk);
             db.advance_review_baseline(room_id, &f.path, kind, content.as_deref(), now_ms())?;
+            db.set_review_baseline_image(room_id, &f.path, image.as_deref())?;
         }
         return Ok(pending.len());
     };
@@ -580,8 +658,10 @@ fn accept_impl(
     if hunks.is_empty() {
         // Whole file.
         guard_hash(&disk, content_hash)?;
+        let image = image_mirror_on_disk(&disk, cwd, path);
         let (kind, content) = skein_review::encode(&disk);
         db.advance_review_baseline(room_id, path, kind, content.as_deref(), now_ms())?;
+        db.set_review_baseline_image(room_id, path, image.as_deref())?;
         return Ok(1);
     }
 
@@ -931,6 +1011,11 @@ mod tests {
             pending_impl(&self.db, "r1", &self.cwd).unwrap()
         }
 
+        /// The #409 image mirror for `rel`, if any.
+        fn image(&self, rel: &str) -> Option<Vec<u8>> {
+            self.db.review_baseline_image("r1", rel).unwrap()
+        }
+
         fn commit_all(&self, msg: &str) {
             let repo = git2::Repository::open(&self.cwd).unwrap();
             commit(&repo, msg);
@@ -1270,6 +1355,93 @@ mod tests {
         assert_eq!(room.pending().len(), 1);
     }
 
+    // ── #409 image mirror ────────────────────────────────────────
+
+    #[test]
+    fn a_binary_image_baseline_mirrors_its_head_bytes() {
+        let room = Room::new();
+        let original = [0x89, b'P', b'N', b'G', 1, 2, 3, 4];
+        fs::write(room.path("logo.png"), original).unwrap();
+        room.commit_all("add logo");
+        fs::write(room.path("logo.png"), [0x89, b'P', b'N', b'G', 9, 9, 9, 9]).unwrap();
+        room.touched("h1", "logo.png");
+
+        assert_eq!(room.image("logo.png").as_deref(), Some(&original[..]));
+    }
+
+    #[test]
+    fn a_non_image_binary_baseline_mirrors_nothing() {
+        let room = Room::new();
+        fs::write(room.path("data.bin"), [0x00, 0x01, 0x02]).unwrap();
+        room.commit_all("add data");
+        fs::write(room.path("data.bin"), [0x00, 0x01, 0x03]).unwrap();
+        room.touched("h1", "data.bin");
+        assert!(room.image("data.bin").is_none());
+    }
+
+    #[test]
+    fn accepting_a_binary_image_mirrors_the_accepted_disk_bytes() {
+        let room = Room::new();
+        fs::write(room.path("logo.png"), [0x89, b'P', b'N', b'G', 1]).unwrap();
+        room.touched("h1", "logo.png"); // never committed — baseline is Missing
+        let accepted = [0x89, b'P', b'N', b'G', 2];
+        fs::write(room.path("logo.png"), accepted).unwrap();
+
+        accept_impl(&room.db, "r1", &room.cwd, Some("logo.png"), &[], None).unwrap();
+        assert_eq!(room.image("logo.png").as_deref(), Some(&accepted[..]));
+    }
+
+    #[test]
+    fn accept_all_mirrors_every_pending_image() {
+        let room = Room::new();
+        let bytes = [0x89, b'P', b'N', b'G', 7];
+        fs::write(room.path("logo.png"), bytes).unwrap();
+        room.touched("h1", "logo.png");
+
+        accept_impl(&room.db, "r1", &room.cwd, None, &[], None).unwrap();
+        assert_eq!(room.image("logo.png").as_deref(), Some(&bytes[..]));
+    }
+
+    #[test]
+    fn a_failed_reject_of_a_binary_image_leaves_its_mirror_untouched() {
+        // Reject never moves the baseline (and, on a binary baseline, it
+        // cannot even restore the file — there is no text to write
+        // back), so the mirror must be exactly as untouched as the row
+        // it belongs to.
+        let room = Room::new();
+        let original = [0x89, b'P', b'N', b'G', 1];
+        fs::write(room.path("logo.png"), original).unwrap();
+        room.commit_all("add logo");
+        fs::write(room.path("logo.png"), [0x89, b'P', b'N', b'G', 2]).unwrap();
+        room.touched("h1", "logo.png");
+        assert_eq!(room.image("logo.png").as_deref(), Some(&original[..]));
+
+        assert!(reject_impl(&room.db, "r1", &room.cwd, "logo.png", &[], None).is_err());
+        assert_eq!(room.image("logo.png").as_deref(), Some(&original[..]));
+    }
+
+    #[test]
+    fn discovery_mirrors_a_shell_written_binary_image() {
+        let room = Room::new();
+        let bytes = [0x89, b'P', b'N', b'G', 3];
+        fs::write(room.path("logo.png"), bytes).unwrap();
+        room.commit_all("add logo");
+        fs::write(room.path("logo.png"), [0x89, b'P', b'N', b'G', 4]).unwrap();
+
+        room.discover(&["logo.png"]);
+        assert_eq!(room.image("logo.png").as_deref(), Some(&bytes[..]));
+    }
+
+    #[test]
+    fn a_text_svg_baseline_mirrors_nothing_it_already_carries_its_own_bytes() {
+        let room = Room::new();
+        fs::write(room.path("icon.svg"), "<svg>one</svg>").unwrap();
+        room.commit_all("add icon");
+        fs::write(room.path("icon.svg"), "<svg>two</svg>").unwrap();
+        room.touched("h1", "icon.svg");
+        assert!(room.image("icon.svg").is_none());
+    }
+
     #[test]
     fn hunk_operations_are_refused_on_a_file_with_no_line_diff() {
         let room = Room::new();
@@ -1578,6 +1750,7 @@ mod tests {
             Some("a different snapshot"),
             "h1",
             200,
+            None,
         )
         .unwrap();
 

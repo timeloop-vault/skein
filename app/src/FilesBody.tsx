@@ -20,9 +20,11 @@ import { EditorView } from "@codemirror/view";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { FileTree } from "./FileTree.tsx";
+import { ImageView } from "./ImageView.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { createBufferState } from "./editor.ts";
 import { filesRegistry } from "./filesRegistry.ts";
+import { isImagePath } from "./imageFiles.ts";
 import { usePersistedState } from "./prefs.ts";
 
 interface TextDto {
@@ -39,6 +41,9 @@ interface TabInfo {
 	name: string; // leaf, for the tab + prompts
 	dirty: boolean;
 	readOnly: boolean;
+	/** #409: an image preview tab — no CodeMirror buffer, never dirty,
+	 *  rendered by ImageView instead of the fp-code host. */
+	isImage: boolean;
 }
 
 /** Past this many open buffers, the least-recently-active CLEAN
@@ -64,6 +69,13 @@ export const FilesBody = ({ harnessId, cwd, visible }: FilesBodyProps) => {
 	const bufRef = useRef(
 		new Map<string, { state: EditorState; readOnly: boolean; mtimeMs: number }>(),
 	);
+	// path -> reload counter for open image tabs (#409). Mirrors bufRef's
+	// role as the synchronous "is this already open" source of truth —
+	// tabsRef lags a render behind setTabs, so a same-tick reopen (or a
+	// double-click race, same hazard bufRef guards against below) can't
+	// rely on it. Bumping the counter on a reopen is also ImageView's
+	// reload trigger via loadKey.
+	const imgRef = useRef(new Map<string, number>());
 	// In-flight guards: double-click opens and Mod+S mashes race the
 	// awaited IPC round-trips (#185 review).
 	const openingRef = useRef(new Set<string>());
@@ -102,7 +114,7 @@ export const FilesBody = ({ harnessId, cwd, visible }: FilesBodyProps) => {
 	useEffect(() => {
 		if (!visible) return;
 		viewRef.current?.requestMeasure();
-		if (activeRef.current) viewRef.current?.focus();
+		if (activeRef.current && !imgRef.current.has(activeRef.current)) viewRef.current?.focus();
 	}, [visible]);
 
 	/** Persist the live view state back into the buffer map. */
@@ -127,6 +139,27 @@ export const FilesBody = ({ harnessId, cwd, visible }: FilesBodyProps) => {
 		setActive(path);
 		lruRef.current.set(path, ++lruSeq.current);
 		v.focus();
+	};
+
+	/** Activate an image tab: no CodeMirror buffer to swap in, and the
+	 *  CM view must give up focus so hidden keystrokes don't land in it
+	 *  (#409). */
+	const activateImage = (path: string) => {
+		if (activeRef.current === path) return;
+		stashActive();
+		viewRef.current?.contentDOM.blur();
+		activeRef.current = path;
+		setActive(path);
+		lruRef.current.set(path, ++lruSeq.current);
+	};
+
+	/** Dispatch to the right activation path by tab kind. `imgRef` is
+	 *  consulted rather than `tabsRef` because it is updated
+	 *  synchronously at tab creation, the same reason `bufRef` is used
+	 *  for text tabs. */
+	const selectTab = (path: string) => {
+		if (imgRef.current.has(path)) activateImage(path);
+		else activate(path);
 	};
 
 	const markDirty = (path: string) => {
@@ -183,7 +216,48 @@ export const FilesBody = ({ harnessId, cwd, visible }: FilesBodyProps) => {
 	const saveRef = useRef(save);
 	saveRef.current = save;
 
+	/** Evict the least-recently-active clean tab (any kind) past
+	 *  MAX_BUFFERS, then append `tab`. Shared by the text and image open
+	 *  paths so the LRU policy stays one piece of logic. */
+	const pushTab = (tab: TabInfo) => {
+		setTabs((prev) => {
+			let next = prev;
+			if (prev.length >= MAX_BUFFERS) {
+				const clean = prev.filter((t) => !t.dirty && t.path !== activeRef.current);
+				if (clean.length > 0) {
+					const evict = clean.reduce((a, b) =>
+						(lruRef.current.get(a.path) ?? 0) <= (lruRef.current.get(b.path) ?? 0) ? a : b,
+					);
+					bufRef.current.delete(evict.path);
+					imgRef.current.delete(evict.path);
+					lruRef.current.delete(evict.path);
+					next = prev.filter((t) => t.path !== evict.path);
+				}
+			}
+			return [...next, tab];
+		});
+	};
+
+	/** Open (or reopen) an image tab (#409): no read_file_text, no
+	 *  CodeMirror buffer — ImageView loads bytes itself, lazily, via
+	 *  `read_image_bytes`. Reopening an already-open image bumps its
+	 *  reload counter so ImageView's loadKey changes and it re-fetches. */
+	const openImage = (absPath: string, name: string) => {
+		if (imgRef.current.has(absPath)) {
+			imgRef.current.set(absPath, (imgRef.current.get(absPath) ?? 0) + 1);
+			activateImage(absPath);
+			return;
+		}
+		imgRef.current.set(absPath, 0);
+		pushTab({ path: absPath, name, dirty: false, readOnly: true, isImage: true });
+		activateImage(absPath);
+	};
+
 	const openFile = async (absPath: string, name: string) => {
+		if (isImagePath(absPath)) {
+			openImage(absPath, name);
+			return;
+		}
 		if (bufRef.current.has(absPath)) {
 			activate(absPath);
 			return;
@@ -203,21 +277,7 @@ export const FilesBody = ({ harnessId, cwd, visible }: FilesBodyProps) => {
 				onSave: () => void saveRef.current(absPath),
 			});
 			bufRef.current.set(absPath, { state, readOnly: viewOnly, mtimeMs: dto.mtime_ms });
-			setTabs((prev) => {
-				let next = prev;
-				if (prev.length >= MAX_BUFFERS) {
-					const clean = prev.filter((t) => !t.dirty && t.path !== activeRef.current);
-					if (clean.length > 0) {
-						const evict = clean.reduce((a, b) =>
-							(lruRef.current.get(a.path) ?? 0) <= (lruRef.current.get(b.path) ?? 0) ? a : b,
-						);
-						bufRef.current.delete(evict.path);
-						lruRef.current.delete(evict.path);
-						next = prev.filter((t) => t.path !== evict.path);
-					}
-				}
-				return [...next, { path: absPath, name, dirty: false, readOnly: viewOnly }];
-			});
+			pushTab({ path: absPath, name, dirty: false, readOnly: viewOnly, isImage: false });
 			activate(absPath);
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -240,12 +300,13 @@ export const FilesBody = ({ harnessId, cwd, visible }: FilesBodyProps) => {
 		const idx = cur.findIndex((t) => t.path === path);
 		const next = cur.filter((t) => t.path !== path);
 		bufRef.current.delete(path);
+		imgRef.current.delete(path);
 		lruRef.current.delete(path);
 		setTabs(next);
 		if (activeRef.current === path) {
 			activeRef.current = null;
 			const neighbor = next[Math.min(idx, next.length - 1)];
-			if (neighbor) activate(neighbor.path);
+			if (neighbor) selectTab(neighbor.path);
 			else setActive(null);
 		}
 	};
@@ -281,7 +342,7 @@ export const FilesBody = ({ harnessId, cwd, visible }: FilesBodyProps) => {
 									key={t.path}
 									className={`fp-buftab ${t.path === active ? "active" : ""}`}
 									title={t.path}
-									onClick={() => activate(t.path)}
+									onClick={() => selectTab(t.path)}
 								>
 									<span className="name">{t.name}</span>
 									{t.dirty ? (
@@ -309,7 +370,7 @@ export const FilesBody = ({ harnessId, cwd, visible }: FilesBodyProps) => {
 								</div>
 							))}
 						</div>
-						{activeTab?.readOnly && (
+						{activeTab?.readOnly && !activeTab.isImage && (
 							<div className="fp-notice">
 								view only — file is over 256 KB or not valid UTF-8 (saving would mangle it)
 							</div>
@@ -323,7 +384,20 @@ export const FilesBody = ({ harnessId, cwd, visible }: FilesBodyProps) => {
 								{note}
 							</div>
 						)}
-						<div ref={hostRef} className="fp-code" style={{ display: active ? "block" : "none" }} />
+						<div
+							ref={hostRef}
+							className="fp-code"
+							style={{ display: active && !activeTab?.isImage ? "block" : "none" }}
+						/>
+						{active && activeTab?.isImage && (
+							<div className="fp-code">
+								<ImageView
+									path={active}
+									loadKey={`${active}#${imgRef.current.get(active) ?? 0}`}
+									load={() => invoke<ArrayBuffer>("read_image_bytes", { path: active })}
+								/>
+							</div>
+						)}
 						{!active && (
 							<div className="fp-empty">
 								<div className="glyph">◇</div>

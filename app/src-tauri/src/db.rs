@@ -307,6 +307,7 @@ const ROOM_KEYED_TABLES: &[&str] = &[
     "harness_events",
     "harness_actions",
     "review_baselines",
+    "review_baseline_images",
     "review_threads",
     "review_comments",
     "review_viewed",
@@ -511,6 +512,27 @@ impl Database {
                 harness_id TEXT NOT NULL,
                 captured_ms INTEGER NOT NULL,
                 touched_ms INTEGER NOT NULL,
+                PRIMARY KEY (room_id, path)
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Issue #409: the raw bytes behind a `Binary`/`TooLarge`
+        // baseline on an image path. `review_baselines.content` only
+        // ever holds text (a `Text` baseline — SVG included, since it's
+        // UTF-8 — already carries its bytes there); a raster image's
+        // baseline keeps nothing but a digest or a length, which is
+        // enough to detect a change but not enough to render one. A
+        // sibling table rather than widening `content` to a BLOB: every
+        // other kind still has nothing to store, and this only ever
+        // exists for the minority of baselines that are both non-text
+        // and a known image extension.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS review_baseline_images (
+                room_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                bytes BLOB NOT NULL,
                 PRIMARY KEY (room_id, path)
             )",
             [],
@@ -1341,6 +1363,55 @@ impl Database {
             Some(r) => r.map(Some).map_err(|e| e.to_string()),
             None => Ok(None),
         }
+    }
+
+    /// Mirror (or clear) `review_baseline_images` for one baseline
+    /// (#409). Every writer of a `review_baselines` row calls this
+    /// alongside it: `Some(bytes)` upserts a mirror of the baseline's
+    /// raw content for an image path Skein classified as `Binary` or
+    /// `TooLarge`; `None` deletes any row that might be there — a
+    /// `Text`/`Missing`/`Symlink`/`Unreadable` baseline, a non-image
+    /// path, or bytes over the cap all have nothing worth keeping here.
+    pub fn set_review_baseline_image(
+        &self,
+        room_id: &str,
+        path: &str,
+        bytes: Option<&[u8]>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock();
+        match bytes {
+            Some(b) => conn.execute(
+                "INSERT INTO review_baseline_images (room_id, path, bytes) \
+                 VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(room_id, path) DO UPDATE SET bytes = excluded.bytes",
+                params![room_id, path, b],
+            ),
+            None => conn.execute(
+                "DELETE FROM review_baseline_images WHERE room_id = ?1 AND path = ?2",
+                params![room_id, path],
+            ),
+        }
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// The mirrored bytes for a baseline, when
+    /// [`Self::set_review_baseline_image`] kept one. `None` when there
+    /// never was one — the pending image lookup
+    /// (`review_surface::image`) falls back from there.
+    pub fn review_baseline_image(
+        &self,
+        room_id: &str,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT bytes FROM review_baseline_images WHERE room_id = ?1 AND path = ?2",
+            params![room_id, path],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())
     }
 
     // ── review comments (issue #212) ──────────────────────────────
@@ -3256,6 +3327,55 @@ mod review_baseline_tests {
     }
 
     #[test]
+    fn baseline_image_upserts_and_clears_independently_of_the_row() {
+        let (_d, db) = fresh();
+        assert_eq!(db.review_baseline_image("r1", "shot.png").unwrap(), None);
+
+        db.set_review_baseline_image("r1", "shot.png", Some(&[1, 2, 3]))
+            .unwrap();
+        assert_eq!(
+            db.review_baseline_image("r1", "shot.png").unwrap(),
+            Some(vec![1, 2, 3])
+        );
+
+        // A later write for the same path replaces, not appends.
+        db.set_review_baseline_image("r1", "shot.png", Some(&[9]))
+            .unwrap();
+        assert_eq!(
+            db.review_baseline_image("r1", "shot.png").unwrap(),
+            Some(vec![9])
+        );
+
+        // Clearing removes the row outright rather than storing empty
+        // bytes — `None` is what a non-image or over-cap write passes.
+        db.set_review_baseline_image("r1", "shot.png", None)
+            .unwrap();
+        assert_eq!(db.review_baseline_image("r1", "shot.png").unwrap(), None);
+
+        // Clearing a path that was never mirrored is a no-op, not an
+        // error — every baseline write calls this unconditionally.
+        db.set_review_baseline_image("r1", "never-mirrored.png", None)
+            .unwrap();
+    }
+
+    #[test]
+    fn baseline_images_are_scoped_per_room() {
+        let (_d, db) = fresh();
+        db.set_review_baseline_image("r1", "shot.png", Some(&[1]))
+            .unwrap();
+        db.set_review_baseline_image("r2", "shot.png", Some(&[2]))
+            .unwrap();
+        assert_eq!(
+            db.review_baseline_image("r1", "shot.png").unwrap(),
+            Some(vec![1])
+        );
+        assert_eq!(
+            db.review_baseline_image("r2", "shot.png").unwrap(),
+            Some(vec![2])
+        );
+    }
+
+    #[test]
     fn baselines_survive_a_restart() {
         // #211's mandatory property: an empty tracker after a reload
         // makes pending hunks "silently disappear — the user sees their
@@ -3625,6 +3745,10 @@ mod orphan_sweep_tests {
                 "INSERT INTO review_baselines \
                  (room_id, path, kind, content, harness_id, captured_ms, touched_ms) \
                  VALUES (?1, 'a.rs', 'text', 'v1', 'h1', 1, 1)"
+            }
+            "review_baseline_images" => {
+                "INSERT INTO review_baseline_images (room_id, path, bytes) \
+                 VALUES (?1, 'shot.png', X'89504e47')"
             }
             "review_threads" => {
                 "INSERT INTO review_threads \

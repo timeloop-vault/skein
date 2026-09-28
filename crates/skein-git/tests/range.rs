@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use git2::{Repository, Signature};
-use skein_git::{DiffLineKind, MAX_DIFF_FILE_BYTES, Repo, StatusKind};
+use skein_git::{CappedBlob, DiffLineKind, MAX_DIFF_FILE_BYTES, Repo, StatusKind};
 use tempfile::TempDir;
 
 /// A repo with one commit on `main`.
@@ -404,6 +404,72 @@ fn blob_at_is_none_for_unknown_paths_and_revisions() {
     fs::create_dir(path.join("dir")).unwrap();
     commit_file(&path, "dir/x.txt", "x\n", "add dir");
     assert_eq!(repo.blob_at("HEAD", "dir").unwrap(), None);
+}
+
+#[test]
+fn blob_at_capped_returns_content_under_the_cap() {
+    let (_tmp, path) = init_repo();
+    commit_file(&path, "shot.png", "small image bytes", "add image");
+    let repo = Repo::open(&path).unwrap();
+    assert_eq!(
+        repo.blob_at_capped("HEAD", "shot.png", 1024).unwrap(),
+        CappedBlob::Content(b"small image bytes".to_vec())
+    );
+}
+
+#[test]
+fn blob_at_capped_reports_too_large_without_copying() {
+    let (_tmp, path) = init_repo();
+    let big = "x".repeat(100);
+    commit_file(&path, "shot.png", &big, "add image");
+    let repo = Repo::open(&path).unwrap();
+    assert_eq!(
+        repo.blob_at_capped("HEAD", "shot.png", 10).unwrap(),
+        CappedBlob::TooLarge(100)
+    );
+}
+
+#[test]
+fn blob_at_capped_is_missing_for_unknown_paths_and_revisions() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    assert_eq!(
+        repo.blob_at_capped("HEAD", "no-such-file", 1024).unwrap(),
+        CappedBlob::Missing
+    );
+    assert_eq!(
+        repo.blob_at_capped("no-such-rev", "README.md", 1024)
+            .unwrap(),
+        CappedBlob::Missing
+    );
+    fs::create_dir(path.join("dir")).unwrap();
+    commit_file(&path, "dir/x.txt", "x\n", "add dir");
+    assert_eq!(
+        repo.blob_at_capped("HEAD", "dir", 1024).unwrap(),
+        CappedBlob::Missing
+    );
+}
+
+// ── first parent ──────────────────────────────────────────────────
+
+#[test]
+fn first_parent_is_the_immediate_ancestor() {
+    let (_tmp, path) = init_repo();
+    let first = {
+        let repo = Repo::open(&path).unwrap();
+        repo.resolve_commit("HEAD").unwrap().unwrap()
+    };
+    commit_file(&path, "a.txt", "one\n", "second");
+    let repo = Repo::open(&path).unwrap();
+    assert_eq!(repo.first_parent("HEAD").unwrap().as_deref(), Some(&*first));
+}
+
+#[test]
+fn first_parent_is_none_for_a_root_commit_or_unknown_revision() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    assert_eq!(repo.first_parent("HEAD").unwrap(), None);
+    assert_eq!(repo.first_parent("nope").unwrap(), None);
 }
 
 // ── base-branch guessing ──────────────────────────────────────────

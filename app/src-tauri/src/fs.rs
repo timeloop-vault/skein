@@ -176,6 +176,46 @@ fn read_file_text_impl(path: &str, db: &Database) -> Result<FileTextDto, String>
     })
 }
 
+/// Read `path`'s raw bytes for the Files editor / review pane image
+/// preview (#409). Returns a [`tauri::ipc::Response`] — a raw
+/// `ArrayBuffer` on the JS side, not JSON — because #46 found base64
+/// breaks down on large images; this is the reason the command exists
+/// at all rather than reusing `read_file_text`.
+///
+/// Same room scope as the other commands. Refuses a path that is not
+/// one of `skein_review::is_image_path`'s known extensions
+/// (`Err("notimage")`) and a file over
+/// [`skein_review::MAX_IMAGE_BYTES`] (`Err("toolarge:<len>")`), checked
+/// from metadata before any bytes are read.
+///
+/// Async: reading up to 16 MiB off disk is real blocking work — #171.
+#[tauri::command]
+pub async fn read_image_bytes(
+    path: String,
+    db: tauri::State<'_, Arc<Database>>,
+) -> Result<tauri::ipc::Response, String> {
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        read_image_bytes_impl(&path, &db, skein_review::MAX_IMAGE_BYTES)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map(tauri::ipc::Response::new)
+}
+
+fn read_image_bytes_impl(path: &str, db: &Database, max_bytes: u64) -> Result<Vec<u8>, String> {
+    if !skein_review::is_image_path(path) {
+        return Err("notimage".into());
+    }
+    let canon = ensure_room_scope(db, path)?;
+    let meta = std::fs::metadata(&canon).map_err(|e| format!("metadata: {e}"))?;
+    let len = meta.len();
+    if len > max_bytes {
+        return Err(format!("toolarge:{len}"));
+    }
+    std::fs::read(&canon).map_err(|e| format!("read: {e}"))
+}
+
 fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
     meta.modified()
         .ok()
@@ -404,6 +444,51 @@ mod tests {
             &final_content, winner,
             "file must hold the winner's content in full, not interleaved or truncated"
         );
+    }
+
+    #[test]
+    fn read_image_bytes_reads_a_png_in_scope() {
+        let room_dir = TempDir::new().unwrap();
+        let png = room_dir.path().join("shot.png");
+        let bytes = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        std::fs::write(&png, bytes).unwrap();
+        let (_db_dir, db) = db_with_room_at(room_dir.path());
+        let got = read_image_bytes_impl(png.to_str().unwrap(), &db, skein_review::MAX_IMAGE_BYTES)
+            .unwrap();
+        assert_eq!(got, bytes);
+    }
+
+    #[test]
+    fn read_image_bytes_refuses_paths_outside_every_room() {
+        let room_dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let png = outside.path().join("shot.png");
+        std::fs::write(&png, [0u8; 4]).unwrap();
+        let (_db_dir, db) = db_with_room_at(room_dir.path());
+        let err = read_image_bytes_impl(png.to_str().unwrap(), &db, skein_review::MAX_IMAGE_BYTES)
+            .unwrap_err();
+        assert!(err.contains("outside"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn read_image_bytes_refuses_a_non_image_path() {
+        let room_dir = TempDir::new().unwrap();
+        let txt = room_dir.path().join("notes.txt");
+        std::fs::write(&txt, "hi").unwrap();
+        let (_db_dir, db) = db_with_room_at(room_dir.path());
+        let err = read_image_bytes_impl(txt.to_str().unwrap(), &db, skein_review::MAX_IMAGE_BYTES)
+            .unwrap_err();
+        assert_eq!(err, "notimage");
+    }
+
+    #[test]
+    fn read_image_bytes_refuses_over_the_cap() {
+        let room_dir = TempDir::new().unwrap();
+        let png = room_dir.path().join("big.png");
+        std::fs::write(&png, [0u8; 10]).unwrap();
+        let (_db_dir, db) = db_with_room_at(room_dir.path());
+        let err = read_image_bytes_impl(png.to_str().unwrap(), &db, 5).unwrap_err();
+        assert_eq!(err, "toolarge:10");
     }
 
     #[cfg(unix)]
