@@ -430,6 +430,7 @@ pub fn run() {
             db_save_rooms,
             git::git_is_repo,
             git::git_inspect_folder,
+            git::git_repo_identity,
             git::git_head_branch,
             git::git_propose_worktree_path,
             git::git_add_worktree,

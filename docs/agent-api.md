@@ -482,6 +482,7 @@ the identical string unchanged:
 | `unsaved_files` | `close_room`, `close_harness` | a `files` harness in scope has dirty buffers (names listed) |
 | `last_harness` | `close_harness` | the target is the room's only harness — use `close_room` instead |
 | `permission_open` | `close_harness` | the target harness is in phase `permission` — a human-facing dialog is open |
+| `repo_mismatch` | `open_harness` | the target room's folder now holds a different repository than the room recorded (#418); the user must resolve the room's "different repository" card first |
 | `room_full` | `open_harness` | the room already holds the harness ceiling (8) |
 
 An unknown room or harness id is a plain `not_found`, the same as
@@ -614,6 +615,7 @@ as every other route.
       "archived": false,
       "safe_to_remove": false,
       "retired": false,
+      "repo_mismatch": false,
       "match": "cwd"
     }
   ],
@@ -640,6 +642,10 @@ as every other route.
 - `retired` is `true` for a room the user retired (#417): archived
   history that open-from-outside never matches. It is reported here only
   so a sweep can see it, and is always `safe_to_remove`.
+- `repo_mismatch` is `true` when the room recorded a repository identity
+  (#418, its root commits) and its folder now holds a different
+  repository, or none. Such a room is skipped by open-from-outside until
+  the user resolves it; `safe_to_remove` is unaffected.
 - Path comparison uses the same normalisation room grouping already
   relies on (`app/src/roomGroups.ts`'s `normalizePath`): backslashes to
   forward slashes, one trailing separator stripped, case-folded, on

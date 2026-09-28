@@ -948,3 +948,108 @@ fn head_is_dir_false_on_an_unborn_head() {
     let repo = Repo::open(&path).unwrap();
     assert!(!repo.head_is_dir("src").unwrap());
 }
+
+fn commit_file(repo: &Repository, name: &str) -> git2::Oid {
+    let workdir = repo.workdir().unwrap().to_path_buf();
+    fs::write(workdir.join(name), name.as_bytes()).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new(name)).unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let sig = Signature::now("test", "test@example.com").unwrap();
+    let parents: Vec<git2::Commit> = repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_commit().ok())
+        .into_iter()
+        .collect();
+    let refs: Vec<&git2::Commit> = parents.iter().collect();
+    repo.commit(Some("HEAD"), &sig, &sig, name, &tree, &refs)
+        .unwrap()
+}
+
+#[test]
+fn root_commits_single_commit_is_itself() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    let head = repo.head_commit_id().unwrap();
+    assert_eq!(repo.root_commits().unwrap(), vec![head]);
+}
+
+#[test]
+fn root_commits_linear_history_is_the_first() {
+    let (_tmp, path) = init_repo();
+    let raw = Repository::open(&path).unwrap();
+    let first = raw.head().unwrap().peel_to_commit().unwrap().id();
+    commit_file(&raw, "b.txt");
+    commit_file(&raw, "c.txt");
+    let repo = Repo::open(&path).unwrap();
+    assert_eq!(repo.root_commits().unwrap(), vec![first.to_string()]);
+    assert_ne!(repo.head_commit_id().unwrap(), first.to_string());
+}
+
+#[test]
+fn root_commits_of_independent_repos_are_disjoint() {
+    // Distinct commit messages, so the ids differ even when both repos
+    // are created within the same second.
+    let mk = |name: &str| {
+        let tmp = TempDir::new().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+        commit_file(&repo, name);
+        tmp
+    };
+    let (a, b) = (mk("a.txt"), mk("b.txt"));
+    let ra = Repo::open(a.path()).unwrap().root_commits().unwrap();
+    let rb = Repo::open(b.path()).unwrap().root_commits().unwrap();
+    assert_eq!((ra.len(), rb.len()), (1, 1));
+    assert_ne!(ra, rb);
+}
+
+#[test]
+fn root_commits_match_across_clone_and_worktree() {
+    let (_tmp, path) = init_repo();
+    let raw = Repository::open(&path).unwrap();
+    commit_file(&raw, "b.txt");
+    let want = Repo::open(&path).unwrap().root_commits().unwrap();
+
+    let clone_dir = TempDir::new().unwrap();
+    Repository::clone(path.to_str().unwrap(), clone_dir.path()).unwrap();
+    assert_eq!(
+        Repo::open(clone_dir.path())
+            .unwrap()
+            .root_commits()
+            .unwrap(),
+        want
+    );
+
+    let wt_parent = TempDir::new().unwrap();
+    let wt_path = wt_parent.path().join("wt");
+    let wt = Repo::open(&path)
+        .unwrap()
+        .add_worktree("feat/x", "main", &wt_path)
+        .unwrap();
+    assert_eq!(Repo::open(&wt.path).unwrap().root_commits().unwrap(), want);
+}
+
+#[test]
+fn root_commits_empty_repo_is_empty() {
+    let tmp = TempDir::new().unwrap();
+    Repository::init(tmp.path()).unwrap();
+    let repo = Repo::open(tmp.path()).unwrap();
+    assert!(repo.root_commits().unwrap().is_empty());
+    assert!(repo.head_commit_id().is_none());
+}
+
+#[test]
+fn origin_url_set_and_unset() {
+    let (_tmp, path) = init_repo();
+    assert_eq!(Repo::open(&path).unwrap().origin_url(), None);
+    Repository::open(&path)
+        .unwrap()
+        .remote("origin", "https://example.com/a/b.git")
+        .unwrap();
+    assert_eq!(
+        Repo::open(&path).unwrap().origin_url().as_deref(),
+        Some("https://example.com/a/b.git")
+    );
+}

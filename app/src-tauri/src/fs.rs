@@ -340,6 +340,7 @@ mod tests {
             created_by: None,
             closed_by: None,
             retired: None,
+            repo_identity: None,
         };
         db.save_all(&[room]).unwrap();
         (db_dir, db)

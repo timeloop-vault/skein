@@ -75,9 +75,11 @@ export function useWorktreeWatcher(cwd: string, enabled: boolean, onTick: () => 
 /// active room, not only the one whose Review tab is currently open, so
 /// a file someone edited while looking at Live Context is still
 /// pending by the time they switch tabs.
-export function useReviewDiscovery(roomId: string, cwd: string | undefined) {
+export function useReviewDiscovery(roomId: string, cwd: string | undefined, gated: boolean) {
 	useEffect(() => {
-		if (!roomId || !cwd) return;
+		// A gated room (missing folder / repo mismatch, #418) must not
+		// baseline whatever repo now sits at its path.
+		if (!roomId || !cwd || gated) return;
 		let cancelled = false;
 		let watchId: string | null = null;
 		invoke<string>("review_discovery_start", { roomId, cwd })
@@ -96,7 +98,7 @@ export function useReviewDiscovery(roomId: string, cwd: string | undefined) {
 			cancelled = true;
 			if (watchId) void invoke("git_watch_stop", { id: watchId });
 		};
-	}, [roomId, cwd]);
+	}, [roomId, cwd, gated]);
 }
 
 /// Re-fetch when an agent writes to this room's review (#213).

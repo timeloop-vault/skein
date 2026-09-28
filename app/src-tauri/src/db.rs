@@ -269,6 +269,22 @@ pub struct Room {
     /// open-from-outside skips it. Round-tripped; must survive save.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub retired: Option<i64>,
+    /// The repository this room was made in (#418): root commit ids, which
+    /// survive clones and worktrees. Lets open-from-outside tell "same
+    /// repo" from "a different repo now sits at this path".
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub repo_identity: Option<RepoIdentity>,
+}
+
+/// What stays the same about a repository across clones and worktrees
+/// (#418). `origin_url` is display-only; matching uses `root_commits`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoIdentity {
+    #[serde(default)]
+    pub root_commits: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub origin_url: Option<String>,
 }
 
 /// Who asked for a room `create_room` (#330) made, so the UI can say so.
@@ -2645,6 +2661,7 @@ mod tests {
             created_by: None,
             closed_by: None,
             retired: None,
+            repo_identity: None,
         }
     }
 
@@ -2805,6 +2822,41 @@ mod tests {
             "harnesses":[],"activeHarnessId":"","archived":1000}"#;
         let room: Room = serde_json::from_str(json).unwrap();
         assert_eq!(room.retired, None);
+    }
+
+    /// #418: `repoIdentity` round-trips through save and load.
+    #[test]
+    fn repo_identity_round_trips_through_save_and_load() {
+        let (_dir, db) = fresh_db();
+        let mut r = room("r1");
+        let ident = RepoIdentity {
+            root_commits: vec!["abc".into()],
+            origin_url: Some("https://example.com/x.git".into()),
+        };
+        r.repo_identity = Some(ident.clone());
+        db.save_all(&[r]).unwrap();
+        let outcome = db.load_all().unwrap();
+        assert_eq!(outcome.rooms[0].repo_identity, Some(ident));
+    }
+
+    /// #418: a blob written before `repoIdentity` existed loads with
+    /// `None`, and a partial identity tolerates missing keys.
+    #[test]
+    fn a_pre_418_blob_loads_without_a_repo_identity() {
+        let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+            "harnesses":[],"activeHarnessId":""}"#;
+        let room: Room = serde_json::from_str(json).unwrap();
+        assert_eq!(room.repo_identity, None);
+        let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+            "harnesses":[],"activeHarnessId":"","repoIdentity":{}}"#;
+        let room: Room = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            room.repo_identity,
+            Some(RepoIdentity {
+                root_commits: Vec::new(),
+                origin_url: None
+            })
+        );
     }
 
     /// #76: `repoRoot` round-trips through save and load like the other
@@ -4017,6 +4069,7 @@ mod orphan_sweep_tests {
             created_by: None,
             closed_by: None,
             retired: None,
+            repo_identity: None,
         }
     }
 

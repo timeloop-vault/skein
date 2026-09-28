@@ -4,7 +4,9 @@
 //! collapse `GitError` to `String` for the Result. Any logic richer
 //! than that belongs in `skein-git` so it stays testable without Tauri.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -14,6 +16,7 @@ use skein_git::{
 };
 use tauri::ipc::Channel;
 
+use crate::db::RepoIdentity;
 use crate::watcher::WatcherManager;
 
 /// Serializes `git_add_worktree` (#171): nothing else stops two
@@ -197,6 +200,101 @@ fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
     info.head = repo.head_branch();
     info.remote_branches = repo.remote_branches().unwrap_or_default();
     Ok(info)
+}
+
+/// A repository's identity: what stays the same across clones and
+/// worktrees (#418). `origin_url` is for display only.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RepoIdentityDto {
+    #[serde(rename = "rootCommits")]
+    pub root_commits: Vec<String>,
+    #[serde(rename = "originUrl")]
+    pub origin_url: Option<String>,
+}
+
+/// `HEAD commit oid -> root commits`. The roots of a given commit never
+/// change, and hydrate asks once per room, so remember them.
+static ROOTS_MEMO: LazyLock<Mutex<HashMap<String, Vec<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+const ROOTS_MEMO_MAX: usize = 256;
+
+/// Root commits of `repo`'s HEAD, through the memo. Empty for an unborn
+/// HEAD.
+fn memoized_roots(repo: &Repo) -> Result<Vec<String>, String> {
+    // A shallow clone's graft boundary reads as a root, and a later
+    // deepen would change the answer for the same HEAD, so it is never
+    // an identity and never memoized.
+    if repo.is_shallow() {
+        return Ok(Vec::new());
+    }
+    let Some(head) = repo.head_commit_id() else {
+        return Ok(Vec::new());
+    };
+    if let Some(hit) = ROOTS_MEMO.lock().get(&head) {
+        return Ok(hit.clone());
+    }
+    let roots = repo.root_commits().map_err(|e| e.to_string())?;
+    let mut memo = ROOTS_MEMO.lock();
+    if memo.len() > ROOTS_MEMO_MAX {
+        memo.clear();
+    }
+    memo.insert(head, roots.clone());
+    Ok(roots)
+}
+
+/// Whether the repository at a path is the one a room recorded (#418).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityCheck {
+    Same,
+    Mismatch,
+    /// Nothing to compare, or nothing there to compare against.
+    Unknown,
+}
+
+/// Compare a room's stored identity with what `path` holds now. A missing
+/// folder is `Unknown` (the #164 missing-folder flow owns it); an
+/// existing folder that is not a repo is a `Mismatch`.
+pub fn check_identity(stored: Option<&RepoIdentity>, path: &Path) -> IdentityCheck {
+    let Some(stored) = stored.filter(|s| !s.root_commits.is_empty()) else {
+        return IdentityCheck::Unknown;
+    };
+    if !path.exists() {
+        return IdentityCheck::Unknown;
+    }
+    let Ok(repo) = Repo::open(path) else {
+        return IdentityCheck::Mismatch;
+    };
+    let Ok(roots) = memoized_roots(&repo) else {
+        return IdentityCheck::Unknown;
+    };
+    if roots.is_empty() {
+        IdentityCheck::Unknown
+    } else if roots.iter().any(|r| stored.root_commits.contains(r)) {
+        IdentityCheck::Same
+    } else {
+        IdentityCheck::Mismatch
+    }
+}
+
+pub(crate) fn repo_identity_impl(path: &str) -> Result<Option<RepoIdentityDto>, String> {
+    let Ok(repo) = Repo::open(Path::new(path)) else {
+        return Ok(None);
+    };
+    let root_commits = memoized_roots(&repo)?;
+    Ok(Some(RepoIdentityDto {
+        root_commits,
+        origin_url: repo.origin_url(),
+    }))
+}
+
+/// The repository identity of `path` (root commit ids + origin URL);
+/// `None` when the path is missing or not a repo. Async for the same
+/// reason as [`git_inspect_folder`] (#171).
+#[tauri::command]
+pub async fn git_repo_identity(path: String) -> Result<Option<RepoIdentityDto>, String> {
+    tauri::async_runtime::spawn_blocking(move || repo_identity_impl(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Current HEAD branch name, or `None` for detached HEAD / unborn branch /
@@ -450,6 +548,144 @@ mod tests {
             .unwrap();
         let branch = repo.head().unwrap().shorthand().unwrap().to_owned();
         (dir, branch)
+    }
+
+    fn stored_of(path: &Path) -> RepoIdentity {
+        let dto = repo_identity_impl(&path.to_string_lossy())
+            .unwrap()
+            .unwrap();
+        RepoIdentity {
+            root_commits: dto.root_commits,
+            origin_url: dto.origin_url,
+        }
+    }
+
+    #[test]
+    fn check_identity_covers_every_branch() {
+        let (dir, base) = repo_with_commit();
+        let stored = stored_of(dir.path());
+
+        // Same repo, and a linked worktree of it.
+        assert_eq!(
+            check_identity(Some(&stored), dir.path()),
+            IdentityCheck::Same
+        );
+        let wt_parent = TempDir::new().unwrap();
+        let wt = wt_parent.path().join("wt");
+        git_add_worktree_impl(
+            &dir.path().to_string_lossy(),
+            "feature/id",
+            &base,
+            &wt.to_string_lossy(),
+        )
+        .unwrap();
+        assert_eq!(check_identity(Some(&stored), &wt), IdentityCheck::Same);
+
+        // A different repo at the path (its own root commit).
+        let (other, _) = repo_with_commit();
+        {
+            let repo = git2::Repository::open(other.path()).unwrap();
+            let sig = git2::Signature::now("t", "t@example.com").unwrap();
+            let tree = repo
+                .find_tree(repo.index().unwrap().write_tree().unwrap())
+                .unwrap();
+            // Orphan root: distinct history, so a distinct root id.
+            let c = repo
+                .commit(None, &sig, &sig, "other root", &tree, &[])
+                .unwrap();
+            repo.reference("refs/heads/other", c, true, "t").unwrap();
+            repo.set_head("refs/heads/other").unwrap();
+        }
+        assert_eq!(
+            check_identity(Some(&stored), other.path()),
+            IdentityCheck::Mismatch
+        );
+
+        // Plain directory: exists, not a repo.
+        let plain = TempDir::new().unwrap();
+        assert_eq!(
+            check_identity(Some(&stored), plain.path()),
+            IdentityCheck::Mismatch
+        );
+
+        // Missing folder.
+        assert_eq!(
+            check_identity(Some(&stored), &plain.path().join("nope")),
+            IdentityCheck::Unknown
+        );
+
+        // Unborn HEAD.
+        let unborn = TempDir::new().unwrap();
+        git2::Repository::init(unborn.path()).unwrap();
+        assert_eq!(
+            check_identity(Some(&stored), unborn.path()),
+            IdentityCheck::Unknown
+        );
+
+        // Nothing stored / empty roots.
+        assert_eq!(check_identity(None, dir.path()), IdentityCheck::Unknown);
+        let empty = RepoIdentity {
+            root_commits: Vec::new(),
+            origin_url: None,
+        };
+        assert_eq!(
+            check_identity(Some(&empty), plain.path()),
+            IdentityCheck::Unknown
+        );
+    }
+
+    #[test]
+    fn repo_identity_paths() {
+        let (dir, _) = repo_with_commit();
+        let p = dir.path().to_string_lossy().into_owned();
+        let id = repo_identity_impl(&p).unwrap().unwrap();
+        assert_eq!(id.root_commits.len(), 1);
+        assert_eq!(id.origin_url, None);
+        // Second call is served from the memo and agrees.
+        assert_eq!(repo_identity_impl(&p).unwrap().unwrap(), id);
+
+        let empty = TempDir::new().unwrap();
+        git2::Repository::init(empty.path()).unwrap();
+        let e = repo_identity_impl(&empty.path().to_string_lossy())
+            .unwrap()
+            .unwrap();
+        assert!(e.root_commits.is_empty());
+
+        let plain = TempDir::new().unwrap();
+        assert_eq!(
+            repo_identity_impl(&plain.path().to_string_lossy()).unwrap(),
+            None
+        );
+        assert_eq!(repo_identity_impl("Z:/does/not/exist").unwrap(), None);
+    }
+
+    #[test]
+    fn a_shallow_repo_has_no_identity_and_is_never_memoized() {
+        let (dir, _) = repo_with_commit();
+        let p = dir.path().to_string_lossy().into_owned();
+        let stored = stored_of(dir.path());
+        assert_eq!(stored.root_commits.len(), 1);
+        let head = git2::Repository::open(dir.path())
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap();
+        // libgit2 honours `.git/shallow`: the named commit becomes the
+        // graft boundary.
+        std::fs::write(dir.path().join(".git").join("shallow"), format!("{head}\n")).unwrap();
+        let id = repo_identity_impl(&p).unwrap().unwrap();
+        assert!(id.root_commits.is_empty());
+        assert_eq!(
+            check_identity(Some(&stored), dir.path()),
+            IdentityCheck::Unknown
+        );
+        // Unshallowing brings the real answer back, not a cached one.
+        std::fs::remove_file(dir.path().join(".git").join("shallow")).unwrap();
+        assert_eq!(
+            repo_identity_impl(&p).unwrap().unwrap().root_commits.len(),
+            1
+        );
     }
 
     /// Two threads race `git_add_worktree_impl` for the same repo and

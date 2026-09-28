@@ -95,12 +95,14 @@ type RawSegment =
 /// every exported function below so the grouping rule (what counts as
 /// a group, who leads, what order members fall in) lives in exactly
 /// one place.
-function computeSegments(rooms: readonly Room[]): RawSegment[] {
+function computeSegments(rooms: readonly Room[], ungrouped?: ReadonlySet<string>): RawSegment[] {
 	const buckets = new Map<string, { room: Room; idx: number }[]>();
 	const segments: RawSegment[] = [];
 
 	rooms.forEach((room, idx) => {
-		const key = groupKey(room);
+		// #418: an `ungrouped` room (its folder now holds a different
+		// repository) must not join the group of whatever repo is there.
+		const key = ungrouped?.has(room.id) ? null : groupKey(room);
 		if (key === null) {
 			segments.push({ kind: "plain", room, firstIndex: idx });
 			return;
@@ -165,8 +167,12 @@ function dropFirstIndex(seg: RawSegment): StripSegment {
 }
 
 /// Build the tab strip's top-level segments from a flat room list.
-export function buildStrip(rooms: readonly Room[]): StripSegment[] {
-	return computeSegments(rooms).map(dropFirstIndex);
+/// `ungrouped` (#418) names rooms that always render as plain tabs.
+export function buildStrip(
+	rooms: readonly Room[],
+	ungrouped?: ReadonlySet<string>,
+): StripSegment[] {
+	return computeSegments(rooms, ungrouped).map(dropFirstIndex);
 }
 
 /// Every room a group segment holds, lead first (if present) then
@@ -353,8 +359,9 @@ export function resolveTopDrop(
 	dragSegId: string,
 	targetSegId: string,
 	place: "before" | "after",
+	ungrouped?: ReadonlySet<string>,
 ): Room[] {
-	const segments = computeSegments(rooms);
+	const segments = computeSegments(rooms, ungrouped);
 	const fromIndex = segments.findIndex((s) => rawSegmentId(s) === dragSegId);
 	const toIndex = segments.findIndex((s) => rawSegmentId(s) === targetSegId);
 	if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) {

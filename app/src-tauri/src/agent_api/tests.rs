@@ -85,6 +85,7 @@ fn room(id: &str, harnesses: Vec<Harness>) -> Room {
         created_by: None,
         closed_by: None,
         retired: None,
+        repo_identity: None,
     }
 }
 
@@ -2224,6 +2225,31 @@ fn find_rooms_for_path_keeps_a_retired_room_flagged_and_safe_to_remove() {
     assert!(retired.retired && retired.archived && retired.safe_to_remove);
     let open = out.rooms.iter().find(|m| m.room_id == "r2").unwrap();
     assert!(!open.retired && !open.safe_to_remove);
+}
+
+#[test]
+fn find_rooms_for_path_flags_a_repo_mismatch_without_changing_safe_to_remove() {
+    let f = fixture();
+    let plain = tempfile::TempDir::new().unwrap();
+    let cwd = plain.path().to_string_lossy().into_owned();
+    let ident = crate::db::RepoIdentity {
+        root_commits: vec!["deadbeef".into()],
+        origin_url: None,
+    };
+    // Open room whose folder now holds no repo: mismatch, still not safe.
+    let mut open = room_with_cwd("r1", &cwd);
+    open.repo_identity = Some(ident.clone());
+    // Same identity but the folder is gone: unknown, not a mismatch.
+    let mut gone = room_with_cwd("r2", &plain.path().join("nope").to_string_lossy());
+    gone.repo_identity = Some(ident);
+    // No identity recorded: unknown.
+    let bare = room_with_cwd("r3", &plain.path().join("bare").to_string_lossy());
+    save(&f.db, &[open, gone, bare]);
+    let out = find_paths(&f.db, &cwd).unwrap();
+    let by = |id: &str| out.rooms.iter().find(|m| m.room_id == id).unwrap();
+    assert!(by("r1").repo_mismatch && !by("r1").safe_to_remove);
+    assert!(!by("r2").repo_mismatch);
+    assert!(!by("r3").repo_mismatch);
 }
 
 #[test]
@@ -5155,6 +5181,35 @@ async fn open_harness_refuses_an_already_archived_room() {
     .unwrap_err();
     assert!(
         matches!(&err, VerbError::Refused(m) if m.starts_with("archived:")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_harness_refuses_a_room_whose_folder_holds_a_different_repo() {
+    let f = fixture();
+    // A plain folder that exists but is not a repo reads as a mismatch.
+    let plain = tempfile::TempDir::new().unwrap();
+    let mut r1 = room("r1", vec![harness("h1", "claude", "main")]);
+    r1.cwd = Some(plain.path().to_string_lossy().into_owned());
+    r1.repo_identity = Some(crate::db::RepoIdentity {
+        root_commits: vec!["0".repeat(40)],
+        origin_url: None,
+    });
+    save(&f.db, &[r1]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let err = verbs::open_harness(
+        &state,
+        &caller,
+        &open_harness_args("r1"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.starts_with("repo_mismatch:")),
         "{err:?}"
     );
 }
