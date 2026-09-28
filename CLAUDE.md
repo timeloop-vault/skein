@@ -380,6 +380,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   room whose folder later vanishes keeps its group (#164). The one
   exception is the user repointing a missing room to another folder,
   which re-derives it from the new folder.
+  **Retired rooms (#417):** `retired` (epoch ms, only ever on an archived
+  room) means history — hidden from Reopen unless "Show retired", never
+  matched by open-from-outside (`open_request.rs`), and reported by
+  `find_rooms_for_path` with `retired: true` / `safe_to_remove`. It keeps
+  its `sessions` row, so the #237 `sweep_orphans` never erases its
+  history; only Delete forever does. `db.rs`'s `Room` struct is what
+  `save_all` serializes and it has no catch-all, so any new frontend Room
+  field must be added there too or it is silently dropped on save.
 - **PTYs** live in `PtyManager`. `pty_spawn` returns an opaque id;
   output streams over a per-spawn `tauri::ipc::Channel<PtyEvent>` — a
   tagged enum `{kind:"data",chunk}` / `{kind:"exit",code}`. PTYs

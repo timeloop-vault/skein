@@ -24,6 +24,10 @@ import { confirmDialog } from "./confirmDialog.ts";
 import { filesRegistry } from "./filesRegistry.ts";
 import { unarchiveRoomTransform, withResumeCmds } from "./harnessCmd.ts";
 import { repointRoom } from "./missingFolder.ts";
+import {
+	retireRooms as retireRoomsPure,
+	unretireRooms as unretireRoomsPure,
+} from "./reopenList.ts";
 import { nextActiveAfterClose } from "./roomGroups.ts";
 import type { Harness, Room } from "./types.ts";
 
@@ -580,7 +584,34 @@ export function useRoomsStore(
 		setRooms((prev) => (prev.some((r) => r.id === room.id) ? prev : [...prev, room]));
 	};
 
+	// #417: batch forms for Reopen's multi-select.
+	const deleteRoomsForever = (ids: readonly string[]) => {
+		const gone = new Set(ids);
+		setRooms((prev) => prev.filter((r) => !gone.has(r.id)));
+	};
+
+	const restoreRooms = (restored: Room[]) => {
+		setRooms((prev) => {
+			const have = new Set(prev.map((r) => r.id));
+			const add = restored.filter((r) => !have.has(r.id));
+			return add.length === 0 ? prev : [...prev, ...add];
+		});
+	};
+
+	const retireRooms = (ids: readonly string[]) => {
+		const now = Date.now();
+		setRooms((prev) => retireRoomsPure(prev, ids, now));
+	};
+
+	const unretireRooms = (ids: readonly string[]) => {
+		setRooms((prev) => unretireRoomsPure(prev, ids));
+	};
+
 	return {
+		retireRooms,
+		unretireRooms,
+		deleteRoomsForever,
+		restoreRooms,
 		rooms,
 		setRooms,
 		roomsRef,

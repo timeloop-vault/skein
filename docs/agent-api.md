@@ -613,6 +613,7 @@ as every other route.
       "branch": "…",
       "archived": false,
       "safe_to_remove": false,
+      "retired": false,
       "match": "cwd"
     }
   ],
@@ -636,6 +637,9 @@ as every other route.
   `remove_worktree` and `delete_room` stay refused by name; `close_room`
   (#411) is a real verb now, but a separate, guarded one — see "Closing
   a room, and controlling harnesses" above.
+- `retired` is `true` for a room the user retired (#417): archived
+  history that open-from-outside never matches. It is reported here only
+  so a sweep can see it, and is always `safe_to_remove`.
 - Path comparison uses the same normalisation room grouping already
   relies on (`app/src/roomGroups.ts`'s `normalizePath`): backslashes to
   forward slashes, one trailing separator stripped, case-folded, on

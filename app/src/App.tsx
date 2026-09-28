@@ -179,8 +179,10 @@ export default function App() {
 		unarchiveRoomRef,
 		recreateMissingWorktree,
 		pickMissingFolder,
-		deleteRoomForever,
-		restoreRoom,
+		retireRooms,
+		unretireRooms,
+		deleteRoomsForever,
+		restoreRooms,
 		closeRoom,
 		closeRoomForAgent,
 		switchRoom,
@@ -608,7 +610,7 @@ export default function App() {
 				<Titlebar {...titlebarProps} />
 				<EmptyState
 					onNew={() => void openNewRoom()}
-					archivedCount={archivedRooms.length}
+					archivedCount={archivedRooms.filter((r) => r.retired === undefined).length}
 					onReopen={() => setShowReopen(true)}
 				/>
 				<AppOverlays
@@ -631,8 +633,10 @@ export default function App() {
 					archivedRooms={archivedRooms}
 					allRooms={roomsRef.current}
 					reopenRoom={reopenRoom}
-					deleteRoomForever={deleteRoomForever}
-					restoreRoom={restoreRoom}
+					deleteRoomsForever={deleteRoomsForever}
+					restoreRooms={restoreRooms}
+					retireRooms={retireRooms}
+					unretireRooms={unretireRooms}
 					setShowReopen={setShowReopen}
 					toasts={toasts}
 					jumpToToast={jumpToToast}
@@ -836,8 +840,10 @@ export default function App() {
 				archivedRooms={archivedRooms}
 				allRooms={roomsRef.current}
 				reopenRoom={reopenRoom}
-				deleteRoomForever={deleteRoomForever}
-				restoreRoom={restoreRoom}
+				deleteRoomsForever={deleteRoomsForever}
+				restoreRooms={restoreRooms}
+				retireRooms={retireRooms}
+				unretireRooms={unretireRooms}
 				setShowReopen={setShowReopen}
 				toasts={toasts}
 				jumpToToast={jumpToToast}

@@ -84,6 +84,7 @@ fn room(id: &str, harnesses: Vec<Harness>) -> Room {
         attention: None,
         created_by: None,
         closed_by: None,
+        retired: None,
     }
 }
 
@@ -2209,6 +2210,20 @@ fn find_rooms_for_path_reports_an_archived_room_as_safe_to_remove() {
     assert_eq!(out.rooms.len(), 1);
     assert!(out.rooms[0].archived);
     assert!(out.rooms[0].safe_to_remove);
+}
+
+#[test]
+fn find_rooms_for_path_keeps_a_retired_room_flagged_and_safe_to_remove() {
+    let f = fixture();
+    let mut r = room_with_cwd("r1", "C:/repo-wt/task-1");
+    r.archived = Some(1);
+    r.retired = Some(2);
+    save(&f.db, &[r, room_with_cwd("r2", "C:/repo-wt/task-2")]);
+    let out = find_paths(&f.db, "C:/repo-wt").unwrap();
+    let retired = out.rooms.iter().find(|m| m.room_id == "r1").unwrap();
+    assert!(retired.retired && retired.archived && retired.safe_to_remove);
+    let open = out.rooms.iter().find(|m| m.room_id == "r2").unwrap();
+    assert!(!open.retired && !open.safe_to_remove);
 }
 
 #[test]

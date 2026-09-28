@@ -156,6 +156,6 @@ export const withResumeCmds = (room: Room, ports: ReadonlyMap<string, number>): 
  *  anyone any more, and letting it survive would misattribute whatever
  *  happens next. */
 export const unarchiveRoomTransform = (room: Room, ports: ReadonlyMap<string, number>): Room => {
-	const { archived, closedBy: _closedBy, ...rest } = room;
+	const { archived, retired: _retired, closedBy: _closedBy, ...rest } = room;
 	return withResumeCmds(rest, ports);
 };

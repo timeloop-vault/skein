@@ -100,6 +100,11 @@ export interface Room {
 	// Present = archived (hidden from the tab strip but listed in the
 	// reopen modal). Chapter 6 phase 2.
 	archived?: number;
+	// #417: epoch ms when an archived room was retired; only meaningful
+	// with `archived`. Retired = history: hidden from Reopen by default,
+	// never matched by path, and it keeps its sessions row so the #237
+	// sweep never erases its history.
+	retired?: number;
 	// Canonical main-checkout path of the git repo this room belongs to
 	// (resolved from a worktree via skein-git `main_repo_root()`).
 	// Absent for non-git rooms and rooms not yet resolved. This is the

@@ -288,6 +288,8 @@ struct Candidate<'a> {
 fn best_rooms<'a>(query_norm: &str, candidates: &[Candidate<'a>]) -> Vec<&'a Room> {
     let owners: Vec<&Candidate<'a>> = candidates
         .iter()
+        // A retired room (#417) is history and owns nothing.
+        .filter(|c| c.room.retired.is_none())
         .filter(|c| {
             matches!(
                 path_match_kind(query_norm, &c.cwd_norm),
@@ -578,6 +580,40 @@ mod tests {
                 path: gone.to_string_lossy().into_owned()
             }
         );
+    }
+
+    fn retired(mut r: Room, at: i64) -> Room {
+        r.retired = Some(at);
+        r
+    }
+
+    #[test]
+    fn a_retired_room_owns_nothing_so_the_folder_resolves_to_new_room() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cwd = canonical_string(tmp.path()).unwrap();
+        let rooms = [retired(room("gone", &cwd, Some(100)), 200)];
+        assert_eq!(
+            resolve(&rooms, tmp.path()),
+            OpenTarget::NewRoom { folder: cwd }
+        );
+    }
+
+    #[test]
+    fn a_retired_deeper_owner_yields_to_a_plain_archived_shallower_one() {
+        let rooms = [
+            room("shallow", "/code/mono", Some(100)),
+            retired(room("deep", "/code/mono/app", Some(300)), 400),
+        ];
+        assert_eq!(ids(&rooms, "/code/mono/app/src"), ["shallow"]);
+    }
+
+    #[test]
+    fn an_open_room_is_unaffected_by_retired_neighbours() {
+        let rooms = [
+            retired(room("gone", "/code/repo", Some(100)), 200),
+            room("live", "/code/repo", None),
+        ];
+        assert_eq!(ids(&rooms, "/code/repo"), ["live"]);
     }
 
     #[test]

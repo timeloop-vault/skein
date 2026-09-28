@@ -602,6 +602,10 @@ pub struct RoomPathMatch {
     /// about it, and a caller told only `archived` would have to
     /// reconstruct that itself.
     pub safe_to_remove: bool,
+    /// The room is retired (#417): archived history that open-from-outside
+    /// never matches. Reported only so a sweep can see it; always
+    /// `safe_to_remove`.
+    pub retired: bool,
     /// `"cwd"` for an exact match, `"inside_room"` when the queried path
     /// sits strictly under the room's cwd, `"contains_room"` when the
     /// room's cwd sits strictly under the queried path — never a bare
@@ -674,6 +678,7 @@ pub fn find_rooms_for_path(
         let Some(kind) = path_match_kind(&query, &normalize_path_for_match(cwd)) else {
             continue;
         };
+        let retired = room.retired.is_some();
         let archived = room.archived.is_some();
         let entry = RoomPathMatch {
             room_id: room.id.clone(),
@@ -682,7 +687,8 @@ pub fn find_rooms_for_path(
             repo_root: room.repo_root.clone(),
             branch: room.branch.clone(),
             archived,
-            safe_to_remove: archived,
+            safe_to_remove: archived || retired,
+            retired,
             match_kind: kind.to_owned(),
         };
         if kind == "cwd" {

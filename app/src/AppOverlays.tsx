@@ -33,8 +33,10 @@ export const AppOverlays = ({
 	archivedRooms,
 	allRooms,
 	reopenRoom,
-	deleteRoomForever,
-	restoreRoom,
+	deleteRoomsForever,
+	restoreRooms,
+	retireRooms,
+	unretireRooms,
 	setShowReopen,
 	toasts,
 	jumpToToast,
@@ -65,8 +67,10 @@ export const AppOverlays = ({
 	// ReopenRoomModal's `allRooms` doc comment.
 	allRooms: Room[];
 	reopenRoom: (id: string) => void;
-	deleteRoomForever: (id: string) => void;
-	restoreRoom: (room: Room) => void;
+	deleteRoomsForever: (ids: readonly string[]) => void;
+	restoreRooms: (rooms: Room[]) => void;
+	retireRooms: (ids: readonly string[]) => void;
+	unretireRooms: (ids: readonly string[]) => void;
 	setShowReopen: (show: boolean) => void;
 	toasts: ToastEntry[];
 	jumpToToast: (toast: ToastEntry) => void;
@@ -103,8 +107,10 @@ export const AppOverlays = ({
 					rooms={archivedRooms}
 					allRooms={allRooms}
 					onReopen={reopenRoom}
-					onDelete={deleteRoomForever}
-					onRestore={restoreRoom}
+					onDelete={deleteRoomsForever}
+					onRestore={restoreRooms}
+					onRetire={retireRooms}
+					onUnretire={unretireRooms}
 					onClose={() => setShowReopen(false)}
 				/>
 			)}

@@ -264,6 +264,11 @@ pub struct Room {
     /// `review_signoff` makes about its own record). Round-tripped only.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub closed_by: Option<ClosedBy>,
+    /// Retirement timestamp (epoch ms, #417) — set by the frontend on an
+    /// archived room that is history. A retired room owns no path:
+    /// open-from-outside skips it. Round-tripped; must survive save.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub retired: Option<i64>,
 }
 
 /// Who asked for a room `create_room` (#330) made, so the UI can say so.
@@ -2639,6 +2644,7 @@ mod tests {
             attention: None,
             created_by: None,
             closed_by: None,
+            retired: None,
         }
     }
 
@@ -2778,6 +2784,27 @@ mod tests {
                 harness_id: Some("d1".into()),
             })
         );
+    }
+
+    /// #417: `retired` round-trips through save and load.
+    #[test]
+    fn retired_round_trips_through_save_and_load() {
+        let (_dir, db) = fresh_db();
+        let mut r = room("r1");
+        r.archived = Some(1_000);
+        r.retired = Some(2_000);
+        db.save_all(&[r]).unwrap();
+        let outcome = db.load_all().unwrap();
+        assert_eq!(outcome.rooms[0].retired, Some(2_000));
+    }
+
+    /// #417: a blob written before `retired` existed loads with `None`.
+    #[test]
+    fn a_pre_417_blob_loads_without_a_retired_field() {
+        let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+            "harnesses":[],"activeHarnessId":"","archived":1000}"#;
+        let room: Room = serde_json::from_str(json).unwrap();
+        assert_eq!(room.retired, None);
     }
 
     /// #76: `repoRoot` round-trips through save and load like the other
@@ -3989,6 +4016,7 @@ mod orphan_sweep_tests {
             attention: None,
             created_by: None,
             closed_by: None,
+            retired: None,
         }
     }
 
@@ -4094,6 +4122,28 @@ mod orphan_sweep_tests {
         for table in ROOM_KEYED_TABLES {
             assert_eq!(row_count(&db, table, "orphan"), 0, "table {table}");
             assert_eq!(row_count(&db, table, "live"), 1, "table {table}");
+        }
+    }
+
+    /// #417: a retired, archived room still has its `sessions` row, so the
+    /// sweep never erases its history (unlike Delete forever).
+    #[test]
+    fn sweep_keeps_history_of_a_retired_archived_room() {
+        let (_d, db) = fresh();
+        let mut r = room("old");
+        r.archived = Some(1_000);
+        r.retired = Some(2_000);
+        db.save_all(&[r]).unwrap();
+        db.load_all().unwrap();
+        for table in ROOM_KEYED_TABLES {
+            seed_row(&db, table, "old");
+        }
+
+        let deleted = db.sweep_orphans().unwrap();
+
+        assert_eq!(deleted, 0);
+        for table in ROOM_KEYED_TABLES {
+            assert_eq!(row_count(&db, table, "old"), 1, "table {table}");
         }
     }
 
