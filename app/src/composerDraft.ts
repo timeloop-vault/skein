@@ -45,7 +45,8 @@ export type DraftEvent =
 	| { type: "userPaste" } // the user pasted (Ctrl+V path, or a bracketed paste seen in onData)
 	| { type: "seamPaste" } // harnessInput.sendPrompt pasted a body
 	| { type: "seamSubmit" } // harnessInput.sendPrompt wrote its "\r"
-	| { type: "respawn" }; // a fresh PTY registered for this harness
+	| { type: "respawn" } // a fresh PTY registered for this harness
+	| { type: "screenEmpty" }; // #413: the screen positively reads an empty composer
 
 const HISTORY_RECALL_KEYS = new Set([
 	"\x1b[A", // Up
@@ -110,6 +111,11 @@ export function reduceDraft(prev: ComposerDraft, ev: DraftEvent): ComposerDraft 
 			return CLEAN_DRAFT;
 		case "respawn":
 			return CLEAN_DRAFT;
+		case "screenEmpty":
+			// #413: the screen check only ever overrides the `unknown` latch.
+			// `typed` is a count this module tracked itself, and `clean` has
+			// nothing to release; neither is second-guessed by a screen read.
+			return prev.kind === "unknown" ? CLEAN_DRAFT : prev;
 		case "key":
 			return reduceKey(prev, ev.key);
 	}
@@ -156,6 +162,42 @@ function reduceKey(prev: ComposerDraft, key: string): ComposerDraft {
 	}
 }
 
+/// #413: a short, content-free name for the class of `ev`, for logs and the
+/// "why is this draft held" cause. Never includes key bytes — what the user
+/// typed is private and must not reach `skein.log`.
+export function describeDraftEvent(ev: DraftEvent): string {
+	switch (ev.type) {
+		case "key":
+			switch (classifyKey(ev.key)) {
+				case "submit":
+					return "submit";
+				case "clear":
+					return "clear";
+				case "backspace":
+					return "backspace";
+				case "historyRecall":
+					return "historyRecall";
+				case "shiftEnter":
+					return "shiftEnter";
+				case "printable":
+					return "printable";
+				case "other":
+					return "other escape";
+			}
+			return "other escape";
+		case "userPaste":
+			return "userPaste";
+		case "seamPaste":
+			return "seamPaste";
+		case "seamSubmit":
+			return "seamSubmit";
+		case "respawn":
+			return "respawn";
+		case "screenEmpty":
+			return "screenEmpty";
+	}
+}
+
 /// True only for a transition that EMPTIED the composer without submitting
 /// it — `prev` held something, `next` reads clean, and the event that got
 /// it there was neither a submit (`"\r"` or `seamSubmit`) nor a `respawn`.
@@ -166,6 +208,9 @@ function reduceKey(prev: ComposerDraft, key: string): ComposerDraft {
 /// the CLI is already processing. A respawn is excluded for the same
 /// reason it resets to clean in the first place — a fresh PTY has no
 /// draft to have "cleared" at all.
+///
+/// #413: `screenEmpty` counts — `unknown` → `clean` by a confident screen
+/// read is an emptying with no submit, exactly what held mail waits for.
 export function draftClearedBy(prev: ComposerDraft, ev: DraftEvent, next: ComposerDraft): boolean {
 	if (prev.kind === "clean") return false;
 	if (next.kind !== "clean") return false;
@@ -179,10 +224,15 @@ export function draftClearedBy(prev: ComposerDraft, ev: DraftEvent, next: Compos
 /// `null` when the composer reads clean, a refusal for `typed` and
 /// `unknown` alike — the gate has no way to act on the difference between
 /// "definitely holds text" and "might", so both are held the same way.
-export function checkDraft(draft: ComposerDraft): { ok: false; reason: string } | null {
+export function checkDraft(
+	draft: ComposerDraft,
+): { ok: false; reason: string; draftHeld: true } | null {
 	if (draft.kind === "clean") return null;
 	return {
 		ok: false,
+		// #413: a marker rather than a reason-text match, so "held by the
+		// draft guard" is distinguishable from every other refusal.
+		draftHeld: true,
 		reason:
 			"the composer holds unsent text — holding automatic delivery until it's submitted or cleared",
 	};

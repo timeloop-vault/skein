@@ -72,7 +72,13 @@
 // `/clear`, a message the CLI queues internally — and a paste that
 // reaches neither `onKey` nor the bracketed-paste branch of `onData`.
 
-import { CLEAN_DRAFT, checkDraft, draftClearedBy, reduceDraft } from "./composerDraft.ts";
+import {
+	CLEAN_DRAFT,
+	checkDraft,
+	describeDraftEvent,
+	draftClearedBy,
+	reduceDraft,
+} from "./composerDraft.ts";
 import type { ComposerDraft, DraftEvent } from "./composerDraft.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { HarnessCapabilities } from "./data.tsx";
@@ -80,6 +86,8 @@ import { logBoth } from "./frontendLog.ts";
 import { atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
 import type { HarnessActivity } from "./harnessActivity.ts";
 import { launchSettled } from "./launchReady.ts";
+import { readComposer } from "./promptScreen.ts";
+import type { ScreenSnapshot } from "./promptScreen.ts";
 import { SUBMIT_GAP_MS, SUBMIT_RETRY_SCHEDULE_MS, decideSubmitRetry } from "./submitRetry.ts";
 import type { HarnessKind } from "./types.ts";
 
@@ -97,7 +105,19 @@ export interface HarnessInputTarget {
 	/// Submit whatever is now in the harness's input — a bare "\r",
 	/// written as its own `pty_write` call after the paste.
 	submit(): void;
+	/// #413: which harness kind this terminal runs — `readComposer` needs it
+	/// to pick the right prompt recogniser. Absent = never screen-checked.
+	kind?: HarnessKind;
+	/// #413: a snapshot of the visible screen (independent of user scroll),
+	/// or null when it can't be read. Absent = never screen-checked.
+	screen?(): ScreenSnapshot | null;
 }
+
+/// #413: how long after the user's last draft event a screen read may be
+/// trusted. The PTY echo can lag the `onKey` event, so a snapshot taken too
+/// soon still shows the pre-keystroke empty prompt — the one false "empty"
+/// this check must avoid.
+export const SCREEN_SETTLE_MS = 1500;
 
 const targets = new Map<string, HarnessInputTarget>();
 
@@ -126,6 +146,28 @@ const drafts = new Map<string, ComposerDraft>();
 /// Subscribers notified once per transition `draftClearedBy` calls a
 /// "cleared" — never on every event, so a caller doesn't have to
 /// re-derive that predicate itself.
+/// #413: why a draft is `unknown`, so the screen check can tell the user's
+/// own doing from the seam's. A `seamPaste` also sets `unknown`, but the
+/// screen then shows the NUDGE's pasted body, not the user's text — and its
+/// own `seamSubmit` (or the user's next event) resolves that. Reading an
+/// empty screen mid-flight (paste not yet echoed) must never release it, so
+/// the check runs only for a "user"-caused unknown.
+const unknownCause = new Map<string, "user" | "seam">();
+/// #413: when the user last produced a draft event (key / userPaste).
+const lastUserDraftEventAt = new Map<string, number>();
+/// #413: per-harness debounced screen-check timers.
+const screenTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/// #413: the event class and time that last moved a draft to typed/unknown.
+const draftCauses = new Map<string, { event: string; at: number }>();
+/// #413: last screen-check outcome logged per harness, to dedupe the timer.
+const lastScreenLog = new Map<string, string>();
+
+function cancelScreenTimer(id: string): void {
+	const t = screenTimers.get(id);
+	if (t !== undefined) clearTimeout(t);
+	screenTimers.delete(id);
+}
+
 const draftClearedSubscribers = new Set<(id: string) => void>();
 
 /// #386: subscribers notified once `register` has finished setting up
@@ -156,7 +198,12 @@ export const harnessInput = {
 			// Only clear our own registration: a respawn that already
 			// registered a fresh target for the same id must not have
 			// its target ripped out by the old effect's belated cleanup.
-			if (targets.get(id) === target) targets.delete(id);
+			if (targets.get(id) === target) {
+				targets.delete(id);
+				cancelScreenTimer(id);
+				unknownCause.delete(id);
+				lastUserDraftEventAt.delete(id);
+			}
 		};
 	},
 	isRegistered(id: string): boolean {
@@ -186,13 +233,82 @@ export const harnessInput = {
 	/// #383: fold `ev` into `id`'s inferred composer draft, and notify
 	/// `subscribeDraftCleared` subscribers when `draftClearedBy` says this
 	/// transition emptied it without a submit.
-	noteDraftEvent(id: string, ev: DraftEvent): void {
+	noteDraftEvent(id: string, ev: DraftEvent, nowMs: number = Date.now()): void {
 		const prev = drafts.get(id) ?? CLEAN_DRAFT;
 		const next = reduceDraft(prev, ev);
 		drafts.set(id, next);
+		const userEvent = ev.type === "key" || ev.type === "userPaste";
+		if (userEvent) lastUserDraftEventAt.set(id, nowMs);
+		if (next.kind === "unknown") {
+			if (ev.type === "seamPaste") unknownCause.set(id, "seam");
+			else if (userEvent) unknownCause.set(id, "user");
+		} else {
+			unknownCause.delete(id);
+		}
+		if (prev.kind !== next.kind) {
+			const cls = describeDraftEvent(ev);
+			if (next.kind === "clean") draftCauses.delete(id);
+			else draftCauses.set(id, { event: cls, at: nowMs });
+			lastScreenLog.delete(id);
+			logBoth(
+				"debug",
+				"skein::seam",
+				`[skein] composerDraft: harness ${id} ${prev.kind} → ${next.kind} (${cls}) (#413)`,
+			);
+		}
+		// Debounced: every user event that leaves the draft `unknown` pushes
+		// the screen check out by another settle window, so "type, move the
+		// cursor, erase it all" releases held mail without an Enter.
+		if (ev.type === "seamPaste" || ev.type === "respawn" || next.kind !== "unknown") {
+			cancelScreenTimer(id);
+		} else if (userEvent) {
+			cancelScreenTimer(id);
+			screenTimers.set(
+				id,
+				setTimeout(() => {
+					screenTimers.delete(id);
+					harnessInput.checkScreen(id);
+				}, SCREEN_SETTLE_MS),
+			);
+		}
 		if (draftClearedBy(prev, ev, next)) {
 			for (const cb of draftClearedSubscribers) cb(id);
 		}
+	},
+	/// #413: when the draft is `unknown` because of the USER (not a seam
+	/// paste), settled for `SCREEN_SETTLE_MS`, and the screen confidently
+	/// reads an empty composer, fold `screenEmpty` (→ `clean`, which fires
+	/// the draft-cleared subscribers). Returns true iff it did. Never throws.
+	checkScreen(id: string, nowMs: number = Date.now()): boolean {
+		if (harnessInput.draft(id).kind !== "unknown") return false;
+		if (unknownCause.get(id) !== "user") return false;
+		const target = targets.get(id);
+		if (target?.screen === undefined || target.kind === undefined) return false;
+		if (nowMs - (lastUserDraftEventAt.get(id) ?? Number.NEGATIVE_INFINITY) < SCREEN_SETTLE_MS) {
+			return false;
+		}
+		let reading: "empty" | "text" | "unknown" = "unknown";
+		try {
+			const snap = target.screen();
+			if (snap !== null) reading = readComposer(target.kind, snap);
+		} catch {
+			reading = "unknown";
+		}
+		const line =
+			reading === "empty" ? "screen reads empty → clean" : `screen reads ${reading}, still held`;
+		if (lastScreenLog.get(id) !== line) {
+			lastScreenLog.set(id, line);
+			logBoth("debug", "skein::seam", `[skein] composerDraft: harness ${id} ${line} (#413)`);
+		}
+		if (reading !== "empty") return false;
+		harnessInput.noteDraftEvent(id, { type: "screenEmpty" }, nowMs);
+		return true;
+	},
+	/// #413: the event class and time that last moved `id`'s draft to
+	/// typed/unknown, or null while clean — never the typed content. For a
+	/// later health view (#414) and the "nudge refused" log line.
+	draftCause(id: string): { event: string; at: number } | null {
+		return draftCauses.get(id) ?? null;
 	},
 	/// `id`'s current inferred composer draft — `CLEAN_DRAFT` for a
 	/// harness this store has never seen an event for.
@@ -240,7 +356,8 @@ export interface CanSendPromptInput {
 	nowMs?: number;
 }
 
-export type GateResult = { ok: true } | { ok: false; reason: string };
+/// `draftHeld` (#413) is set only by the #383 composer-draft guard.
+export type GateResult = { ok: true } | { ok: false; reason: string; draftHeld?: true };
 
 /// Shared across `canSendPrompt` and `canInsertText`: the harness has to
 /// have a terminal at all, and that terminal has to be the one the seam
@@ -444,7 +561,7 @@ export function sendPrompt(
 	harnessId: string,
 	kind: HarnessKind,
 	body: string,
-	opts?: { automatic?: boolean },
+	opts?: { automatic?: boolean; releasedByUser?: boolean },
 ): GateResult {
 	const target = targets.get(harnessId);
 	const gate = canSendPrompt({
@@ -462,7 +579,9 @@ export function sendPrompt(
 		);
 		return gate;
 	}
-	if (opts?.automatic) {
+	// #413: `releasedByUser` (the tab's "deliver now") skips ONLY this
+	// draft recheck; the gate above and everything after still apply.
+	if (opts?.automatic && !opts.releasedByUser) {
 		const draftRefusal = checkDraft(harnessInput.draft(harnessId));
 		if (draftRefusal) {
 			logBoth(

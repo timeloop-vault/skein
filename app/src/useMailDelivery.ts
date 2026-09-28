@@ -80,10 +80,14 @@ import { logBoth } from "./frontendLog.ts";
 import { atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
 import { canSendPrompt, harnessInput, sendPrompt } from "./harnessInput.ts";
 import type { GateResult } from "./harnessInput.ts";
+import { mailHold } from "./mailHold.ts";
 import {
 	automaticGate,
 	decideMailNudge,
+	isDraftHold,
+	mailHeld,
 	mailNudgeText,
+	releaseRefusalReason,
 	shouldCheckOnTransition,
 } from "./mailNudge.ts";
 import { mailPending, nextMailRetry } from "./mailRetry.ts";
@@ -161,13 +165,20 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 	// is forgotten.
 	const lastMailRefusalReasonRef = useRef<Map<string, string>>(new Map());
 
-	const logMailRefusal = (harnessId: string, reason: string): void => {
+	const logMailRefusal = (harnessId: string, refusal: GateResult): void => {
+		const reason = refusal.ok ? "" : refusal.reason;
 		if (lastMailRefusalReasonRef.current.get(harnessId) === reason) return;
 		lastMailRefusalReasonRef.current.set(harnessId, reason);
+		// #413: name what last moved the draft off clean (event class only,
+		// never content) when the refusal is the draft guard's.
+		const cause = isDraftHold(refusal) ? harnessInput.draftCause(harnessId) : null;
+		const causeNote = cause
+			? ` [cause: ${cause.event}, ${Math.round((Date.now() - cause.at) / 1000)}s ago]`
+			: "";
 		logBoth(
 			"info",
 			"skein::mail",
-			`[skein] useMailDelivery: harness ${harnessId} nudge refused — ${reason} (#404)`,
+			`[skein] useMailDelivery: harness ${harnessId} nudge refused — ${reason}${causeNote} (#404, #413)`,
 		);
 	};
 
@@ -215,6 +226,7 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 			lastNudgedRef.current.delete(id);
 			lastMailRefusalReasonRef.current.delete(id);
 			mailStore.forget(id);
+			mailHold.forget(id);
 			clearRetry(id);
 			clearSettlement(id);
 		}
@@ -243,7 +255,9 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 	// missing activity record reads as still-pending `true`, so the
 	// bounded retry keeps trying within its window rather than giving up
 	// on what may be a transient gap.
-	const check = async (harnessId: string): Promise<boolean> => {
+	// #413: `releasedByUser` is the tab's "deliver now" — the same attempt,
+	// with only the composer-draft guard skipped.
+	const check = async (harnessId: string, releasedByUser = false): Promise<boolean> => {
 		const meta = metaRef.current.get(harnessId);
 		if (!meta) return false;
 		// #388: settle a still-pending nudge BEFORE asking for the live
@@ -351,34 +365,75 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 		// #388: a settlement still pending refuses outright, before even
 		// consulting `canSendPrompt`/the draft — see the comment on
 		// `settlementPending` above.
+		// #413: an automatic send first lets a confident empty-screen read
+		// release an `unknown` draft latch (never on the releasedByUser path,
+		// which skips the draft guard anyway).
+		if (!settlementPending && !releasedByUser) harnessInput.checkScreen(harnessId);
 		const gate: GateResult = settlementPending
 			? { ok: false, reason: "a previous nudge is still settling (#388)" }
-			: automaticGate(
-					canSendPrompt({
+			: releasedByUser
+				? canSendPrompt({
 						capabilities: HARNESS_KINDS[meta.kind].capabilities,
 						activity,
 						registered: harnessInput.isRegistered(harnessId),
 						bracketedPasteOn: harnessInput.bracketedPaste(harnessId),
 						body,
-					}),
-					harnessInput.draft(harnessId),
-				);
+					})
+				: automaticGate(
+						canSendPrompt({
+							capabilities: HARNESS_KINDS[meta.kind].capabilities,
+							activity,
+							registered: harnessInput.isRegistered(harnessId),
+							bracketedPasteOn: harnessInput.bracketedPaste(harnessId),
+							body,
+						}),
+						harnessInput.draft(harnessId),
+					);
 		const lastNudged = lastNudgedRef.current.get(harnessId) ?? 0;
+		const atStoppingPoint = atSafeStoppingPoint(activity);
 		const decision = decideMailNudge({
-			atStoppingPoint: atSafeStoppingPoint(activity),
+			atStoppingPoint,
 			unread: res.count,
 			lastNudged,
 			gate,
 		});
+		// #413: a refused deliver-now — remember why and log it.
+		const noteReleaseRefused = (reason: string): void => {
+			mailHold.setReleaseRefusal(harnessId, reason);
+			logBoth(
+				"info",
+				"skein::mail",
+				`[skein] useMailDelivery: harness ${harnessId} deliver-now refused — ${reason} (#413)`,
+			);
+		};
 		if (!decision.nudge) {
 			lastNudgedRef.current.set(harnessId, decision.lastNudged);
+			// A refused deliver-now leaves `held` as it was — a non-draft
+			// refusal would otherwise read "not held" and drop the entry, and
+			// with it the refusal the tab shows.
+			if (!releasedByUser) {
+				mailHold.set(
+					harnessId,
+					mailHeld({ unread: res.count, lastNudged: decision.lastNudged, refusal: gate }),
+				);
+			}
+			if (releasedByUser) {
+				noteReleaseRefused(
+					releaseRefusalReason({
+						atStoppingPoint,
+						unread: res.count,
+						lastNudged: decision.lastNudged,
+						gate,
+					}),
+				);
+			}
 			// #404: only worth a log line when there's mail actually
 			// outstanding AND the gate itself is why nothing went out —
 			// "not at a stopping point yet" or "already nudged for this
 			// count" aren't refusals, just not-yet.
 			const pending = pendingResult(harnessId, res.count, decision.lastNudged);
 			if (!gate.ok && pending) {
-				logMailRefusal(harnessId, gate.reason);
+				logMailRefusal(harnessId, gate);
 			}
 			return pending;
 		}
@@ -405,11 +460,26 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 		// proven to have landed, or rolls `lastNudged` back to its
 		// pre-nudge value once `NUDGE_SETTLE_MS` passes with no proof —
 		// see this settlement's own evaluation at the top of `check`.
-		const result = sendPrompt(harnessId, meta.kind, body, { automatic: true });
+		const result = sendPrompt(harnessId, meta.kind, body, {
+			automatic: true,
+			...(releasedByUser ? { releasedByUser: true } : {}),
+		});
 		if (!result.ok) {
 			lastNudgedRef.current.set(harnessId, lastNudged);
-			logMailRefusal(harnessId, result.reason);
+			logMailRefusal(harnessId, result);
+			if (!releasedByUser) {
+				mailHold.set(harnessId, mailHeld({ unread: res.count, lastNudged, refusal: result }));
+			}
+			if (releasedByUser) noteReleaseRefused(result.reason);
 			return pendingResult(harnessId, res.count, lastNudged);
+		}
+		mailHold.set(harnessId, false);
+		if (releasedByUser) {
+			logBoth(
+				"info",
+				"skein::mail",
+				`[skein] useMailDelivery: harness ${harnessId} deliver-now sent — unread=${res.count} (#413)`,
+			);
 		}
 		lastMailRefusalReasonRef.current.delete(harnessId);
 		lastNudgedRef.current.set(harnessId, decision.lastNudged);
@@ -459,11 +529,15 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 		retryRef.current.set(harnessId, { armedAtMs, timer });
 	};
 
-	const runSerialized = (harnessId: string, source: "event" | "timer" = "event"): void => {
+	const runSerialized = (
+		harnessId: string,
+		source: "event" | "timer" = "event",
+		releasedByUser = false,
+	): void => {
 		const prior = inFlightRef.current.get(harnessId) ?? Promise.resolve(false);
 		const next = prior.then(
-			() => check(harnessId),
-			() => check(harnessId),
+			() => check(harnessId, releasedByUser),
+			() => check(harnessId, releasedByUser),
 		);
 		inFlightRef.current.set(harnessId, next);
 		void next.then((pending) => {
@@ -547,10 +621,22 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: runSerialized closes only over refs, stable across renders.
 	useEffect(() => {
 		const unsub = harnessInput.subscribeRegistered((harnessId) => {
+			// #413: a fresh PTY starts with a clean composer; a "held" marker
+			// from the old one would flash until the next check.
+			mailHold.forget(harnessId);
 			if (!metaRef.current.has(harnessId)) return;
 			runSerialized(harnessId);
 		});
 		return unsub;
+	}, []);
+
+	// #413: the tab's "deliver now" click.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: runSerialized closes only over refs, stable across renders.
+	useEffect(() => {
+		return mailHold.onRelease((harnessId) => {
+			if (!metaRef.current.has(harnessId)) return;
+			runSerialized(harnessId, "event", true);
+		});
 	}, []);
 
 	// #386/#388: stop every outstanding retry and settlement timer on

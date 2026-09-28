@@ -1,6 +1,6 @@
 // Fire-and-forget forwarding of frontend log lines to Rust's
 // daily-rotating `skein.log`, via the `frontend_log` Tauri command
-// (`app/src-tauri/src/lib.rs`, 2000-char cap, levels info/warn/error).
+// (`app/src-tauri/src/lib.rs`, 2000-char cap, levels debug/info/warn/error).
 //
 // #362 introduced the seam for one narrow case: a `Channel.onmessage`
 // throw that would otherwise wedge silently (see `harnessEvents.ts`'s
@@ -26,7 +26,9 @@ import { invoke } from "@tauri-apps/api/core";
 /// node environment there is no Tauri runtime to answer the IPC call,
 /// and some mocks throw synchronously rather than returning a rejected
 /// promise.
-export function logToRust(level: "info" | "warn" | "error", target: string, message: string): void {
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+export function logToRust(level: LogLevel, target: string, message: string): void {
 	try {
 		void invoke("frontend_log", { level, target, message }).catch(() => {});
 	} catch {
@@ -41,8 +43,9 @@ export function logToRust(level: "info" | "warn" | "error", target: string, mess
 /// reach the file too. `message` is used as-is for both: callers
 /// already write their own `[skein] ...` prefix, so this adds none of
 /// its own.
-export function logBoth(level: "info" | "warn" | "error", target: string, message: string): void {
-	if (level === "warn") console.warn(message);
+export function logBoth(level: LogLevel, target: string, message: string): void {
+	if (level === "debug") console.debug(message);
+	else if (level === "warn") console.warn(message);
 	else if (level === "error") console.error(message);
 	else console.info(message);
 	logToRust(level, target, message);
