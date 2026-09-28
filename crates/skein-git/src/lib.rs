@@ -33,7 +33,7 @@ mod worktree;
 
 pub use diff::{DiffHunk, DiffLine, DiffLineKind, FileDiff, MAX_DIFF_FILE_BYTES};
 pub use error::{GitError, Result};
-pub use range::{CommitInfo, MAX_RANGE_COMMITS};
+pub use range::{CappedBlob, CommitInfo, MAX_RANGE_COMMITS};
 pub use repo::{BranchInfo, Repo};
 pub use status::{StatusEntry, StatusKind};
 pub use worktree::{WorktreeInfo, propose_worktree_path};

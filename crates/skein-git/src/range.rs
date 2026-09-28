@@ -73,6 +73,20 @@ fn to_info(commit: &Commit<'_>) -> CommitInfo {
     }
 }
 
+/// The result of [`Repo::blob_at_capped`] — a blob lookup that never
+/// copies more than the caller asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CappedBlob {
+    /// No such blob at that revision/path (or the entry there isn't a
+    /// blob at all — a submodule, a directory).
+    Missing,
+    /// The blob exists but is bigger than the cap. Its length, not its
+    /// content — nothing was copied.
+    TooLarge(u64),
+    /// The blob's full content, copied because it fit.
+    Content(Vec<u8>),
+}
+
 /// Candidate base branches, most authoritative first. `origin/HEAD` is
 /// what the remote itself says its default branch is; the rest are the
 /// conventional names, in the order a repo is likely to use them.
@@ -266,6 +280,49 @@ impl Repo {
         };
         let object = entry.to_object(&self.repo)?;
         Ok(object.as_blob().map(|b| b.content().to_vec()))
+    }
+
+    /// The same lookup as [`Repo::blob_at`], but checked against the
+    /// blob's own recorded size *before* any bytes are copied.
+    ///
+    /// `blob_at` always clones the whole blob into a `Vec`; for the
+    /// review pane's image preview (#409) that is unbounded work for a
+    /// caller that may only want to know whether the content fits under
+    /// a cap — a multi-hundred-MB asset blob would otherwise be copied
+    /// in full just to be discarded as too large a moment later.
+    pub fn blob_at_capped(&self, rev: &str, relpath: &str, max_bytes: u64) -> Result<CappedBlob> {
+        let Ok(object) = self.repo.revparse_single(rev) else {
+            return Ok(CappedBlob::Missing);
+        };
+        let Ok(tree) = object.peel_to_tree() else {
+            return Ok(CappedBlob::Missing);
+        };
+        let Ok(entry) = tree.get_path(std::path::Path::new(relpath)) else {
+            return Ok(CappedBlob::Missing);
+        };
+        let object = entry.to_object(&self.repo)?;
+        let Some(blob) = object.as_blob() else {
+            return Ok(CappedBlob::Missing); // a tree entry, not a blob
+        };
+        let size = u64::try_from(blob.size()).unwrap_or(u64::MAX);
+        if size > max_bytes {
+            return Ok(CappedBlob::TooLarge(size));
+        }
+        Ok(CappedBlob::Content(blob.content().to_vec()))
+    }
+
+    /// The sha of `rev`'s first parent, or `None` when `rev` does not
+    /// resolve, or resolves to a root commit with no parent.
+    ///
+    /// The same first-parent rule [`Repo::diff_commit`] already applies
+    /// for a merge, exposed on its own: #409's commit-scope "old" side
+    /// needs the parent sha without paying for a full diff to get it.
+    pub fn first_parent(&self, rev: &str) -> Result<Option<String>> {
+        let Some(sha) = self.resolve_commit(rev)? else {
+            return Ok(None);
+        };
+        let commit = self.repo.find_commit(Oid::from_str(&sha)?)?;
+        Ok(commit.parent_id(0).ok().map(|id| id.to_string()))
     }
 
     /// Skein's guess at the branch a review should be scoped against.

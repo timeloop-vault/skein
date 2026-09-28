@@ -58,6 +58,7 @@
 mod anchor;
 mod content;
 mod hunks;
+mod image;
 
 pub use anchor::{
     Anchor, MIN_CONFIDENCE, Placement, Reanchorer, Side, capture_lines, hash_lines, reanchor,
@@ -69,3 +70,4 @@ pub use content::{
 pub use hunks::{
     CONTEXT_RADIUS, Hunk, HunkLine, LineKind, ReviewError, accept, diff_lines, reject, split_lines,
 };
+pub use image::{MAX_IMAGE_BYTES, image_mime, is_image_path};

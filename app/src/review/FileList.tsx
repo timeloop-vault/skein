@@ -12,6 +12,7 @@
 // since comes back with `changedSinceViewed` and the row says so.
 
 import { HChip } from "../components.tsx";
+import { isImagePath } from "../imageFiles.ts";
 import type { HarnessKind } from "../types.ts";
 import type { ReviewFile } from "./api.ts";
 
@@ -94,7 +95,7 @@ export const FileList = ({
 							</span>
 						)}
 						{f.binary ? (
-							<span className="rv-binary">bin</span>
+							<span className="rv-binary">{isImagePath(f.path) ? "img" : "bin"}</span>
 						) : (
 							<>
 								{f.additions > 0 && <span className="delta-add">+{f.additions}</span>}

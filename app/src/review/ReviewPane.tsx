@@ -40,6 +40,7 @@ import type { Harness, HarnessKind } from "../types.ts";
 import { CommitList } from "./CommitList.tsx";
 import { DiffBody, type LineSelection, type ThreadHandlers } from "./DiffBody.tsx";
 import { FileList } from "./FileList.tsx";
+import { ImageDiff } from "./ImageDiff.tsx";
 import { ReviewHeader } from "./ReviewHeader.tsx";
 import { SignoffConfirm, type SignoffIntent, SignoffNotice } from "./SignoffControl.tsx";
 import { Composer, ThreadView } from "./Thread.tsx";
@@ -56,6 +57,7 @@ import {
 	resolveThread,
 	unplacedThreads,
 } from "./api.ts";
+import { type SvgViewMode, chooseReviewBody, isSvgPath } from "./imageDiffModel.ts";
 import { selectNudge } from "./nudges.ts";
 import { signoffState } from "./signoff.ts";
 import {
@@ -89,6 +91,9 @@ export const ReviewPane = ({
 	const [scope, setScope] = useState<ReviewScope>("branch");
 	const [commitSha, setCommitSha] = useState<string | undefined>(undefined);
 	const [activePath, setActivePath] = useState<string | undefined>(undefined);
+	// The SVG image/text toggle (#409) — per file, so switching files
+	// doesn't carry one file's choice onto the next.
+	const [svgMode, setSvgMode] = useState<SvgViewMode>("image");
 	const [busy, setBusy] = useState(false);
 	const [actionError, setActionError] = useState<string | undefined>(undefined);
 	// Bumped after every mutation so the open file re-pulls its threads;
@@ -192,6 +197,11 @@ export const ReviewPane = ({
 			setActivePath(undefined);
 		}
 	}, [files, activePath]);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `activePath` is the deliberate trigger — a new file starts the toggle over on "image".
+	useEffect(() => {
+		setSvgMode("image");
+	}, [activePath]);
 
 	const run = (work: () => Promise<unknown>) => {
 		setBusy(true);
@@ -327,27 +337,81 @@ export const ReviewPane = ({
 		);
 	} else if (!file) {
 		body = <div className="rv-empty">select a file to review it</div>;
-	} else if (file.blocked) {
-		body = <div className="rv-empty">{file.blocked} — no line diff to show</div>;
-	} else if (file.hunks.length === 0) {
-		body = (
-			<div className="rv-empty">
-				no diff in this scope
-				{orphans.length > 0 && " — its comments are below"}
-			</div>
-		);
 	} else {
+		// #409: an image gets a before/after instead of the "no line diff"
+		// message a binary/toolarge block would otherwise show. SVG is
+		// also text, so it gets a toggle between the two rather than only
+		// ever the image — comments stay attached to the text view, which
+		// is why the toggle lives beside the body rather than replacing it.
+		const rb = chooseReviewBody({
+			hasFile: true,
+			path: file.path,
+			blocked: file.blocked,
+			hunksLength: file.hunks.length,
+			svgMode,
+		});
+		let content: React.ReactNode;
+		switch (rb.kind) {
+			case "image":
+				content = (
+					<ImageDiff
+						roomId={roomId}
+						cwd={cwd}
+						scope={scope}
+						commitSha={effectiveCommit}
+						path={file.path}
+						change={file.change}
+						contentHash={file.contentHash}
+					/>
+				);
+				break;
+			case "blocked":
+				content = <div className="rv-empty">{rb.blocked} — no line diff to show</div>;
+				break;
+			case "no-diff":
+				content = (
+					<div className="rv-empty">
+						no diff in this scope
+						{orphans.length > 0 && " — its comments are below"}
+					</div>
+				);
+				break;
+			default:
+				content = (
+					<DiffBody
+						hunks={file.hunks}
+						threads={file.threads}
+						busy={busy}
+						owners={owners}
+						harnessKindOf={harnessKindOf}
+						verbs={verbs}
+						handlers={handlers}
+						onComment={commentOnLines}
+					/>
+				);
+		}
 		body = (
-			<DiffBody
-				hunks={file.hunks}
-				threads={file.threads}
-				busy={busy}
-				owners={owners}
-				harnessKindOf={harnessKindOf}
-				verbs={verbs}
-				handlers={handlers}
-				onComment={commentOnLines}
-			/>
+			<>
+				{isSvgPath(file.path) && (
+					<div className="rv-imgtoggle">
+						<button
+							type="button"
+							className={`rv-btn${svgMode === "image" ? " primary" : ""}`}
+							onClick={() => setSvgMode("image")}
+						>
+							image
+						</button>
+						<button
+							type="button"
+							className={`rv-btn${svgMode === "text" ? " primary" : ""}`}
+							onClick={() => setSvgMode("text")}
+						>
+							text
+						</button>
+					</div>
+				)}
+				{content}
+			</>
 		);
 	}
 

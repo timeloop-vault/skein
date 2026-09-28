@@ -185,6 +185,32 @@ export const fetchFile = (
 		commitSha: commitSha ?? null,
 	});
 
+/// Which half of a before/after image pair (#409): the content the diff
+/// is *from* vs. the content it is *to*, mirroring `Side` above but
+/// named for the image diff rather than a line's gutter.
+export type ImageDiffSide = "old" | "new";
+
+/// Raw bytes for one side of an image file in the review pane. Rejects
+/// with the same error strings `read_image_bytes` uses, plus
+/// `"unavailable"` for a pending-scope baseline whose bytes weren't kept
+/// (see `parseImageError` in `../imageFiles.ts`).
+export const fetchImageBytes = (
+	roomId: string,
+	cwd: string,
+	path: string,
+	scope: ReviewScope,
+	side: ImageDiffSide,
+	commitSha?: string,
+): Promise<ArrayBuffer> =>
+	invoke<ArrayBuffer>("review_image_bytes", {
+		roomId,
+		cwd,
+		path,
+		scope,
+		commitSha: commitSha ?? null,
+		side,
+	});
+
 export const addThread = (roomId: string, cwd: string, thread: NewThread): Promise<ReviewThread> =>
 	invoke<ReviewThread>("review_add_thread", { roomId, cwd, thread });
 

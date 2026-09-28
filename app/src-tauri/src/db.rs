@@ -307,6 +307,7 @@ const ROOM_KEYED_TABLES: &[&str] = &[
     "harness_events",
     "harness_actions",
     "review_baselines",
+    "review_baseline_images",
     "review_threads",
     "review_comments",
     "review_viewed",
@@ -316,6 +317,14 @@ const ROOM_KEYED_TABLES: &[&str] = &[
     "review_signoff",
     "harness_messages",
 ];
+
+/// Per-room ceiling on the total size of `review_baseline_images` rows
+/// (#409 follow-up). A mirror is a preview convenience, not the review
+/// record itself, so a room that keeps generating large "before" images
+/// must not be allowed to grow `skein.db` without bound — a write that
+/// would push the room over this cap drops the mirror for that path
+/// instead of storing it (see `Database::set_review_baseline_image`).
+pub(crate) const MAX_ROOM_IMAGE_MIRROR_BYTES: u64 = 128 * 1024 * 1024;
 
 pub struct Database {
     conn: Mutex<Connection>,
@@ -511,6 +520,27 @@ impl Database {
                 harness_id TEXT NOT NULL,
                 captured_ms INTEGER NOT NULL,
                 touched_ms INTEGER NOT NULL,
+                PRIMARY KEY (room_id, path)
+            )",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Issue #409: the raw bytes behind a `Binary`/`TooLarge`
+        // baseline on an image path. `review_baselines.content` only
+        // ever holds text (a `Text` baseline — SVG included, since it's
+        // UTF-8 — already carries its bytes there); a raster image's
+        // baseline keeps nothing but a digest or a length, which is
+        // enough to detect a change but not enough to render one. A
+        // sibling table rather than widening `content` to a BLOB: every
+        // other kind still has nothing to store, and this only ever
+        // exists for the minority of baselines that are both non-text
+        // and a known image extension.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS review_baseline_images (
+                room_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                bytes BLOB NOT NULL,
                 PRIMARY KEY (room_id, path)
             )",
             [],
@@ -968,6 +998,24 @@ impl Database {
             conn.execute("VACUUM INTO ?1", params![tmp_str])
                 .map_err(|e| e.to_string())?;
         }
+        // Strip the image mirror from the snapshot (#409 follow-up): a
+        // mirror is a rebuildable preview cache, not state worth paying
+        // for twice on every backup generation. A restored `.bak` falls
+        // back to the HEAD-blob digest / "unavailable" path exactly like
+        // a room whose baseline was never mirrored. A failure here must
+        // fail the whole backup rather than promote a half-cleaned temp
+        // file to `.bak` — returning early leaves `tmp` in place for the
+        // next call's cleanup, same as a failed VACUUM INTO above.
+        {
+            let tmp_conn = Connection::open(&tmp).map_err(|e| e.to_string())?;
+            tmp_conn
+                .execute("DELETE FROM review_baseline_images", [])
+                .map_err(|e| e.to_string())?;
+            // VACUUM (not just DELETE) so the freed pages are actually
+            // released — VACUUM INTO already produced a compact copy,
+            // but the DELETE above reintroduces free pages of its own.
+            tmp_conn.execute("VACUUM", []).map_err(|e| e.to_string())?;
+        }
         if dest.exists() {
             replace_file(&dest, &prev)?;
         }
@@ -1341,6 +1389,107 @@ impl Database {
             Some(r) => r.map(Some).map_err(|e| e.to_string()),
             None => Ok(None),
         }
+    }
+
+    /// Mirror (or clear) `review_baseline_images` for one baseline
+    /// (#409). Every writer of a `review_baselines` row calls this
+    /// alongside it: `Some(bytes)` upserts a mirror of the baseline's
+    /// raw content for an image path Skein classified as `Binary` or
+    /// `TooLarge`; `None` deletes any row that might be there — a
+    /// `Text`/`Missing`/`Symlink`/`Unreadable` baseline, a non-image
+    /// path, or bytes over the cap all have nothing worth keeping here.
+    pub fn set_review_baseline_image(
+        &self,
+        room_id: &str,
+        path: &str,
+        bytes: Option<&[u8]>,
+    ) -> Result<(), String> {
+        self.set_review_baseline_image_capped(room_id, path, bytes, MAX_ROOM_IMAGE_MIRROR_BYTES)
+    }
+
+    /// [`Self::set_review_baseline_image`] with the per-room cap taken
+    /// as a parameter, so a test can exercise the cap without writing
+    /// 128 MiB (the `read_image_bytes_impl` pattern in `fs.rs`).
+    fn set_review_baseline_image_capped(
+        &self,
+        room_id: &str,
+        path: &str,
+        bytes: Option<&[u8]>,
+        max_room_bytes: u64,
+    ) -> Result<(), String> {
+        let mut conn = self.conn.lock();
+        match bytes {
+            Some(b) => {
+                let tx = conn.transaction().map_err(|e| e.to_string())?;
+                // Every OTHER mirror already stored for this room — the
+                // path being written doesn't count against itself, so
+                // replacing an existing mirror with a same-size blob at
+                // the cap still succeeds.
+                let other_bytes: i64 = tx
+                    .query_row(
+                        "SELECT COALESCE(SUM(length(bytes)), 0) FROM review_baseline_images \
+                         WHERE room_id = ?1 AND path != ?2",
+                        params![room_id, path],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                let other_bytes = u64::try_from(other_bytes).unwrap_or(0);
+                if other_bytes.saturating_add(b.len() as u64) > max_room_bytes {
+                    // Over the cap: drop whatever mirror this path had
+                    // rather than keep a stale one — an old "before"
+                    // image is worse than none, since it would show the
+                    // wrong diff instead of falling back honestly.
+                    tracing::info!(
+                        room_id,
+                        path,
+                        other_bytes,
+                        new_bytes = b.len(),
+                        cap_bytes = max_room_bytes,
+                        "review baseline image mirror over per-room cap; dropping mirror"
+                    );
+                    tx.execute(
+                        "DELETE FROM review_baseline_images WHERE room_id = ?1 AND path = ?2",
+                        params![room_id, path],
+                    )
+                } else {
+                    tx.execute(
+                        "INSERT INTO review_baseline_images (room_id, path, bytes) \
+                         VALUES (?1, ?2, ?3) \
+                         ON CONFLICT(room_id, path) DO UPDATE SET bytes = excluded.bytes",
+                        params![room_id, path, b],
+                    )
+                }
+                .map_err(|e| e.to_string())?;
+                tx.commit().map_err(|e| e.to_string())?;
+            }
+            None => {
+                conn.execute(
+                    "DELETE FROM review_baseline_images WHERE room_id = ?1 AND path = ?2",
+                    params![room_id, path],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The mirrored bytes for a baseline, when
+    /// [`Self::set_review_baseline_image`] kept one. `None` when there
+    /// never was one — the pending image lookup
+    /// (`review_surface::image`) falls back from there.
+    pub fn review_baseline_image(
+        &self,
+        room_id: &str,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT bytes FROM review_baseline_images WHERE room_id = ?1 AND path = ?2",
+            params![room_id, path],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())
     }
 
     // ── review comments (issue #212) ──────────────────────────────
@@ -2811,6 +2960,36 @@ mod tests {
     }
 
     #[test]
+    fn backup_strips_the_image_mirror_but_keeps_baseline_rows() {
+        let (_dir, db) = fresh_db();
+        db.save_all(&[room("r1")]).unwrap();
+        db.insert_review_baseline_if_absent("r1", "shot.png", "binary", None, "h1", 1)
+            .unwrap();
+        db.set_review_baseline_image("r1", "shot.png", Some(&[1, 2, 3]))
+            .unwrap();
+        let _ = db.load_all().unwrap();
+
+        let bak = db.backup_last_known_good().unwrap();
+        let restored = Database::open(&bak).unwrap();
+        assert_eq!(
+            restored.review_baseline_image("r1", "shot.png").unwrap(),
+            None,
+            "the mirror is a rebuildable preview cache, not worth a snapshot copy"
+        );
+        assert_eq!(
+            restored.review_baselines_for_room("r1").unwrap().len(),
+            1,
+            "the baseline row itself must survive; only the mirror is stripped"
+        );
+
+        // Stripping the snapshot must not touch the live db.
+        assert_eq!(
+            db.review_baseline_image("r1", "shot.png").unwrap(),
+            Some(vec![1, 2, 3])
+        );
+    }
+
+    #[test]
     fn record_then_query_by_harness_returns_event() {
         let (_dir, db) = fresh_db();
         db.record_harness_event("h1", "r1", "running", "waiting", 1_000, true, Some("l2c1"))
@@ -3256,6 +3435,122 @@ mod review_baseline_tests {
     }
 
     #[test]
+    fn baseline_image_upserts_and_clears_independently_of_the_row() {
+        let (_d, db) = fresh();
+        assert_eq!(db.review_baseline_image("r1", "shot.png").unwrap(), None);
+
+        db.set_review_baseline_image("r1", "shot.png", Some(&[1, 2, 3]))
+            .unwrap();
+        assert_eq!(
+            db.review_baseline_image("r1", "shot.png").unwrap(),
+            Some(vec![1, 2, 3])
+        );
+
+        // A later write for the same path replaces, not appends.
+        db.set_review_baseline_image("r1", "shot.png", Some(&[9]))
+            .unwrap();
+        assert_eq!(
+            db.review_baseline_image("r1", "shot.png").unwrap(),
+            Some(vec![9])
+        );
+
+        // Clearing removes the row outright rather than storing empty
+        // bytes — `None` is what a non-image or over-cap write passes.
+        db.set_review_baseline_image("r1", "shot.png", None)
+            .unwrap();
+        assert_eq!(db.review_baseline_image("r1", "shot.png").unwrap(), None);
+
+        // Clearing a path that was never mirrored is a no-op, not an
+        // error — every baseline write calls this unconditionally.
+        db.set_review_baseline_image("r1", "never-mirrored.png", None)
+            .unwrap();
+    }
+
+    #[test]
+    fn baseline_images_are_scoped_per_room() {
+        let (_d, db) = fresh();
+        db.set_review_baseline_image("r1", "shot.png", Some(&[1]))
+            .unwrap();
+        db.set_review_baseline_image("r2", "shot.png", Some(&[2]))
+            .unwrap();
+        assert_eq!(
+            db.review_baseline_image("r1", "shot.png").unwrap(),
+            Some(vec![1])
+        );
+        assert_eq!(
+            db.review_baseline_image("r2", "shot.png").unwrap(),
+            Some(vec![2])
+        );
+    }
+
+    #[test]
+    fn cap_allows_multiple_paths_until_the_room_total_is_exceeded() {
+        let (_d, db) = fresh();
+        let cap = 10u64;
+        db.set_review_baseline_image_capped("r1", "a.png", Some(&[0; 4]), cap)
+            .unwrap();
+        db.set_review_baseline_image_capped("r1", "b.png", Some(&[0; 4]), cap)
+            .unwrap();
+        // a (4) + b (4) + this write (4) = 12 > 10: refused.
+        db.set_review_baseline_image_capped("r1", "c.png", Some(&[0; 4]), cap)
+            .unwrap();
+
+        assert_eq!(
+            db.review_baseline_image("r1", "a.png").unwrap(),
+            Some(vec![0; 4])
+        );
+        assert_eq!(
+            db.review_baseline_image("r1", "b.png").unwrap(),
+            Some(vec![0; 4])
+        );
+        assert_eq!(db.review_baseline_image("r1", "c.png").unwrap(), None);
+    }
+
+    #[test]
+    fn cap_drops_a_stale_mirror_rather_than_keep_the_old_one() {
+        let (_d, db) = fresh();
+        let cap = 10u64;
+        db.set_review_baseline_image_capped("r1", "a.png", Some(&[1, 2, 3, 4]), cap)
+            .unwrap();
+        assert_eq!(
+            db.review_baseline_image("r1", "a.png").unwrap(),
+            Some(vec![1, 2, 3, 4])
+        );
+
+        // Overwriting with a blob that alone busts the room cap must
+        // remove the old mirror outright, not leave it in place — a
+        // stale "before" image would show the wrong diff, which is
+        // worse than falling back to "unavailable".
+        db.set_review_baseline_image_capped("r1", "a.png", Some(&[0; 20]), cap)
+            .unwrap();
+        assert_eq!(db.review_baseline_image("r1", "a.png").unwrap(), None);
+    }
+
+    #[test]
+    fn cap_allows_a_same_size_replacement_of_a_path_already_at_the_cap() {
+        let (_d, db) = fresh();
+        let cap = 10u64;
+        db.set_review_baseline_image_capped("r1", "a.png", Some(&[0; 6]), cap)
+            .unwrap();
+        db.set_review_baseline_image_capped("r1", "b.png", Some(&[0; 4]), cap)
+            .unwrap();
+        // Room total is exactly at the cap (6 + 4 = 10).
+
+        // Replacing b.png with a same-size blob must not count b's own
+        // old bytes against itself, so this still fits.
+        db.set_review_baseline_image_capped("r1", "b.png", Some(&[1; 4]), cap)
+            .unwrap();
+        assert_eq!(
+            db.review_baseline_image("r1", "b.png").unwrap(),
+            Some(vec![1; 4])
+        );
+        assert_eq!(
+            db.review_baseline_image("r1", "a.png").unwrap(),
+            Some(vec![0; 6])
+        );
+    }
+
+    #[test]
     fn baselines_survive_a_restart() {
         // #211's mandatory property: an empty tracker after a reload
         // makes pending hunks "silently disappear — the user sees their
@@ -3625,6 +3920,10 @@ mod orphan_sweep_tests {
                 "INSERT INTO review_baselines \
                  (room_id, path, kind, content, harness_id, captured_ms, touched_ms) \
                  VALUES (?1, 'a.rs', 'text', 'v1', 'h1', 1, 1)"
+            }
+            "review_baseline_images" => {
+                "INSERT INTO review_baseline_images (room_id, path, bytes) \
+                 VALUES (?1, 'shot.png', X'89504e47')"
             }
             "review_threads" => {
                 "INSERT INTO review_threads \
