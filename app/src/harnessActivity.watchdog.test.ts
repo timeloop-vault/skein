@@ -358,3 +358,23 @@ describe("recoverUnheardSilence (#404)", () => {
 		expect(harnessActivity.get(id)?.silenceRecovered).toBe(false);
 	});
 });
+
+describe("adapterDelivered authority re-grant (#422)", () => {
+	it("restores authority when the adapter speaks after a detach", () => {
+		const id = attachedHarness();
+		harnessActivity.detachAuthoritativeSource(id);
+		expect(harnessActivity.get(id)?.authoritative).toBe(false);
+
+		harnessActivity.adapterDelivered(id);
+		expect(harnessActivity.get(id)?.authoritative).toBe(true);
+	});
+
+	it("does not restore authority for restoresAuthority: false", () => {
+		const id = attachedHarness();
+		harnessActivity.adapterDelivered(id);
+		harnessActivity.detachAuthoritativeSource(id);
+
+		harnessActivity.adapterDelivered(id, { restoresAuthority: false });
+		expect(harnessActivity.get(id)?.authoritative).toBe(false);
+	});
+});

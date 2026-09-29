@@ -118,6 +118,22 @@ export function hasClaudeTranscriptTail(
 	return kind === "claude" && typeof sessionId === "string" && sessionId.length > 0;
 }
 
+/// #422: the newest attach per harness. A stale attach's cleanup,
+/// attach rejection, or late `session_end` must not strip authority
+/// from a newer attach of the same harness (`/clear` re-point, manual
+/// reattach), so each of those checks it is still the live one.
+const liveAttach = new Map<string, symbol>();
+
+const beginAttach = (harnessId: string): { token: symbol; isLive: () => boolean } => {
+	const token = Symbol(harnessId);
+	liveAttach.set(harnessId, token);
+	return { token, isLive: () => liveAttach.get(harnessId) === token };
+};
+
+const endAttach = (harnessId: string, token: symbol): void => {
+	if (liveAttach.get(harnessId) === token) liveAttach.delete(harnessId);
+};
+
 /// Subscribe a Claude harness to its JSONL event stream. Marks the
 /// activity store as authoritative-source so the L2a idle tick stops
 /// fighting the adapter. Returns an unsubscribe — callers should run
@@ -134,6 +150,7 @@ export function attachClaudeEvents(
 ): () => void {
 	const channel = new Channel<ClaudeEvent>();
 	let closed = false;
+	const { token, isLive } = beginAttach(harnessId);
 	channel.onmessage = guardChannelHandler(harnessId, "claude_events", (event) => {
 		// #259: any event at all proves the tail is on the right file.
 		// Guarded so a straggler after unsubscribe can't hand authority
@@ -142,8 +159,12 @@ export function attachClaudeEvents(
 		// and reattaches this same harness mid-life, so a straggler from
 		// the OLD tail landing after that detach must not feed the NEW
 		// session's phase/subagent state either.
-		if (!closed) {
-			harnessActivity.adapterDelivered(harnessId);
+		// #422: a live adapter speaking after `session_end` (the
+		// transcript reappeared) takes authority back.
+		if (!closed && isLive()) {
+			harnessActivity.adapterDelivered(harnessId, {
+				restoresAuthority: event.kind !== "session_end",
+			});
 			translate(harnessId, event);
 		}
 	});
@@ -175,12 +196,13 @@ export function attachClaudeEvents(
 			"claude_events",
 			`attach failed harness=${harnessId} session=${sessionId}: ${msg}`,
 		);
-		harnessActivity.detachAuthoritativeSource(harnessId);
+		if (isLive()) harnessActivity.detachAuthoritativeSource(harnessId);
 	});
 
 	return () => {
 		closed = true;
-		harnessActivity.detachAuthoritativeSource(harnessId);
+		if (isLive()) harnessActivity.detachAuthoritativeSource(harnessId);
+		endAttach(harnessId, token);
 		void invoke("claude_events_detach", { harnessId }).catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.warn(`[skein] claude_events_detach failed for ${harnessId}:`, msg);
@@ -281,7 +303,9 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			// reflects PTY truth. #86: a dialog open at this moment
 			// would otherwise pin `permission` for good — the L2a tick
 			// never touches a non-running phase, and no tool_result can
-			// arrive from a file that is gone.
+			// arrive from a file that is gone. #422: the handler only
+			// translates for the live attach; and if the file reappears, the next event
+			// restores authority (`adapterDelivered`).
 			harnessActivity.releasePermission(harnessId, TRANSITION_SOURCE.AdapterDetached);
 			harnessActivity.detachAuthoritativeSource(harnessId);
 			return;
@@ -405,10 +429,17 @@ export function attachOpencodeEvents(
 ): () => void {
 	const channel = new Channel<OpencodeEvent>();
 	let closed = false;
+	const { token, isLive } = beginAttach(harnessId);
 	channel.onmessage = guardChannelHandler(harnessId, "opencode_events", (event) => {
 		// #259: see attachClaudeEvents. `connected` arrives first, so a
 		// stream that is up disarms the watchdog before any prompt.
-		if (!closed) harnessActivity.adapterDelivered(harnessId);
+		// #422: a straggler from a closed or replaced attach must not
+		// translate (its `session_end` would detach the live one).
+		if (closed || !isLive()) return;
+		// `connected` re-arms authority itself, explicitly.
+		harnessActivity.adapterDelivered(harnessId, {
+			restoresAuthority: event.kind !== "session_end" && event.kind !== "connected",
+		});
 		translateOpencode(harnessId, event, onSessionCaptured, getSessionId, onSessionFollowed);
 	});
 
@@ -425,12 +456,13 @@ export function attachOpencodeEvents(
 	}).catch((err: unknown) => {
 		const msg = err instanceof Error ? err.message : String(err);
 		console.warn(`[skein] opencode_events_attach failed for ${harnessId}:`, msg);
-		harnessActivity.detachAuthoritativeSource(harnessId);
+		if (isLive()) harnessActivity.detachAuthoritativeSource(harnessId);
 	});
 
 	return () => {
 		closed = true;
-		harnessActivity.detachAuthoritativeSource(harnessId);
+		if (isLive()) harnessActivity.detachAuthoritativeSource(harnessId);
+		endAttach(harnessId, token);
 		// The process this was observed on is going away (#248).
 		observedAgents.forget(harnessId);
 		// #86: outstanding permission/question ids are meaningless once
