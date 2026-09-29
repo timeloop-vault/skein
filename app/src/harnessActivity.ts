@@ -70,7 +70,12 @@ export type {
 	TransitionSource,
 } from "./harnessActivityTypes.ts";
 export { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
-export { atSafeStoppingPoint, isDecisiveInput, phaseSnapshot } from "./harnessActivityCore.ts";
+export {
+	atSafeStoppingPoint,
+	isDecisiveInput,
+	onTick,
+	phaseSnapshot,
+} from "./harnessActivityCore.ts";
 export {
 	activityToStatus,
 	aggregateRoomStatus,
@@ -113,6 +118,12 @@ export const harnessActivity = {
 			delegationEmptiedAt: null,
 			delegatedCount: 0,
 			silenceRecovered: false,
+			phaseSince: now,
+			lastTurnSignal: null,
+			lastAdapterEvent: null,
+			authorityLostAt: null,
+			permissionAt: null,
+			lastSubmitAt: null,
 		});
 		ensureTick();
 		emit(id);
@@ -156,6 +167,8 @@ export const harnessActivity = {
 		const cur = store.get(id);
 		if (!cur) return;
 		const restores = opts?.restoresAuthority ?? true;
+		// #423: stamped on every call, ahead of the early return below.
+		cur.lastAdapterEvent = { at: Date.now(), restoresAuthority: restores };
 		const regrant = restores && !cur.authoritative && !cur.adapterSilent && cur.phase !== "exited";
 		if (cur.adapterHeard && !cur.adapterSilent && !regrant) return;
 		if (cur.adapterSilent) {
@@ -317,7 +330,7 @@ export const harnessActivity = {
 		disarmDelegation(id);
 		const cur = store.get(id);
 		if (!cur || !cur.authoritative) return;
-		store.set(id, { ...cur, authoritative: false });
+		store.set(id, { ...cur, authoritative: false, authorityLostAt: Date.now() });
 	},
 
 	/// L2c adapter says the harness is doing work. Bypasses the
@@ -346,6 +359,8 @@ export const harnessActivity = {
 		// the disarm must not depend on `setPhase` actually running.
 		disarmDelegation(id);
 		const cur = store.get(id);
+		// #423: record what the adapter said before any guard can drop it.
+		if (cur) cur.lastTurnSignal = { kind: "work", at: Date.now() };
 		if (!cur || cur.phase === "exited") return;
 		if (cur.phase === "permission" && !opts?.clearsPermission) return;
 		setPhase(id, "running", source);
@@ -362,6 +377,8 @@ export const harnessActivity = {
 		// `setRunningFromAdapter` above.
 		disarmDelegation(id);
 		const cur = store.get(id);
+		// #423: see `setRunningFromAdapter`.
+		if (cur) cur.lastTurnSignal = { kind: "end", at: Date.now() };
 		if (!cur || cur.phase === "exited") return;
 		setPhase(id, "waiting", source);
 	},
@@ -382,6 +399,9 @@ export const harnessActivity = {
 	/// deferral eventually resolves without a further adapter event.
 	awaitingPromptFromAdapter(id: string, source: TransitionSource): void {
 		const cur = store.get(id);
+		// #423: an end of turn is recorded even when it only arms the
+		// deferral and changes no phase.
+		if (cur) cur.lastTurnSignal = { kind: "end", at: Date.now() };
 		if (!cur || cur.phase === "exited") return;
 		if (subagents.workingCount(id) === 0) {
 			harnessActivity.setWaitingFromAdapter(id, source);
@@ -423,6 +443,7 @@ export const harnessActivity = {
 			permissionTool: toolName,
 			permissionAgentType: agentType ?? null,
 			permissionAgentId: agentId ?? null,
+			permissionAt: Date.now(),
 		});
 	},
 
@@ -447,7 +468,10 @@ export const harnessActivity = {
 	recordInput(id: string, data: string): void {
 		const cur = store.get(id);
 		if (!cur) return;
-		const armWatchdog = shouldArmWatchdog(cur) && (data.includes("\r") || data.includes("\n"));
+		const submitted = data.includes("\r") || data.includes("\n");
+		// #423: recorded unconditionally, unlike `promptSubmittedAt` below.
+		if (submitted) cur.lastSubmitAt = Date.now();
+		const armWatchdog = shouldArmWatchdog(cur) && submitted;
 		if (!cur.hasUserInput || armWatchdog) {
 			store.set(id, {
 				...cur,
@@ -486,6 +510,8 @@ export const harnessActivity = {
 	/// about.
 	notePromptSubmitted(id: string): void {
 		const cur = store.get(id);
+		// #423: a seam submit is a submit whatever the watchdog decides.
+		if (cur) cur.lastSubmitAt = Date.now();
 		if (!cur || cur.phase === "permission" || !shouldArmWatchdog(cur)) return;
 		store.set(id, { ...cur, promptSubmittedAt: Date.now() });
 	},
@@ -569,6 +595,39 @@ export const harnessActivity = {
 		if (store.get(id)?.phase !== "waiting") {
 			setPhase(id, "waiting", TRANSITION_SOURCE.SilenceRecovered);
 		}
+		return true;
+	},
+
+	/// #423: the supervisor's authority repair — an adapter that is
+	/// speaking again but was never handed authority back. Guards are
+	/// re-checked here, at call time, not trusted from the caller's earlier
+	/// read: the harness exists, authority is really gone, no watchdog
+	/// diagnosis (`adapterSilent`) is standing — that recovery belongs to
+	/// `adapterDelivered` — and it hasn't exited. Changes no phase. Returns
+	/// whether it applied.
+	supervisorRegrantAuthority(id: string): boolean {
+		const cur = store.get(id);
+		if (!cur || cur.authoritative || cur.adapterSilent || cur.phase === "exited") return false;
+		logBoth(
+			"info",
+			"skein::activity",
+			`[skein] harness ${id}: supervisor restoring adapter authority (#423)`,
+		);
+		store.set(id, { ...cur, authoritative: true });
+		return true;
+	},
+
+	/// #423: the supervisor's phase repair — a harness whose end of turn
+	/// was seen but whose phase never followed. Only from `running` or
+	/// `idle`, and never while a #277 deferral is armed (that harness is
+	/// legitimately `running` until its subagents finish). `permission`,
+	/// `exited`, `spawning` and `waiting` are left alone. Guards are
+	/// re-checked at call time. Returns whether it applied.
+	supervisorSetWaiting(id: string): boolean {
+		const cur = store.get(id);
+		if (!cur || (cur.phase !== "running" && cur.phase !== "idle")) return false;
+		if (cur.delegationDeferredAt !== null) return false;
+		setPhase(id, "waiting", TRANSITION_SOURCE.SupervisorRecovered);
 		return true;
 	},
 
@@ -772,6 +831,12 @@ export const harnessActivity = {
 				delegationEmptiedAt: null,
 				delegatedCount: 0,
 				silenceRecovered: false,
+				phaseSince: Date.now(),
+				lastTurnSignal: null,
+				lastAdapterEvent: null,
+				authorityLostAt: null,
+				permissionAt: null,
+				lastSubmitAt: null,
 			});
 			emit(id);
 			return;
@@ -797,6 +862,11 @@ export const harnessActivity = {
 
 	get(id: string): HarnessActivity | null {
 		return store.get(id) ?? null;
+	},
+
+	/// #423: every harness id in the store, for the supervisor's sweep.
+	ids(): string[] {
+		return [...store.keys()];
 	},
 
 	/// #356: every harness id this process has a phase for, for the

@@ -29,6 +29,12 @@ const mkActivity = (phase: ActivityPhase): HarnessActivity => ({
 	delegationEmptiedAt: null,
 	delegatedCount: 0,
 	silenceRecovered: false,
+	phaseSince: 0,
+	lastTurnSignal: null,
+	lastAdapterEvent: null,
+	authorityLostAt: null,
+	permissionAt: null,
+	lastSubmitAt: null,
 });
 
 describe("phaseSnapshot", () => {

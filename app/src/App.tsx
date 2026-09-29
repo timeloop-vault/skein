@@ -29,6 +29,7 @@ import { withDefaultAgent } from "./prefs.ts";
 import { reattachOutcomeMessage } from "./reattachOutcomeMessage.ts";
 import { allRoomOrder } from "./roomGroups.ts";
 import { isMac } from "./shortcuts.ts";
+import { startSupervisor } from "./supervisor/runtime.ts";
 import type { HarnessKind, Room, SpawnSettings, SpawnSettingsPayload } from "./types.ts";
 import { useAgentRequests } from "./useAgentRequests.ts";
 import {
@@ -471,6 +472,10 @@ export default function App() {
 	// Scoped to active rooms only, same as the keyboard-nav cycle above —
 	// an archived room's harnesses have no live PTY to nudge.
 	useMailDelivery(activeRooms);
+
+	// #423: the harness supervisor rides the activity tick; idempotent, so
+	// StrictMode's double mount is harmless.
+	useEffect(() => startSupervisor(), []);
 
 	// #330: the `create_room` agent verb's frontend half — answers
 	// #328's `skein://agent-request` round trip. Unlike `useMailDelivery`

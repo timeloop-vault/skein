@@ -80,3 +80,70 @@ pub async fn claude_session_exists(id: String) -> Result<bool, String> {
     .await
     .map_err(|e| e.to_string())
 }
+
+/// Size and mtime of a Claude transcript, for the #423 supervisor's
+/// "adapter silent while the file keeps growing" check.
+#[derive(serde::Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptStatDto {
+    pub size: u64,
+    pub mtime_ms: u64,
+}
+
+/// Stat `path`; `None` when it doesn't exist.
+fn stat_transcript(path: &std::path::Path) -> Result<Option<TranscriptStatDto>, String> {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("stat transcript: {e}")),
+    };
+    let mtime_ms = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+    Ok(Some(TranscriptStatDto {
+        size: meta.len(),
+        mtime_ms,
+    }))
+}
+
+/// Stat the main transcript for `session_id` at the COMPUTED path only.
+/// The tail also falls back to a directory scan when that path misses,
+/// so `tail_silent_file_growing` is blind when the cwd encoding drifts
+/// (#259). `None` when the file doesn't exist. One stat, so it
+/// runs inline rather than on the blocking pool.
+#[tauri::command]
+pub fn claude_transcript_stat(
+    session_id: &str,
+    cwd: &str,
+) -> Result<Option<TranscriptStatDto>, String> {
+    if session_id.is_empty() || session_id.contains(['/', '\\']) {
+        return Err("invalid session id".to_string());
+    }
+    let Some(home) = crate::home_dir() else {
+        return Ok(None);
+    };
+    stat_transcript(&claude::session_jsonl_path(&home, cwd, session_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stat_transcript_reports_size_and_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, b"hello").unwrap();
+        let stat = stat_transcript(&path).unwrap().unwrap();
+        assert_eq!(stat.size, 5);
+        assert!(stat.mtime_ms > 0);
+    }
+
+    #[test]
+    fn stat_transcript_missing_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(stat_transcript(&dir.path().join("nope.jsonl")), Ok(None));
+    }
+}
