@@ -23,6 +23,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -34,7 +35,7 @@ use crate::db::{
     Database, Harness, HarnessMessageRow, ReviewAddressedRow, ReviewCommentRow, ReviewThreadRow,
     Room,
 };
-use crate::git::repo_root_for_path;
+use crate::git::{IdentityCheck, check_identity, repo_root_for_path};
 use crate::review::{abs_path, now_ms};
 use crate::review_surface::Scope;
 use crate::review_surface::query::{ScopeFiles, file_impl, scope_impl};
@@ -587,6 +588,8 @@ pub struct FindRoomsForPathArgs {
     pub path: String,
 }
 
+// Independent wire flags a caller reads separately, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub struct RoomPathMatch {
@@ -602,6 +605,14 @@ pub struct RoomPathMatch {
     /// about it, and a caller told only `archived` would have to
     /// reconstruct that itself.
     pub safe_to_remove: bool,
+    /// The room is retired (#417): archived history that open-from-outside
+    /// never matches. Reported only so a sweep can see it; always
+    /// `safe_to_remove`.
+    pub retired: bool,
+    /// The room recorded a repository identity (#418) and its folder now
+    /// holds a different repository, or none. Informational only: it never
+    /// changes `safe_to_remove`.
+    pub repo_mismatch: bool,
     /// `"cwd"` for an exact match, `"inside_room"` when the queried path
     /// sits strictly under the room's cwd, `"contains_room"` when the
     /// room's cwd sits strictly under the queried path — never a bare
@@ -674,6 +685,7 @@ pub fn find_rooms_for_path(
         let Some(kind) = path_match_kind(&query, &normalize_path_for_match(cwd)) else {
             continue;
         };
+        let retired = room.retired.is_some();
         let archived = room.archived.is_some();
         let entry = RoomPathMatch {
             room_id: room.id.clone(),
@@ -682,7 +694,10 @@ pub fn find_rooms_for_path(
             repo_root: room.repo_root.clone(),
             branch: room.branch.clone(),
             archived,
-            safe_to_remove: archived,
+            safe_to_remove: archived || retired,
+            retired,
+            repo_mismatch: check_identity(room.repo_identity.as_ref(), Path::new(cwd))
+                == IdentityCheck::Mismatch,
             match_kind: kind.to_owned(),
         };
         if kind == "cwd" {
@@ -2200,6 +2215,18 @@ pub async fn open_harness(
             "archived: {} is archived",
             target.name
         )));
+    }
+    if let Some(cwd) = target.cwd.as_deref() {
+        if check_identity(target.repo_identity.as_ref(), Path::new(cwd)) == IdentityCheck::Mismatch
+        {
+            log_open_harness_outcome(&caller.room_id, room_id, "repo_mismatch");
+            return Err(VerbError::Refused(format!(
+                "repo_mismatch: the folder of {} now holds a different repository \
+                 than the room was made for; the user must resolve the room's \
+                 \"different repository\" card before a harness can open there",
+                target.name
+            )));
+        }
     }
     if target.harnesses.len() >= MAX_HARNESSES_PER_ROOM {
         log_open_harness_outcome(&caller.room_id, room_id, "room_full");

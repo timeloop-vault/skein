@@ -100,12 +100,21 @@ export interface Room {
 	// Present = archived (hidden from the tab strip but listed in the
 	// reopen modal). Chapter 6 phase 2.
 	archived?: number;
+	// #417: epoch ms when an archived room was retired; only meaningful
+	// with `archived`. Retired = history: hidden from Reopen by default,
+	// never matched by path, and it keeps its sessions row so the #237
+	// sweep never erases its history.
+	retired?: number;
 	// Canonical main-checkout path of the git repo this room belongs to
 	// (resolved from a worktree via skein-git `main_repo_root()`).
 	// Absent for non-git rooms and rooms not yet resolved. This is the
 	// room-group key (#76), and is kept even if the folder later
 	// disappears (#164).
 	repoRoot?: string;
+	// #418: which repo this room belongs to. Root commits are stable across
+	// renames, remotes and clones; `originUrl` is display only. Backfilled
+	// on hydrate for rooms that predate it.
+	repoIdentity?: RepoIdentity;
 	// #328: set when a room is created without switching to it
 	// (`createRoom(args, { activate: false })`), cleared the moment it
 	// becomes the active room. A ROOM-level mark rather than a
@@ -270,4 +279,10 @@ export interface HarnessConfigStatus {
 	 *  rather than describing it. */
 	claudeFlag: string;
 	opencodeVar: string;
+}
+
+/** #418: mirrors `git_repo_identity` (minus the null-vs-absent originUrl). */
+export interface RepoIdentity {
+	rootCommits: string[];
+	originUrl?: string;
 }

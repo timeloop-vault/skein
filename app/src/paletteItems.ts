@@ -104,10 +104,12 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 			invoke: () => toggleReviewRef.current(),
 		});
 	}
-	if (archivedRooms.length > 0) {
+	// #417: retired rooms are hidden from Reopen unless "Show retired".
+	const reopenable = archivedRooms.filter((r) => r.retired === undefined).length;
+	if (reopenable > 0) {
 		paletteItems.push({
 			id: "cmd:reopen-room",
-			label: `Reopen room… (${archivedRooms.length})`,
+			label: `Reopen room… (${reopenable})`,
 			invoke: () => setShowReopen(true),
 		});
 	}

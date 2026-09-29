@@ -375,11 +375,40 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   first clean non-empty load per process. **Field policy: every field
   added to Room/Harness after v0.2.5 MUST be `#[serde(default)]` or
   `Option`** — a required field makes old blobs unparseable.
-  `repoRoot` (the #76 group key) is set at create and backfilled at
-  hydrate/unarchive via `git_inspect_folder`, and never cleared — a
-  room whose folder later vanishes keeps its group (#164). The one
-  exception is the user repointing a missing room to another folder,
-  which re-derives it from the new folder.
+  `repoRoot` (the #76 group key) is set at create and re-derived at
+  hydrate/unarchive/repoint via `git_inspect_folder` — but only when the
+  identity check below says the folder is the same repo (or can't tell),
+  so a mismatched room keeps its old value — and it is never cleared: a
+  room whose folder later vanishes keeps its group (#164).
+  **Retired rooms (#417):** `retired` (epoch ms, only ever on an archived
+  room) means history — hidden from Reopen unless "Show retired", never
+  matched by open-from-outside (`open_request.rs`), and reported by
+  `find_rooms_for_path` with `retired: true` / `safe_to_remove`. It keeps
+  its `sessions` row, so the #237 `sweep_orphans` never erases its
+  history; only Delete forever does. `db.rs`'s `Room` struct is what
+  `save_all` serializes and it has no catch-all, so any new frontend Room
+  field must be added there too or it is silently dropped on save.
+  **Repo identity (#418):** `Room.repoIdentity` = `{rootCommits, originUrl?}`,
+  the root commits from a first-parent walk of HEAD (`originUrl` is display
+  only, never compared); stored at creation and backfilled for every room,
+  archived included, on hydrate. `compareIdentity` (`repoIdentity.ts`) is
+  `unknown` when nothing was stored, the folder is missing, or the repo is
+  shallow (`RepoIdentityDto.shallow`), and `mismatch` when the folder isn't a
+  repo, is a repo with no commits (an unborn HEAD cannot be the recorded
+  history), or the root sets are disjoint. It
+  runs at hydrate, unarchive and repoint before any harness mounts, and in
+  Rust open-request resolution. A mismatched room renders `RepoMismatchCard`
+  instead of `HarnessColumn` (retire / repoint / "it's the same repo"), is
+  skipped by open-from-outside, is flagged `repo_mismatch` by
+  `find_rooms_for_path` (`safe_to_remove` unchanged), and is kept out of
+  strip grouping (`buildStrip`'s `ungrouped`) so it never joins the repo now
+  at its path. Review discovery (#221) is paused while a room is gated, so
+  the foreign repo's files are never baselined. Known limits: a shallow
+  clone reads as unknown (never stored, never flagged — its first-parent
+  root is a graft boundary); a room whose HEAD moves to an orphan branch or
+  through a history rewrite can read as a mismatch, which is exactly what
+  "It's the same repo" resolves; a room created in a folder that isn't a
+  repo yet gets its identity at the next launch.
 - **PTYs** live in `PtyManager`. `pty_spawn` returns an opaque id;
   output streams over a per-spawn `tauri::ipc::Channel<PtyEvent>` — a
   tagged enum `{kind:"data",chunk}` / `{kind:"exit",code}`. PTYs

@@ -264,6 +264,27 @@ pub struct Room {
     /// `review_signoff` makes about its own record). Round-tripped only.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub closed_by: Option<ClosedBy>,
+    /// Retirement timestamp (epoch ms, #417) — set by the frontend on an
+    /// archived room that is history. A retired room owns no path:
+    /// open-from-outside skips it. Round-tripped; must survive save.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub retired: Option<i64>,
+    /// The repository this room was made in (#418): root commit ids, which
+    /// survive clones and worktrees. Lets open-from-outside tell "same
+    /// repo" from "a different repo now sits at this path".
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub repo_identity: Option<RepoIdentity>,
+}
+
+/// What stays the same about a repository across clones and worktrees
+/// (#418). `origin_url` is display-only; matching uses `root_commits`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoIdentity {
+    #[serde(default)]
+    pub root_commits: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub origin_url: Option<String>,
 }
 
 /// Who asked for a room `create_room` (#330) made, so the UI can say so.
@@ -2639,6 +2660,8 @@ mod tests {
             attention: None,
             created_by: None,
             closed_by: None,
+            retired: None,
+            repo_identity: None,
         }
     }
 
@@ -2776,6 +2799,62 @@ mod tests {
             Some(HarnessCreatedBy {
                 room_id: "director".into(),
                 harness_id: Some("d1".into()),
+            })
+        );
+    }
+
+    /// #417: `retired` round-trips through save and load.
+    #[test]
+    fn retired_round_trips_through_save_and_load() {
+        let (_dir, db) = fresh_db();
+        let mut r = room("r1");
+        r.archived = Some(1_000);
+        r.retired = Some(2_000);
+        db.save_all(&[r]).unwrap();
+        let outcome = db.load_all().unwrap();
+        assert_eq!(outcome.rooms[0].retired, Some(2_000));
+    }
+
+    /// #417: a blob written before `retired` existed loads with `None`.
+    #[test]
+    fn a_pre_417_blob_loads_without_a_retired_field() {
+        let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+            "harnesses":[],"activeHarnessId":"","archived":1000}"#;
+        let room: Room = serde_json::from_str(json).unwrap();
+        assert_eq!(room.retired, None);
+    }
+
+    /// #418: `repoIdentity` round-trips through save and load.
+    #[test]
+    fn repo_identity_round_trips_through_save_and_load() {
+        let (_dir, db) = fresh_db();
+        let mut r = room("r1");
+        let ident = RepoIdentity {
+            root_commits: vec!["abc".into()],
+            origin_url: Some("https://example.com/x.git".into()),
+        };
+        r.repo_identity = Some(ident.clone());
+        db.save_all(&[r]).unwrap();
+        let outcome = db.load_all().unwrap();
+        assert_eq!(outcome.rooms[0].repo_identity, Some(ident));
+    }
+
+    /// #418: a blob written before `repoIdentity` existed loads with
+    /// `None`, and a partial identity tolerates missing keys.
+    #[test]
+    fn a_pre_418_blob_loads_without_a_repo_identity() {
+        let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+            "harnesses":[],"activeHarnessId":""}"#;
+        let room: Room = serde_json::from_str(json).unwrap();
+        assert_eq!(room.repo_identity, None);
+        let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+            "harnesses":[],"activeHarnessId":"","repoIdentity":{}}"#;
+        let room: Room = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            room.repo_identity,
+            Some(RepoIdentity {
+                root_commits: Vec::new(),
+                origin_url: None
             })
         );
     }
@@ -3989,6 +4068,8 @@ mod orphan_sweep_tests {
             attention: None,
             created_by: None,
             closed_by: None,
+            retired: None,
+            repo_identity: None,
         }
     }
 
@@ -4094,6 +4175,28 @@ mod orphan_sweep_tests {
         for table in ROOM_KEYED_TABLES {
             assert_eq!(row_count(&db, table, "orphan"), 0, "table {table}");
             assert_eq!(row_count(&db, table, "live"), 1, "table {table}");
+        }
+    }
+
+    /// #417: a retired, archived room still has its `sessions` row, so the
+    /// sweep never erases its history (unlike Delete forever).
+    #[test]
+    fn sweep_keeps_history_of_a_retired_archived_room() {
+        let (_d, db) = fresh();
+        let mut r = room("old");
+        r.archived = Some(1_000);
+        r.retired = Some(2_000);
+        db.save_all(&[r]).unwrap();
+        db.load_all().unwrap();
+        for table in ROOM_KEYED_TABLES {
+            seed_row(&db, table, "old");
+        }
+
+        let deleted = db.sweep_orphans().unwrap();
+
+        assert_eq!(deleted, 0);
+        for table in ROOM_KEYED_TABLES {
+            assert_eq!(row_count(&db, table, "old"), 1, "table {table}");
         }
     }
 

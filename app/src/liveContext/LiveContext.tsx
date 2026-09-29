@@ -43,6 +43,9 @@ interface LiveContextProps {
 	 *  display:flex, not none). The Activity card needs it to re-pin its
 	 *  auto-tail when shown — a hidden card can't measure scroll. */
 	visible: boolean;
+	/** The room shows a missing-folder / repo-mismatch card: review
+	 *  discovery stays off so it can't baseline a foreign repo. */
+	gated: boolean;
 	/** Per-turn cost hair-lines in the Activity feed. User-level pref
 	 *  owned by App (one LiveContext is mounted per room — instance-local
 	 *  state would desync across rooms), toggled from the Activity card
@@ -84,6 +87,7 @@ export const LiveContext = memo(function LiveContext({
 	cwd,
 	harnesses,
 	visible,
+	gated,
 	showTurnCosts,
 	onToggleTurnCosts,
 	onBranchChange,
@@ -139,7 +143,7 @@ export const LiveContext = memo(function LiveContext({
 	// regardless of `visible` or which right-pane tab is open — a file
 	// touched while looking at Live Context must still be pending when
 	// the user switches to Review.
-	useReviewDiscovery(roomId, cwd);
+	useReviewDiscovery(roomId, cwd, gated);
 
 	// "· idle 2h 14m" in the Activity head once the room's been silent
 	// past the tail threshold (§10 long-quiet). A per-minute ticker

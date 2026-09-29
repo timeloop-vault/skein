@@ -2072,6 +2072,77 @@ html.tab-dragging.tab-drag-refused * {
 	border-color: var(--accent);
 	background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
 }
+.sk-archived-row.checked {
+	border-color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 16%, var(--bg-2));
+}
+.sk-archived-row.retired .sk-archived-open {
+	opacity: 0.55;
+}
+.sk-archived-tag {
+	margin-left: 8px;
+	padding: 1px 6px;
+	border: 1px solid var(--line-strong);
+	border-radius: 3px;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.75);
+	font-weight: 400;
+	color: var(--fg-2);
+}
+.sk-archived-act {
+	flex: 0 0 auto;
+	padding: 0 12px;
+	border: 0;
+	border-left: 1px solid var(--line);
+	background: transparent;
+	color: var(--accent);
+	cursor: pointer;
+	font: inherit;
+	font-size: calc(var(--cfs) * 0.9167);
+}
+.sk-archived-act:hover {
+	background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+/* #417: select-all / count / retire / delete line under the filter. */
+.sk-reopen-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 20px;
+	border-bottom: 1px solid var(--line);
+	font-size: calc(var(--cfs) * 0.9167);
+	color: var(--fg-2);
+}
+.sk-reopen-spacer {
+	flex: 1;
+}
+.sk-reopen-toggle {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	cursor: pointer;
+}
+.sk-reopen-tool {
+	padding: 3px 10px;
+	border: 1px solid var(--line-strong);
+	border-radius: 4px;
+	background: transparent;
+	color: var(--fg-1);
+	font: inherit;
+	cursor: pointer;
+}
+.sk-reopen-tool:hover:not(:disabled) {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+.sk-reopen-tool.danger:hover:not(:disabled) {
+	border-color: var(--err);
+	color: var(--err);
+}
+.sk-reopen-tool:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
 .sk-archived-open {
 	flex: 1;
 	min-width: 0;

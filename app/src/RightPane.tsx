@@ -37,6 +37,7 @@ export const RightPane = ({
 	harnesses,
 	activeHarness,
 	visible,
+	gated,
 	showTurnCosts,
 	onToggleTurnCosts,
 	onBranchChange,
@@ -50,6 +51,8 @@ export const RightPane = ({
 	// target. `undefined` for a room with no harnesses at all.
 	activeHarness: Harness | undefined;
 	visible: boolean;
+	// Missing-folder / repo-mismatch card showing: pauses review discovery.
+	gated: boolean;
 	showTurnCosts: boolean;
 	onToggleTurnCosts: () => void;
 	onBranchChange?: ((roomId: string, branch: string | null) => void) | undefined;
@@ -88,6 +91,7 @@ export const RightPane = ({
 					cwd={cwd}
 					harnesses={harnesses}
 					visible={visible && tab === "context"}
+					gated={gated}
 					showTurnCosts={showTurnCosts}
 					onToggleTurnCosts={onToggleTurnCosts}
 					onBranchChange={onBranchChange}

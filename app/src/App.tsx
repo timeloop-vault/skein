@@ -16,6 +16,7 @@ import { AppOverlays } from "./AppOverlays.tsx";
 import type { PaletteItem } from "./CommandPalette.tsx";
 import { HarnessColumn } from "./HarnessColumn.tsx";
 import { MissingFolderCard } from "./MissingFolderCard.tsx";
+import { RepoMismatchCard } from "./RepoMismatchCard.tsx";
 import { RightPane } from "./RightPane.tsx";
 import { GroupRow, type RenameTarget, RoomStrip } from "./RoomStrip.tsx";
 import { Splitter } from "./Splitter.tsx";
@@ -168,6 +169,9 @@ export default function App() {
 		backupRoomCount,
 		setBackupRoomCount,
 		missingFolders,
+		mismatchedRooms,
+		confirmSameRepo,
+		retireMismatchedRoom,
 		checkRoomFolder,
 		hydrateRooms,
 		activeRooms,
@@ -179,8 +183,10 @@ export default function App() {
 		unarchiveRoomRef,
 		recreateMissingWorktree,
 		pickMissingFolder,
-		deleteRoomForever,
-		restoreRoom,
+		retireRooms,
+		unretireRooms,
+		deleteRoomsForever,
+		restoreRooms,
 		closeRoom,
 		closeRoomForAgent,
 		switchRoom,
@@ -230,6 +236,7 @@ export default function App() {
 		switchRoom,
 		unarchiveRoomRef,
 		lastUsedByGroupRef,
+		mismatchedRooms,
 	);
 	// #76: derived from `stripSegments` above — kept here (not in the
 	// hook) since keyboard nav is the only consumer and it already
@@ -608,7 +615,7 @@ export default function App() {
 				<Titlebar {...titlebarProps} />
 				<EmptyState
 					onNew={() => void openNewRoom()}
-					archivedCount={archivedRooms.length}
+					archivedCount={archivedRooms.filter((r) => r.retired === undefined).length}
 					onReopen={() => setShowReopen(true)}
 				/>
 				<AppOverlays
@@ -631,8 +638,10 @@ export default function App() {
 					archivedRooms={archivedRooms}
 					allRooms={roomsRef.current}
 					reopenRoom={reopenRoom}
-					deleteRoomForever={deleteRoomForever}
-					restoreRoom={restoreRoom}
+					deleteRoomsForever={deleteRoomsForever}
+					restoreRooms={restoreRooms}
+					retireRooms={retireRooms}
+					unretireRooms={unretireRooms}
 					setShowReopen={setShowReopen}
 					toasts={toasts}
 					jumpToToast={jumpToToast}
@@ -725,6 +734,15 @@ export default function App() {
 								onPickFolder={(newCwd) => void pickMissingFolder(r, newCwd)}
 								onClose={() => void closeRoom(r.id)}
 							/>
+						) : mismatchedRooms.has(r.id) ? (
+							// #418: same gate — a different repository now lives here,
+							// so nothing resumes until the user decides.
+							<RepoMismatchCard
+								room={r}
+								onRetire={() => retireMismatchedRoom(r.id)}
+								onRepoint={(newCwd) => void pickMissingFolder(r, newCwd)}
+								onSameRepo={() => void confirmSameRepo(r.id)}
+							/>
 						) : (
 							<HarnessColumn
 								room={r}
@@ -793,6 +811,7 @@ export default function App() {
 								harnesses={r.harnesses}
 								activeHarness={r.harnesses.find((h) => h.id === r.activeHarnessId)}
 								visible={r.id === activeRoomId}
+								gated={missingFolders.has(r.id) || mismatchedRooms.has(r.id)}
 								showTurnCosts={showTurnCosts}
 								onToggleTurnCosts={handleToggleTurnCosts}
 								onBranchChange={handleBranchChange}
@@ -836,8 +855,10 @@ export default function App() {
 				archivedRooms={archivedRooms}
 				allRooms={roomsRef.current}
 				reopenRoom={reopenRoom}
-				deleteRoomForever={deleteRoomForever}
-				restoreRoom={restoreRoom}
+				deleteRoomsForever={deleteRoomsForever}
+				restoreRooms={restoreRooms}
+				retireRooms={retireRooms}
+				unretireRooms={unretireRooms}
 				setShowReopen={setShowReopen}
 				toasts={toasts}
 				jumpToToast={jumpToToast}

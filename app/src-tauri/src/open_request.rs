@@ -34,6 +34,7 @@ use tauri::{AppHandle, Emitter, Manager, Url};
 use tauri_plugin_deep_link::DeepLinkExt;
 
 use crate::db::{Database, Room};
+use crate::git::{IdentityCheck, check_identity};
 use crate::room_paths::{normalize_path_for_match, path_match_kind, strip_verbatim};
 
 /// The poke. No payload — see the module doc.
@@ -288,11 +289,20 @@ struct Candidate<'a> {
 fn best_rooms<'a>(query_norm: &str, candidates: &[Candidate<'a>]) -> Vec<&'a Room> {
     let owners: Vec<&Candidate<'a>> = candidates
         .iter()
+        // A retired room (#417) is history and owns nothing.
+        .filter(|c| c.room.retired.is_none())
         .filter(|c| {
             matches!(
                 path_match_kind(query_norm, &c.cwd_norm),
                 Some("cwd" | "inside_room")
             )
+        })
+        // A folder that now holds a different repo than the room was made
+        // in (#418) is not that room's folder any more. Checked after the
+        // path filter: it opens repos, so only pay for path matches.
+        .filter(|c| {
+            let cwd = c.room.cwd.as_deref().unwrap_or_default();
+            check_identity(c.room.repo_identity.as_ref(), Path::new(cwd)) != IdentityCheck::Mismatch
         })
         .collect();
     let Some(deepest) = owners.iter().map(|c| c.cwd_norm.len()).max() else {
@@ -577,6 +587,115 @@ mod tests {
             OpenTarget::Missing {
                 path: gone.to_string_lossy().into_owned()
             }
+        );
+    }
+
+    fn retired(mut r: Room, at: i64) -> Room {
+        r.retired = Some(at);
+        r
+    }
+
+    #[test]
+    fn a_retired_room_owns_nothing_so_the_folder_resolves_to_new_room() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cwd = canonical_string(tmp.path()).unwrap();
+        let rooms = [retired(room("gone", &cwd, Some(100)), 200)];
+        assert_eq!(
+            resolve(&rooms, tmp.path()),
+            OpenTarget::NewRoom { folder: cwd }
+        );
+    }
+
+    #[test]
+    fn a_retired_deeper_owner_yields_to_a_plain_archived_shallower_one() {
+        let rooms = [
+            room("shallow", "/code/mono", Some(100)),
+            retired(room("deep", "/code/mono/app", Some(300)), 400),
+        ];
+        assert_eq!(ids(&rooms, "/code/mono/app/src"), ["shallow"]);
+    }
+
+    #[test]
+    fn an_open_room_is_unaffected_by_retired_neighbours() {
+        let rooms = [
+            retired(room("gone", "/code/repo", Some(100)), 200),
+            room("live", "/code/repo", None),
+        ];
+        assert_eq!(ids(&rooms, "/code/repo"), ["live"]);
+    }
+
+    /// A repo at `dir` with one root commit whose message is `msg`
+    /// (distinct messages give distinct root ids).
+    fn init_repo_at(dir: &Path, msg: &str) {
+        let repo = git2::Repository::init(dir).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &[])
+            .unwrap();
+    }
+
+    fn with_identity(mut r: Room, dir: &Path) -> Room {
+        let dto = crate::git::repo_identity_impl(&dir.to_string_lossy())
+            .unwrap()
+            .unwrap();
+        r.repo_identity = Some(crate::db::RepoIdentity {
+            root_commits: dto.root_commits,
+            origin_url: dto.origin_url,
+        });
+        r
+    }
+
+    #[test]
+    fn a_folder_now_holding_an_unrelated_repo_is_not_the_rooms() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        init_repo_at(tmp.path(), "original");
+        let cwd = canonical_string(tmp.path()).unwrap();
+        let open = with_identity(room("open", &cwd, None), tmp.path());
+        let old = with_identity(room("old", &cwd, Some(100)), tmp.path());
+        // Same repo: still owned.
+        assert_eq!(
+            resolve(&[open.clone(), old.clone()], tmp.path()),
+            OpenTarget::Room {
+                room_ids: vec!["open".into()],
+                archived: false,
+                folder: cwd.clone()
+            }
+        );
+        // The clone at that path is replaced by a different repo.
+        let other = tempfile::TempDir::new().unwrap();
+        init_repo_at(other.path(), "something else entirely");
+        let foreign = with_identity(room("x", &cwd, None), other.path());
+        let foreign_old = with_identity(room("y", &cwd, Some(100)), other.path());
+        assert_eq!(
+            resolve(&[foreign, foreign_old], tmp.path()),
+            OpenTarget::NewRoom {
+                folder: cwd.clone()
+            }
+        );
+        // No recorded identity: unknown, so still matched.
+        assert_eq!(
+            resolve(&[room("bare", &cwd, None)], tmp.path()),
+            OpenTarget::Room {
+                room_ids: vec!["bare".into()],
+                archived: false,
+                folder: cwd
+            }
+        );
+    }
+
+    #[test]
+    fn a_folder_now_holding_an_empty_repo_is_not_the_rooms() {
+        let orig = tempfile::TempDir::new().unwrap();
+        init_repo_at(orig.path(), "original");
+        let fresh = tempfile::TempDir::new().unwrap();
+        git2::Repository::init(fresh.path()).unwrap();
+        let cwd = canonical_string(fresh.path()).unwrap();
+        let r = with_identity(room("r", &cwd, None), orig.path());
+        assert_eq!(
+            resolve(&[r], fresh.path()),
+            OpenTarget::NewRoom { folder: cwd }
         );
     }
 

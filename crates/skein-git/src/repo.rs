@@ -139,6 +139,58 @@ impl Repo {
         self.head_branch_name()
     }
 
+    /// Hex id of the commit HEAD resolves to; `None` for an unborn HEAD.
+    pub fn head_commit_id(&self) -> Option<String> {
+        Some(
+            self.repo
+                .head()
+                .ok()?
+                .peel_to_commit()
+                .ok()?
+                .id()
+                .to_string(),
+        )
+    }
+
+    /// Hex ids of the parentless commit(s) reached by walking HEAD's
+    /// first-parent chain, sorted and deduped. This is the repository's
+    /// identity: every clone and worktree of it shares the same root.
+    /// A `Vec` so a future full-history walk can return several. An
+    /// unborn HEAD (empty repo) yields an empty vec. Read-only.
+    pub fn root_commits(&self) -> Result<Vec<String>> {
+        let Ok(head) = self.repo.head() else {
+            return Ok(Vec::new());
+        };
+        let Ok(commit) = head.peel_to_commit() else {
+            return Ok(Vec::new());
+        };
+        let mut walk = self.repo.revwalk()?;
+        walk.simplify_first_parent()?;
+        walk.push(commit.id())?;
+        let mut roots = Vec::new();
+        for oid in walk {
+            let oid = oid?;
+            if self.repo.find_commit(oid)?.parent_count() == 0 {
+                roots.push(oid.to_string());
+            }
+        }
+        roots.sort();
+        roots.dedup();
+        Ok(roots)
+    }
+
+    /// Whether this is a shallow clone. Its graft boundary looks like a
+    /// root commit, so [`Self::root_commits`] is not an identity there.
+    pub fn is_shallow(&self) -> bool {
+        self.repo.is_shallow()
+    }
+
+    /// `remote.origin.url`, if configured. For display only.
+    pub fn origin_url(&self) -> Option<String> {
+        let remote = self.repo.find_remote("origin").ok()?;
+        remote.url().map(str::to_owned)
+    }
+
     pub(crate) fn head_branch_name(&self) -> Option<String> {
         let head = self.repo.head().ok()?;
         if !head.is_branch() {

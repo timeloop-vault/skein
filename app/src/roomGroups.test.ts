@@ -462,3 +462,32 @@ describe("resolveTopDrop", () => {
 		expect(resolveTopDrop(rooms, "g:/a", "g:/a", "before")).toBe(rooms);
 	});
 });
+
+describe("ungrouped rooms (#418)", () => {
+	const main = room("main", { repoRoot: "/repo", cwd: "/repo" });
+	const wt = room("wt", { repoRoot: "/repo", cwd: "/repo-wt/a" });
+
+	it("keeps a mismatched worktree room out of the group of the repo now at its path", () => {
+		const segs = buildStrip([main, wt], new Set(["wt"]));
+		expect(segs).toEqual([
+			{ kind: "plain", room: main },
+			{ kind: "plain", room: wt },
+		]);
+	});
+
+	it("keeps a mismatched main room plain, leaving its former worktree without a lead", () => {
+		const segs = buildStrip([main, wt], new Set(["main"]));
+		expect(segs.map((s) => s.kind)).toEqual(["plain", "group"]);
+		const grp = segs[1];
+		expect(grp?.kind === "group" && grp.lead).toBeNull();
+	});
+
+	it("an empty set behaves like no set", () => {
+		expect(buildStrip([main, wt], new Set())).toEqual(buildStrip([main, wt]));
+	});
+
+	it("resolveTopDrop honours the ungrouped set", () => {
+		const out = resolveTopDrop([main, wt], "r:wt", "r:main", "before", new Set(["wt"]));
+		expect(out.map((r) => r.id)).toEqual(["wt", "main"]);
+	});
+});

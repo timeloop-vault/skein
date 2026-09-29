@@ -52,8 +52,13 @@ export function useRoomStripNav(
 	switchRoom: (id: string) => void,
 	unarchiveRoomRef: MutableRefObject<(id: string) => Promise<void>>,
 	lastUsedByGroupRef: MutableRefObject<Map<string, string>>,
+	// #418: rooms whose folder holds a different repository — kept out of
+	// grouping so they never join the repo now at their path.
+	ungrouped: ReadonlySet<string>,
 ) {
 	const [showNewRoom, setShowNewRoom] = useState(false);
+	const ungroupedRef = useRef(ungrouped);
+	ungroupedRef.current = ungrouped;
 
 	// Issue #26 / #76: room drag-and-drop reorder, two-level-strip aware.
 	// Decides, fresh against the CURRENT `rooms` (never a stale
@@ -72,7 +77,7 @@ export function useRoomStripNav(
 	const reorderRoom = (fromId: string, targetId: string, side: "before" | "after") => {
 		setRooms((prev) => {
 			if (fromId === targetId) return prev;
-			const segments = buildStrip(prev);
+			const segments = buildStrip(prev, ungroupedRef.current);
 			const dragSeg = segmentOfRoom(segments, fromId);
 			const dragIsMember =
 				dragSeg?.kind === "group" && dragSeg.lead?.id !== fromId
@@ -90,7 +95,7 @@ export function useRoomStripNav(
 			const dragSegId = dragSeg ? segmentId(dragSeg) : fromId;
 			const targetSeg = segmentOfRoom(segments, targetId);
 			const targetSegId = targetSeg ? segmentId(targetSeg) : targetId;
-			return resolveTopDrop(prev, dragSegId, targetSegId, side);
+			return resolveTopDrop(prev, dragSegId, targetSegId, side, ungroupedRef.current);
 		});
 	};
 
@@ -122,7 +127,7 @@ export function useRoomStripNav(
 	// worktree rooms grouped with their main room under one repository
 	// tab. Keyboard nav (cycleRoom, jumpRoom) and the RoomStrip/GroupRow
 	// render all walk this, not `activeRooms` directly.
-	const stripSegments = useMemo(() => buildStrip(activeRooms), [activeRooms]);
+	const stripSegments = useMemo(() => buildStrip(activeRooms, ungrouped), [activeRooms, ungrouped]);
 	const stripSegmentsRef = useRef(stripSegments);
 	stripSegmentsRef.current = stripSegments;
 

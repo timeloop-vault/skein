@@ -203,6 +203,14 @@ describe("unarchiveRoomTransform", () => {
 		expect(out.harnesses[0]?.cmd).toEqual(["claude", "--resume", SID]);
 	});
 
+	it("drops the retired stamp too", () => {
+		const out = unarchiveRoomTransform(
+			room([harness("claude", { cmd: ["claude"] })], { archived: 1, retired: 2 }),
+			ports(),
+		);
+		expect(out).not.toHaveProperty("retired");
+	});
+
 	it("preserves the rest of the room", () => {
 		const out = unarchiveRoomTransform(
 			room([harness("claude", { cmd: ["claude"] })], {
