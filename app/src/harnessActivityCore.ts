@@ -138,8 +138,14 @@ export const setPhase = (
 		...cur,
 		phase,
 		...(leftPermission
-			? { permissionTool: null, permissionAgentType: null, permissionAgentId: null }
+			? {
+					permissionTool: null,
+					permissionAgentType: null,
+					permissionAgentId: null,
+					permissionAt: null,
+				}
 			: null),
+		...(from !== phase ? { phaseSince: Date.now() } : null),
 		...patch,
 	});
 	emit(id);
@@ -180,6 +186,7 @@ const degradeSilentAdapter = (id: string, cur: HarnessActivity, now: number): vo
 	store.set(id, {
 		...cur,
 		authoritative: false,
+		authorityLostAt: cur.authoritative ? now : cur.authorityLostAt,
 		adapterSilent: true,
 		degradedBy: "adapter-silent",
 		lastOutputAt: now,
@@ -210,6 +217,7 @@ const degradeLaunchSilentAdapter = (id: string, cur: HarnessActivity, now: numbe
 	store.set(id, {
 		...cur,
 		authoritative: false,
+		authorityLostAt: cur.authoritative ? now : cur.authorityLostAt,
 		adapterSilent: true,
 		degradedBy: "launch-silent",
 		lastOutputAt: now,
@@ -237,6 +245,18 @@ export const disarmDelegation = (id: string): void => {
 	if (!cur || cur.delegationDeferredAt === null) return;
 	cur.delegationDeferredAt = null;
 	cur.delegationEmptiedAt = null;
+};
+
+/// #423: listeners called once at the END of every tick iteration with
+/// that iteration's `now`. The harness supervisor's clock — it reads the
+/// facts the store records rather than running a timer of its own.
+const tickListeners = new Set<(now: number) => void>();
+
+export const onTick = (listener: (now: number) => void): (() => void) => {
+	tickListeners.add(listener);
+	return () => {
+		tickListeners.delete(listener);
+	};
 };
 
 export const ensureTick = (): void => {
@@ -335,6 +355,16 @@ export const ensureTick = (): void => {
 			}
 			if (quiet >= IDLE_AFTER_MS) {
 				setPhase(id, "idle", TRANSITION_SOURCE.L2aIdle);
+			}
+		}
+		// #423: after every store rule ran, so a listener sees this
+		// tick's transitions. A throwing listener must not stop the
+		// tick or the ones after it.
+		for (const cb of tickListeners) {
+			try {
+				cb(now);
+			} catch (err) {
+				console.error("[skein] tick listener threw:", err);
 			}
 		}
 	}, TICK_INTERVAL_MS);

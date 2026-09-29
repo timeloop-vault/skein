@@ -93,6 +93,7 @@ import {
 import { mailPending, nextMailRetry } from "./mailRetry.ts";
 import { NUDGE_SETTLE_MS, evaluateSettlement } from "./mailSettle.ts";
 import { mailStore } from "./mailStore.ts";
+import { forgetMailState, noteMailState } from "./supervisor/mailFeed.ts";
 import type { HarnessKind, Room } from "./types.ts";
 
 /// DTO mirror of `agent_api::verbs::MailUnread` — see `mail_unread` in
@@ -169,6 +170,7 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 		const reason = refusal.ok ? "" : refusal.reason;
 		if (lastMailRefusalReasonRef.current.get(harnessId) === reason) return;
 		lastMailRefusalReasonRef.current.set(harnessId, reason);
+		noteMailState(harnessId, { lastRefusal: reason === "" ? null : reason });
 		// #413: name what last moved the draft off clean (event class only,
 		// never content) when the refusal is the draft guard's.
 		const cause = isDraftHold(refusal) ? harnessInput.draftCause(harnessId) : null;
@@ -189,7 +191,10 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 	// rather than reading as still-throttled from mail that's long gone.
 	const pendingResult = (harnessId: string, count: number, lastNudged: number): boolean => {
 		const pending = mailPending(count, lastNudged);
-		if (!pending) lastMailRefusalReasonRef.current.delete(harnessId);
+		if (!pending) {
+			lastMailRefusalReasonRef.current.delete(harnessId);
+			noteMailState(harnessId, { lastRefusal: null });
+		}
 		return pending;
 	};
 
@@ -225,6 +230,7 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 			seededRef.current.delete(id);
 			lastNudgedRef.current.delete(id);
 			lastMailRefusalReasonRef.current.delete(id);
+			forgetMailState(id);
 			mailStore.forget(id);
 			mailHold.forget(id);
 			clearRetry(id);
@@ -238,6 +244,7 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 			invoke<MailUnread>("mail_unread", { roomId: m.roomId, harnessId: id })
 				.then((res) => {
 					mailStore.set(id, res.count, res.fromRoomNames);
+					noteMailState(id, { unread: res.count });
 				})
 				.catch((err: unknown) => {
 					logBoth(
@@ -359,6 +366,7 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 			return true;
 		}
 		mailStore.set(harnessId, res.count, res.fromRoomNames);
+		noteMailState(harnessId, { unread: res.count });
 		const activity = harnessActivity.get(harnessId);
 		if (!activity) return true;
 		const body = mailNudgeText(res.count, res.fromRoomNames);
@@ -482,6 +490,7 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 			);
 		}
 		lastMailRefusalReasonRef.current.delete(harnessId);
+		noteMailState(harnessId, { lastRefusal: null, lastNudgeAt: Date.now() });
 		lastNudgedRef.current.set(harnessId, decision.lastNudged);
 		const prior = settleRef.current.get(harnessId);
 		if (prior) clearTimeout(prior.timer);

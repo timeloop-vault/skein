@@ -165,6 +165,41 @@ export interface HarnessActivity {
 	/// once this is set — a stuck harness must still degrade for good.
 	/// In-memory only, reset to `false` on every spawn.
 	silenceRecovered: boolean;
+	/// #423: epoch ms of the last REAL phase change (`setPhase` with a
+	/// different phase; a patch-only re-entry doesn't count). Spawn time
+	/// until the first change. What the supervisor reads to tell how long
+	/// a harness has sat in its current phase. In-memory only.
+	phaseSince: number;
+	/// #423: the main session's latest adapter turn signal — "work" from
+	/// `setRunningFromAdapter`, "end" from `awaitingPromptFromAdapter` /
+	/// `setWaitingFromAdapter`. Recorded REGARDLESS of whether the call
+	/// then changed phase or was ignored (non-authoritative, `permission`
+	/// without `clearsPermission`, …): the point is what the adapter
+	/// said, not what Skein did with it. Subagent events never record it.
+	/// `null` until the first signal. In-memory only, reset on every spawn.
+	lastTurnSignal: { kind: "work" | "end"; at: number } | null;
+	/// #423: the most recent adapter event of any kind, stamped by
+	/// `adapterDelivered` on every call. `restoresAuthority` is whether
+	/// that event was one allowed to hand authority back (false for the
+	/// `session_end` that announces the adapter's loss). `null` until the
+	/// adapter first speaks. In-memory only, reset on every spawn.
+	lastAdapterEvent: { at: number; restoresAuthority: boolean } | null;
+	/// #423: epoch ms `authoritative` last went true → false (detach, or
+	/// either silent-adapter watchdog). Left in place when authority is
+	/// later regained, so a reader compares it with `lastAdapterEvent`.
+	/// `null` if authority was never lost. In-memory only, reset on every
+	/// spawn.
+	authorityLostAt: number | null;
+	/// #423: epoch ms the `permission` phase was entered or the permission
+	/// ping last arrived (`setPermissionFromAdapter`, including a re-entry
+	/// while already in `permission`). Cleared to `null` whenever the phase
+	/// leaves `permission`, in the same place `permissionTool` is.
+	/// In-memory only.
+	permissionAt: number | null;
+	/// #423: epoch ms of the user's last Enter/submit in this PTY (typed, or a
+	/// `sendPrompt` seam submit), recorded whatever the watchdog does with it.
+	/// `null` until the first. In-memory only, reset on every spawn.
+	lastSubmitAt: number | null;
 }
 
 /// Global transition callback: receives every real phase change
@@ -267,4 +302,7 @@ export const TRANSITION_SOURCE = {
 	// that turns out to have been a lost first paste, not a broken tail —
 	// see that method's own doc for the conditions.
 	SilenceRecovered: "silence-recovered",
+	// #423: the harness supervisor moved a harness whose phase had gone
+	// stale (`supervisorSetWaiting`).
+	SupervisorRecovered: "supervisor-recovered",
 } as const;

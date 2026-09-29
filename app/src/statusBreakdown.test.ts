@@ -36,6 +36,12 @@ const activity = (over: Partial<HarnessActivity> = {}): HarnessActivity => ({
 	delegationEmptiedAt: null,
 	delegatedCount: 0,
 	silenceRecovered: false,
+	phaseSince: 0,
+	lastTurnSignal: null,
+	lastAdapterEvent: null,
+	authorityLostAt: null,
+	permissionAt: null,
+	lastSubmitAt: null,
 	...over,
 });
 

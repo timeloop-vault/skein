@@ -122,17 +122,31 @@ export function hasClaudeTranscriptTail(
 /// attach rejection, or late `session_end` must not strip authority
 /// from a newer attach of the same harness (`/clear` re-point, manual
 /// reattach), so each of those checks it is still the live one.
-const liveAttach = new Map<string, symbol>();
+///
+/// #423: each entry also carries what the attach was made with, so
+/// `liveAttach` can hand the supervisor enough to re-attach.
+export type LiveAttach = { kind: "claude"; sessionId: string; cwd: string } | { kind: "opencode" };
 
-const beginAttach = (harnessId: string): { token: symbol; isLive: () => boolean } => {
+const attaches = new Map<string, { token: symbol; info: LiveAttach }>();
+
+const beginAttach = (
+	harnessId: string,
+	info: LiveAttach,
+): { token: symbol; isLive: () => boolean } => {
 	const token = Symbol(harnessId);
-	liveAttach.set(harnessId, token);
-	return { token, isLive: () => liveAttach.get(harnessId) === token };
+	attaches.set(harnessId, { token, info });
+	return { token, isLive: () => attaches.get(harnessId)?.token === token };
 };
 
 const endAttach = (harnessId: string, token: symbol): void => {
-	if (liveAttach.get(harnessId) === token) liveAttach.delete(harnessId);
+	if (attaches.get(harnessId)?.token === token) attaches.delete(harnessId);
 };
+
+/// #423: the harness's live attach — non-null exactly while an attach
+/// has begun and neither ended nor been superseded by a newer one.
+export function liveAttach(harnessId: string): LiveAttach | null {
+	return attaches.get(harnessId)?.info ?? null;
+}
 
 /// Subscribe a Claude harness to its JSONL event stream. Marks the
 /// activity store as authoritative-source so the L2a idle tick stops
@@ -150,7 +164,7 @@ export function attachClaudeEvents(
 ): () => void {
 	const channel = new Channel<ClaudeEvent>();
 	let closed = false;
-	const { token, isLive } = beginAttach(harnessId);
+	const { token, isLive } = beginAttach(harnessId, { kind: "claude", sessionId, cwd });
 	channel.onmessage = guardChannelHandler(harnessId, "claude_events", (event) => {
 		// #259: any event at all proves the tail is on the right file.
 		// Guarded so a straggler after unsubscribe can't hand authority
@@ -429,7 +443,7 @@ export function attachOpencodeEvents(
 ): () => void {
 	const channel = new Channel<OpencodeEvent>();
 	let closed = false;
-	const { token, isLive } = beginAttach(harnessId);
+	const { token, isLive } = beginAttach(harnessId, { kind: "opencode" });
 	channel.onmessage = guardChannelHandler(harnessId, "opencode_events", (event) => {
 		// #259: see attachClaudeEvents. `connected` arrives first, so a
 		// stream that is up disarms the watchdog before any prompt.

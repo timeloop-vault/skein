@@ -442,6 +442,7 @@ pub fn run() {
             resume::opencode_list_sessions,
             resume::opencode_session_exists,
             resume::claude_session_exists,
+            resume::claude_transcript_stat,
             claude_events_attach,
             claude_events_detach,
             claude_events_reattach,
