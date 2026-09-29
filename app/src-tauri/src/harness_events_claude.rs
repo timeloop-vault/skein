@@ -1972,127 +1972,145 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
         }
     }
 
-    // Open + seek + read-to-end. Rolling a long-lived File handle
-    // would be a tiny optimisation but risks holding a stale fd if
-    // Claude ever rotates the file. Reopening every tick is robust
-    // and the file sizes we're dealing with (kilobytes of JSON per
-    // event) are trivial to seek into.
-    let mut file = match fs::File::open(&s.path) {
-        Ok(f) => f,
-        Err(e) => {
-            // File vanished — Claude was uninstalled mid-session, or
-            // the user wiped ~/.claude. Surface as SessionEnd once and
-            // detach from this run (the adapter stays alive in case the
-            // file comes back, but we don't keep re-emitting).
-            if s.attached {
-                s.attached = false;
-                let harness_id = s.harness_id.clone();
-                let path = s.path.clone();
-                drop(s);
-                tracing::warn!(
-                    harness_id = %harness_id,
-                    path = %path.display(),
-                    error = %e,
-                    "claude_events: transcript vanished; emitting SessionEnd"
-                );
-                on_event(ClaudeEvent::SessionEnd);
-            } else if e.kind() != std::io::ErrorKind::NotFound {
-                // NotFound while `!attached` is the expected "still
-                // waiting for Claude to write the first row" case —
-                // anything else (permissions, IO error) is worth a
-                // line since it means this harness may never attach.
-                tracing::warn!(
-                    harness_id = %s.harness_id,
-                    path = %s.path.display(),
-                    error = %e,
-                    "claude_events: unexpected error opening transcript"
-                );
-            }
-            return;
-        }
-    };
-
-    // Defensive: file size dropped below last_pos (rotation /
-    // truncation). #425: resync as backfill rather than replaying from
-    // 0 as live — the rows in it are history we already reported (or
-    // that the DB already holds), not new events.
-    if let Ok(meta) = file.metadata()
-        && meta.len() < s.last_pos
-    {
-        tracing::info!(
-            harness_id = %s.harness_id,
-            path = %s.path.display(),
-            case = Reappear::Truncated.name(),
-            last_pos = s.last_pos,
-            file_len = meta.len(),
-            "claude_events: transcript shrank"
-        );
-        drop(file);
-        finish_resync(s, state, on_event);
-        return;
-    }
-
-    if let Err(e) = file.seek(SeekFrom::Start(s.last_pos)) {
-        tracing::warn!(
-            harness_id = %s.harness_id,
-            path = %s.path.display(),
-            pos = s.last_pos,
-            error = %e,
-            "claude_events: seek failed"
-        );
-        return;
-    }
-    let mut buf = String::new();
-    let bytes = match file.read_to_string(&mut buf) {
-        Ok(b) => b,
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::InvalidData {
-                // UTF-8 decode failed somewhere mid-file. JSONL is
-                // ASCII for the keys + UTF-8 content; the only way
-                // this fires is if we landed in the middle of a
-                // multi-byte char. Bump last_pos by what we did read
-                // (zero in this case) and wait for the next tick to
-                // pick up a full line. Expected transient state, not
-                // an error — logged at debug.
-                tracing::debug!(
-                    harness_id = %s.harness_id,
-                    path = %s.path.display(),
-                    "claude_events: utf8 mid-line; retrying next tick"
-                );
-                // #362: a one- or two-tick stall here is the ordinary
-                // case above. Count consecutive failures at the SAME
-                // last_pos — a run that survives past the threshold
-                // means the file is stuck mid multi-byte character for
-                // good, not just a write straddling a debounce tick.
-                if s.utf8_stall_at == Some(s.last_pos) {
-                    s.utf8_stall_count = s.utf8_stall_count.saturating_add(1);
-                } else {
-                    s.utf8_stall_at = Some(s.last_pos);
-                    s.utf8_stall_count = 1;
-                    s.utf8_stall_warned = false;
-                }
-                if should_warn_utf8_stall(s.utf8_stall_count, s.utf8_stall_warned) {
-                    s.utf8_stall_warned = true;
-                    let len = file.metadata().ok().map(|m| m.len());
+    // Stat first and skip the open when nothing has been appended
+    // (#428). notify 8.2's inotify backend arms IN_OPEN on watched
+    // dirs and notify-debouncer-mini forwards every event kind, so on
+    // Linux this tick's own `File::open` would queue the next tick
+    // 50 ms later, a self-sustaining loop for the adapter's lifetime.
+    // Windows/macOS don't report opens, which is why it only shows on
+    // Linux. A stat failure falls through to the open path, so a
+    // vanished file still emits SessionEnd; shrink and growth also
+    // fall through.
+    let unchanged_len = fs::metadata(&s.path)
+        .ok()
+        .map(|m| m.len())
+        .filter(|&len| len == s.last_pos);
+    let (buf, bytes, file_len) = if let Some(len) = unchanged_len {
+        (String::new(), 0, Some(len))
+    } else {
+        // Open + seek + read-to-end. Rolling a long-lived File handle
+        // would be a tiny optimisation but risks holding a stale fd if
+        // Claude ever rotates the file. Reopening every tick is robust
+        // and the file sizes we're dealing with (kilobytes of JSON per
+        // event) are trivial to seek into.
+        let mut file = match fs::File::open(&s.path) {
+            Ok(f) => f,
+            Err(e) => {
+                // File vanished — Claude was uninstalled mid-session, or
+                // the user wiped ~/.claude. Surface as SessionEnd once and
+                // detach from this run (the adapter stays alive in case the
+                // file comes back, but we don't keep re-emitting).
+                if s.attached {
+                    s.attached = false;
+                    let harness_id = s.harness_id.clone();
+                    let path = s.path.clone();
+                    drop(s);
+                    tracing::warn!(
+                        harness_id = %harness_id,
+                        path = %path.display(),
+                        error = %e,
+                        "claude_events: transcript vanished; emitting SessionEnd"
+                    );
+                    on_event(ClaudeEvent::SessionEnd);
+                } else if e.kind() != std::io::ErrorKind::NotFound {
+                    // NotFound while `!attached` is the expected "still
+                    // waiting for Claude to write the first row" case —
+                    // anything else (permissions, IO error) is worth a
+                    // line since it means this harness may never attach.
                     tracing::warn!(
                         harness_id = %s.harness_id,
                         path = %s.path.display(),
-                        pos = s.last_pos,
-                        file_len = ?len,
-                        ticks = s.utf8_stall_count,
-                        "claude_events: transcript stuck mid multi-byte character across many ticks"
+                        error = %e,
+                        "claude_events: unexpected error opening transcript"
                     );
                 }
-            } else {
-                tracing::warn!(
-                    harness_id = %s.harness_id,
-                    path = %s.path.display(),
-                    error = %e,
-                    "claude_events: read failed"
-                );
+                return;
             }
+        };
+
+        // Defensive: file size dropped below last_pos (rotation /
+        // truncation). #425: resync as backfill rather than replaying from
+        // 0 as live — the rows in it are history we already reported (or
+        // that the DB already holds), not new events.
+        if let Ok(meta) = file.metadata()
+            && meta.len() < s.last_pos
+        {
+            tracing::info!(
+                harness_id = %s.harness_id,
+                path = %s.path.display(),
+                case = Reappear::Truncated.name(),
+                last_pos = s.last_pos,
+                file_len = meta.len(),
+                "claude_events: transcript shrank"
+            );
+            drop(file);
+            finish_resync(s, state, on_event);
             return;
         }
+
+        if let Err(e) = file.seek(SeekFrom::Start(s.last_pos)) {
+            tracing::warn!(
+                harness_id = %s.harness_id,
+                path = %s.path.display(),
+                pos = s.last_pos,
+                error = %e,
+                "claude_events: seek failed"
+            );
+            return;
+        }
+        let mut buf = String::new();
+        let bytes = match file.read_to_string(&mut buf) {
+            Ok(b) => b,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::InvalidData {
+                    // UTF-8 decode failed somewhere mid-file. JSONL is
+                    // ASCII for the keys + UTF-8 content; the only way
+                    // this fires is if we landed in the middle of a
+                    // multi-byte char. Bump last_pos by what we did read
+                    // (zero in this case) and wait for the next tick to
+                    // pick up a full line. Expected transient state, not
+                    // an error — logged at debug.
+                    tracing::debug!(
+                        harness_id = %s.harness_id,
+                        path = %s.path.display(),
+                        "claude_events: utf8 mid-line; retrying next tick"
+                    );
+                    // #362: a one- or two-tick stall here is the ordinary
+                    // case above. Count consecutive failures at the SAME
+                    // last_pos — a run that survives past the threshold
+                    // means the file is stuck mid multi-byte character for
+                    // good, not just a write straddling a debounce tick.
+                    if s.utf8_stall_at == Some(s.last_pos) {
+                        s.utf8_stall_count = s.utf8_stall_count.saturating_add(1);
+                    } else {
+                        s.utf8_stall_at = Some(s.last_pos);
+                        s.utf8_stall_count = 1;
+                        s.utf8_stall_warned = false;
+                    }
+                    if should_warn_utf8_stall(s.utf8_stall_count, s.utf8_stall_warned) {
+                        s.utf8_stall_warned = true;
+                        let len = file.metadata().ok().map(|m| m.len());
+                        tracing::warn!(
+                            harness_id = %s.harness_id,
+                            path = %s.path.display(),
+                            pos = s.last_pos,
+                            file_len = ?len,
+                            ticks = s.utf8_stall_count,
+                            "claude_events: transcript stuck mid multi-byte character across many ticks"
+                        );
+                    }
+                } else {
+                    tracing::warn!(
+                        harness_id = %s.harness_id,
+                        path = %s.path.display(),
+                        error = %e,
+                        "claude_events: read failed"
+                    );
+                }
+                return;
+            }
+        };
+        (buf, bytes, file.metadata().ok().map(|m| m.len()))
     };
     // Reaching here means the read decoded cleanly — any UTF-8 stall
     // run in progress is over. Rearm so a *future* stall gets its own
@@ -2100,7 +2118,6 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     s.utf8_stall_at = None;
     s.utf8_stall_count = 0;
     s.utf8_stall_warned = false;
-    let file_len = file.metadata().ok().map(|m| m.len());
     let advance: u64 = u64::try_from(bytes).unwrap_or(u64::MAX);
     s.last_pos = s.last_pos.saturating_add(advance);
     extend_fingerprint(&mut s.fingerprint, buf.as_bytes());
@@ -5333,6 +5350,32 @@ mod tests {
             "expected only the derived initial phase, got {events:?}"
         );
         assert_eq!(state.lock().last_pos, content.len() as u64);
+    }
+
+    /// #428: the stat-skip (`len == last_pos`) sits after the reappear
+    /// classification, so a recreated file of exactly the same length
+    /// but different bytes is still resynced, never skipped.
+    #[test]
+    fn reappear_same_length_different_content_is_not_stat_skipped() {
+        let dir = TempDir::new().unwrap();
+        let (state, path, _db) = t425_vanished(&dir, true);
+        let old_len = state.lock().last_pos;
+
+        let other_end = T425_END.replace("done-A", "done-B");
+        let content = t425_jsonl(&[T425_PROMPT, T425_TOOL, T425_RESULT, &other_end]);
+        assert_eq!(content.len() as u64, old_len, "fixture must be same length");
+        fs::write(&path, &content).unwrap();
+        let events = t425_tick(&state);
+        assert!(
+            matches!(events.as_slice(), [ClaudeEvent::AwaitingPrompt]),
+            "expected only the derived initial phase, got {events:?}"
+        );
+        let s = state.lock();
+        assert!(s.attached);
+        assert_eq!(s.last_pos, content.len() as u64);
+        let mut expected = Vec::new();
+        extend_fingerprint(&mut expected, content.as_bytes());
+        assert_eq!(s.fingerprint, expected);
     }
 
     /// A partial line carried across the vanish is completed by the
