@@ -8,25 +8,26 @@ lived in a scratch folder and are not committed.
 **Summary**
 
 - **Rendering works.** A real prototype renders in full inside
-  `<iframe sandbox="allow-scripts">` in a Tauri 2.11.0 release build on
-  Windows (WebView2). It is served over HTTP from `127.0.0.1`, and
-  reloading on a changed URL works. One header is mandatory:
-  `Access-Control-Allow-Origin: *`. Without it the page renders blank
-  with no error. That was observed in Chrome; WebView2 was only run with
-  the header on.
+  `<iframe sandbox="allow-scripts">` in a Tauri 2.11.0 release build,
+  on both Windows (WebView2) and macOS (WKWebView). It is served over
+  HTTP from `127.0.0.1`, and reloading on a changed URL works. One
+  header is mandatory: `Access-Control-Allow-Origin: *`. Without it the
+  page renders blank with no error. That was observed in Chrome and in
+  WKWebView; WebView2 was only run with the header on.
 - **Picking works.** A script injected by the server reports the
   clicked element to the host over `postMessage`: selector, text,
   attributes, rect, and a JSX source file and line. Only one source
   file was sampled.
-- **The iframe cannot reach Tauri IPC.** It sees `__TAURI_INTERNALS__`,
-  but every `invoke` from it is refused.
+- **The iframe cannot reach Tauri IPC.** On Windows it sees
+  `__TAURI_INTERNALS__`, but every `invoke` from it is refused. On
+  macOS the object is not injected into the iframe at all.
 - **Element threads fit the review model, with changes.** They need a
   sibling anchor table rather than new columns, and a DOM-side
   re-anchoring pass under the same never-silently-moved-or-dropped
   contract. Sign-off covers them unchanged.
 - **Open Design is a reference, not a library.** Borrow its conventions
   (`data-od-id`, the anchor state ladder). Lift none of its code.
-- **Unknown:** macOS WKWebView behaviour. §2.6 says how to find out.
+- **No platform split.** One serving model works on both OSes (§2.6).
 
 ## 1. How the prototypes load
 
@@ -93,6 +94,8 @@ The probes ran on a Windows 11 box and were three things:
 | Chrome, sandboxed, `ACAO: *` | 742 / 95 | Only Babel's "in-browser transformer" warning. |
 | Chrome, no sandbox (control) | 742 / 95 | Same output; ACAO not needed. |
 | **Tauri 2.11 release, WebView2**, sandboxed, `ACAO: *` | **742 / 95** | Host `http://tauri.localhost`; `postMessage` received with `e.origin === "null"`, `e.source === iframe.contentWindow`. |
+| **Tauri 2.11 release, WKWebView** (macOS 26.2), sandboxed, `ACAO: *` | **742 / 95** | Host `tauri://localhost`; no mixed-content or blocked-frame error; same `postMessage` result; `_debugSource` identical to Windows. |
+| Tauri 2.11 release, WKWebView, sandboxed, no CORS header | **0 / 0**, blank | Same silent failure as Chrome: the `.jsx` requests reach the server with `Origin: null`, and nothing is surfaced. |
 
 - **SRI from an opaque origin works.** The CDN tags use
   `crossorigin="anonymous"` and unpkg sends `ACAO: *`.
@@ -112,7 +115,9 @@ The probes ran on a Windows 11 box and were three things:
   host. This matches the fix for CVE-2024-35222
   (GHSA-57fm-592m-34r7): iframes lost IPC in 2.0.0-beta.20, except on
   Windows when the iframe shares the window's origin, and a null origin
-  never does.
+  never does. On macOS the refusal is stronger: `__TAURI_INTERNALS__` is
+  `undefined` inside the sandboxed iframe, and the custom command's log
+  shows only the host's call.
 
 ### 2.3 Recommended serving model
 
@@ -194,19 +199,24 @@ already runs over the same worktree. The design pane:
 A reload costs one full Babel re-transpile. That is fine at this size,
 but worth watching on larger prototypes.
 
-### 2.6 Unknown: macOS WKWebView
+### 2.6 macOS WKWebView
 
-The macOS app origin is `tauri://localhost`. It is not known whether
-WebKit treats an `http://127.0.0.1` iframe under a custom-scheme parent
-as mixed content. `127.0.0.1` is "potentially trustworthy" by spec, and
-WebKit has honoured that for years, but nothing confirms it here.
+The open question was whether WebKit treats an `http://127.0.0.1`
+iframe under the `tauri://localhost` custom-scheme parent as mixed
+content. **It does not.**
 
-**How to find out:** build the same throwaway host app on the Mac, the
-probe the Windows run used (`tauri-host` pinned to 2.11.0, release, the
-same picker beacons), and repeat the §2.2 table and the IPC refusal
-check. The run needs no Skein code. If it fails, the fallback is a
-custom scheme on macOS only, at the cost of the platform split §2.3
-avoids.
+The same throwaway host app (Tauri pinned to 2.11.0, release) was
+rebuilt and run on macOS 26.2 (WebKit 26.2) with the same server and
+picker beacons. The results are the macOS rows in §2.2:
+- a full render with no mixed-content or blocked-frame errors;
+- `postMessage` delivered;
+- `?v=2` reload with every sibling refetched;
+- the same `_debugSource`;
+- no IPC object in the iframe.
+
+The app window opened directly from an ssh launch into the logged-in
+session. **No macOS-only fallback is needed.** The localhost serving
+model in §2.3 holds on both platforms.
 
 ### 2.7 Offline and CDN
 
@@ -407,7 +417,6 @@ of it is embedded.
 
 | Item | Where it gets answered |
 |---|---|
-| macOS WKWebView renders the `127.0.0.1` iframe | §2.6: repeat the throwaway host app on the Mac before slice 1 ships on macOS |
 | `_debugSource` file names for elements from other `.jsx` files | slice 2, with the picker in place |
 | Preview route on the agent-API listener or its own | slice 1 |
 | Babel re-transpile time on large prototypes | slice 1, by measuring reload latency |
@@ -446,7 +455,7 @@ entry file from the room's worktree in a sandboxed iframe.
   outside `.git/` and `node_modules/`, bump `?v=n`.
 - **Acceptance:**
   - the real design folder's prototype renders in the pane on Windows,
-    and on macOS after the §2.6 check;
+    and on macOS;
   - saving a `.jsx` reloads it;
   - a preview URL for room A cannot read a file of room B;
   - an `invoke` from the iframe is refused (a test page in a fixture
