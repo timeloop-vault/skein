@@ -665,6 +665,18 @@ struct TailState {
     /// Have we observed `attached` yet? If false, the file didn't
     /// exist when `attach` was called and we're waiting for create.
     attached: bool,
+    /// Whether this state has EVER been attached to the transcript
+    /// (#425). `attached` flips back to false when the file vanishes,
+    /// so it cannot tell a first appearance (every byte is new, read
+    /// from 0 as live) from a reappearance (the same transcript,
+    /// already consumed up to `last_pos`, which must not be replayed).
+    ever_attached: bool,
+    /// The last up to `FINGERPRINT_LEN` bytes ending at `last_pos`
+    /// (#425). When the transcript reappears after a vanish, the same
+    /// bytes at the same offset are what says "same file, keep going";
+    /// anything else is a different or truncated file and is resynced
+    /// as backfill instead of replayed as live.
+    fingerprint: Vec<u8>,
     /// Tracks whether the previous emitted event was inside an
     /// assistant turn — used to coalesce streamed `assistant` rows
     /// into one `AssistantTurn` event per turn boundary.
@@ -1044,17 +1056,24 @@ where
             cwd: ap.cwd.clone(),
             app: ap.app.clone(),
         });
-        let (last_pos, attached, initial_event) = match fs::read_to_string(&path) {
+        let (last_pos, attached, initial_event, fingerprint) = match fs::read_to_string(&path) {
             Ok(content) => {
                 let (init, fresh) = scan_history(&content, actions.as_mut());
                 if let Some(ap) = actions.as_ref() {
                     persist_extracted_batch(ap, fresh);
                 }
                 let len = u64::try_from(content.len()).unwrap_or(u64::MAX);
-                (len, true, init)
+                (len, true, init, fingerprint_of(content.as_bytes()))
             }
-            Err(_) => (0, false, None),
+            // The file EXISTS but can't be read as UTF-8 (a write cut
+            // mid-character): claim it as already attached-before, with
+            // a `last_pos` no file can reach, so the first tick takes
+            // the reappear path and resyncs it as backfill instead of
+            // reading it from 0 as live (#425).
+            Err(_) if path.exists() => (u64::MAX, false, None, Vec::new()),
+            Err(_) => (0, false, None, Vec::new()),
         };
+        let ever_attached = attached || last_pos == u64::MAX;
         // Derive the parent before moving `path` into TailState.
         // Watching the parent (not the file directly) survives some
         // platforms (Linux/inotify) losing the watch when the file is
@@ -1165,6 +1184,8 @@ where
             last_pos,
             partial: String::new(),
             attached,
+            ever_attached,
+            fingerprint,
             in_assistant_turn: false,
             actions,
             subagents_dir: subagents_dir_opt.clone(),
@@ -1773,6 +1794,135 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+/// How many trailing consumed bytes `TailState::fingerprint` keeps (#425).
+const FINGERPRINT_LEN: usize = 256;
+
+/// The last up to `FINGERPRINT_LEN` bytes of `bytes` (#425).
+fn fingerprint_of(bytes: &[u8]) -> Vec<u8> {
+    bytes[bytes.len().saturating_sub(FINGERPRINT_LEN)..].to_vec()
+}
+
+/// Append freshly consumed bytes to a fingerprint, keeping only the
+/// last `FINGERPRINT_LEN`. A read shorter than that extends the old
+/// fingerprint rather than replacing it (#425).
+fn extend_fingerprint(fp: &mut Vec<u8>, new: &[u8]) {
+    fp.extend_from_slice(new);
+    if fp.len() > FINGERPRINT_LEN {
+        fp.drain(..fp.len() - FINGERPRINT_LEN);
+    }
+}
+
+/// What a transcript that vanished and came back looks like relative
+/// to what this tail had consumed (#425).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Reappear {
+    /// Same bytes at the consumed offset: keep going, the rest is new.
+    Same,
+    /// Shorter than what we consumed.
+    Truncated,
+    /// Long enough, but the consumed tail bytes differ (or can't be read).
+    Different,
+}
+
+impl Reappear {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Same => "same",
+            Self::Truncated => "truncated",
+            Self::Different => "different",
+        }
+    }
+}
+
+/// Classify a reappeared transcript by length and by the fingerprint
+/// of the bytes ending at `last_pos` (#425).
+fn classify_reappear(path: &Path, last_pos: u64, fp: &[u8], file_len: u64) -> Reappear {
+    if file_len < last_pos {
+        return Reappear::Truncated;
+    }
+    let Some(start) = last_pos.checked_sub(fp.len() as u64) else {
+        return Reappear::Different;
+    };
+    let mut got = vec![0u8; fp.len()];
+    let read = fs::File::open(path)
+        .and_then(|mut f| {
+            f.seek(SeekFrom::Start(start))?;
+            f.read_exact(&mut got)
+        })
+        .is_ok();
+    if read && got == fp {
+        Reappear::Same
+    } else {
+        Reappear::Different
+    }
+}
+
+/// Outcome of `resync_as_backfill` (#425).
+enum Resync {
+    Done(Option<ClaudeEvent>),
+    Unreadable,
+}
+
+/// Resync a truncated or different transcript exactly like `attach_at`
+/// reads an existing file (#425): fresh `ActionExtractor`, then
+/// `scan_history` and `persist_extracted_batch` (only rows newer than the max persisted
+/// timestamp, no broadcast, no baseline capture), `last_pos` at the
+/// content length. Returns the derived initial phase event, which the
+/// caller emits after dropping the lock. `Unreadable` means the file
+/// could not be read as UTF-8; state is untouched so the caller can retry.
+fn resync_as_backfill(s: &mut TailState) -> Resync {
+    let content = match fs::read_to_string(&s.path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                harness_id = %s.harness_id,
+                path = %s.path.display(),
+                error = %e,
+                "claude_events: could not read transcript to resync"
+            );
+            return Resync::Unreadable;
+        }
+    };
+    if let Some(ap) = s.actions.as_mut() {
+        // Same reasoning as `ReattachRecipe::fresh_persistence`: the old
+        // extractor may be stuck mid-turn on rows that no longer exist.
+        ap.extractor = ActionExtractor::new();
+    }
+    let (init, fresh) = scan_history(&content, s.actions.as_mut());
+    if let Some(ap) = s.actions.as_ref() {
+        persist_extracted_batch(ap, fresh);
+    }
+    s.last_pos = u64::try_from(content.len()).unwrap_or(u64::MAX);
+    s.partial.clear();
+    // `attach_at` starts a state with `false` after the same scan.
+    s.in_assistant_turn = false;
+    s.fingerprint = fingerprint_of(content.as_bytes());
+    s.utf8_stall_at = None;
+    s.utf8_stall_count = 0;
+    s.utf8_stall_warned = false;
+    Resync::Done(init)
+}
+
+/// Run `resync_as_backfill`, drop the lock, and emit only the initial
+/// event (if any) through `dispatch_events` — `on_event` is never called
+/// under the lock (#425).
+fn finish_resync(
+    mut s: parking_lot::MutexGuard<'_, TailState>,
+    state: &Arc<Mutex<TailState>>,
+    on_event: &(dyn Fn(ClaudeEvent) + Send + Sync),
+) {
+    let init = match resync_as_backfill(&mut s) {
+        Resync::Done(init) => init,
+        Resync::Unreadable => {
+            // Retry on the next tick via the reappear path.
+            s.attached = false;
+            None
+        }
+    };
+    drop(s);
+    dispatch_events(state, init.into_iter().collect(), on_event);
+}
+
 /// One tick of the tail-reader. Reads any bytes appended since
 /// `last_pos`, splits into lines, parses each as a Claude event, and
 /// emits `ClaudeEvent`s. Called from the debouncer's flush thread.
@@ -1784,13 +1934,37 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     if !s.attached {
         if s.path.exists() {
             s.attached = true;
-            // Start at 0 — file is fresh, all bytes are new.
-            s.last_pos = 0;
-            tracing::info!(
-                harness_id = %s.harness_id,
-                path = %s.path.display(),
-                "claude_events: transcript appeared"
-            );
+            if s.ever_attached {
+                // #425: the transcript we had already consumed
+                // vanished and is back. Replaying it from 0 as live
+                // would re-emit every historic row (phase events,
+                // broadcasts, review baselines). Decide whether it is
+                // the same file; if not, resync it as backfill.
+                let file_len = fs::metadata(&s.path).map_or(0, |m| m.len());
+                let case = classify_reappear(&s.path, s.last_pos, &s.fingerprint, file_len);
+                tracing::info!(
+                    harness_id = %s.harness_id,
+                    path = %s.path.display(),
+                    case = case.name(),
+                    last_pos = s.last_pos,
+                    file_len,
+                    "claude_events: transcript reappeared"
+                );
+                if case != Reappear::Same {
+                    finish_resync(s, state, on_event);
+                    return;
+                }
+            } else {
+                s.ever_attached = true;
+                // Start at 0 — file is fresh, all bytes are new.
+                s.last_pos = 0;
+                s.fingerprint.clear();
+                tracing::info!(
+                    harness_id = %s.harness_id,
+                    path = %s.path.display(),
+                    "claude_events: transcript appeared"
+                );
+            }
         } else {
             // Still not there. Maybe the watcher fired for an
             // unrelated file in the project dir; keep waiting.
@@ -1839,14 +2013,23 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     };
 
     // Defensive: file size dropped below last_pos (rotation /
-    // truncation). Reset and read from 0 — better to replay than to
-    // silently miss events.
+    // truncation). #425: resync as backfill rather than replaying from
+    // 0 as live — the rows in it are history we already reported (or
+    // that the DB already holds), not new events.
     if let Ok(meta) = file.metadata()
         && meta.len() < s.last_pos
     {
-        s.last_pos = 0;
-        s.partial.clear();
-        s.in_assistant_turn = false;
+        tracing::info!(
+            harness_id = %s.harness_id,
+            path = %s.path.display(),
+            case = Reappear::Truncated.name(),
+            last_pos = s.last_pos,
+            file_len = meta.len(),
+            "claude_events: transcript shrank"
+        );
+        drop(file);
+        finish_resync(s, state, on_event);
+        return;
     }
 
     if let Err(e) = file.seek(SeekFrom::Start(s.last_pos)) {
@@ -1920,6 +2103,7 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     let file_len = file.metadata().ok().map(|m| m.len());
     let advance: u64 = u64::try_from(bytes).unwrap_or(u64::MAX);
     s.last_pos = s.last_pos.saturating_add(advance);
+    extend_fingerprint(&mut s.fingerprint, buf.as_bytes());
 
     // First bytes ever read off the MAIN transcript since this attach
     // (#362) — once per attach, logged at info so "attached but the
@@ -2021,6 +2205,18 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     }
     drop(s);
 
+    dispatch_events(state, events, on_event);
+}
+
+/// Hand `events` to `on_event` with tick's panic containment and
+/// `events_sent`/`send_errors` bookkeeping. Must be called WITHOUT the
+/// state lock held. Shared by `tick` and the #425 resync path so a
+/// resync's initial event is counted like any other.
+fn dispatch_events(
+    state: &Arc<Mutex<TailState>>,
+    events: Vec<ClaudeEvent>,
+    on_event: &(dyn Fn(ClaudeEvent) + Send + Sync),
+) {
     // A panic inside `on_event` would otherwise unwind straight through
     // `tick` — caught here (rather than only by the debouncer callback's
     // own `catch_unwind`) so it's counted toward `send_errors` and
@@ -2213,8 +2409,26 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
         if let Ok(meta) = file.metadata()
             && meta.len() < tail.last_pos
         {
-            tail.last_pos = 0;
+            // #425: re-seed the way `attach_at` seeds a subagent — jump
+            // to EOF, no events, no rows. Replaying from 0 would
+            // re-emit rows already seen as live activity.
+            // An unreadable file (a write cut mid UTF-8 char) is left
+            // for the next tick: never fall back to 0, which would
+            // replay this subagent live.
+            let Ok(content) = fs::read_to_string(&tail.path) else {
+                continue;
+            };
+            tail.last_pos = u64::try_from(content.len()).unwrap_or(u64::MAX);
             tail.partial.clear();
+            tail.finished = subagent_content_is_finished(&content);
+            tracing::info!(
+                harness_id = %s.harness_id,
+                path = %tail.path.display(),
+                last_pos = tail.last_pos,
+                file_len = meta.len(),
+                "claude_events: subagent transcript shrank; re-seeded without replay"
+            );
+            continue;
         }
         if let Err(e) = file.seek(SeekFrom::Start(tail.last_pos)) {
             if !tail.open_failure_logged {
@@ -4411,6 +4625,8 @@ mod tests {
             last_pos: 0,
             partial: String::new(),
             attached: true,
+            ever_attached: true,
+            fingerprint: Vec::new(),
             in_assistant_turn: false,
             actions: None,
             subagents_dir: None,
@@ -4469,6 +4685,8 @@ mod tests {
             last_pos: 0,
             partial: String::new(),
             attached: true,
+            ever_attached: true,
+            fingerprint: Vec::new(),
             in_assistant_turn: false,
             actions: None,
             subagents_dir: None,
@@ -4755,6 +4973,8 @@ mod tests {
             last_pos: 0,
             partial: String::new(),
             attached: true,
+            ever_attached: true,
+            fingerprint: Vec::new(),
             in_assistant_turn: false,
             actions: None,
             subagents_dir: Some(sub_dir),
@@ -4933,6 +5153,340 @@ mod tests {
             ),
             "subagent tail did not survive its dir being deleted and recreated, got {events:?}"
         );
+    }
+
+    // ── #425: a reappearing transcript is never replayed as live ────
+
+    const T425_PROMPT: &str =
+        r#"{"type":"user","timestamp":"2026-05-15T21:16:21.000Z","message":{"content":"go"}}"#;
+    const T425_TOOL: &str = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-05-15T21:16:22.572Z","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]}}"#;
+    const T425_RESULT: &str = r#"{"type":"user","timestamp":"2026-05-15T21:16:23.000Z","toolUseResult":{"stdout":"x"},"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"x","is_error":false}]}}"#;
+    const T425_END: &str = r#"{"type":"assistant","timestamp":"2026-05-15T21:16:24.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"done-A"}]}}"#;
+    const T425_NEW: &str =
+        r#"{"type":"user","timestamp":"2026-05-15T21:16:30.000Z","message":{"content":"more"}}"#;
+
+    fn t425_jsonl(rows: &[&str]) -> String {
+        let mut out = rows.join("\n");
+        out.push('\n');
+        out
+    }
+
+    /// A never-attached state on `path` (file may or may not exist yet),
+    /// driven directly through `tick`.
+    fn t425_state(path: &Path, actions: Option<ActionPersistence>) -> Arc<Mutex<TailState>> {
+        Arc::new(Mutex::new(TailState {
+            harness_id: "h1".into(),
+            path: path.to_path_buf(),
+            last_pos: 0,
+            partial: String::new(),
+            attached: false,
+            ever_attached: false,
+            fingerprint: Vec::new(),
+            in_assistant_turn: false,
+            actions,
+            subagents_dir: None,
+            subagents: HashMap::new(),
+            subagents_dir_read_failure_logged: false,
+            first_read_logged: false,
+            events_sent: 0,
+            send_errors: 0,
+            last_heartbeat: None,
+            utf8_stall_at: None,
+            utf8_stall_count: 0,
+            utf8_stall_warned: false,
+        }))
+    }
+
+    fn t425_tick(state: &Arc<Mutex<TailState>>) -> Vec<ClaudeEvent> {
+        let out = std::sync::Mutex::new(Vec::new());
+        tick(state, &|e| out.lock().unwrap().push(e));
+        out.into_inner().unwrap()
+    }
+
+    fn t425_persistence(db_path: &Path) -> (Arc<crate::db::Database>, ActionPersistence) {
+        let db = Arc::new(crate::db::Database::open(db_path).unwrap());
+        let ap = ActionPersistence {
+            extractor: ActionExtractor::new(),
+            db: Arc::clone(&db),
+            harness_id: "h1".into(),
+            room_id: "r1".into(),
+            cwd: String::new(),
+            app: None,
+        };
+        (db, ap)
+    }
+
+    /// Attach live on the base transcript, then make it vanish
+    /// (`SessionEnd`), leaving the state ready for a reappearance.
+    fn t425_vanished(
+        dir: &TempDir,
+        with_db: bool,
+    ) -> (
+        Arc<Mutex<TailState>>,
+        PathBuf,
+        Option<Arc<crate::db::Database>>,
+    ) {
+        let path = dir.path().join("session.jsonl");
+        let (db, ap) = if with_db {
+            let (db, ap) = t425_persistence(&dir.path().join("t.db"));
+            (Some(db), Some(ap))
+        } else {
+            (None, None)
+        };
+        let state = t425_state(&path, ap);
+        fs::write(
+            &path,
+            t425_jsonl(&[T425_PROMPT, T425_TOOL, T425_RESULT, T425_END]),
+        )
+        .unwrap();
+        let first = t425_tick(&state);
+        assert_eq!(first.len(), 4, "first appearance reads live, got {first:?}");
+        fs::remove_file(&path).unwrap();
+        let ended = t425_tick(&state);
+        assert!(matches!(ended.as_slice(), [ClaudeEvent::SessionEnd]));
+        assert!(!state.lock().attached);
+        (state, path, db)
+    }
+
+    #[test]
+    fn reappear_same_reads_only_the_new_rows() {
+        let dir = TempDir::new().unwrap();
+        let (state, path, db) = t425_vanished(&dir, true);
+        let db = db.unwrap();
+        let rows_before = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
+        assert!(!rows_before.is_empty());
+
+        fs::write(
+            &path,
+            t425_jsonl(&[T425_PROMPT, T425_TOOL, T425_RESULT, T425_END, T425_NEW]),
+        )
+        .unwrap();
+        let events = t425_tick(&state);
+        assert!(
+            matches!(events.as_slice(), [ClaudeEvent::UserPrompt]),
+            "only the appended row may be read live, got {events:?}"
+        );
+        let rows_after = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
+        assert_eq!(
+            rows_after.len(),
+            rows_before.len(),
+            "no duplicated harness_actions rows"
+        );
+        let len = fs::metadata(&path).unwrap().len();
+        assert_eq!(state.lock().last_pos, len);
+    }
+
+    #[test]
+    fn reappear_truncated_resyncs_as_backfill() {
+        let dir = TempDir::new().unwrap();
+        let (state, path, db) = t425_vanished(&dir, true);
+        let db = db.unwrap();
+        let rows_before = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
+
+        fs::write(&path, t425_jsonl(&[T425_PROMPT, T425_END])).unwrap();
+        let events = t425_tick(&state);
+        assert!(
+            matches!(events.as_slice(), [ClaudeEvent::AwaitingPrompt]),
+            "expected only the derived initial phase, got {events:?}"
+        );
+        let len = fs::metadata(&path).unwrap().len();
+        {
+            let s = state.lock();
+            assert_eq!(s.last_pos, len);
+            assert!(s.partial.is_empty());
+        }
+        assert_eq!(
+            db.recent_harness_actions_by_room("r1", -1, 100)
+                .unwrap()
+                .len(),
+            rows_before.len()
+        );
+        // Tailing continues normally from the resynced position.
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(f, "{T425_NEW}").unwrap();
+        f.sync_all().unwrap();
+        let events = t425_tick(&state);
+        assert!(matches!(events.as_slice(), [ClaudeEvent::UserPrompt]));
+    }
+
+    #[test]
+    fn reappear_different_content_resyncs_as_backfill() {
+        let dir = TempDir::new().unwrap();
+        let (state, path, _db) = t425_vanished(&dir, true);
+        let old_len = state.lock().last_pos;
+
+        // Longer than before, but not the same bytes.
+        let other_end = T425_END.replace("done-A", "done-B");
+        let content = t425_jsonl(&[
+            T425_PROMPT,
+            T425_TOOL,
+            T425_RESULT,
+            T425_NEW,
+            T425_PROMPT,
+            &other_end,
+        ]);
+        assert!(content.len() as u64 > old_len);
+        fs::write(&path, &content).unwrap();
+        let events = t425_tick(&state);
+        assert!(
+            matches!(events.as_slice(), [ClaudeEvent::AwaitingPrompt]),
+            "expected only the derived initial phase, got {events:?}"
+        );
+        assert_eq!(state.lock().last_pos, content.len() as u64);
+    }
+
+    /// A partial line carried across the vanish is completed by the
+    /// bytes appended to the recreated (same) file: read live, once.
+    #[test]
+    fn reappear_same_completes_a_carried_partial_line() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let state = t425_state(&path, None);
+        let (head, tail) = T425_END.split_at(40);
+        let before = format!(
+            "{T425_PROMPT}
+{head}"
+        );
+        fs::write(&path, &before).unwrap();
+        let first = t425_tick(&state);
+        assert!(matches!(first.as_slice(), [ClaudeEvent::UserPrompt]));
+        assert!(!state.lock().partial.is_empty());
+        fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            t425_tick(&state).as_slice(),
+            [ClaudeEvent::SessionEnd]
+        ));
+
+        fs::write(
+            &path,
+            format!(
+                "{before}{tail}
+"
+            ),
+        )
+        .unwrap();
+        let events = t425_tick(&state);
+        assert!(
+            matches!(events.as_slice(), [ClaudeEvent::AwaitingPrompt]),
+            "the completed row is new and read live once, got {events:?}"
+        );
+    }
+
+    /// A file that exists at attach but isn't valid UTF-8 yet must not
+    /// be replayed from 0 as live once it becomes readable.
+    #[test]
+    fn unreadable_at_attach_does_not_replay_once_readable() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut bad = t425_jsonl(&[T425_PROMPT, T425_TOOL]).into_bytes();
+        bad.extend_from_slice(&[0xff, 0xfe]);
+        fs::write(&path, &bad).unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let manager = test_manager();
+        manager
+            .attach_at(
+                "h1",
+                path.clone(),
+                move |e| {
+                    let _ = tx.send(e);
+                },
+                None,
+            )
+            .unwrap();
+        drain_brief(&rx);
+
+        fs::write(
+            &path,
+            t425_jsonl(&[T425_PROMPT, T425_TOOL, T425_RESULT, T425_END]),
+        )
+        .unwrap();
+        let events = drain(&rx);
+        assert!(
+            events
+                .iter()
+                .all(|e| matches!(e, ClaudeEvent::AwaitingPrompt)),
+            "history must not replay as live events, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn fingerprint_keeps_the_last_256_bytes_across_short_reads() {
+        let mut fp = fingerprint_of(&[1u8; 300]);
+        assert_eq!(fp.len(), FINGERPRINT_LEN);
+        extend_fingerprint(&mut fp, &[2u8; 10]);
+        assert_eq!(fp.len(), FINGERPRINT_LEN);
+        assert_eq!(&fp[FINGERPRINT_LEN - 10..], &[2u8; 10]);
+        assert_eq!(fp[0], 1);
+        let mut small = Vec::new();
+        extend_fingerprint(&mut small, b"ab");
+        extend_fingerprint(&mut small, b"cd");
+        assert_eq!(small, b"abcd");
+    }
+
+    /// While attached, a shrinking transcript is resynced, not replayed.
+    #[test]
+    fn attached_shrink_resyncs_without_replay() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let state = t425_state(&path, None);
+        fs::write(
+            &path,
+            t425_jsonl(&[T425_PROMPT, T425_TOOL, T425_RESULT, T425_END]),
+        )
+        .unwrap();
+        assert_eq!(t425_tick(&state).len(), 4);
+        fs::write(&path, t425_jsonl(&[T425_PROMPT, T425_END])).unwrap();
+        let events = t425_tick(&state);
+        assert!(matches!(events.as_slice(), [ClaudeEvent::AwaitingPrompt]));
+        assert_eq!(state.lock().last_pos, fs::metadata(&path).unwrap().len());
+    }
+
+    /// A subagent transcript that shrinks is re-seeded like at attach:
+    /// nothing emitted, `last_pos` at the new EOF.
+    #[test]
+    fn subagent_shrink_reseeds_without_replay() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        fs::write(&path, "").unwrap();
+        let sub_dir = dir.path().join("subagents");
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub_path = sub_dir.join("agent-x.jsonl");
+        let content = concat!(
+            r#"{"type":"assistant","isSidechain":true,"agentId":"x","message":{"stop_reason":"end_turn","content":[]}}"#,
+            "\n"
+        );
+        fs::write(&sub_path, content).unwrap();
+
+        let state = t425_state(&path, None);
+        {
+            let mut s = state.lock();
+            s.attached = true;
+            s.ever_attached = true;
+            s.subagents_dir = Some(sub_dir);
+            s.subagents.insert(
+                "x".into(),
+                SubagentTail {
+                    path: sub_path,
+                    last_pos: 10_000,
+                    partial: "junk".into(),
+                    finished: false,
+                    agent_type: None,
+                    description: None,
+                    started_ms: None,
+                    started_ms_resolved: true,
+                    last_ts_ms: 0,
+                    open_failure_logged: false,
+                },
+            );
+        }
+        let events = t425_tick(&state);
+        assert!(events.is_empty(), "no replay, got {events:?}");
+        let s = state.lock();
+        let t = s.subagents.get("x").unwrap();
+        assert_eq!(t.last_pos, content.len() as u64);
+        assert!(t.partial.is_empty());
+        assert_eq!(t.finished, subagent_content_is_finished(content));
     }
 
     /// A pass over an adapter whose watched directories haven't
@@ -5341,6 +5895,8 @@ mod tests {
             last_pos: 0,
             partial: String::new(),
             attached: true,
+            ever_attached: true,
+            fingerprint: Vec::new(),
             in_assistant_turn: false,
             actions: None,
             subagents_dir: None,
