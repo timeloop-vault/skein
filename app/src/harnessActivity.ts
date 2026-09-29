@@ -146,14 +146,29 @@ export const harnessActivity = {
 	/// and if the watchdog had already given up (a false alarm: say the
 	/// Enter answered a trust dialog and no prompt followed in time),
 	/// hands authority back so the adapter's phases win again. #259.
-	adapterDelivered(id: string): void {
+	///
+	/// #422: an adapter that speaks while `authoritative` is false and
+	/// no watchdog fired (its own `session_end` detached it, and the
+	/// transcript then reappeared on the same channel) takes authority
+	/// back too. Pass `restoresAuthority: false` for the event that
+	/// itself announces the adapter's loss (`session_end`).
+	adapterDelivered(id: string, opts?: { restoresAuthority?: boolean }): void {
 		const cur = store.get(id);
-		if (!cur || (cur.adapterHeard && !cur.adapterSilent)) return;
+		if (!cur) return;
+		const restores = opts?.restoresAuthority ?? true;
+		const regrant = restores && !cur.authoritative && !cur.adapterSilent && cur.phase !== "exited";
+		if (cur.adapterHeard && !cur.adapterSilent && !regrant) return;
 		if (cur.adapterSilent) {
 			logBoth(
 				"info",
 				"skein::activity",
 				`[skein] harness ${id}: adapter recovered; handing phase back to it`,
+			);
+		} else if (regrant) {
+			logBoth(
+				"info",
+				"skein::activity",
+				`[skein] harness ${id}: adapter delivered while not authoritative; restoring its authority (#422)`,
 			);
 		}
 		store.set(id, {
@@ -161,7 +176,7 @@ export const harnessActivity = {
 			adapterHeard: true,
 			adapterSilent: false,
 			degradedBy: null,
-			...(cur.adapterSilent ? { authoritative: true } : null),
+			...(cur.adapterSilent || regrant ? { authoritative: true } : null),
 		});
 	},
 
