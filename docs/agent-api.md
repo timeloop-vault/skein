@@ -644,7 +644,8 @@ as every other route.
   so a sweep can see it, and is always `safe_to_remove`.
 - `repo_mismatch` is `true` when the room recorded a repository identity
   (#418, its root commits) and its folder now holds a different
-  repository, or none. Such a room is skipped by open-from-outside until
+  repository, none, or an empty one (no commits yet); only a shallow
+  clone is left unjudged. Such a room is skipped by open-from-outside until
   the user resolves it; `safe_to_remove` is unaffected.
 - Path comparison uses the same normalisation room grouping already
   relies on (`app/src/roomGroups.ts`'s `normalizePath`): backslashes to

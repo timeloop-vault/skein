@@ -210,6 +210,11 @@ pub struct RepoIdentityDto {
     pub root_commits: Vec<String>,
     #[serde(rename = "originUrl")]
     pub origin_url: Option<String>,
+    /// Roots are a graft boundary, not real history: empty `rootCommits`
+    /// then means "cannot tell", where for a non-shallow repo it means
+    /// "no commits yet".
+    #[serde(default)]
+    pub shallow: bool,
 }
 
 /// `HEAD commit oid -> root commits`. The roots of a given commit never
@@ -264,11 +269,16 @@ pub fn check_identity(stored: Option<&RepoIdentity>, path: &Path) -> IdentityChe
     let Ok(repo) = Repo::open(path) else {
         return IdentityCheck::Mismatch;
     };
+    // A shallow repo cannot vouch either way; an empty one (unborn HEAD)
+    // cannot be the repo whose history was recorded.
+    if repo.is_shallow() {
+        return IdentityCheck::Unknown;
+    }
     let Ok(roots) = memoized_roots(&repo) else {
         return IdentityCheck::Unknown;
     };
     if roots.is_empty() {
-        IdentityCheck::Unknown
+        IdentityCheck::Mismatch
     } else if roots.iter().any(|r| stored.root_commits.contains(r)) {
         IdentityCheck::Same
     } else {
@@ -284,6 +294,7 @@ pub(crate) fn repo_identity_impl(path: &str) -> Result<Option<RepoIdentityDto>, 
     Ok(Some(RepoIdentityDto {
         root_commits,
         origin_url: repo.origin_url(),
+        shallow: repo.is_shallow(),
     }))
 }
 
@@ -614,12 +625,12 @@ mod tests {
             IdentityCheck::Unknown
         );
 
-        // Unborn HEAD.
+        // Unborn HEAD: no commits cannot be the recorded history.
         let unborn = TempDir::new().unwrap();
         git2::Repository::init(unborn.path()).unwrap();
         assert_eq!(
             check_identity(Some(&stored), unborn.path()),
-            IdentityCheck::Unknown
+            IdentityCheck::Mismatch
         );
 
         // Nothing stored / empty roots.
@@ -650,6 +661,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(e.root_commits.is_empty());
+        assert!(!e.shallow);
 
         let plain = TempDir::new().unwrap();
         assert_eq!(
@@ -676,6 +688,7 @@ mod tests {
         std::fs::write(dir.path().join(".git").join("shallow"), format!("{head}\n")).unwrap();
         let id = repo_identity_impl(&p).unwrap().unwrap();
         assert!(id.root_commits.is_empty());
+        assert!(id.shallow);
         assert_eq!(
             check_identity(Some(&stored), dir.path()),
             IdentityCheck::Unknown

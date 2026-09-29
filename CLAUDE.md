@@ -392,8 +392,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   the root commits from a first-parent walk of HEAD (`originUrl` is display
   only, never compared); stored at creation and backfilled for every room,
   archived included, on hydrate. `compareIdentity` (`repoIdentity.ts`) is
-  `unknown` when either side has no roots or the folder is missing, and
-  `mismatch` when the folder isn't a repo or the root sets are disjoint. It
+  `unknown` when nothing was stored, the folder is missing, or the repo is
+  shallow (`RepoIdentityDto.shallow`), and `mismatch` when the folder isn't a
+  repo, is a repo with no commits (an unborn HEAD cannot be the recorded
+  history), or the root sets are disjoint. It
   runs at hydrate, unarchive and repoint before any harness mounts, and in
   Rust open-request resolution. A mismatched room renders `RepoMismatchCard`
   instead of `HarnessColumn` (retire / repoint / "it's the same repo"), is

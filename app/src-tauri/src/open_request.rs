@@ -686,6 +686,20 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_now_holding_an_empty_repo_is_not_the_rooms() {
+        let orig = tempfile::TempDir::new().unwrap();
+        init_repo_at(orig.path(), "original");
+        let fresh = tempfile::TempDir::new().unwrap();
+        git2::Repository::init(fresh.path()).unwrap();
+        let cwd = canonical_string(fresh.path()).unwrap();
+        let r = with_identity(room("r", &cwd, None), orig.path());
+        assert_eq!(
+            resolve(&[r], fresh.path()),
+            OpenTarget::NewRoom { folder: cwd }
+        );
+    }
+
+    #[test]
     fn resolve_opens_a_files_folder_and_seeds_new_room_with_it() {
         let tmp = tempfile::TempDir::new().unwrap();
         let file = tmp.path().join("notes.txt");

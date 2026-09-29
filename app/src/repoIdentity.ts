@@ -9,6 +9,8 @@ export type IdentityCheck = "same" | "mismatch" | "unknown";
 export interface RepoIdentityDto {
 	rootCommits: string[];
 	originUrl?: string | null;
+	/** Roots are a graft boundary: empty roots then mean "cannot tell". */
+	shallow?: boolean;
 }
 
 export function identityFromDto(dto: RepoIdentityDto): RepoIdentity {
@@ -17,15 +19,18 @@ export function identityFromDto(dto: RepoIdentityDto): RepoIdentity {
 		: { rootCommits: dto.rootCommits };
 }
 
-/** Unknown never blocks: only positive evidence of a different repo is a mismatch. */
+/** Unknown never blocks: only positive evidence of a different repo is a mismatch.
+ *  A repo with no commits cannot be the one whose history was recorded, so it is
+ *  a mismatch; only a shallow repo (roots unreliable) stays unknown. */
 export function compareIdentity(
 	stored: RepoIdentity | undefined,
-	folder: { exists: boolean; identity: RepoIdentity | null },
+	folder: { exists: boolean; identity: RepoIdentity | null; shallow?: boolean },
 ): IdentityCheck {
 	if (!stored || stored.rootCommits.length === 0) return "unknown";
 	if (!folder.exists) return "unknown";
 	if (folder.identity === null) return "mismatch";
-	if (folder.identity.rootCommits.length === 0) return "unknown";
+	if (folder.shallow) return "unknown";
+	if (folder.identity.rootCommits.length === 0) return "mismatch";
 	const have = new Set(stored.rootCommits);
 	return folder.identity.rootCommits.some((c) => have.has(c)) ? "same" : "mismatch";
 }

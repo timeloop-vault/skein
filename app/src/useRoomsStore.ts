@@ -45,20 +45,29 @@ import type { Harness, RepoIdentity, Room } from "./types.ts";
 interface FolderProbe {
 	info: FolderInfoDto;
 	identity: RepoIdentity | null;
+	shallow: boolean;
 }
 async function probeFolder(path: string): Promise<FolderProbe | null> {
 	try {
 		const info = await invoke<FolderInfoDto>("git_inspect_folder", { path });
-		if (!info.exists) return { info, identity: null };
+		if (!info.exists) return { info, identity: null, shallow: false };
 		const dto = await invoke<RepoIdentityDto | null>("git_repo_identity", { path });
-		return { info, identity: dto ? identityFromDto(dto) : null };
+		return {
+			info,
+			identity: dto ? identityFromDto(dto) : null,
+			shallow: dto?.shallow === true,
+		};
 	} catch (err) {
 		console.warn(`[skein] folder probe failed for ${path}:`, err);
 		return null;
 	}
 }
 const checkProbe = (stored: RepoIdentity | undefined, p: FolderProbe): IdentityCheck =>
-	compareIdentity(stored, { exists: p.info.exists, identity: p.identity });
+	compareIdentity(stored, {
+		exists: p.info.exists,
+		identity: p.identity,
+		shallow: p.shallow,
+	});
 
 /** Wire shape of `db_load_rooms` (#167): the rooms that parsed plus
  *  any rows the backend quarantined instead of failing the load.
