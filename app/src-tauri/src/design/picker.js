@@ -47,6 +47,62 @@
 		post({ type: "script-error", message: clip(r?.message ?? r) });
 	});
 
+	// ---- per-file JSX source -------------------------------------------
+	// Babel's built-in transform-react-jsx-source emits a shared
+	// `var _jsxFileName` per script; @babel/standalone runs each
+	// <script type="text/babel" src> as a classic script, so they all
+	// share one global and the last file loaded wins. Override the plugin
+	// under the SAME name (rewrite.rs's data-plugins keeps working, and a
+	// failed registration falls back to the built-in) with one that
+	// inlines the filename as a literal.
+	let sourceRegistered = false;
+	const registerSource = () => {
+		try {
+			if (sourceRegistered) return;
+			const B = window.Babel;
+			if (!B || typeof B.registerPlugin !== "function") return;
+			B.registerPlugin("transform-react-jsx-source", ({ types: t }) => ({
+				visitor: {
+					JSXOpeningElement(path, state) {
+						const node = path.node;
+						if (!node.loc) return;
+						const has = node.attributes.some(
+							(a) => t.isJSXAttribute(a) && a.name && a.name.name === "__source",
+						);
+						if (has) return;
+						const fileName = state.filename || state.file?.opts?.filename || "";
+						node.attributes.push(
+							t.jsxAttribute(
+								t.jsxIdentifier("__source"),
+								t.jsxExpressionContainer(
+									t.objectExpression([
+										t.objectProperty(t.identifier("fileName"), t.stringLiteral(fileName)),
+										t.objectProperty(
+											t.identifier("lineNumber"),
+											t.numericLiteral(node.loc.start.line),
+										),
+										t.objectProperty(
+											t.identifier("columnNumber"),
+											t.numericLiteral(node.loc.start.column + 1),
+										),
+									]),
+								),
+							),
+						);
+					},
+				},
+			}));
+			sourceRegistered = true;
+		} catch (_) {
+			// Falls back to the built-in plugin.
+		}
+	};
+	// Babel may already be loaded; if it loads later in <body>, a listener
+	// on `document` fires before Babel's own `window` DOMContentLoaded
+	// listener (which does the transforming) in the bubble path.
+	registerSource();
+	document.addEventListener("DOMContentLoaded", registerSource);
+
 	// ---- element descriptors -------------------------------------------
 
 	const isOverlay = (el) => !!el?.closest?.(`[${OVERLAY}]`);

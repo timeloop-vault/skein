@@ -279,10 +279,13 @@ export const ThreadView = ({
 	onEditComment,
 	onDeleteComment,
 	design,
+	hideElementNote = false,
 }: {
 	thread: ReviewThread;
 	busy: boolean;
 	design?: DesignLink | undefined;
+	/// The design pane prints its own element header, so it asks for it once.
+	hideElementNote?: boolean;
 	onReply: (body: string) => void;
 	onResolve: (resolved: boolean) => void;
 	onDelete: () => void;
@@ -328,7 +331,7 @@ export const ThreadView = ({
 			{open && (
 				<>
 					<PlacementNote thread={thread} />
-					<ElementNote thread={thread} design={design} />
+					{!hideElementNote && <ElementNote thread={thread} design={design} />}
 					<AddressedNote thread={thread} />
 					{thread.comments.map((c) => (
 						<CommentBody

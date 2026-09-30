@@ -1573,6 +1573,10 @@ html.tab-dragging.tab-drag-refused * {
 .sk-splitter-y:hover {
 	background: var(--accent);
 }
+/* A drag over an iframe would lose its mousemove/mouseup to the frame. */
+.sk-dragging iframe {
+	pointer-events: none;
+}
 
 /* Right pane */
 .sk-right {
@@ -3014,6 +3018,13 @@ html.tab-dragging.tab-drag-refused * {
 .dp-comment-state.lost,
 .dp-comment-state.stale {
 	color: #d9a400;
+}
+.dp-comment-head .dp-comment-el {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .dp-comment-el,
 .dp-comment-src,

@@ -93,10 +93,16 @@ export const CardStack = ({ layout, onLayoutChange, onToggleCollapse, cards }: C
 		const onUp = () => {
 			window.removeEventListener("pointermove", onMove);
 			window.removeEventListener("pointerup", onUp);
+			window.removeEventListener("pointercancel", onUp);
+			window.removeEventListener("blur", onUp);
+			document.body.classList.remove("sk-dragging");
 			onLayoutChange(latest);
 		};
+		document.body.classList.add("sk-dragging");
 		window.addEventListener("pointermove", onMove);
 		window.addEventListener("pointerup", onUp);
+		window.addEventListener("pointercancel", onUp);
+		window.addEventListener("blur", onUp);
 	};
 
 	return (

@@ -6,7 +6,11 @@
 // row, height for column); the second pane absorbs the remainder via
 // flex: 1.
 
-import { type ReactNode, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
+
+// Set on <body> for the length of a drag; styles.css turns iframe pointer
+// events off under it so the drag keeps following the pointer.
+const DRAGGING_CLASS = "sk-dragging";
 
 interface SplitterProps {
 	direction: "row" | "column";
@@ -31,6 +35,9 @@ export const Splitter = ({
 }: SplitterProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const isRow = direction === "row";
+	// Ends a drag in flight if the splitter unmounts mid-drag.
+	const stopUnmount = useRef<(() => void) | null>(null);
+	useEffect(() => () => stopUnmount.current?.(), []);
 
 	const onMouseDown = (e: React.MouseEvent) => {
 		e.preventDefault();
@@ -50,13 +57,20 @@ export const Splitter = ({
 		const onUp = () => {
 			window.removeEventListener("mousemove", onMove);
 			window.removeEventListener("mouseup", onUp);
+			window.removeEventListener("blur", onUp);
+			stopUnmount.current = null;
 			document.body.style.cursor = "";
 			document.body.style.userSelect = "";
+			document.body.classList.remove(DRAGGING_CLASS);
 		};
 		document.body.style.cursor = isRow ? "col-resize" : "row-resize";
 		document.body.style.userSelect = "none";
+		// An iframe under the pointer swallows mousemove/mouseup.
+		document.body.classList.add(DRAGGING_CLASS);
 		window.addEventListener("mousemove", onMove);
 		window.addEventListener("mouseup", onUp);
+		window.addEventListener("blur", onUp);
+		stopUnmount.current = onUp;
 	};
 
 	const sizeKey = isRow ? "width" : "height";

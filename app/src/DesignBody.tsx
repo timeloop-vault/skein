@@ -110,7 +110,11 @@ const ElementThreadItem = ({
 			<button type="button" className="dp-comment-head" onClick={onSelect}>
 				<span className="dp-comment-n">{n}</span>
 				<span className={`dp-comment-state ${state}`}>{state}</span>
-				{a && <span className="dp-comment-el">{elementSummary(a)}</span>}
+				{a && (
+					<span className="dp-comment-el" title={elementSummary(a)}>
+						{elementSummary(a)}
+					</span>
+				)}
 			</button>
 			{state === "lost" && a && (
 				<div className="dp-comment-lost">
@@ -122,6 +126,7 @@ const ElementThreadItem = ({
 			<ThreadView
 				thread={thread}
 				busy={busy}
+				hideElementNote
 				onReply={onReply}
 				onResolve={onResolve}
 				onDelete={onDelete}
