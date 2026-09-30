@@ -19,6 +19,7 @@ import {
 	placementSignature,
 	seenWrites,
 	sourceLabel,
+	unplaced,
 } from "./designComments.ts";
 import { subscribeDesignFocus, takeDesignFocus } from "./designFocus.ts";
 import {
@@ -67,6 +68,10 @@ const invokeWithRetry = async <T,>(
 /** How long after the iframe's `load` we wait for the `ready` beacon
  *  before saying Skein's preview script did not run. */
 const READY_TIMEOUT_MS = 3000;
+
+/** Re-asks for an unanswered thread: 400 ms doubling, 5 tries. */
+const LOCATE_RETRY_MS = 400;
+const LOCATE_RETRIES = 5;
 
 interface DesignBodyProps {
 	harnessId: string;
@@ -313,6 +318,28 @@ export const DesignBody = ({
 		if (readyCount === 0) return;
 		locateNow();
 	}, [readyCount, signature, locateNow]);
+
+	// A located that left a thread unanswered (or a locate that never
+	// reached the page, e.g. posted while a reload was in flight) must not
+	// leave it without a pin: ask again, a few times, with backoff.
+	const retriesRef = useRef(0);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: readyCount and signature reset the budget
+	useEffect(() => {
+		retriesRef.current = 0;
+	}, [readyCount, signature]);
+	useEffect(() => {
+		if (readyCount === 0 || !ready) return;
+		if (unplaced(threads, placements).length === 0) return;
+		if (retriesRef.current >= LOCATE_RETRIES) return;
+		const id = window.setTimeout(
+			() => {
+				retriesRef.current += 1;
+				locateNowRef.current();
+			},
+			LOCATE_RETRY_MS * 2 ** retriesRef.current,
+		);
+		return () => window.clearTimeout(id);
+	}, [threads, placements, readyCount, ready]);
 
 	// Pins follow the side list's numbering and the latest placements.
 	useEffect(() => {
@@ -562,7 +589,7 @@ export const DesignBody = ({
 									key={t.id}
 									n={i + 1}
 									thread={t}
-									state={displayState(t, placements)}
+									state={displayState(t, placements, ready)}
 									selected={selected?.id === t.id}
 									busy={busy}
 									onSelect={() => setSelected((s) => ({ id: t.id, tick: (s?.tick ?? 0) + 1 }))}

@@ -404,7 +404,11 @@
 	};
 	const pinNodes = new Map();
 
+	// The latest pins, kept so they can be redrawn if the page ever drops
+	// the overlay (it lives on <html>, but the page is arbitrary code).
+	let lastPins = null;
 	const setPins = (msg) => {
+		lastPins = msg;
 		const root = ensureOverlay();
 		for (const n of pinNodes.values()) n.remove();
 		pinNodes.clear();
@@ -453,10 +457,36 @@
 		if (domTimer !== null) clearTimeout(domTimer);
 		domTimer = setTimeout(() => {
 			domTimer = null;
+			if (lastPins && !document.documentElement.querySelector(`:scope > [${OVERLAY}="root"]`)) {
+				setPins(lastPins);
+			}
 			post({ type: "dom-changed" });
 		}, 250);
 	};
+	// Layout can settle with no DOM mutation: images and fonts arriving,
+	// CSS transitions/animations ending, the page resizing itself. Pins use
+	// measured rects, so those are dom-changed too.
+	const layoutSignal = (e) => {
+		if (e?.target && e.target.nodeType === 1 && isOverlay(e.target)) return;
+		domChanged();
+	};
 	const startObserving = () => {
+		for (const t of ["load", "transitionend", "animationend"]) {
+			document.addEventListener(t, layoutSignal, true);
+		}
+		window.addEventListener("load", layoutSignal);
+		try {
+			document.fonts?.ready?.then(domChanged);
+		} catch (_) {
+			// No font loading API.
+		}
+		try {
+			const ro = new ResizeObserver(domChanged);
+			ro.observe(document.documentElement);
+			if (document.body) ro.observe(document.body);
+		} catch (_) {
+			// No ResizeObserver.
+		}
 		new MutationObserver((list) => {
 			if (list.some((m) => !ownMutation(m))) domChanged();
 		}).observe(document, {

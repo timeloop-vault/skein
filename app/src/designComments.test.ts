@@ -4,9 +4,11 @@ import {
 	type WrittenSeen,
 	buildLocateAnchors,
 	buildPins,
+	displayState,
 	placeThreads,
 	placementSignature,
 	seenWrites,
+	unplaced,
 } from "./designComments.ts";
 import type { ElementDescriptor, LocateResult } from "./elementAnchor.ts";
 
@@ -129,5 +131,26 @@ describe("seen write-back", () => {
 			],
 		]);
 		expect(seenWrites([t], p, [], written, 1)).toEqual([]);
+	});
+});
+
+describe("badge and unanswered threads", () => {
+	const a = thread("a");
+	const b = thread("b");
+	if (b.element) b.element.state = "anchored";
+	const live = placeThreads([a], [{ id: "a", found: { ...empty, bySelector: desc() } }]);
+
+	it("live placement wins over the stored state", () => {
+		expect(displayState(a, new Map([["a", { state: "lost", at: null }]]), true)).toBe("lost");
+	});
+
+	it("an unanswered thread does not repeat the stored claim once the page is up", () => {
+		expect(displayState(b, live, true)).toBe("locating");
+		expect(displayState(b, live, false)).toBe("anchored");
+		expect(displayState({ ...b, resolvedMs: 1 }, live, true)).toBe("anchored");
+	});
+
+	it("lists open threads with no placement", () => {
+		expect(unplaced([a, b], live).map((t) => t.id)).toEqual(["b"]);
 	});
 });

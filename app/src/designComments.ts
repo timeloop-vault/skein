@@ -155,9 +155,26 @@ export const elementSummary = (a: ElementAnchor): string => {
 export const sourceLabel = (a: Pick<ElementAnchor, "source">): string | undefined =>
 	a.source ? `${a.source.file}:${a.source.line}` : undefined;
 
-/** The state to show for a thread: this load's computed placement when
- *  there is one, else what the backend trusts. */
+/** Open element threads the page has not answered for yet (no live
+ *  placement). Non-empty after a `located` means a thread or a reply was
+ *  lost on the way, and the pane should ask again. */
+export const unplaced = (
+	threads: readonly ElementThread[],
+	placements: ReadonlyMap<string, Placement>,
+): ElementThread[] => placeable(threads).filter((t) => !placements.has(t.id));
+
+/** The state to show for a thread. A live placement always wins; with
+ *  none, the stored state is shown only while no page is being asked
+ *  (`live` false) — once the page is up, an unanswered thread reads
+ *  `locating` rather than repeating a stored claim the pins contradict.
+ *  Resolved threads have no pin, so they keep their stored state. */
 export const displayState = (
 	t: ElementThread,
 	placements: ReadonlyMap<string, Placement>,
-): string => placements.get(t.id)?.state ?? t.element?.state ?? "unknown";
+	live = false,
+): string => {
+	const p = placements.get(t.id);
+	if (p) return p.state;
+	if (live && t.resolvedMs == null && t.element) return "locating";
+	return t.element?.state ?? "unknown";
+};
