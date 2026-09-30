@@ -1,3 +1,4 @@
+import { backgroundTasks } from "../backgroundTasks.ts";
 import { logBoth } from "../frontendLog.ts";
 import { harnessActivity, onTick } from "../harnessActivity.ts";
 import { liveAttach } from "../harnessEvents.ts";
@@ -108,6 +109,7 @@ const tick = (now: number): void => {
 			authorityLostAt: a.authorityLostAt,
 			lastTurnSignal: a.lastTurnSignal,
 			subagentsWorking: subagents.workingCount(id),
+			backgroundWorking: backgroundTasks.workingCount(id),
 			delegationDeferredAt: a.delegationDeferredAt,
 			delegationEmptiedAt: a.delegationEmptiedAt,
 			permissionAt: a.permissionAt,

@@ -14,6 +14,7 @@ import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { useEffect } from "react";
 import { listHarnessAgents, unknownAgentMessage, validateAgent } from "./agents.ts";
+import { backgroundTasks } from "./backgroundTasks.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import {
@@ -519,6 +520,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// side rediscovers live subagents fresh on the next
 			// attach, so nothing is lost by dropping the cache here.
 			subagents.forget(harnessId);
+			backgroundTasks.forget(harnessId);
 		};
 	}, [mountKey]);
 

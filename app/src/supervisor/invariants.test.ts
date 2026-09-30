@@ -17,6 +17,7 @@ function snap(over: Partial<SupervisorSnapshot> = {}): SupervisorSnapshot {
 		authorityLostAt: null,
 		lastTurnSignal: null,
 		subagentsWorking: 0,
+		backgroundWorking: 0,
 		delegationDeferredAt: null,
 		delegationEmptiedAt: null,
 		permissionAt: null,

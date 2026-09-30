@@ -34,6 +34,8 @@
 // from here, so `import { ... } from "./harnessActivity.ts"` is unchanged
 // for every caller.
 
+import { backgroundTasks } from "./backgroundTasks.ts";
+import { outstandingWork } from "./deferral.ts";
 import { logBoth } from "./frontendLog.ts";
 import { INDUCED_MUTE_MS, TAIL_MAX_CHARS } from "./harnessActivityConstants.ts";
 import {
@@ -83,6 +85,7 @@ export {
 	effectiveStatus,
 	higherPriorityStatus,
 	statusLabel,
+	stillRunningSummary,
 } from "./harnessActivityLabels.ts";
 export type { RoomHarnessRef } from "./harnessActivityLabels.ts";
 export {
@@ -294,6 +297,7 @@ export const harnessActivity = {
 		const cur = store.get(id);
 		if (!cur) return;
 		subagents.forget(id);
+		backgroundTasks.forget(id);
 		disarmDelegation(id);
 		if (cur.phase !== "running") return;
 		setPhase(
@@ -389,7 +393,7 @@ export const harnessActivity = {
 	/// being done if it just delegated work still running in the
 	/// background — measured true in 94% of 127 real sessions.
 	///
-	/// No working subagents (`subagents.workingCount` is 0): identical
+	/// No outstanding work (no working subagents or background tasks): identical
 	/// to today, straight to `waiting`. One or more: arm the deferral
 	/// (idempotent — a second end-of-turn while already deferred
 	/// doesn't reset when it was armed) and change NO phase at all.
@@ -403,7 +407,7 @@ export const harnessActivity = {
 		// deferral and changes no phase.
 		if (cur) cur.lastTurnSignal = { kind: "end", at: Date.now() };
 		if (!cur || cur.phase === "exited") return;
-		if (subagents.workingCount(id) === 0) {
+		if (outstandingWork(id) === 0) {
 			harnessActivity.setWaitingFromAdapter(id, source);
 			return;
 		}

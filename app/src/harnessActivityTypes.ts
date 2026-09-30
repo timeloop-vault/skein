@@ -114,7 +114,8 @@ export interface HarnessActivity {
 	injected: boolean;
 	/// #277 (epic #298): epoch ms the main transcript's end of turn
 	/// was deferred because `subagents.workingCount` was non-zero at
-	/// the time, or `null` when no deferral is armed. Arming changes
+	/// the time (subagents plus background tasks, #446), or `null` when
+	/// no deferral is armed. Arming changes
 	/// no phase — the harness stays whatever it already was (`running`
 	/// or `permission`). Disarmed by any main-transcript work signal
 	/// (`setRunningFromAdapter`/`setWaitingFromAdapter`/`exited`, plus
@@ -290,14 +291,19 @@ export const TRANSITION_SOURCE = {
 	L2c1ClaudeSubagentToolResult: "l2c1-claude-subagent-tool-result",
 	// #277: a deferred end-of-turn resolving on its own, via the tick's
 	// Rule 3 (working set went empty and stayed empty) or Rule 4
-	// (ceiling — a subagent signal was presumed lost). Deliberately
+	// (ceiling — a signal was presumed lost, or a task held too long). Deliberately
 	// NOT prefixed `l2c1-claude-`: the deferral mechanism is
-	// harness-agnostic, keyed only on `subagents.workingCount`, so if
-	// opencode ever grows a child-session liveness signal feeding the
-	// same registry, it gets this behaviour — and these source names —
-	// for free.
+	// harness-agnostic, keyed on outstanding work (`subagents` plus
+	// `backgroundTasks` working counts, #446), so if opencode ever grows
+	// a liveness signal feeding the same registries, it gets this
+	// behaviour — and these source names — for free.
 	DelegationSettled: "delegation-settled",
 	DelegationCeiling: "delegation-ceiling",
+	// #441: the stale-work watchdog. A `running` authoritative harness
+	// with outstanding work but no deferral armed and no signal for the
+	// ceiling is presumed to have lost its end; nothing is claimed
+	// finished.
+	WorkWatchdog: "work-watchdog",
 	// #404: `recoverUnheardSilence` undoing a #259 adapter-silent degrade
 	// that turns out to have been a lost first paste, not a broken tail —
 	// see that method's own doc for the conditions.
