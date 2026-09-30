@@ -171,7 +171,7 @@ const CommentBody = ({
 /// certainty, not a guess, and badging it would train the user to
 /// ignore the badge that matters.
 const PlacementNote = ({ thread }: { thread: ReviewThread }) => {
-	if (!thread.outdated) return null;
+	if (!thread.outdated || thread.scope === "element") return null;
 	const pct = thread.confidence == null ? null : Math.round(thread.confidence * 100);
 	return (
 		<div className="rv-outdated">
@@ -189,6 +189,65 @@ const PlacementNote = ({ thread }: { thread: ReviewThread }) => {
 		</div>
 	);
 };
+
+/// Shorten untrusted page text for display; the full value stays in the
+/// tooltip. Plain strings only — they are rendered as React text.
+const clip = (s: string, max: number): string => (s.length > max ? `${s.slice(0, max)}…` : s);
+
+const ELEMENT_MISS: Record<string, string> = {
+	stale: "element changed — showing original evidence",
+	lost: "element not found — showing original evidence",
+	unknown: "element not checked yet — showing original evidence",
+};
+
+/// The anchor summary an element thread (#434) wears: what was commented
+/// on, where it came from, and whether the design pane can still find it.
+/// Every value is page content and therefore untrusted.
+const ElementNote = ({
+	thread,
+	design,
+}: {
+	thread: ReviewThread;
+	design: DesignLink | undefined;
+}) => {
+	const el = thread.element;
+	if (!el) return null;
+	const { anchor, state } = el;
+	const found = state === "anchored" || state === "reanchored";
+	const src = anchor.source ? `${anchor.source.file}:${anchor.source.line}` : undefined;
+	const label = anchor.odId ?? anchor.selector;
+	return (
+		<div className={`rv-element${found ? "" : " rv-outdated"}`}>
+			<div className="rv-element-head">
+				<span className="rv-outdated-tag" title={`element ${state}`}>
+					{state}
+				</span>
+				<code title={anchor.selector}>{`<${clip(anchor.tag, 24)}>`}</code>
+				<span title={label}>{clip(label, 48)}</span>
+				{src && <span title={src}>{clip(src, 60)}</span>}
+			</div>
+			{anchor.text !== "" && <div title={anchor.text}>{clip(anchor.text, 120)}</div>}
+			{!found && <span>{ELEMENT_MISS[state] ?? ELEMENT_MISS.unknown}</span>}
+			{design && (
+				<button
+					type="button"
+					className="rv-linkbtn"
+					disabled={!design.available}
+					title={design.available ? "focus this element in the design pane" : NO_DESIGN_TITLE}
+					onClick={design.onShow}
+				>
+					show in design pane
+				</button>
+			)}
+		</div>
+	);
+};
+
+const NO_DESIGN_TITLE = "Add a design harness to this room to see it";
+
+/// How an element thread reaches the room's design harness. Absent when
+/// the surface rendering the thread has no design pane to offer.
+export type DesignLink = { available: boolean; onShow: () => void };
 
 /// The agent's "I handled this" claim (#213).
 ///
@@ -219,9 +278,11 @@ export const ThreadView = ({
 	onDelete,
 	onEditComment,
 	onDeleteComment,
+	design,
 }: {
 	thread: ReviewThread;
 	busy: boolean;
+	design?: DesignLink | undefined;
 	onReply: (body: string) => void;
 	onResolve: (resolved: boolean) => void;
 	onDelete: () => void;
@@ -267,6 +328,7 @@ export const ThreadView = ({
 			{open && (
 				<>
 					<PlacementNote thread={thread} />
+					<ElementNote thread={thread} design={design} />
 					<AddressedNote thread={thread} />
 					{thread.comments.map((c) => (
 						<CommentBody

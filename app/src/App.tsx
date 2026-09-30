@@ -22,6 +22,7 @@ import { GroupRow, type RenameTarget, RoomStrip } from "./RoomStrip.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { StatusBar } from "./StatusBar.tsx";
 import { StatusDot } from "./components.tsx";
+import { publishDesignFocus } from "./designFocus.ts";
 import { usePermissionHarnessIds } from "./harnessActivity.ts";
 import { reattachClaudeTelemetry } from "./harnessEvents.ts";
 import { buildPaletteItems } from "./paletteItems.ts";
@@ -824,6 +825,11 @@ export default function App() {
 								onBranchChange={handleBranchChange}
 								tab={rightPaneTabs[r.id] ?? "context"}
 								onTabChange={(tab) => setRightPaneTab(r.id, tab)}
+								onShowInDesign={(pick, entry, threadId) => {
+									if (pick.setEntry) setHarnessDesignEntry(r.id, pick.harnessId, entry);
+									switchHarnessInRoom(r.id, pick.harnessId);
+									publishDesignFocus({ roomId: r.id, harnessId: pick.harnessId, entry, threadId });
+								}}
 							/>
 						) : null}
 					</div>

@@ -25,20 +25,46 @@ use parking_lot::Mutex;
 
 use crate::db::Database;
 
-pub use serve::serve;
+pub use serve::{MAX_SERVED, resolve_under, serve};
 
 pub struct PreviewState {
     db: Arc<Database>,
     /// token → room id.
     tokens: Mutex<HashMap<String, String>>,
+    /// room id → worktree-relative path → digest of the raw bytes last
+    /// served (#434). What an element placement is stamped against.
+    served: Mutex<HashMap<String, HashMap<String, String>>>,
 }
+
+/// Most distinct files remembered per room. Past it a new path is not
+/// recorded and its stamp falls back to disk, which is the weaker
+/// direction but bounded.
+const MAX_SERVED_PER_ROOM: usize = 500;
 
 impl PreviewState {
     pub fn new(db: Arc<Database>) -> Self {
         Self {
             db,
             tokens: Mutex::new(HashMap::new()),
+            served: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Remember the digest of the bytes just served for `rel`.
+    fn record_served(&self, token: &str, rel: &str, digest: String) {
+        let Some(room) = self.room_for(token) else {
+            return;
+        };
+        let mut served = self.served.lock();
+        let files = served.entry(room).or_default();
+        if files.len() < MAX_SERVED_PER_ROOM || files.contains_key(rel) {
+            files.insert(rel.to_owned(), digest);
+        }
+    }
+
+    /// A copy of what was last served for the room.
+    pub fn served_digests(&self, room_id: &str) -> HashMap<String, String> {
+        self.served.lock().get(room_id).cloned().unwrap_or_default()
     }
 
     /// The room's preview token, minting one the first time. Idempotent

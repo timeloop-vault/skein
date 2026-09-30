@@ -19,12 +19,13 @@ use super::anchoring::{
 use super::dto::{
     AddressedDto, CommentDto, CommitDto, FileDetailDto, ReviewFileDto, ReviewScopeDto, ThreadDto,
 };
+use super::element::{apply_element, element_rows_by_thread};
 use super::git::{
     Range, additions, deletions, file_hash, norm, resolve_range, scope_diffs, status_str,
     to_review_hunk,
 };
 use super::{Scope, thread_scope};
-use crate::db::{Database, ReviewThreadRow};
+use crate::db::{Database, ReviewElementAnchorRow, ReviewThreadRow};
 use crate::review::{PendingFileDto, pending_impl, relative_key};
 
 #[allow(clippy::too_many_lines)]
@@ -84,6 +85,15 @@ pub(crate) fn scope_impl(
     let Ok(repo) = Repo::open(Path::new(cwd)) else {
         // A non-git room still has a review: #211's pending set is not
         // git-dependent, and saying "not a repo" beats an empty pane.
+        let mut files = pending_files(&pending, &viewed, &per_file);
+        push_element_only_files(
+            &mut files,
+            &threads,
+            &per_file,
+            &viewed,
+            &pending_paths,
+            |_| String::new(),
+        );
         return Ok(ReviewScopeDto {
             is_repo: false,
             base_ref: None,
@@ -93,7 +103,7 @@ pub(crate) fn scope_impl(
             head_sha: None,
             commits: Vec::new(),
             truncated: false,
-            files: pending_files(&pending, &viewed, &per_file),
+            files,
             additions: pending.iter().map(|p| p.additions).sum(),
             deletions: pending.iter().map(|p| p.deletions).sum(),
             pending_count: pending.len(),
@@ -132,7 +142,7 @@ pub(crate) fn scope_impl(
         .collect();
 
     // Pending is its own file list and needs no git diff.
-    let files = if scope == Scope::Pending {
+    let mut files = if scope == Scope::Pending {
         pending_files(&pending, &viewed, &per_file)
     } else {
         let diffs = scope_diffs(&repo, &range, scope, commit_sha, &[])?;
@@ -165,6 +175,20 @@ pub(crate) fn scope_impl(
             })
             .collect()
     };
+    push_element_only_files(
+        &mut files,
+        &threads,
+        &per_file,
+        &viewed,
+        &pending_paths,
+        |p| {
+            if scope == Scope::Pending {
+                String::new()
+            } else {
+                file_hash(cwd, p, scope, commit_sha, &repo)
+            }
+        },
+    );
 
     let error = if range.base_ref.is_some() && !range.base_resolved {
         Some(format!(
@@ -193,6 +217,50 @@ pub(crate) fn scope_impl(
         threads: review_threads,
         error,
     })
+}
+
+/// List every entry that carries unresolved element threads but has no
+/// row yet (#434). Sign-off counts those threads, so the reviewer must
+/// be able to find them even when the prototype itself never changed.
+/// Such a row says `change: "unchanged"` with zero counts and no hunks;
+/// `file_impl` already answers for it with its threads and an empty
+/// diff. Resolved-only entries are not added, and file-scope threads are
+/// deliberately untouched.
+fn push_element_only_files(
+    files: &mut Vec<ReviewFileDto>,
+    threads: &[ReviewThreadRow],
+    per_file: &HashMap<String, (usize, usize)>,
+    viewed: &HashMap<String, String>,
+    pending_paths: &[String],
+    hash_of: impl Fn(&str) -> String,
+) {
+    let listed: HashSet<String> = files.iter().map(|f| f.path.clone()).collect();
+    let wanted: std::collections::BTreeSet<String> = threads
+        .iter()
+        .filter(|t| t.scope == thread_scope::ELEMENT && t.resolved_ms.is_none())
+        .filter_map(|t| t.file_path.as_deref().map(norm))
+        .filter(|p| !listed.contains(p))
+        .collect();
+    for path in wanted {
+        let (thread_count, unresolved_count) = per_file.get(&path).copied().unwrap_or((0, 0));
+        let hash = hash_of(&path);
+        let marked = viewed.get(&path);
+        files.push(ReviewFileDto {
+            name: path.rsplit('/').next().unwrap_or(&path).to_owned(),
+            change: "unchanged",
+            additions: 0,
+            deletions: 0,
+            binary: false,
+            viewed: marked.is_some_and(|h| *h == hash),
+            changed_since_viewed: marked.is_some_and(|h| *h != hash),
+            content_hash: hash,
+            thread_count,
+            unresolved_count,
+            has_pending: pending_paths.contains(&path),
+            harness_id: None,
+            path,
+        });
+    }
 }
 
 /// The Pending scope's file list, straight from #211's model.
@@ -243,6 +311,8 @@ pub(crate) struct ScopeFiles {
     /// filter `file_impl` used to run per call, done once here.
     threads_by_file: HashMap<String, Vec<ReviewThreadRow>>,
     addressed: HashMap<String, AddressedDto>,
+    /// Anchor rows of the room's element threads (#434).
+    elements: HashMap<String, ReviewElementAnchorRow>,
     repo: Option<Repo>,
     /// `None` only for `Scope::Pending`, which has no git range at all.
     range: Option<Range>,
@@ -283,6 +353,7 @@ impl ScopeFiles {
     ) -> Result<Self, String> {
         let comments = comments_by_thread(db, room_id)?;
         let addressed = addressed_by_thread(db, room_id)?;
+        let elements = element_rows_by_thread(db, room_id)?;
         let mut threads_by_file: HashMap<String, Vec<ReviewThreadRow>> = HashMap::new();
         for t in db.review_threads_for_room(room_id)? {
             if let Some(fp) = t.file_path.as_deref() {
@@ -308,6 +379,7 @@ impl ScopeFiles {
                 comments,
                 threads_by_file,
                 addressed,
+                elements,
                 repo,
                 range: None,
                 diffs: HashMap::new(),
@@ -331,6 +403,7 @@ impl ScopeFiles {
             comments,
             threads_by_file,
             addressed,
+            elements,
             repo,
             range: Some(range),
             diffs,
@@ -350,6 +423,7 @@ impl ScopeFiles {
             let ctx = PlaceCtx::new(self.repo.as_ref(), &self.cwd, None, self.scope, None);
             let mut threads = place_threads(db, &ctx, key, file_threads, &self.comments);
             apply_addressed(&mut threads, &self.addressed);
+            apply_element(&mut threads, &self.elements, Some(&self.cwd));
             return Ok(match found {
                 Some(p) => FileDetailDto {
                     name: p.name,
@@ -401,6 +475,7 @@ impl ScopeFiles {
         );
         let mut threads = place_threads(db, &ctx, key, file_threads, &self.comments);
         apply_addressed(&mut threads, &self.addressed);
+        apply_element(&mut threads, &self.elements, Some(&self.cwd));
 
         let hash = file_hash(
             &self.cwd,
@@ -597,6 +672,72 @@ mod tests {
                 "{path} diverged between file_impl and the unfiltered snapshot"
             );
         }
+    }
+
+    fn thread_row(id: &str, scope: &str, path: &str, resolved: Option<i64>) -> ReviewThreadRow {
+        ReviewThreadRow {
+            id: id.into(),
+            room_id: "r1".into(),
+            scope: scope.into(),
+            file_path: Some(path.into()),
+            commit_sha: None,
+            side: None,
+            line_start: None,
+            line_end: None,
+            anchor_hash: None,
+            anchor_lines: None,
+            resolved_ms: resolved,
+            created_ms: 1,
+            updated_ms: 1,
+        }
+    }
+
+    #[test]
+    fn an_unchanged_entry_with_an_open_element_thread_is_listed_in_every_scope() {
+        // #434: sign-off counts the thread, so the reviewer must be able
+        // to find it even though nothing in the entry changed.
+        let (db, tmp) = tests_support::repo_with_base_and_uncommitted_edits();
+        let cwd = tmp.path().to_str().unwrap();
+        db.set_review_base_ref("r1", "base", 1).unwrap();
+        let anchor = |id: &str, path: &str| crate::db::ReviewElementAnchorRow {
+            thread_id: id.into(),
+            room_id: "r1".into(),
+            file_path: path.into(),
+            anchor_json: "{}".into(),
+            last_seen_json: None,
+            updated_ms: 1,
+        };
+        // c.txt is unchanged from base: open element thread. a.txt has a
+        // diff already: must not be listed twice.
+        db.insert_review_element_thread(
+            &thread_row("e1", "element", "c.txt", None),
+            &anchor("e1", "c.txt"),
+        )
+        .unwrap();
+        db.insert_review_element_thread(
+            &thread_row("e2", "element", "a.txt", None),
+            &anchor("e2", "a.txt"),
+        )
+        .unwrap();
+        // A file-scope thread on an unchanged file is deliberately not listed.
+        db.insert_review_thread(&thread_row("f1", thread_scope::FILE, "d.txt", None))
+            .unwrap();
+
+        for scope in [Scope::Branch, Scope::Pending] {
+            let dto = scope_impl(&db, "r1", cwd, scope, None).unwrap();
+            let c: Vec<_> = dto.files.iter().filter(|f| f.path == "c.txt").collect();
+            assert_eq!(c.len(), 1, "{scope:?}");
+            assert_eq!(c[0].change, "unchanged");
+            assert_eq!((c[0].additions, c[0].deletions, c[0].binary), (0, 0, false));
+            assert_eq!((c[0].thread_count, c[0].unresolved_count), (1, 1));
+            assert_eq!(dto.files.iter().filter(|f| f.path == "a.txt").count(), 1);
+            assert!(dto.files.iter().all(|f| f.path != "d.txt"));
+        }
+
+        // Once resolved it is no longer worth a row.
+        db.set_review_thread_resolved("e1", Some(2), 2).unwrap();
+        let dto = scope_impl(&db, "r1", cwd, Scope::Branch, None).unwrap();
+        assert!(dto.files.iter().all(|f| f.path != "c.txt"));
     }
 
     /// Fixtures. Kept beside the tests rather than in a shared helper —

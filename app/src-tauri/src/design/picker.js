@@ -1,8 +1,11 @@
 // Skein design preview: the script injected into every served HTML page.
-// It only reports upward; #434 extends this with selection/anchoring.
+// Beacons go up (source "skein-design"); the host talks down with
+// source "skein-host" (#434): pick mode, locate, pins, highlight.
 (() => {
 	const SOURCE = "skein-design";
+	const HOST = "skein-host";
 	const MAX = 500;
+	const OVERLAY = "data-skein-overlay";
 	const clip = (s) => String(s == null ? "" : s).slice(0, MAX);
 	const post = (msg) => {
 		try {
@@ -42,5 +45,367 @@
 	window.addEventListener("unhandledrejection", (e) => {
 		const r = e.reason;
 		post({ type: "script-error", message: clip(r?.message ?? r) });
+	});
+
+	// ---- element descriptors -------------------------------------------
+
+	const isOverlay = (el) => !!el?.closest?.(`[${OVERLAY}]`);
+	const ws = (s) =>
+		String(s || "")
+			.replace(/\s+/g, " ")
+			.trim();
+	const clipTo = (s, n) => String(s).slice(0, n);
+
+	const odIdOf = (el) =>
+		el.getAttribute("data-od-id") ||
+		el.getAttribute("data-screen-label") ||
+		el.getAttribute("id") ||
+		undefined;
+
+	const textOf = (el) => {
+		// Clone-free: overlay nodes live on documentElement, never inside
+		// page elements, but guard anyway by skipping when inside one.
+		if (isOverlay(el)) return "";
+		const raw = typeof el.innerText === "string" ? el.innerText : el.textContent;
+		return clipTo(ws(raw), 500);
+	};
+
+	const esc = (s) =>
+		window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/[^\w-]/g, "\\$&");
+
+	const selectorOf = (el) => {
+		const parts = [];
+		let cur = el;
+		while (cur && cur.nodeType === 1) {
+			const tag = cur.tagName.toLowerCase();
+			const id = cur.getAttribute("id");
+			if (id && document.getElementById(id) === cur) {
+				parts.unshift(`#${esc(id)}`);
+				break;
+			}
+			if (cur === document.documentElement || tag === "body") {
+				parts.unshift(tag);
+				if (tag === "body") parts.unshift("html");
+				break;
+			}
+			let n = 1;
+			for (let s = cur.previousElementSibling; s; s = s.previousElementSibling) {
+				if (s.tagName === cur.tagName) n++;
+			}
+			parts.unshift(`${tag}:nth-of-type(${n})`);
+			cur = cur.parentElement;
+		}
+		return clipTo(parts.join(" > "), 1000);
+	};
+
+	const attrsOf = (el) => {
+		const out = {};
+		let count = 0;
+		const keep = (name) =>
+			[
+				"class",
+				"id",
+				"role",
+				"name",
+				"type",
+				"href",
+				"src",
+				"alt",
+				"title",
+				"data-od-id",
+				"data-screen-label",
+			].includes(name) || name.startsWith("aria-");
+		for (const a of Array.from(el.attributes)) {
+			if (count >= 16) break;
+			if (!keep(a.name)) continue;
+			out[clipTo(a.name, 64)] = clipTo(a.value, 300);
+			count++;
+		}
+		return out;
+	};
+
+	const rectOf = (el) => {
+		const r = el.getBoundingClientRect();
+		return {
+			x: Math.round(r.left + window.scrollX),
+			y: Math.round(r.top + window.scrollY),
+			w: Math.round(r.width),
+			h: Math.round(r.height),
+		};
+	};
+
+	// The element's OWN fiber only: walking up would name the parent
+	// component's line, not this element's.
+	const rawSourceOf = (el) => {
+		try {
+			const key = Object.keys(el).find((k) => k.startsWith("__reactFiber$"));
+			const src = key && el[key] && el[key]._debugSource;
+			if (!src || typeof src.fileName !== "string") return undefined;
+			const out = { fileName: clipTo(src.fileName, 1000), lineNumber: src.lineNumber };
+			if (src.columnNumber != null) out.columnNumber = src.columnNumber;
+			return out;
+		} catch (_) {
+			return undefined;
+		}
+	};
+
+	let describe = (el) => {
+		const d = {
+			selector: selectorOf(el),
+			tag: clipTo(el.tagName.toLowerCase(), 64),
+			text: textOf(el),
+			attrs: attrsOf(el),
+			rect: rectOf(el),
+		};
+		const od = odIdOf(el);
+		if (od) d.odId = clipTo(od, 200);
+		const rs = rawSourceOf(el);
+		if (rs) d.rawSource = rs;
+		return d;
+	};
+
+	// ---- pick mode -------------------------------------------------------
+
+	let picking = false;
+	let hover = null;
+	let box = null;
+
+	const ensureOverlay = () => {
+		let root = document.documentElement.querySelector(`:scope > [${OVERLAY}="root"]`);
+		if (!root) {
+			root = document.createElement("div");
+			root.setAttribute(OVERLAY, "root");
+			root.style.cssText =
+				"position:absolute;left:0;top:0;width:0;height:0;margin:0;padding:0;border:0;z-index:2147483647;pointer-events:none;";
+			document.documentElement.appendChild(root);
+		}
+		return root;
+	};
+
+	const moveBox = (el) => {
+		if (!box) {
+			box = document.createElement("div");
+			box.setAttribute(OVERLAY, "hover");
+			box.style.cssText =
+				"position:absolute;box-sizing:border-box;border:2px solid #4f8cff;background:rgba(79,140,255,.12);pointer-events:none;";
+			ensureOverlay().appendChild(box);
+		}
+		const r = rectOf(el);
+		box.style.left = `${r.x}px`;
+		box.style.top = `${r.y}px`;
+		box.style.width = `${r.w}px`;
+		box.style.height = `${r.h}px`;
+	};
+
+	const onMove = (e) => {
+		const el = e.target;
+		if (!el || el.nodeType !== 1 || isOverlay(el)) return;
+		hover = el;
+		moveBox(el);
+	};
+	const onClick = (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+		const el = e.target;
+		if (!el || el.nodeType !== 1 || isOverlay(el)) return;
+		stopPick();
+		post({ type: "picked", element: describe(el) });
+	};
+	const onKey = (e) => {
+		if (e.key !== "Escape") return;
+		e.preventDefault();
+		e.stopPropagation();
+		stopPick();
+		post({ type: "pick-cancelled" });
+	};
+	// Swallow the rest of the gesture so the page does not react to it.
+	const swallow = (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+	};
+
+	const startPick = () => {
+		if (picking) return;
+		picking = true;
+		document.addEventListener("mousemove", onMove, true);
+		document.addEventListener("click", onClick, true);
+		document.addEventListener("keydown", onKey, true);
+		document.addEventListener("mousedown", swallow, true);
+		document.addEventListener("mouseup", swallow, true);
+		document.addEventListener("auxclick", swallow, true);
+	};
+	function stopPick() {
+		if (!picking) return;
+		picking = false;
+		document.removeEventListener("mousemove", onMove, true);
+		document.removeEventListener("click", onClick, true);
+		document.removeEventListener("keydown", onKey, true);
+		document.removeEventListener("mousedown", swallow, true);
+		document.removeEventListener("mouseup", swallow, true);
+		document.removeEventListener("auxclick", swallow, true);
+		if (box) box.remove();
+		box = null;
+		hover = null;
+	}
+
+	// ---- locate ----------------------------------------------------------
+
+	const safeQuery = (sel) => {
+		try {
+			const el = document.querySelector(sel);
+			return el && !isOverlay(el) ? el : null;
+		} catch (_) {
+			return null;
+		}
+	};
+
+	const locateOne = (a, all) => {
+		const res = { bySelector: null, byOdId: [], byText: [], sameTag: [] };
+		if (typeof a.selector === "string") {
+			const el = safeQuery(a.selector);
+			if (el) res.bySelector = describe(el);
+		}
+		const tag = typeof a.tag === "string" ? a.tag.toLowerCase() : "";
+		if (typeof a.odId === "string" && a.odId) {
+			for (const el of all) {
+				if (res.byOdId.length >= 10) break;
+				if (odIdOf(el) === a.odId) res.byOdId.push(describe(el));
+			}
+		}
+		if (tag) {
+			let same = [];
+			try {
+				same = Array.from(document.getElementsByTagName(tag));
+			} catch (_) {
+				same = [];
+			}
+			same = same.filter((el) => !isOverlay(el));
+			const want = typeof a.text === "string" ? clipTo(ws(a.text), 500) : "";
+			if (want) {
+				for (const el of same) {
+					if (res.byText.length >= 10) break;
+					if (textOf(el) === want) res.byText.push(describe(el));
+				}
+			}
+			for (const el of same.slice(0, 200)) res.sameTag.push(describe(el));
+		}
+		return res;
+	};
+
+	const locate = (msg) => {
+		// describe() reads layout; one pass sees each element many times.
+		const cache = new Map();
+		const base = describe;
+		describe = (el) => {
+			let d = cache.get(el);
+			if (!d) {
+				d = base(el);
+				cache.set(el, d);
+			}
+			return d;
+		};
+		try {
+			locateAll(msg);
+		} finally {
+			describe = base;
+		}
+	};
+
+	const locateAll = (msg) => {
+		const anchors = Array.isArray(msg.anchors) ? msg.anchors.slice(0, 100) : [];
+		const all = Array.from(document.querySelectorAll("*")).filter((el) => !isOverlay(el));
+		const results = [];
+		for (const a of anchors) {
+			if (!a || typeof a !== "object") continue;
+			try {
+				results.push({ id: a.id, found: locateOne(a, all) });
+			} catch (_) {
+				results.push({
+					id: a.id,
+					found: { bySelector: null, byOdId: [], byText: [], sameTag: [] },
+				});
+			}
+		}
+		const files = [location.href];
+		try {
+			for (const e of performance.getEntriesByType("resource")) {
+				if (files.length >= 200) break;
+				files.push(e.name);
+			}
+		} catch (_) {
+			// Resource timing unavailable.
+		}
+		post({ type: "located", requestId: msg.requestId, results, files });
+	};
+
+	// ---- pins ------------------------------------------------------------
+
+	const STATE_STYLE = {
+		anchored: "background:#2f9e5b;border:2px solid #fff;",
+		reanchored: "background:#d99a1e;border:2px solid #fff;",
+		stale: "background:#7a7f87;border:2px solid #fff;opacity:.8;",
+		lost: "background:transparent;color:#c0392b;border:2px dashed #c0392b;",
+	};
+	const pinNodes = new Map();
+
+	const setPins = (msg) => {
+		const root = ensureOverlay();
+		for (const n of pinNodes.values()) n.remove();
+		pinNodes.clear();
+		const pins = Array.isArray(msg.pins) ? msg.pins : [];
+		for (const p of pins) {
+			if (!p || !p.rect || !Number.isFinite(p.n)) continue;
+			const { x, y } = p.rect;
+			if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+			const node = document.createElement("div");
+			node.setAttribute(OVERLAY, "pin");
+			node.textContent = String(p.n);
+			node.style.cssText = `position:absolute;left:${x}px;top:${y}px;min-width:18px;height:18px;padding:0 4px;box-sizing:border-box;border-radius:9px;color:#fff;font:600 11px/14px system-ui,sans-serif;text-align:center;pointer-events:none;transform:translate(-50%,-50%);${Object.prototype.hasOwnProperty.call(STATE_STYLE, p.state) ? STATE_STYLE[p.state] : STATE_STYLE.anchored}`;
+			root.appendChild(node);
+			pinNodes.set(p.n, node);
+		}
+	};
+
+	const highlight = (msg) => {
+		const node = pinNodes.get(msg.n);
+		if (!node) return;
+		node.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+		node.animate(
+			[
+				{ transform: "translate(-50%,-50%) scale(1)" },
+				{ transform: "translate(-50%,-50%) scale(1.8)" },
+				{ transform: "translate(-50%,-50%) scale(1)" },
+			],
+			{ duration: 600, iterations: 2 },
+		);
+	};
+
+	// ---- host messages ---------------------------------------------------
+
+	window.addEventListener("message", (e) => {
+		if (e.source !== window.parent) return;
+		const m = e.data;
+		if (!m || typeof m !== "object" || m.source !== HOST || m.v !== 1) return;
+		try {
+			switch (m.type) {
+				case "pick-start":
+					startPick();
+					break;
+				case "pick-cancel":
+					stopPick();
+					break;
+				case "locate":
+					locate(m);
+					break;
+				case "pins":
+					setPins(m);
+					break;
+				case "highlight":
+					highlight(m);
+					break;
+			}
+		} catch (_) {
+			// A bad host message must never break the page.
+		}
 	});
 })();

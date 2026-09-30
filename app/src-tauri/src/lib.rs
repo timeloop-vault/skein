@@ -499,6 +499,8 @@ pub fn run() {
             review_surface::commands::review_file,
             review_surface::commands::review_image_bytes,
             review_surface::commands::review_add_thread,
+            review_surface::commands::review_element_seen,
+            review_surface::commands::review_element_threads,
             review_surface::commands::review_reply,
             review_surface::commands::review_edit_comment,
             review_surface::commands::review_delete_comment,

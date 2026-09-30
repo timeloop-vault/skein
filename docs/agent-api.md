@@ -112,6 +112,17 @@ like `claude · main`).
 
 `unresolved_total` is the room's count, not the filter's.
 
+A thread's `scope` is `line`, `file`, `commit`, `review` or `element`
+(#434: a comment on an element of a rendered design, `file` being its
+entry HTML). An `element` thread has no line range and is never
+`unmoved`: it carries `placement: "element"` and an `element` object
+(`anchor` — the picker's evidence: selector, tag, text, attributes,
+optional source file and line; `lastSeen`; `state`). `state` is what the
+design pane last reported (`anchored`, `reanchored`, `stale` or `lost`),
+believed only while every file that report was computed from is
+unchanged on disk, and `unknown` otherwise; `outdated` is true unless the
+state is `anchored` or `reanchored`. Read the anchor, not a position.
+
 ### `get_comment`
 
 `{ thread_id }` — the thread plus the code it is about:
@@ -122,6 +133,9 @@ like `claude · main`).
 - `current_context` — that region of the file as it stands today, with
   1-based line numbers and `>` marking the commented lines.
 - `diff_context` — the hunk the comment lands in, as unified diff.
+
+For an `element` thread `anchor_lines`, `current_context` and
+`diff_context` are absent; the `element` object above is the evidence.
 
 ### `get_diff`
 

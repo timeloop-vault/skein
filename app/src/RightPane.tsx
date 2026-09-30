@@ -18,9 +18,12 @@
 // thing that needs a stable identity per pane is this list.
 
 import { useCallback } from "react";
+import { pickDesignHarness } from "./designFocus.ts";
 import { LiveContext } from "./liveContext/index.ts";
 import { useRoomActions } from "./liveContext/store.ts";
 import { ReviewPane } from "./review/ReviewPane.tsx";
+import type { DesignLink } from "./review/Thread.tsx";
+import type { ReviewThread } from "./review/api.ts";
 import type { Harness, HarnessKind } from "./types.ts";
 import "./rightPane.css";
 
@@ -43,7 +46,15 @@ export const RightPane = ({
 	onBranchChange,
 	tab,
 	onTabChange,
+	onShowInDesign,
 }: {
+	/** #434: point a design harness at `entry` (when `setEntry`), switch
+	 *  to it and focus the element thread. */
+	onShowInDesign: (
+		pick: { harnessId: string; setEntry: boolean },
+		entry: string,
+		threadId: string,
+	) => void;
 	roomId: string;
 	cwd: string;
 	harnesses: Harness[];
@@ -67,6 +78,21 @@ export const RightPane = ({
 	const harnessKindOf = useCallback(
 		(harnessId: string): HarnessKind => harnesses.find((h) => h.id === harnessId)?.kind ?? "byoh",
 		[harnesses],
+	);
+
+	const designLinkFor = useCallback(
+		(t: ReviewThread): DesignLink | undefined => {
+			const entry = t.element?.anchor.entry;
+			if (!entry) return undefined;
+			const pick = pickDesignHarness({ harnesses }, entry);
+			return {
+				available: pick != null,
+				onShow: () => {
+					if (pick) onShowInDesign(pick, entry, t.id);
+				},
+			};
+		},
+		[harnesses, onShowInDesign],
 	);
 
 	return (
@@ -109,6 +135,7 @@ export const RightPane = ({
 					harnessKindOf={harnessKindOf}
 					activeHarness={activeHarness}
 					visible={visible && tab === "review"}
+					designLinkFor={designLinkFor}
 				/>
 			</div>
 		</div>

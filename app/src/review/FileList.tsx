@@ -24,6 +24,8 @@ const CHANGE_GLYPH: Record<string, string> = {
 	renamed: "R",
 	conflicted: "!",
 	typechange: "T",
+	// No diff, listed only for its element threads (#434).
+	unchanged: "·",
 };
 
 const splitPath = (path: string): [string, string] => {

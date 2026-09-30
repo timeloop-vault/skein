@@ -38,7 +38,9 @@ use crate::db::{
 use crate::git::{IdentityCheck, check_identity, repo_root_for_path};
 use crate::review::{abs_path, now_ms};
 use crate::review_surface::Scope;
+use crate::review_surface::element::{DigestCache, ElementDto, element_dto};
 use crate::review_surface::query::{ScopeFiles, file_impl, scope_impl};
+use crate::review_surface::thread_scope;
 use crate::room_paths::{normalize_path_for_match, path_match_kind};
 
 /// Rendered diff text is capped so a whole-branch `get_diff` on a large
@@ -183,10 +185,19 @@ pub struct AgentAddressed {
 #[serde(rename_all = "snake_case")]
 pub struct AgentThread {
     pub thread_id: String,
-    /// `line` | `file` | `commit` | `review`.
+    /// `line` | `file` | `commit` | `review` | `element`.
     pub scope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
+    /// `"element"` for an element thread, which has no line to be
+    /// unmoved from; absent otherwise. `outdated` is true unless the
+    /// design pane's last report still matches the files on disk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<&'static str>,
+    /// An element thread's stored anchor and state, as the review pane
+    /// receives it (`anchor`, `lastSeen`, `state` — camelCase, verbatim).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit_sha: Option<String>,
     /// Where the comment sits *now*, 1-based inclusive.
@@ -343,10 +354,20 @@ pub fn get_comment(
     // function needs the file's hunks as well as its placements, so it
     // does the one `file_impl` call itself and feeds the result back in
     // rather than paying for the same scope diff twice.
-    let mut ctx = RoomCtx::load(db, caller, &[])?;
+    let is_element = row.scope == thread_scope::ELEMENT;
+    let seed: &[ReviewThreadRow] = if is_element {
+        std::slice::from_ref(&row)
+    } else {
+        &[]
+    };
+    let mut ctx = RoomCtx::load(db, caller, seed)?;
 
     let mut diff_context = None;
-    if let (Some(cwd), Some(path)) = (caller.cwd.as_deref(), row.file_path.as_deref()) {
+    // An element thread has no lines to diff against; its entry HTML
+    // would only cost a scope diff for nothing.
+    if let (Some(cwd), Some(path), false) =
+        (caller.cwd.as_deref(), row.file_path.as_deref(), is_element)
+    {
         if let Ok(detail) = file_impl(db, &caller.room_id, cwd, path, Scope::Branch, None) {
             for t in &detail.threads {
                 ctx.placed
@@ -363,7 +384,7 @@ pub fn get_comment(
 
     let thread = ctx.to_agent_thread(&row);
     let current_context = match (caller.cwd.as_deref(), row.file_path.as_deref()) {
-        (Some(cwd), Some(path)) => match (thread.line_start, thread.line_end) {
+        (Some(cwd), Some(path)) if !is_element => match (thread.line_start, thread.line_end) {
             (Some(start), Some(end)) => read_around(cwd, path, start, end),
             _ => None,
         },
@@ -2798,6 +2819,10 @@ struct RoomCtx {
     labels: BTreeMap<String, String>,
     /// thread id → (start, end, outdated) as of right now.
     placed: BTreeMap<String, (Option<usize>, Option<usize>, bool)>,
+    /// Element threads' anchor and state (#434). The agent has no DOM,
+    /// so this is the pane's last report, believed only while its
+    /// content stamp still holds — never a line position.
+    elements: BTreeMap<String, ElementDto>,
 }
 
 impl RoomCtx {
@@ -2850,27 +2875,55 @@ impl RoomCtx {
             }
         }
 
+        let mut elements = BTreeMap::new();
+        if threads.iter().any(|t| t.scope == thread_scope::ELEMENT) {
+            let rows = db
+                .review_element_anchors_for_room(&caller.room_id)
+                .map_err(internal)?;
+            let root = caller.cwd.as_deref().map(Path::new);
+            let mut cache = DigestCache::default();
+            for row in rows {
+                if let Some(dto) = element_dto(&row, root, &mut cache) {
+                    elements.insert(row.thread_id, dto);
+                }
+            }
+        }
+
         Ok(Self {
             comments,
             addressed,
             labels,
             placed,
+            elements,
         })
     }
 
     fn to_agent_thread(&self, t: &ReviewThreadRow) -> AgentThread {
-        let (line_start, line_end, outdated) =
+        let is_element = t.scope == thread_scope::ELEMENT;
+        let element = if is_element {
+            self.elements.get(&t.id)
+        } else {
+            None
+        };
+        let (line_start, line_end, outdated) = if is_element {
+            // Never a line position, and a guess unless the pane's
+            // report holds — also when the anchor could not be read.
+            (None, None, element.is_none_or(ElementDto::is_outdated))
+        } else {
             self.placed.get(&t.id).copied().unwrap_or_else(|| {
                 (
                     t.line_start.and_then(|n| usize::try_from(n).ok()),
                     t.line_end.and_then(|n| usize::try_from(n).ok()),
                     false,
                 )
-            });
+            })
+        };
         AgentThread {
             thread_id: t.id.clone(),
             scope: t.scope.clone(),
             file: t.file_path.clone(),
+            placement: is_element.then_some("element"),
+            element: element.and_then(|e| serde_json::to_value(e).ok()),
             commit_sha: t.commit_sha.clone(),
             line_start,
             line_end,
@@ -2917,8 +2970,11 @@ impl RoomCtx {
 
 /// The distinct files a set of threads touches, normalized.
 fn files_of(threads: &[ReviewThreadRow]) -> BTreeSet<String> {
+    // Element threads are placed by the design pane, not by a diff, so
+    // their entry file is not worth a pass through `ScopeFiles`.
     threads
         .iter()
+        .filter(|t| t.scope != thread_scope::ELEMENT)
         .filter_map(|t| t.file_path.as_deref().map(normalize))
         .collect()
 }

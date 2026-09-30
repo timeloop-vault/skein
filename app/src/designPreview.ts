@@ -5,23 +5,189 @@
 // `e.source === iframe.contentWindow`; this module checks the shape,
 // caps every string and never yields anything but plain text.
 
+import type { ElementDescriptor, ElementRect, ElementSource, LocateResult } from "./elementAnchor";
+
 export const MAX_BEACON_TEXT = 500;
 export const MAX_BEACONS = 50;
+/** Same cap as Rust `check_rel_path`. */
+const MAX_SOURCE_PATH = 500;
+const NUL = String.fromCharCode(0);
 
 export type Beacon =
 	| { type: "ready"; href: string }
 	| { type: "resource-error"; tag: string; url: string }
-	| { type: "script-error"; message: string; url?: string; line?: number };
+	| { type: "script-error"; message: string; url?: string; line?: number }
+	| { type: "picked"; element: ElementDescriptor }
+	| { type: "pick-cancelled" }
+	| {
+			type: "located";
+			requestId: string;
+			results: { id: string; found: LocateResult }[];
+			/** Worktree-relative paths of the files the page loaded. */
+			files: string[];
+	  };
 
-const cap = (s: string): string => (s.length > MAX_BEACON_TEXT ? s.slice(0, MAX_BEACON_TEXT) : s);
+const MAX_ATTRS = 16;
+const MAX_ANCHORS = 100;
+const MAX_FILES = 200;
+const MAX_BY_ID = 10;
+const MAX_BY_TEXT = 10;
+const MAX_SAME_TAG = 200;
+
+const clipTo = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s);
+const cap = (s: string): string => clipTo(s, MAX_BEACON_TEXT);
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/** A worktree-relative path from a URL the preview served
+ *  (`/preview/<token>/<path>`, possibly mangled by Babel into
+ *  `/http:/127.0.0.1:1234/preview/tok/proto/shell.jsx`). Undefined for
+ *  anything else, and for paths that could escape the worktree. */
+export const stripSourcePrefix = (fileName: string): string | undefined => {
+	let name = fileName;
+	const q = name.search(/[?#]/);
+	if (q >= 0) name = name.slice(0, q);
+	const at = name.indexOf("/preview/");
+	if (at < 0) return undefined;
+	const segs = name.slice(at + "/preview/".length).split("/");
+	if (segs.length < 2 || segs[0] === "") return undefined; // token + path
+	const out: string[] = [];
+	for (const raw of segs.slice(1)) {
+		let seg: string;
+		try {
+			seg = decodeURIComponent(raw);
+		} catch {
+			return undefined;
+		}
+		if (
+			seg === "" ||
+			seg === ".." ||
+			seg === "." ||
+			seg.includes("\\") ||
+			seg.includes("/") ||
+			seg.includes(":") ||
+			seg.includes(NUL)
+		) {
+			return undefined;
+		}
+		out.push(seg);
+	}
+	const path = out.join("/");
+	return [...path].length > MAX_SOURCE_PATH ? undefined : path;
+};
+
+const parseRect = (v: unknown): ElementRect | null => {
+	if (!isObj(v)) return null;
+	const x = num(v.x);
+	const y = num(v.y);
+	const w = num(v.w);
+	const h = num(v.h);
+	return x === null || y === null || w === null || h === null ? null : { x, y, w, h };
+};
+
+const parseSource = (v: unknown): ElementSource | undefined => {
+	if (!isObj(v) || typeof v.fileName !== "string") return undefined;
+	const file = stripSourcePrefix(v.fileName);
+	const line = num(v.lineNumber);
+	if (file === undefined || line === null) return undefined;
+	const column = num(v.columnNumber);
+	return column === null ? { file, line } : { file, line, column };
+};
+
+const parseDescriptor = (v: unknown): ElementDescriptor | null => {
+	if (!isObj(v)) return null;
+	if (typeof v.selector !== "string" || typeof v.tag !== "string" || typeof v.text !== "string") {
+		return null;
+	}
+	const rect = parseRect(v.rect);
+	if (!rect) return null;
+	const attrs: Record<string, string> = {};
+	if (isObj(v.attrs)) {
+		for (const [k, val] of Object.entries(v.attrs)) {
+			if (Object.keys(attrs).length >= MAX_ATTRS) break;
+			if (typeof val === "string") attrs[clipTo(k, 64)] = clipTo(val, 300);
+		}
+	}
+	const out: ElementDescriptor = {
+		selector: clipTo(v.selector, 1000),
+		tag: clipTo(v.tag, 64),
+		text: cap(v.text),
+		attrs,
+		rect,
+	};
+	if (typeof v.odId === "string" && v.odId !== "") out.odId = clipTo(v.odId, 200);
+	const source = parseSource(v.rawSource);
+	if (source) out.source = source;
+	return out;
+};
+
+const parseDescriptors = (v: unknown, max: number): ElementDescriptor[] => {
+	if (!Array.isArray(v)) return [];
+	const out: ElementDescriptor[] = [];
+	for (const item of v.slice(0, max)) {
+		const d = parseDescriptor(item);
+		if (d) out.push(d);
+	}
+	return out;
+};
+
+const parseLocate = (v: unknown): LocateResult | null => {
+	if (!isObj(v)) return null;
+	return {
+		bySelector: v.bySelector == null ? null : parseDescriptor(v.bySelector),
+		byOdId: parseDescriptors(v.byOdId, MAX_BY_ID),
+		byText: parseDescriptors(v.byText, MAX_BY_TEXT),
+		sameTag: parseDescriptors(v.sameTag, MAX_SAME_TAG),
+	};
+};
+
+const idOf = (v: unknown): string | null =>
+	typeof v === "string" ? clipTo(v, 200) : num(v) !== null ? String(v) : null;
+
+const parseLocated = (d: Record<string, unknown>): Beacon | null => {
+	const requestId = idOf(d.requestId);
+	if (requestId === null || !Array.isArray(d.results)) return null;
+	const results: { id: string; found: LocateResult }[] = [];
+	for (const r of d.results.slice(0, MAX_ANCHORS)) {
+		if (!isObj(r)) continue;
+		const id = idOf(r.id);
+		const found = parseLocate(r.found);
+		if (id !== null && found) results.push({ id, found });
+	}
+	const files: string[] = [];
+	if (Array.isArray(d.files)) {
+		for (const f of d.files.slice(0, MAX_FILES)) {
+			const p = typeof f === "string" ? stripSourcePrefix(f) : undefined;
+			if (p !== undefined) files.push(p);
+		}
+	}
+	return { type: "located", requestId, results, files };
+};
+
+/** Host to iframe messages, handled by the injected picker script. */
+export type HostMessage =
+	| { type: "pick-start" }
+	| { type: "pick-cancel" }
+	| {
+			type: "locate";
+			requestId: string;
+			anchors: { id: string; odId?: string; selector: string; tag: string; text: string }[];
+	  }
+	| { type: "pins"; pins: { n: number; state: string; rect: ElementRect }[] }
+	| { type: "highlight"; n: number };
+
+/** Wrap a host message in the envelope the injected script checks. */
+export const hostMessage = (msg: HostMessage): HostMessage & { source: "skein-host"; v: 1 } => ({
+	source: "skein-host",
+	v: 1,
+	...msg,
+});
 
 /** Validate one `message` event payload from the preview iframe.
  *  Returns null for anything that is not a well-formed v1 beacon. */
 export const parseBeacon = (data: unknown): Beacon | null => {
 	if (typeof data !== "object" || data === null) return null;
-	const d = data as Partial<
-		Record<"source" | "v" | "type" | "href" | "tag" | "url" | "message" | "line", unknown>
-	>;
+	const d = data as Record<string, unknown>;
 	if (d.source !== "skein-design" || d.v !== 1) return null;
 	switch (d.type) {
 		case "ready":
@@ -37,6 +203,14 @@ export const parseBeacon = (data: unknown): Beacon | null => {
 			if (typeof d.line === "number" && Number.isFinite(d.line)) out.line = d.line;
 			return out;
 		}
+		case "picked": {
+			const element = parseDescriptor(d.element);
+			return element ? { type: "picked", element } : null;
+		}
+		case "pick-cancelled":
+			return { type: "pick-cancelled" };
+		case "located":
+			return parseLocated(d);
 		default:
 			return null;
 	}

@@ -261,6 +261,10 @@
 .rv-change.untracked {
 	color: var(--ok);
 }
+.rv-change.unchanged {
+	color: var(--fg-3);
+	opacity: 0.6;
+}
 .rv-change.deleted {
 	color: var(--err);
 }
@@ -599,6 +603,22 @@
 	gap: 3px;
 	font-size: 0.85em;
 	color: var(--warn);
+}
+.rv-element {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	font-size: 0.85em;
+	overflow-wrap: anywhere;
+}
+.rv-element-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 6px;
+}
+.rv-element .rv-linkbtn {
+	align-self: flex-start;
 }
 .rv-outdated-tag {
 	align-self: flex-start;
