@@ -85,23 +85,46 @@ pub fn design_watch_start(
     let root = room_root(&db, &room_id)?;
     let canonical = dunce::canonicalize(&root).map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
-    let filter = Mutex::new(ChangeFilter::new(canonical.clone(), SystemTime::now()));
-    manager
-        .start_with_paths(id.clone(), &canonical, move |paths| {
-            let changed = match paths {
-                None => true,
-                Some(p) => filter
+    tracing::info!(room_id = %room_id, root = %canonical.display(), "design watch start");
+    start_design_watch(&manager, id.clone(), &canonical, move || {
+        // Fails only if the frontend dropped its half.
+        let _ = on_change.send(());
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+/// Wires `ChangeFilter` to a real watcher; `tick` fires per reload-worthy
+/// batch. Split out so tests drive the same code `design_watch_start` runs.
+fn start_design_watch<F>(
+    manager: &WatcherManager,
+    id: String,
+    canonical: &Path,
+    tick: F,
+) -> Result<(), crate::watcher::WatcherError>
+where
+    F: Fn() + Send + 'static,
+{
+    let filter = Mutex::new(ChangeFilter::new(
+        canonical.to_path_buf(),
+        SystemTime::now(),
+    ));
+    manager.start_with_paths(id, canonical, move |paths| {
+        let (count, changed) = match paths {
+            None => (0, true),
+            Some(p) => (
+                p.len(),
+                filter
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .observe(&p),
-            };
-            if changed {
-                // Fails only if the frontend dropped its half.
-                let _ = on_change.send(());
-            }
-        })
-        .map_err(|e| e.to_string())?;
-    Ok(id)
+            ),
+        };
+        tracing::debug!(paths = count, ticked = changed, "design watch batch");
+        if changed {
+            tick();
+        }
+    })
 }
 
 /// Whether a debounced batch should reload the preview: anything outside
@@ -327,6 +350,40 @@ mod tests {
         let mut f = filter(dir.path(), -5);
         assert!(!f.observe(&[dir.path().join("sub")]));
         assert!(!f.observe(&[dir.path().join(".git/x")]));
+    }
+
+    fn rewrite_ticks(watch_root: &Path, file_dir: &Path) -> bool {
+        let p = file_dir.join("proto/x.jsx");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, "one").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let manager = WatcherManager::new();
+        let canonical = dunce::canonicalize(watch_root).unwrap();
+        start_design_watch(&manager, "t".into(), &canonical, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::write(&p, "two, longer").unwrap();
+        rx.recv_timeout(Duration::from_secs(3)).is_ok()
+    }
+
+    #[test]
+    fn real_watcher_ticks_on_jsx_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(rewrite_ticks(dir.path(), dir.path()));
+    }
+
+    #[test]
+    fn real_watcher_ticks_with_mixed_separator_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = dir.path().to_string_lossy().into_owned();
+        let mixed = PathBuf::from(if cfg!(windows) {
+            s.replacen('\\', "/", 1)
+        } else {
+            format!("{s}/./")
+        });
+        assert!(rewrite_ticks(&mixed, dir.path()));
     }
 
     #[test]
