@@ -44,8 +44,10 @@
 
 pub mod auth;
 pub mod commands;
+mod element;
 pub mod http;
 pub mod mcp;
+mod render;
 pub mod state;
 pub mod verbs;
 

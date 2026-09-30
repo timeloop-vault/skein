@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ReviewComment, ReviewThread } from "./api.ts";
+import "./element.css";
 
 /// Short relative time — the review reads in minutes and hours, and a
 /// full timestamp in a narrow pane costs more than it tells.

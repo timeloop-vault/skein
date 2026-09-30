@@ -4,24 +4,8 @@
 // the frame gets `allow-scripts` and NEVER `allow-same-origin`, and its
 // `postMessage` beacons are untrusted (see designPreview.ts).
 
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-	type ElementThread,
-	type WrittenSeen,
-	buildLocateAnchors,
-	buildPins,
-	displayState,
-	elementSummary,
-	pinNumbers,
-	placeThreads,
-	placementSignature,
-	seenWrites,
-	sourceLabel,
-	unplaced,
-} from "./designComments.ts";
-import { subscribeDesignFocus, takeDesignFocus } from "./designFocus.ts";
+import { DesignComments } from "./DesignComments.tsx";
 import {
 	type Beacon,
 	type HostMessage,
@@ -29,49 +13,14 @@ import {
 	parseBeacon,
 	previewUrl,
 	pushBeacon,
-	retryDelay,
 } from "./designPreview.ts";
-import type { ElementAnchor, ElementDescriptor, Placement } from "./elementAnchor.ts";
-import { Composer, ThreadView } from "./review/Thread.tsx";
-import {
-	addThread,
-	deleteComment,
-	deleteThread,
-	editComment,
-	fetchElementThreads,
-	replyToThread,
-	reportElementSeen,
-	resolveThread,
-} from "./review/api.ts";
-
-/** Run `fn`, retrying with backoff while `isCancelled()` is false. A new
- *  room's db row lands only after the pane's first invoke, so the first
- *  tries can fail with "unknown room". Rejects with the last error once
- *  the budget is spent; resolves/rejects only if not cancelled is the
- *  caller's concern (it checks its own flag). */
-const invokeWithRetry = async <T,>(
-	fn: () => Promise<T>,
-	isCancelled: () => boolean,
-): Promise<T> => {
-	for (let failures = 1; ; failures++) {
-		try {
-			return await fn();
-		} catch (e) {
-			const delay = retryDelay(failures);
-			if (delay === null || isCancelled()) throw e;
-			await new Promise((r) => window.setTimeout(r, delay));
-			if (isCancelled()) throw e;
-		}
-	}
-};
+import { useDesignComments } from "./useDesignComments.ts";
+import { useDesignPreview } from "./useDesignPreview.ts";
+import "./design.css";
 
 /** How long after the iframe's `load` we wait for the `ready` beacon
  *  before saying Skein's preview script did not run. */
 const READY_TIMEOUT_MS = 3000;
-
-/** Re-asks for an unanswered thread: 400 ms doubling, 5 tries. */
-const LOCATE_RETRY_MS = 400;
-const LOCATE_RETRIES = 5;
 
 interface DesignBodyProps {
 	harnessId: string;
@@ -82,67 +31,6 @@ interface DesignBodyProps {
 	onEntryChange: (entry: string) => void;
 }
 
-/** One thread in the side list. Every string here came from the page or
- *  the comment author and is rendered as text. */
-const ElementThreadItem = ({
-	n,
-	thread,
-	state,
-	selected,
-	busy,
-	onSelect,
-	onReply,
-	onResolve,
-	onDelete,
-	onEditComment,
-	onDeleteComment,
-}: {
-	n: number;
-	thread: ElementThread;
-	state: string;
-	selected: boolean;
-	busy: boolean;
-	onSelect: () => void;
-	onReply: (body: string) => void;
-	onResolve: (resolved: boolean) => void;
-	onDelete: () => void;
-	onEditComment: (commentId: string, body: string) => void;
-	onDeleteComment: (commentId: string) => void;
-}) => {
-	const a = thread.element?.anchor;
-	const src = a ? sourceLabel(a) : undefined;
-	return (
-		<div className={`dp-comment-item${selected ? " selected" : ""}`} data-state={state}>
-			<button type="button" className="dp-comment-head" onClick={onSelect}>
-				<span className="dp-comment-n">{n}</span>
-				<span className={`dp-comment-state ${state}`}>{state}</span>
-				{a && (
-					<span className="dp-comment-el" title={elementSummary(a)}>
-						{elementSummary(a)}
-					</span>
-				)}
-			</button>
-			{state === "lost" && a && (
-				<div className="dp-comment-lost">
-					element not found
-					{src !== undefined && <span className="dp-comment-src"> · was at {src}</span>}
-				</div>
-			)}
-			{state !== "lost" && src !== undefined && <div className="dp-comment-src">{src}</div>}
-			<ThreadView
-				thread={thread}
-				busy={busy}
-				hideElementNote
-				onReply={onReply}
-				onResolve={onResolve}
-				onDelete={onDelete}
-				onEditComment={onEditComment}
-				onDeleteComment={onDeleteComment}
-			/>
-		</div>
-	);
-};
-
 export const DesignBody = ({
 	harnessId,
 	roomId,
@@ -151,113 +39,32 @@ export const DesignBody = ({
 	entry,
 	onEntryChange,
 }: DesignBodyProps) => {
-	const [base, setBase] = useState<string | null>(null);
-	const [entries, setEntries] = useState<string[] | null>(null);
-	const [error, setError] = useState<string | null>(null);
-	const [attempt, setAttempt] = useState(0);
-	const [version, setVersion] = useState(0);
+	const { base, entries, error, version, retry, reload } = useDesignPreview(roomId);
 	const [beacons, setBeacons] = useState<Beacon[]>([]);
 	const [ready, setReady] = useState(false);
 	const [noReady, setNoReady] = useState(false);
+	const [readyCount, setReadyCount] = useState(0);
+	const [picking, setPicking] = useState(false);
 	const frameRef = useRef<HTMLIFrameElement | null>(null);
 	const readyRef = useRef(false);
 	const timerRef = useRef<number | null>(null);
-
-	// Element comments (#434).
-	const [picking, setPicking] = useState(false);
-	const [draft, setDraft] = useState<ElementDescriptor | null>(null);
-	const [threads, setThreads] = useState<ElementThread[]>([]);
-	const [placements, setPlacements] = useState<Map<string, Placement>>(new Map());
-	const [selected, setSelected] = useState<{ id: string; tick: number } | null>(null);
-	const [busy, setBusy] = useState(false);
-	const [commentError, setCommentError] = useState<string | null>(null);
-	const [readyCount, setReadyCount] = useState(0);
-	const threadsRef = useRef<ElementThread[]>([]);
-	threadsRef.current = threads;
-	const requestRef = useRef(0);
-	const locateNowRef = useRef<() => void>(() => {});
-	const writtenRef = useRef<Map<string, WrittenSeen>>(new Map());
-	const readyCountRef = useRef(0);
-	readyCountRef.current = readyCount;
 
 	const post = useCallback((msg: HostMessage) => {
 		frameRef.current?.contentWindow?.postMessage(hostMessage(msg), "*");
 	}, []);
 
-	const fetchThreads = useCallback(async () => {
-		if (entry === undefined) {
-			setThreads([]);
-			return;
-		}
-		try {
-			setThreads(await fetchElementThreads(roomId, entry));
-		} catch (e) {
-			setCommentError(String(e));
-		}
-	}, [roomId, entry]);
-
-	const refreshEntries = useCallback(async () => {
-		try {
-			setEntries(await invoke<string[]>("design_list_entries", { roomId }));
-		} catch (e) {
-			setError(String(e));
-		}
-	}, [roomId]);
-
-	// Preview base + entry list; `attempt` is the inline retry.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt is the retry trigger
-	useEffect(() => {
-		let cancelled = false;
-		const isCancelled = () => cancelled;
-		setError(null);
-		invokeWithRetry(() => invoke<string>("design_preview_base", { roomId }), isCancelled)
-			.then((b) => {
-				if (!cancelled) setBase(b);
-			})
-			.catch((e) => {
-				if (!cancelled) setError(String(e));
-			});
-		invokeWithRetry(() => invoke<string[]>("design_list_entries", { roomId }), isCancelled)
-			.then((list) => {
-				if (!cancelled) setEntries(list);
-			})
-			.catch((e) => {
-				if (!cancelled) setError(String(e));
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, [roomId, attempt]);
-
-	// The watcher runs only while mounted; a tick reloads the frame.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt is the retry trigger
-	useEffect(() => {
-		const channel = new Channel<null>();
-		channel.onmessage = () => {
-			setVersion((n) => n + 1);
-			void refreshEntries();
-		};
-		let watchId: string | null = null;
-		let cancelled = false;
-		invokeWithRetry(
-			() => invoke<string>("design_watch_start", { roomId, onChange: channel }),
-			() => cancelled,
-		)
-			.then((id) => {
-				if (cancelled) {
-					void invoke("git_watch_stop", { id });
-					return;
-				}
-				watchId = id;
-			})
-			.catch((e) => {
-				if (!cancelled) setError(String(e));
-			});
-		return () => {
-			cancelled = true;
-			if (watchId !== null) void invoke("git_watch_stop", { id: watchId });
-		};
-	}, [roomId, attempt, refreshEntries]);
+	const c = useDesignComments({
+		harnessId,
+		roomId,
+		cwd,
+		visible,
+		entry,
+		onEntryChange,
+		post,
+		ready,
+		readyCount,
+	});
+	const { setDraft, setSelected, relocate, onLocated, clearPlacements } = c;
 
 	// One entry and none chosen: pick it and persist.
 	useEffect(() => {
@@ -276,101 +83,10 @@ export const DesignBody = ({
 		setNoReady(false);
 		readyRef.current = false;
 		setPicking(false);
-		setPlacements(new Map());
+		clearPlacements();
 		if (timerRef.current !== null) window.clearTimeout(timerRef.current);
 		timerRef.current = null;
 	}, [url]);
-
-	// Threads for this entry: on mount / entry change, and whenever the
-	// review changes (an agent reply, the review pane, our own writes).
-	useEffect(() => {
-		void fetchThreads();
-	}, [fetchThreads]);
-	useEffect(() => {
-		let cancelled = false;
-		const unlisten = listen<{ roomId: string }>("skein://review-changed", (event) => {
-			if (event.payload.roomId === roomId) void fetchThreads();
-		});
-		return () => {
-			cancelled = true;
-			void unlisten.then((off) => {
-				if (cancelled) off();
-			});
-		};
-	}, [roomId, fetchThreads]);
-
-	// Placement: ask the page where the open threads' elements are — on
-	// every load (`ready`) and when the set of threads to locate changes.
-	const locateNow = useCallback(() => {
-		const anchors = buildLocateAnchors(threadsRef.current);
-		requestRef.current += 1;
-		if (anchors.length === 0) {
-			setPlacements(new Map());
-			post({ type: "pins", pins: [] });
-			return;
-		}
-		post({ type: "locate", requestId: String(requestRef.current), anchors });
-	}, [post]);
-	locateNowRef.current = locateNow;
-	const signature = placementSignature(threads);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: readyCount and signature are the triggers; threads are read through a ref
-	useEffect(() => {
-		if (readyCount === 0) return;
-		locateNow();
-	}, [readyCount, signature, locateNow]);
-
-	// A located that left a thread unanswered (or a locate that never
-	// reached the page, e.g. posted while a reload was in flight) must not
-	// leave it without a pin: ask again, a few times, with backoff.
-	const retriesRef = useRef(0);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: readyCount and signature reset the budget
-	useEffect(() => {
-		retriesRef.current = 0;
-	}, [readyCount, signature]);
-	useEffect(() => {
-		if (readyCount === 0 || !ready) return;
-		if (unplaced(threads, placements).length === 0) return;
-		if (retriesRef.current >= LOCATE_RETRIES) return;
-		const id = window.setTimeout(
-			() => {
-				retriesRef.current += 1;
-				locateNowRef.current();
-			},
-			LOCATE_RETRY_MS * 2 ** retriesRef.current,
-		);
-		return () => window.clearTimeout(id);
-	}, [threads, placements, readyCount, ready]);
-
-	// Pins follow the side list's numbering and the latest placements.
-	useEffect(() => {
-		if (readyCount === 0) return;
-		post({ type: "pins", pins: buildPins(threads, placements) });
-	}, [threads, placements, readyCount, post]);
-
-	// Highlight the selected thread's pin once it has one.
-	const selectedId = selected?.id;
-	const selectedTick = selected?.tick;
-	// biome-ignore lint/correctness/useExhaustiveDependencies: tick re-fires a repeat click; threads/placements settle a pending focus
-	useEffect(() => {
-		if (selectedId === undefined || readyCount === 0) return;
-		const n = pinNumbers(threads).get(selectedId);
-		if (n !== undefined && placements.has(selectedId)) post({ type: "highlight", n });
-	}, [selectedId, selectedTick, threads, placements, readyCount, post]);
-
-	// Focus requests (#434): a thread opened from elsewhere.
-	const focusThread = useCallback(
-		(f: { entry: string; threadId: string }) => {
-			if (f.entry !== entry) onEntryChange(f.entry);
-			setSelected((s) => ({ id: f.threadId, tick: (s?.tick ?? 0) + 1 }));
-		},
-		[entry, onEntryChange],
-	);
-	useEffect(() => subscribeDesignFocus(harnessId, focusThread), [harnessId, focusThread]);
-	useEffect(() => {
-		if (!visible) return;
-		const f = takeDesignFocus(harnessId);
-		if (f) focusThread(f);
-	}, [visible, harnessId, focusThread]);
 
 	// Escape leaves pick mode even when the host, not the frame, has focus.
 	useEffect(() => {
@@ -394,60 +110,12 @@ export const DesignBody = ({
 		}
 	};
 
-	// The api.ts write wrappers emit skein://review-changed themselves.
-	const wrote = async () => {
-		await fetchThreads();
-	};
-
-	const act = async (fn: () => Promise<unknown>) => {
-		setBusy(true);
-		setCommentError(null);
-		try {
-			await fn();
-			await wrote();
-		} catch (e) {
-			setCommentError(String(e));
-		} finally {
-			setBusy(false);
-		}
-	};
-
-	const submitDraft = (body: string) => {
-		if (!draft || entry === undefined) return;
-		const element: ElementAnchor = { ...draft, entry };
-		void act(async () => {
-			await addThread(roomId, cwd, {
-				scope: "element",
-				filePath: entry,
-				anchorLines: [],
-				body,
-				element,
-			});
-			setDraft(null);
-		});
-	};
-
 	useEffect(
 		() => () => {
 			if (timerRef.current !== null) window.clearTimeout(timerRef.current);
 		},
 		[],
 	);
-
-	const onLocatedRef = useRef<(b: Extract<Beacon, { type: "located" }>) => void>(() => {});
-	onLocatedRef.current = (b) => {
-		if (b.requestId !== String(requestRef.current)) return;
-		const current = threadsRef.current;
-		const next = placeThreads(current, b.results);
-		setPlacements(next);
-		const load = readyCountRef.current;
-		const writes = seenWrites(current, next, b.files, writtenRef.current, load);
-		if (writes.length === 0) return;
-		for (const w of writes) writtenRef.current.set(w.threadId, { ...w.seen, load });
-		void Promise.all(writes.map((w) => reportElementSeen(roomId, w.threadId, w.seen)))
-			.catch((e) => setCommentError(String(e)))
-			.then(() => fetchThreads());
-	};
 
 	// Beacons from the frame: only its own window is believed.
 	useEffect(() => {
@@ -466,18 +134,18 @@ export const DesignBody = ({
 				setDraft(b.element);
 			} else if (b.type === "dom-changed") {
 				// The page finished (re)rendering or resized: its pins may be off.
-				locateNowRef.current();
+				relocate();
 			} else if (b.type === "pick-cancelled") {
 				setPicking(false);
 			} else if (b.type === "located") {
-				onLocatedRef.current(b);
+				onLocated(b);
 			} else {
 				setBeacons((prev) => pushBeacon(prev, b));
 			}
 		};
 		window.addEventListener("message", onMessage);
 		return () => window.removeEventListener("message", onMessage);
-	}, []);
+	}, [setDraft, relocate, onLocated]);
 
 	const onFrameLoad = () => {
 		if (readyRef.current) return;
@@ -514,7 +182,7 @@ export const DesignBody = ({
 						</option>
 					))}
 				</select>
-				<button type="button" title="Reload" onClick={() => setVersion((n) => n + 1)}>
+				<button type="button" title="Reload" onClick={reload}>
 					↻
 				</button>
 				<button
@@ -532,7 +200,7 @@ export const DesignBody = ({
 			{error !== null && (
 				<div className="fp-notice warn" role="alert">
 					{error}{" "}
-					<button type="button" onClick={() => setAttempt((n) => n + 1)}>
+					<button type="button" onClick={retry}>
 						Retry
 					</button>
 				</div>
@@ -559,48 +227,22 @@ export const DesignBody = ({
 						src={url}
 						onLoad={onFrameLoad}
 					/>
-					{(draft !== null || threads.length > 0 || commentError !== null) && (
-						<div className="dp-comments">
-							{commentError !== null && (
-								<div className="fp-notice warn" role="alert">
-									{commentError}
-								</div>
-							)}
-							{draft !== null && (
-								<div className="dp-comment-draft">
-									<div className="dp-comment-el">
-										{elementSummary({ ...draft, entry: entry ?? "" })}
-									</div>
-									{sourceLabel(draft) !== undefined && (
-										<div className="dp-comment-src">{sourceLabel(draft)}</div>
-									)}
-									<Composer
-										placeholder="Comment on this element…"
-										busy={busy}
-										submitLabel="Comment"
-										autoFocus
-										onSubmit={submitDraft}
-										onCancel={() => setDraft(null)}
-									/>
-								</div>
-							)}
-							{threads.map((t, i) => (
-								<ElementThreadItem
-									key={t.id}
-									n={i + 1}
-									thread={t}
-									state={displayState(t, placements, ready)}
-									selected={selected?.id === t.id}
-									busy={busy}
-									onSelect={() => setSelected((s) => ({ id: t.id, tick: (s?.tick ?? 0) + 1 }))}
-									onReply={(body) => void act(() => replyToThread(roomId, t.id, body))}
-									onResolve={(r) => void act(() => resolveThread(roomId, t.id, r))}
-									onDelete={() => void act(() => deleteThread(roomId, t.id))}
-									onEditComment={(id, body) => void act(() => editComment(roomId, id, body))}
-									onDeleteComment={(id) => void act(() => deleteComment(roomId, id))}
-								/>
-							))}
-						</div>
+					{(c.draft !== null || c.threads.length > 0 || c.commentError !== null) && (
+						<DesignComments
+							roomId={roomId}
+							entry={entry}
+							ready={ready}
+							threads={c.threads}
+							placements={c.placements}
+							draft={c.draft}
+							selected={c.selected}
+							busy={c.busy}
+							commentError={c.commentError}
+							act={c.act}
+							onSelect={(id) => setSelected((s) => ({ id, tick: (s?.tick ?? 0) + 1 }))}
+							onSubmitDraft={c.submitDraft}
+							onCancelDraft={() => setDraft(null)}
+						/>
 					)}
 				</div>
 			) : (

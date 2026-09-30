@@ -1,0 +1,4 @@
+.rv-change.unchanged {
+	color: var(--fg-3);
+	opacity: 0.6;
+}

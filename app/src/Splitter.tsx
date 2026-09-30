@@ -7,8 +7,9 @@
 // flex: 1.
 
 import { type ReactNode, useEffect, useRef } from "react";
+import "./Splitter.css";
 
-// Set on <body> for the length of a drag; styles.css turns iframe pointer
+// Set on <body> for the length of a drag; Splitter.css turns iframe pointer
 // events off under it so the drag keeps following the pointer.
 const DRAGGING_CLASS = "sk-dragging";
 

@@ -22,34 +22,30 @@
 //!   looking at two different answers to the same question.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use skein_review::{FileState, Hunk, LineKind};
 
 use super::auth::Caller;
+use super::element;
+use super::render::{covering_hunk, read_around, render_file, render_hunk};
 use super::state::AgentApiState;
 use crate::db::{
     Database, Harness, HarnessMessageRow, ReviewAddressedRow, ReviewCommentRow, ReviewThreadRow,
     Room,
 };
 use crate::git::{IdentityCheck, check_identity, repo_root_for_path};
-use crate::review::{abs_path, now_ms};
+use crate::review::now_ms;
 use crate::review_surface::Scope;
-use crate::review_surface::element::{DigestCache, ElementDto, element_dto};
+use crate::review_surface::element::ElementDto;
 use crate::review_surface::query::{ScopeFiles, file_impl, scope_impl};
-use crate::review_surface::thread_scope;
 use crate::room_paths::{normalize_path_for_match, path_match_kind};
 
 /// Rendered diff text is capped so a whole-branch `get_diff` on a large
 /// change cannot swallow the agent's context. Truncation is reported,
 /// never silent.
 const MAX_DIFF_BYTES: usize = 256 * 1024;
-
-/// How many lines of today's file to show either side of a comment.
-const CONTEXT_RADIUS: usize = 6;
 
 /// The largest a mailbox message body may be (#327). A message is a
 /// nudge, not a document.
@@ -109,7 +105,7 @@ impl VerbError {
 
 type VerbResult<T> = Result<T, VerbError>;
 
-fn internal(e: impl std::fmt::Display) -> VerbError {
+pub(super) fn internal(e: impl std::fmt::Display) -> VerbError {
     VerbError::Internal(e.to_string())
 }
 
@@ -190,8 +186,8 @@ pub struct AgentThread {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     /// `"element"` for an element thread, which has no line to be
-    /// unmoved from; absent otherwise. `outdated` is true unless the
-    /// design pane's last report still matches the files on disk.
+    /// unmoved from; `outdated` is true unless the design pane's last
+    /// report still matches the files on disk.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placement: Option<&'static str>,
     /// An element thread's stored anchor and state, as the review pane
@@ -354,17 +350,10 @@ pub fn get_comment(
     // function needs the file's hunks as well as its placements, so it
     // does the one `file_impl` call itself and feeds the result back in
     // rather than paying for the same scope diff twice.
-    let is_element = row.scope == thread_scope::ELEMENT;
-    let seed: &[ReviewThreadRow] = if is_element {
-        std::slice::from_ref(&row)
-    } else {
-        &[]
-    };
-    let mut ctx = RoomCtx::load(db, caller, seed)?;
+    let is_element = element::is_element(&row);
+    let mut ctx = RoomCtx::load(db, caller, element::seed(&row))?;
 
     let mut diff_context = None;
-    // An element thread has no lines to diff against; its entry HTML
-    // would only cost a scope diff for nothing.
     if let (Some(cwd), Some(path), false) =
         (caller.cwd.as_deref(), row.file_path.as_deref(), is_element)
     {
@@ -384,7 +373,7 @@ pub fn get_comment(
 
     let thread = ctx.to_agent_thread(&row);
     let current_context = match (caller.cwd.as_deref(), row.file_path.as_deref()) {
-        (Some(cwd), Some(path)) if !is_element => match (thread.line_start, thread.line_end) {
+        (Some(cwd), Some(path)) => match (thread.line_start, thread.line_end) {
             (Some(start), Some(end)) => read_around(cwd, path, start, end),
             _ => None,
         },
@@ -2819,9 +2808,7 @@ struct RoomCtx {
     labels: BTreeMap<String, String>,
     /// thread id → (start, end, outdated) as of right now.
     placed: BTreeMap<String, (Option<usize>, Option<usize>, bool)>,
-    /// Element threads' anchor and state (#434). The agent has no DOM,
-    /// so this is the pane's last report, believed only while its
-    /// content stamp still holds — never a line position.
+    /// Element threads' anchor and state (#434).
     elements: BTreeMap<String, ElementDto>,
 }
 
@@ -2875,19 +2862,7 @@ impl RoomCtx {
             }
         }
 
-        let mut elements = BTreeMap::new();
-        if threads.iter().any(|t| t.scope == thread_scope::ELEMENT) {
-            let rows = db
-                .review_element_anchors_for_room(&caller.room_id)
-                .map_err(internal)?;
-            let root = caller.cwd.as_deref().map(Path::new);
-            let mut cache = DigestCache::default();
-            for row in rows {
-                if let Some(dto) = element_dto(&row, root, &mut cache) {
-                    elements.insert(row.thread_id, dto);
-                }
-            }
-        }
+        let elements = element::load(db, caller, threads)?;
 
         Ok(Self {
             comments,
@@ -2899,31 +2874,23 @@ impl RoomCtx {
     }
 
     fn to_agent_thread(&self, t: &ReviewThreadRow) -> AgentThread {
-        let is_element = t.scope == thread_scope::ELEMENT;
-        let element = if is_element {
-            self.elements.get(&t.id)
-        } else {
-            None
-        };
-        let (line_start, line_end, outdated) = if is_element {
-            // Never a line position, and a guess unless the pane's
-            // report holds — also when the anchor could not be read.
-            (None, None, element.is_none_or(ElementDto::is_outdated))
-        } else {
-            self.placed.get(&t.id).copied().unwrap_or_else(|| {
+        let view = element::view(&self.elements, t);
+        let (line_start, line_end, outdated) = match &view {
+            Some(v) => (None, None, v.outdated),
+            None => self.placed.get(&t.id).copied().unwrap_or_else(|| {
                 (
                     t.line_start.and_then(|n| usize::try_from(n).ok()),
                     t.line_end.and_then(|n| usize::try_from(n).ok()),
                     false,
                 )
-            })
+            }),
         };
         AgentThread {
             thread_id: t.id.clone(),
             scope: t.scope.clone(),
             file: t.file_path.clone(),
-            placement: is_element.then_some("element"),
-            element: element.and_then(|e| serde_json::to_value(e).ok()),
+            placement: view.as_ref().map(|_| element::PLACEMENT),
+            element: view.and_then(|v| v.json),
             commit_sha: t.commit_sha.clone(),
             line_start,
             line_end,
@@ -2970,11 +2937,9 @@ impl RoomCtx {
 
 /// The distinct files a set of threads touches, normalized.
 fn files_of(threads: &[ReviewThreadRow]) -> BTreeSet<String> {
-    // Element threads are placed by the design pane, not by a diff, so
-    // their entry file is not worth a pass through `ScopeFiles`.
     threads
         .iter()
-        .filter(|t| t.scope != thread_scope::ELEMENT)
+        .filter(|t| !element::is_element(t))
         .filter_map(|t| t.file_path.as_deref().map(normalize))
         .collect()
 }
@@ -2986,70 +2951,6 @@ fn normalize(path: &str) -> String {
 fn parse_anchor(raw: Option<&str>) -> Vec<String> {
     raw.and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
         .unwrap_or_default()
-}
-
-/// The hunk whose new-side range covers `line`.
-fn covering_hunk(hunks: &[Hunk], line: usize) -> Option<&Hunk> {
-    hunks
-        .iter()
-        .find(|h| line >= h.new_start && line < h.new_start + h.new_lines)
-}
-
-/// `line_start..=line_end` in the file on disk, with a few lines either
-/// side and 1-based numbers, so the agent sees what is there now and
-/// not only what was there when the comment was written.
-fn read_around(cwd: &str, path: &str, start: usize, end: usize) -> Option<String> {
-    let FileState::Text(text) = skein_review::read_state(&abs_path(cwd, path)) else {
-        return None;
-    };
-    let lines: Vec<&str> = text.lines().collect();
-    let from = start.saturating_sub(CONTEXT_RADIUS).max(1);
-    let to = (end + CONTEXT_RADIUS).min(lines.len());
-    if from > to || from > lines.len() {
-        return None;
-    }
-    let mut out = String::new();
-    for (offset, line) in lines[from - 1..to].iter().enumerate() {
-        let n = from + offset;
-        let marker = if n >= start && n <= end { '>' } else { ' ' };
-        let _ = writeln!(out, "{marker} {n:>5} | {line}");
-    }
-    Some(out)
-}
-
-/// One file as a unified diff, the way `git diff` would print it.
-///
-/// Text, not the [`Hunk`] tree the pane renders: an agent reads a patch
-/// natively and would have to reconstruct one from the JSON anyway.
-fn render_file(path: &str, blocked: Option<&'static str>, hunks: &[Hunk]) -> String {
-    let mut out = format!("--- a/{path}\n+++ b/{path}\n");
-    if let Some(reason) = blocked {
-        let _ = writeln!(out, "(no line diff: {reason})");
-        return out;
-    }
-    if hunks.is_empty() {
-        out.push_str("(no changes in this scope)\n");
-        return out;
-    }
-    for h in hunks {
-        out.push_str(&render_hunk(h));
-    }
-    out
-}
-
-fn render_hunk(h: &Hunk) -> String {
-    let mut out = format!("{}\n", h.header);
-    for l in &h.lines {
-        let sign = match l.kind {
-            LineKind::Add => '+',
-            LineKind::Delete => '-',
-            LineKind::Context => ' ',
-        };
-        out.push(sign);
-        out.push_str(&l.content);
-        out.push('\n');
-    }
-    out
 }
 
 // ── cross-room room and harness listing (issue #356) ────────────────

@@ -1573,10 +1573,6 @@ html.tab-dragging.tab-drag-refused * {
 .sk-splitter-y:hover {
 	background: var(--accent);
 }
-/* A drag over an iframe would lose its mousemove/mouseup to the frame. */
-.sk-dragging iframe {
-	pointer-events: none;
-}
 
 /* Right pane */
 .sk-right {
@@ -2967,75 +2963,4 @@ html.tab-dragging.tab-drag-refused * {
 	font-size: calc(var(--cfs, 12px) * 0.85);
 	color: var(--fg-1);
 	opacity: 0.92;
-}
-
-/* Element comments in the design pane (#434). */
-.dp-main {
-	display: flex;
-	flex: 1;
-	min-height: 0;
-}
-.dp-main .dp-frame {
-	flex: 1;
-	min-width: 0;
-}
-.dp-comments {
-	width: 300px;
-	flex: none;
-	overflow-y: auto;
-	border-left: 1px solid var(--border, #333);
-	padding: 8px;
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-}
-.dp-comment-toggle.on {
-	outline: 1px solid currentColor;
-}
-.dp-comment-head {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	width: 100%;
-	text-align: left;
-	background: none;
-	border: 0;
-	padding: 2px 0;
-	color: inherit;
-	cursor: pointer;
-}
-.dp-comment-item.selected {
-	outline: 1px solid currentColor;
-	outline-offset: 2px;
-}
-.dp-comment-n {
-	font-weight: 600;
-}
-.dp-comment-state {
-	font-size: 11px;
-	opacity: 0.8;
-}
-.dp-comment-state.lost,
-.dp-comment-state.stale {
-	color: #d9a400;
-}
-.dp-comment-head .dp-comment-el {
-	flex: 1;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.dp-comment-el,
-.dp-comment-src,
-.dp-comment-lost {
-	font-family: var(--mono, monospace);
-	font-size: 11px;
-	overflow-wrap: anywhere;
-	opacity: 0.85;
-}
-.dp-comment-draft {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
 }
