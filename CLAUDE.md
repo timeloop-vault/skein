@@ -475,6 +475,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   tool_call row, so the only new row is `subagent_end`: a *background*
   subagent's `AgentRow` lands at launch and nothing else ever marks it
   finished.
+  A local slash command (`/context`, `/model`, …) is not a turn
+  (#463): its `system`/`local_command` rows and the `isMeta` user row
+  carrying its output start nothing, so the harness stays `waiting`
+  and its mail keeps flowing; `LocalCommandTracker` in
+  `crates/skein-harness` decides it by position, because peer and
+  subagent hand-back messages are `isMeta` too and do start turns.
   **End-of-turn deferral (#277, epic #298):** a main session ending its
   turn while `subagents.workingCount` is non-zero does not move to
   `waiting` — that phase means "your turn", and it was a lie while
