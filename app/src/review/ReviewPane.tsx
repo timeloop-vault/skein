@@ -225,10 +225,10 @@ export const ReviewPane = ({
 
 	const handlers: ThreadHandlers = {
 		onReply: (threadId, body) => run(() => replyToThread(roomId, threadId, body)),
-		onResolve: (threadId, resolved) => run(() => resolveThread(threadId, resolved)),
-		onDeleteThread: (threadId) => run(() => deleteThread(threadId)),
-		onEditComment: (commentId, body) => run(() => editComment(commentId, body)),
-		onDeleteComment: (commentId) => run(() => deleteComment(commentId)),
+		onResolve: (threadId, resolved) => run(() => resolveThread(roomId, threadId, resolved)),
+		onDeleteThread: (threadId) => run(() => deleteThread(roomId, threadId)),
+		onEditComment: (commentId, body) => run(() => editComment(roomId, commentId, body)),
+		onDeleteComment: (commentId) => run(() => deleteComment(roomId, commentId)),
 	};
 
 	const commentOnLines = (selection: LineSelection, body: string) => {

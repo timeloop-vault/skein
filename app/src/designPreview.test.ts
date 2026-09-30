@@ -23,6 +23,14 @@ const el = (o: Record<string, unknown> = {}) => ({
 	...o,
 });
 
+describe("dom-changed beacon", () => {
+	it("parses", () => {
+		expect(parseBeacon({ source: "skein-design", v: 1, type: "dom-changed" })).toEqual({
+			type: "dom-changed",
+		});
+	});
+});
+
 describe("stripSourcePrefix", () => {
 	it("maps preview URLs to worktree paths", () => {
 		expect(stripSourcePrefix("/http:/127.0.0.1:1234/preview/tok/proto/shell.jsx")).toBe(

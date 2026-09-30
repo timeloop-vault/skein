@@ -436,6 +436,43 @@
 		);
 	};
 
+	// ---- dom-changed -------------------------------------------------------
+	// Babel transpiles and React renders after DOMContentLoaded, so the page
+	// the host located against at `ready` may be empty. Tell the host when
+	// the DOM settles; our own overlay (pins, hover box, flash) is ignored
+	// so drawing pins can never cause another round.
+
+	const ownMutation = (m) => {
+		if (isOverlay(m.target)) return true;
+		if (m.type !== "childList") return false;
+		const nodes = [...m.addedNodes, ...m.removedNodes];
+		return nodes.length > 0 && nodes.every((n) => n.nodeType === 1 && n.hasAttribute(OVERLAY));
+	};
+	let domTimer = null;
+	const domChanged = () => {
+		if (domTimer !== null) clearTimeout(domTimer);
+		domTimer = setTimeout(() => {
+			domTimer = null;
+			post({ type: "dom-changed" });
+		}, 250);
+	};
+	const startObserving = () => {
+		new MutationObserver((list) => {
+			if (list.some((m) => !ownMutation(m))) domChanged();
+		}).observe(document, {
+			childList: true,
+			subtree: true,
+			characterData: true,
+			attributes: true,
+		});
+		window.addEventListener("resize", domChanged);
+	};
+	if (document.readyState === "loading") {
+		document.addEventListener("DOMContentLoaded", startObserving);
+	} else {
+		startObserving();
+	}
+
 	// ---- host messages ---------------------------------------------------
 
 	window.addEventListener("message", (e) => {

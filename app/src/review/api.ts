@@ -14,6 +14,7 @@
 //             not been committed yet.
 
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import type { ElementAnchor, ElementRect } from "../elementAnchor.ts";
 import type { ReviewHunk } from "../liveContext/review.ts";
 
@@ -237,8 +238,21 @@ export const fetchImageBytes = (
 		side,
 	});
 
+/// A thread/comment write touches only sqlite, so nothing else tells the
+/// other surfaces showing this room's threads (review pane, design pane).
+/// Emit the event the backend emits for an agent's write, same payload.
+const written = async <T>(roomId: string, write: Promise<T>): Promise<T> => {
+	const out = await write;
+	try {
+		await emit("skein://review-changed", { roomId });
+	} catch (e) {
+		console.error("[skein] review-changed emit failed:", e);
+	}
+	return out;
+};
+
 export const addThread = (roomId: string, cwd: string, thread: NewThread): Promise<ReviewThread> =>
-	invoke<ReviewThread>("review_add_thread", { roomId, cwd, thread });
+	written(roomId, invoke<ReviewThread>("review_add_thread", { roomId, cwd, thread }));
 
 /// What the design pane found when it re-located an element thread.
 export interface ElementSeen {
@@ -262,22 +276,23 @@ export const replyToThread = (
 	roomId: string,
 	threadId: string,
 	body: string,
-): Promise<ReviewComment> => invoke<ReviewComment>("review_reply", { roomId, threadId, body });
+): Promise<ReviewComment> =>
+	written(roomId, invoke<ReviewComment>("review_reply", { roomId, threadId, body }));
 
-export const editComment = (commentId: string, body: string): Promise<void> =>
-	invoke<void>("review_edit_comment", { commentId, body });
+export const editComment = (roomId: string, commentId: string, body: string): Promise<void> =>
+	written(roomId, invoke<void>("review_edit_comment", { commentId, body }));
 
 /// Returns the thread id when deleting the comment emptied the thread.
-export const deleteComment = (commentId: string): Promise<string | null> =>
-	invoke<string | null>("review_delete_comment", { commentId });
+export const deleteComment = (roomId: string, commentId: string): Promise<string | null> =>
+	written(roomId, invoke<string | null>("review_delete_comment", { commentId }));
 
-export const deleteThread = (threadId: string): Promise<void> =>
-	invoke<void>("review_delete_thread", { threadId });
+export const deleteThread = (roomId: string, threadId: string): Promise<void> =>
+	written(roomId, invoke<void>("review_delete_thread", { threadId }));
 
 /// Human-only by design (D8): an agent that can resolve its own
 /// comments removes the gate the review loop exists to provide.
-export const resolveThread = (threadId: string, resolved: boolean): Promise<void> =>
-	invoke<void>("review_resolve_thread", { threadId, resolved });
+export const resolveThread = (roomId: string, threadId: string, resolved: boolean): Promise<void> =>
+	written(roomId, invoke<void>("review_resolve_thread", { threadId, resolved }));
 
 export const markViewed = (
 	roomId: string,

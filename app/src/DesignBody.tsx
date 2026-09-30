@@ -5,10 +5,11 @@
 // `postMessage` beacons are untrusted (see designPreview.ts).
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type ElementThread,
+	type WrittenSeen,
 	buildLocateAnchors,
 	buildPins,
 	displayState,
@@ -169,7 +170,10 @@ export const DesignBody = ({
 	const threadsRef = useRef<ElementThread[]>([]);
 	threadsRef.current = threads;
 	const requestRef = useRef(0);
-	const writtenRef = useRef<Set<string>>(new Set());
+	const locateNowRef = useRef<() => void>(() => {});
+	const writtenRef = useRef<Map<string, WrittenSeen>>(new Map());
+	const readyCountRef = useRef(0);
+	readyCountRef.current = readyCount;
 
 	const post = useCallback((msg: HostMessage) => {
 		frameRef.current?.contentWindow?.postMessage(hostMessage(msg), "*");
@@ -292,11 +296,7 @@ export const DesignBody = ({
 
 	// Placement: ask the page where the open threads' elements are — on
 	// every load (`ready`) and when the set of threads to locate changes.
-	const signature = placementSignature(threads);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: readyCount and signature are the triggers; threads are read through a ref
-	useEffect(() => {
-		if (readyCount === 0) return;
-		writtenRef.current = new Set();
+	const locateNow = useCallback(() => {
 		const anchors = buildLocateAnchors(threadsRef.current);
 		requestRef.current += 1;
 		if (anchors.length === 0) {
@@ -305,7 +305,14 @@ export const DesignBody = ({
 			return;
 		}
 		post({ type: "locate", requestId: String(requestRef.current), anchors });
-	}, [readyCount, signature, post]);
+	}, [post]);
+	locateNowRef.current = locateNow;
+	const signature = placementSignature(threads);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: readyCount and signature are the triggers; threads are read through a ref
+	useEffect(() => {
+		if (readyCount === 0) return;
+		locateNow();
+	}, [readyCount, signature, locateNow]);
 
 	// Pins follow the side list's numbering and the latest placements.
 	useEffect(() => {
@@ -360,11 +367,9 @@ export const DesignBody = ({
 		}
 	};
 
-	// The review pane refreshes on the backend's event; a write from this
-	// pane touches only sqlite, so send the same event (same payload).
+	// The api.ts write wrappers emit skein://review-changed themselves.
 	const wrote = async () => {
 		await fetchThreads();
-		await emit("skein://review-changed", { roomId });
 	};
 
 	const act = async (fn: () => Promise<unknown>) => {
@@ -408,9 +413,10 @@ export const DesignBody = ({
 		const current = threadsRef.current;
 		const next = placeThreads(current, b.results);
 		setPlacements(next);
-		const writes = seenWrites(current, next, b.files, writtenRef.current);
+		const load = readyCountRef.current;
+		const writes = seenWrites(current, next, b.files, writtenRef.current, load);
 		if (writes.length === 0) return;
-		for (const w of writes) writtenRef.current.add(w.threadId);
+		for (const w of writes) writtenRef.current.set(w.threadId, { ...w.seen, load });
 		void Promise.all(writes.map((w) => reportElementSeen(roomId, w.threadId, w.seen)))
 			.catch((e) => setCommentError(String(e)))
 			.then(() => fetchThreads());
@@ -431,6 +437,9 @@ export const DesignBody = ({
 			} else if (b.type === "picked") {
 				setPicking(false);
 				setDraft(b.element);
+			} else if (b.type === "dom-changed") {
+				// The page finished (re)rendering or resized: its pins may be off.
+				locateNowRef.current();
 			} else if (b.type === "pick-cancelled") {
 				setPicking(false);
 			} else if (b.type === "located") {
@@ -558,10 +567,10 @@ export const DesignBody = ({
 									busy={busy}
 									onSelect={() => setSelected((s) => ({ id: t.id, tick: (s?.tick ?? 0) + 1 }))}
 									onReply={(body) => void act(() => replyToThread(roomId, t.id, body))}
-									onResolve={(r) => void act(() => resolveThread(t.id, r))}
-									onDelete={() => void act(() => deleteThread(t.id))}
-									onEditComment={(id, body) => void act(() => editComment(id, body))}
-									onDeleteComment={(id) => void act(() => deleteComment(id))}
+									onResolve={(r) => void act(() => resolveThread(roomId, t.id, r))}
+									onDelete={() => void act(() => deleteThread(roomId, t.id))}
+									onEditComment={(id, body) => void act(() => editComment(roomId, id, body))}
+									onDeleteComment={(id) => void act(() => deleteComment(roomId, id))}
 								/>
 							))}
 						</div>

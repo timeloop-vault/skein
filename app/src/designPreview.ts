@@ -19,6 +19,7 @@ export type Beacon =
 	| { type: "script-error"; message: string; url?: string; line?: number }
 	| { type: "picked"; element: ElementDescriptor }
 	| { type: "pick-cancelled" }
+	| { type: "dom-changed" }
 	| {
 			type: "located";
 			requestId: string;
@@ -209,6 +210,8 @@ export const parseBeacon = (data: unknown): Beacon | null => {
 		}
 		case "pick-cancelled":
 			return { type: "pick-cancelled" };
+		case "dom-changed":
+			return { type: "dom-changed" };
 		case "located":
 			return parseLocated(d);
 		default:

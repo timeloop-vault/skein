@@ -99,29 +99,42 @@ const rectMoved = (a: ElementRect | undefined, b: ElementRect | undefined): bool
 	);
 };
 
-/** The placements worth persisting: state, selector or rect differ from
- *  what is stored, or the stored answer is `unknown` (its content stamp no
- *  longer matches the disk). `written` holds threads already written for
- *  this load, so an answer the backend cannot confirm is not retried. */
+/** What this pane last wrote for a thread, and in which page load. */
+export interface WrittenSeen {
+	state: AnchorState;
+	selector?: string;
+	rect?: ElementRect;
+	load: number;
+}
+
+/** The placements worth persisting. The baseline is what this pane last
+ *  wrote for the thread, else the stored `lastSeen`; a write is due when
+ *  state, selector or rect (beyond a couple of px) differ from it. A stored
+ *  `unknown` (its content stamp no longer matches the disk) also earns one
+ *  write per page `load`, so an answer the backend cannot confirm is not
+ *  retried on every re-locate. */
 export const seenWrites = (
 	threads: readonly ElementThread[],
 	placements: ReadonlyMap<string, Placement>,
 	files: string[],
-	written: ReadonlySet<string>,
+	written: ReadonlyMap<string, WrittenSeen>,
+	load: number,
 ): SeenWrite[] => {
 	const out: SeenWrite[] = [];
 	for (const t of placeable(threads)) {
 		const p = placements.get(t.id);
-		if (!p || written.has(t.id) || !t.element) continue;
-		const last = t.element.lastSeen;
+		if (!p || !t.element) continue;
 		const selector = p.at?.selector;
 		const rect = p.at?.rect;
+		const mine = written.get(t.id);
+		const base = mine ?? t.element.lastSeen;
+		const unknownDue = t.element.state === "unknown" && mine?.load !== load;
 		const changed =
-			t.element.state === "unknown" ||
-			!last ||
-			last.state !== p.state ||
-			last.selector !== selector ||
-			rectMoved(last.rect, rect);
+			unknownDue ||
+			!base ||
+			base.state !== p.state ||
+			base.selector !== selector ||
+			rectMoved(base.rect, rect);
 		if (!changed) continue;
 		const seen: SeenWrite["seen"] = { state: p.state, files };
 		if (selector !== undefined) seen.selector = selector;
