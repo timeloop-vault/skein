@@ -455,7 +455,20 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   `SubagentStop` is reported not to always fire). A subagent has no user
   to await, so its own end of turn IS its exit: a terminal `stop_reason`
   (`end_turn`/`stop_sequence`/`max_tokens`) means done, verified 221/221
-  on real transcripts — nothing polls mtime. The frontend mirrors the
+  on real transcripts — nothing polls mtime. Since Claude Code 2.1.285 a
+  subagent usually ends on its `SubagentHandback` tool's `tool_result`
+  (flagged `toolEndsTurn`), with no terminal assistant row after it, so
+  that result is an exit too (#440; 283 such endings in 3,643
+  transcripts, all 2.1.285; 2.1.271–2.1.284 also call `SubagentHandback`
+  but follow its result with a terminal `end_turn`, which the state
+  machine counts once). The exit is the result, not the `tool_use`,
+  because the report is delivered only then. The per-subagent state
+  machine lives in `crates/skein-harness` (`SubagentLifecycle`), shared
+  by the live tail and the attach scan, and only a new user prompt row
+  re-opens a finished subagent (assistant or `attachment` rows after an
+  exit no longer do, nor does a `queueTranscriptOnly` row; `isMeta`
+  rows still do, since 1525 of 1526 post-exit ones were followed by
+  assistant work). The frontend mirrors the
   live set in a pure per-harness registry, `subagents.ts`. The feed
   already renders the delegation via the main transcript's `Agent`
   tool_call row, so the only new row is `subagent_end`: a *background*
@@ -483,7 +496,11 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   `DELEGATION_CEILING_MS` (15 min of total subagent silence — measured
   2.4% of 1038 real subagents have an internal quiet gap that long)
   presumes the working set gone and notifies without claiming anything
-  finished, since Skein can't know that. The restart leak — every
+  finished, since Skein can't know that. The ceiling was being left
+  unarmed before #440: a `queueTranscriptOnly` user row (a
+  `<task-notification>` Claude Code writes after an end of turn, which
+  starts no turn — 0 of 55 did) used to read as a work signal and
+  disarm the deferral, and it no longer does. The restart leak — every
   attach-time subagent reading as newly working — is closed by
   `ClaudeEvent::SubagentStart.initial`, true only for the disk-seeded
   attach batch; `subagents.workingCount` excludes those via

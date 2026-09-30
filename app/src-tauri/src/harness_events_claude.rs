@@ -149,10 +149,12 @@ pub enum ClaudeEvent {
     /// parent-harness phase change: it says nothing about the main
     /// session's own state.
     SubagentToolResult { agent_id: String },
-    /// A subagent's transcript ended — its last row is an assistant
-    /// row with a terminal `stop_reason` (see
-    /// `skein_harness::claude::subagent_row_is_terminal`). A subagent
-    /// has no user to await, so the end of its turn IS its exit.
+    /// A subagent's transcript ended — an assistant row with a terminal
+    /// `stop_reason`, or (#440) the `tool_result` of its `SubagentHandback`
+    /// call (see `skein_harness::claude::SubagentLifecycle`). A subagent
+    /// has no user to await, so the end of its turn IS its exit. The
+    /// handback's result, not its `tool_use`, is the exit: only then is
+    /// the report delivered, and Claude marks that row `toolEndsTurn`.
     SubagentEnd {
         agent_id: String,
         agent_type: Option<String>,
@@ -596,12 +598,13 @@ struct SubagentTail {
     /// Trailing partial line carried across ticks — same role as
     /// `TailState::partial`.
     partial: String,
-    /// Whether the last row read from this transcript is terminal
-    /// (see `skein_harness::claude::subagent_row_is_terminal`). A
-    /// subagent that gets more rows after finishing (a follow-up
-    /// delegation to the same id) flips this back to `false` and
-    /// re-emits `SubagentStart`.
-    finished: bool,
+    /// Exit/re-open state machine (`skein_harness::claude::SubagentLifecycle`,
+    /// #440): a terminal `stop_reason` or a `SubagentHandback`
+    /// `tool_result` ends the subagent; a later user prompt re-opens it
+    /// and re-emits `SubagentStart`. Kept across ticks (and seeded from
+    /// the whole file at attach) so a handback id seen earlier still
+    /// matches its result.
+    lifecycle: skein_harness::claude::SubagentLifecycle,
     /// From the `agent-<id>.meta.json` sidecar; `None` when it's
     /// absent or doesn't parse. Carried here so `SubagentEnd` can
     /// report the same type/description `SubagentStart` did, without
@@ -1134,7 +1137,8 @@ where
                 };
                 let content = fs::read_to_string(&sub_path).unwrap_or_default();
                 let last_pos = u64::try_from(content.len()).unwrap_or(u64::MAX);
-                let finished = subagent_content_is_finished(&content);
+                let lifecycle = subagent_lifecycle_from_content(&content);
+                let finished = lifecycle.is_finished();
                 let meta = skein_harness::claude::read_subagent_meta(&sub_path);
                 let (agent_type, description) =
                     meta.map_or((None, None), |m| (m.agent_type, m.description));
@@ -1163,7 +1167,7 @@ where
                         path: sub_path,
                         last_pos,
                         partial: String::new(),
-                        finished,
+                        lifecycle,
                         agent_type,
                         description,
                         // Seeded at attach, jumped straight to EOF —
@@ -2188,7 +2192,11 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     // Only the subagents still being tailed live count as "watched" —
     // a finished one is a cheap stat check, not a file whose new rows
     // we're expecting (#362).
-    let live_subagents = s.subagents.values().filter(|t| !t.finished).count();
+    let live_subagents = s
+        .subagents
+        .values()
+        .filter(|t| !t.lifecycle.is_finished())
+        .count();
     let watched_files = 1 + live_subagents;
     tracing::debug!(
         harness_id = %s.harness_id,
@@ -2365,7 +2373,7 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
                     path: sub_path.clone(),
                     last_pos: 0,
                     partial: String::new(),
-                    finished: false,
+                    lifecycle: skein_harness::claude::SubagentLifecycle::default(),
                     agent_type,
                     description,
                     started_ms: None,
@@ -2437,7 +2445,7 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
             };
             tail.last_pos = u64::try_from(content.len()).unwrap_or(u64::MAX);
             tail.partial.clear();
-            tail.finished = subagent_content_is_finished(&content);
+            tail.lifecycle = subagent_lifecycle_from_content(&content);
             tracing::info!(
                 harness_id = %s.harness_id,
                 path = %tail.path.display(),
@@ -2495,9 +2503,15 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
             if let Some(ts) = row_ts {
                 tail.last_ts_ms = ts;
             }
-            if skein_harness::claude::subagent_row_is_terminal(&value) {
-                if !tail.finished {
-                    tail.finished = true;
+            // The lifecycle decides exit and re-open (#440). Behaviour
+            // change: only a user prompt row (no tool_result) re-opens a
+            // finished subagent now. Assistant rows and non-message rows
+            // (e.g. a trailing `attachment`) after an exit used to
+            // re-open it, which misfired on the 2.1.27x trailing rows.
+            // The exit is a `SubagentHandback` tool_result (report
+            // delivered; Claude marks it `toolEndsTurn`), not its tool_use.
+            match tail.lifecycle.observe(&value) {
+                Some(skein_harness::claude::SubagentTransition::Finished) => {
                     events.push(ClaudeEvent::SubagentEnd {
                         agent_id: agent_id.clone(),
                         agent_type: tail.agent_type.clone(),
@@ -2533,20 +2547,21 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
                         source: None,
                     });
                 }
-            } else if tail.finished {
-                // More rows arrived after a terminal one — a
-                // follow-up delegation to the same id. Live again.
-                // Reuses the cached `agent_type`/`description` from
-                // this id's first appearance rather than re-reading
-                // the `.meta.json` sidecar — on the assumption Claude
-                // never changes an id's meta after the fact.
-                tail.finished = false;
-                events.push(ClaudeEvent::SubagentStart {
-                    agent_id: agent_id.clone(),
-                    agent_type: tail.agent_type.clone(),
-                    description: tail.description.clone(),
-                    initial: false,
-                });
+                Some(skein_harness::claude::SubagentTransition::Reopened) => {
+                    // A new prompt arrived after the exit — a
+                    // follow-up delegation to the same id. Live again.
+                    // Reuses the cached `agent_type`/`description` from
+                    // this id's first appearance rather than re-reading
+                    // the `.meta.json` sidecar — on the assumption Claude
+                    // never changes an id's meta after the fact.
+                    events.push(ClaudeEvent::SubagentStart {
+                        agent_id: agent_id.clone(),
+                        agent_type: tail.agent_type.clone(),
+                        description: tail.description.clone(),
+                        initial: false,
+                    });
+                }
+                None => {}
             }
             if is_subagent_tool_result_row(&value) {
                 events.push(ClaudeEvent::SubagentToolResult {
@@ -2580,14 +2595,14 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
     }
 }
 
-/// Scans every complete line in `content` and returns whether the
-/// *last* one is terminal (see
-/// `skein_harness::claude::subagent_row_is_terminal`). Used to seed a
-/// subagent's `finished` state from what's already on disk at attach
-/// time, mirroring the per-row logic `tick_subagents` applies while
-/// tailing live.
-fn subagent_content_is_finished(content: &str) -> bool {
-    let mut finished = false;
+/// Runs a fresh `SubagentLifecycle` over every complete line in
+/// `content`. Used to seed a subagent's lifecycle from what's already
+/// on disk at attach time, mirroring the per-row logic `tick_subagents`
+/// applies while tailing live. The lifecycle is kept (not just its
+/// verdict) so a `SubagentHandback` id seen before attach still matches
+/// a result that arrives afterwards.
+fn subagent_lifecycle_from_content(content: &str) -> skein_harness::claude::SubagentLifecycle {
+    let mut lifecycle = skein_harness::claude::SubagentLifecycle::default();
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -2596,9 +2611,9 @@ fn subagent_content_is_finished(content: &str) -> bool {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
             continue;
         };
-        finished = skein_harness::claude::subagent_row_is_terminal(&value);
+        lifecycle.observe(&value);
     }
-    finished
+    lifecycle
 }
 
 /// A `user` row whose `message.content` carries a `tool_result` block
@@ -2824,6 +2839,10 @@ fn apply_initial_state_row(value: &serde_json::Value, last: &mut Option<ClaudeEv
     let Some(ty) = value.get("type").and_then(serde_json::Value::as_str) else {
         return;
     };
+    // #440: same skip as the live parser.
+    if skein_harness::claude::is_queue_transcript_only(value) {
+        return;
+    }
     // #260: same rule as the live parser, or an interrupted session
     // resumes into running on every restart.
     if ends_turn_without_stop_reason(ty, value) {
@@ -2927,6 +2946,10 @@ fn parse_value(value: &serde_json::Value, in_assistant_turn: &mut bool) -> Optio
         // Reset the turn flag if a sub-agent interrupts so the next
         // main-session assistant row starts a fresh turn.
         *in_assistant_turn = false;
+        return None;
+    }
+
+    if skein_harness::claude::is_queue_transcript_only(value) {
         return None;
     }
 
@@ -3585,6 +3608,32 @@ mod tests {
         assert!(matches!(
             parse_one(result),
             Some(ClaudeEvent::ToolUseResult)
+        ));
+    }
+
+    const QUEUED_NOTIFICATION: &str = r#"{"type":"user","message":{"role":"user","content":"<task-notification>done</task-notification>"},"origin":{"kind":"task-notification"},"promptSource":"system","queueTranscriptOnly":true,"uuid":"u9","timestamp":"2026-01-01T00:00:00.030Z"}"#;
+
+    #[test]
+    fn queue_transcript_only_user_row_is_not_a_prompt() {
+        let value: serde_json::Value = serde_json::from_str(QUEUED_NOTIFICATION).unwrap();
+        let mut in_turn = true;
+        assert!(parse_value(&value, &mut in_turn).is_none());
+        assert!(in_turn, "the skip must leave the turn flag alone");
+        // Same row without the flag starts a turn.
+        let unflagged = QUEUED_NOTIFICATION.replace(r#""queueTranscriptOnly":true,"#, "");
+        assert!(matches!(
+            parse_one(&unflagged),
+            Some(ClaudeEvent::UserPrompt)
+        ));
+    }
+
+    #[test]
+    fn queue_transcript_only_row_after_end_turn_keeps_awaiting_prompt() {
+        let end = r#"{"type":"assistant","message":{"stop_reason":"end_turn","content":[]}}"#;
+        let log = format!("{end}\n{QUEUED_NOTIFICATION}\n");
+        assert!(matches!(
+            determine_initial_state(&log),
+            Some(ClaudeEvent::AwaitingPrompt)
         ));
     }
 
@@ -4282,6 +4331,231 @@ mod tests {
             ),
             "SubagentEnd re-fired on a later tick, got {more:?}"
         );
+    }
+
+    const HB_TOOL_USE: &str = r#"{"type":"assistant","isSidechain":true,"agentId":"a1","uuid":"u2","timestamp":"2026-01-01T00:00:00.000Z","message":{"id":"msg_X","role":"assistant","content":[{"type":"tool_use","id":"toolu_H","name":"SubagentHandback","input":{"message":"..."}}],"stop_reason":null}}"#;
+    const HB_RESULT: &str = r#"{"type":"user","isSidechain":true,"agentId":"a1","uuid":"u4","timestamp":"2026-01-01T00:00:01.100Z","message":{"role":"user","content":[{"tool_use_id":"toolu_H","type":"tool_result","content":[{"type":"text","text":"{\"success\":true,\"message\":\"Report delivered to your caller.\"}"}]}]},"toolUseResult":{"success":true,"message":"Report delivered to your caller."},"toolEndsTurn":true,"sourceToolAssistantUUID":"u2"}"#;
+    const HB_RESULT_NO_FLAG: &str = r#"{"type":"user","isSidechain":true,"agentId":"a1","uuid":"u4","timestamp":"2026-01-01T00:00:01.100Z","message":{"role":"user","content":[{"tool_use_id":"toolu_H","type":"tool_result","content":"delivered"}]}}"#;
+    const BASH_USE: &str = r#"{"type":"assistant","isSidechain":true,"agentId":"a1","uuid":"u0","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_B","name":"Bash","input":{"command":"ls"}}],"stop_reason":"tool_use"}}"#;
+    const BASH_RESULT: &str = r#"{"type":"user","isSidechain":true,"agentId":"a1","uuid":"u1","timestamp":"2026-01-01T00:00:00.500Z","message":{"role":"user","content":[{"tool_use_id":"toolu_B","type":"tool_result","content":"ok"}]}}"#;
+
+    fn append_lines(path: &Path, lines: &[&str]) {
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        for l in lines {
+            writeln!(f, "{l}").unwrap();
+        }
+        f.sync_all().unwrap();
+    }
+
+    fn count_ends(events: &[ClaudeEvent]) -> usize {
+        events
+            .iter()
+            .filter(|e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "a1"))
+            .count()
+    }
+
+    /// #440: a `SubagentHandback` `tool_use` alone is not an exit; its
+    /// `tool_result` is — one `SubagentEnd` and one `subagent_end` row.
+    #[test]
+    fn subagent_handback_result_ends_subagent_once_with_action_row() {
+        let dir = TempDir::new().unwrap();
+        let jsonl = dir.path().join("session.jsonl");
+        let db_path = dir.path().join("test.db");
+        let _manager = make_persisting_adapter(jsonl.clone(), &db_path, "h1", "r1");
+        append_lines(
+            &jsonl,
+            &[
+                r#"{"type":"assistant","sessionId":"x","message":{"stop_reason":"tool_use","content":[]}}"#,
+            ],
+        );
+        let sub_dir = skein_harness::claude::subagents_dir(&jsonl).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub_path = sub_dir.join("agent-a1.jsonl");
+        append_lines(&sub_path, &[BASH_USE, BASH_RESULT]);
+        thread::sleep(Duration::from_secs(1));
+        append_lines(&sub_path, &[HB_TOOL_USE]);
+        thread::sleep(Duration::from_secs(1));
+
+        let db = crate::db::Database::open(&db_path).unwrap();
+        let ends = |db: &crate::db::Database| {
+            db.recent_harness_actions_by_room("r1", -1, 100)
+                .unwrap()
+                .iter()
+                .filter(|a| a.kind == crate::db::action_kind::SUBAGENT_END)
+                .count()
+        };
+        assert_eq!(ends(&db), 0, "tool_use alone must not end the subagent");
+
+        append_lines(&sub_path, &[HB_RESULT]);
+        thread::sleep(Duration::from_secs(2));
+        assert_eq!(ends(&db), 1, "the handback result ends the subagent once");
+    }
+
+    #[test]
+    fn subagent_handback_tool_use_then_result_emits_one_end_event() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        mgr.supervise_once();
+        let sub_path = sub_dir.join("agent-a1.jsonl");
+        append_lines(&sub_path, &[BASH_USE, BASH_RESULT, HB_TOOL_USE]);
+        let events = drain(&rx);
+        assert_eq!(count_ends(&events), 0, "tool_use alone, got {events:?}");
+        append_lines(&sub_path, &[HB_RESULT]);
+        let events = drain(&rx);
+        assert_eq!(count_ends(&events), 1, "got {events:?}");
+    }
+
+    /// The pre-handback ending (terminal `stop_reason`) still exits.
+    #[test]
+    fn subagent_end_turn_still_ends_subagent() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        mgr.supervise_once();
+        append_lines(
+            &sub_dir.join("agent-a1.jsonl"),
+            &[
+                BASH_USE,
+                r#"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"stop_reason":"end_turn","content":[]}}"#,
+            ],
+        );
+        let events = drain(&rx);
+        assert_eq!(count_ends(&events), 1, "got {events:?}");
+    }
+
+    /// Trailing 2.1.27x rows after a handback exit do not re-open; a
+    /// real user prompt does.
+    #[test]
+    fn subagent_trailing_rows_after_handback_do_not_reopen_but_prompt_does() {
+        let dir = TempDir::new().unwrap();
+        let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
+        drain(&rx);
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        mgr.supervise_once();
+        let sub_path = sub_dir.join("agent-a1.jsonl");
+        append_lines(&sub_path, &[BASH_USE, BASH_RESULT, HB_TOOL_USE, HB_RESULT]);
+        let events = drain(&rx);
+        assert_eq!(count_ends(&events), 1, "got {events:?}");
+
+        append_lines(
+            &sub_path,
+            &[
+                r#"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#,
+                r#"{"type":"attachment","isSidechain":true,"agentId":"a1","attachment":{"type":"x"}}"#,
+            ],
+        );
+        let events = drain(&rx);
+        assert_eq!(count_ends(&events), 0, "no second end, got {events:?}");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ClaudeEvent::SubagentStart { .. })),
+            "trailing rows must not re-open, got {events:?}"
+        );
+
+        append_lines(
+            &sub_path,
+            &[
+                r#"{"type":"user","isSidechain":true,"agentId":"a1","message":{"role":"user","content":"carry on"}}"#,
+            ],
+        );
+        let events = drain(&rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ClaudeEvent::SubagentStart { agent_id, initial, .. }
+                    if agent_id == "a1" && !*initial
+            )),
+            "a user prompt re-opens, got {events:?}"
+        );
+    }
+
+    /// At attach, a handback-finished transcript seeds nothing; a
+    /// mid-work one seeds an initial start.
+    #[test]
+    fn attach_seeds_start_only_for_subagent_not_handed_back() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        append_lines(
+            &path,
+            &[
+                r#"{"type":"assistant","sessionId":"x","message":{"stop_reason":"tool_use","content":[]}}"#,
+            ],
+        );
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        append_lines(
+            &sub_dir.join("agent-done.jsonl"),
+            &[BASH_USE, BASH_RESULT, HB_TOOL_USE, HB_RESULT],
+        );
+        append_lines(&sub_dir.join("agent-busy.jsonl"), &[BASH_USE]);
+
+        let (tx, rx) = mpsc::channel();
+        let manager = test_manager();
+        manager
+            .attach_at("h1", path, move |e| tx.send(e).unwrap(), None)
+            .unwrap();
+        let events = drain_brief(&rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ClaudeEvent::SubagentStart { agent_id, initial, .. }
+                    if agent_id == "busy" && *initial
+            )),
+            "got {events:?}"
+        );
+        assert!(
+            !events.iter().any(
+                |e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "done")
+            ),
+            "handed-back subagent must not be seeded, got {events:?}"
+        );
+    }
+
+    /// The handback id seen at attach carries into the live tail: a
+    /// result without `toolEndsTurn` still ends the subagent.
+    #[test]
+    fn attach_handback_id_carries_into_live_tail() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        append_lines(
+            &path,
+            &[
+                r#"{"type":"assistant","sessionId":"x","message":{"stop_reason":"tool_use","content":[]}}"#,
+            ],
+        );
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub_path = sub_dir.join("agent-a1.jsonl");
+        append_lines(&sub_path, &[BASH_USE, BASH_RESULT, HB_TOOL_USE]);
+
+        let (tx, rx) = mpsc::channel();
+        let manager = test_manager();
+        manager
+            .attach_at("h1", path, move |e| tx.send(e).unwrap(), None)
+            .unwrap();
+        let events = drain_brief(&rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ClaudeEvent::SubagentStart { agent_id, initial, .. }
+                    if agent_id == "a1" && *initial
+            )),
+            "got {events:?}"
+        );
+        append_lines(&sub_path, &[HB_RESULT_NO_FLAG]);
+        let events = drain(&rx);
+        assert_eq!(count_ends(&events), 1, "got {events:?}");
     }
 
     /// `tick_subagents` stats a subagent file before opening it and
@@ -5513,7 +5787,7 @@ mod tests {
                     path: sub_path,
                     last_pos: 10_000,
                     partial: "junk".into(),
-                    finished: false,
+                    lifecycle: skein_harness::claude::SubagentLifecycle::default(),
                     agent_type: None,
                     description: None,
                     started_ms: None,
@@ -5529,7 +5803,10 @@ mod tests {
         let t = s.subagents.get("x").unwrap();
         assert_eq!(t.last_pos, content.len() as u64);
         assert!(t.partial.is_empty());
-        assert_eq!(t.finished, subagent_content_is_finished(content));
+        assert_eq!(
+            t.lifecycle.is_finished(),
+            skein_harness::claude::subagent_transcript_is_finished(content)
+        );
     }
 
     /// A pass over an adapter whose watched directories haven't
