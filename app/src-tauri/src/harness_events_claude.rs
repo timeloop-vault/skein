@@ -37,6 +37,7 @@ use skein_harness::claude::background::{
     self, BackgroundKind, BackgroundTask, BackgroundTasks, BackgroundTransition, Outcome,
     OutcomeStatus, OutputTrailer,
 };
+use skein_harness::claude::local_command::LocalCommandTracker;
 
 use crate::db::Database;
 use crate::harness_actions_claude::{ActionExtractor, ExtractedAction};
@@ -740,6 +741,8 @@ struct TailState {
     /// assistant turn — used to coalesce streamed `assistant` rows
     /// into one `AssistantTurn` event per turn boundary.
     in_assistant_turn: bool,
+    /// Local slash command classifier (#463); fed every main-chain row.
+    local_command: LocalCommandTracker,
     /// Action persistence sink. `None` for path-injected tests that
     /// only care about phase events. Populated in production by
     /// `attach_at_with_actions`. Lives in `TailState` so the watcher
@@ -1120,9 +1123,15 @@ where
             app: ap.app.clone(),
         });
         let mut background = BackgroundState::default();
+        let mut local_command = LocalCommandTracker::default();
         let (last_pos, attached, initial_event, fingerprint) = match fs::read_to_string(&path) {
             Ok(content) => {
-                let (init, fresh) = scan_history(&content, actions.as_mut(), &mut background);
+                let (init, fresh) = scan_history(
+                    &content,
+                    actions.as_mut(),
+                    &mut background,
+                    &mut local_command,
+                );
                 if let Some(ap) = actions.as_ref() {
                     persist_extracted_batch(ap, fresh);
                 }
@@ -1262,6 +1271,9 @@ where
             ever_attached,
             fingerprint,
             in_assistant_turn: false,
+            // Seeded from the attach walk so a burst split across attach
+            // and the first live read is still recognised (#463).
+            local_command,
             actions,
             subagents_dir: subagents_dir_opt.clone(),
             subagents: initial_subagents,
@@ -1980,7 +1992,13 @@ fn resync_as_backfill(s: &mut TailState) -> Resync {
         owner: std::mem::take(&mut s.background.owner),
         ..BackgroundState::default()
     };
-    let (init, fresh) = scan_history(&content, s.actions.as_mut(), &mut background);
+    let mut local_command = LocalCommandTracker::default();
+    let (init, fresh) = scan_history(
+        &content,
+        s.actions.as_mut(),
+        &mut background,
+        &mut local_command,
+    );
     for (agent_id, tail) in &s.subagents {
         if let Ok(sub) = fs::read_to_string(&tail.path) {
             subagent_lifecycle_from_content(&sub, &mut background, agent_id);
@@ -1995,6 +2013,7 @@ fn resync_as_backfill(s: &mut TailState) -> Resync {
     s.partial.clear();
     // `attach_at` starts a state with `false` after the same scan.
     s.in_assistant_turn = false;
+    s.local_command = local_command;
     s.fingerprint = fingerprint_of(content.as_bytes());
     s.utf8_stall_at = None;
     s.utf8_stall_count = 0;
@@ -2248,6 +2267,7 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     let mut background_rows: Vec<ExtractedAction> = Vec::new();
     let harness_id = s.harness_id.clone();
     let mut in_assistant_turn = s.in_assistant_turn;
+    let mut local_command = std::mem::take(&mut s.local_command);
     let mut lines_parsed: usize = 0;
     while let Some(line) = lines.next() {
         if lines.peek().is_none() {
@@ -2270,7 +2290,7 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
         let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
             continue;
         };
-        if let Some(event) = parse_value(&value, &mut in_assistant_turn) {
+        if let Some(event) = parse_value(&value, &mut in_assistant_turn, &mut local_command) {
             events.push(event);
         }
         if let Some(ap) = s.actions.as_mut() {
@@ -2289,6 +2309,7 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
         );
     }
     s.in_assistant_turn = in_assistant_turn;
+    s.local_command = local_command;
 
     // Subagent transcripts, after the main file — same lock, same
     // events vec, so consumers see main-session events first and
@@ -3125,6 +3146,7 @@ fn scan_history(
     content: &str,
     mut actions: Option<&mut ActionPersistence>,
     background: &mut BackgroundState,
+    local_command: &mut LocalCommandTracker,
 ) -> (
     Option<ClaudeEvent>,
     Vec<crate::harness_actions_claude::ExtractedAction>,
@@ -3142,7 +3164,7 @@ fn scan_history(
         let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
             continue;
         };
-        apply_initial_state_row(&value, &mut last);
+        apply_initial_state_row(&value, &mut last, local_command);
         background.feed(&value, None, None);
         if let Some(ap) = actions.as_mut() {
             let extracted = ap.extractor.ingest(&value);
@@ -3290,7 +3312,13 @@ fn max_persisted_ts_ms(db: &Database, harness_id: &str) -> i64 {
 /// derived phase" tests below stay simple to write.
 #[cfg(test)]
 fn determine_initial_state(content: &str) -> Option<ClaudeEvent> {
-    scan_history(content, None, &mut BackgroundState::default()).0
+    scan_history(
+        content,
+        None,
+        &mut BackgroundState::default(),
+        &mut LocalCommandTracker::default(),
+    )
+    .0
 }
 
 /// One row's worth of `determine_initial_state`'s logic, factored out
@@ -3299,7 +3327,11 @@ fn determine_initial_state(content: &str) -> Option<ClaudeEvent> {
 /// and the action scan each re-parsing every line (#171e). Mutates
 /// `last` in place — same "last relevant row wins" rule the doc comment
 /// on `determine_initial_state` describes.
-fn apply_initial_state_row(value: &serde_json::Value, last: &mut Option<ClaudeEvent>) {
+fn apply_initial_state_row(
+    value: &serde_json::Value,
+    last: &mut Option<ClaudeEvent>,
+    local_command: &mut LocalCommandTracker,
+) {
     if skein_harness::claude::is_sidechain(value) {
         return;
     }
@@ -3308,6 +3340,11 @@ fn apply_initial_state_row(value: &serde_json::Value, last: &mut Option<ClaudeEv
     };
     // #440: same skip as the live parser.
     if skein_harness::claude::is_queue_transcript_only(value) {
+        return;
+    }
+    // #463: a local slash command's own rows are not a turn start; see
+    // the `local_command` module doc.
+    if local_command.observe(value) {
         return;
     }
     // #260: same rule as the live parser, or an interrupted session
@@ -3413,7 +3450,11 @@ fn ends_turn_without_stop_reason(ty: &str, value: &serde_json::Value) -> bool {
 /// retry/edit). They appear at the *start* of a Claude turn, not
 /// the end. Treating them as "awaiting input" was the bug that
 /// kept the dot green until the L2a 8 s idle timeout finally fired.
-fn parse_value(value: &serde_json::Value, in_assistant_turn: &mut bool) -> Option<ClaudeEvent> {
+fn parse_value(
+    value: &serde_json::Value,
+    in_assistant_turn: &mut bool,
+    local_command: &mut LocalCommandTracker,
+) -> Option<ClaudeEvent> {
     let ty = value.get("type")?.as_str()?;
 
     // Sub-agent rows carry isSidechain=true. The main session is
@@ -3427,6 +3468,12 @@ fn parse_value(value: &serde_json::Value, in_assistant_turn: &mut bool) -> Optio
     }
 
     if skein_harness::claude::is_queue_transcript_only(value) {
+        return None;
+    }
+
+    // #463: a local slash command's own rows are not a turn start, and
+    // leave the turn flag alone; see the `local_command` module doc.
+    if local_command.observe(value) {
         return None;
     }
 
@@ -4044,7 +4091,7 @@ mod tests {
     /// `parse_value` on one JSON row, starting outside an assistant turn.
     fn parse_one(row: &str) -> Option<ClaudeEvent> {
         let value: serde_json::Value = serde_json::from_str(row).unwrap();
-        parse_value(&value, &mut false)
+        parse_value(&value, &mut false, &mut LocalCommandTracker::default())
     }
 
     // #260 — the row shapes below are from a real Claude Code 2.1.270
@@ -4072,7 +4119,7 @@ mod tests {
         .unwrap();
         let mut in_turn = true;
         assert!(matches!(
-            parse_value(&value, &mut in_turn),
+            parse_value(&value, &mut in_turn, &mut LocalCommandTracker::default()),
             Some(ClaudeEvent::AwaitingPrompt)
         ));
         assert!(!in_turn);
@@ -4099,7 +4146,7 @@ mod tests {
     fn queue_transcript_only_user_row_is_not_a_prompt() {
         let value: serde_json::Value = serde_json::from_str(QUEUED_NOTIFICATION).unwrap();
         let mut in_turn = true;
-        assert!(parse_value(&value, &mut in_turn).is_none());
+        assert!(parse_value(&value, &mut in_turn, &mut LocalCommandTracker::default()).is_none());
         assert!(in_turn, "the skip must leave the turn flag alone");
         // Same row without the flag starts a turn.
         let unflagged = QUEUED_NOTIFICATION.replace(r#""queueTranscriptOnly":true,"#, "");
@@ -4117,6 +4164,116 @@ mod tests {
             determine_initial_state(&log),
             Some(ClaudeEvent::AwaitingPrompt)
         ));
+    }
+
+    // #463 — local slash command rows (shapes from Claude Code 2.1.285,
+    // contents anonymised).
+    const LC_END: &str = r#"{"type":"assistant","message":{"stop_reason":"end_turn","content":[]},"uuid":"a1","timestamp":"2026-01-01T00:00:00.000Z"}"#;
+    const LC_NAME: &str = r#"{"type":"system","subtype":"local_command","content":"<command-name>/context</command-name>\n<command-message>context</command-message>\n<command-args></command-args>","level":"info","isMeta":false,"uuid":"s1","timestamp":"2026-01-01T00:00:01.000Z"}"#;
+    const LC_STDOUT: &str = r#"{"type":"system","subtype":"local_command","content":"<local-command-stdout>ctx output</local-command-stdout>","level":"info","isMeta":false,"commandRun":{"command":"context"},"uuid":"s2","timestamp":"2026-01-01T00:00:01.100Z"}"#;
+    const LC_OUTPUT: &str = r#"{"type":"user","isMeta":true,"promptId":"p1","message":{"role":"user","content":"ctx output"},"uuid":"u1","timestamp":"2026-01-01T00:00:01.200Z"}"#;
+    const LC_PEER: &str = r#"{"type":"user","isMeta":true,"promptId":"p2","origin":{"kind":"peer","from":"x","handback":true},"promptSource":"system","turnOrigin":"peer","message":{"role":"user","content":"Another Claude session sent a message: hi"},"uuid":"u2","timestamp":"2026-01-01T00:00:02.000Z"}"#;
+    const LC_CUSTOM: &str = r#"{"type":"user","promptId":"p3","origin":{"kind":"human"},"message":{"role":"user","content":"<command-message>my-cmd</command-message>\n<command-name>/my-cmd</command-name>"},"uuid":"u3","timestamp":"2026-01-01T00:00:03.000Z"}"#;
+
+    fn lc_feed(
+        rows: &[&str],
+        in_turn: &mut bool,
+        tracker: &mut LocalCommandTracker,
+    ) -> Vec<ClaudeEvent> {
+        rows.iter()
+            .filter_map(|r| {
+                let v: serde_json::Value = serde_json::from_str(r).unwrap();
+                parse_value(&v, in_turn, tracker)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn local_command_rows_after_end_turn_produce_no_events_live() {
+        let mut in_turn = false;
+        let mut tracker = LocalCommandTracker::default();
+        let first = lc_feed(&[LC_END], &mut in_turn, &mut tracker);
+        assert!(matches!(first.as_slice(), [ClaudeEvent::AwaitingPrompt]));
+        let events = lc_feed(&[LC_NAME, LC_STDOUT, LC_OUTPUT], &mut in_turn, &mut tracker);
+        assert!(events.is_empty(), "got {events:?}");
+    }
+
+    #[test]
+    fn local_command_rows_appended_to_a_tailed_file_produce_no_events() {
+        let dir = TempDir::new().unwrap();
+        let (state, path, _db) = t425_vanished(&dir, false);
+        fs::write(
+            &path,
+            t425_jsonl(&[
+                T425_PROMPT,
+                T425_TOOL,
+                T425_RESULT,
+                T425_END,
+                LC_NAME,
+                LC_STDOUT,
+                LC_OUTPUT,
+            ]),
+        )
+        .unwrap();
+        let events = t425_tick(&state);
+        assert!(events.is_empty(), "got {events:?}");
+    }
+
+    #[test]
+    fn local_command_rows_after_end_turn_keep_awaiting_prompt_on_attach() {
+        let log = format!("{LC_END}\n{LC_NAME}\n{LC_STDOUT}\n{LC_OUTPUT}\n");
+        assert!(matches!(
+            determine_initial_state(&log),
+            Some(ClaudeEvent::AwaitingPrompt)
+        ));
+    }
+
+    #[test]
+    fn custom_slash_command_still_starts_a_turn() {
+        let mut in_turn = false;
+        let mut tracker = LocalCommandTracker::default();
+        let events = lc_feed(
+            &[LC_END, LC_NAME, LC_STDOUT, LC_OUTPUT, LC_CUSTOM],
+            &mut in_turn,
+            &mut tracker,
+        );
+        assert!(
+            matches!(
+                events.as_slice(),
+                [ClaudeEvent::AwaitingPrompt, ClaudeEvent::UserPrompt { .. }]
+            ),
+            "got {events:?}"
+        );
+    }
+
+    #[test]
+    fn peer_message_right_after_a_local_command_still_starts_a_turn() {
+        let mut in_turn = false;
+        let mut tracker = LocalCommandTracker::default();
+        let events = lc_feed(
+            &[LC_END, LC_NAME, LC_STDOUT, LC_OUTPUT, LC_PEER],
+            &mut in_turn,
+            &mut tracker,
+        );
+        assert!(
+            matches!(
+                events.as_slice(),
+                [ClaudeEvent::AwaitingPrompt, ClaudeEvent::UserPrompt { .. }]
+            ),
+            "got {events:?}"
+        );
+    }
+
+    #[test]
+    fn local_command_burst_split_across_attach_and_live_is_recognised() {
+        let attach = format!("{LC_END}\n{LC_NAME}\n{LC_STDOUT}\n");
+        let mut tracker = LocalCommandTracker::default();
+        let (init, _) = scan_history(&attach, None, &mut BackgroundState::default(), &mut tracker);
+        assert!(matches!(init, Some(ClaudeEvent::AwaitingPrompt)));
+        // The live tail is seeded with the attach walk's tracker.
+        let mut in_turn = false;
+        let events = lc_feed(&[LC_OUTPUT], &mut in_turn, &mut tracker);
+        assert!(events.is_empty(), "got {events:?}");
     }
 
     #[test]
@@ -5401,6 +5558,7 @@ mod tests {
             ever_attached: true,
             fingerprint: Vec::new(),
             in_assistant_turn: false,
+            local_command: LocalCommandTracker::default(),
             actions: None,
             subagents_dir: None,
             subagents: HashMap::new(),
@@ -5462,6 +5620,7 @@ mod tests {
             ever_attached: true,
             fingerprint: Vec::new(),
             in_assistant_turn: false,
+            local_command: LocalCommandTracker::default(),
             actions: None,
             subagents_dir: None,
             subagents: HashMap::new(),
@@ -5751,6 +5910,7 @@ mod tests {
             ever_attached: true,
             fingerprint: Vec::new(),
             in_assistant_turn: false,
+            local_command: LocalCommandTracker::default(),
             actions: None,
             subagents_dir: Some(sub_dir),
             subagents: HashMap::new(),
@@ -5959,6 +6119,7 @@ mod tests {
             ever_attached: false,
             fingerprint: Vec::new(),
             in_assistant_turn: false,
+            local_command: LocalCommandTracker::default(),
             actions,
             subagents_dir: None,
             subagents: HashMap::new(),
@@ -6707,6 +6868,7 @@ mod tests {
             ever_attached: true,
             fingerprint: Vec::new(),
             in_assistant_turn: false,
+            local_command: LocalCommandTracker::default(),
             actions: None,
             subagents_dir: None,
             subagents: HashMap::new(),
