@@ -3,7 +3,11 @@
 // harnessActivity.ts (#19). See harnessActivity.ts for the module this
 // belongs to.
 
-import type { HarnessActivity } from "./harnessActivityTypes.ts";
+import {
+	type HarnessActivity,
+	TRANSITION_SOURCE,
+	type TransitionSource,
+} from "./harnessActivityTypes.ts";
 import type { Status } from "./types.ts";
 
 /// Map the internal activity phase onto the existing display
@@ -72,6 +76,28 @@ export function statusLabel(
 export function delegationSummary(count: number): string | null {
 	if (count <= 0) return null;
 	return count === 1 ? "1 delegated agent finished" : `${count} delegated agents finished`;
+}
+
+/// #441: wording for background tasks presumed still running after a
+/// ceiling/watchdog flush. `null` for zero.
+export function stillRunningSummary(count: number): string | null {
+	if (count <= 0) return null;
+	return count === 1
+		? "1 background task still running"
+		: `${count} background tasks still running`;
+}
+
+/// The suffix for a `→ waiting` notification. A ceiling/watchdog flush
+/// never claims anything finished, only what is presumed still running.
+export function waitingNote(
+	source: TransitionSource,
+	delegatedCount: number,
+	overdueCount: number,
+): string | null {
+	if (source === TRANSITION_SOURCE.DelegationCeiling || source === TRANSITION_SOURCE.WorkWatchdog) {
+		return stillRunningSummary(overdueCount);
+	}
+	return delegationSummary(delegatedCount);
 }
 
 /// `activityToStatus` with the "acknowledged" downgrade applied:

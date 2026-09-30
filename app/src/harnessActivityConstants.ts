@@ -76,3 +76,13 @@ export const DELEGATION_SETTLE_MS = 60_000;
 /// and the constant leans long rather than risk a permanently
 /// suppressed harness.
 export const DELEGATION_CEILING_MS = 15 * 60_000;
+/// #446 (epic #439): the ceiling for a background Bash/PowerShell task,
+/// or a persistent/no-timeout Monitor, holding a deferred end of turn,
+/// measured from max(deferral armed, task started). Evidence from
+/// docs/background-task-recon.md Q3: Bash-woken wake-ups have median
+/// 215 s, p90 1189 s (~20 min); 28% of affected end-of-turns were woken
+/// by the human first and some tasks never end (servers), so silence
+/// costs more than an early notice. The same 15 min as #277's ceiling
+/// to start; tune from `harness_events` (`delegation-ceiling` rows). A
+/// Monitor with a timeout uses its own deadline instead.
+export const BACKGROUND_TASK_CEILING_MS = 15 * 60_000;

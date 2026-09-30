@@ -15,6 +15,7 @@
 // that reads from the store.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { backgroundTasks } from "./backgroundTasks.ts";
 import { logToRust } from "./frontendLog.ts";
 import { TRANSITION_SOURCE, type TransitionSource, harnessActivity } from "./harnessActivity.ts";
 import { observedAgents } from "./harnessAgent.ts";
@@ -404,8 +405,29 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			harnessActivity.noteSubagentActivity(harnessId);
 			return;
 		case "background_start":
+			// #446: a background task holds an end of turn like a subagent.
+			// No direct phase write; the deferral reads the registry.
+			backgroundTasks.record(
+				harnessId,
+				{
+					taskId: event.task_id,
+					kind: event.task_kind,
+					description: event.description,
+					command: event.command,
+					timeoutMs: event.timeout_ms,
+					persistent: event.persistent,
+					agentId: event.agent_id,
+				},
+				event.initial === true,
+			);
+			// A live subagent's row is proof of life; an attach replay is not.
+			if (event.initial !== true && event.agent_id !== null) {
+				harnessActivity.noteSubagentActivity(harnessId);
+			}
+			return;
 		case "background_end":
-			// #445 emits these; S3 (#446) consumes them. No phase effect.
+			backgroundTasks.finish(harnessId, event.task_id);
+			if (event.agent_id !== null) harnessActivity.noteSubagentActivity(harnessId);
 			return;
 	}
 };

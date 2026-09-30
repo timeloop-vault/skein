@@ -20,8 +20,10 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { useEffect, useRef, useState } from "react";
+import { backgroundTasks } from "./backgroundTasks.ts";
 import { HARNESS_KINDS } from "./data.tsx";
-import { TRANSITION_SOURCE, delegationSummary, harnessActivity } from "./harnessActivity.ts";
+import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
+import { waitingNote } from "./harnessActivityLabels.ts";
 import {
 	ACTION_EVENT,
 	type HarnessAction,
@@ -296,10 +298,11 @@ export function useHarnessNotifications(
 			// after 15 min of silence, not because the work actually
 			// completed, so no suffix rides along there; every other route
 			// into `waiting` (including `DelegationSettled`) can say so
-			// honestly.
+			// honestly. #441: a ceiling/watchdog flush instead says how many
+			// background tasks are presumed still running, never "finished".
 			const delegationNote =
-				to === "waiting" && source !== TRANSITION_SOURCE.DelegationCeiling
-					? delegationSummary(a.delegatedCount)
+				to === "waiting"
+					? waitingNote(source, a.delegatedCount, backgroundTasks.overdueCount(harnessId))
 					: null;
 			// hasUserInput gate applies only to the passive transition.
 			// `→ waiting` and `→ permission` are both unconditional.

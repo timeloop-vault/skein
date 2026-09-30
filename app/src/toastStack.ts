@@ -36,9 +36,9 @@ export interface ToastEntry {
 	/** Waiting variant only (#277): `delegationSummary` of
 	 *  `HarnessActivity.delegatedCount`, when the harness delegated
 	 *  work since the user's last prompt and this end-of-turn wasn't
-	 *  flushed by the ceiling (see the `DelegationCeiling` check at the
-	 *  call site) — "Skein cannot claim the delegated work finished"
-	 *  there, so no suffix rides along. */
+	 *  flushed by the ceiling/watchdog (see `waitingNote`) — there it is
+	 *  `stillRunningSummary` of the overdue background tasks instead,
+	 *  since Skein cannot claim anything finished. */
 	delegationNote?: string | undefined;
 	/** "created" variant only: the room that asked for this one, so the
 	 *  toast can read "<requesterRoomName> opened <roomName>" — `roomName`

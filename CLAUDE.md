@@ -513,12 +513,45 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   attach batch; `subagents.workingCount` excludes those via
   `SubagentEntry.fromAttach` (sticky false once a live start is seen;
   2.8% of real transcripts are these orphans). The mechanism keys only
-  on `subagents.workingCount`, not on anything Claude-specific — the
+  on outstanding-work counts (below), not on anything Claude-specific — the
   sources are `delegation-settled`/`delegation-ceiling`, not
   `l2c1-claude-*` — so a future opencode child-session signal would
   inherit it for free; opencode registers no subagents today, so the
   count is always 0, and none of this needs #215 config injection, same
   as subagent discovery generally — only the *permission* signal does.
+  **Background tasks feed the same deferral (#446/#441):** it keys on
+  `outstandingWork` in `deferral.ts` = `subagents.workingCount` +
+  `backgroundTasks.workingCount` — one deferral, one set of timers, still
+  no new phase; the tick rules moved there from `harnessActivityCore.ts`
+  (`tickWork`). `backgroundTasks.ts` is a pure per-harness registry
+  mirroring `subagents.ts`: attach-seeded tasks (`initial = true`) are
+  `fromAttach` and never count, since a missing `.output` trailer does not
+  mean running, and an `overdue` flag keeps a task listed after a ceiling
+  released it but stops it counting, so it cannot re-defer the next turn.
+  Ceilings are per kind and driven by the frontend tick (the Rust deadline
+  sweep only runs on transcript ticks): a Monitor with a timeout ends at
+  startedAt + timeout (`expireDue`) and the ordinary settle rule follows;
+  Bash/PowerShell and persistent or timeout-less Monitors get
+  `BACKGROUND_TASK_CEILING_MS` (15 min, from the later of deferral armed
+  and task started) and are then marked overdue. The subagent ceiling is
+  unchanged. When everything outstanding is ended or released and at least
+  one was released, the deferral flushes at once to `waiting` with source
+  `delegation-ceiling`, and the notification says "N background tasks still
+  running" (`stillRunningSummary`), never "finished". 15 min because
+  Bash-woken wake-ups measured median 215 s / p90 ~20 min, 28% of affected
+  end-of-turns were woken by the human first, and some tasks never end:
+  silence costs more than an early notice — tune from `harness_events`
+  `delegation-ceiling` rows. #441's watchdog (`tickStaleWork`): phase
+  `running`, authoritative, no deferral armed, outstanding work > 0 and no
+  main-transcript turn signal, subagent activity or new task start for
+  `DELEGATION_CEILING_MS` presumes subagents gone and tasks overdue and
+  flips to `waiting` with source `work-watchdog`, claiming nothing
+  finished; it is what catches an unrecognised row shape disarming a
+  deferral, as #440's queue-only rows once did. Held mail and nudges (#381)
+  go out on either release through the ordinary transition-to-waiting
+  trigger. The supervisor's `ended_turn_not_waiting` and
+  `deferral_without_work` now guard on subagents plus background tasks
+  (`backgroundWorking` in its snapshot).
   **Background tasks (#444/#445, epic #439):** a `Bash`/`PowerShell`
   `run_in_background` command, an auto-backgrounded one, or a `Monitor`
   is a *task*, not a subagent. The pure parsers and a per-session state
@@ -544,8 +577,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   each announced start exactly one end and says nothing about a task
   it never announced. A task-notification user row is
   `UserPrompt { task_notification: true }`: it still moves the phase
-  to running, but it is not a human submit. Nothing in the frontend consumes these yet; the deferral is
-  #446. Design and evidence: `docs/background-task-recon.md`.
+  to running, but it is not a human submit. The frontend consumer is
+  `backgroundTasks.ts` (#446, above); its display wording is still #447.
+  Design and evidence: `docs/background-task-recon.md`.
   **`permission` is its own phase (#86)**, distinct from `waiting`
   (end of turn / needs input), and outranks it everywhere. Claude's
   JSONL records nothing when a dialog opens, so the signal is a

@@ -20,6 +20,7 @@ export interface SupervisorSnapshot {
 	/// main session only
 	lastTurnSignal: { kind: "work" | "end"; at: number } | null;
 	subagentsWorking: number;
+	backgroundWorking: number;
 	delegationDeferredAt: number | null;
 	delegationEmptiedAt: number | null;
 	permissionAt: number | null;
@@ -105,7 +106,7 @@ export const INVARIANTS: readonly Invariant[] = [
 			if (
 				t?.kind === "end" &&
 				(s.lastSubmitAt === null || t.at > s.lastSubmitAt) &&
-				s.subagentsWorking === 0 &&
+				s.subagentsWorking + s.backgroundWorking === 0 &&
 				s.delegationDeferredAt === null &&
 				(s.phase === "running" || s.phase === "idle") &&
 				(s.lastOutputAt === null || now - s.lastOutputAt >= ENDED_TURN_QUIET_MS)
@@ -169,7 +170,7 @@ export const INVARIANTS: readonly Invariant[] = [
 		check(s, now) {
 			if (
 				s.delegationDeferredAt !== null &&
-				s.subagentsWorking === 0 &&
+				s.subagentsWorking + s.backgroundWorking === 0 &&
 				s.phase !== "permission" &&
 				s.phase !== "exited" &&
 				(s.delegationEmptiedAt === null || now - s.delegationEmptiedAt >= DELEGATION_SETTLE_MS)
@@ -193,6 +194,7 @@ export const INVARIANTS: readonly Invariant[] = [
 			const t = s.lastTurnSignal;
 			if (
 				s.permissionAgentId === null &&
+				// subagents only: background tasks open no dialogs
 				s.subagentsWorking === 0 &&
 				t !== null &&
 				t.at > s.permissionAt &&

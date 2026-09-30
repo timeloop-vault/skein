@@ -5,11 +5,10 @@
 // hooks) reads and writes through the exports below. See harnessActivity.ts
 // for the module this belongs to.
 
+import { tickWork } from "./deferral.ts";
 import { logBoth } from "./frontendLog.ts";
 import {
 	ADAPTER_SILENT_AFTER_MS,
-	DELEGATION_CEILING_MS,
-	DELEGATION_SETTLE_MS,
 	IDLE_AFTER_MS,
 	LAUNCH_SILENT_AFTER_MS,
 	PATTERN_WAITING_AFTER_MS,
@@ -23,7 +22,6 @@ import type {
 	TransitionSource,
 } from "./harnessActivityTypes.ts";
 import { matchesWaitingPrompt } from "./harnessPatterns.ts";
-import { subagents } from "./subagents.ts";
 
 export const store = new Map<string, HarnessActivity>();
 export const listeners = new Map<string, Set<() => void>>();
@@ -264,49 +262,8 @@ export const ensureTick = (): void => {
 	tickHandle = setInterval(() => {
 		const now = Date.now();
 		for (const [id, a] of store) {
-			// #277: a deferred end-of-turn is evaluated before the
-			// `authoritative` skip below, because a deferred harness
-			// IS authoritative by definition — only the Claude
-			// translator's `awaitingPromptFromAdapter` arms one, and
-			// only while an L2c adapter is attached. `continue`s out
-			// either way, so the authoritative block never
-			// double-handles it.
-			if (a.delegationDeferredAt !== null) {
-				// #86: permission is the harder stop. Leave the
-				// harness alone; re-evaluate on a later tick once the
-				// dialog clears back to `running`.
-				if (a.phase === "permission") continue;
-				const working = subagents.workingCount(id);
-				if (working === 0) {
-					// Rule 3 — settle timer. See `DELEGATION_SETTLE_MS`
-					// for the measurement behind the threshold.
-					if (a.delegationEmptiedAt === null) {
-						a.delegationEmptiedAt = now;
-					} else if (now - a.delegationEmptiedAt >= DELEGATION_SETTLE_MS) {
-						a.delegationDeferredAt = null;
-						a.delegationEmptiedAt = null;
-						setPhase(id, "waiting", TRANSITION_SOURCE.DelegationSettled);
-					}
-				} else {
-					// The working set is non-empty again after having
-					// been seen empty — clear the mark so a fresh
-					// settle window starts cleanly if it empties again.
-					if (a.delegationEmptiedAt !== null) a.delegationEmptiedAt = null;
-					// Rule 4 — ceiling. See `DELEGATION_CEILING_MS` for
-					// the measurement behind the threshold.
-					if (now - a.delegationActivityAt >= DELEGATION_CEILING_MS) {
-						const dropped = subagents.presumeGone(id);
-						console.warn(
-							`[skein] harness ${id}: presumed ${dropped} subagent(s) gone after ` +
-								`${DELEGATION_CEILING_MS / 60_000} min with no subagent event; flushing the deferred end of turn`,
-						);
-						a.delegationDeferredAt = null;
-						a.delegationEmptiedAt = null;
-						setPhase(id, "waiting", TRANSITION_SOURCE.DelegationCeiling);
-					}
-				}
-				continue;
-			}
+			// #446/#441: see `tickWork` in deferral.ts.
+			if (tickWork(id, a, now, setPhase)) continue;
 			// Harnesses with an authoritative source (Claude JSONL
 			// tail, opencode SSE adapter) write their own phase
 			// from the L2c module. The idle heuristic would fight
