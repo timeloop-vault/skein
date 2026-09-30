@@ -1,0 +1,4 @@
+/* A drag over an iframe would lose its mousemove/mouseup to the frame. */
+.sk-dragging iframe {
+	pointer-events: none;
+}

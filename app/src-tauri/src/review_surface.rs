@@ -29,6 +29,7 @@
 //! | [`dto`] | what does the frontend receive |
 //! | [`git`] | what does this scope actually cover, and what did git say |
 //! | [`anchoring`] | where does this thread sit now |
+//! | [`element`] | element-anchored threads: validation, stamp, pane placement (#434) |
 //! | [`query`] | the two read commands' logic |
 //! | [`signoff`] | has the reviewer approved this, and does it still hold |
 //! | [`write`] | opening a thread, which is where an anchor is captured |
@@ -49,6 +50,9 @@ mod anchoring;
 // re-export does not carry.
 pub mod commands;
 mod dto;
+// `pub(crate)` for the agent API: an agent reads an element thread's
+// state through the same rule the pane does.
+pub(crate) mod element;
 mod git;
 mod image;
 // `pub(crate)` for the agent API (#213): an agent asking "what is this
@@ -77,11 +81,14 @@ pub enum Scope {
 }
 
 /// Thread scopes, as stored in `review_threads.scope` (D5).
-mod thread_scope {
+pub(crate) mod thread_scope {
     pub const LINE: &str = "line";
     pub const FILE: &str = "file";
     pub const COMMIT: &str = "commit";
     pub const REVIEW: &str = "review";
+    /// A comment on a rendered element (#434); its anchor lives in
+    /// `review_element_anchors`.
+    pub const ELEMENT: &str = "element";
 }
 
 #[cfg(test)]

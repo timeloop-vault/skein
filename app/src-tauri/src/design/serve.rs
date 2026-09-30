@@ -17,7 +17,7 @@ use super::rewrite::rewrite_html;
 const PICKER: &str = include_str!("picker.js");
 
 /// Largest file the preview will serve.
-const MAX_SERVED: u64 = 32 * 1024 * 1024;
+pub const MAX_SERVED: u64 = 32 * 1024 * 1024;
 
 pub fn router(state: Arc<PreviewState>) -> Router {
     Router::new()
@@ -124,6 +124,18 @@ pub fn resolve_under(root: &Path, rel: &str) -> Result<PathBuf, Refusal> {
     Ok(full)
 }
 
+/// `full` (already canonical, from [`resolve_under`]) as a
+/// `/`-separated path relative to the room folder.
+fn relative_to(root: &str, full: &Path) -> Option<String> {
+    let root = Path::new(root).canonicalize().ok()?;
+    let rel = full.strip_prefix(root).ok()?;
+    let parts: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
 fn content_type(path: &Path) -> &'static str {
     let ext = path
         .extension()
@@ -185,6 +197,15 @@ async fn serve_file(
     let Ok(bytes) = tokio::fs::read(&full).await else {
         return plain(StatusCode::NOT_FOUND);
     };
+    // Recorded from the raw bytes, before any rewrite: the freshness
+    // check recomputes the same digest from the file on disk.
+    if let Some(rel) = state.root_for(&token).and_then(|r| relative_to(&r, &full)) {
+        state.record_served(
+            &token,
+            &rel,
+            crate::review_surface::element::digest_bytes(&bytes),
+        );
+    }
     let ctype = content_type(&full);
     let body = if ctype.starts_with("text/html") {
         match String::from_utf8(bytes) {
@@ -330,7 +351,7 @@ mod tests {
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
-        tokio::spawn(serve(listener, state));
+        tokio::spawn(serve(listener, Arc::clone(&state)));
 
         // A's own file.
         let res = get(&format!("{base}/preview/{ta}/a.txt")).await;
@@ -341,6 +362,13 @@ mod tests {
         assert_eq!(h["access-control-allow-origin"], "*");
         assert_eq!(h["x-content-type-options"], "nosniff");
         assert_eq!(res.text().await.unwrap(), "AAA");
+        // The raw bytes' digest is remembered under the room, by
+        // relative path (#434), and only for that room.
+        assert_eq!(
+            state.served_digests("ra")["a.txt"],
+            crate::review_surface::element::digest_bytes(b"AAA")
+        );
+        assert!(state.served_digests("rb").is_empty());
 
         // B's file under B's own token works (the fixture is sound).
         assert_eq!(

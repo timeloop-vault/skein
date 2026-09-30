@@ -4,30 +4,19 @@
 // the frame gets `allow-scripts` and NEVER `allow-same-origin`, and its
 // `postMessage` beacons are untrusted (see designPreview.ts).
 
-import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type Beacon, parseBeacon, previewUrl, pushBeacon, retryDelay } from "./designPreview.ts";
-
-/** Run `fn`, retrying with backoff while `isCancelled()` is false. A new
- *  room's db row lands only after the pane's first invoke, so the first
- *  tries can fail with "unknown room". Rejects with the last error once
- *  the budget is spent; resolves/rejects only if not cancelled is the
- *  caller's concern (it checks its own flag). */
-const invokeWithRetry = async <T,>(
-	fn: () => Promise<T>,
-	isCancelled: () => boolean,
-): Promise<T> => {
-	for (let failures = 1; ; failures++) {
-		try {
-			return await fn();
-		} catch (e) {
-			const delay = retryDelay(failures);
-			if (delay === null || isCancelled()) throw e;
-			await new Promise((r) => window.setTimeout(r, delay));
-			if (isCancelled()) throw e;
-		}
-	}
-};
+import { DesignComments } from "./DesignComments.tsx";
+import {
+	type Beacon,
+	type HostMessage,
+	hostMessage,
+	parseBeacon,
+	previewUrl,
+	pushBeacon,
+} from "./designPreview.ts";
+import { useDesignComments } from "./useDesignComments.ts";
+import { useDesignPreview } from "./useDesignPreview.ts";
+import "./design.css";
 
 /** How long after the iframe's `load` we wait for the `ready` beacon
  *  before saying Skein's preview script did not run. */
@@ -36,6 +25,7 @@ const READY_TIMEOUT_MS = 3000;
 interface DesignBodyProps {
 	harnessId: string;
 	roomId: string;
+	cwd: string;
 	visible: boolean;
 	entry: string | undefined;
 	onEntryChange: (entry: string) => void;
@@ -44,84 +34,37 @@ interface DesignBodyProps {
 export const DesignBody = ({
 	harnessId,
 	roomId,
+	cwd,
 	visible,
 	entry,
 	onEntryChange,
 }: DesignBodyProps) => {
-	const [base, setBase] = useState<string | null>(null);
-	const [entries, setEntries] = useState<string[] | null>(null);
-	const [error, setError] = useState<string | null>(null);
-	const [attempt, setAttempt] = useState(0);
-	const [version, setVersion] = useState(0);
+	const { base, entries, error, version, retry, reload } = useDesignPreview(roomId);
 	const [beacons, setBeacons] = useState<Beacon[]>([]);
 	const [ready, setReady] = useState(false);
 	const [noReady, setNoReady] = useState(false);
+	const [readyCount, setReadyCount] = useState(0);
+	const [picking, setPicking] = useState(false);
 	const frameRef = useRef<HTMLIFrameElement | null>(null);
 	const readyRef = useRef(false);
 	const timerRef = useRef<number | null>(null);
 
-	const refreshEntries = useCallback(async () => {
-		try {
-			setEntries(await invoke<string[]>("design_list_entries", { roomId }));
-		} catch (e) {
-			setError(String(e));
-		}
-	}, [roomId]);
+	const post = useCallback((msg: HostMessage) => {
+		frameRef.current?.contentWindow?.postMessage(hostMessage(msg), "*");
+	}, []);
 
-	// Preview base + entry list; `attempt` is the inline retry.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt is the retry trigger
-	useEffect(() => {
-		let cancelled = false;
-		const isCancelled = () => cancelled;
-		setError(null);
-		invokeWithRetry(() => invoke<string>("design_preview_base", { roomId }), isCancelled)
-			.then((b) => {
-				if (!cancelled) setBase(b);
-			})
-			.catch((e) => {
-				if (!cancelled) setError(String(e));
-			});
-		invokeWithRetry(() => invoke<string[]>("design_list_entries", { roomId }), isCancelled)
-			.then((list) => {
-				if (!cancelled) setEntries(list);
-			})
-			.catch((e) => {
-				if (!cancelled) setError(String(e));
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, [roomId, attempt]);
-
-	// The watcher runs only while mounted; a tick reloads the frame.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt is the retry trigger
-	useEffect(() => {
-		const channel = new Channel<null>();
-		channel.onmessage = () => {
-			setVersion((n) => n + 1);
-			void refreshEntries();
-		};
-		let watchId: string | null = null;
-		let cancelled = false;
-		invokeWithRetry(
-			() => invoke<string>("design_watch_start", { roomId, onChange: channel }),
-			() => cancelled,
-		)
-			.then((id) => {
-				if (cancelled) {
-					void invoke("git_watch_stop", { id });
-					return;
-				}
-				watchId = id;
-			})
-			.catch((e) => {
-				if (!cancelled) setError(String(e));
-			});
-		return () => {
-			cancelled = true;
-			if (watchId !== null) void invoke("git_watch_stop", { id: watchId });
-		};
-	}, [roomId, attempt, refreshEntries]);
+	const c = useDesignComments({
+		harnessId,
+		roomId,
+		cwd,
+		visible,
+		entry,
+		onEntryChange,
+		post,
+		ready,
+		readyCount,
+	});
+	const { setDraft, setSelected, relocate, onLocated, clearPlacements } = c;
 
 	// One entry and none chosen: pick it and persist.
 	useEffect(() => {
@@ -139,9 +82,33 @@ export const DesignBody = ({
 		setReady(false);
 		setNoReady(false);
 		readyRef.current = false;
+		setPicking(false);
+		clearPlacements();
 		if (timerRef.current !== null) window.clearTimeout(timerRef.current);
 		timerRef.current = null;
 	}, [url]);
+
+	// Escape leaves pick mode even when the host, not the frame, has focus.
+	useEffect(() => {
+		if (!picking) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape") return;
+			setPicking(false);
+			post({ type: "pick-cancel" });
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [picking, post]);
+
+	const togglePick = () => {
+		if (picking) {
+			setPicking(false);
+			post({ type: "pick-cancel" });
+		} else {
+			setPicking(true);
+			post({ type: "pick-start" });
+		}
+	};
 
 	useEffect(
 		() => () => {
@@ -161,13 +128,24 @@ export const DesignBody = ({
 				readyRef.current = true;
 				setReady(true);
 				setNoReady(false);
+				setReadyCount((n) => n + 1);
+			} else if (b.type === "picked") {
+				setPicking(false);
+				setDraft(b.element);
+			} else if (b.type === "dom-changed") {
+				// The page finished (re)rendering or resized: its pins may be off.
+				relocate();
+			} else if (b.type === "pick-cancelled") {
+				setPicking(false);
+			} else if (b.type === "located") {
+				onLocated(b);
 			} else {
 				setBeacons((prev) => pushBeacon(prev, b));
 			}
 		};
 		window.addEventListener("message", onMessage);
 		return () => window.removeEventListener("message", onMessage);
-	}, []);
+	}, [setDraft, relocate, onLocated]);
 
 	const onFrameLoad = () => {
 		if (readyRef.current) return;
@@ -204,15 +182,25 @@ export const DesignBody = ({
 						</option>
 					))}
 				</select>
-				<button type="button" title="Reload" onClick={() => setVersion((n) => n + 1)}>
+				<button type="button" title="Reload" onClick={reload}>
 					↻
+				</button>
+				<button
+					type="button"
+					className={`dp-comment-toggle${picking ? " on" : ""}`}
+					title="Pick an element to comment on (Esc cancels)"
+					aria-pressed={picking}
+					disabled={!ready || entry === undefined}
+					onClick={togglePick}
+				>
+					Comment
 				</button>
 				<span className="dp-status">{status}</span>
 			</div>
 			{error !== null && (
 				<div className="fp-notice warn" role="alert">
 					{error}{" "}
-					<button type="button" onClick={() => setAttempt((n) => n + 1)}>
+					<button type="button" onClick={retry}>
 						Retry
 					</button>
 				</div>
@@ -230,14 +218,33 @@ export const DesignBody = ({
 					<div className="hint">Add an .html file and it will show up here.</div>
 				</div>
 			) : url !== null ? (
-				<iframe
-					ref={frameRef}
-					className="dp-frame"
-					title="Design preview"
-					sandbox="allow-scripts"
-					src={url}
-					onLoad={onFrameLoad}
-				/>
+				<div className="dp-main">
+					<iframe
+						ref={frameRef}
+						className="dp-frame"
+						title="Design preview"
+						sandbox="allow-scripts"
+						src={url}
+						onLoad={onFrameLoad}
+					/>
+					{(c.draft !== null || c.threads.length > 0 || c.commentError !== null) && (
+						<DesignComments
+							roomId={roomId}
+							entry={entry}
+							ready={ready}
+							threads={c.threads}
+							placements={c.placements}
+							draft={c.draft}
+							selected={c.selected}
+							busy={c.busy}
+							commentError={c.commentError}
+							act={c.act}
+							onSelect={(id) => setSelected((s) => ({ id, tick: (s?.tick ?? 0) + 1 }))}
+							onSubmitDraft={c.submitDraft}
+							onCancelDraft={() => setDraft(null)}
+						/>
+					)}
+				</div>
 			) : (
 				<div className="fp-empty" />
 			)}

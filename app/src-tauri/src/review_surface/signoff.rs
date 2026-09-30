@@ -289,6 +289,46 @@ mod tests {
         assert_eq!(s.unaddressed_count, 1, "t2 is claimed handled; t1 is not");
     }
 
+    #[test]
+    fn an_unresolved_element_thread_is_counted_like_any_other() {
+        // #434: element threads live in `review_threads`, so the count
+        // needs no scope filter to include them.
+        let (db, tmp) = tests_support::repo_with_commit();
+        let cwd = tmp.path().to_str().unwrap();
+        let element = super::super::write::add_thread_impl(
+            &db,
+            "r1",
+            cwd,
+            &super::super::dto::NewThread {
+                scope: "element".into(),
+                file_path: Some("index.html".into()),
+                commit_sha: None,
+                side: None,
+                line_start: None,
+                line_end: None,
+                anchor_lines: Vec::new(),
+                element: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "entry": "index.html", "selector": "#a", "tag": "div",
+                        "text": "", "attrs": {},
+                        "rect": {"x": 0, "y": 0, "w": 1, "h": 1}
+                    }))
+                    .unwrap(),
+                ),
+                body: "bigger".into(),
+            },
+        )
+        .unwrap();
+
+        let s = set_impl(&db, "r1", cwd, true, None, 1_000).unwrap();
+        assert_eq!(s.unresolved_count, 1);
+        assert_eq!(s.unaddressed_count, 1);
+
+        db.set_review_thread_resolved(&element.id, Some(2), 2)
+            .unwrap();
+        assert_eq!(status_impl(&db, "r1", cwd).unwrap().unresolved_count, 0);
+    }
+
     /// Fixtures. Kept beside the tests rather than in a shared helper:
     /// nothing else in the crate builds a repo *and* a database.
     mod tests_support {

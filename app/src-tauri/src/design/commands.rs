@@ -39,7 +39,7 @@ impl PreviewEndpoint {
     }
 }
 
-fn room_root(db: &Database, room_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn room_root(db: &Database, room_id: &str) -> Result<PathBuf, String> {
     let room = db
         .room_by_id(room_id)?
         .ok_or_else(|| format!("unknown room {room_id}"))?;

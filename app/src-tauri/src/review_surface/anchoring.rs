@@ -189,6 +189,10 @@ pub(super) fn to_thread_dto(
     // longer be about what you think", which is meaningless for a
     // review-level remark.
     let line_scoped = t.scope == thread_scope::LINE;
+    // An element thread has no line to be unmoved from. It starts out as
+    // a guess; `apply_element` clears that only when the design pane's
+    // last report still matches the files on disk.
+    let element = t.scope == thread_scope::ELEMENT;
     let (line_start, line_end, outdated, confidence) = if line_scoped {
         let start = placement.start();
         let end = start.map(|s| s + anchor_lines.len().saturating_sub(1));
@@ -198,13 +202,15 @@ pub(super) fn to_thread_dto(
         };
         (start, end, placement.is_outdated(), confidence)
     } else {
-        (None, None, false, None)
+        (None, None, element, None)
     };
 
     ThreadDto {
         comments: comments.get(&t.id).cloned().unwrap_or_default(),
         placement: if line_scoped {
             placement_str(placement)
+        } else if element {
+            "element"
         } else {
             "unmoved"
         },
@@ -222,6 +228,8 @@ pub(super) fn to_thread_dto(
         // Stamped afterwards by `apply_addressed` — see there for why
         // it is not this function's business.
         addressed: None,
+        // Stamped afterwards by `apply_element`.
+        element: None,
         created_ms: t.created_ms,
         updated_ms: t.updated_ms,
     }

@@ -373,6 +373,7 @@ export const HarnessColumn = ({
 							<DesignBody
 								harnessId={h.id}
 								roomId={room.id}
+								cwd={h.cwd ?? room.cwd ?? ""}
 								visible={visible}
 								entry={h.designEntry}
 								onEntryChange={(entry) => onDesignEntryChange(room.id, h.id, entry)}

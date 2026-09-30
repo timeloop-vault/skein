@@ -10,6 +10,7 @@
 use serde::{Deserialize, Serialize};
 use skein_review::Hunk;
 
+use super::element::{ElementAnchor, ElementDto};
 use crate::db::ReviewCommentRow;
 
 #[derive(Debug, Clone, Serialize)]
@@ -162,7 +163,7 @@ pub struct AddressedDto {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDto {
     pub id: String,
-    /// `line` | `file` | `commit` | `review`.
+    /// `line` | `file` | `commit` | `review` | `element`.
     pub scope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_path: Option<String>,
@@ -181,7 +182,8 @@ pub struct ThreadDto {
     /// against by eye.
     pub anchor_lines: Vec<String>,
     /// `unmoved` | `moved` | `shifted` | `outdated` — see
-    /// `skein_review::Placement`.
+    /// `skein_review::Placement` — or `element`, which says the real
+    /// answer is in [`ThreadDto::element`] (#434).
     pub placement: &'static str,
     /// True for `shifted` and `outdated` alike: both are guesses, and
     /// D6 says a guess renders as one.
@@ -193,6 +195,9 @@ pub struct ThreadDto {
     /// Set when an agent has said it handled this (#213).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub addressed: Option<AddressedDto>,
+    /// Set on `element` threads only (#434).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element: Option<ElementDto>,
     pub created_ms: i64,
     pub updated_ms: i64,
     pub comments: Vec<CommentDto>,
@@ -219,7 +224,7 @@ pub struct FileDetailDto {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewThread {
-    /// `line` | `file` | `commit` | `review`.
+    /// `line` | `file` | `commit` | `review` | `element`.
     pub scope: String,
     #[serde(default)]
     pub file_path: Option<String>,
@@ -238,5 +243,9 @@ pub struct NewThread {
     /// that landed between the click and the submit.
     #[serde(default)]
     pub anchor_lines: Vec<String>,
+    /// The picked element. Required for `element` scope, refused for
+    /// every other (#434).
+    #[serde(default)]
+    pub element: Option<ElementAnchor>,
     pub body: String,
 }

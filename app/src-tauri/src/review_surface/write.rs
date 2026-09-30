@@ -14,9 +14,10 @@ use skein_review::{FileState, Placement, Side, capture_lines};
 
 use super::anchoring::{comments_by_thread, side_of, to_thread_dto};
 use super::dto::{NewThread, ThreadDto};
+use super::element::{apply_element, element_rows_by_thread, validate_anchor};
 use super::git::norm;
 use super::thread_scope;
-use crate::db::{Database, ReviewCommentRow, ReviewThreadRow};
+use crate::db::{Database, ReviewCommentRow, ReviewElementAnchorRow, ReviewThreadRow};
 use crate::review::{abs_path, now_ms, relative_key};
 
 pub(super) fn add_thread_impl(
@@ -29,11 +30,21 @@ pub(super) fn add_thread_impl(
         return Err("a comment needs a body".into());
     }
     let scope = match input.scope.as_str() {
-        thread_scope::LINE | thread_scope::FILE | thread_scope::COMMIT | thread_scope::REVIEW => {
-            input.scope.clone()
-        }
+        thread_scope::LINE
+        | thread_scope::FILE
+        | thread_scope::COMMIT
+        | thread_scope::REVIEW
+        | thread_scope::ELEMENT => input.scope.clone(),
         other => return Err(format!("unknown comment scope: {other}")),
     };
+    let is_element = scope == thread_scope::ELEMENT;
+    if is_element != input.element.is_some() {
+        return Err(if is_element {
+            "an element comment needs the element it is about".into()
+        } else {
+            "only an element comment carries an element".into()
+        });
+    }
     let file_path = input
         .file_path
         .as_deref()
@@ -41,11 +52,21 @@ pub(super) fn add_thread_impl(
     if scope == thread_scope::LINE && file_path.is_none() {
         return Err("a line comment needs a file".into());
     }
+    // Validated before anything is written, and what is stored is the
+    // validated struct, not the caller's JSON.
+    let element = match (&input.element, &file_path) {
+        (Some(a), Some(path)) => Some(validate_anchor(a.clone(), path)?),
+        (Some(_), None) => return Err("an element comment needs a file".into()),
+        (None, _) => None,
+    };
 
     // Fall back to reading the anchor from disk only when the caller
     // sent none — a line comment with no anchor text could never be
     // re-matched, and would be outdated from birth.
-    let anchor_lines = if input.anchor_lines.is_empty() && scope == thread_scope::LINE {
+    let anchor_lines = if is_element {
+        // An element has no text lines to be matched against.
+        Vec::new()
+    } else if input.anchor_lines.is_empty() && scope == thread_scope::LINE {
         match (&file_path, input.line_start, input.line_end) {
             (Some(path), Some(start), Some(end)) => {
                 let text = match skein_review::read_state(&abs_path(cwd, path)) {
@@ -67,7 +88,11 @@ pub(super) fn add_thread_impl(
         room_id: room_id.to_owned(),
         scope: scope.clone(),
         file_path,
-        commit_sha: input.commit_sha.clone(),
+        commit_sha: if is_element {
+            None
+        } else {
+            input.commit_sha.clone()
+        },
         side: if scope == thread_scope::LINE {
             Some(match side_of(input.side.as_deref()) {
                 Side::Old => "old".to_owned(),
@@ -76,8 +101,14 @@ pub(super) fn add_thread_impl(
         } else {
             None
         },
-        line_start: input.line_start.and_then(|n| i64::try_from(n).ok()),
-        line_end: input.line_end.and_then(|n| i64::try_from(n).ok()),
+        line_start: input
+            .line_start
+            .filter(|_| !is_element)
+            .and_then(|n| i64::try_from(n).ok()),
+        line_end: input
+            .line_end
+            .filter(|_| !is_element)
+            .and_then(|n| i64::try_from(n).ok()),
         anchor_hash: if anchor_lines.is_empty() {
             None
         } else {
@@ -92,7 +123,20 @@ pub(super) fn add_thread_impl(
         created_ms: now,
         updated_ms: now,
     };
-    db.insert_review_thread(&row)?;
+    match &element {
+        Some(anchor) => db.insert_review_element_thread(
+            &row,
+            &ReviewElementAnchorRow {
+                thread_id: thread_id.clone(),
+                room_id: room_id.to_owned(),
+                file_path: anchor.entry.clone(),
+                anchor_json: serde_json::to_string(anchor).map_err(|e| e.to_string())?,
+                last_seen_json: None,
+                updated_ms: now,
+            },
+        )?,
+        None => db.insert_review_thread(&row)?,
+    }
     db.insert_review_comment(&ReviewCommentRow {
         id: uuid::Uuid::new_v4().to_string(),
         thread_id: thread_id.clone(),
@@ -113,5 +157,13 @@ pub(super) fn add_thread_impl(
     let placement = Placement::Unmoved {
         start: input.line_start.unwrap_or(1),
     };
-    Ok(to_thread_dto(stored, anchor_lines, placement, &comments))
+    let mut dto = to_thread_dto(stored, anchor_lines, placement, &comments);
+    if is_element {
+        apply_element(
+            std::slice::from_mut(&mut dto),
+            &element_rows_by_thread(db, room_id)?,
+            Some(cwd),
+        );
+    }
+    Ok(dto)
 }

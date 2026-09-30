@@ -43,10 +43,11 @@ import { FileList } from "./FileList.tsx";
 import { ImageDiff } from "./ImageDiff.tsx";
 import { ReviewHeader } from "./ReviewHeader.tsx";
 import { SignoffConfirm, type SignoffIntent, SignoffNotice } from "./SignoffControl.tsx";
-import { Composer, ThreadView } from "./Thread.tsx";
+import { Composer, type DesignLink, ThreadView } from "./Thread.tsx";
 import {
 	type ReviewFile,
 	type ReviewScope,
+	type ReviewThread,
 	addThread,
 	contributingHarnesses,
 	deleteComment,
@@ -76,7 +77,10 @@ export const ReviewPane = ({
 	harnessKindOf,
 	activeHarness,
 	visible,
+	designLinkFor,
 }: {
+	/** "Show in design pane" for an element thread (#434); absent = no link. */
+	designLinkFor?: ((thread: ReviewThread) => DesignLink | undefined) | undefined;
 	roomId: string;
 	cwd: string;
 	/** The room's action rows — per-hunk harness attribution only (D4). */
@@ -221,10 +225,10 @@ export const ReviewPane = ({
 
 	const handlers: ThreadHandlers = {
 		onReply: (threadId, body) => run(() => replyToThread(roomId, threadId, body)),
-		onResolve: (threadId, resolved) => run(() => resolveThread(threadId, resolved)),
-		onDeleteThread: (threadId) => run(() => deleteThread(threadId)),
-		onEditComment: (commentId, body) => run(() => editComment(commentId, body)),
-		onDeleteComment: (commentId) => run(() => deleteComment(commentId)),
+		onResolve: (threadId, resolved) => run(() => resolveThread(roomId, threadId, resolved)),
+		onDeleteThread: (threadId) => run(() => deleteThread(roomId, threadId)),
+		onEditComment: (commentId, body) => run(() => editComment(roomId, commentId, body)),
+		onDeleteComment: (commentId) => run(() => deleteComment(roomId, commentId)),
 	};
 
 	const commentOnLines = (selection: LineSelection, body: string) => {
@@ -371,8 +375,8 @@ export const ReviewPane = ({
 			case "no-diff":
 				content = (
 					<div className="rv-empty">
-						no diff in this scope
-						{orphans.length > 0 && " — its comments are below"}
+						{file.change === "unchanged" ? "no changes in this file" : "no diff in this scope"}
+						{orphans.length > 0 && " — its comments are above"}
 					</div>
 				);
 				break;
@@ -575,6 +579,7 @@ export const ReviewPane = ({
 							key={t.id}
 							thread={t}
 							busy={busy}
+							design={t.scope === "element" ? designLinkFor?.(t) : undefined}
 							onReply={(b) => handlers.onReply(t.id, b)}
 							onResolve={(r) => handlers.onResolve(t.id, r)}
 							onDelete={() => handlers.onDeleteThread(t.id)}

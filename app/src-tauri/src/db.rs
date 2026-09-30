@@ -37,6 +37,8 @@ use parking_lot::Mutex;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, named_params, params};
 use serde::{Deserialize, Serialize};
 
+mod element_anchors;
+pub use element_anchors::ReviewElementAnchorRow;
 /// Mirrors the TS Harness interface. Field renames keep the wire format
 /// camelCase to match what the frontend serializes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -376,6 +378,7 @@ const ROOM_KEYED_TABLES: &[&str] = &[
     "review_viewed",
     "review_settings",
     "review_addressed",
+    "review_element_anchors",
     "agent_tokens",
     "review_signoff",
     "harness_messages",
@@ -728,6 +731,8 @@ impl Database {
             [],
         )
         .map_err(|e| e.to_string())?;
+
+        element_anchors::init_schema(conn)?;
 
         // Issue #214 (epic #52 D9, as corrected): the reviewer's
         // sign-off. One row per room, because a room is one review
@@ -1733,11 +1738,7 @@ impl Database {
             )
             .map_err(|e| e.to_string())?;
         if remaining == 0 {
-            conn.execute(
-                "DELETE FROM review_threads WHERE id = ?1",
-                params![thread_id],
-            )
-            .map_err(|e| e.to_string())?;
+            element_anchors::delete_thread(&conn, &thread_id)?;
             return Ok(Some(thread_id));
         }
         Ok(None)
@@ -1751,11 +1752,7 @@ impl Database {
             params![thread_id],
         )
         .map_err(|e| e.to_string())?;
-        conn.execute(
-            "DELETE FROM review_threads WHERE id = ?1",
-            params![thread_id],
-        )
-        .map_err(|e| e.to_string())?;
+        element_anchors::delete_thread(&conn, thread_id)?;
         Ok(conn.changes() > 0)
     }
 
@@ -4151,6 +4148,7 @@ mod orphan_sweep_tests {
                  (thread_id, room_id, commit_sha, harness_id, note, addressed_ms) \
                  VALUES ('thread-' || ?1, ?1, NULL, 'h1', NULL, 1)"
             }
+            "review_element_anchors" => element_anchors::SEED_SQL,
             "agent_tokens" => {
                 "INSERT INTO agent_tokens (token, room_id, created_ms, revoked_ms) \
                  VALUES ('token-' || ?1, ?1, 1, NULL)"

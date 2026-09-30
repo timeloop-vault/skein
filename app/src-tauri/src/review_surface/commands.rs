@@ -1,6 +1,6 @@
 //! The Tauri boundary.
 //!
-//! Thirteen commands, all the same shape: clone the `Database` handle, do
+//! Fifteen commands, all the same shape: clone the `Database` handle, do
 //! the work on the blocking pool, collapse the error to a `String`.
 //! Every one of them stats or reads files, walks a revision list, or
 //! touches sqlite, and the pane calls the first two on every debounced
@@ -13,11 +13,14 @@ use std::sync::Arc;
 
 use super::Scope;
 use super::dto::{CommentDto, FileDetailDto, NewThread, ReviewScopeDto, ThreadDto};
+use super::element::{SeenInput, element_threads_impl, seen_impl};
 use super::image::image_bytes_impl;
 use super::query::{file_impl, scope_impl};
 use super::signoff::{self, SignoffStatus};
 use super::write::add_thread_impl;
 use crate::db::{Database, ReviewCommentRow};
+use crate::design::PreviewState;
+use crate::design::commands::room_root;
 use crate::review::now_ms;
 
 /// The review header, commit list and file list for one scope.
@@ -112,6 +115,46 @@ pub async fn review_add_thread(
     tauri::async_runtime::spawn_blocking(move || add_thread_impl(&db, &room_id, &cwd, &thread))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Record where the design pane found an element thread's element
+/// (#434). Updates the last-seen placement only, never the anchor. No
+/// review-changed event: the pane that calls this already holds the
+/// answer, and the other Tauri-side writes do not emit either.
+#[tauri::command]
+pub async fn review_element_seen(
+    room_id: String,
+    thread_id: String,
+    seen: SeenInput,
+    db: tauri::State<'_, Arc<Database>>,
+    preview: tauri::State<'_, Arc<PreviewState>>,
+) -> Result<(), String> {
+    let db = Arc::clone(&db);
+    let preview = Arc::clone(&preview);
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = room_root(&db, &room_id)?;
+        let served = preview.served_digests(&room_id);
+        seen_impl(&db, &room_id, &root, &thread_id, &seen, &served)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Every element thread on one entry HTML, resolved included — the
+/// design pane's fetch. Needs no git, so it works in a non-git room.
+#[tauri::command]
+pub async fn review_element_threads(
+    room_id: String,
+    entry: String,
+    db: tauri::State<'_, Arc<Database>>,
+) -> Result<Vec<ThreadDto>, String> {
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = room_root(&db, &room_id)?;
+        element_threads_impl(&db, &room_id, &root, &entry)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Reply on an existing thread (D5: flat, with replies).

@@ -14,12 +14,33 @@
 //             not been committed yet.
 
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
+import type { ElementAnchor, ElementRect } from "../elementAnchor.ts";
 import type { ReviewHunk } from "../liveContext/review.ts";
 
 export type ReviewScope = "branch" | "commit" | "pending";
 
 /// How a thread is attached (D5).
-export type ThreadScope = "line" | "file" | "commit" | "review";
+export type ThreadScope = "line" | "file" | "commit" | "review" | "element";
+
+/// Where an element thread's anchor stands (#434). Everything but
+/// `anchored` and `reanchored` is a guess or a miss and renders as one.
+export type ElementState = "anchored" | "reanchored" | "stale" | "lost" | "unknown";
+
+/// What the design pane last saw for an element thread — the evidence an
+/// unplaceable one falls back on.
+export interface ElementLastSeen {
+	state: ElementState;
+	selector?: string;
+	rect?: ElementRect;
+	seenMs: number;
+}
+
+export interface ElementThreadInfo {
+	anchor: ElementAnchor;
+	lastSeen?: ElementLastSeen;
+	state: ElementState;
+}
 
 /// Which side of the diff a line thread hangs on. A comment on a
 /// deleted line lives in the old text and is re-anchored there.
@@ -27,7 +48,7 @@ export type Side = "old" | "new";
 
 /// How a thread re-matched on this refresh. `shifted` and `outdated`
 /// are both guesses — see `outdated`, which is true for both.
-export type Placement = "unmoved" | "moved" | "shifted" | "outdated";
+export type Placement = "unmoved" | "moved" | "shifted" | "outdated" | "element";
 
 export interface ReviewComment {
 	id: string;
@@ -74,6 +95,8 @@ export interface ReviewThread {
 	resolvedMs?: number;
 	/** Set when an agent has said it handled this (#213). */
 	addressed?: ReviewAddressed;
+	/** Only on `scope === "element"` (#434). */
+	element?: ElementThreadInfo;
 	createdMs: number;
 	updatedMs: number;
 	comments: ReviewComment[];
@@ -93,6 +116,8 @@ export interface ReviewCommit {
 export interface ReviewFile {
 	path: string;
 	name: string;
+	/** added | modified | deleted | renamed | … | `unchanged` (#434: an
+	 *  entry HTML listed only for its element threads, no diff). */
 	change: string;
 	additions: number;
 	deletions: number;
@@ -155,6 +180,8 @@ export interface NewThread {
 	lineEnd?: number | undefined;
 	anchorLines: string[];
 	body: string;
+	/** Required for `scope === "element"`. */
+	element?: ElementAnchor | undefined;
 }
 
 export const fetchScope = (
@@ -211,29 +238,61 @@ export const fetchImageBytes = (
 		side,
 	});
 
+/// A thread/comment write touches only sqlite, so nothing else tells the
+/// other surfaces showing this room's threads (review pane, design pane).
+/// Emit the event the backend emits for an agent's write, same payload.
+const written = async <T>(roomId: string, write: Promise<T>): Promise<T> => {
+	const out = await write;
+	try {
+		await emit("skein://review-changed", { roomId });
+	} catch (e) {
+		console.error("[skein] review-changed emit failed:", e);
+	}
+	return out;
+};
+
 export const addThread = (roomId: string, cwd: string, thread: NewThread): Promise<ReviewThread> =>
-	invoke<ReviewThread>("review_add_thread", { roomId, cwd, thread });
+	written(roomId, invoke<ReviewThread>("review_add_thread", { roomId, cwd, thread }));
+
+/// What the design pane found when it re-located an element thread.
+export interface ElementSeen {
+	state: ElementState;
+	selector?: string | undefined;
+	rect?: ElementRect | undefined;
+	/** Source files the page was built from, for the backend's own checks. */
+	files: string[];
+}
+
+export const reportElementSeen = (
+	roomId: string,
+	threadId: string,
+	seen: ElementSeen,
+): Promise<void> => invoke<void>("review_element_seen", { roomId, threadId, seen });
+
+export const fetchElementThreads = (roomId: string, entry: string): Promise<ReviewThread[]> =>
+	invoke<ReviewThread[]>("review_element_threads", { roomId, entry });
 
 export const replyToThread = (
 	roomId: string,
 	threadId: string,
 	body: string,
-): Promise<ReviewComment> => invoke<ReviewComment>("review_reply", { roomId, threadId, body });
+): Promise<ReviewComment> =>
+	written(roomId, invoke<ReviewComment>("review_reply", { roomId, threadId, body }));
 
-export const editComment = (commentId: string, body: string): Promise<void> =>
-	invoke<void>("review_edit_comment", { commentId, body });
+export const editComment = (roomId: string, commentId: string, body: string): Promise<void> =>
+	written(roomId, invoke<void>("review_edit_comment", { commentId, body }));
 
 /// Returns the thread id when deleting the comment emptied the thread.
-export const deleteComment = (commentId: string): Promise<string | null> =>
-	invoke<string | null>("review_delete_comment", { commentId });
+export const deleteComment = (roomId: string, commentId: string): Promise<string | null> =>
+	written(roomId, invoke<string | null>("review_delete_comment", { commentId }));
 
-export const deleteThread = (threadId: string): Promise<void> =>
-	invoke<void>("review_delete_thread", { threadId });
+export const deleteThread = (roomId: string, threadId: string): Promise<void> =>
+	written(roomId, invoke<void>("review_delete_thread", { threadId }));
 
 /// Human-only by design (D8): an agent that can resolve its own
 /// comments removes the gate the review loop exists to provide.
-export const resolveThread = (threadId: string, resolved: boolean): Promise<void> =>
-	invoke<void>("review_resolve_thread", { threadId, resolved });
+export const resolveThread = (roomId: string, threadId: string, resolved: boolean): Promise<void> =>
+	written(roomId, invoke<void>("review_resolve_thread", { threadId, resolved }));
 
 export const markViewed = (
 	roomId: string,
@@ -266,11 +325,15 @@ export function threadsByLine(threads: ReviewThread[]): Map<string, ReviewThread
 	return map;
 }
 
-/// Threads with no line to sit on — file-scoped ones, plus every line
-/// thread the matcher could not place. Both render above the diff, so
-/// an orphaned comment is impossible to miss (D6: never silently drop).
+/// Threads with no line to sit on — file-scoped ones, element ones (#434,
+/// they live on the page, not a line), plus every line thread the matcher
+/// could not place. All render above the diff, so an orphaned comment is
+/// impossible to miss (D6: never silently drop).
 export function unplacedThreads(threads: ReviewThread[]): ReviewThread[] {
-	return threads.filter((t) => t.scope === "file" || (t.scope === "line" && t.lineStart == null));
+	return threads.filter(
+		(t) =>
+			t.scope === "file" || t.scope === "element" || (t.scope === "line" && t.lineStart == null),
+	);
 }
 
 export const isUnresolved = (t: ReviewThread): boolean => t.resolvedMs == null;

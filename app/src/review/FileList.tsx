@@ -15,6 +15,7 @@ import { HChip } from "../components.tsx";
 import { isImagePath } from "../imageFiles.ts";
 import type { HarnessKind } from "../types.ts";
 import type { ReviewFile } from "./api.ts";
+import "./fileList.css";
 
 const CHANGE_GLYPH: Record<string, string> = {
 	added: "A",
@@ -24,6 +25,8 @@ const CHANGE_GLYPH: Record<string, string> = {
 	renamed: "R",
 	conflicted: "!",
 	typechange: "T",
+	// No diff, listed only for its element threads (#434).
+	unchanged: "·",
 };
 
 const splitPath = (path: string): [string, string] => {
