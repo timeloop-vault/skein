@@ -274,6 +274,15 @@ pub fn is_sidechain(row: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// A `user` row flagged `queueTranscriptOnly` (#440): Claude Code writes
+/// a `<task-notification>` this way right after an end of turn, to record
+/// a queued message. It starts no turn, so it is never a prompt.
+#[must_use]
+pub fn is_queue_transcript_only(row: &Value) -> bool {
+    row.get("type").and_then(Value::as_str) == Some("user")
+        && row.get("queueTranscriptOnly").and_then(Value::as_bool) == Some(true)
+}
+
 /// The terminal stop-reason set, shared by `subagent_row_is_terminal`
 /// (raw `Value`, needed because the subagent tailer never deserializes
 /// a full `AssistantRow`) and `AssistantRow::is_terminal` (the parsed
@@ -301,6 +310,130 @@ pub fn subagent_row_is_terminal(row: &Value) -> bool {
         .and_then(|m| m.get("stop_reason"))
         .and_then(Value::as_str);
     stop_reason_is_terminal(stop_reason)
+}
+
+/// A change in whether a subagent transcript reads as finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentTransition {
+    /// The subagent just exited.
+    Finished,
+    /// A finished subagent was resumed (a new prompt arrived).
+    Reopened,
+}
+
+/// Per-subagent lifecycle, fed its transcript rows in order.
+///
+/// Older Claude Code versions end a subagent with a terminal
+/// `stop_reason`. Newer ones (2.1.285) end it by calling the
+/// `SubagentHandback` tool: an assistant row holding that `tool_use`
+/// with a null `stop_reason`, then a `user` row with its `tool_result`,
+/// and nothing after. Versions 2.1.271-284 hand back the same way but
+/// then add a trailing `end_turn` text row.
+///
+/// The exit is the tool RESULT, not the `tool_use`: before the result the
+/// report has not been delivered, and the result row is where Claude
+/// itself marks `toolEndsTurn: true` (seen on no other row). A tail that
+/// starts mid-file may never have seen the `tool_use`, so `toolEndsTurn`
+/// alone is enough; the remembered handback ids cover a result that
+/// lacks the flag.
+///
+/// A finished subagent can be resumed by a `user` row with no
+/// `tool_result` (a `SendMessage` delivery), except a
+/// `queueTranscriptOnly` row, which starts no turn. `isMeta` rows DO
+/// reopen: on real transcripts 1525 of 1526 post-exit ones were followed
+/// by assistant work. Assistant rows do NOT
+/// reopen: the 2.1.27x trailing thinking/`end_turn` rows follow the
+/// handback and must not flip it back, and non-message rows such as a
+/// trailing `attachment` are ignored for the same reason.
+#[derive(Debug, Clone, Default)]
+pub struct SubagentLifecycle {
+    finished: bool,
+    handback_ids: HashSet<String>,
+}
+
+impl SubagentLifecycle {
+    /// Whether the rows observed so far leave the subagent finished.
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        self.finished
+    }
+
+    /// Feed the next transcript row; returns the transition it caused,
+    /// if any.
+    pub fn observe(&mut self, row: &Value) -> Option<SubagentTransition> {
+        let content = row
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_array);
+        match row.get("type").and_then(Value::as_str) {
+            Some("assistant") => {
+                for block in content.into_iter().flatten() {
+                    if block.get("type").and_then(Value::as_str) == Some("tool_use")
+                        && block.get("name").and_then(Value::as_str) == Some("SubagentHandback")
+                        && let Some(id) = block.get("id").and_then(Value::as_str)
+                    {
+                        self.handback_ids.insert(id.to_owned());
+                    }
+                }
+                if subagent_row_is_terminal(row) {
+                    return self.set_finished();
+                }
+                None
+            }
+            Some("user") => {
+                let mut has_result = false;
+                let mut handed_back = false;
+                for block in content.into_iter().flatten() {
+                    if block.get("type").and_then(Value::as_str) == Some("tool_result") {
+                        has_result = true;
+                        if block
+                            .get("tool_use_id")
+                            .and_then(Value::as_str)
+                            .is_some_and(|id| self.handback_ids.contains(id))
+                        {
+                            handed_back = true;
+                        }
+                    }
+                }
+                if has_result {
+                    let ends_turn = row.get("toolEndsTurn").and_then(Value::as_bool) == Some(true);
+                    if ends_turn || handed_back {
+                        return self.set_finished();
+                    }
+                    None
+                } else if self.finished && !is_queue_transcript_only(row) {
+                    self.finished = false;
+                    Some(SubagentTransition::Reopened)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn set_finished(&mut self) -> Option<SubagentTransition> {
+        if self.finished {
+            None
+        } else {
+            self.finished = true;
+            Some(SubagentTransition::Finished)
+        }
+    }
+}
+
+/// The attach-time scan: run a fresh [`SubagentLifecycle`] over every
+/// complete, parseable, non-empty JSON line and report whether the
+/// transcript ends finished.
+#[must_use]
+pub fn subagent_transcript_is_finished(content: &str) -> bool {
+    let mut lifecycle = SubagentLifecycle::default();
+    for line in content.lines().filter(|l| !l.trim().is_empty()) {
+        if let Ok(row) = serde_json::from_str::<Value>(line) {
+            lifecycle.observe(&row);
+        }
+    }
+    lifecycle.is_finished()
 }
 
 /// The row's `timestamp` (ISO 8601) as epoch ms. `None` when the row
@@ -864,6 +997,234 @@ mod tests {
 
         let user_row = json!({"type": "user", "message": {"stop_reason": "end_turn"}});
         assert!(!subagent_row_is_terminal(&user_row));
+    }
+
+    fn handback_use() -> Value {
+        json!({"parentUuid":"uuid-1","isSidechain":true,"agentId":"a1",
+            "message":{"id":"msg_X","type":"message","role":"assistant",
+            "content":[{"type":"tool_use","id":"toolu_H","name":"SubagentHandback",
+            "input":{"message":"..."},"caller":{"type":"direct"}}],
+            "stop_reason":null,"stop_sequence":null},
+            "type":"assistant","uuid":"uuid-2",
+            "timestamp":"2026-01-01T00:00:00.000Z","version":"2.1.285"})
+    }
+
+    fn handback_result(ends_turn: bool) -> Value {
+        let mut row = json!({"parentUuid":"uuid-2","isSidechain":true,"agentId":"a1",
+            "type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_H",
+            "type":"tool_result","content":[{"type":"text",
+            "text":"{\"success\":true,\"message\":\"Report delivered to your caller.\"}"}]}]},
+            "uuid":"uuid-4","timestamp":"2026-01-01T00:00:01.100Z",
+            "toolUseResult":{"success":true,"message":"Report delivered to your caller."},
+            "sourceToolAssistantUUID":"uuid-2","version":"2.1.285"});
+        if ends_turn {
+            row["toolEndsTurn"] = json!(true);
+        }
+        row
+    }
+
+    fn end_turn_row() -> Value {
+        json!({"type":"assistant","isSidechain":true,"agentId":"a1",
+            "message":{"id":"msg_Y","role":"assistant",
+            "content":[{"type":"text","text":"..."}],"stop_reason":"end_turn"},
+            "uuid":"uuid-5","timestamp":"2026-01-01T00:00:02.000Z","version":"2.1.278"})
+    }
+
+    fn thinking_row() -> Value {
+        json!({"type":"assistant","isSidechain":true,"agentId":"a1",
+            "message":{"id":"msg_Y","role":"assistant",
+            "content":[{"type":"thinking","thinking":"..."}],"stop_reason":null}})
+    }
+
+    fn bash_use(stop_reason: &Value) -> Value {
+        json!({"type":"assistant","isSidechain":true,"agentId":"a1",
+            "message":{"id":"msg_Z","role":"assistant",
+            "content":[{"type":"tool_use","id":"toolu_Y","name":"Bash","input":{}}],
+            "stop_reason":stop_reason}})
+    }
+
+    fn bash_result() -> Value {
+        json!({"type":"user","isSidechain":true,"agentId":"a1",
+            "message":{"role":"user","content":[{"tool_use_id":"toolu_Y",
+            "type":"tool_result","content":"ok"}]}})
+    }
+
+    fn resume_row() -> Value {
+        json!({"type":"user","isSidechain":true,"agentId":"a1",
+            "message":{"role":"user","content":"please continue"}})
+    }
+
+    fn attachment_row() -> Value {
+        json!({"type":"attachment","isSidechain":true,"agentId":"a1","attachment":{}})
+    }
+
+    fn transcript(rows: &[Value]) -> String {
+        rows.iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn lifecycle_handback_finishes_on_the_result_not_the_tool_use() {
+        let mut lc = SubagentLifecycle::default();
+        assert_eq!(lc.observe(&handback_use()), None);
+        assert!(!lc.is_finished());
+        assert_eq!(
+            lc.observe(&handback_result(true)),
+            Some(SubagentTransition::Finished)
+        );
+        assert!(lc.is_finished());
+        assert_eq!(lc.observe(&handback_result(true)), None);
+    }
+
+    #[test]
+    fn lifecycle_result_matching_handback_id_finishes_without_the_flag() {
+        let mut lc = SubagentLifecycle::default();
+        lc.observe(&handback_use());
+        assert_eq!(
+            lc.observe(&handback_result(false)),
+            Some(SubagentTransition::Finished)
+        );
+    }
+
+    #[test]
+    fn lifecycle_tool_ends_turn_alone_finishes_when_the_tool_use_was_not_seen() {
+        let mut lc = SubagentLifecycle::default();
+        assert_eq!(
+            lc.observe(&handback_result(true)),
+            Some(SubagentTransition::Finished)
+        );
+        assert!(lc.is_finished());
+    }
+
+    #[test]
+    fn lifecycle_old_end_turn_ending_still_finishes() {
+        let mut lc = SubagentLifecycle::default();
+        assert_eq!(
+            lc.observe(&end_turn_row()),
+            Some(SubagentTransition::Finished)
+        );
+        assert!(lc.is_finished());
+    }
+
+    #[test]
+    fn lifecycle_mid_work_tool_use_keeps_working() {
+        for stop in &[json!("tool_use"), json!(null)] {
+            let mut lc = SubagentLifecycle::default();
+            assert_eq!(lc.observe(&bash_use(stop)), None);
+            assert!(!lc.is_finished());
+            assert_eq!(lc.observe(&bash_result()), None);
+            assert!(!lc.is_finished());
+        }
+    }
+
+    #[test]
+    fn lifecycle_trailing_rows_after_a_27x_handback_never_reopen() {
+        let mut lc = SubagentLifecycle::default();
+        let transitions: Vec<_> = [
+            handback_use(),
+            handback_result(false),
+            thinking_row(),
+            end_turn_row(),
+        ]
+        .iter()
+        .filter_map(|r| lc.observe(r))
+        .collect();
+        assert_eq!(transitions, vec![SubagentTransition::Finished]);
+        assert!(lc.is_finished());
+    }
+
+    #[test]
+    fn lifecycle_resume_reopens_and_finishes_again() {
+        let mut lc = SubagentLifecycle::default();
+        lc.observe(&handback_use());
+        lc.observe(&handback_result(true));
+        assert!(lc.is_finished());
+        assert_eq!(
+            lc.observe(&resume_row()),
+            Some(SubagentTransition::Reopened)
+        );
+        assert!(!lc.is_finished());
+        assert_eq!(lc.observe(&bash_use(&json!("tool_use"))), None);
+        assert_eq!(lc.observe(&bash_result()), None);
+        assert!(!lc.is_finished());
+        lc.observe(&handback_use());
+        assert_eq!(
+            lc.observe(&handback_result(true)),
+            Some(SubagentTransition::Finished)
+        );
+    }
+
+    #[test]
+    fn lifecycle_queue_transcript_only_row_does_not_reopen() {
+        let mut lc = SubagentLifecycle::default();
+        lc.observe(&end_turn_row());
+        let mut row = resume_row();
+        row["queueTranscriptOnly"] = json!(true);
+        assert_eq!(lc.observe(&row), None);
+        assert!(lc.is_finished());
+        assert!(is_queue_transcript_only(&row));
+        assert!(!is_queue_transcript_only(&resume_row()));
+    }
+
+    #[test]
+    fn lifecycle_queue_transcript_only_after_a_handback_does_not_reopen() {
+        let mut lc = SubagentLifecycle::default();
+        lc.observe(&handback_use());
+        lc.observe(&handback_result(true));
+        let mut row = resume_row();
+        row["queueTranscriptOnly"] = json!(true);
+        assert_eq!(lc.observe(&row), None);
+        assert!(lc.is_finished());
+    }
+
+    #[test]
+    fn lifecycle_is_meta_row_still_reopens() {
+        let mut lc = SubagentLifecycle::default();
+        lc.observe(&end_turn_row());
+        let mut row = resume_row();
+        row["isMeta"] = json!(true);
+        assert_eq!(lc.observe(&row), Some(SubagentTransition::Reopened));
+    }
+
+    #[test]
+    fn lifecycle_trailing_attachment_row_does_not_reopen() {
+        let mut lc = SubagentLifecycle::default();
+        lc.observe(&handback_use());
+        lc.observe(&handback_result(true));
+        assert_eq!(lc.observe(&attachment_row()), None);
+        assert!(lc.is_finished());
+    }
+
+    #[test]
+    fn subagent_transcript_is_finished_scans_the_whole_transcript() {
+        assert!(subagent_transcript_is_finished(&transcript(&[
+            bash_use(&json!("tool_use")),
+            bash_result(),
+            handback_use(),
+            handback_result(true),
+        ])));
+        assert!(subagent_transcript_is_finished(&transcript(&[
+            bash_use(&json!("tool_use")),
+            bash_result(),
+            end_turn_row(),
+        ])));
+        assert!(!subagent_transcript_is_finished(&transcript(&[
+            bash_use(&json!("tool_use")),
+            bash_result(),
+        ])));
+        assert!(!subagent_transcript_is_finished(&transcript(&[
+            bash_result(),
+            handback_use(),
+        ])));
+        assert!(subagent_transcript_is_finished(&transcript(&[
+            handback_use(),
+            handback_result(true),
+            attachment_row(),
+        ])));
+        let with_junk = format!("{}\n\nnot json\n{}", handback_use(), handback_result(true));
+        assert!(subagent_transcript_is_finished(&with_junk));
     }
 
     /// Shape taken from a real 2.1.263 assistant row.
