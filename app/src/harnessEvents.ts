@@ -74,7 +74,9 @@ export type ClaudeEvent =
 	| { kind: "assistant_turn" }
 	| { kind: "tool_use_start"; name: string }
 	| { kind: "tool_use_result" }
-	| { kind: "user_prompt" }
+	// `task_notification` (#445): the row is a `<task-notification>`
+	// Claude Code wrote itself, not a typed prompt.
+	| { kind: "user_prompt"; task_notification?: boolean }
 	| { kind: "awaiting_prompt" }
 	| { kind: "attachment" }
 	| { kind: "session_end" }
@@ -102,7 +104,45 @@ export type ClaudeEvent =
 			agent_id: string;
 			agent_type: string | null;
 			description: string | null;
+	  }
+	// #445 — background Bash/PowerShell/Monitor tasks. `initial` as for
+	// `subagent_start`; `agent_id` is the launching subagent, null for
+	// the main session.
+	| {
+			kind: "background_start";
+			task_id: string;
+			tool_use_id: string;
+			task_kind: BackgroundTaskKind;
+			description: string | null;
+			command: string | null;
+			timeout_ms: number | null;
+			persistent: boolean;
+			auto_backgrounded: boolean;
+			agent_id: string | null;
+			initial: boolean;
+	  }
+	| {
+			kind: "background_end";
+			task_id: string;
+			task_kind: BackgroundTaskKind;
+			agent_id: string | null;
+			status: BackgroundEndStatus;
+			exit_code: number | null;
 	  };
+
+export type BackgroundTaskKind = "bash" | "powershell" | "monitor";
+
+/// `subagent_ended`: the launching subagent exited, so Skein can't
+/// know whether the task finished.
+export type BackgroundEndStatus =
+	| "completed"
+	| "failed"
+	| "killed"
+	| "stopped"
+	| "expired"
+	| "task_stopped"
+	| "subagent_ended"
+	| "unknown";
 
 /// Whether a harness is the kind of thing `attachClaudeEvents` ever
 /// attaches to: a Claude harness with a pre-allocated session uuid
@@ -362,6 +402,10 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			);
 			// #277: proof of life either way, phase effect or not.
 			harnessActivity.noteSubagentActivity(harnessId);
+			return;
+		case "background_start":
+		case "background_end":
+			// #445 emits these; S3 (#446) consumes them. No phase effect.
 			return;
 	}
 };

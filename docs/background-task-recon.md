@@ -157,7 +157,11 @@ Three forms.
 | Expiry | none | `Monitor event: "<d>"` | `[Monitor expired after 10m with no events delivered. Re-arm it...]` |
 
 The expiry form has no status tag. It is recognisable only by the event
-text, so the parser depends on a string Claude Code may reword.
+text, so the parser depends on a string Claude Code may reword. The expiry
+text was reconfirmed on 2.1.286 with a longer wording (`[Monitor expired
+after 5m with no events delivered. Re-arm it if you still need the watch
+— and widen the filter if silence was unexpected.]`). S1 pins both forms
+in fixtures.
 
 ### TaskStop
 
@@ -566,8 +570,8 @@ Each is a separate issue and PR.
 | --- | --- |
 | Bash ceiling value (15 min is a guess; Bash-woken p90 is about 20 min) | Ship the constant, then read real deferral outcomes from the `harness_events` log and tune. |
 | Do Monitor events belong in the feed? | Decide with Stefan from S4 screenshots; default no (noise). |
-| Is the `.output` trailer written on a hard crash? | Untested. Kill a `claude` process with a live background task and read the file. |
-| Do `persistent: true` Monitors (unbounded) behave like Bash? | Not in the sample. Arm one in a scratch session and watch for events and ending. Until known, they get the Bash ceiling, not a deadline (as in the Recommendation). |
+| Is the `.output` trailer written on a hard crash? | Answered 2026-09-30: no. Tested on Claude Code 2.1.286 (Windows). The `claude` process was force-killed while a background Bash `sleep 90; echo ...` ran. The `.output` stayed empty with no trailer for over 100 s. The background child survived the kill and ran to completion (its side-effect file was written). Control: when a `-p` session exits cleanly, the task's `.output` gets `[killed]`. So a missing trailer does not mean running. After a crash it can belong to an orphan that is still running, or to one that has finished. That is why S2 seeds such tasks with `initial = true` and trusts a trailer only when one is present. |
+| Do `persistent: true` Monitors (unbounded) behave like Bash? | Partly answered 2026-09-30. A persistent Monitor could not be armed headless: the models sent `"persistent":"true"` as a string, and every start result came back `persistent:false`. Still open for a real persistent Monitor. Observed for non-persistent Monitors (2.1.286): a command that exits ends with `<status>completed</status>` and `Monitor "<desc>" stream ended`, with the last line in `<event>`, and the trailer is `[exited with code 0]`. A command that never exits, on expiry, writes the `[Monitor expired after 5m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]` event with no status tag in the transcript, and the trailer is `[killed]`. A `claude -p` session stayed alive past its end of turn until the Monitor expired. A Monitor armed when `claude` was hard-killed got no trailer, and `--resume` wrote no synthetic terminal for it. (A background Bash task in the same run did get the "didn't finish before the previous session ended" `stopped` synthetic.) So after a crash only the deadline ends a Monitor. S2's deadline sweep covers that. Until a persistent one is seen, they get the Bash ceiling, not a deadline (as in the Recommendation). |
 | Who owns a subagent's task after the subagent ends? | 38 orphans, 7 of them with a `[killed]` trailer. Verify by trailer on a live sample. |
 | macOS temp path | Confirm from a Mac transcript's start row. The design reads the path from the row, so it should not matter. |
 | Does the expiry text stay stable across Claude Code versions? | It is the only expiry marker. Pin it in an S1 fixture and treat an unrecognised form as "unknown, not running". |
