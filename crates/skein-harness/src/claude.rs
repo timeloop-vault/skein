@@ -42,6 +42,8 @@ use serde_json::Value;
 
 use crate::time::parse_iso8601_ms;
 
+pub mod background;
+
 // ── paths ─────────────────────────────────────────────────────────
 
 /// Longest encoded name Claude uses as-is; longer ones are cut here and

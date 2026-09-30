@@ -33,9 +33,26 @@ use notify_debouncer_mini::notify::RecommendedWatcher;
 use notify_debouncer_mini::{DebounceEventResult, Debouncer, new_debouncer, notify::RecursiveMode};
 use parking_lot::Mutex;
 use serde::Serialize;
+use skein_harness::claude::background::{
+    self, BackgroundKind, BackgroundTask, BackgroundTasks, BackgroundTransition, Outcome,
+    OutcomeStatus, OutputTrailer,
+};
 
 use crate::db::Database;
-use crate::harness_actions_claude::ActionExtractor;
+use crate::harness_actions_claude::{ActionExtractor, ExtractedAction};
+
+/// `harness_actions.kind` of the row a background task's end writes
+/// (#445). Local rather than in `db::action_kind`, which a sibling change
+/// is editing; the feed reads the kind off the row either way.
+const BACKGROUND_END: &str = "background_end";
+
+/// How long past a Monitor's `started + timeout` the adapter waits
+/// before it ends the task itself as `Expired` (#445). Claude Code
+/// normally writes a `[Monitor expired after …` notice at the deadline,
+/// which says more than the sweep can (its summary), so the sweep must
+/// lose that race; it exists for the Monitors that pass their deadline
+/// with no notice at all (recon §Q2).
+const MONITOR_EXPIRY_GRACE_MS: i64 = 60_000;
 
 /// Tighter than the worktree watcher's 200 ms — notification UX cares
 /// about latency, and a JSONL append produces exactly one event we
@@ -111,7 +128,15 @@ pub enum ClaudeEvent {
     /// Tool finished and the result was appended to the session.
     ToolUseResult,
     /// User-authored message arrived (typed prompt, not a tool result).
-    UserPrompt,
+    ///
+    /// `task_notification` (#445) is true when the row is a
+    /// `<task-notification>` Claude Code wrote itself (a background
+    /// task's end, a Monitor line), not something the user typed — read
+    /// with `skein_harness::claude::background::task_notification_text`,
+    /// the same test the background tracker uses. The phase is the same
+    /// either way (still `running`); the flag is for the consumer that
+    /// needs to tell the two apart (#446).
+    UserPrompt { task_notification: bool },
     /// Claude finished its turn and is awaiting the next user prompt.
     /// This is the "waiting on input" signal.
     AwaitingPrompt,
@@ -159,6 +184,37 @@ pub enum ClaudeEvent {
         agent_id: String,
         agent_type: Option<String>,
         description: Option<String>,
+    },
+    /// A background `Bash` / `PowerShell` command or `Monitor` started
+    /// (#445, slice S2 of #439): its `tool_use` joined to a `tool_result`
+    /// carrying the task id (`skein_harness::claude::background`).
+    /// `agent_id` names the subagent that launched it, `None` for the
+    /// main session. `initial` mirrors `SubagentStart.initial`: true
+    /// only for the batch re-derived from disk at attach time, where a
+    /// task still outstanding belongs to a process that died with the
+    /// PTY it ran in; false for everything a live tick discovers.
+    BackgroundStart {
+        task_id: String,
+        tool_use_id: String,
+        task_kind: BackgroundKind,
+        description: Option<String>,
+        command: Option<String>,
+        timeout_ms: Option<u64>,
+        persistent: bool,
+        auto_backgrounded: bool,
+        agent_id: Option<String>,
+        initial: bool,
+    },
+    /// A background task ended: a terminal notification, a `TaskStop`
+    /// result, a Monitor deadline the adapter swept, or (status
+    /// `subagent_ended`) the launching subagent exiting, in which case
+    /// Skein can't know whether it finished.
+    BackgroundEnd {
+        task_id: String,
+        task_kind: BackgroundKind,
+        agent_id: Option<String>,
+        status: OutcomeStatus,
+        exit_code: Option<i32>,
     },
 }
 
@@ -701,6 +757,10 @@ struct TailState {
     subagents_dir: Option<PathBuf>,
     /// Per-subagent tail state, keyed by agent id.
     subagents: HashMap<String, SubagentTail>,
+    /// Background-task tracker fed every row of the main transcript and
+    /// of every subagent transcript (#445), plus which subagent owns
+    /// which task.
+    background: BackgroundState,
     /// One-shot guard for the "could not read subagents dir this tick"
     /// warn (#362) — without it, a subagents dir that becomes
     /// permanently unreadable (deleted, permissions) warns on every
@@ -1059,9 +1119,10 @@ where
             cwd: ap.cwd.clone(),
             app: ap.app.clone(),
         });
+        let mut background = BackgroundState::default();
         let (last_pos, attached, initial_event, fingerprint) = match fs::read_to_string(&path) {
             Ok(content) => {
-                let (init, fresh) = scan_history(&content, actions.as_mut());
+                let (init, fresh) = scan_history(&content, actions.as_mut(), &mut background);
                 if let Some(ap) = actions.as_ref() {
                     persist_extracted_batch(ap, fresh);
                 }
@@ -1137,7 +1198,8 @@ where
                 };
                 let content = fs::read_to_string(&sub_path).unwrap_or_default();
                 let last_pos = u64::try_from(content.len()).unwrap_or(u64::MAX);
-                let lifecycle = subagent_lifecycle_from_content(&content);
+                let lifecycle =
+                    subagent_lifecycle_from_content(&content, &mut background, &agent_id);
                 let finished = lifecycle.is_finished();
                 let meta = skein_harness::claude::read_subagent_meta(&sub_path);
                 let (agent_type, description) =
@@ -1181,6 +1243,15 @@ where
             }
         }
 
+        // Background tasks (#445): main and subagent history are both
+        // fed by now, so the live set can be derived (nothing announced
+        // yet, so the result is all starts). Nothing the feeding
+        // produced was kept — history is not replayed as events or rows.
+        // What is still outstanding is held back like the subagent
+        // starts, to be emitted once the watcher is armed.
+        let initial_background_starts =
+            reconcile_background(&mut background, &initial_subagents, now_ms());
+
         let attach_info_path = path.clone();
         let state = Arc::new(Mutex::new(TailState {
             harness_id: harness_id.to_string(),
@@ -1194,6 +1265,7 @@ where
             actions,
             subagents_dir: subagents_dir_opt.clone(),
             subagents: initial_subagents,
+            background,
             subagents_dir_read_failure_logged: false,
             first_read_logged: false,
             events_sent: 0,
@@ -1287,6 +1359,9 @@ where
         // already existed and was readable (see the seeding loop
         // above), so there's nothing to gate here any more.
         for event in initial_subagent_starts {
+            on_event(event);
+        }
+        for event in initial_background_starts {
             on_event(event);
         }
 
@@ -1863,7 +1938,7 @@ fn classify_reappear(path: &Path, last_pos: u64, fp: &[u8], file_len: u64) -> Re
 
 /// Outcome of `resync_as_backfill` (#425).
 enum Resync {
-    Done(Option<ClaudeEvent>),
+    Done(Vec<ClaudeEvent>),
     Unreadable,
 }
 
@@ -1892,7 +1967,27 @@ fn resync_as_backfill(s: &mut TailState) -> Resync {
         // extractor may be stuck mid-turn on rows that no longer exist.
         ap.extractor = ActionExtractor::new();
     }
-    let (init, fresh) = scan_history(&content, s.actions.as_mut());
+    // Background tasks (#445): same no-replay rule. The tracker is
+    // rebuilt from the new main content and the subagent files already
+    // tailed, with every transition discarded; a task outstanding across
+    // the resync is not re-announced.
+    // What was announced, and who owns what, carries over, so the
+    // reconcile below can close (or keep) exactly those, and close an
+    // owned one as `subagent_ended` even when the new content no longer
+    // shows its start.
+    let mut background = BackgroundState {
+        announced: std::mem::take(&mut s.background.announced),
+        owner: std::mem::take(&mut s.background.owner),
+        ..BackgroundState::default()
+    };
+    let (init, fresh) = scan_history(&content, s.actions.as_mut(), &mut background);
+    for (agent_id, tail) in &s.subagents {
+        if let Ok(sub) = fs::read_to_string(&tail.path) {
+            subagent_lifecycle_from_content(&sub, &mut background, agent_id);
+        }
+    }
+    let background_events = reconcile_background(&mut background, &s.subagents, now_ms());
+    s.background = background;
     if let Some(ap) = s.actions.as_ref() {
         persist_extracted_batch(ap, fresh);
     }
@@ -1904,7 +1999,7 @@ fn resync_as_backfill(s: &mut TailState) -> Resync {
     s.utf8_stall_at = None;
     s.utf8_stall_count = 0;
     s.utf8_stall_warned = false;
-    Resync::Done(init)
+    Resync::Done(init.into_iter().chain(background_events).collect())
 }
 
 /// Run `resync_as_backfill`, drop the lock, and emit only the initial
@@ -1915,16 +2010,16 @@ fn finish_resync(
     state: &Arc<Mutex<TailState>>,
     on_event: &(dyn Fn(ClaudeEvent) + Send + Sync),
 ) {
-    let init = match resync_as_backfill(&mut s) {
-        Resync::Done(init) => init,
+    let events = match resync_as_backfill(&mut s) {
+        Resync::Done(events) => events,
         Resync::Unreadable => {
             // Retry on the next tick via the reappear path.
             s.attached = false;
-            None
+            Vec::new()
         }
     };
     drop(s);
-    dispatch_events(state, init.into_iter().collect(), on_event);
+    dispatch_events(state, events, on_event);
 }
 
 /// One tick of the tail-reader. Reads any bytes appended since
@@ -2150,6 +2245,8 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     let drained = std::mem::take(&mut s.partial);
     let mut lines = drained.split('\n').peekable();
     let mut events = Vec::new();
+    let mut background_rows: Vec<ExtractedAction> = Vec::new();
+    let harness_id = s.harness_id.clone();
     let mut in_assistant_turn = s.in_assistant_turn;
     let mut lines_parsed: usize = 0;
     while let Some(line) = lines.next() {
@@ -2180,6 +2277,16 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
             let extracted = ap.extractor.ingest(&value);
             persist_extracted(ap, extracted, true);
         }
+        // Background tasks (#445): the same row, a third consumer.
+        s.background.feed(
+            &value,
+            None,
+            Some(&mut BackgroundOut {
+                harness_id: &harness_id,
+                events: &mut events,
+                rows: &mut background_rows,
+            }),
+        );
     }
     s.in_assistant_turn = in_assistant_turn;
 
@@ -2187,7 +2294,20 @@ fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent) + Send + 
     // events vec, so consumers see main-session events first and
     // subagent events second within one tick.
     let main_events = events.len();
-    tick_subagents(&mut s, &mut events);
+    tick_subagents(&mut s, &mut events, &mut background_rows);
+    // Monitor deadlines, after both files so a real expiry notice that
+    // arrived this tick wins over the sweep (#445).
+    s.background.sweep(
+        now_ms(),
+        &mut BackgroundOut {
+            harness_id: &harness_id,
+            events: &mut events,
+            rows: &mut background_rows,
+        },
+    );
+    if let Some(ap) = s.actions.as_ref() {
+        persist_extracted(ap, background_rows, true);
+    }
     let subagent_events = events.len() - main_events;
     // Only the subagents still being tailed live count as "watched" —
     // a finished one is a cheap stat check, not a file whose new rows
@@ -2295,7 +2415,16 @@ fn dispatch_events(
 /// finished on disk when `attach_at` seeds `initial_subagents` never
 /// enters this function's terminal-row branch at all, because its
 /// `finished` flag is already `true` and its rows are never re-read.
-fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
+///
+/// Every subagent row is also fed to the background tracker (#445), which
+/// appends its `BackgroundStart`/`BackgroundEnd` events to `events` and
+/// its `background_end` rows to `background_rows` (persisted by `tick`);
+/// a subagent finishing ends the tasks it launched.
+fn tick_subagents(
+    s: &mut TailState,
+    events: &mut Vec<ClaudeEvent>,
+    background_rows: &mut Vec<ExtractedAction>,
+) {
     let Some(dir) = s.subagents_dir.clone() else {
         return;
     };
@@ -2336,6 +2465,7 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
     };
     let mut seen: HashSet<String> = HashSet::new();
     let mut new_count: usize = 0;
+    let mut reseeded = false;
     let mut subagent_end_actions: Vec<crate::harness_actions_claude::ExtractedAction> = Vec::new();
     for entry in entries.flatten() {
         let sub_path = entry.path();
@@ -2445,7 +2575,13 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
             };
             tail.last_pos = u64::try_from(content.len()).unwrap_or(u64::MAX);
             tail.partial.clear();
-            tail.lifecycle = subagent_lifecycle_from_content(&content);
+            // The tracker takes the content again with no events: ids it
+            // already knows are ignored, and nothing here is replayed.
+            // What that changed is reconciled against what was announced
+            // once the loop is done (`reseeded`).
+            reseeded = true;
+            tail.lifecycle =
+                subagent_lifecycle_from_content(&content, &mut s.background, &agent_id);
             tracing::info!(
                 harness_id = %s.harness_id,
                 path = %tail.path.display(),
@@ -2510,6 +2646,15 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
             // re-open it, which misfired on the 2.1.27x trailing rows.
             // The exit is a `SubagentHandback` tool_result (report
             // delivered; Claude marks it `toolEndsTurn`), not its tool_use.
+            s.background.feed(
+                &value,
+                Some(&agent_id),
+                Some(&mut BackgroundOut {
+                    harness_id: &s.harness_id,
+                    events,
+                    rows: background_rows,
+                }),
+            );
             match tail.lifecycle.observe(&value) {
                 Some(skein_harness::claude::SubagentTransition::Finished) => {
                     events.push(ClaudeEvent::SubagentEnd {
@@ -2517,6 +2662,9 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
                         agent_type: tail.agent_type.clone(),
                         description: tail.description.clone(),
                     });
+                    // Its background tasks die with it (#445); Skein
+                    // can't know whether they finished, so events only.
+                    s.background.end_owned_by(&agent_id, events);
                     // Feed a `subagent_end` row into the activity feed
                     // (epic #298). The delegation itself already
                     // renders via the main transcript's `Agent`
@@ -2578,6 +2726,14 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
     // whether it was live or finished.
     s.subagents.retain(|id, _| seen.contains(id));
 
+    if reseeded {
+        events.extend(reconcile_background(
+            &mut s.background,
+            &s.subagents,
+            now_ms(),
+        ));
+    }
+
     tracing::debug!(
         harness_id = %s.harness_id,
         seen = seen.len(),
@@ -2601,7 +2757,15 @@ fn tick_subagents(s: &mut TailState, events: &mut Vec<ClaudeEvent>) {
 /// applies while tailing live. The lifecycle is kept (not just its
 /// verdict) so a `SubagentHandback` id seen before attach still matches
 /// a result that arrives afterwards.
-fn subagent_lifecycle_from_content(content: &str) -> skein_harness::claude::SubagentLifecycle {
+///
+/// The same walk feeds `background` with the subagent's rows (#445), no
+/// events: history is not replayed, but the tracker has to know which
+/// tasks this subagent started and owns.
+fn subagent_lifecycle_from_content(
+    content: &str,
+    background: &mut BackgroundState,
+    agent_id: &str,
+) -> skein_harness::claude::SubagentLifecycle {
     let mut lifecycle = skein_harness::claude::SubagentLifecycle::default();
     for line in content.lines() {
         let trimmed = line.trim();
@@ -2612,8 +2776,306 @@ fn subagent_lifecycle_from_content(content: &str) -> skein_harness::claude::Suba
             continue;
         };
         lifecycle.observe(&value);
+        background.feed(&value, Some(agent_id), None);
     }
     lifecycle
+}
+
+/// The background-task tracker plus which subagent launched which task
+/// (#445). A task absent from `owner` belongs to the main session.
+#[derive(Default)]
+struct BackgroundState {
+    tasks: BackgroundTasks,
+    /// task id → agent id of the subagent whose transcript started it.
+    owner: HashMap<String, String>,
+    /// The adapter's promise to the frontend: every task id whose
+    /// `BackgroundStart` was emitted (initial or live) and whose
+    /// `BackgroundEnd` has not been, mapped to its kind so an end can be
+    /// emitted even when the tracker no longer knows the task. Every
+    /// announced start gets exactly one end, and an end is only ever
+    /// emitted (event or `background_end` row) for an id in here: an end
+    /// for a task nobody was told about just updates the tracker.
+    announced: HashMap<String, BackgroundKind>,
+}
+
+/// Where a live feed's results go: the tick's event list and the rows
+/// `tick` persists afterwards. History feeds pass no sink at all.
+struct BackgroundOut<'a> {
+    harness_id: &'a str,
+    events: &'a mut Vec<ClaudeEvent>,
+    rows: &'a mut Vec<ExtractedAction>,
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+fn background_start_event(
+    task: &BackgroundTask,
+    agent_id: Option<String>,
+    initial: bool,
+) -> ClaudeEvent {
+    ClaudeEvent::BackgroundStart {
+        task_id: task.task_id.clone(),
+        tool_use_id: task.tool_use_id.clone(),
+        task_kind: task.kind,
+        description: task.description.clone(),
+        command: task.command.clone(),
+        timeout_ms: task.timeout_ms,
+        persistent: task.persistent,
+        auto_backgrounded: task.auto_backgrounded,
+        agent_id,
+        initial,
+    }
+}
+
+impl BackgroundState {
+    /// Feeds one transcript row. `agent_id` is the subagent whose file it
+    /// came from, `None` for the main file. The tracker is
+    /// order-independent (an early terminal is remembered), so the main
+    /// file and the subagent files can be fed in any order. With a sink
+    /// (live) every transition becomes an event, and an end also a
+    /// `background_end` row; without one (history) they are dropped, but
+    /// ownership is still recorded.
+    fn feed(
+        &mut self,
+        row: &serde_json::Value,
+        agent_id: Option<&str>,
+        mut out: Option<&mut BackgroundOut<'_>>,
+    ) {
+        let row_ts = skein_harness::claude::timestamp_ms(row);
+        for transition in self.tasks.observe(row) {
+            match transition {
+                BackgroundTransition::Started(task) => {
+                    if let Some(agent) = agent_id {
+                        self.owner.insert(task.task_id.clone(), agent.to_owned());
+                    }
+                    if let Some(out) = out.as_deref_mut() {
+                        self.announced.insert(task.task_id.clone(), task.kind);
+                        tracing::info!(
+                            harness_id = %out.harness_id,
+                            task_id = %task.task_id,
+                            task_kind = ?task.kind,
+                            initial = false,
+                            "claude_events: background task started"
+                        );
+                        out.events.push(background_start_event(
+                            &task,
+                            agent_id.map(str::to_owned),
+                            false,
+                        ));
+                    }
+                }
+                BackgroundTransition::Ended { task, outcome } => {
+                    if let Some(out) = out.as_deref_mut() {
+                        self.announce_end(&task, &outcome, row_ts, true, out);
+                    }
+                }
+                // Monitor output lines: no event, no row. S4 (#447) decides.
+                BackgroundTransition::MonitorEvent { .. } => {}
+            }
+        }
+    }
+
+    /// The end of one task: the event, plus (for an end Skein actually
+    /// saw) the feed row. `ts` is the ending row's timestamp, falling
+    /// back to now. Silent unless the task's start was announced, which
+    /// this then retires.
+    fn announce_end(
+        &mut self,
+        task: &BackgroundTask,
+        outcome: &Outcome,
+        ts: Option<i64>,
+        with_row: bool,
+        out: &mut BackgroundOut<'_>,
+    ) {
+        if self.announced.remove(&task.task_id).is_none() {
+            return;
+        }
+        let agent_id = self.owner.get(&task.task_id).cloned();
+        tracing::info!(
+            harness_id = %out.harness_id,
+            task_id = %task.task_id,
+            task_kind = ?task.kind,
+            status = ?outcome.status,
+            "claude_events: background task ended"
+        );
+        out.events.push(ClaudeEvent::BackgroundEnd {
+            task_id: task.task_id.clone(),
+            task_kind: task.kind,
+            agent_id: agent_id.clone(),
+            status: outcome.status,
+            exit_code: outcome.exit_code,
+        });
+        if !with_row {
+            return;
+        }
+        let timestamp_ms = ts.unwrap_or_else(now_ms);
+        let mut payload = serde_json::json!({
+            "task_id": task.task_id,
+            "task_kind": task.kind,
+            "description": task.description,
+            "command": task.command,
+            "status": outcome.status,
+            "exit_code": outcome.exit_code,
+            "summary": outcome.summary,
+            "agent_id": agent_id,
+        });
+        if let Some(start) = task.started_ms
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert(
+                "duration_ms".into(),
+                serde_json::json!(timestamp_ms.saturating_sub(start)),
+            );
+        }
+        out.rows.push(ExtractedAction {
+            kind: BACKGROUND_END,
+            timestamp_ms,
+            payload: payload.to_string(),
+            source: None,
+        });
+    }
+
+    /// Ends every still-outstanding task `agent_id` launched, as
+    /// `SubagentEnded`: event only, no row (a subagent's exit doesn't say
+    /// its tasks finished). Called when that subagent's transcript ends.
+    fn end_owned_by(&mut self, agent_id: &str, events: &mut Vec<ClaudeEvent>) {
+        let owned: Vec<String> = self
+            .owner
+            .iter()
+            .filter(|(_, owner)| owner.as_str() == agent_id)
+            .map(|(task_id, _)| task_id.clone())
+            .collect();
+        for task_id in owned {
+            if let Some(BackgroundTransition::Ended { task, outcome }) = self
+                .tasks
+                .end(&task_id, Outcome::new(OutcomeStatus::SubagentEnded))
+                && self.announced.remove(&task_id).is_some()
+            {
+                tracing::info!(
+                    task_id = %task.task_id,
+                    task_kind = ?task.kind,
+                    status = ?outcome.status,
+                    "claude_events: background task ended"
+                );
+                events.push(ClaudeEvent::BackgroundEnd {
+                    task_id: task.task_id,
+                    task_kind: task.kind,
+                    agent_id: Some(agent_id.to_owned()),
+                    status: outcome.status,
+                    exit_code: None,
+                });
+            }
+        }
+    }
+
+    /// Ends Monitors past their deadline plus [`MONITOR_EXPIRY_GRACE_MS`]
+    /// as `Expired`, event and row. `now_ms` is the caller's clock so a
+    /// test can drive it.
+    fn sweep(&mut self, now_ms: i64, out: &mut BackgroundOut<'_>) {
+        for transition in self.tasks.expire_overdue(now_ms, MONITOR_EXPIRY_GRACE_MS) {
+            if let BackgroundTransition::Ended { task, outcome } = transition {
+                self.announce_end(&task, &outcome, Some(now_ms), true, out);
+            }
+        }
+    }
+}
+
+/// Re-derives the live background set from a freshly fed tracker and
+/// reconciles it with what was announced (#445). At attach, once main and
+/// subagent history are both fed, nothing is announced yet; after a
+/// resync the old tracker's `announced` set was carried over.
+///
+/// First, everything the transcripts can't vouch for ends silently: a
+/// Monitor past its deadline (so the sweep doesn't later end what no one
+/// was told about), a task whose `.output` file already ends in an
+/// `[exited …]` / `[killed]` trailer, and a task whose launching subagent
+/// is finished. A missing owner counts as finished: its file was skipped
+/// or unreadable, and ending silently is the safe direction. Then:
+/// every announced id that is no longer outstanding gets one
+/// `BackgroundEnd` (`unknown`, or `subagent_ended` for an owned task), no
+/// row, since Skein can't know how it ended; and every outstanding id not
+/// yet announced gets `BackgroundStart { initial: true }` (liveness
+/// unknown, like the attach batch). Ends come first.
+///
+/// Accepted loss: on a resync or subagent re-seed, a live-announced
+/// main-session task that the trailer or the deadline shows as done is
+/// closed here with no row, and its later real notification is then
+/// dropped as unannounced, so that task's `background_end` row is lost.
+/// It happens only on a rare shrink or truncation, and it errs toward
+/// closing rather than leaking.
+fn reconcile_background(
+    background: &mut BackgroundState,
+    subagents: &HashMap<String, SubagentTail>,
+    now_ms: i64,
+) -> Vec<ClaudeEvent> {
+    // Discarded: history is not replayed, and these are not announced.
+    background.tasks.expire_overdue(now_ms, 0);
+    let outstanding: Vec<BackgroundTask> = background
+        .tasks
+        .outstanding(now_ms)
+        .into_iter()
+        .cloned()
+        .collect();
+    let mut live = HashSet::new();
+    let mut starts = Vec::new();
+    for task in outstanding {
+        let trailer = background
+            .tasks
+            .output_path(&task.task_id)
+            .map_or(OutputTrailer::Unreadable, |p| {
+                background::read_output_trailer(&p)
+            });
+        if matches!(trailer, OutputTrailer::Exited(_) | OutputTrailer::Killed) {
+            background
+                .tasks
+                .end(&task.task_id, Outcome::new(OutcomeStatus::Completed));
+            continue;
+        }
+        let owner = background.owner.get(&task.task_id).cloned();
+        if let Some(agent) = &owner
+            && subagents
+                .get(agent)
+                .is_none_or(|t| t.lifecycle.is_finished())
+        {
+            background
+                .tasks
+                .end(&task.task_id, Outcome::new(OutcomeStatus::SubagentEnded));
+            continue;
+        }
+        live.insert(task.task_id.clone());
+        if !background.announced.contains_key(&task.task_id) {
+            background.announced.insert(task.task_id.clone(), task.kind);
+            starts.push(background_start_event(&task, owner, true));
+        }
+    }
+    let gone: Vec<(String, BackgroundKind)> = background
+        .announced
+        .iter()
+        .filter(|(id, _)| !live.contains(*id))
+        .map(|(id, kind)| (id.clone(), *kind))
+        .collect();
+    let mut events = Vec::new();
+    for (task_id, task_kind) in gone {
+        background.announced.remove(&task_id);
+        let agent_id = background.owner.get(&task_id).cloned();
+        events.push(ClaudeEvent::BackgroundEnd {
+            task_id,
+            task_kind,
+            status: if agent_id.is_some() {
+                OutcomeStatus::SubagentEnded
+            } else {
+                OutcomeStatus::Unknown
+            },
+            agent_id,
+            exit_code: None,
+        });
+    }
+    events.extend(starts);
+    events
 }
 
 /// A `user` row whose `message.content` carries a `tool_result` block
@@ -2656,9 +3118,13 @@ fn is_subagent_tool_result_row(value: &serde_json::Value) -> bool {
 /// restart avoids duplicating rows. On first attach the max is 0, so
 /// every row is fresh. Persistence itself is the caller's job
 /// (`persist_extracted_batch`), so this function stays a pure scan.
+///
+/// `background` (#445) sees every row too, with no sink: the tracker is
+/// primed, nothing is emitted.
 fn scan_history(
     content: &str,
     mut actions: Option<&mut ActionPersistence>,
+    background: &mut BackgroundState,
 ) -> (
     Option<ClaudeEvent>,
     Vec<crate::harness_actions_claude::ExtractedAction>,
@@ -2677,6 +3143,7 @@ fn scan_history(
             continue;
         };
         apply_initial_state_row(&value, &mut last);
+        background.feed(&value, None, None);
         if let Some(ap) = actions.as_mut() {
             let extracted = ap.extractor.ingest(&value);
             fresh.extend(extracted.into_iter().filter(|a| a.timestamp_ms > max_ts));
@@ -2823,7 +3290,7 @@ fn max_persisted_ts_ms(db: &Database, harness_id: &str) -> i64 {
 /// derived phase" tests below stay simple to write.
 #[cfg(test)]
 fn determine_initial_state(content: &str) -> Option<ClaudeEvent> {
-    scan_history(content, None).0
+    scan_history(content, None, &mut BackgroundState::default()).0
 }
 
 /// One row's worth of `determine_initial_state`'s logic, factored out
@@ -2868,12 +3335,22 @@ fn apply_initial_state_row(value: &serde_json::Value, last: &mut Option<ClaudeEv
             *last = if value.get("toolUseResult").is_some() {
                 Some(ClaudeEvent::ToolUseResult)
             } else {
-                Some(ClaudeEvent::UserPrompt)
+                Some(ClaudeEvent::UserPrompt {
+                    task_notification: is_task_notification(value),
+                })
             };
         }
         // Metadata rows don't shift phase; skip.
         _ => {}
     }
+}
+
+/// Is this `user` row a `<task-notification>` Claude Code wrote itself
+/// rather than a prompt the user typed (#445)? By the row's text, via the
+/// tracker's own carrier test, not by `origin.kind` /`promptSource`: the
+/// text is what the tracker acts on, so the two can't disagree.
+fn is_task_notification(value: &serde_json::Value) -> bool {
+    background::task_notification_text(value).is_some()
 }
 
 /// Text Claude writes as a plain `user` row when the user stops a turn:
@@ -3022,7 +3499,9 @@ fn parse_value(value: &serde_json::Value, in_assistant_turn: &mut bool) -> Optio
             if value.get("toolUseResult").is_some() {
                 Some(ClaudeEvent::ToolUseResult)
             } else {
-                Some(ClaudeEvent::UserPrompt)
+                Some(ClaudeEvent::UserPrompt {
+                    task_notification: is_task_notification(value),
+                })
             }
         }
         "attachment" => {
@@ -3602,7 +4081,10 @@ mod tests {
     #[test]
     fn a_prompt_that_only_mentions_the_interrupt_text_is_still_a_prompt() {
         let row = r#"{"type":"user","sessionId":"x","message":{"content":[{"type":"text","text":"why did I see [Request interrupted by user]?"}]}}"#;
-        assert!(matches!(parse_one(row), Some(ClaudeEvent::UserPrompt)));
+        assert!(matches!(
+            parse_one(row),
+            Some(ClaudeEvent::UserPrompt { .. })
+        ));
         // A tool result never ends the turn, whatever its text says.
         let result = r#"{"type":"user","sessionId":"x","toolUseResult":"x","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
         assert!(matches!(
@@ -3623,7 +4105,7 @@ mod tests {
         let unflagged = QUEUED_NOTIFICATION.replace(r#""queueTranscriptOnly":true,"#, "");
         assert!(matches!(
             parse_one(&unflagged),
-            Some(ClaudeEvent::UserPrompt)
+            Some(ClaudeEvent::UserPrompt { .. })
         ));
     }
 
@@ -4922,6 +5404,7 @@ mod tests {
             actions: None,
             subagents_dir: None,
             subagents: HashMap::new(),
+            background: BackgroundState::default(),
             subagents_dir_read_failure_logged: false,
             first_read_logged: false,
             events_sent: 0,
@@ -4982,6 +5465,7 @@ mod tests {
             actions: None,
             subagents_dir: None,
             subagents: HashMap::new(),
+            background: BackgroundState::default(),
             subagents_dir_read_failure_logged: false,
             first_read_logged: false,
             events_sent: 0,
@@ -5270,6 +5754,7 @@ mod tests {
             actions: None,
             subagents_dir: Some(sub_dir),
             subagents: HashMap::new(),
+            background: BackgroundState::default(),
             subagents_dir_read_failure_logged: false,
             first_read_logged: false,
             events_sent: 0,
@@ -5477,6 +5962,7 @@ mod tests {
             actions,
             subagents_dir: None,
             subagents: HashMap::new(),
+            background: BackgroundState::default(),
             subagents_dir_read_failure_logged: false,
             first_read_logged: false,
             events_sent: 0,
@@ -5554,7 +6040,7 @@ mod tests {
         .unwrap();
         let events = t425_tick(&state);
         assert!(
-            matches!(events.as_slice(), [ClaudeEvent::UserPrompt]),
+            matches!(events.as_slice(), [ClaudeEvent::UserPrompt { .. }]),
             "only the appended row may be read live, got {events:?}"
         );
         let rows_after = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
@@ -5597,7 +6083,10 @@ mod tests {
         writeln!(f, "{T425_NEW}").unwrap();
         f.sync_all().unwrap();
         let events = t425_tick(&state);
-        assert!(matches!(events.as_slice(), [ClaudeEvent::UserPrompt]));
+        assert!(matches!(
+            events.as_slice(),
+            [ClaudeEvent::UserPrompt { .. }]
+        ));
     }
 
     #[test]
@@ -5666,7 +6155,7 @@ mod tests {
         );
         fs::write(&path, &before).unwrap();
         let first = t425_tick(&state);
-        assert!(matches!(first.as_slice(), [ClaudeEvent::UserPrompt]));
+        assert!(matches!(first.as_slice(), [ClaudeEvent::UserPrompt { .. }]));
         assert!(!state.lock().partial.is_empty());
         fs::remove_file(&path).unwrap();
         assert!(matches!(
@@ -6221,6 +6710,7 @@ mod tests {
             actions: None,
             subagents_dir: None,
             subagents: HashMap::new(),
+            background: BackgroundState::default(),
             subagents_dir_read_failure_logged: false,
             first_read_logged: false,
             events_sent: 0,
@@ -6266,5 +6756,1036 @@ mod tests {
             !s.utf8_stall_warned,
             "a successful read must rearm the warn guard"
         );
+    }
+
+    // ── #445: background tasks ──────────────────────────────────────
+
+    const T445_TS: &str = "2026-01-01T00:00:00.000Z";
+    const T445_TS_END: &str = "2026-01-01T00:00:05.000Z";
+    /// `T445_TS` as epoch ms.
+    const T445_START_MS: i64 = 1_767_225_600_000;
+
+    /// Tags a row as a subagent's own when `agent` is given.
+    fn t445_row(mut row: serde_json::Value, agent: Option<&str>) -> String {
+        if let (Some(agent), Some(obj)) = (agent, row.as_object_mut()) {
+            obj.insert("isSidechain".into(), true.into());
+            obj.insert("agentId".into(), agent.into());
+        }
+        row.to_string()
+    }
+
+    fn t445_use(name: &str, id: &str, input: &serde_json::Value, agent: Option<&str>) -> String {
+        t445_row(
+            serde_json::json!({"type":"assistant","timestamp":T445_TS,"message":{"content":[
+                {"type":"tool_use","id":id,"name":name,"input":input}]}}),
+            agent,
+        )
+    }
+
+    fn t445_result(
+        use_id: &str,
+        text: &str,
+        tur: &serde_json::Value,
+        agent: Option<&str>,
+    ) -> String {
+        t445_row(
+            serde_json::json!({"type":"user","timestamp":T445_TS,"toolUseResult":tur,
+                "message":{"content":[
+                    {"type":"tool_result","tool_use_id":use_id,"content":text,"is_error":false}]}}),
+            agent,
+        )
+    }
+
+    /// A background Bash start: `tool_use` + `tool_result`, the result
+    /// naming `output` (which the caller creates, or not).
+    fn t445_bash_start(
+        use_id: &str,
+        task_id: &str,
+        output: &Path,
+        agent: Option<&str>,
+    ) -> Vec<String> {
+        let input =
+            serde_json::json!({"command":"make","description":"build","run_in_background":true});
+        let text = format!(
+            "Command running in background with ID: {task_id}. Output is being written to: {}. You will be notified",
+            output.display()
+        );
+        vec![
+            t445_use("Bash", use_id, &input, agent),
+            t445_result(
+                use_id,
+                &text,
+                &serde_json::json!({"backgroundTaskId":task_id}),
+                agent,
+            ),
+        ]
+    }
+
+    fn t445_monitor_start(use_id: &str, task_id: &str, timeout_ms: u64) -> Vec<String> {
+        let input = serde_json::json!({"description":"watch","timeout_ms":timeout_ms,"command":"tail","persistent":false});
+        vec![
+            t445_use("Monitor", use_id, &input, None),
+            t445_result(
+                use_id,
+                "Monitor started",
+                &serde_json::json!({"taskId":task_id,"timeoutMs":timeout_ms,"persistent":false}),
+                None,
+            ),
+        ]
+    }
+
+    fn t445_notif(task_id: &str, status: &str, summary: &str) -> String {
+        format!(
+            "<task-notification>\n<task-id>{task_id}</task-id>\n<tool-use-id>toolu_test_1</tool-use-id>\n\
+             <status>{status}</status>\n<summary>{summary}</summary>\n</task-notification>"
+        )
+    }
+
+    fn t445_enqueue(text: &str) -> String {
+        serde_json::json!({"type":"queue-operation","operation":"enqueue","timestamp":T445_TS_END,"content":text})
+            .to_string()
+    }
+
+    fn t445_delivery(text: &str) -> String {
+        serde_json::json!({"type":"user","timestamp":T445_TS_END,"message":{"role":"user","content":text}})
+            .to_string()
+    }
+
+    /// Both carriers of one notification, as Claude Code writes them.
+    fn t445_notified(text: &str) -> Vec<String> {
+        vec![t445_enqueue(text), t445_delivery(text)]
+    }
+
+    fn t445_sub_end_turn(agent: &str) -> String {
+        t445_row(
+            serde_json::json!({"type":"assistant","timestamp":T445_TS_END,
+                "message":{"stop_reason":"end_turn","content":[]}}),
+            Some(agent),
+        )
+    }
+
+    fn t445_append(path: &Path, rows: &[String]) {
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+        append_lines(path, &refs);
+    }
+
+    fn t445_starts(events: &[ClaudeEvent]) -> Vec<&ClaudeEvent> {
+        events
+            .iter()
+            .filter(|e| matches!(e, ClaudeEvent::BackgroundStart { .. }))
+            .collect()
+    }
+
+    fn t445_ends(events: &[ClaudeEvent]) -> Vec<&ClaudeEvent> {
+        events
+            .iter()
+            .filter(|e| matches!(e, ClaudeEvent::BackgroundEnd { .. }))
+            .collect()
+    }
+
+    /// Payloads of every persisted `background_end` row in room `r1`.
+    fn t445_end_rows(db: &crate::db::Database) -> Vec<serde_json::Value> {
+        db.recent_harness_actions_by_room_and_kind("r1", BACKGROUND_END, -1, 100)
+            .unwrap()
+            .iter()
+            .map(|a| serde_json::from_str(&a.payload).unwrap())
+            .collect()
+    }
+
+    /// A live tail on a main transcript that already exists, with the
+    /// subagents dir set. The first tick reads from byte 0 as live.
+    fn t445_live(
+        dir: &TempDir,
+        main_rows: &[String],
+    ) -> (
+        Arc<Mutex<TailState>>,
+        PathBuf,
+        PathBuf,
+        Arc<crate::db::Database>,
+    ) {
+        let path = dir.path().join("session.jsonl");
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        let (db, ap) = t425_persistence(&dir.path().join("t.db"));
+        let state = t425_state(&path, Some(ap));
+        state.lock().subagents_dir = Some(sub_dir.clone());
+        t445_append(&path, main_rows);
+        (state, path, sub_dir, db)
+    }
+
+    /// Attach (full path, history fed, no live tick yet) over whatever is
+    /// on disk, persisting into a fresh db.
+    fn t445_attach(
+        path: &Path,
+        dir: &TempDir,
+    ) -> (
+        ClaudeEventsManager,
+        mpsc::Receiver<ClaudeEvent>,
+        Arc<crate::db::Database>,
+    ) {
+        let (db, ap) = t425_persistence(&dir.path().join("t.db"));
+        let (tx, rx) = mpsc::channel();
+        let manager = test_manager();
+        manager
+            .attach_at(
+                "h1",
+                path.to_path_buf(),
+                move |e| tx.send(e).unwrap(),
+                Some(ap),
+            )
+            .unwrap();
+        (manager, rx, db)
+    }
+
+    /// Case 1.
+    #[test]
+    fn t445_live_start_then_notification_ends_once_with_row() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        let (state, path, _sub, db) = t445_live(&dir, &[]);
+        t445_append(
+            &path,
+            &t445_bash_start("toolu_test_1", "b0000001a", &output, None),
+        );
+
+        let events = t425_tick(&state);
+        let starts = t445_starts(&events);
+        let [
+            ClaudeEvent::BackgroundStart {
+                task_id,
+                tool_use_id,
+                task_kind,
+                description,
+                agent_id,
+                initial,
+                ..
+            },
+        ] = starts.as_slice()
+        else {
+            panic!("expected exactly one BackgroundStart, got {events:?}");
+        };
+        assert_eq!(task_id, "b0000001a");
+        assert_eq!(tool_use_id, "toolu_test_1");
+        assert_eq!(*task_kind, BackgroundKind::Bash);
+        assert_eq!(description.as_deref(), Some("build"));
+        assert!(agent_id.is_none() && !initial);
+        assert!(t445_ends(&events).is_empty(), "{events:?}");
+
+        // The notification arrives as the enqueue and the delivery row.
+        t445_append(
+            &path,
+            &t445_notified(&t445_notif("b0000001a", "completed", "done (exit code 0)")),
+        );
+        let events = t425_tick(&state);
+        let ends = t445_ends(&events);
+        let [
+            ClaudeEvent::BackgroundEnd {
+                task_id,
+                status,
+                exit_code,
+                ..
+            },
+        ] = ends.as_slice()
+        else {
+            panic!("expected exactly one BackgroundEnd, got {events:?}");
+        };
+        assert_eq!(task_id, "b0000001a");
+        assert_eq!(*status, OutcomeStatus::Completed);
+        assert_eq!(*exit_code, Some(0));
+        assert!(t445_starts(&events).is_empty(), "{events:?}");
+
+        // Only the delivery row is a user row; the enqueue is not.
+        let prompts: Vec<bool> = events
+            .iter()
+            .filter_map(|e| match e {
+                ClaudeEvent::UserPrompt { task_notification } => Some(*task_notification),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(prompts, vec![true], "{events:?}");
+
+        let rows = t445_end_rows(&db);
+        let [row] = rows.as_slice() else {
+            panic!("expected one background_end row, got {rows:?}");
+        };
+        assert_eq!(row["task_id"], "b0000001a");
+        assert_eq!(row["status"], "completed");
+        assert_eq!(row["exit_code"], 0);
+        assert_eq!(row["duration_ms"], 5000);
+
+        // A later tick re-fires nothing, and a typed prompt is not a notification.
+        t445_append(
+            &path,
+            &[serde_json::json!({"type":"user","timestamp":T445_TS_END,"message":{"content":"next"}})
+                .to_string()],
+        );
+        let events = t425_tick(&state);
+        assert!(
+            matches!(
+                events.as_slice(),
+                [ClaudeEvent::UserPrompt {
+                    task_notification: false
+                }]
+            ),
+            "{events:?}"
+        );
+        assert_eq!(t445_end_rows(&db).len(), 1);
+    }
+
+    /// Case 2.
+    #[test]
+    fn t445_attach_over_outstanding_task_seeds_initial_start() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        fs::write(&output, "still going\n").unwrap();
+        let path = dir.path().join("session.jsonl");
+        t445_append(
+            &path,
+            &t445_bash_start("toolu_test_1", "b0000001a", &output, None),
+        );
+
+        let (_mgr, rx, db) = t445_attach(&path, &dir);
+        let events = drain_brief(&rx);
+        let starts = t445_starts(&events);
+        let [
+            ClaudeEvent::BackgroundStart {
+                task_id, initial, ..
+            },
+        ] = starts.as_slice()
+        else {
+            panic!("expected one initial BackgroundStart, got {events:?}");
+        };
+        assert_eq!(task_id, "b0000001a");
+        assert!(initial);
+        assert!(t445_ends(&events).is_empty(), "{events:?}");
+        assert!(t445_end_rows(&db).is_empty());
+    }
+
+    /// Case 3.
+    #[test]
+    fn t445_attach_over_finished_task_seeds_nothing() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        fs::write(&output, "done\n").unwrap();
+        let path = dir.path().join("session.jsonl");
+        t445_append(
+            &path,
+            &t445_bash_start("toolu_test_1", "b0000001a", &output, None),
+        );
+        t445_append(
+            &path,
+            &t445_notified(&t445_notif("b0000001a", "completed", "done (exit code 0)")),
+        );
+
+        let (_mgr, rx, db) = t445_attach(&path, &dir);
+        let events = drain_brief(&rx);
+        assert!(t445_starts(&events).is_empty(), "{events:?}");
+        assert!(t445_ends(&events).is_empty(), "{events:?}");
+        assert!(t445_end_rows(&db).is_empty());
+    }
+
+    /// Case 4, attach half: a `[killed]` trailer is the only record.
+    #[test]
+    fn t445_attach_killed_trailer_seeds_nothing() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        fs::write(&output, "work\n[killed]\n").unwrap();
+        let path = dir.path().join("session.jsonl");
+        t445_append(
+            &path,
+            &t445_bash_start("toolu_test_1", "b0000001a", &output, None),
+        );
+
+        let (_mgr, rx, db) = t445_attach(&path, &dir);
+        let events = drain_brief(&rx);
+        assert!(t445_starts(&events).is_empty(), "{events:?}");
+        assert!(t445_ends(&events).is_empty(), "{events:?}");
+        assert!(t445_end_rows(&db).is_empty());
+    }
+
+    /// Case 4, live half: `TaskStop` leaves no notification.
+    #[test]
+    fn t445_live_task_stop_ends_as_task_stopped() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        let (state, path, _sub, db) = t445_live(&dir, &[]);
+        t445_append(
+            &path,
+            &t445_bash_start("toolu_test_1", "b0000001a", &output, None),
+        );
+        t425_tick(&state);
+
+        t445_append(
+            &path,
+            &[
+                t445_use(
+                    "TaskStop",
+                    "toolu_test_2",
+                    &serde_json::json!({"task_id":"b0000001a"}),
+                    None,
+                ),
+                t445_result(
+                    "toolu_test_2",
+                    "Successfully stopped task",
+                    &serde_json::json!({"task_id":"b0000001a","task_type":"local_bash"}),
+                    None,
+                ),
+            ],
+        );
+        let events = t425_tick(&state);
+        let ends = t445_ends(&events);
+        assert!(
+            matches!(
+                ends.as_slice(),
+                [ClaudeEvent::BackgroundEnd {
+                    status: OutcomeStatus::TaskStopped,
+                    ..
+                }]
+            ),
+            "{events:?}"
+        );
+        let rows = t445_end_rows(&db);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["status"], "task_stopped");
+    }
+
+    /// Case 5a: the pinned expiry notice, no `<status>`.
+    #[test]
+    fn t445_monitor_expiry_notice_ends_as_expired_once() {
+        let dir = TempDir::new().unwrap();
+        let (state, path, _sub, db) = t445_live(&dir, &[]);
+        t445_append(
+            &path,
+            &t445_monitor_start("toolu_test_1", "b0000004a", 15_000),
+        );
+        let notice = "<task-notification>\n<task-id>b0000004a</task-id>\n\
+            <summary>Monitor \"watch\" expired</summary>\n\
+            <event>[Monitor expired after 15s with 1 event delivered. Re-arm it if you still need it.]</event>\n\
+            </task-notification>";
+        t445_append(&path, &t445_notified(notice));
+
+        // One tick: the start, then the notice, before any sweep.
+        let events = t425_tick(&state);
+        assert_eq!(t445_starts(&events).len(), 1, "{events:?}");
+        let ends = t445_ends(&events);
+        assert!(
+            matches!(
+                ends.as_slice(),
+                [ClaudeEvent::BackgroundEnd {
+                    status: OutcomeStatus::Expired,
+                    task_kind: BackgroundKind::Monitor,
+                    ..
+                }]
+            ),
+            "{events:?}"
+        );
+        assert_eq!(t445_end_rows(&db).len(), 1);
+
+        // The sweep, running on every tick, has nothing left to do.
+        t445_append(
+            &path,
+            &[r#"{"type":"user","message":{"content":"x"}}"#.into()],
+        );
+        let events = t425_tick(&state);
+        assert!(t445_ends(&events).is_empty(), "{events:?}");
+        assert_eq!(t445_end_rows(&db).len(), 1);
+    }
+
+    /// Case 5b: a Monitor past its deadline with no notice at all is ended
+    /// by the tick's sweep, once.
+    #[test]
+    fn t445_monitor_without_notice_is_swept_once_by_tick() {
+        let dir = TempDir::new().unwrap();
+        let (state, path, _sub, db) = t445_live(&dir, &[]);
+        // The rows are stamped months ago, so the deadline is long gone.
+        t445_append(
+            &path,
+            &t445_monitor_start("toolu_test_1", "b0000004a", 15_000),
+        );
+
+        let events = t425_tick(&state);
+        assert_eq!(t445_starts(&events).len(), 1, "{events:?}");
+        assert!(
+            matches!(
+                t445_ends(&events).as_slice(),
+                [ClaudeEvent::BackgroundEnd {
+                    status: OutcomeStatus::Expired,
+                    ..
+                }]
+            ),
+            "{events:?}"
+        );
+        assert_eq!(t445_end_rows(&db).len(), 1);
+
+        t445_append(
+            &path,
+            &[r#"{"type":"user","message":{"content":"x"}}"#.into()],
+        );
+        let events = t425_tick(&state);
+        assert!(t445_ends(&events).is_empty(), "{events:?}");
+        assert_eq!(t445_end_rows(&db).len(), 1, "swept again on a later tick");
+    }
+
+    /// Case 5c: the sweep's clock is start + timeout + grace, exactly.
+    #[test]
+    fn t445_sweep_waits_for_deadline_plus_grace() {
+        let mut bg = BackgroundState::default();
+        let mut events = Vec::new();
+        let mut rows = Vec::new();
+        for row in t445_monitor_start("toolu_test_1", "b0000004a", 15_000) {
+            bg.feed(
+                &serde_json::from_str(&row).unwrap(),
+                None,
+                Some(&mut BackgroundOut {
+                    harness_id: "h1",
+                    events: &mut events,
+                    rows: &mut rows,
+                }),
+            );
+        }
+        // The start is announced, which is what lets the sweep end it.
+        assert_eq!(events.len(), 1, "{events:?}");
+        events.clear();
+        let due = T445_START_MS + 15_000 + MONITOR_EXPIRY_GRACE_MS;
+        let sweep = |bg: &mut BackgroundState, now, events: &mut Vec<_>, rows: &mut Vec<_>| {
+            bg.sweep(
+                now,
+                &mut BackgroundOut {
+                    harness_id: "h1",
+                    events,
+                    rows,
+                },
+            );
+        };
+        sweep(&mut bg, T445_START_MS + 15_000, &mut events, &mut rows);
+        sweep(&mut bg, due - 1, &mut events, &mut rows);
+        assert!(events.is_empty() && rows.is_empty());
+        sweep(&mut bg, due, &mut events, &mut rows);
+        sweep(&mut bg, due + 10_000, &mut events, &mut rows);
+        assert!(
+            matches!(
+                events.as_slice(),
+                [ClaudeEvent::BackgroundEnd {
+                    status: OutcomeStatus::Expired,
+                    ..
+                }]
+            ),
+            "{events:?}"
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, BACKGROUND_END);
+    }
+
+    /// Case 6, live: the subagent's own task is dropped, without a row,
+    /// when the subagent ends.
+    #[test]
+    fn t445_subagent_end_drops_its_task_without_a_row() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        let (state, _path, sub_dir, db) = t445_live(
+            &dir,
+            &[r#"{"type":"user","message":{"content":"go"}}"#.to_owned()],
+        );
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub_path = sub_dir.join("agent-a1.jsonl");
+        t445_append(
+            &sub_path,
+            &t445_bash_start("toolu_test_1", "b0000001a", &output, Some("a1")),
+        );
+
+        let events = t425_tick(&state);
+        let starts = t445_starts(&events);
+        let [
+            ClaudeEvent::BackgroundStart {
+                agent_id, initial, ..
+            },
+        ] = starts.as_slice()
+        else {
+            panic!("expected one BackgroundStart, got {events:?}");
+        };
+        assert_eq!(agent_id.as_deref(), Some("a1"));
+        assert!(!initial);
+
+        t445_append(&sub_path, &[t445_sub_end_turn("a1")]);
+        let events = t425_tick(&state);
+        let order: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                ClaudeEvent::SubagentEnd { .. } => Some("subagent_end"),
+                ClaudeEvent::BackgroundEnd { .. } => Some("background_end"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, ["subagent_end", "background_end"], "{events:?}");
+        assert!(
+            matches!(
+                t445_ends(&events).as_slice(),
+                [ClaudeEvent::BackgroundEnd {
+                    status: OutcomeStatus::SubagentEnded,
+                    agent_id: Some(a),
+                    ..
+                }] if a == "a1"
+            ),
+            "{events:?}"
+        );
+        assert!(t445_end_rows(&db).is_empty(), "no row for a dropped task");
+    }
+
+    /// Case 6, attach: a finished subagent's unfinished task is not seeded.
+    #[test]
+    fn t445_attach_finished_subagent_task_is_not_seeded() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        fs::write(&output, "running\n").unwrap();
+        let path = dir.path().join("session.jsonl");
+        t445_append(
+            &path,
+            &[r#"{"type":"user","message":{"content":"go"}}"#.to_owned()],
+        );
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub_path = sub_dir.join("agent-a1.jsonl");
+        t445_append(
+            &sub_path,
+            &t445_bash_start("toolu_test_1", "b0000001a", &output, Some("a1")),
+        );
+        t445_append(&sub_path, &[t445_sub_end_turn("a1")]);
+
+        let (_mgr, rx, db) = t445_attach(&path, &dir);
+        let events = drain_brief(&rx);
+        assert!(t445_starts(&events).is_empty(), "{events:?}");
+        assert!(t445_ends(&events).is_empty(), "{events:?}");
+        assert!(t445_end_rows(&db).is_empty());
+    }
+
+    /// Case 6, attach, other side: the same task under a subagent that is
+    /// still running is seeded, with its owner.
+    #[test]
+    fn t445_attach_live_subagent_task_is_seeded_with_owner() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        fs::write(&output, "running\n").unwrap();
+        let path = dir.path().join("session.jsonl");
+        t445_append(
+            &path,
+            &[r#"{"type":"user","message":{"content":"go"}}"#.to_owned()],
+        );
+        let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
+        t445_append(
+            &sub_dir.join("agent-a1.jsonl"),
+            &t445_bash_start("toolu_test_1", "b0000001a", &output, Some("a1")),
+        );
+
+        let (_mgr, rx, _db) = t445_attach(&path, &dir);
+        let events = drain_brief(&rx);
+        assert!(
+            matches!(
+                t445_starts(&events).as_slice(),
+                [ClaudeEvent::BackgroundStart {
+                    agent_id: Some(a),
+                    initial: true,
+                    ..
+                }] if a == "a1"
+            ),
+            "{events:?}"
+        );
+    }
+
+    /// Case 7: history is never replayed as live.
+    #[test]
+    fn t445_attach_history_is_not_replayed_as_live() {
+        let dir = TempDir::new().unwrap();
+        let out = |id: &str| dir.path().join(format!("{id}.output"));
+        let path = dir.path().join("session.jsonl");
+        // Three finished (notification, TaskStop, failure), one outstanding.
+        t445_append(
+            &path,
+            &t445_bash_start("toolu_test_1", "b0000001a", &out("b0000001a"), None),
+        );
+        t445_append(
+            &path,
+            &t445_notified(&t445_notif("b0000001a", "completed", "done (exit code 0)")),
+        );
+        t445_append(
+            &path,
+            &t445_bash_start("toolu_test_2", "b0000002a", &out("b0000002a"), None),
+        );
+        t445_append(
+            &path,
+            &[
+                t445_use(
+                    "TaskStop",
+                    "toolu_test_s",
+                    &serde_json::json!({"task_id":"b0000002a"}),
+                    None,
+                ),
+                t445_result(
+                    "toolu_test_s",
+                    "stopped",
+                    &serde_json::json!({"task_id":"b0000002a"}),
+                    None,
+                ),
+            ],
+        );
+        t445_append(
+            &path,
+            &t445_bash_start("toolu_test_3", "b0000003a", &out("b0000003a"), None),
+        );
+        t445_append(
+            &path,
+            &t445_notified(&t445_notif(
+                "b0000003a",
+                "failed",
+                "failed with exit code 2",
+            )),
+        );
+        fs::write(out("b0000004a"), "running\n").unwrap();
+        t445_append(
+            &path,
+            &t445_bash_start("toolu_test_4", "b0000004a", &out("b0000004a"), None),
+        );
+
+        let (_mgr, rx, db) = t445_attach(&path, &dir);
+        let events = drain_brief(&rx);
+        let starts = t445_starts(&events);
+        let [
+            ClaudeEvent::BackgroundStart {
+                task_id, initial, ..
+            },
+        ] = starts.as_slice()
+        else {
+            panic!("expected only the outstanding task, got {events:?}");
+        };
+        assert_eq!(task_id, "b0000004a");
+        assert!(initial);
+        assert!(t445_ends(&events).is_empty(), "{events:?}");
+
+        // A live tick over an unrelated row says nothing about the history.
+        t445_append(
+            &path,
+            &[
+                r#"{"type":"assistant","message":{"stop_reason":"end_turn","content":[]}}"#
+                    .to_owned(),
+            ],
+        );
+        let more = drain(&rx);
+        assert!(
+            more.iter()
+                .any(|e| matches!(e, ClaudeEvent::AwaitingPrompt)),
+            "the tick never ran: {more:?}"
+        );
+        assert!(t445_starts(&more).is_empty(), "{more:?}");
+        assert!(t445_ends(&more).is_empty(), "{more:?}");
+        assert!(t445_end_rows(&db).is_empty());
+    }
+
+    /// Order independence at the adapter: a subagent's task terminal sits in
+    /// the MAIN file, which a tick reads before the subagent file that holds
+    /// the start.
+    #[test]
+    fn t445_terminal_in_main_before_start_in_subagent_same_tick() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        let (state, _path, sub_dir, db) = t445_live(
+            &dir,
+            &t445_notified(&t445_notif("b0000001a", "completed", "done (exit code 0)")),
+        );
+        fs::create_dir_all(&sub_dir).unwrap();
+        t445_append(
+            &sub_dir.join("agent-a1.jsonl"),
+            &t445_bash_start("toolu_test_1", "b0000001a", &output, Some("a1")),
+        );
+
+        let events = t425_tick(&state);
+        assert_eq!(t445_starts(&events).len(), 1, "{events:?}");
+        assert!(
+            matches!(
+                t445_ends(&events).as_slice(),
+                [ClaudeEvent::BackgroundEnd {
+                    status: OutcomeStatus::Completed,
+                    exit_code: Some(0),
+                    agent_id: Some(a),
+                    ..
+                }] if a == "a1"
+            ),
+            "{events:?}"
+        );
+        assert_eq!(t445_end_rows(&db).len(), 1);
+        assert!(
+            state
+                .lock()
+                .background
+                .tasks
+                .outstanding(now_ms())
+                .is_empty()
+        );
+    }
+
+    /// Gate: an end for a task whose start was never announced updates the
+    /// tracker and says nothing.
+    #[test]
+    fn t445_end_for_unannounced_task_is_silent() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        let mut bg = BackgroundState::default();
+        for row in t445_bash_start("toolu_test_1", "b0000001a", &output, None) {
+            bg.feed(&serde_json::from_str(&row).unwrap(), None, None);
+        }
+        let mut events = Vec::new();
+        let mut rows = Vec::new();
+        for row in t445_notified(&t445_notif("b0000001a", "completed", "done (exit code 0)")) {
+            bg.feed(
+                &serde_json::from_str(&row).unwrap(),
+                None,
+                Some(&mut BackgroundOut {
+                    harness_id: "h1",
+                    events: &mut events,
+                    rows: &mut rows,
+                }),
+            );
+        }
+        assert!(events.is_empty() && rows.is_empty(), "{events:?}");
+        assert!(bg.tasks.outstanding(now_ms()).is_empty());
+    }
+
+    /// Attach over a Monitor that passed its deadline with no notice: it
+    /// is ended in the tracker at attach, so no tick ever sweeps it into
+    /// an end nobody was told the start of.
+    #[test]
+    fn t445_attach_past_deadline_monitor_then_tick_is_silent() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        t445_append(
+            &path,
+            &t445_monitor_start("toolu_test_1", "b0000004a", 15_000),
+        );
+
+        let (_mgr, rx, db) = t445_attach(&path, &dir);
+        let events = drain_brief(&rx);
+        assert!(t445_starts(&events).is_empty(), "{events:?}");
+        assert!(t445_ends(&events).is_empty(), "{events:?}");
+
+        t445_append(
+            &path,
+            &[r#"{"type":"user","message":{"content":"x"}}"#.to_owned()],
+        );
+        let more = drain(&rx);
+        assert!(!more.is_empty(), "the tick never ran");
+        assert!(t445_starts(&more).is_empty(), "{more:?}");
+        assert!(t445_ends(&more).is_empty(), "{more:?}");
+        assert!(t445_end_rows(&db).is_empty());
+    }
+
+    /// Resync: a task announced live that the new content lacks gets
+    /// exactly one `unknown` end, and no row.
+    #[test]
+    fn t445_resync_closes_announced_task_missing_from_new_content() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        let (state, path, _sub, db) = t445_live(&dir, &[]);
+        t445_append(
+            &path,
+            &t445_bash_start("toolu_test_1", "b0000001a", &output, None),
+        );
+        let events = t425_tick(&state);
+        assert_eq!(t445_starts(&events).len(), 1, "{events:?}");
+
+        // Replaced by something shorter: the truncation path resyncs.
+        fs::write(
+            &path,
+            "{\"type\":\"user\",\"message\":{\"content\":\"x\"}}
+",
+        )
+        .unwrap();
+        let events = t425_tick(&state);
+        assert!(
+            matches!(
+                t445_ends(&events).as_slice(),
+                [ClaudeEvent::BackgroundEnd {
+                    task_id,
+                    status: OutcomeStatus::Unknown,
+                    ..
+                }] if task_id == "b0000001a"
+            ),
+            "{events:?}"
+        );
+        assert!(t445_end_rows(&db).is_empty());
+
+        // Nothing is left to end.
+        t445_append(
+            &path,
+            &[r#"{"type":"user","message":{"content":"y"}}"#.to_owned()],
+        );
+        assert!(t445_ends(&t425_tick(&state)).is_empty());
+    }
+
+    /// Resync after the sweep already ended a Monitor: the rebuilt tracker
+    /// has it outstanding again, but it is neither ended nor started a
+    /// second time.
+    #[test]
+    fn t445_resync_after_sweep_does_not_end_twice() {
+        let dir = TempDir::new().unwrap();
+        let padding = serde_json::json!({"type":"user","message":{"content":"p".repeat(200)}});
+        let mut rows = vec![padding.to_string()];
+        rows.extend(t445_monitor_start("toolu_test_1", "b0000004a", 15_000));
+        let (state, path, _sub, db) = t445_live(&dir, &rows);
+        let events = t425_tick(&state);
+        assert_eq!(t445_starts(&events).len(), 1, "{events:?}");
+        assert_eq!(t445_ends(&events).len(), 1, "{events:?}");
+        assert_eq!(t445_end_rows(&db).len(), 1);
+
+        // Same Monitor rows, minus the padding: shorter, so it resyncs.
+        fs::write(
+            &path,
+            format!(
+                "{}
+",
+                rows[1..].join(
+                    "
+"
+                )
+            ),
+        )
+        .unwrap();
+        let events = t425_tick(&state);
+        assert!(t445_starts(&events).is_empty(), "{events:?}");
+        assert!(t445_ends(&events).is_empty(), "{events:?}");
+        assert_eq!(t445_end_rows(&db).len(), 1, "a second row");
+    }
+
+    /// Re-seed: a subagent file that owns an announced task shrinks to a
+    /// finished transcript. The task ends once as `subagent_ended` (the
+    /// owner is finished), with the owner's id, no row and no start.
+    #[test]
+    fn t445_subagent_reseed_closes_owned_announced_task() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        let (state, _path, sub_dir, db) = t445_live(
+            &dir,
+            &[r#"{"type":"user","message":{"content":"go"}}"#.to_owned()],
+        );
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub_path = sub_dir.join("agent-a1.jsonl");
+        t445_append(
+            &sub_path,
+            &t445_bash_start("toolu_test_1", "b0000001a", &output, Some("a1")),
+        );
+        let events = t425_tick(&state);
+        assert_eq!(t445_starts(&events).len(), 1, "{events:?}");
+
+        fs::write(
+            &sub_path,
+            format!(
+                "{}
+",
+                t445_sub_end_turn("a1")
+            ),
+        )
+        .unwrap();
+        let events = t425_tick(&state);
+        assert!(t445_starts(&events).is_empty(), "{events:?}");
+        assert!(
+            matches!(
+                t445_ends(&events).as_slice(),
+                [ClaudeEvent::BackgroundEnd {
+                    status: OutcomeStatus::SubagentEnded,
+                    agent_id: Some(a),
+                    ..
+                }] if a == "a1"
+            ),
+            "{events:?}"
+        );
+        assert!(t445_end_rows(&db).is_empty());
+    }
+
+    /// Case 2c: a resync that is the first to see an outstanding task
+    /// announces it once, as an initial start.
+    #[test]
+    fn t445_resync_announces_never_announced_outstanding_task_once() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        fs::write(
+            &output, "running
+",
+        )
+        .unwrap();
+        let padding = serde_json::json!({"type":"user","message":{"content":"p".repeat(3000)}});
+        let (state, path, _sub, _db) = t445_live(&dir, &[padding.to_string()]);
+        t425_tick(&state);
+
+        let rows = t445_bash_start("toolu_test_1", "b0000001a", &output, None);
+        fs::write(
+            &path,
+            format!(
+                "{}
+",
+                rows.join(
+                    "
+"
+                )
+            ),
+        )
+        .unwrap();
+        let events = t425_tick(&state);
+        assert!(
+            matches!(
+                t445_starts(&events).as_slice(),
+                [ClaudeEvent::BackgroundStart {
+                    task_id,
+                    initial: true,
+                    ..
+                }] if task_id == "b0000001a"
+            ),
+            "{events:?}"
+        );
+        assert!(t445_ends(&events).is_empty(), "{events:?}");
+
+        t445_append(
+            &path,
+            &[r#"{"type":"user","message":{"content":"y"}}"#.to_owned()],
+        );
+        let events = t425_tick(&state);
+        assert!(t445_starts(&events).is_empty(), "{events:?}");
+        assert!(t445_ends(&events).is_empty(), "{events:?}");
+    }
+
+    /// Resync keeps ownership: an announced subagent-owned task that the
+    /// new content (and the vanished subagent file) no longer shows ends
+    /// as `subagent_ended` with its `agent_id`, not `unknown`.
+    #[test]
+    fn t445_resync_carries_owner_to_the_closing_end() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("b0000001a.output");
+        let padding = serde_json::json!({"type":"user","message":{"content":"p".repeat(500)}});
+        let (state, path, sub_dir, db) = t445_live(&dir, &[padding.to_string()]);
+        fs::create_dir_all(&sub_dir).unwrap();
+        let sub_path = sub_dir.join("agent-a1.jsonl");
+        t445_append(
+            &sub_path,
+            &t445_bash_start("toolu_test_1", "b0000001a", &output, Some("a1")),
+        );
+        let events = t425_tick(&state);
+        assert_eq!(t445_starts(&events).len(), 1, "{events:?}");
+
+        fs::remove_file(&sub_path).unwrap();
+        fs::write(
+            &path,
+            "{\"type\":\"user\",\"message\":{\"content\":\"x\"}}
+",
+        )
+        .unwrap();
+        let events = t425_tick(&state);
+        assert!(
+            matches!(
+                t445_ends(&events).as_slice(),
+                [ClaudeEvent::BackgroundEnd {
+                    status: OutcomeStatus::SubagentEnded,
+                    agent_id: Some(a),
+                    ..
+                }] if a == "a1"
+            ),
+            "{events:?}"
+        );
+        assert!(t445_end_rows(&db).is_empty());
     }
 }

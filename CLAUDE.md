@@ -512,6 +512,33 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   inherit it for free; opencode registers no subagents today, so the
   count is always 0, and none of this needs #215 config injection, same
   as subagent discovery generally — only the *permission* signal does.
+  **Background tasks (#444/#445, epic #439):** a `Bash`/`PowerShell`
+  `run_in_background` command, an auto-backgrounded one, or a `Monitor`
+  is a *task*, not a subagent. The pure parsers and a per-session state
+  machine live in `crates/skein-harness` (`claude::background`,
+  `BackgroundTasks`); the adapter feeds it every row of the main file
+  and of every subagent file. Live = starts, minus terminal
+  `<task-notification>`s (from any carrier: a `queue-operation`
+  enqueue, the user-row delivery or a `queued_command` attachment,
+  deduped per id), minus `TaskStop` results (which write no
+  notification), minus Monitors past their deadline. The Monitor expiry
+  has no status tag and is recognised only by its event text, pinned in
+  fixtures; an unrecognised status reads as ended. It is
+  order-independent, because a subagent's start lands in its own file
+  while its terminal enqueue lands in the main file. Events are
+  `ClaudeEvent::BackgroundStart { initial }` / `BackgroundEnd`, plus
+  one `background_end` harness_actions row per real terminal; a task
+  whose owning subagent exits ends as `subagent_ended`, with an event
+  but no row. Attach re-derives with `initial = true`, like
+  `SubagentStart`, and trusts the `.output` trailer (`[exited with code
+  N]` / `[killed]`) only when present: a hard-killed `claude` writes
+  none and its child keeps running (verified 2026-09-30). Every end,
+  event or row, is gated on an announced start: the adapter promises
+  each announced start exactly one end and says nothing about a task
+  it never announced. A task-notification user row is
+  `UserPrompt { task_notification: true }`: it still moves the phase
+  to running, but it is not a human submit. Nothing in the frontend consumes these yet; the deferral is
+  #446. Design and evidence: `docs/background-task-recon.md`.
   **`permission` is its own phase (#86)**, distinct from `waiting`
   (end of turn / needs input), and outranks it everywhere. Claude's
   JSONL records nothing when a dialog opens, so the signal is a
