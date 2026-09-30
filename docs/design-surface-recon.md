@@ -137,7 +137,7 @@ The probes ran on a Windows 11 box and were three things:
   (`app/src-tauri/src/agent_api/http.rs`), or on a second listener with
   the same bind pattern (`lib.rs`, `127.0.0.1:0`). A second listener
   keeps preview CORS headers off `/api` and `/mcp` entirely. Slice 1
-  decides; either works.
+  decides; either works. Slice 1 (#433) chose the second listener; see §5.
 - **The route needs its own capability, not the bearer token.** An
   iframe cannot send an `Authorization` header, and agent-API auth is
   per-route (`with_caller`), so a preview route is unauthenticated by
@@ -418,7 +418,7 @@ of it is embedded.
 | Item | Where it gets answered |
 |---|---|
 | `_debugSource` file names for elements from other `.jsx` files | slice 2, with the picker in place |
-| Preview route on the agent-API listener or its own | slice 1 |
+| Preview route on the agent-API listener or its own | Answered in slice 1 (#433): a second `127.0.0.1:0` listener. Preview routes are unauthenticated by design (the capability is the unguessable path token, since an iframe cannot send a bearer header) and must send `Access-Control-Allow-Origin: *`; a separate listener keeps both off `/api` and `/mcp`, so a preview bug cannot reach an agent verb. |
 | Babel re-transpile time on large prototypes | slice 1, by measuring reload latency |
 | Choosing which HTML file is the entry | slice 1 (a picker over `*.html` in the worktree; remembered per harness) |
 

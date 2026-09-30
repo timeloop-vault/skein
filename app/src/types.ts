@@ -10,7 +10,7 @@
 // surface living in the harness body slot. Kind-specific behaviour
 // should branch on `HARNESS_KINDS[kind].capabilities`, not on kind
 // string comparisons.
-export type HarnessKind = "claude" | "opencode" | "copilot" | "byoh" | "files";
+export type HarnessKind = "claude" | "opencode" | "copilot" | "byoh" | "files" | "design";
 
 // "permission" (#86) is a harder stop than "waiting": the harness is
 // blocked on an approval dialog, not merely at end-of-turn awaiting a
@@ -51,6 +51,10 @@ export interface Harness {
 	// given (measured on #219), so omitting it here would silently
 	// resurrect whatever the conversation started as.
 	agent?: string;
+	// #433: a `design` harness's chosen preview entry — a worktree-
+	// relative, `/`-separated path to an .html/.htm file. Absent until
+	// one is picked (or the only one is auto-picked).
+	designEntry?: string;
 	// Bumped on every deliberate respawn (Enter-for-shell after a child
 	// exits). Folded into the LiveTerminal mountKey so the remount fires
 	// even when the new cmd equals the old one — the case the cmd-identity

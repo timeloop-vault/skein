@@ -68,6 +68,10 @@ pub struct Harness {
     /// not is dropped on the next save.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub agent: Option<String>,
+    /// A `design` harness's chosen preview entry (#433): a worktree-
+    /// relative, `/`-separated path. Round-tripped, not interpreted.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub design_entry: Option<String>,
     /// Count of attention-worthy transitions accumulated for this
     /// harness while the user wasn't viewing it. Cleared when the
     /// harness becomes the active harness in the active room.
@@ -2678,9 +2682,33 @@ mod tests {
             cwd: None,
             session_id: None,
             agent: None,
+            design_entry: None,
             pending_notifications: None,
             created_by: None,
         }
+    }
+
+    /// #433: a design harness's chosen entry survives a restart, and a
+    /// blob without the key still loads.
+    #[test]
+    fn a_harness_design_entry_survives_the_round_trip() {
+        let (_dir, db) = fresh_db();
+        let mut r = room("r1");
+        let mut with_entry = harness("h1");
+        with_entry.design_entry = Some("mock ups/index.html".into());
+        r.harnesses = vec![with_entry, harness("h2")];
+        r.active_harness_id = "h1".into();
+        db.save_all(&[r]).unwrap();
+        let outcome = db.load_all().unwrap();
+        let hs = &outcome.rooms[0].harnesses;
+        assert_eq!(hs[0].design_entry.as_deref(), Some("mock ups/index.html"));
+        assert_eq!(hs[1].design_entry, None);
+
+        let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+            "harnesses":[{"id":"h1","kind":"design","name":"h1","status":"idle",
+            "model":"","tokens":"0"}],"activeHarnessId":"h1"}"#;
+        let old: Room = serde_json::from_str(json).unwrap();
+        assert_eq!(old.harnesses[0].design_entry, None);
     }
 
     // ── room persistence (#167) ──────────────────────────────────

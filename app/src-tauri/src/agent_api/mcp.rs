@@ -675,7 +675,7 @@ pub fn tool_specs() -> Vec<Value> {
                     },
                     "kind": {
                         "type": "string",
-                        "enum": ["claude", "opencode", "copilot", "byoh", "files"],
+                        "enum": ["claude", "opencode", "copilot", "byoh", "files", "design"],
                         "description": "Optional — default: the user's own default \
                             harness kind for this folder.",
                     },
@@ -741,7 +741,7 @@ pub fn tool_specs() -> Vec<Value> {
                     "room": { "type": "string", "description": "A room id." },
                     "kind": {
                         "type": "string",
-                        "enum": ["claude", "opencode", "copilot", "byoh", "files"],
+                        "enum": ["claude", "opencode", "copilot", "byoh", "files", "design"],
                         "description": "Optional — default: the user's own default \
                             harness kind for this folder.",
                     },

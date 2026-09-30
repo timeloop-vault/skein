@@ -211,6 +211,23 @@ export function useHarnessActions(
 		);
 	};
 
+	// #433: a design harness's chosen preview entry. Persisted with the
+	// rooms blob; no spawnGen bump — there is no process to respawn.
+	const setHarnessDesignEntry = (roomId: string, harnessId: string, entry: string) => {
+		setRooms((prev) =>
+			prev.map((r) =>
+				r.id === roomId
+					? {
+							...r,
+							harnesses: r.harnesses.map((h) =>
+								h.id === harnessId ? { ...h, designEntry: entry } : h,
+							),
+						}
+					: r,
+			),
+		);
+	};
+
 	// #189: clicking + harness again toggles the picker closed.
 	const addHarness = (roomId: string) => setShowPicker((cur) => (cur === roomId ? null : roomId));
 
@@ -225,6 +242,7 @@ export function useHarnessActions(
 		closeHarness,
 		closeHarnessForAgent,
 		updateHarnessCmd,
+		setHarnessDesignEntry,
 		addHarness,
 	};
 }

@@ -189,6 +189,33 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			opensClickedLinks: false,
 		},
 	},
+	// #433: a live preview of the worktree's HTML in a sandboxed iframe.
+	design: {
+		id: "design",
+		label: "◐",
+		name: "Design",
+		chip: "h-design",
+		desc: "Live-preview the worktree's HTML.",
+		program: null,
+		skillInvocation: null,
+		capabilities: {
+			pty: false,
+			resume: false,
+			notify: false,
+			agents: false,
+			agentSwitchable: false,
+			submitRetry: false,
+			imagePaste: false,
+			opensClickedLinks: false,
+		},
+	},
 };
 
-export const HARNESS_ORDER: HarnessKind[] = ["claude", "opencode", "copilot", "byoh", "files"];
+export const HARNESS_ORDER: HarnessKind[] = [
+	"claude",
+	"opencode",
+	"copilot",
+	"byoh",
+	"files",
+	"design",
+];
