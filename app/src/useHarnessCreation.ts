@@ -229,7 +229,7 @@ export function useHarnessCreation(
 		// Computed here (off the pre-await snapshot above) rather than
 		// inside the `setRooms` updater below, so the same value can be
 		// returned to the caller — `open_harness` reports it back.
-		const name = `${kind === "files" ? "files" : HARNESS_KINDS[kind].label}-${targetRoom.harnesses.length + 1}`;
+		const name = `${kind === "files" || kind === "design" ? kind : HARNESS_KINDS[kind].label}-${targetRoom.harnesses.length + 1}`;
 		// Phase 2a: pre-allocate Claude's conversation id so the harness
 		// resumes to *this* conversation on Skein restart — no picker.
 		const sessionId = kind === "claude" ? crypto.randomUUID() : undefined;

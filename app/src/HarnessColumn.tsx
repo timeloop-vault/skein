@@ -1,4 +1,5 @@
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef } from "react";
+import { DesignBody } from "./DesignBody.tsx";
 import { FilesBody } from "./FilesBody.tsx";
 import { HarnessActionsMenu } from "./HarnessActionsMenu.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
@@ -206,6 +207,7 @@ export interface HarnessColumnProps {
 	onSwitchHarness: (roomId: string, harnessId: string) => void;
 	onCloseHarness: (roomId: string, harnessId: string) => void;
 	onHarnessCmdChange: (roomId: string, harnessId: string, cmd: string[]) => void;
+	onDesignEntryChange: (roomId: string, harnessId: string, entry: string) => void;
 	// Epic #50 L2c-2: per-opencode-harness embedded-server port. The
 	// column pulls each harness's port out of this map (keyed by
 	// harnessId) and forwards it to the corresponding LiveTerminal.
@@ -236,6 +238,7 @@ export const HarnessColumn = ({
 	onSwitchHarness,
 	onCloseHarness,
 	onHarnessCmdChange,
+	onDesignEntryChange,
 	opencodePorts,
 	onOpencodeSessionCaptured,
 	onOpencodeSessionFollowed,
@@ -365,6 +368,14 @@ export const HarnessColumn = ({
 								opencodePort={opencodePorts.get(h.id)}
 								onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
 								onSessionFollowed={(sid) => onOpencodeSessionFollowed(h.id, sid)}
+							/>
+						) : h.kind === "design" ? (
+							<DesignBody
+								harnessId={h.id}
+								roomId={room.id}
+								visible={visible}
+								entry={h.designEntry}
+								onEntryChange={(entry) => onDesignEntryChange(room.id, h.id, entry)}
 							/>
 						) : (
 							<FilesBody harnessId={h.id} cwd={h.cwd ?? room.cwd ?? ""} visible={visible} />

@@ -1279,7 +1279,7 @@ pub fn unread_mail(messages: &[HarnessMessageRow], rooms: &[Room]) -> MailUnread
 /// a plain list here rather than imported, since nothing on the Rust
 /// side otherwise needs that registry; `create_room` only needs to
 /// reject a typo loudly rather than pass it through to the frontend.
-const KNOWN_HARNESS_KINDS: &[&str] = &["claude", "opencode", "copilot", "byoh", "files"];
+const KNOWN_HARNESS_KINDS: &[&str] = &["claude", "opencode", "copilot", "byoh", "files", "design"];
 
 /// How long to wait for the frontend to resolve a `(kind, agent)` — a
 /// folder lookup plus a couple of `localStorage` reads, so this should

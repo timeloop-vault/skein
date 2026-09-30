@@ -23,18 +23,21 @@ pub(crate) enum HarnessKind {
     Copilot,
     Byoh,
     Files,
+    /// #433: a non-PTY live preview of the worktree's HTML.
+    Design,
 }
 
 // Only this module's own tests iterate every kind today — production
 // code always has one already in hand (from the harness record or a
 // Tauri arg).
 #[cfg(test)]
-pub(crate) const ALL: [HarnessKind; 5] = [
+pub(crate) const ALL: [HarnessKind; 6] = [
     HarnessKind::Claude,
     HarnessKind::Opencode,
     HarnessKind::Copilot,
     HarnessKind::Byoh,
     HarnessKind::Files,
+    HarnessKind::Design,
 ];
 
 impl HarnessKind {
@@ -45,6 +48,7 @@ impl HarnessKind {
             Self::Copilot => "copilot",
             Self::Byoh => "byoh",
             Self::Files => "files",
+            Self::Design => "design",
         }
     }
 
@@ -57,7 +61,7 @@ impl HarnessKind {
             Self::Claude => Some("claude"),
             Self::Opencode => Some("opencode"),
             Self::Copilot => Some("gh"),
-            Self::Byoh | Self::Files => None,
+            Self::Byoh | Self::Files | Self::Design => None,
         }
     }
 

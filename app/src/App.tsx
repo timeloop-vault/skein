@@ -265,6 +265,7 @@ export default function App() {
 		closeHarness,
 		closeHarnessForAgent,
 		updateHarnessCmd,
+		setHarnessDesignEntry,
 		addHarness,
 	} = useHarnessActions(
 		setRooms,
@@ -782,6 +783,7 @@ export default function App() {
 								onSwitchHarness={switchHarnessInRoom}
 								onCloseHarness={closeHarness}
 								onHarnessCmdChange={updateHarnessCmd}
+								onDesignEntryChange={setHarnessDesignEntry}
 								opencodePorts={opencodePorts}
 								onOpencodeSessionCaptured={(harnessId, sid) =>
 									setHarnessSessionId(r.id, harnessId, sid)

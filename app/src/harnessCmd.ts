@@ -74,7 +74,8 @@ export const cmdForKind = (
 		case "byoh":
 			return fallbackShell.length > 0 ? fallbackShell : ["pwsh.exe"];
 		case "files":
-			// Unreachable: `files` has no process (capabilities.pty is
+		case "design":
+			// Unreachable: `files`/`design` have no process (capabilities.pty is
 			// false, so creation paths never call cmdForKind for it).
 			// The empty argv is a type-totality placeholder, and
 			// HarnessBody wouldn't spawn an empty cmd anyway.

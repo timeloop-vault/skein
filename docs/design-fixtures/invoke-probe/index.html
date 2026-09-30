@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<title>Skein design preview - invoke probe</title>
+	<style>
+		body { font-family: sans-serif; padding: 24px; }
+		h1 { font-size: 40px; }
+		#summary { font-size: 24px; font-weight: bold; }
+	</style>
+</head>
+<body>
+	<h1>Skein design preview — invoke probe</h1>
+	<p id="summary">RUNNING</p>
+	<pre id="result"></pre>
+	<script>
+		const lines = [];
+		const out = document.getElementById("result");
+		let failed = false;
+		const show = () => {
+			out.textContent = lines.join("\n");
+		};
+		const timeout = (ms) =>
+			new Promise((_, reject) => setTimeout(() => reject(new Error("timeout after " + ms + " ms")), ms));
+		async function probe(label, cmd, args) {
+			try {
+				const value = await Promise.race([
+					window.__TAURI_INTERNALS__.invoke(cmd, args),
+					timeout(3000),
+				]);
+				lines.push("invoke " + label + ": ALLOWED (" + JSON.stringify(value) + ") — this is a failure");
+				failed = true;
+			} catch (e) {
+				lines.push("invoke " + label + ": REFUSED (" + (e && e.message ? e.message : String(e)) + ")");
+			}
+			show();
+		}
+		async function run() {
+			const present = typeof window.__TAURI_INTERNALS__ !== "undefined";
+			lines.push("IPC object: " + (present ? "present" : "absent"));
+			show();
+			if (present) {
+				await probe("plugin:app|version", "plugin:app|version");
+				await probe("design_list_entries", "design_list_entries", { roomId: "x" });
+			}
+			const summary = document.getElementById("summary");
+			summary.textContent = failed ? "FAIL" : "PASS";
+			summary.style.color = failed ? "#b00020" : "#0a7d2c";
+		}
+		run();
+	</script>
+</body>
+</html>

@@ -9,6 +9,7 @@ mod agent_api;
 mod agents;
 mod cli_shim;
 mod db;
+mod design;
 mod fs;
 mod git;
 mod harness_action_event;
@@ -302,6 +303,36 @@ pub fn run() {
             };
             app.manage(endpoint);
 
+            // The design preview server (#433). A separate listener
+            // from the agent API above, and not fatal when the bind
+            // fails; see the `design` module doc for why.
+            let preview_state = Arc::new(crate::design::PreviewState::new(Arc::clone(&db)));
+            let preview_endpoint = match std::net::TcpListener::bind(("127.0.0.1", 0)).and_then(|l| {
+                let port = l.local_addr()?.port();
+                l.set_nonblocking(true)?;
+                Ok((l, port))
+            }) {
+                Ok((listener, port)) => {
+                    let state = Arc::clone(&preview_state);
+                    tauri::async_runtime::spawn(async move {
+                        match tokio::net::TcpListener::from_std(listener) {
+                            Ok(listener) => crate::design::serve(listener, state).await,
+                            Err(e) => {
+                                tracing::error!(error = %e, "design preview: adopting listener failed");
+                            }
+                        }
+                    });
+                    tracing::info!(port, "design preview listening on 127.0.0.1");
+                    crate::design::commands::PreviewEndpoint::bound(port)
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "design preview: bind failed");
+                    crate::design::commands::PreviewEndpoint::failed(e.to_string())
+                }
+            };
+            app.manage(preview_state);
+            app.manage(preview_endpoint);
+
             app.manage(db);
 
             // Resolve the product name from the merged tauri config —
@@ -438,6 +469,9 @@ pub fn run() {
             git::git_status,
             git::git_watch_start,
             git::git_watch_stop,
+            design::commands::design_preview_base,
+            design::commands::design_list_entries,
+            design::commands::design_watch_start,
             git::git_diff,
             resume::opencode_list_sessions,
             resume::opencode_session_exists,

@@ -59,6 +59,7 @@ fn harness(id: &str, kind: &str, name: &str) -> Harness {
         cwd: None,
         session_id: None,
         agent: None,
+        design_entry: None,
         pending_notifications: None,
         created_by: None,
     }
