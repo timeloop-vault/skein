@@ -58,8 +58,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
 - **Biome** lint + format (frontend), **clippy pedantic** `-D warnings`
   (Rust)
 - Pre-commit hook in `.githooks/pre-commit` (activate:
-  `git config core.hooksPath .githooks`) runs, in order: cargo fmt,
-  clippy, and tests for BOTH the workspace and `app/src-tauri`
+  `git config core.hooksPath .githooks`) runs, in order: a warn-only
+  file-size check (#452), cargo fmt, clippy, and tests for BOTH the
+  workspace and `app/src-tauri`
   (excluded from the workspace — `cargo test --workspace` does NOT
   reach its ~160 unit tests; #168), then tsc, vitest and biome. Note the
   workspace fmt needs `--all`: with two members, plain `cargo fmt`
@@ -821,6 +822,20 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   `exactOptionalPropertyTypes`. Biome with tabs + double quotes — run
   it from `app/` (`cd app && npx biome check .`), never from the repo
   root with a path argument.
+- **File size** (epic #452). Rust: a file stays well under 1,000 lines
+  counting its in-module tests; new files aim for ≤600, and a large
+  test module moves to a sibling `tests.rs` (`#[cfg(test)] mod tests;`).
+  TS/TSX: components, hooks and modules stay under 400 lines, aiming
+  for 250; `*.test.ts` is exempt but splits by concern once large. CSS:
+  one stylesheet per component or area, co-located and imported by it,
+  plus a small tokens/base file; none over 500 lines, and no new rules
+  in the global `styles.css`. Creating or growing a file past its limit
+  means splitting it by concern, not adding to it — along the questions
+  a reader has, not by layer (`review_surface/` is the precedent). The
+  pre-commit hook warns, never blocks, on staged files over the limit;
+  files already over it sit in `.githooks/size-allowlist` tagged with
+  their refactor issue (#453–#462) and warn only if they grow. A
+  refactor PR deletes its entry.
 - **Tests live with the code that owns them.**
   `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;

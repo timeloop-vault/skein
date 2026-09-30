@@ -5,6 +5,9 @@ set -e
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
+echo "=== pre-commit: file size (warn only, #452) ==="
+sh "$REPO_ROOT/.githooks/size-check" || true
+
 echo "=== pre-commit: cargo fmt (workspace) ==="
 # --all: with a virtual root manifest and more than one member, plain
 # `cargo fmt` fails with "Failed to find targets" (#209 added the 2nd crate).

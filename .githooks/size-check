@@ -1,0 +1,38 @@
+#!/bin/sh
+# Warn-only file-size check for STAGED files (epic #452). Always exits 0.
+# Limits: Rust 1000, TS/TSX 400, CSS 500 lines; tests (*.test.ts[x]) exempt.
+# Files already over a limit are listed in .githooks/size-allowlist and
+# warn only when they grow past their recorded count.
+ROOT=$(git rev-parse --show-toplevel) || exit 0
+ALLOW="$ROOT/.githooks/size-allowlist"
+[ -f "$ALLOW" ] || ALLOW=/dev/null
+
+out=$(git -c core.quotepath=off diff --cached --name-only --diff-filter=ACMR | while IFS= read -r path; do
+	case $path in
+	(*.test.ts | *.test.tsx) continue ;;
+	(*.rs) limit=1000 ;;
+	(*.ts | *.tsx) limit=400 ;;
+	(*.css) limit=500 ;;
+	(*) continue ;;
+	esac
+	n=$(git show ":$path" | wc -l | tr -d ' \r')
+	entry=$(tr -d '\r' <"$ALLOW" | awk -v p="$path" '$1 == p { print $2, $3; exit }')
+	if [ -z "$entry" ]; then
+		[ "$n" -gt "$limit" ] && echo "size: $path is $n lines (limit $limit)"
+		continue
+	fi
+	recorded=${entry%% *}
+	issue=${entry#* }
+	if [ "$n" -le "$limit" ]; then
+		echo "size: $path is now $n lines, under its limit - delete its entry from .githooks/size-allowlist"
+	elif [ "$n" -gt "$recorded" ]; then
+		echo "size: $path grew to $n lines (allowlisted at $recorded, limit $limit, see $issue)"
+	fi
+done)
+
+[ -n "$out" ] || exit 0
+echo "$out"
+if echo "$out" | grep -q -e ' (limit ' -e ' grew to '; then
+	echo "size: see the file size rule in CLAUDE.md (Conventions, epic #452). The commit is not blocked."
+fi
+exit 0
