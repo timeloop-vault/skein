@@ -6,7 +6,28 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type Beacon, parseBeacon, previewUrl, pushBeacon } from "./designPreview.ts";
+import { type Beacon, parseBeacon, previewUrl, pushBeacon, retryDelay } from "./designPreview.ts";
+
+/** Run `fn`, retrying with backoff while `isCancelled()` is false. A new
+ *  room's db row lands only after the pane's first invoke, so the first
+ *  tries can fail with "unknown room". Rejects with the last error once
+ *  the budget is spent; resolves/rejects only if not cancelled is the
+ *  caller's concern (it checks its own flag). */
+const invokeWithRetry = async <T,>(
+	fn: () => Promise<T>,
+	isCancelled: () => boolean,
+): Promise<T> => {
+	for (let failures = 1; ; failures++) {
+		try {
+			return await fn();
+		} catch (e) {
+			const delay = retryDelay(failures);
+			if (delay === null || isCancelled()) throw e;
+			await new Promise((r) => window.setTimeout(r, delay));
+			if (isCancelled()) throw e;
+		}
+	}
+};
 
 /** How long after the iframe's `load` we wait for the `ready` beacon
  *  before saying Skein's preview script did not run. */
@@ -51,21 +72,29 @@ export const DesignBody = ({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt is the retry trigger
 	useEffect(() => {
 		let cancelled = false;
+		const isCancelled = () => cancelled;
 		setError(null);
-		invoke<string>("design_preview_base", { roomId })
+		invokeWithRetry(() => invoke<string>("design_preview_base", { roomId }), isCancelled)
 			.then((b) => {
 				if (!cancelled) setBase(b);
 			})
 			.catch((e) => {
 				if (!cancelled) setError(String(e));
 			});
-		void refreshEntries();
+		invokeWithRetry(() => invoke<string[]>("design_list_entries", { roomId }), isCancelled)
+			.then((list) => {
+				if (!cancelled) setEntries(list);
+			})
+			.catch((e) => {
+				if (!cancelled) setError(String(e));
+			});
 		return () => {
 			cancelled = true;
 		};
-	}, [roomId, attempt, refreshEntries]);
+	}, [roomId, attempt]);
 
 	// The watcher runs only while mounted; a tick reloads the frame.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt is the retry trigger
 	useEffect(() => {
 		const channel = new Channel<null>();
 		channel.onmessage = () => {
@@ -74,7 +103,10 @@ export const DesignBody = ({
 		};
 		let watchId: string | null = null;
 		let cancelled = false;
-		invoke<string>("design_watch_start", { roomId, onChange: channel })
+		invokeWithRetry(
+			() => invoke<string>("design_watch_start", { roomId, onChange: channel }),
+			() => cancelled,
+		)
 			.then((id) => {
 				if (cancelled) {
 					void invoke("git_watch_stop", { id });
@@ -89,7 +121,7 @@ export const DesignBody = ({
 			cancelled = true;
 			if (watchId !== null) void invoke("git_watch_stop", { id: watchId });
 		};
-	}, [roomId, refreshEntries]);
+	}, [roomId, attempt, refreshEntries]);
 
 	// One entry and none chosen: pick it and persist.
 	useEffect(() => {
@@ -145,7 +177,7 @@ export const DesignBody = ({
 		}, READY_TIMEOUT_MS);
 	};
 
-	let status = "loading…";
+	let status = error !== null ? "" : "loading…";
 	if (entries !== null && entries.length === 0) status = "no HTML files";
 	else if (url !== null) status = ready ? `live · ${entry}` : (entry ?? "");
 

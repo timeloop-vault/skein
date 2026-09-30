@@ -50,3 +50,20 @@ export const pushBeacon = (list: readonly Beacon[], b: Beacon): Beacon[] =>
  *  segment percent-encoded, plus a `?v=` cache-buster. */
 export const previewUrl = (base: string, entry: string, version: number): string =>
 	`${base}${entry.split("/").map(encodeURIComponent).join("/")}?v=${version}`;
+
+export const RETRY_FIRST_MS = 150;
+export const RETRY_MAX_MS = 2000;
+export const RETRY_BUDGET_MS = 15000;
+
+/** Delay before retry number `failures` (1 = after the first failure):
+ *  150 ms doubling, capped at 2 s. Null once the delays already spent
+ *  reach the ~15 s budget — the caller gives up and shows the error. */
+export const retryDelay = (failures: number): number | null => {
+	let spent = 0;
+	let delay = RETRY_FIRST_MS;
+	for (let i = 1; i < failures; i++) {
+		spent += delay;
+		delay = Math.min(delay * 2, RETRY_MAX_MS);
+	}
+	return spent >= RETRY_BUDGET_MS ? null : delay;
+};

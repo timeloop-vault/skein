@@ -6,6 +6,7 @@ import {
 	parseBeacon,
 	previewUrl,
 	pushBeacon,
+	retryDelay,
 } from "./designPreview.ts";
 
 const msg = (o: Record<string, unknown>) => ({ source: "skein-design", v: 1, ...o });
@@ -74,5 +75,21 @@ describe("previewUrl", () => {
 		expect(previewUrl(base, "my mocks/åäö #1.html", 0)).toBe(
 			`${base}my%20mocks/%C3%A5%C3%A4%C3%B6%20%231.html?v=0`,
 		);
+	});
+});
+
+describe("retryDelay", () => {
+	it("doubles from 150 ms, caps at 2 s, then gives up", () => {
+		const seq: number[] = [];
+		for (let n = 1; ; n++) {
+			const d = retryDelay(n);
+			if (d === null) break;
+			seq.push(d);
+		}
+		expect(seq.slice(0, 6)).toEqual([150, 300, 600, 1200, 2000, 2000]);
+		expect(Math.max(...seq)).toBe(2000);
+		const total = seq.reduce((a, b) => a + b, 0);
+		expect(total).toBeGreaterThanOrEqual(15000);
+		expect(total).toBeLessThan(19000);
 	});
 });
