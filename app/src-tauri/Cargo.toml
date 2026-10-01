@@ -43,8 +43,8 @@ dunce = "1.0.5"
 portable-pty = "0.8"
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }
-rusqlite = { version = "0.34", features = ["bundled"] }
-notify-debouncer-mini = "0.6"
+rusqlite = { version = "0.40", features = ["bundled"] }
+notify-debouncer-mini = "0.7"
 # reqwest is already in the tree transitively (via tauri-plugin-updater);
 # making it a direct dep is essentially free at compile time. We use it
 # for the opencode `/event` SSE stream — chunked streaming GET against
@@ -116,7 +116,7 @@ skein-winnotify = { path = "../../crates/skein-winnotify" }
 tempfile = "3"
 # Same feature set as the workspace: local repos only, no OpenSSL/libssh2.
 # Used to build real repos in the review-baseline tests (#211).
-git2 = { version = "0.20", default-features = false }
+git2 = { version = "0.21", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"
