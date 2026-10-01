@@ -6546,6 +6546,10 @@ mod tests {
             )
             .unwrap();
             f.sync_all().unwrap();
+            // Close before draining: macOS FSEvents reports the change
+            // on close, not per write (#437; see
+            // `main_events_keep_flowing_after_sidecars_appear_post_attach`).
+            drop(f);
             // Let the (still perfectly healthy) live watch catch up
             // normally before checking — `drain` waits for it.
             let events = drain(&rx);
@@ -6711,8 +6715,13 @@ mod tests {
         )
         .unwrap();
         f.sync_all().unwrap();
+        // Close, and wait the full `drain` window: macOS FSEvents only
+        // reports the change on close and can take longer than
+        // `drain_brief`'s 300 ms, so either shortcut would make this
+        // absence check pass vacuously there (#437).
+        drop(f);
         assert!(
-            drain_brief(&rx).is_empty(),
+            drain(&rx).is_empty(),
             "a detached harness must not keep receiving events from a leaked, abandoned watcher"
         );
     }
@@ -6770,6 +6779,9 @@ mod tests {
         )
         .unwrap();
         f2.sync_all().unwrap();
+        // Close before draining: macOS FSEvents reports the change on
+        // close, not per write (#437).
+        drop(f2);
         let events = drain(&rx2);
         assert!(
             events
