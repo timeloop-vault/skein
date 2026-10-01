@@ -7,7 +7,7 @@
 //! component it already uses for a git diff.
 
 use serde::{Deserialize, Serialize};
-use similar::{ChangeTag, TextDiff};
+use similar::{Algorithm, ChangeTag, TextDiff};
 
 /// Context lines kept either side of a change — the unified-diff default.
 pub const CONTEXT_RADIUS: usize = 3;
@@ -111,7 +111,10 @@ fn strip_terminator(s: &str) -> &str {
 pub fn diff_lines(baseline: &str, current: &str) -> Vec<Hunk> {
     let old = split_lines(baseline);
     let new = split_lines(current);
-    let diff = TextDiff::from_slices(&old, &new);
+    // RawMyers keeps the pre-3.2 hunk shapes; moving to the git-style Myers is a deliberate separate change.
+    let diff = TextDiff::configure()
+        .algorithm(Algorithm::RawMyers)
+        .diff_slices(&old, &new);
 
     let mut out = Vec::new();
     for group in diff.grouped_ops(CONTEXT_RADIUS) {
