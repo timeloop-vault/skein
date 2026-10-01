@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ADAPTER_SILENT_AFTER_MS } from "./harnessActivityConstants.ts";
-import { SUBMIT_RETRY_SCHEDULE_MS, decideSubmitRetry } from "./submitRetry.ts";
 import type { DecideSubmitRetryInput } from "./submitRetry.ts";
+import { decideSubmitRetry, SUBMIT_RETRY_SCHEDULE_MS } from "./submitRetry.ts";
 
 // Pure `decideSubmitRetry` tests build the input by hand — no store,
 // no DOM, no timers — exactly what the #380 retry policy is supposed

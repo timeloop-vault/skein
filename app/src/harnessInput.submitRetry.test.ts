@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
-import { harnessInput, sendPrompt } from "./harnessInput.ts";
+import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import type { HarnessInputTarget } from "./harnessInput.ts";
+import { harnessInput, sendPrompt } from "./harnessInput.ts";
 import { subagents } from "./subagents.ts";
 import { SUBMIT_GAP_MS, SUBMIT_RETRY_SCHEDULE_MS } from "./submitRetry.ts";
 

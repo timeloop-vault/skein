@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
 	type Beacon,
-	MAX_BEACONS,
-	MAX_BEACON_TEXT,
 	hostMessage,
+	MAX_BEACON_TEXT,
+	MAX_BEACONS,
 	parseBeacon,
 	previewUrl,
 	pushBeacon,

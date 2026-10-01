@@ -1,14 +1,14 @@
 // File and search rows: edit / read / grep+glob (#80 D2b, split #460).
 
-import { ResultPreview, byteLen, formatBytes } from "./ResultPreview.tsx";
-import { Row, basename } from "./Row.tsx";
 import { num, obj, str } from "./payload.ts";
+import { byteLen, formatBytes, ResultPreview } from "./ResultPreview.tsx";
+import { basename, Row } from "./Row.tsx";
 import {
-	PREVIEW_MIN,
-	type ToolRowProps,
 	countNonEmptyLines,
 	harnessTool,
 	normalizeResultString,
+	PREVIEW_MIN,
+	type ToolRowProps,
 } from "./toolShared.ts";
 
 export const EditRow = ({ payload, harness, timestampMs }: ToolRowProps) => {

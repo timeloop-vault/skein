@@ -1,9 +1,9 @@
 // Error, compaction and generic fallback rows, plus the error-toast copy (#80 D2b, split #460).
 
+import { num, obj, type Payload, str } from "./payload.ts";
 import { ResultPreview } from "./ResultPreview.tsx";
-import { Row, formatDuration } from "./Row.tsx";
-import { type Payload, num, obj, str } from "./payload.ts";
-import { type ToolRowProps, harnessTool, normalizeResultString } from "./toolShared.ts";
+import { formatDuration, Row } from "./Row.tsx";
+import { harnessTool, normalizeResultString, type ToolRowProps } from "./toolShared.ts";
 
 export const CompactRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
 	const auto = payload.auto === true;

@@ -16,19 +16,19 @@
 // before the first backfilled item plus an end-marker after the last one
 // when live items follow.
 
-import type { FeedItem, FlattenOptions } from "./feedItemTypes.ts";
 import {
 	BURST_GAP_MS,
 	BURST_MIN,
 	type BurstCandidate,
-	SKIP_KINDS,
 	burstCandidate,
 	commonAncestor,
 	costFromClaude,
+	SKIP_KINDS,
 	shortScope,
 	stepFromOpencode,
 } from "./feedItemsHelpers.ts";
-import { type Payload, num, parsePayload, str } from "./payload.ts";
+import type { FeedItem, FlattenOptions } from "./feedItemTypes.ts";
+import { num, type Payload, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
 
 /// Flatten display-ordered actions into feed items: turn_duration → a

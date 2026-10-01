@@ -27,8 +27,8 @@ import { SessionTotals, sessionTotals } from "./feedItems.tsx";
 import "./chrome.css";
 import { useReviewDiscovery } from "../review/useReviewData.ts";
 import { PlanCardBody } from "./PlanCard.tsx";
-import { RoomSubtitle } from "./RoomSubtitle.tsx";
 import { type PlanGroup, planTotals, reducePlan } from "./plan.ts";
+import { RoomSubtitle } from "./RoomSubtitle.tsx";
 import { useRoomActions } from "./store.ts";
 import { useGitBranchWatcher } from "./useGitBranchWatcher.ts";
 

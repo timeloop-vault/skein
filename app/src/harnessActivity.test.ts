@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-	TRANSITION_SOURCE,
 	activityToStatus,
 	aggregateRoomStatus,
 	delegationSummary,
@@ -9,6 +8,7 @@ import {
 	higherPriorityStatus,
 	isDecisiveInput,
 	statusLabel,
+	TRANSITION_SOURCE,
 } from "./harnessActivity.ts";
 
 // #86 — permission promoted to its own activity phase. These tests

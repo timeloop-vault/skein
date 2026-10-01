@@ -14,7 +14,7 @@
 // (`useNewRoomForm.tsx`'s `initialDefaults?.harness ?? "claude"`); agent
 // falls back through `startingAgent` (prefs.ts) the same way.
 
-import { type RequestResult, asRecord, isHarnessKind, isOmitted } from "./agentRequestsShared.ts";
+import { asRecord, isHarnessKind, isOmitted, type RequestResult } from "./agentRequestsShared.ts";
 import { type AgentListing, unknownAgentMessage, validateAgent } from "./agents.ts";
 import { type DefaultAgents, type FolderDefaults, startingAgent } from "./prefs.ts";
 import type { HarnessKind } from "./types.ts";

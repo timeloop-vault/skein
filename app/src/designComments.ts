@@ -10,8 +10,8 @@ import {
 	type ElementAnchor,
 	type ElementRect,
 	type LocateResult,
-	type Placement,
 	matchElement,
+	type Placement,
 } from "./elementAnchor.ts";
 import type { ReviewThread } from "./review/api.ts";
 

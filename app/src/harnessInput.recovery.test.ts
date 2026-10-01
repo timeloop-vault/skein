@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { harnessActivity } from "./harnessActivity.ts";
 import { ADAPTER_SILENT_AFTER_MS } from "./harnessActivityConstants.ts";
-import { harnessInput, sendPrompt } from "./harnessInput.ts";
 import type { HarnessInputTarget } from "./harnessInput.ts";
+import { harnessInput, sendPrompt } from "./harnessInput.ts";
 import { LAUNCH_QUIET_MS } from "./launchReady.ts";
 import { evaluateSettlement } from "./mailSettle.ts";
 import { SUBMIT_GAP_MS } from "./submitRetry.ts";

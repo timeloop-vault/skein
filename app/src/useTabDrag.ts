@@ -24,11 +24,8 @@ import {
 	useState,
 } from "react";
 import {
-	type DropSide,
-	type TabDragHit,
-	type TabDragInfo,
-	type TabDragState,
 	cancel as cancelDrag,
+	type DropSide,
 	gapForX,
 	gapToTarget,
 	idleState,
@@ -36,6 +33,9 @@ import {
 	press as pressDrag,
 	release as releaseDrag,
 	sideFor,
+	type TabDragHit,
+	type TabDragInfo,
+	type TabDragState,
 } from "./tabDrag.ts";
 import "./tabDrag.css";
 

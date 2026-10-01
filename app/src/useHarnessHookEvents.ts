@@ -6,7 +6,7 @@
 import { listen } from "@tauri-apps/api/event";
 import type { MutableRefObject } from "react";
 import { useEffect } from "react";
-import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
+import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { followedSession } from "./sessionTracking.ts";
 import type { Room } from "./types.ts";
 

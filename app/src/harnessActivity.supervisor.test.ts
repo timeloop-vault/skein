@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { TRANSITION_SOURCE, harnessActivity, onTick } from "./harnessActivity.ts";
+import { harnessActivity, onTick, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { TICK_INTERVAL_MS } from "./harnessActivityConstants.ts";
 
 // #423 — the facts the harness supervisor reads, and its two guarded

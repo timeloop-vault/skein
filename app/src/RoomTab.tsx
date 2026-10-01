@@ -1,7 +1,7 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
+import type { DragProps } from "./dragProps.ts";
 import { HChip, StatusDot } from "./HChip.tsx";
 import { RoomNameInput } from "./RoomNameInput.tsx";
-import type { DragProps } from "./dragProps.ts";
 import type { Room } from "./types.ts";
 import "./RoomStrip.css";
 

@@ -3,7 +3,7 @@
 // kind — shared helpers, create_room(.resolve), close_room, and the
 // open/close_harness pair.
 
-export * from "./agentRequestsShared.ts";
-export * from "./agentRequestsCreate.ts";
 export * from "./agentRequestsCloseRoom.ts";
+export * from "./agentRequestsCreate.ts";
 export * from "./agentRequestsHarness.ts";
+export * from "./agentRequestsShared.ts";

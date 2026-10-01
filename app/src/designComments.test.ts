@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-	type ElementThread,
-	type WrittenSeen,
 	buildLocateAnchors,
 	buildPins,
 	displayState,
-	placeThreads,
+	type ElementThread,
 	placementSignature,
+	placeThreads,
 	seenWrites,
 	unplaced,
+	type WrittenSeen,
 } from "./designComments.ts";
 import type { ElementDescriptor, LocateResult } from "./elementAnchor.ts";
 

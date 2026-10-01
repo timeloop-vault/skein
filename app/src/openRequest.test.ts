@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type OpenTarget, decideOpen } from "./openRequest.ts";
+import { decideOpen, type OpenTarget } from "./openRequest.ts";
 import type { Room } from "./types.ts";
 
 const room = (id: string): Room => ({

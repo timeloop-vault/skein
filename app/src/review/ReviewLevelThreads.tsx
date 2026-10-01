@@ -2,9 +2,9 @@
 // which belongs to no file and no commit. Split out of ReviewPane.tsx
 // (#460); the composer's open state stays in the pane.
 
+import { addThread, type ReviewThread } from "./api.ts";
 import type { ThreadHandlers } from "./DiffBody.tsx";
 import { Composer, ThreadView } from "./Thread.tsx";
-import { type ReviewThread, addThread } from "./api.ts";
 
 export const ReviewLevelThreads = ({
 	roomId,

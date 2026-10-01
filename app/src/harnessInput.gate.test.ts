@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { HarnessActivity } from "./harnessActivity.ts";
-import { canInsertText, canSendPrompt, formatDroppedPaths } from "./harnessInput.ts";
 import type { CanInsertTextInput, CanSendPromptInput } from "./harnessInput.ts";
+import { canInsertText, canSendPrompt, formatDroppedPaths } from "./harnessInput.ts";
 import { LAUNCH_QUIET_MS } from "./launchReady.ts";
 
 // Pure `canSendPrompt` tests build the input by hand — no store, no

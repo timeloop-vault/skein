@@ -2,9 +2,9 @@
 // pure move, no behaviour change. Props are named after the App.tsx
 // locals they replace so the JSX body didn't need to change.
 
-import { AgentStatusBarSeg, LiveStatusBarChip } from "./HarnessColumn.tsx";
 import { HChip } from "./components.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
+import { AgentStatusBarSeg, LiveStatusBarChip } from "./HarnessColumn.tsx";
 import { harnessActivity, statusLabel } from "./harnessActivity.ts";
 import type { Harness, Room } from "./types.ts";
 import "./StatusBar.css";

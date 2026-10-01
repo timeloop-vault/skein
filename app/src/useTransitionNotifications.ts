@@ -26,7 +26,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { useEffect } from "react";
 import { backgroundTasks } from "./backgroundTasks.ts";
 import { HARNESS_KINDS } from "./data.tsx";
-import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
+import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { waitingNote } from "./harnessActivityLabels.ts";
 import {
 	classifyTransition,
@@ -37,7 +37,7 @@ import {
 	toastState,
 } from "./harnessNotifyLogic.ts";
 import { BADGE_COALESCE_MS, enqueueOsNotification } from "./notifications.tsx";
-import { type NewToast, type ToastEntry, appendToast } from "./toastStack.ts";
+import { appendToast, type NewToast, type ToastEntry } from "./toastStack.ts";
 import type { Room } from "./types.ts";
 import type { NotificationPermission } from "./useWindowFocusPermission.ts";
 

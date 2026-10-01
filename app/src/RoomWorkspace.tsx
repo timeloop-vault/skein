@@ -1,9 +1,9 @@
+import { publishDesignFocus } from "./designFocus.ts";
 import { HarnessColumn } from "./HarnessColumn.tsx";
 import { MissingFolderCard } from "./MissingFolderCard.tsx";
 import { RepoMismatchCard } from "./RepoMismatchCard.tsx";
 import { RightPane } from "./RightPane.tsx";
 import { Splitter } from "./Splitter.tsx";
-import { publishDesignFocus } from "./designFocus.ts";
 import type { Room } from "./types.ts";
 import type { useAppSettings } from "./useAppSettings.ts";
 import type { useHarnessActions } from "./useHarnessActions.ts";

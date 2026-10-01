@@ -4,7 +4,7 @@
 // call on `harnessActivity`. Public entry is `harnessEvents.ts`.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { TRANSITION_SOURCE, type TransitionSource, harnessActivity } from "./harnessActivity.ts";
+import { harnessActivity, TRANSITION_SOURCE, type TransitionSource } from "./harnessActivity.ts";
 import { observedAgents } from "./harnessAgent.ts";
 import { beginAttach, endAttach, guardChannelHandler } from "./harnessEventsShared.ts";
 import { type PendingPhase, pendingPrompts } from "./pendingPrompts.ts";

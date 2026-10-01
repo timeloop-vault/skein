@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
 	type AgentInfo,
 	type AgentListing,
-	NO_AGENTS,
 	kindHasAgents,
+	NO_AGENTS,
 	unknownAgentMessage,
 	validateAgent,
 } from "./agents.ts";

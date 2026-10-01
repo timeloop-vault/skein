@@ -6,8 +6,8 @@
 
 import type { MutableRefObject } from "react";
 import { logBoth } from "./frontendLog.ts";
-import { harnessInput } from "./harnessInput.ts";
 import type { GateResult } from "./harnessInput.ts";
+import { harnessInput } from "./harnessInput.ts";
 import { isDraftHold } from "./mailNudge.ts";
 import { mailPending } from "./mailRetry.ts";
 import { noteMailState } from "./supervisor/mailFeed.ts";

@@ -21,10 +21,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { MutableRefObject } from "react";
 import { useEffect, useRef } from "react";
-import type { CreateRoomArgs } from "./NewRoomDialogTypes.ts";
 import {
 	type CloseRoomAttribution,
-	type RequestResult,
 	decideOpenHarness,
 	derivePromptFirstLine,
 	parseCloseHarnessArgs,
@@ -33,13 +31,15 @@ import {
 	parseOpenHarnessArgs,
 	parseOpenHarnessResolveArgs,
 	parseResolveArgs,
+	type RequestResult,
 	resolveAgent,
 	resolveKind,
 	specFromCreateArgs,
 } from "./agentRequests.ts";
 import { listHarnessAgents } from "./agents.ts";
 import { harnessActivity } from "./harnessActivity.ts";
-import { type DefaultAgents, type NewRoomMemory, branchTemplateFor, defaultsFor } from "./prefs.ts";
+import type { CreateRoomArgs } from "./NewRoomDialogTypes.ts";
+import { branchTemplateFor, type DefaultAgents, defaultsFor, type NewRoomMemory } from "./prefs.ts";
 import { fetchScope } from "./review/api.ts";
 import type { NewToast } from "./toastStack.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";

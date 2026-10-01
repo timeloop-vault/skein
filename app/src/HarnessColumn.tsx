@@ -1,11 +1,10 @@
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef } from "react";
-import { DesignBody } from "./DesignBody.tsx";
-import { FilesBody } from "./FilesBody.tsx";
-import { HarnessActionsMenu } from "./HarnessActionsMenu.tsx";
-import { LiveTerminal } from "./LiveTerminal.tsx";
 import { useWorkingBackgroundTaskCount } from "./backgroundTasks.ts";
 import { HarnessPicker, HarnessTab } from "./components.tsx";
+import { DesignBody } from "./DesignBody.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
+import { FilesBody } from "./FilesBody.tsx";
+import { HarnessActionsMenu } from "./HarnessActionsMenu.tsx";
 import {
 	activityToStatus,
 	effectiveStatus,
@@ -13,6 +12,7 @@ import {
 	useHarnessActivity,
 } from "./harnessActivity.ts";
 import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
+import { LiveTerminal } from "./LiveTerminal.tsx";
 import type { DefaultAgents } from "./prefs.ts";
 import { useWorkingSubagentCount } from "./subagents.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";

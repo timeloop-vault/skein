@@ -1,7 +1,7 @@
 // Pure helpers behind flattenFeed's burst-fold and per-turn-cost logic.
 // Split out of feedItems.tsx (#19) — moved verbatim.
 
-import { type Payload, num, obj, parsePayload, str } from "./payload.ts";
+import { num, obj, type Payload, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
 
 /// Kinds that never render as their own row and aren't derived chrome

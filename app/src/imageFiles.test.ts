@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-	MAX_IMAGE_BYTES,
 	formatBytes,
 	imageMime,
 	isImagePath,
+	MAX_IMAGE_BYTES,
 	parseImageError,
 } from "./imageFiles.ts";
 

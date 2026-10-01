@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-	type NewToast,
-	type ToastEntry,
 	appendToast,
 	coalesceToast,
+	type NewToast,
+	type ToastEntry,
 	toastRemainingMs,
 } from "./toastStack.ts";
 

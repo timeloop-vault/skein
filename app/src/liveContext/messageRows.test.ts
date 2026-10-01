@@ -2,8 +2,8 @@
 // these strings, but the logic itself needs no React).
 
 import { describe, expect, it } from "vitest";
-import { messageInLabel, messageOutLabel } from "./payload.ts";
 import type { Payload } from "./payload.ts";
+import { messageInLabel, messageOutLabel } from "./payload.ts";
 
 describe("messageInLabel", () => {
 	it("prefers the room and harness names", () => {

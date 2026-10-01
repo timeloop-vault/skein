@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
-import type { RepoStatus } from "./NewRoomDialogTypes.ts";
 import { branchFieldAttachedAfterBlur } from "./branchName.ts";
+import type { RepoStatus } from "./NewRoomDialogTypes.ts";
 
 // Split out of `NewRoomDialog.tsx` (#461): the Branch field (mode cards,
 // worktree branch name, base branch). Only rendered for a valid repo.

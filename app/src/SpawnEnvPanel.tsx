@@ -13,9 +13,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
+import { CAPTURE_OPTIONS } from "./spawnEnv/constants.ts";
 import { EnvPreviewSection } from "./spawnEnv/EnvPreviewSection.tsx";
 import { EnvToggles } from "./spawnEnv/EnvToggles.tsx";
-import { CAPTURE_OPTIONS } from "./spawnEnv/constants.ts";
 import { EnvVarList, StringList } from "./spawnEnv/lists.tsx";
 import type { CaptureMode, EnvPreview, HarnessConfigStatus, SpawnSettings } from "./types.ts";
 import "./SpawnEnvPanel.css";

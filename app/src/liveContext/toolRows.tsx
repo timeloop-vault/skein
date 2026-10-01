@@ -10,8 +10,8 @@
 import type { HarnessKind } from "../types.ts";
 import { ApiErrorRow, CompactRow, GenericToolRow, ToolErrorRow } from "./errorRows.tsx";
 import { EditRow, ReadRow, SearchRow } from "./fileRows.tsx";
-import { type Payload, obj, str } from "./payload.ts";
-import { type ToolRowProps, harnessTool } from "./toolShared.ts";
+import { obj, type Payload, str } from "./payload.ts";
+import { harnessTool, type ToolRowProps } from "./toolShared.ts";
 import { AgentRow, AskRow, BashRow, TaskRow, TodoWriteRow } from "./workRows.tsx";
 
 export { apiErrorToastText } from "./errorRows.tsx";

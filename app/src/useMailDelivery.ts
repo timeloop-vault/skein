@@ -80,13 +80,13 @@ import { atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
 import { harnessInput } from "./harnessInput.ts";
 import { checkMail } from "./mailDeliveryCheck.ts";
 import {
+	clearRetry,
+	clearSettlement,
 	type HarnessMeta,
 	type MailRefs,
 	type MailUnread,
 	type RetryEntry,
 	type SettleEntry,
-	clearRetry,
-	clearSettlement,
 } from "./mailDeliveryState.ts";
 import { mailHold } from "./mailHold.ts";
 import { shouldCheckOnTransition } from "./mailNudge.ts";

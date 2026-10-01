@@ -17,14 +17,14 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+	fetchFile,
+	fetchScope,
 	type ReviewFileDetail,
 	type ReviewScope,
 	type ReviewScopeData,
-	fetchFile,
-	fetchScope,
 } from "./api.ts";
 import { createCoalescer, sameJson } from "./coalesce.ts";
-import { type SignoffStatus, fetchSignoff, setSignoff } from "./signoff.ts";
+import { fetchSignoff, type SignoffStatus, setSignoff } from "./signoff.ts";
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 

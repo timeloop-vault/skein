@@ -7,13 +7,14 @@ vi.mock("../frontendLog.ts", () => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 
 import { logBoth } from "../frontendLog.ts";
-import { TRANSITION_SOURCE, harnessActivity } from "../harnessActivity.ts";
+import { harnessActivity, TRANSITION_SOURCE } from "../harnessActivity.ts";
 import { subagents } from "../subagents.ts";
 import { forgetMailState, noteMailState } from "./mailFeed.ts";
 import { __resetSupervisorForTests, startSupervisor, supervisorViolations } from "./runtime.ts";
 import { RECOVERY_MIN_INTERVAL_MS } from "./supervisorState.ts";
 
 vi.mock("../harnessEvents.ts", () => ({ liveAttach: vi.fn(() => null) }));
+
 import { liveAttach } from "../harnessEvents.ts";
 
 const log = vi.mocked(logBoth);

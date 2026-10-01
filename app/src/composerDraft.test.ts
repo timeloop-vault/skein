@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ComposerDraft, DraftEvent } from "./composerDraft.ts";
 import {
 	CLEAN_DRAFT,
 	checkDraft,
@@ -6,7 +7,6 @@ import {
 	draftClearedBy,
 	reduceDraft,
 } from "./composerDraft.ts";
-import type { ComposerDraft, DraftEvent } from "./composerDraft.ts";
 
 const clean = CLEAN_DRAFT;
 const typed = (chars: number): ComposerDraft => ({ kind: "typed", chars });

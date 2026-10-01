@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-	type SignoffStatus,
 	approvePrompt,
+	type SignoffStatus,
 	short,
 	signoffState,
 	staleExplanation,

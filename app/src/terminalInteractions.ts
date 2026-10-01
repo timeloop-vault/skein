@@ -13,13 +13,13 @@ import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { Terminal } from "@xterm/xterm";
 import { harnessInput } from "./harnessInput.ts";
 import { isAppShortcut, isMac, isWindows } from "./shortcuts.ts";
+import type { ClipboardPlatform } from "./terminalClipboard.ts";
 import {
 	decideClipboardAction,
 	emptySelectionHint,
 	isNoTextClipboardError,
 	pasteFailureHint,
 } from "./terminalClipboard.ts";
-import type { ClipboardPlatform } from "./terminalClipboard.ts";
 
 /// This platform, as far as the copy/paste key matrix cares — see
 /// `terminalClipboard.ts`. Computed once; `navigator.platform` doesn't

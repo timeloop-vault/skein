@@ -21,20 +21,20 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FolderInfoDto } from "./NewRoomDialog.tsx";
 import {
+	defaultsFor,
 	EMPTY_NEW_ROOM_MEMORY,
 	type FolderDefaults,
 	type NewRoomMemory,
-	defaultsFor,
 	recentFolders,
 	rememberFolder,
 	usePersistedState,
 } from "./prefs.ts";
 import {
-	type StripSegment,
 	buildStrip,
 	resolveRowDrop,
 	resolveTopDrop,
 	roomIsGroupMain,
+	type StripSegment,
 	segmentId,
 	segmentOfRoom,
 	topLevelTarget,

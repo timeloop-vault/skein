@@ -4,9 +4,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { type Dispatch, type MutableRefObject, type SetStateAction, useCallback } from "react";
+import { repointRoom } from "./missingFolder.ts";
 import type { FolderInfoDto } from "./NewRoomDialog.tsx";
 import type { RenameTarget } from "./RoomStrip.tsx";
-import { repointRoom } from "./missingFolder.ts";
 import { type IdentityCheck, isStorable } from "./repoIdentity.ts";
 import { nextActiveAfterClose } from "./roomGroups.ts";
 import { checkProbe, probeFolder } from "./roomsStoreProbe.ts";

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-	DEFAULT_BRANCH_TEMPLATE,
 	applyBranchTemplate,
 	branchCollision,
 	branchFieldAttachedAfterBlur,
 	branchFieldProblem,
 	branchNameProblem,
+	DEFAULT_BRANCH_TEMPLATE,
 	taskSlug,
 	templateFromBranch,
 	worktreeLeaf,

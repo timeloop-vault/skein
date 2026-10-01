@@ -14,7 +14,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { backgroundTasks } from "./backgroundTasks.ts";
 import { logToRust } from "./frontendLog.ts";
-import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
+import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { beginAttach, endAttach, guardChannelHandler } from "./harnessEventsShared.ts";
 import { subagents } from "./subagents.ts";
 import type { HarnessKind } from "./types.ts";

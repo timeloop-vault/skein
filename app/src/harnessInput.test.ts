@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { harnessActivity } from "./harnessActivity.ts";
-import { harnessInput, insertText, sendPrompt } from "./harnessInput.ts";
 import type { HarnessInputTarget } from "./harnessInput.ts";
+import { harnessInput, insertText, sendPrompt } from "./harnessInput.ts";
 import { SUBMIT_GAP_MS } from "./submitRetry.ts";
 
 const nextId = (() => {

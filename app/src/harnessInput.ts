@@ -16,8 +16,8 @@
 //   - `harnessInputSend.ts` — `sendPrompt` / `insertText`, the
 //     paste/submit mechanics.
 
-export { SCREEN_SETTLE_MS, harnessInput } from "./harnessInputRegistry.ts";
-export type { HarnessInputTarget } from "./harnessInputRegistry.ts";
-export { canInsertText, canSendPrompt, formatDroppedPaths } from "./harnessInputGate.ts";
 export type { CanInsertTextInput, CanSendPromptInput, GateResult } from "./harnessInputGate.ts";
+export { canInsertText, canSendPrompt, formatDroppedPaths } from "./harnessInputGate.ts";
+export type { HarnessInputTarget } from "./harnessInputRegistry.ts";
+export { harnessInput, SCREEN_SETTLE_MS } from "./harnessInputRegistry.ts";
 export { insertText, sendPrompt } from "./harnessInputSend.ts";

@@ -3,7 +3,7 @@
 	"files": {
 		"includes": ["**", "!**/dist", "!**/src-tauri/target", "!**/src-tauri/gen"]
 	},
-	"assist": { "actions": { "source": { "organizeImports": "off" } } },
+	"assist": { "actions": { "source": { "organizeImports": "on" } } },
 	"css": {
 		"linter": { "enabled": false },
 		"formatter": { "enabled": false }

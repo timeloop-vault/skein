@@ -11,8 +11,8 @@ import {
 	permissionIds,
 	permissionListeners,
 } from "./harnessActivityCore.ts";
-import { aggregateRoomStatus } from "./harnessActivityLabels.ts";
 import type { RoomHarnessRef } from "./harnessActivityLabels.ts";
+import { aggregateRoomStatus } from "./harnessActivityLabels.ts";
 import type { HarnessActivity } from "./harnessActivityTypes.ts";
 import type { Status } from "./types.ts";
 

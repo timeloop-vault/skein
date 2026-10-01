@@ -3,9 +3,8 @@
 // feedTotals.ts (session totals) and feedItemViews.tsx (components);
 // importers keep using this path.
 
-export type { FeedItem, FlattenOptions } from "./feedItemTypes.ts";
 export { flattenFeed } from "./feedFlatten.ts";
-export { formatTokensShort, sessionTotals } from "./feedTotals.ts";
+export type { FeedItem, FlattenOptions } from "./feedItemTypes.ts";
 export {
 	BackfillBanner,
 	BackfillEnd,
@@ -14,3 +13,4 @@ export {
 	TurnCost,
 	TurnSeparator,
 } from "./feedItemViews.tsx";
+export { formatTokensShort, sessionTotals } from "./feedTotals.ts";

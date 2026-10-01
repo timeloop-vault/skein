@@ -2,7 +2,7 @@
 // feedItems.tsx (#460).
 
 import { costFromClaude, stepFromOpencode } from "./feedItemsHelpers.ts";
-import { type Payload, num, parsePayload, str } from "./payload.ts";
+import { num, type Payload, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
 
 /// Sub-cent costs render as a floor rather than a misleading "$0.00".

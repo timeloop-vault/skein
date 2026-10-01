@@ -1,9 +1,9 @@
 // Shell, plan, question and sub-agent rows (#80 D2b, split #460).
 
-import { ResultPreview, byteLen, formatBytes } from "./ResultPreview.tsx";
-import { Row, formatDuration } from "./Row.tsx";
-import { type Payload, num, obj, str } from "./payload.ts";
-import { PREVIEW_MIN, type ToolRowProps, normalizeResultString } from "./toolShared.ts";
+import { num, obj, type Payload, str } from "./payload.ts";
+import { byteLen, formatBytes, ResultPreview } from "./ResultPreview.tsx";
+import { formatDuration, Row } from "./Row.tsx";
+import { normalizeResultString, PREVIEW_MIN, type ToolRowProps } from "./toolShared.ts";
 
 export const BashRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
 	const command = str(obj(payload.input)?.command) ?? "";

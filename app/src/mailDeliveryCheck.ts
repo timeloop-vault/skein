@@ -7,13 +7,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { HARNESS_KINDS } from "./data.tsx";
 import { logBoth } from "./frontendLog.ts";
 import { atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
-import { canSendPrompt, harnessInput, sendPrompt } from "./harnessInput.ts";
 import type { GateResult } from "./harnessInput.ts";
+import { canSendPrompt, harnessInput, sendPrompt } from "./harnessInput.ts";
 import {
-	type MailRefs,
-	type MailUnread,
 	clearSettlement,
 	logMailRefusal,
+	type MailRefs,
+	type MailUnread,
 	pendingResult,
 } from "./mailDeliveryState.ts";
 import { mailHold } from "./mailHold.ts";
@@ -24,7 +24,7 @@ import {
 	mailNudgeText,
 	releaseRefusalReason,
 } from "./mailNudge.ts";
-import { NUDGE_SETTLE_MS, evaluateSettlement } from "./mailSettle.ts";
+import { evaluateSettlement, NUDGE_SETTLE_MS } from "./mailSettle.ts";
 import { mailStore } from "./mailStore.ts";
 import { noteMailState } from "./supervisor/mailFeed.ts";
 

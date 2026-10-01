@@ -32,11 +32,11 @@ import { checkDraft } from "./composerDraft.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { logBoth } from "./frontendLog.ts";
 import { atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
-import { canInsertText, canSendPrompt } from "./harnessInputGate.ts";
 import type { GateResult } from "./harnessInputGate.ts";
-import { harnessInput } from "./harnessInputRegistry.ts";
+import { canInsertText, canSendPrompt } from "./harnessInputGate.ts";
 import type { HarnessInputTarget } from "./harnessInputRegistry.ts";
-import { SUBMIT_GAP_MS, SUBMIT_RETRY_SCHEDULE_MS, decideSubmitRetry } from "./submitRetry.ts";
+import { harnessInput } from "./harnessInputRegistry.ts";
+import { decideSubmitRetry, SUBMIT_GAP_MS, SUBMIT_RETRY_SCHEDULE_MS } from "./submitRetry.ts";
 import type { HarnessKind } from "./types.ts";
 
 /// Paste `body` into `harnessId`'s terminal and submit it, after

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { LAUNCH_QUIET_MS, LAUNCH_READY_CAP_MS, launchSettled } from "./launchReady.ts";
 import type { LaunchSettledInput } from "./launchReady.ts";
+import { LAUNCH_QUIET_MS, LAUNCH_READY_CAP_MS, launchSettled } from "./launchReady.ts";
 
 const input = (over: Partial<LaunchSettledInput> = {}): LaunchSettledInput => ({
 	adapterHeard: false,

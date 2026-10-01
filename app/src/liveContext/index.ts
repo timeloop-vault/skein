@@ -2,6 +2,6 @@
 // across D2–D4; this barrel keeps the import site in App.tsx stable.
 
 export { LiveContext } from "./LiveContext.tsx";
-export { ACTION_EVENT, useRoomActions, type HarnessAction } from "./store.ts";
 export { parsePayload } from "./payload.ts";
+export { ACTION_EVENT, type HarnessAction, useRoomActions } from "./store.ts";
 export { apiErrorToastText } from "./toolRows.tsx";

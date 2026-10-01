@@ -1,10 +1,10 @@
 import {
 	type AgentAttribution,
-	type RequestResult,
 	asRecord,
 	isHarnessKind,
 	isOmitted,
 	parseAttribution,
+	type RequestResult,
 } from "./agentRequestsShared.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
 

@@ -15,7 +15,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { useEffect, useRef, useState } from "react";
 import { clearHarnessPending, dropToastsFor } from "./harnessNotifyLogic.ts";
 import { clearAttention } from "./roomAttention.ts";
-import { type NewToast, type ToastEntry, appendToast } from "./toastStack.ts";
+import { appendToast, type NewToast, type ToastEntry } from "./toastStack.ts";
 import type { Room } from "./types.ts";
 import { useApiErrorToasts } from "./useApiErrorToasts.ts";
 import { useHarnessHookEvents } from "./useHarnessHookEvents.ts";

@@ -15,9 +15,9 @@
 // called right after this hook.
 
 import { useCallback, useState } from "react";
-import type { RightPaneTab } from "./RightPane.tsx";
 import { DEFAULT_BRANCH_TEMPLATE } from "./branchName.ts";
 import { type DefaultAgents, usePersistedState } from "./prefs.ts";
+import type { RightPaneTab } from "./RightPane.tsx";
 import type { Density, Theme } from "./types.ts";
 
 // xterm font size range. Outside this band the terminal looks either

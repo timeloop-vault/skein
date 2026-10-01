@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FolderInfoDto } from "./NewRoomDialogTypes.ts";
-import { type CreateRoomSpec, type WorktreeGit, createRoomArgs } from "./worktreeRoom.ts";
+import { type CreateRoomSpec, createRoomArgs, type WorktreeGit } from "./worktreeRoom.ts";
 
 function folder(opts: Partial<FolderInfoDto> = {}): FolderInfoDto {
 	return {

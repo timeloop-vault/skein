@@ -28,11 +28,26 @@
 // alongside the worktree watcher.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { acceptReview, attributeHunks, rejectReview } from "../liveContext/review.ts";
 import type { ReviewHunk } from "../liveContext/review.ts";
+import { acceptReview, attributeHunks, rejectReview } from "../liveContext/review.ts";
 import type { HarnessAction } from "../liveContext/store.ts";
 import type { Harness, HarnessKind } from "../types.ts";
+import {
+	addThread,
+	contributingHarnesses,
+	deleteComment,
+	deleteThread,
+	editComment,
+	markViewed,
+	type ReviewFile,
+	type ReviewScope,
+	type ReviewThread,
+	replyToThread,
+	resolveThread,
+	unplacedThreads,
+} from "./api.ts";
 import type { LineSelection, ThreadHandlers } from "./DiffBody.tsx";
+import type { SvgViewMode } from "./imageDiffModel.ts";
 import { ReviewBody } from "./ReviewBody.tsx";
 import { ReviewFileBar } from "./ReviewFileBar.tsx";
 import { ReviewFileSection } from "./ReviewFileSection.tsx";
@@ -40,21 +55,6 @@ import { ReviewHeader } from "./ReviewHeader.tsx";
 import { ReviewLevelThreads } from "./ReviewLevelThreads.tsx";
 import { SignoffConfirm, type SignoffIntent, SignoffNotice } from "./SignoffControl.tsx";
 import type { DesignLink } from "./Thread.tsx";
-import {
-	type ReviewFile,
-	type ReviewScope,
-	type ReviewThread,
-	addThread,
-	contributingHarnesses,
-	deleteComment,
-	deleteThread,
-	editComment,
-	markViewed,
-	replyToThread,
-	resolveThread,
-	unplacedThreads,
-} from "./api.ts";
-import type { SvgViewMode } from "./imageDiffModel.ts";
 import {
 	useAgentWrites,
 	useReviewFile,

@@ -1,7 +1,7 @@
 // Shared types and normalizers for the tool-family rows (#80 D2b, split #460).
 
 import type { HarnessKind } from "../types.ts";
-import { type Payload, obj, str } from "./payload.ts";
+import { obj, type Payload, str } from "./payload.ts";
 
 export interface ToolRowProps {
 	payload: Payload;

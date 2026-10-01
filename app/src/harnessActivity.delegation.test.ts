@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { HARNESS_KINDS } from "./data.tsx";
-import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
+import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { canSendPrompt } from "./harnessInput.ts";
 import { subagents } from "./subagents.ts";
 

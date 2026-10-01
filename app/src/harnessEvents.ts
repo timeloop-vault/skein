@@ -18,18 +18,18 @@
 // `harnessEventsClaude.ts`, `harnessEventsOpencode.ts` and the shared
 // `harnessEventsShared.ts`, re-exported here so importers are unchanged.
 
-export {
-	attachClaudeEvents,
-	hasClaudeTranscriptTail,
-	reattachClaudeTelemetry,
-} from "./harnessEventsClaude.ts";
 export type {
 	BackgroundEndStatus,
 	BackgroundTaskKind,
 	ClaudeEvent,
 	ReattachOutcome,
 } from "./harnessEventsClaude.ts";
-export { attachOpencodeEvents } from "./harnessEventsOpencode.ts";
+export {
+	attachClaudeEvents,
+	hasClaudeTranscriptTail,
+	reattachClaudeTelemetry,
+} from "./harnessEventsClaude.ts";
 export type { OpencodeEvent } from "./harnessEventsOpencode.ts";
-export { guardChannelHandler, liveAttach } from "./harnessEventsShared.ts";
+export { attachOpencodeEvents } from "./harnessEventsOpencode.ts";
 export type { LiveAttach } from "./harnessEventsShared.ts";
+export { guardChannelHandler, liveAttach } from "./harnessEventsShared.ts";

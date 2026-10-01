@@ -17,12 +17,12 @@ import { useEffect } from "react";
 import { newToastId, setHarnessPending } from "./harnessNotifyLogic.ts";
 import {
 	ACTION_EVENT,
-	type HarnessAction,
 	apiErrorToastText,
+	type HarnessAction,
 	parsePayload,
 } from "./liveContext/index.ts";
 import { API_ERROR_INCIDENT_MS } from "./notifications.tsx";
-import { type NewToast, type ToastEntry, appendToast, coalesceToast } from "./toastStack.ts";
+import { appendToast, coalesceToast, type NewToast, type ToastEntry } from "./toastStack.ts";
 import type { Room } from "./types.ts";
 
 export function useApiErrorToasts(

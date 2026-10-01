@@ -6,12 +6,12 @@ import { subagents } from "../subagents.ts";
 import type { SupervisorSnapshot } from "./invariants.ts";
 import { mailState } from "./mailFeed.ts";
 import {
-	type HarnessSupervisorState,
-	type ViolationRecord,
 	emptyHarnessState,
 	evaluate,
 	formatEffect,
 	formatRecoveryOutcome,
+	type HarnessSupervisorState,
+	type ViolationRecord,
 } from "./supervisorState.ts";
 import { claudeTranscriptStat } from "./transcriptStat.ts";
 

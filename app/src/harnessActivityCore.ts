@@ -14,13 +14,13 @@ import {
 	PATTERN_WAITING_AFTER_MS,
 	TICK_INTERVAL_MS,
 } from "./harnessActivityConstants.ts";
-import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
 import type {
 	ActivityPhase,
 	HarnessActivity,
 	TransitionListener,
 	TransitionSource,
 } from "./harnessActivityTypes.ts";
+import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
 import { matchesWaitingPrompt } from "./harnessPatterns.ts";
 
 export const store = new Map<string, HarnessActivity>();

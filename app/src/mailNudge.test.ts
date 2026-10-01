@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ComposerDraft } from "./composerDraft.ts";
+import type { DecideMailNudgeInput } from "./mailNudge.ts";
 import {
 	automaticGate,
 	decideMailNudge,
@@ -7,7 +8,6 @@ import {
 	mailPopoverText,
 	shouldCheckOnTransition,
 } from "./mailNudge.ts";
-import type { DecideMailNudgeInput } from "./mailNudge.ts";
 
 const CLEAN: ComposerDraft = { kind: "clean" };
 const TYPED: ComposerDraft = { kind: "typed", chars: 3 };
