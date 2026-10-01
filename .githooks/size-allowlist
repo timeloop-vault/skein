@@ -10,7 +10,6 @@ app/src-tauri/src/agent_api/http.rs 1075 #455
 app/src-tauri/src/agent_api/tests.rs 5838 #455
 app/src-tauri/src/agent_api/verbs.rs 3475 #455
 app/src-tauri/src/db.rs 4261 #454
-app/src-tauri/src/harness_events_claude.rs 7791 #453
 app/src-tauri/src/lib.rs 1390 #456
 app/src-tauri/src/pty.rs 1628 #457
 app/src/App.tsx 884 #459
