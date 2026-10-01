@@ -1,4 +1,6 @@
-use super::{Instant, run_coalescer, spawn_pty_writer};
+use std::time::Instant;
+
+use super::output::{run_coalescer, spawn_pty_writer};
 use std::io::Write;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};

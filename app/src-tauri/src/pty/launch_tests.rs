@@ -1,4 +1,4 @@
-use super::{resolve_program_in, windows_resolved_program};
+use super::preview::{resolve_program_in, windows_resolved_program};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
