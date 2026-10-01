@@ -186,15 +186,17 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 		// A chip knows its harness → read that harness's OWN live state from
 		// the store, so a room-tab summary chip shows its real state rather
 		// than borrowing the room's aggregate dot (#141). Also picks up
-		// `permissionTool` (#86) — only available here, since a lone dot
-		// has no harness id to ask. #329: the mail marker borrows the same
-		// chip (by id, not by the agent-key-filtered `chip` above, which
-		// would miss a Claude harness with no agent), so hovering it shows
-		// identical state to hovering the rest of the tab.
+		// `permissionTool` (#86). #329: the mail marker, and a harness-tab
+		// dot, borrow the same chip (by id, not by the agent-key-filtered
+		// `chip` above, which would miss a Claude harness with no agent), so
+		// hovering them shows identical state to the rest of the tab. Feed
+		// rows and status-bar segments don't: their dot may not be live state.
+		const row = el.closest<HTMLElement>(ROW_SEL);
+		const chips = row?.querySelectorAll<HTMLElement>(".h-chip[data-harness-id]");
 		const stateChip = isChip
 			? el
-			: isMail
-				? el.closest<HTMLElement>(ROW_SEL)?.querySelector<HTMLElement>(".h-chip[data-harness-id]")
+			: isMail || (isDot && row?.matches(".sk-harness-tab") && chips?.length === 1)
+				? chips?.[0]
 				: undefined;
 		if (stateChip?.dataset.harnessId) {
 			const a = harnessActivity.get(stateChip.dataset.harnessId);
