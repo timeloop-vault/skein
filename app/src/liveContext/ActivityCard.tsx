@@ -33,9 +33,9 @@ import {
 	BackfillEnd,
 	BurstRow,
 	type FeedItem,
+	flattenFeed,
 	TurnCost,
 	TurnSeparator,
-	flattenFeed,
 } from "./feedItems.tsx";
 import { ActivityRow } from "./rows.tsx";
 import type { HarnessAction } from "./store.ts";

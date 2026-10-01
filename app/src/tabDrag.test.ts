@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-	DRAG_THRESHOLD_PX,
-	type TabDragHit,
-	type TabDragState,
 	cancel,
+	DRAG_THRESHOLD_PX,
 	gapForX,
 	gapToTarget,
 	idleState,
@@ -11,6 +9,8 @@ import {
 	press,
 	release,
 	sideFor,
+	type TabDragHit,
+	type TabDragState,
 } from "./tabDrag.ts";
 
 // Pure state-machine tests — no DOM, no React. `move`'s `hit` is built by

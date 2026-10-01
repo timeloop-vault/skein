@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
-import type { SettingsModal } from "./SettingsModal.tsx";
 import { withDefaultAgent } from "./prefs.ts";
+import type { SettingsModal } from "./SettingsModal.tsx";
 import type { HarnessKind, SpawnSettingsPayload } from "./types.ts";
 import {
 	CHROME_FONT_MAX,

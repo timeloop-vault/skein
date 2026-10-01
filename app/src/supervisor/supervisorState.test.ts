@@ -2,15 +2,15 @@ import { describe, expect, it } from "vitest";
 import type { Invariant, SupervisorSnapshot } from "./invariants";
 import {
 	type Effect,
-	HISTORY_CAP,
-	type HarnessSupervisorState,
-	RECOVERY_CAP,
-	RECOVERY_MIN_INTERVAL_MS,
-	RECOVERY_WINDOW_MS,
 	emptyHarnessState,
 	evaluate,
 	formatEffect,
 	formatRecoveryOutcome,
+	type HarnessSupervisorState,
+	HISTORY_CAP,
+	RECOVERY_CAP,
+	RECOVERY_MIN_INTERVAL_MS,
+	RECOVERY_WINDOW_MS,
 } from "./supervisorState";
 
 const snapshot = {} as SupervisorSnapshot;

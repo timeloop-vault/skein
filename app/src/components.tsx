@@ -6,13 +6,13 @@
 // module (#19).
 import "./components.css";
 
+export type { DragProps, DropSide } from "./dragProps.ts";
 export {
 	HarnessPicker,
 	NO_REVIEW_TOOLS_TITLE,
 	NoReviewToolsBadge,
 	useAgentListing,
 } from "./HarnessPicker.tsx";
-export type { DragProps, DropSide } from "./dragProps.ts";
 export { HarnessTab } from "./HarnessTab.tsx";
 export { HChip, StatusDot } from "./HChip.tsx";
 export { RoomNameInput } from "./RoomNameInput.tsx";

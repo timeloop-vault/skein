@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { HARNESS_KINDS } from "./data.tsx";
 import {
-	type RepoSkill,
-	type RepoSkillsIo,
 	loadRepoSkills,
 	parseSkillFrontmatter,
+	type RepoSkill,
+	type RepoSkillsIo,
 	skillInvocationLine,
 } from "./repoSkills.ts";
 

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
 	type ComposerReading,
+	readComposer,
 	type ScreenCell,
 	type ScreenSnapshot,
-	readComposer,
 } from "./promptScreen";
 import type { HarnessKind } from "./types";
 

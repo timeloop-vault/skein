@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TOOL_DEFAULT_AGENT, agentLabel, observedAgents } from "./harnessAgent.ts";
+import { agentLabel, observedAgents, TOOL_DEFAULT_AGENT } from "./harnessAgent.ts";
 
 describe("agentLabel", () => {
 	it("is null for kinds that take no --agent", () => {

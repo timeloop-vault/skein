@@ -23,7 +23,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("./frontendLog.ts", () => ({ logBoth: vi.fn(), logToRust: vi.fn() }));
 
 import { backgroundTasks } from "./backgroundTasks.ts";
-import { TRANSITION_SOURCE, atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
+import { atSafeStoppingPoint, harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import {
 	BACKGROUND_TASK_CEILING_MS,
 	DELEGATION_CEILING_MS,

@@ -8,17 +8,17 @@
 
 import { useMemo } from "react";
 import type { HarnessKind } from "../types.ts";
-import { type PreviewExpansion, PreviewExpansionContext, ResultPreview } from "./ResultPreview.tsx";
-import { Row, basename, formatDuration } from "./Row.tsx";
 import { BackgroundEndRow } from "./backgroundRows.tsx";
 import {
-	type Payload,
 	messageInLabel,
 	messageOutLabel,
 	num,
+	type Payload,
 	parsePayload,
 	str,
 } from "./payload.ts";
+import { type PreviewExpansion, PreviewExpansionContext, ResultPreview } from "./ResultPreview.tsx";
+import { basename, formatDuration, Row } from "./Row.tsx";
 import type { HarnessAction } from "./store.ts";
 import { ToolFamilyRow } from "./toolRows.tsx";
 

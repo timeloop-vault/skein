@@ -18,7 +18,7 @@
 // its latest snapshot and ignores the older deltas, which is the right
 // answer — the snapshot is the whole list.
 
-import { type Payload, obj, parsePayload, str } from "./payload.ts";
+import { obj, type Payload, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
 
 /// Display status, normalised across both harnesses' vocabularies. The

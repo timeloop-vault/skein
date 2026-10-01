@@ -29,11 +29,11 @@
 // a message the CLI queues internally — and a paste that reaches
 // neither `onKey` nor the bracketed-paste branch of `onData`.
 
-import { CLEAN_DRAFT, describeDraftEvent, draftClearedBy, reduceDraft } from "./composerDraft.ts";
 import type { ComposerDraft, DraftEvent } from "./composerDraft.ts";
+import { CLEAN_DRAFT, describeDraftEvent, draftClearedBy, reduceDraft } from "./composerDraft.ts";
 import { logBoth } from "./frontendLog.ts";
-import { readComposer } from "./promptScreen.ts";
 import type { ComposerReading, ScreenSnapshot } from "./promptScreen.ts";
+import { readComposer } from "./promptScreen.ts";
 import type { HarnessKind } from "./types.ts";
 
 /// What a live harness's terminal offers this seam. `LiveTerminal` is

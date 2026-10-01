@@ -1,8 +1,8 @@
 import type { Dispatch, SetStateAction } from "react";
-import { AgentFieldNote } from "./NewRoomAgentFieldNote.tsx";
 import { type AgentListing, kindHasAgents } from "./agents.ts";
 import { HChip } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
+import { AgentFieldNote } from "./NewRoomAgentFieldNote.tsx";
 import { type DefaultAgents, defaultAgentFor } from "./prefs.ts";
 import type { HarnessKind } from "./types.ts";
 

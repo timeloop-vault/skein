@@ -8,8 +8,8 @@
 // tooltip or a drag-overlay label, never a silent no-op.
 
 import type { HarnessCapabilities } from "./data.tsx";
-import { atSafeStoppingPoint } from "./harnessActivity.ts";
 import type { HarnessActivity } from "./harnessActivity.ts";
+import { atSafeStoppingPoint } from "./harnessActivity.ts";
 import { launchSettled } from "./launchReady.ts";
 
 /// Everything `canSendPrompt` needs, gathered by the caller so the gate

@@ -1,12 +1,12 @@
-import { type Mock, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 vi.mock("./confirmDialog.ts", () => ({ confirmDialog: vi.fn() }));
 
-import { CLEAN_DRAFT } from "./composerDraft.ts";
 import type { ComposerDraft } from "./composerDraft.ts";
+import { CLEAN_DRAFT } from "./composerDraft.ts";
 import { confirmDialog } from "./confirmDialog.ts";
-import { harnessInput } from "./harnessInput.ts";
 import type { HarnessInputTarget } from "./harnessInput.ts";
+import { harnessInput } from "./harnessInput.ts";
 import { DELIVER_NOW_REFUSAL, decideRelease, requestDeliverNow } from "./mailDeliverNow.ts";
 import { mailHold } from "./mailHold.ts";
 import type { ScreenCell, ScreenSnapshot } from "./promptScreen.ts";

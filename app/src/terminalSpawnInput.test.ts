@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type ScreenTerm, readVisibleScreen } from "./terminalSpawnInput.ts";
+import { readVisibleScreen, type ScreenTerm } from "./terminalSpawnInput.ts";
 
 function fakeTerm(lines: (string[] | null)[], cols: number): ScreenTerm {
 	return {

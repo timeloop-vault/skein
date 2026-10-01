@@ -55,19 +55,13 @@ import { permissionMethods } from "./harnessActivityPermission.ts";
 import { supervisorMethods } from "./harnessActivitySupervisor.ts";
 import type { ActivityPhase, HarnessActivity, TransitionListener } from "./harnessActivityTypes.ts";
 
-export type {
-	ActivityPhase,
-	HarnessActivity,
-	TransitionListener,
-	TransitionSource,
-} from "./harnessActivityTypes.ts";
-export { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
 export {
 	atSafeStoppingPoint,
 	isDecisiveInput,
 	onTick,
 	phaseSnapshot,
 } from "./harnessActivityCore.ts";
+export type { RoomHarnessRef } from "./harnessActivityLabels.ts";
 export {
 	activityToStatus,
 	aggregateRoomStatus,
@@ -77,7 +71,13 @@ export {
 	statusLabel,
 	stillRunningSummary,
 } from "./harnessActivityLabels.ts";
-export type { RoomHarnessRef } from "./harnessActivityLabels.ts";
+export type {
+	ActivityPhase,
+	HarnessActivity,
+	TransitionListener,
+	TransitionSource,
+} from "./harnessActivityTypes.ts";
+export { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
 export {
 	useHarnessActivity,
 	usePermissionHarnessIds,

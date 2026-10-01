@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
+import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { store } from "./harnessActivityCore.ts";
 
 // #259 — the silent-adapter watchdog. Its own file because the idle

@@ -17,10 +17,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+	isOverridden,
 	type NudgeDef,
 	type NudgeOverrides,
 	type NudgeScope,
-	isOverridden,
 	nudgeBody,
 	nudgesInScope,
 } from "./nudgeRegistry.ts";

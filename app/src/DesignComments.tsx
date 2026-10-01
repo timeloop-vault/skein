@@ -3,9 +3,8 @@
 // string here came from the page or the comment author and is rendered
 // as text.
 
-import { type ElementThread, displayState, elementSummary, sourceLabel } from "./designComments.ts";
+import { displayState, type ElementThread, elementSummary, sourceLabel } from "./designComments.ts";
 import type { ElementDescriptor, Placement } from "./elementAnchor.ts";
-import { Composer, ThreadView } from "./review/Thread.tsx";
 import {
 	deleteComment,
 	deleteThread,
@@ -13,6 +12,7 @@ import {
 	replyToThread,
 	resolveThread,
 } from "./review/api.ts";
+import { Composer, ThreadView } from "./review/Thread.tsx";
 import "./design.css";
 import "./FilesBody.css";
 

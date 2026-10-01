@@ -13,8 +13,8 @@ import {
 	DELEGATION_CEILING_MS,
 	DELEGATION_SETTLE_MS,
 } from "./harnessActivityConstants.ts";
-import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
 import type { ActivityPhase, HarnessActivity, TransitionSource } from "./harnessActivityTypes.ts";
+import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
 import { subagents } from "./subagents.ts";
 
 /// Working subagents plus working background tasks for one harness.

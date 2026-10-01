@@ -21,11 +21,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { confirmDialog } from "./confirmDialog.ts";
 import {
-	type Selection,
 	click,
 	emptySelection,
 	extendTo,
 	pruneTo,
+	type Selection,
 	selectAll,
 	toggle,
 	visibleArchived,

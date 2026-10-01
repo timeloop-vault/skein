@@ -15,8 +15,8 @@ import {
 import { withResumeCmds } from "./harnessCmd.ts";
 import { isStorable, nextRepoRoot } from "./repoIdentity.ts";
 import {
-	type DbLoadOutcome,
 	checkProbe,
+	type DbLoadOutcome,
 	inspectFolderMissing,
 	probeFolder,
 	stillExists,

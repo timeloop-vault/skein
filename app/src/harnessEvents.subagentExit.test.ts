@@ -25,7 +25,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("./frontendLog.ts", () => ({ logBoth: vi.fn(), logToRust: vi.fn() }));
 
 import { HARNESS_KINDS } from "./data.tsx";
-import { TRANSITION_SOURCE, atSafeStoppingPoint, harnessActivity } from "./harnessActivity.ts";
+import { atSafeStoppingPoint, harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { statusLabel } from "./harnessActivityLabels.ts";
 import { attachClaudeEvents } from "./harnessEvents.ts";
 import { canSendPrompt } from "./harnessInput.ts";

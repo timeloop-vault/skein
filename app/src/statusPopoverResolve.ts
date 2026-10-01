@@ -3,7 +3,7 @@
 // plus the live harness stores; split out of statusPopover.ts (#460).
 
 import { activityToStatus, harnessActivity } from "./harnessActivity.ts";
-import { type TaskState, resolveTasks } from "./statusPopoverTasks.ts";
+import { resolveTasks, type TaskState } from "./statusPopoverTasks.ts";
 import { subagents } from "./subagents.ts";
 
 // Rows where a lone status dot describes the same harness as the row's

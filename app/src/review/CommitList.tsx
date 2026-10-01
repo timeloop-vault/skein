@@ -9,9 +9,9 @@
 // here attaches to the commit as a whole (D5) — the remark that is
 // about the change rather than about any one line of it.
 
-import type { ThreadHandlers } from "./DiffBody.tsx";
-import { Composer, ThreadView, ago } from "./Thread.tsx";
 import type { ReviewCommit, ReviewThread } from "./api.ts";
+import type { ThreadHandlers } from "./DiffBody.tsx";
+import { ago, Composer, ThreadView } from "./Thread.tsx";
 import "./CommitList.css";
 
 export const CommitList = ({

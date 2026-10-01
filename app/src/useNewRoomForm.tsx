@@ -1,17 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
-import type { CreateRoomArgs, FolderInfoDto, RepoStatus } from "./NewRoomDialogTypes.ts";
-import { folderStatusBlurb } from "./NewRoomStatusBlurb.tsx";
 import { kindHasAgents } from "./agents.ts";
 import { applyBranchTemplate, branchFieldProblem, taskSlug } from "./branchName.ts";
 import { useAgentListing } from "./components.tsx";
+import type { CreateRoomArgs, FolderInfoDto, RepoStatus } from "./NewRoomDialogTypes.ts";
+import { folderStatusBlurb } from "./NewRoomStatusBlurb.tsx";
 import {
+	branchTemplateFor,
 	type DefaultAgents,
 	type FolderDefaults,
 	type NewRoomMemory,
 	type RecentFolder,
-	branchTemplateFor,
 	startingAgent,
 } from "./prefs.ts";
 import type { HarnessKind } from "./types.ts";

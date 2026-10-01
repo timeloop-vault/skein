@@ -1,7 +1,7 @@
 import { type MouseEvent as ReactMouseEvent, useMemo } from "react";
 import { RoomNameInput, StatusDot } from "./components.tsx";
 import { useRoomActivity } from "./harnessActivity.ts";
-import { type StripSegment, groupDisplayName, groupRooms, segmentId } from "./roomGroups.ts";
+import { groupDisplayName, groupRooms, type StripSegment, segmentId } from "./roomGroups.ts";
 import { type RoomDragWiring, useStableRooms } from "./roomStripShared.tsx";
 import "./RoomStrip.css";
 

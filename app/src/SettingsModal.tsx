@@ -11,12 +11,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { CliShimPanel } from "./CliShimPanel.tsx";
 import { NudgesPanel } from "./NudgesPanel.tsx";
+import type { DefaultAgents } from "./prefs.ts";
 import { AboutSettings } from "./SettingsAbout.tsx";
 import { AgentSettings } from "./SettingsAgents.tsx";
 import { AppearanceSettings } from "./SettingsAppearance.tsx";
 import { NotificationSettings } from "./SettingsNotifications.tsx";
 import { SpawnEnvPanel } from "./SpawnEnvPanel.tsx";
-import type { DefaultAgents } from "./prefs.ts";
 import type { Density, HarnessKind, SpawnSettings, Theme } from "./types.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
 import "./Settings.css";

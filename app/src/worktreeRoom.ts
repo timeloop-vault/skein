@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { CreateRoomArgs, FolderInfoDto } from "./NewRoomDialogTypes.ts";
 import {
 	applyBranchTemplate,
 	branchFieldProblem,
@@ -7,6 +6,7 @@ import {
 	templateFromBranch,
 	worktreeLeaf,
 } from "./branchName.ts";
+import type { CreateRoomArgs, FolderInfoDto } from "./NewRoomDialogTypes.ts";
 import type { HarnessKind } from "./types.ts";
 
 // One place that turns "folder + task + harness + branch choice" into a

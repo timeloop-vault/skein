@@ -1,5 +1,5 @@
-import { HChip, StatusDot } from "./HChip.tsx";
 import type { DragProps } from "./dragProps.ts";
+import { HChip, StatusDot } from "./HChip.tsx";
 import type { AgentLabel } from "./harnessAgent.ts";
 import { requestDeliverNow } from "./mailDeliverNow.ts";
 import { useMailHold } from "./mailHold.ts";

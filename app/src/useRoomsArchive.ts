@@ -10,11 +10,11 @@ import {
 	useCallback,
 	useRef,
 } from "react";
-import type { RenameTarget } from "./RoomStrip.tsx";
-import { type CloseRoomAttribution, type RequestResult, decideCloseRoom } from "./agentRequests.ts";
+import { type CloseRoomAttribution, decideCloseRoom, type RequestResult } from "./agentRequests.ts";
 import { confirmDialog } from "./confirmDialog.ts";
 import { filesRegistry } from "./filesRegistry.ts";
 import { unarchiveRoomTransform } from "./harnessCmd.ts";
+import type { RenameTarget } from "./RoomStrip.tsx";
 import {
 	retireRooms as retireRoomsPure,
 	unretireRooms as unretireRoomsPure,

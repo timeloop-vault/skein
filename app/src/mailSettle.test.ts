@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import {
-	NUDGE_SETTLE_MS,
-	evaluateSettlement,
-	settleNudge,
-	shouldRecoverSilence,
-} from "./mailSettle.ts";
 import type {
 	EvaluateSettlementInput,
-	SettleNudgeInput,
 	SettlementActivity,
+	SettleNudgeInput,
+} from "./mailSettle.ts";
+import {
+	evaluateSettlement,
+	NUDGE_SETTLE_MS,
+	settleNudge,
+	shouldRecoverSilence,
 } from "./mailSettle.ts";
 
 // Pure `settleNudge` tests build the input by hand — no store, no DOM,

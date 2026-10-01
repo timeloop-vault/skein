@@ -27,8 +27,8 @@
 // confirmation renders below it.
 
 import {
-	type SignoffStatus,
 	approvePrompt,
+	type SignoffStatus,
 	short,
 	signoffState,
 	staleExplanation,

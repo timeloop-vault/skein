@@ -22,11 +22,11 @@
 
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback } from "react";
-import type { RenameTarget } from "./RoomStrip.tsx";
-import { type RequestResult, decideCloseHarness } from "./agentRequests.ts";
+import { decideCloseHarness, type RequestResult } from "./agentRequests.ts";
 import { confirmDialog } from "./confirmDialog.ts";
 import { filesRegistry } from "./filesRegistry.ts";
 import { harnessActivity } from "./harnessActivity.ts";
+import type { RenameTarget } from "./RoomStrip.tsx";
 import type { Room } from "./types.ts";
 
 export function useHarnessActions(

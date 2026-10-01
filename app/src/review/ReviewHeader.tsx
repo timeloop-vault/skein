@@ -5,9 +5,9 @@
 import type { HarnessCapabilities } from "../data.tsx";
 import type { GateResult } from "../harnessInput.ts";
 import { acceptReview } from "../liveContext/review.ts";
-import { SignoffControl, type SignoffIntent } from "./SignoffControl.tsx";
 import { type ReviewScope, type ReviewScopeData, setBaseRef } from "./api.ts";
 import type { Nudge } from "./nudges.ts";
+import { SignoffControl, type SignoffIntent } from "./SignoffControl.tsx";
 import type { SignoffStatus } from "./signoff.ts";
 import "./ReviewHeader.css";
 

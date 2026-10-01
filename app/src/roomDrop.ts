@@ -2,7 +2,7 @@
 // roomGroups.ts in #461). Pure: both resolvers return a new room array,
 // or the same reference when the drop is a no-op.
 
-import { type RawSegment, computeSegments } from "./roomSegments";
+import { computeSegments, type RawSegment } from "./roomSegments";
 import type { Room } from "./types";
 
 function rawSegmentId(seg: RawSegment): string {

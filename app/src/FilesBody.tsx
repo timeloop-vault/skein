@@ -18,8 +18,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { FileTree } from "./FileTree.tsx";
 import { ImageView } from "./ImageView.tsx";
-import { Splitter } from "./Splitter.tsx";
 import { usePersistedState } from "./prefs.ts";
+import { Splitter } from "./Splitter.tsx";
 import { useFileBuffers } from "./useFileBuffers.ts";
 import "./FilesBody.css";
 import "./markdown.css";

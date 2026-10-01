@@ -6,9 +6,9 @@
 import { HChip } from "../components.tsx";
 import { acceptReview, rejectReview } from "../liveContext/review.ts";
 import type { HarnessKind } from "../types.ts";
+import { addThread, type ReviewFile, type ReviewScope, type ReviewThread } from "./api.ts";
 import type { ThreadHandlers } from "./DiffBody.tsx";
 import { Composer, type DesignLink, ThreadView } from "./Thread.tsx";
-import { type ReviewFile, type ReviewScope, type ReviewThread, addThread } from "./api.ts";
 import "./ReviewFileBar.css";
 
 export const ReviewFileBar = ({

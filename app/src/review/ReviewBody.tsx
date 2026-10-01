@@ -5,17 +5,17 @@
 
 import type { ReviewHunk } from "../liveContext/review.ts";
 import type { HarnessKind } from "../types.ts";
-import { CommitList } from "./CommitList.tsx";
-import { DiffBody, type LineSelection, type ThreadHandlers } from "./DiffBody.tsx";
-import { ImageDiff } from "./ImageDiff.tsx";
 import {
+	addThread,
 	type ReviewFileDetail,
 	type ReviewScope,
 	type ReviewScopeData,
 	type ReviewThread,
-	addThread,
 } from "./api.ts";
-import { type SvgViewMode, chooseReviewBody, isSvgPath } from "./imageDiffModel.ts";
+import { CommitList } from "./CommitList.tsx";
+import { DiffBody, type LineSelection, type ThreadHandlers } from "./DiffBody.tsx";
+import { ImageDiff } from "./ImageDiff.tsx";
+import { chooseReviewBody, isSvgPath, type SvgViewMode } from "./imageDiffModel.ts";
 
 export const ReviewBody = ({
 	roomId,

@@ -7,15 +7,15 @@
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-	type ElementThread,
-	type WrittenSeen,
 	buildLocateAnchors,
 	buildPins,
+	type ElementThread,
 	pinNumbers,
-	placeThreads,
 	placementSignature,
+	placeThreads,
 	seenWrites,
 	unplaced,
+	type WrittenSeen,
 } from "./designComments.ts";
 import { subscribeDesignFocus, takeDesignFocus } from "./designFocus.ts";
 import type { Beacon, HostMessage } from "./designPreview.ts";

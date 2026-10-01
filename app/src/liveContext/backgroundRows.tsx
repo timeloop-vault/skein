@@ -4,9 +4,9 @@
 // deliberately not rendered — noise.
 
 import type { HarnessKind } from "../types.ts";
-import { Row, formatDuration } from "./Row.tsx";
 import { backgroundEndView } from "./backgroundEnd.ts";
 import type { Payload } from "./payload.ts";
+import { formatDuration, Row } from "./Row.tsx";
 
 export const BackgroundEndRow = ({
 	payload,

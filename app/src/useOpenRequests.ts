@@ -20,7 +20,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { MutableRefObject } from "react";
 import { useCallback, useEffect, useRef } from "react";
 import { confirmDialog } from "./confirmDialog.ts";
-import { type OpenTarget, decideOpen } from "./openRequest.ts";
+import { decideOpen, type OpenTarget } from "./openRequest.ts";
 import type { Room } from "./types.ts";
 
 export function useOpenRequests(

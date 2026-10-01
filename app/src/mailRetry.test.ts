@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { automaticGate, decideMailNudge } from "./mailNudge.ts";
 import type { DecideMailNudgeInput } from "./mailNudge.ts";
-import { MAIL_RETRY_WINDOW_MS, mailPending, nextMailRetry } from "./mailRetry.ts";
+import { automaticGate, decideMailNudge } from "./mailNudge.ts";
 import type { NextMailRetryInput } from "./mailRetry.ts";
+import { MAIL_RETRY_WINDOW_MS, mailPending, nextMailRetry } from "./mailRetry.ts";
 
 const retryInput = (over: Partial<NextMailRetryInput> = {}): NextMailRetryInput => ({
 	pending: true,

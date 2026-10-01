@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TRANSITION_SOURCE, stillRunningSummary } from "./harnessActivity.ts";
+import { stillRunningSummary, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { waitingNote } from "./harnessActivityLabels.ts";
 
 describe("stillRunningSummary", () => {

@@ -4,10 +4,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { FolderInfoDto } from "./NewRoomDialog.tsx";
 import {
-	type IdentityCheck,
-	type RepoIdentityDto,
 	compareIdentity,
+	type IdentityCheck,
 	identityFromDto,
+	type RepoIdentityDto,
 } from "./repoIdentity.ts";
 import type { Harness, RepoIdentity, Room } from "./types.ts";
 

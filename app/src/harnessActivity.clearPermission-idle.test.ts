@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { TRANSITION_SOURCE, harnessActivity } from "./harnessActivity.ts";
+import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 
 // #298 — `clearPermission` must be a no-op from `idle`, same as the
 // other non-`permission` phases covered in `harnessActivity.test.ts`.

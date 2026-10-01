@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
-import type { FolderInfoDto } from "./NewRoomDialogTypes.ts";
 import { worktreeLeaf } from "./branchName.ts";
+import type { FolderInfoDto } from "./NewRoomDialogTypes.ts";
 
 // Split out of `useNewRoomForm.tsx` (#461): the debounced probe for the
 // worktree a submit would create.

@@ -16,14 +16,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { useRef } from "react";
-import type { CreateRoomArgs } from "./NewRoomDialog.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
 import { cmdForKind } from "./harnessCmd.ts";
 import {
-	type CreateHarnessResult,
-	type CreateRoomResult,
 	buildHarness,
 	buildRoom,
+	type CreateHarnessResult,
+	type CreateRoomResult,
 	claimedSessionIdsOf,
 	harnessDisplayName,
 	newId,
@@ -31,6 +30,7 @@ import {
 	withCapturedSessionId,
 	withReplacedSessionId,
 } from "./harnessCreation.ts";
+import type { CreateRoomArgs } from "./NewRoomDialog.tsx";
 import { captureOpencodeSessionId } from "./opencodeCapture.ts";
 import { defaultRoomName } from "./roomName.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";

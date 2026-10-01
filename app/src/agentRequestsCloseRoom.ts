@@ -1,4 +1,4 @@
-import { type RequestResult, asRecord, isOmitted } from "./agentRequestsShared.ts";
+import { asRecord, isOmitted, type RequestResult } from "./agentRequestsShared.ts";
 import type { Room } from "./types.ts";
 
 // ── close_room ──────────────────────────────────────────────────────

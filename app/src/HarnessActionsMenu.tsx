@@ -19,7 +19,7 @@ import { hasClaudeTranscriptTail } from "./harnessEvents.ts";
 import { canSendPrompt, harnessInput, sendPrompt } from "./harnessInput.ts";
 import { actionNudges } from "./nudgeRegistry.ts";
 import { useNudgeOverrides } from "./nudgeStore.ts";
-import { type RepoSkill, loadRepoSkills } from "./repoSkills.ts";
+import { loadRepoSkills, type RepoSkill } from "./repoSkills.ts";
 import type { Harness } from "./types.ts";
 import "./HarnessActionsMenu.css";
 

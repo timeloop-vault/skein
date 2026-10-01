@@ -6,7 +6,7 @@
 // Everything here operates on plain `Room[]` snapshots and returns new
 // arrays (or, where noted, the same reference) rather than mutating.
 
-import { type RawSegment, type StripSegment, computeSegments } from "./roomSegments";
+import { computeSegments, type RawSegment, type StripSegment } from "./roomSegments";
 import type { Room } from "./types";
 
 export { resolveRowDrop, resolveTopDrop } from "./roomDrop";

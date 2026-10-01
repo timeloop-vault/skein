@@ -15,8 +15,8 @@ import { type SyntheticEvent, useEffect, useState } from "react";
 import { ImageFrame } from "../ImageView.tsx";
 import { describeImageError, formatBytes, parseImageError } from "../imageFiles.ts";
 import { type ImageLoadState, useImageBytes } from "../imageLoad.ts";
-import { type ReviewScope, type ImageDiffSide as Side, fetchImageBytes } from "./api.ts";
-import { type SideStatus, modesAvailable, sidesForChange } from "./imageDiffModel.ts";
+import { fetchImageBytes, type ReviewScope, type ImageDiffSide as Side } from "./api.ts";
+import { modesAvailable, type SideStatus, sidesForChange } from "./imageDiffModel.ts";
 import "./ImageDiff.css";
 
 type Mode = "side-by-side" | "swap" | "onion";
