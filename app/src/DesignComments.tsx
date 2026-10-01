@@ -14,6 +14,7 @@ import {
 	resolveThread,
 } from "./review/api.ts";
 import "./design.css";
+import "./FilesBody.css";
 
 /** One thread in the side list. */
 const ElementThreadItem = ({

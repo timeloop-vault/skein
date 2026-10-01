@@ -3,6 +3,7 @@ import { RoomNameInput, StatusDot } from "./components.tsx";
 import { useRoomActivity } from "./harnessActivity.ts";
 import { type StripSegment, groupDisplayName, groupRooms, segmentId } from "./roomGroups.ts";
 import { type RoomDragWiring, useStableRooms } from "./roomStripShared.tsx";
+import "./RoomStrip.css";
 
 /// A TOP-LEVEL group tab: same two-line shape as a room tab (so a
 /// group reads as a tab, not a different kind of chrome) but its own

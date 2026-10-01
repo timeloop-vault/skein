@@ -1,6 +1,7 @@
 import type { ComponentProps } from "react";
 import { GroupRow, type RenameTarget, RoomStrip } from "./RoomStrip.tsx";
 import type { StripSegment } from "./roomGroups.ts";
+import "./RoomStrip.css";
 
 type StripProps = ComponentProps<typeof RoomStrip>;
 

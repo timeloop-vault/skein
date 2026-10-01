@@ -1,0 +1,21 @@
+/* Workspace */
+.sk-workspace {
+	flex: 1;
+	display: flex;
+	min-height: 0;
+	background: var(--bg-1);
+}
+
+/* Right pane */
+.sk-right {
+	flex: 1.05;
+	display: flex;
+	flex-direction: column;
+	background: var(--bg-1);
+	min-width: 0;
+	/* Without min-height:0 a flex item's min size is its content height,
+	   so the Live Context card stack would grow past the window instead
+	   of letting each card body scroll. Matches the splitter panes. */
+	min-height: 0;
+	overflow: hidden;
+}

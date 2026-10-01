@@ -1,0 +1,138 @@
+/* Shared chip + StatusDot (.st-*) atoms. Imported by HChip.tsx and components.tsx. */
+/* The ◇ chip: Files isn't a process, so no coloured process chip —
+   an accent glyph on a transparent ground (design handover §2). */
+.h-chip.h-files {
+	background: transparent;
+	color: var(--accent);
+}
+.h-chip.h-design {
+	background: transparent;
+	color: var(--accent);
+}
+
+/* Harness chips. #68: size driven by the density --chip token (one
+   scale, not five inline magic numbers), floored at 12px via the
+   density values. */
+.h-chip {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-family: var(--sk-mono);
+	font-weight: 700;
+	color: #fff;
+	width: var(--chip, 13px);
+	height: var(--chip, 13px);
+	font-size: calc(var(--chip, 13px) * 0.6);
+	border-radius: calc(var(--chip, 13px) / 4);
+	flex: 0 0 auto;
+}
+/* The two deliberate size exceptions, by context (not magic number):
+   the small harness glyphs under a room tab, and the big chip in the
+   harness pickers (add-harness picker + new-room kind cards). */
+.sk-tab .row-2 .h-chip {
+	/* compact summary glyphs — smaller than a full chip but still track
+	   the chrome font (≈10px at the 12pt default). #137 */
+	--chip: calc(var(--cfs, 12px) * 0.83);
+}
+.sk-harness-card .h-chip,
+.sk-radio-card .h-chip {
+	/* big picker chips (≈18px at 12pt). #137 */
+	--chip: calc(var(--cfs, 12px) * 1.5);
+}
+.h-claude {
+	background: #c96442;
+}
+.h-opencode {
+	background: #5b8a72;
+}
+.h-copilot {
+	background: #4a6b9a;
+}
+.h-byoh {
+	background: #8a7a4a;
+}
+
+/* Status dots — #68: each state has a distinct hue AND a distinct
+   shape (carried entirely by box-shadow / border-radius, so the markup
+   is unchanged), so colour is never the only cue (colour-blind safety):
+   running → disc, waiting → target, permission → target + "!" glyph +
+   a faster pulse, idle → hollow ring, error/exited → square ring. */
+.st-running {
+	background: var(--st-running);
+	box-shadow: 0 0 6px color-mix(in srgb, var(--st-running) 70%, transparent);
+}
+/* waiting → amber "target": filled centre + a gap ring + an outer ring,
+   pulsing. The gap ring uses --bg-0 (the tab-strip / status-bar surface
+   these dots live on). */
+.st-waiting {
+	background: var(--st-waiting);
+	box-shadow: 0 0 0 2px var(--bg-0), 0 0 0 3.5px var(--st-waiting);
+	animation: sk-pulse 1.6s ease-in-out infinite;
+}
+/* #86: permission is a harder stop than waiting, so it doesn't just
+   borrow waiting's target shape with a different hue — a bold "!"
+   glyph and a noticeably faster pulse (0.9s vs 1.6s) make it readable
+   as "more urgent" without relying on colour alone. */
+.st-permission {
+	position: relative;
+	background: var(--st-permission);
+	box-shadow: 0 0 0 2px var(--bg-0), 0 0 0 3.5px var(--st-permission);
+	animation: sk-pulse 0.9s ease-in-out infinite;
+}
+.st-permission::after {
+	content: "!";
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-family: var(--sk-mono);
+	font-weight: 700;
+	line-height: 1;
+	font-size: 7px;
+	color: var(--bg-0);
+}
+/* L2c-1: suppress the pulse on dots the user is *already looking at* —
+   active harness/room tab and the bottom status bar's current-harness
+   chip. The pulse is an attention-grabber for inactive surfaces; once
+   you're on the harness, Claude's prompt is on screen and the pulsing
+   dot becomes nag-noise. The urgent indicator is excluded by selector
+   specificity (it lives inside .sk-statusbar but with its own class)
+   so it keeps pulsing for the inactive room it points at. */
+.sk-harness-tab.active .st-waiting,
+.sk-tab.active .st-waiting,
+.sk-statusbar > .seg:not(.sk-statusbar-urgent) .st-waiting,
+.sk-harness-tab.active .st-permission,
+.sk-tab.active .st-permission,
+.sk-statusbar > .seg:not(.sk-statusbar-urgent) .st-permission {
+	animation: none;
+}
+/* #68: honour the OS reduced-motion setting (replaces the prototype's
+   manual toggle). */
+@media (prefers-reduced-motion: reduce) {
+	.st-waiting,
+	.st-permission {
+		animation: none;
+	}
+}
+/* idle → hollow ring (was a near-invisible dark disc on --bg-0). */
+.st-idle {
+	background: transparent;
+	box-shadow: inset 0 0 0 2px var(--st-idle);
+}
+/* error / exited → square ring. */
+.st-error,
+.st-exited {
+	background: transparent;
+	border-radius: 2px;
+	box-shadow: inset 0 0 0 2px var(--st-error);
+}
+@keyframes sk-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.4;
+	}
+}

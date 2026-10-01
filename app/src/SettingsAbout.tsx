@@ -6,6 +6,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { check } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useState } from "react";
+import "./Settings.css";
 
 type UpdateState =
 	| { status: "idle" }

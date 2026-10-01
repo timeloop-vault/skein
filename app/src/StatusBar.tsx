@@ -7,6 +7,7 @@ import { HChip } from "./components.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity, statusLabel } from "./harnessActivity.ts";
 import type { Harness, Room } from "./types.ts";
+import "./StatusBar.css";
 
 export const StatusBar = ({
 	activeHarness,

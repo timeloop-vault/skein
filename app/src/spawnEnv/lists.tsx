@@ -1,4 +1,5 @@
 import type { EnvVar } from "../types.ts";
+import "../SpawnEnvPanel.css";
 
 /** A list of freeform strings with add / remove / reorder. */
 export const StringList = ({

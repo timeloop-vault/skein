@@ -15,6 +15,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { ConfirmDialogRequest } from "./confirmDialog.ts";
 import { getSnapshot, resolveConfirmDialog, subscribe } from "./confirmDialog.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
+import "./modal.css";
 
 export const ConfirmDialogHost = () => {
 	const request = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);

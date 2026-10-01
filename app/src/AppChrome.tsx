@@ -1,5 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { hints, isMac, modLabel } from "./shortcuts.ts";
+import "./AppChrome.css";
+import "./empty.css";
 
 // ── Empty state ────────────────────────────────────────────────────
 

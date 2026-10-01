@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { Titlebar, type TitlebarProps } from "./AppChrome.tsx";
 import { isMac } from "./shortcuts.ts";
+import "./AppChrome.css";
+import "./boot.css";
 
 // The `.sk-app` root every render path of App shares: theme, density,
 // platform marker and the chrome font-size variable.

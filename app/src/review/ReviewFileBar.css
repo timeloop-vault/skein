@@ -1,0 +1,71 @@
+/* ── the open file's bar ─────────────────────────────────────────── */
+
+.rv-filebar {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 8px;
+	background: var(--bg-2);
+	border-bottom: 1px solid var(--line);
+}
+.rv-filebar-path {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	direction: rtl;
+	text-align: left;
+	color: var(--fg-1);
+	font-size: 0.9em;
+}
+
+/* ── verbs (#211, now living in the pending scope) ───────────────── */
+
+.rv-verbs {
+	display: flex;
+	gap: 2px;
+}
+.rv-act {
+	background: none;
+	border: 1px solid transparent;
+	border-radius: 3px;
+	color: var(--fg-3);
+	font-family: var(--sk-mono);
+	font-size: 0.9em;
+	padding: 0 5px;
+	cursor: pointer;
+}
+.rv-act:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+/* Never the same colour: ✓ reads as "done with this", ↶ as "undo
+   this", and the two are not symmetric operations. */
+.rv-act.accept:hover:not(:disabled) {
+	color: var(--ok);
+	border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+.rv-act.reject:hover:not(:disabled) {
+	color: var(--err);
+	border-color: color-mix(in srgb, var(--err) 40%, transparent);
+}
+.rv-act.all {
+	color: var(--fg-2);
+	border-color: var(--line-strong);
+	font-size: 0.85em;
+}
+.rv-act.all:hover:not(:disabled) {
+	color: var(--ok);
+}
+.rv-act.nudge {
+	color: var(--fg-2);
+	border-color: var(--line-strong);
+	font-size: 0.85em;
+}
+.rv-act.nudge:hover:not(:disabled) {
+	color: var(--accent);
+}

@@ -12,6 +12,8 @@ import { SettingsModal } from "./SettingsModal.tsx";
 import { Toast, type ToastEntry } from "./notifications.tsx";
 import type { DefaultAgents, FolderDefaults, NewRoomMemory, RecentFolder } from "./prefs.ts";
 import type { Room } from "./types.ts";
+import "./AppOverlays.css";
+import "./notifications.css";
 
 export const AppOverlays = ({
 	showNewRoom,

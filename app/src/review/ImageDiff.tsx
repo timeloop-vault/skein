@@ -17,6 +17,7 @@ import { describeImageError, formatBytes, parseImageError } from "../imageFiles.
 import { type ImageLoadState, useImageBytes } from "../imageLoad.ts";
 import { type ReviewScope, type ImageDiffSide as Side, fetchImageBytes } from "./api.ts";
 import { type SideStatus, modesAvailable, sidesForChange } from "./imageDiffModel.ts";
+import "./ImageDiff.css";
 
 type Mode = "side-by-side" | "swap" | "onion";
 

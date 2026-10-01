@@ -1,0 +1,97 @@
+/* Harness column */
+.sk-harness-col {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	/* `min-height: 0` + `overflow: hidden` stop xterm's canvas from
+	   pushing this column taller when the user bumps the terminal
+	   font size. Without these, xterm's now-larger canvas doesn't
+	   fit the previous-cycle row count and grows the column instead
+	   of being clipped — fit then reads the stretched parent height,
+	   computes the same rows count back, and the grid stays
+	   overflowed (#16). */
+	min-height: 0;
+	overflow: hidden;
+	background: var(--bg-1);
+}
+
+.sk-harness-tabs {
+	flex: 0 0 calc(var(--cfs, 12px) * 2.83);
+	height: calc(var(--cfs, 12px) * 2.83);
+	display: flex;
+	align-items: stretch;
+	padding: 0 6px;
+	gap: 2px;
+	background: var(--bg-1);
+	border-bottom: 1px solid var(--line);
+}
+/* #49 phase A: the tab list scrolls; `+ harness` stays pinned after
+   it (many-harness rooms used to push the button off-screen at
+   laptop width — the pinning is load-bearing, design README). */
+.sk-harness-tablist {
+	/* position:relative makes this the tabs' offsetParent, so the
+	   scroll-follow effect's offsetLeft math is tablist-relative. */
+	position: relative;
+	display: flex;
+	align-items: stretch;
+	gap: 2px;
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow-x: auto;
+	scrollbar-width: none;
+	/* Let the active tab's seam-hiding ::after (bottom: -1px) escape
+	   the scrollport so it still paints over the row's border. */
+	margin-bottom: -1px;
+	padding-bottom: 1px;
+}
+.sk-harness-tablist::-webkit-scrollbar {
+	display: none;
+}
+.sk-harness-tab {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 10px;
+	border-radius: 5px 5px 0 0;
+	color: var(--fg-2);
+	font-size: 0.96em;
+	cursor: pointer;
+	position: relative;
+	margin-top: 4px;
+	height: calc(var(--cfs, 12px) * 2.5);
+	border: 1px solid transparent;
+	border-bottom: none;
+	/* #271: see .sk-tab's same properties. */
+	-webkit-user-select: none;
+	user-select: none;
+	touch-action: none;
+}
+.sk-harness-tab:hover {
+	color: var(--fg-1);
+}
+.sk-harness-tab.active {
+	background: var(--bg-2);
+	color: var(--fg-0);
+	border-color: var(--line);
+}
+.sk-harness-tab.active::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: -1px;
+	height: 1px;
+	background: var(--bg-2);
+}
+
+.sk-harness-meta {
+	margin-left: auto;
+	align-self: center;
+	font-family: var(--sk-mono);
+	font-size: 0.83em;
+	color: var(--fg-2);
+	padding-right: 8px;
+	display: flex;
+	gap: 12px;
+}

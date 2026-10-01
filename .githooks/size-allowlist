@@ -7,6 +7,3 @@
 # A refactor PR that brings a file under its limit deletes its entry here
 # (the hook reminds you).
 app/src-tauri/src/lib.rs 1390 #456
-app/src/liveContext/activity.css 542 #462
-app/src/review/review.css 1041 #462
-app/src/styles.css 2966 #462

@@ -2,3 +2,21 @@
 .sk-dragging iframe {
 	pointer-events: none;
 }
+
+/* Splitter divider — handles for resizable panes */
+.sk-splitter-x,
+.sk-splitter-y {
+	flex: 0 0 4px;
+	background: var(--line);
+	transition: background 0.12s;
+}
+.sk-splitter-x {
+	cursor: col-resize;
+}
+.sk-splitter-y {
+	cursor: row-resize;
+}
+.sk-splitter-x:hover,
+.sk-splitter-y:hover {
+	background: var(--accent);
+}

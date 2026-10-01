@@ -1,0 +1,84 @@
+.sk-statusbar-agent .pk {
+	color: var(--fg-3);
+}
+
+/* Status bar */
+.sk-statusbar {
+	flex: 0 0 calc(var(--cfs, 12px) * 2);
+	height: calc(var(--cfs, 12px) * 2);
+	display: flex;
+	align-items: center;
+	background: var(--bg-0);
+	border-top: 1px solid var(--line);
+	padding: 0 10px;
+	gap: 14px;
+	font-family: var(--sk-mono);
+	font-size: 0.83em;
+	color: var(--fg-2);
+	letter-spacing: 0.02em;
+}
+.sk-statusbar .seg {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.sk-statusbar .spacer {
+	flex: 1;
+}
+.sk-statusbar .dot-tiny {
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+}
+/* #86: the "!" glyph reads fine at the full 8px tab-dot size but not
+   at this 5px mini dot — drop it here and lean on colour + the ring
+   box-shadow (still present) plus the adjoining text label instead. */
+.sk-statusbar .dot-tiny.st-permission::after {
+	content: none;
+}
+/* L5d — urgent segment. Highlights a non-active room that has
+   pending notifications so the user has a single click to jump
+   to whatever needs attention most. */
+.sk-statusbar-urgent {
+	cursor: pointer;
+	color: var(--fg-0);
+	padding: 0 6px;
+	border-left: 1px solid var(--line);
+}
+.sk-statusbar-urgent:hover {
+	color: var(--accent);
+}
+.sk-statusbar-urgent .dot-tiny {
+	background: var(--waiting);
+	box-shadow: 0 0 6px var(--waiting);
+}
+/* #86: the permission-ranked urgent segment gets its own colour
+   instead of the generic --waiting one above — three classes beats
+   two on specificity, so this wins regardless of source order. */
+.sk-statusbar-urgent .dot-tiny.st-permission {
+	background: var(--st-permission);
+	box-shadow: 0 0 6px var(--st-permission);
+}
+.sk-statusbar-urgent-count {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 14px;
+	height: 14px;
+	padding: 0 4px;
+	border-radius: 7px;
+	background: var(--accent);
+	color: var(--bg-0);
+	font-size: calc(var(--cfs) * 0.75);
+	font-weight: 600;
+}
+.sk-statusbar-cwd {
+	color: var(--fg-3);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 50ch;
+	direction: rtl;
+	text-align: left;
+}

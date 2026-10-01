@@ -6,6 +6,7 @@ import { HChip } from "../components.tsx";
 import type { HarnessKind } from "../types.ts";
 import { FileList } from "./FileList.tsx";
 import type { ReviewFile } from "./api.ts";
+import "./ReviewFileSection.css";
 
 export const ReviewFileSection = ({
 	files,

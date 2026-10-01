@@ -5,6 +5,7 @@ import { HChip } from "./components.tsx";
 import { isWindows } from "./shortcuts.ts";
 import type { ToastEntry } from "./toastStack.ts";
 import { toastRemainingMs } from "./toastStack.ts";
+import "./notifications.css";
 
 // ── Toasts (in-app notifications, L5c) ─────────────────────────────
 //

@@ -1,0 +1,96 @@
+/* ── diff body ───────────────────────────────────────────────────── */
+
+.rv-body {
+	flex: 1;
+	min-height: 0;
+	line-height: 1.55;
+	padding: 4px 0;
+}
+.rv-hunk-sep {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 8px;
+	color: var(--fg-3);
+	font-size: 0.8em;
+	background: color-mix(in srgb, var(--line) 50%, transparent);
+}
+.rv-hunk-range {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.rv-line {
+	display: flex;
+	align-items: flex-start;
+	padding: 0 8px 0 0;
+	min-height: 17px;
+	position: relative;
+}
+.rv-line.add {
+	background: var(--diff-add);
+}
+.rv-line.del {
+	background: var(--diff-del);
+}
+/* Lines currently gathered into a pending comment anchor. */
+.rv-line.picked {
+	background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.rv-line .gutter {
+	flex: 0 0 74px;
+	display: flex;
+	align-items: center;
+	color: var(--fg-3);
+	font-size: 0.85em;
+	/* The same line box as .src despite the smaller font, so with the
+	   row top-aligned the numbers sit on a wrapped line's first row (#303). */
+	line-height: calc(1.55 / 0.85);
+	user-select: none;
+}
+.rv-line .gutter .ln {
+	flex: 1;
+	text-align: right;
+	padding: 0 4px;
+}
+/* The comment affordance. Hidden until the row is hovered so twenty
+   plus-signs do not compete with the code for attention. */
+.rv-add {
+	flex: 0 0 16px;
+	visibility: hidden;
+	background: var(--accent);
+	color: var(--bg-0);
+	border: 0;
+	border-radius: 3px;
+	font-size: 0.85em;
+	line-height: 1.2;
+	margin: 0 2px;
+	cursor: pointer;
+	padding: 0;
+}
+.rv-line:hover .rv-add,
+.rv-line.picked .rv-add {
+	visibility: visible;
+}
+.rv-line .marker {
+	flex: 0 0 14px;
+	text-align: center;
+	color: var(--fg-3);
+}
+.rv-line.add .marker {
+	color: var(--ok);
+}
+.rv-line.del .marker {
+	color: var(--err);
+}
+.rv-line .src {
+	/* Soft wrap long lines (#303); overflow-wrap catches tokens with no
+	   break opportunity, and flex:1 keeps continuation rows in the text
+	   column rather than under the gutter. */
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	flex: 1;
+	min-width: 0;
+}

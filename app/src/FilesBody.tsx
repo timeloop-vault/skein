@@ -21,6 +21,8 @@ import { ImageView } from "./ImageView.tsx";
 import { Splitter } from "./Splitter.tsx";
 import { usePersistedState } from "./prefs.ts";
 import { useFileBuffers } from "./useFileBuffers.ts";
+import "./FilesBody.css";
+import "./markdown.css";
 
 interface FilesBodyProps {
 	harnessId: string;

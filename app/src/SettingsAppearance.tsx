@@ -3,6 +3,7 @@
 
 import { isMac } from "./shortcuts.ts";
 import type { Density, Theme } from "./types.ts";
+import "./Settings.css";
 
 const DENSITY_OPTIONS: { value: Density; label: string; desc: string }[] = [
 	{ value: "compact", label: "Compact", desc: "Tightest. More on screen at once." },

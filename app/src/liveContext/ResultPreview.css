@@ -1,0 +1,70 @@
+/* Live Context — tool-result expansion preview (issue #80). Imported by
+   ResultPreview.tsx. */
+
+/* Tool-result expansion preview (D2c). */
+.lc-row-preview {
+	grid-column: 3 / -1;
+	margin: 4px 0 2px;
+	padding: 6px 8px;
+	background: var(--bg-0);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	font-size: calc(var(--cfs) * 0.875);
+	color: var(--fg-1);
+	line-height: 1.5;
+	position: relative;
+}
+/* The body is the scroll region — NOT the whole block — so the head (with
+   the collapse control) stays pinned above and never scrolls away. */
+.lc-row-preview pre.body {
+	margin: 0;
+	font: inherit;
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 4.5em;
+	overflow: hidden;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bg-3) transparent;
+}
+.lc-row-preview.tall pre.body {
+	max-height: 16em;
+	overflow-y: auto;
+}
+.lc-row-preview pre.body::-webkit-scrollbar {
+	width: 7px;
+}
+.lc-row-preview pre.body::-webkit-scrollbar-thumb {
+	background: var(--bg-3);
+	border-radius: 4px;
+}
+.lc-row-preview .head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: calc(var(--cfs) * 0.7917);
+	color: var(--fg-3);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	margin-bottom: 4px;
+}
+.lc-row-preview .head .size {
+	margin-left: auto;
+}
+.lc-row-preview .expand-link {
+	color: var(--accent);
+	cursor: pointer;
+	font-size: calc(var(--cfs) * 0.7917);
+	background: none;
+	border: 0;
+	padding: 0;
+	font-family: var(--sk-mono);
+	letter-spacing: inherit;
+	text-transform: inherit;
+}
+.lc-row-preview .expand-link:hover {
+	text-decoration: underline;
+}
+.lc-row-preview.api-error {
+	background: color-mix(in srgb, var(--err) 6%, var(--bg-0));
+	border-color: color-mix(in srgb, var(--err) 35%, var(--line));
+}

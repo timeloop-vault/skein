@@ -21,6 +21,7 @@ import { actionNudges } from "./nudgeRegistry.ts";
 import { useNudgeOverrides } from "./nudgeStore.ts";
 import { type RepoSkill, loadRepoSkills } from "./repoSkills.ts";
 import type { Harness } from "./types.ts";
+import "./HarnessActionsMenu.css";
 
 interface TextDto {
 	content: string;

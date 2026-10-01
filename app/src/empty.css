@@ -1,0 +1,85 @@
+/* Empty state */
+.sk-empty {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	background: var(--bg-1);
+	padding: 40px;
+	gap: 22px;
+}
+.sk-empty .glyph {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 4.6667);
+	color: var(--accent);
+	line-height: 1;
+	letter-spacing: -0.04em;
+}
+.sk-empty h1 {
+	margin: 0;
+	font-size: calc(var(--cfs) * 1.8333);
+	font-weight: 500;
+	color: var(--fg-0);
+	letter-spacing: -0.02em;
+}
+.sk-empty .lede {
+	color: var(--fg-1);
+	max-width: 520px;
+	text-align: center;
+	line-height: 1.6;
+	font-size: calc(var(--cfs) * 1.0833);
+}
+.sk-empty .hint-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.9167);
+	color: var(--fg-2);
+	margin-top: 8px;
+}
+.sk-empty .hint-list .row {
+	display: flex;
+	gap: 14px;
+	align-items: baseline;
+}
+.sk-empty .hint-list .kbd {
+	color: var(--fg-1);
+	background: var(--bg-2);
+	border: 1px solid var(--line);
+	border-radius: 3px;
+	padding: 2px 6px;
+	font-size: calc(var(--cfs) * 0.8333);
+}
+.sk-empty .start-btn {
+	margin-top: 4px;
+	padding: 10px 18px;
+	background: var(--accent);
+	color: #fff;
+	font-family: var(--sk-sans);
+	font-size: calc(var(--cfs) * 1);
+	font-weight: 500;
+	border: 0;
+	border-radius: 6px;
+	cursor: pointer;
+}
+.sk-empty-reopen {
+	margin-top: 8px;
+	padding: 6px 12px;
+	background: transparent;
+	color: var(--fg-2);
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.9167);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	cursor: pointer;
+}
+.sk-empty-reopen:hover {
+	color: var(--fg-0);
+	border-color: var(--line-strong);
+	background: var(--bg-2);
+}
+.sk-empty .start-btn:hover {
+	filter: brightness(1.08);
+}

@@ -4,6 +4,8 @@
 
 // The two-step "+ harness" picker (kind, then agent) moved to its own
 // module (#19).
+import "./components.css";
+
 export {
 	HarnessPicker,
 	NO_REVIEW_TOOLS_TITLE,

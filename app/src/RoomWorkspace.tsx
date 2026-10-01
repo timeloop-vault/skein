@@ -10,6 +10,7 @@ import type { useHarnessActions } from "./useHarnessActions.ts";
 import type { useHarnessCreation } from "./useHarnessCreation.ts";
 import type { useRoomsStore } from "./useRoomsStore.ts";
 import type { useTabDrag } from "./useTabDrag.ts";
+import "./RoomWorkspace.css";
 
 type Store = ReturnType<typeof useRoomsStore>;
 type Settings = ReturnType<typeof useAppSettings>;

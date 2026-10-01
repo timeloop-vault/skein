@@ -1,0 +1,136 @@
+/* ── #49: Files harness (browse + view in the body slot) ───────── */
+.sk-files-nocwd {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--fg-3);
+	font-family: var(--sk-mono);
+	font-size: 11px;
+}
+/* ── #185: Files editor — buffer tabs + CodeMirror ─────────────── */
+.sk-files-body {
+	flex: 1;
+	display: flex;
+	min-height: 0;
+	min-width: 0;
+}
+.fp-editor-col {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	background: var(--bg-0);
+	position: relative;
+}
+.fp-buftabs {
+	height: 32px;
+	flex: 0 0 32px;
+	display: flex;
+	align-items: stretch;
+	background: var(--bg-0);
+	border-bottom: 1px solid var(--line);
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+.fp-buftabs::-webkit-scrollbar {
+	display: none;
+}
+.fp-buftab {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding: 0 12px;
+	font-family: var(--sk-mono);
+	font-size: 11px;
+	color: var(--fg-2);
+	cursor: pointer;
+	border-right: 1px solid var(--line);
+	position: relative;
+	white-space: nowrap;
+}
+.fp-buftab.active {
+	background: var(--bg-1);
+	color: var(--fg-0);
+}
+.fp-buftab.active::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: 2px;
+	background: var(--accent);
+}
+.fp-buftab .x {
+	color: var(--fg-3);
+	padding: 0 2px;
+}
+.fp-buftab .x:hover {
+	color: var(--fg-0);
+}
+.fp-buftab .dot {
+	color: var(--fg-0);
+	font-size: 9px;
+	padding: 0 2px;
+	cursor: pointer;
+}
+.fp-notice {
+	padding: 5px 12px;
+	font-family: var(--sk-mono);
+	font-size: 11px;
+	color: var(--fg-2);
+	background: var(--bg-1);
+	border-bottom: 1px solid var(--line);
+}
+.fp-notice.warn {
+	color: var(--warn);
+	cursor: pointer;
+}
+.fp-code {
+	flex: 1;
+	min-height: 0;
+}
+.fp-code .cm-editor {
+	height: 100%;
+}
+.fp-empty {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	color: var(--fg-3);
+}
+.fp-empty .glyph {
+	font-family: var(--sk-mono);
+	font-size: 36px;
+	color: var(--fg-2);
+}
+.fp-empty .title {
+	font-family: var(--sk-mono);
+	font-size: 13px;
+	color: var(--fg-1);
+}
+.fp-empty .hint {
+	font-size: 11px;
+}
+.fp-confirm {
+	position: absolute;
+	bottom: 14px;
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	background: var(--bg-1);
+	border: 1px solid var(--line-strong);
+	border-radius: 8px;
+	padding: 8px 14px;
+	box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+	font-size: 12px;
+	z-index: 5;
+	white-space: nowrap;
+}

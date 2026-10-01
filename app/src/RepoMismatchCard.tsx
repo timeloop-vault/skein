@@ -5,6 +5,7 @@
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { Room } from "./types.ts";
+import "./boot.css";
 
 interface RepoMismatchCardProps {
 	room: Room;

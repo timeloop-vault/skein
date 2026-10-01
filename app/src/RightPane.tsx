@@ -26,6 +26,7 @@ import type { DesignLink } from "./review/Thread.tsx";
 import type { ReviewThread } from "./review/api.ts";
 import type { Harness, HarnessKind } from "./types.ts";
 import "./rightPane.css";
+import "./diffBody.css";
 
 export type RightPaneTab = "context" | "review";
 

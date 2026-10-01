@@ -1,0 +1,114 @@
+/* #132: hover popover for status dots + harness chips (statusPopover.ts).
+   Centred on its `left` via translateX(-50%); fades in on .show. */
+.sk-pop {
+	position: fixed;
+	z-index: 9000;
+	pointer-events: none;
+	background: var(--bg-2, #181a1f);
+	color: var(--fg-0, #e8e6df);
+	border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.12));
+	border-radius: 5px;
+	padding: 6px 9px;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs, 12px) * 0.9167);
+	line-height: 1.4;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+	white-space: nowrap;
+	opacity: 0;
+	transform: translate(-50%, 3px);
+	transition: opacity 0.12s, transform 0.12s;
+}
+.sk-pop.show {
+	opacity: 1;
+	transform: translate(-50%, 0);
+}
+.sk-pop .pk {
+	color: var(--fg-2);
+}
+.sk-pop .sep {
+	color: var(--fg-3);
+	margin: 0 6px;
+}
+.sk-pop .pv-running {
+	color: var(--st-running);
+}
+.sk-pop .pv-idle {
+	color: var(--st-idle);
+}
+.sk-pop .pv-waiting {
+	color: var(--st-waiting);
+}
+.sk-pop .pv-permission {
+	color: var(--st-permission);
+}
+.sk-pop .pv-error,
+.sk-pop .pv-exited {
+	color: var(--st-error);
+}
+
+/* #331: the aggregate status-dot breakdown popover (room tab, group
+   tab) — same box, but multi-line instead of one nowrap line. Each
+   line is its own block element so it always starts a new row; nowrap
+   only keeps a single line from wrapping mid-word. */
+.sk-pop.sk-pop-breakdown {
+	white-space: normal;
+}
+.sk-pop-breakdown .bd-header {
+	font-weight: 700;
+	white-space: nowrap;
+}
+.sk-pop-breakdown .bd-rule {
+	height: 1px;
+	background: var(--line-strong);
+	margin: 5px 0;
+}
+.sk-pop-breakdown .bd-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	white-space: nowrap;
+	padding: 1px 0;
+}
+.sk-pop-breakdown .bd-dot {
+	font-size: 8px;
+	line-height: 1;
+}
+.sk-pop-breakdown .bd-path {
+	flex: 0 0 auto;
+}
+.sk-pop-breakdown .bd-label {
+	flex: 0 0 auto;
+}
+/* Chip colour classes (.h-claude etc.) are unscoped background rules,
+   so they render fine outside `.h-chip` — this just gives the
+   popover's chip its own sizing rather than depending on `.h-chip`. */
+.sk-pop-breakdown .bd-chip {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-family: var(--sk-mono);
+	font-weight: 700;
+	color: #fff;
+	width: 13px;
+	height: 13px;
+	font-size: 8px;
+	border-radius: 3px;
+	flex: 0 0 auto;
+}
+.sk-pop-breakdown .bd-sub {
+	padding-left: 16px;
+	color: var(--fg-2);
+	white-space: nowrap;
+}
+.sk-pop-breakdown .bd-sub-pre {
+	color: var(--fg-3);
+}
+.sk-pop-breakdown .bd-more {
+	padding-left: 16px;
+	color: var(--fg-2);
+	white-space: nowrap;
+}
+.sk-pop-breakdown .bd-footer {
+	color: var(--fg-2);
+	white-space: nowrap;
+}

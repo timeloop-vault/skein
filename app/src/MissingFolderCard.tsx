@@ -1,13 +1,14 @@
 // Issue #164: rendered in place of a room's HarnessColumn when its
 // folder has gone missing — nothing mounts under it, so no LiveTerminal
 // spawns anywhere else. Reuses the #167 boot-error card look
-// (`.sk-boot-error*` in styles.css).
+// (`.sk-boot-error*` in boot.css).
 
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { type RepoRootInfo, recoveryOptions } from "./missingFolder.ts";
 import type { Room } from "./types.ts";
+import "./boot.css";
 
 interface MissingFolderCardProps {
 	room: Room;

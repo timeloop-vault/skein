@@ -1,0 +1,61 @@
+/* ── collapsible sections ────────────────────────────────────────── */
+
+.rv-section {
+	border-bottom: 1px solid var(--line);
+}
+.rv-section-bar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding-right: 8px;
+}
+.rv-filter {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+}
+.rv-chip {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	border: 1px solid transparent;
+	border-radius: 3px;
+	background: none;
+	color: var(--fg-3);
+	font-family: var(--sk-mono);
+	font-size: 0.8em;
+	padding: 0 4px;
+	cursor: pointer;
+}
+.rv-chip:hover {
+	color: var(--fg-1);
+}
+.rv-chip.on {
+	border-color: var(--line-strong);
+	color: var(--fg-0);
+	background: var(--bg-3);
+}
+.rv-section-head {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	background: none;
+	border: 0;
+	color: var(--fg-2);
+	font-family: var(--sk-mono);
+	font-size: 0.85em;
+	padding: 3px 8px;
+	cursor: pointer;
+	text-align: left;
+}
+.rv-section-head:hover {
+	color: var(--fg-1);
+}
+.rv-section-head .chev {
+	color: var(--fg-3);
+}
+.rv-section-count {
+	color: var(--fg-3);
+}

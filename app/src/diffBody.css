@@ -1,0 +1,48 @@
+/* Diff body (.sk-code / .sk-line*). No .ts/.tsx file references these classes, so the rules look unused; #462 moved them as-is. */
+.sk-code {
+	flex: 1;
+	overflow-y: auto;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.9167);
+	line-height: 1.55;
+	padding: 8px 0;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bg-3) transparent;
+}
+.sk-line {
+	display: flex;
+	padding: 0 12px 0 0;
+	min-height: 17px;
+}
+.sk-line.add {
+	background: var(--diff-add);
+}
+.sk-line.del {
+	background: var(--diff-del);
+}
+.sk-line .gutter {
+	flex: 0 0 56px;
+	display: flex;
+	color: var(--fg-3);
+	font-size: calc(var(--cfs) * 0.8333);
+	user-select: none;
+}
+.sk-line .gutter .ln {
+	flex: 1;
+	text-align: right;
+	padding: 0 6px;
+}
+.sk-line .marker {
+	flex: 0 0 14px;
+	text-align: center;
+	color: var(--fg-3);
+}
+.sk-line.add .marker {
+	color: var(--ok);
+}
+.sk-line.del .marker {
+	color: var(--err);
+}
+.sk-line .src {
+	white-space: pre;
+}

@@ -18,6 +18,7 @@ import { render } from "./statusPopoverRender.ts";
 import { resolve } from "./statusPopoverResolve.ts";
 import { subagents } from "./subagents.ts";
 import type { Room } from "./types.ts";
+import "./statusPopover.css";
 
 // #329: `.tab-mail` (the harness tab's unread-mail marker) is a trigger
 // too — it sits inside a `.sk-harness-tab` row without being the row's

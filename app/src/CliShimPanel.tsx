@@ -8,6 +8,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
+import "./Settings.css";
 
 /** Mirror of `cli_shim::CliShimStatus`. */
 interface CliShimStatus {

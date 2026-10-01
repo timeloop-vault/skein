@@ -9,6 +9,7 @@ import type { HarnessKind } from "../types.ts";
 import type { ThreadHandlers } from "./DiffBody.tsx";
 import { Composer, type DesignLink, ThreadView } from "./Thread.tsx";
 import { type ReviewFile, type ReviewScope, type ReviewThread, addThread } from "./api.ts";
+import "./ReviewFileBar.css";
 
 export const ReviewFileBar = ({
 	roomId,

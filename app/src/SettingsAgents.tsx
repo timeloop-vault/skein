@@ -5,6 +5,7 @@ import { HChip, NO_REVIEW_TOOLS_TITLE, useAgentListing } from "./components.tsx"
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import { type DefaultAgents, defaultAgentFor } from "./prefs.ts";
 import type { HarnessKind } from "./types.ts";
+import "./Settings.css";
 
 /** One kind's default-agent field. Its own component so each kind runs
  *  its own `useAgentListing` probe. */

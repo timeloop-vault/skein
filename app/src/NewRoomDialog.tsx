@@ -4,6 +4,8 @@ import { HarnessSection } from "./NewRoomHarnessSection.tsx";
 import type { DefaultAgents, FolderDefaults, NewRoomMemory, RecentFolder } from "./prefs.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
 import { useNewRoomForm } from "./useNewRoomForm.tsx";
+import "./modal.css";
+import "./NewRoomDialog.css";
 
 // ── New room dialog ────────────────────────────────────────────────
 // The picked folder becomes the room's cwd; every harness in the

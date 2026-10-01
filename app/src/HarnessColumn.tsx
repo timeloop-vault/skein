@@ -16,6 +16,8 @@ import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
 import type { DefaultAgents } from "./prefs.ts";
 import { useWorkingSubagentCount } from "./subagents.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
+import "./StatusBar.css";
+import "./HarnessColumn.css";
 
 // ── Live wrappers that subscribe to the activity store ─────────────
 //
