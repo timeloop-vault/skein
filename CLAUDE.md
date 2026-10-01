@@ -921,7 +921,9 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   Two traps they exist to prevent: `gh` has no `--body @-` (that
   silently sets the body to the literal string `@-` — use
   `--body-file -` and verify), and a squash-merge orphans every
-  stacked branch below it.
+  stacked branch below it. Agents squash-merge their own PRs once the
+  Skein sign-off covers the PR head and the PR is green (per
+  `pr-workflow`).
 - **Keyboard shortcuts** only via the `BINDINGS` table in
   `shortcuts.ts`; prefer letters/digits (Swedish layout — AltGr =
   Ctrl+Alt collides with punctuation chords) and agree bindings with
