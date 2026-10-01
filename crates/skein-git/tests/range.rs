@@ -204,7 +204,7 @@ fn commit_info_on_a_root_commit_has_no_parents() {
     let (_tmp, path) = init_repo();
     let repo = Repo::open(&path).unwrap();
     let info = repo.commit_info("HEAD").unwrap().unwrap();
-    assert!(info.parents.is_empty());
+    assert_eq!(info.parents, Vec::<String>::new());
     assert_eq!(info.body, "", "a one-line message has no body");
 }
 

@@ -91,7 +91,7 @@ fn t445_attach_finished_subagent_task_is_not_seeded() {
     let events = drain_brief(&rx);
     assert!(t445_starts(&events).is_empty(), "{events:?}");
     assert!(t445_ends(&events).is_empty(), "{events:?}");
-    assert!(t445_end_rows(&db).is_empty());
+    assert_eq!(t445_end_rows(&db), Vec::<serde_json::Value>::new());
 }
 
 /// Case 6, attach, other side: the same task under a subagent that is
@@ -210,7 +210,7 @@ fn t445_attach_history_is_not_replayed_as_live() {
     );
     assert!(t445_starts(&more).is_empty(), "{more:?}");
     assert!(t445_ends(&more).is_empty(), "{more:?}");
-    assert!(t445_end_rows(&db).is_empty());
+    assert_eq!(t445_end_rows(&db), Vec::<serde_json::Value>::new());
 }
 
 /// Order independence at the adapter: a subagent's task terminal sits in
@@ -245,13 +245,9 @@ fn t445_terminal_in_main_before_start_in_subagent_same_tick() {
         "{events:?}"
     );
     assert_eq!(t445_end_rows(&db).len(), 1);
-    assert!(
-        state
-            .lock()
-            .background
-            .tasks
-            .outstanding(now_ms())
-            .is_empty()
+    assert_eq!(
+        state.lock().background.tasks.outstanding(now_ms()),
+        Vec::<&skein_harness::claude::background::BackgroundTask>::new()
     );
 }
 
@@ -279,7 +275,10 @@ fn t445_end_for_unannounced_task_is_silent() {
         );
     }
     assert!(events.is_empty() && rows.is_empty(), "{events:?}");
-    assert!(bg.tasks.outstanding(now_ms()).is_empty());
+    assert_eq!(
+        bg.tasks.outstanding(now_ms()),
+        Vec::<&skein_harness::claude::background::BackgroundTask>::new()
+    );
 }
 
 /// Attach over a Monitor that passed its deadline with no notice: it
@@ -307,7 +306,7 @@ fn t445_attach_past_deadline_monitor_then_tick_is_silent() {
     assert!(!more.is_empty(), "the tick never ran");
     assert!(t445_starts(&more).is_empty(), "{more:?}");
     assert!(t445_ends(&more).is_empty(), "{more:?}");
-    assert!(t445_end_rows(&db).is_empty());
+    assert_eq!(t445_end_rows(&db), Vec::<serde_json::Value>::new());
 }
 
 /// Resync: a task announced live that the new content lacks gets
@@ -343,7 +342,7 @@ fn t445_resync_closes_announced_task_missing_from_new_content() {
         ),
         "{events:?}"
     );
-    assert!(t445_end_rows(&db).is_empty());
+    assert_eq!(t445_end_rows(&db), Vec::<serde_json::Value>::new());
 
     // Nothing is left to end.
     t445_append(
@@ -429,7 +428,7 @@ fn t445_subagent_reseed_closes_owned_announced_task() {
         ),
         "{events:?}"
     );
-    assert!(t445_end_rows(&db).is_empty());
+    assert_eq!(t445_end_rows(&db), Vec::<serde_json::Value>::new());
 }
 
 /// Case 2c: a resync that is the first to see an outstanding task
@@ -520,5 +519,5 @@ fn t445_resync_carries_owner_to_the_closing_end() {
         ),
         "{events:?}"
     );
-    assert!(t445_end_rows(&db).is_empty());
+    assert_eq!(t445_end_rows(&db), Vec::<serde_json::Value>::new());
 }

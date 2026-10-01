@@ -160,16 +160,15 @@ fn pending_old(
     // No mirror kept (captured before #409, or over the cap at capture
     // time) — HEAD's own blob still works if it classifies to exactly
     // the state the baseline recorded.
-    if let Ok(repo) = open_repo(cwd) {
-        if let Ok(Some(head_bytes)) = repo.head_blob(key) {
-            if skein_review::classify_bytes(&head_bytes) == state {
-                return if u64::try_from(head_bytes.len()).unwrap_or(u64::MAX) <= max_bytes {
-                    Ok(head_bytes)
-                } else {
-                    Err(format!("toolarge:{}", head_bytes.len()))
-                };
-            }
-        }
+    if let Ok(repo) = open_repo(cwd)
+        && let Ok(Some(head_bytes)) = repo.head_blob(key)
+        && skein_review::classify_bytes(&head_bytes) == state
+    {
+        return if u64::try_from(head_bytes.len()).unwrap_or(u64::MAX) <= max_bytes {
+            Ok(head_bytes)
+        } else {
+            Err(format!("toolarge:{}", head_bytes.len()))
+        };
     }
     Err("unavailable".to_string())
 }
@@ -311,7 +310,7 @@ mod tests {
         let err = room
             .side("../escape.png", Scope::Branch, None, "new")
             .unwrap_err();
-        assert!(!err.is_empty());
+        assert_ne!(err, "");
         assert_ne!(err, "notimage");
     }
 

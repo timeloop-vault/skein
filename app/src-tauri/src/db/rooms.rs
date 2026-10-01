@@ -302,10 +302,10 @@ impl Database {
         let mut out = Vec::new();
         for row in rows {
             let data = row.map_err(|e| e.to_string())?;
-            if let Ok(parsed) = serde_json::from_str::<CwdOnly>(&data) {
-                if let Some(cwd) = parsed.cwd {
-                    out.push(cwd);
-                }
+            if let Ok(parsed) = serde_json::from_str::<CwdOnly>(&data)
+                && let Some(cwd) = parsed.cwd
+            {
+                out.push(cwd);
             }
         }
         Ok(out)

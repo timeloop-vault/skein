@@ -318,10 +318,10 @@ impl<'a> Reanchorer<'a> {
                 continue;
             };
             for &lineno in positions {
-                if let Some(start) = lineno.checked_sub(i) {
-                    if start > 0 {
-                        *votes.entry(start).or_default() += 1;
-                    }
+                if let Some(start) = lineno.checked_sub(i)
+                    && start > 0
+                {
+                    *votes.entry(start).or_default() += 1;
                 }
             }
         }
@@ -379,11 +379,11 @@ impl<'a> Reanchorer<'a> {
             if trimmed.is_empty() {
                 continue;
             }
-            if let Some(count) = available.get_mut(&fnv1a(trimmed.as_bytes())) {
-                if *count > 0 {
-                    *count -= 1;
-                    hits += 1;
-                }
+            if let Some(count) = available.get_mut(&fnv1a(trimmed.as_bytes()))
+                && *count > 0
+            {
+                *count -= 1;
+                hits += 1;
             }
         }
         hits
@@ -677,8 +677,8 @@ fn main() {
         );
         // Past the end clamps rather than failing.
         assert_eq!(capture_lines(FILE, 6, 99).len(), 2);
-        assert!(capture_lines(FILE, 0, 3).is_empty());
-        assert!(capture_lines("", 1, 3).is_empty());
+        assert_eq!(capture_lines(FILE, 0, 3), Vec::<String>::new());
+        assert_eq!(capture_lines("", 1, 3), Vec::<String>::new());
     }
 
     #[test]

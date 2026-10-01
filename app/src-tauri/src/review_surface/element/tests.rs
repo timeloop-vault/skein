@@ -291,7 +291,7 @@ fn scope_element_needs_an_element_and_nothing_else_may_carry_one() {
         &Fixture::new_thread("element", Some(bad)),
     );
     assert!(err.is_err());
-    assert!(f.db.review_threads_for_room("r1").unwrap().is_empty());
+    assert_eq!(f.db.review_threads_for_room("r1").unwrap(), Vec::new());
     let mut other = anchor();
     other.entry = "proto/other.html".into();
     let err = add_thread_impl(

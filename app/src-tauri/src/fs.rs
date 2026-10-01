@@ -68,10 +68,10 @@ pub struct FileTextDto {
 pub(crate) fn ensure_room_scope(db: &Database, path: &str) -> Result<PathBuf, String> {
     let canon = std::fs::canonicalize(path).map_err(|e| format!("{path}: {e}"))?;
     for cwd in db.room_cwds()? {
-        if let Ok(root) = std::fs::canonicalize(&cwd) {
-            if canon.starts_with(&root) {
-                return Ok(canon);
-            }
+        if let Ok(root) = std::fs::canonicalize(&cwd)
+            && canon.starts_with(&root)
+        {
+            return Ok(canon);
         }
     }
     Err("path is outside every room's folder".into())

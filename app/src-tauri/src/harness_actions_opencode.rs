@@ -160,12 +160,11 @@ fn extract_tool_part(part: &Value, out: &mut Vec<ExtractedAction>) {
                 obj.insert("patch_info".into(), pi);
             }
         }
-    } else if kind == action_kind::PLAN_CHANGE {
-        if let Some(obj) = payload.as_object_mut() {
-            if let Some(pi) = extract_plan_item(state) {
-                obj.insert("plan_item".into(), pi);
-            }
-        }
+    } else if kind == action_kind::PLAN_CHANGE
+        && let Some(obj) = payload.as_object_mut()
+        && let Some(pi) = extract_plan_item(state)
+    {
+        obj.insert("plan_item".into(), pi);
     }
 
     out.push(ExtractedAction {
@@ -373,40 +372,38 @@ pub fn backfill_from_db(
         "SELECT data, time_created FROM message \
          WHERE session_id = ?1 \
          ORDER BY time_created, id",
-    ) {
-        if let Ok(msg_rows) = msg_stmt.query_map(rusqlite::params![session_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        }) {
-            for row in msg_rows {
-                let Ok((data, ts_created)) = row else {
-                    continue;
-                };
-                let Ok(value) = serde_json::from_str::<Value>(&data) else {
-                    continue;
-                };
-                let role = value.get("role").and_then(Value::as_str).unwrap_or("");
-                if role != "user" {
-                    continue;
-                }
-                if ts_created <= max_ts {
-                    continue;
-                }
-                let summary_text = value
-                    .get("summary")
-                    .and_then(|s| s.get("diffs"))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                let payload = json!({
-                    "prompt": null,
-                    "summary_diffs": summary_text,
-                });
-                rows_to_insert.push(crate::db::NewHarnessAction {
-                    timestamp_ms: ts_created,
-                    kind: action_kind::USER_PROMPT,
-                    payload: payload.to_string(),
-                    source: None,
-                });
+    ) && let Ok(msg_rows) = msg_stmt.query_map(rusqlite::params![session_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    }) {
+        for row in msg_rows {
+            let Ok((data, ts_created)) = row else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<Value>(&data) else {
+                continue;
+            };
+            let role = value.get("role").and_then(Value::as_str).unwrap_or("");
+            if role != "user" {
+                continue;
             }
+            if ts_created <= max_ts {
+                continue;
+            }
+            let summary_text = value
+                .get("summary")
+                .and_then(|s| s.get("diffs"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let payload = json!({
+                "prompt": null,
+                "summary_diffs": summary_text,
+            });
+            rows_to_insert.push(crate::db::NewHarnessAction {
+                timestamp_ms: ts_created,
+                kind: action_kind::USER_PROMPT,
+                payload: payload.to_string(),
+                source: None,
+            });
         }
     }
 

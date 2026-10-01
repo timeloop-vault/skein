@@ -289,7 +289,7 @@ fn load_all_quarantines_unparseable_rows_and_keeps_good_ones() {
     assert_eq!(outcome.rooms[0].id, "good");
     assert_eq!(outcome.skipped.len(), 1);
     assert_eq!(outcome.skipped[0].id, "bad");
-    assert!(!outcome.skipped[0].error.is_empty());
+    assert_ne!(outcome.skipped[0].error, "");
     // The blob is preserved in quarantine and gone from the live
     // table, so the next save_all wipe can't destroy it.
     let conn = db.conn.lock();

@@ -367,7 +367,7 @@ mod tests {
             "{:?}",
             injection.args
         );
-        assert!(injection.env.is_empty());
+        assert_eq!(injection.env, Vec::new());
     }
 
     #[test]
@@ -380,7 +380,7 @@ mod tests {
             &SpawnSettings::default(),
             Some(&identity()),
         );
-        assert!(injection.args.is_empty());
+        assert_eq!(injection.args, Vec::<String>::new());
         assert_eq!(
             injection.env.first().map(|(k, _)| k.as_str()),
             Some(OPENCODE_CONFIG_VAR)

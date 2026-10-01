@@ -272,19 +272,18 @@ pub fn get_comment(
     let mut diff_context = None;
     if let (Some(cwd), Some(path), false) =
         (caller.cwd.as_deref(), row.file_path.as_deref(), is_element)
+        && let Ok(detail) = file_impl(db, &caller.room_id, cwd, path, Scope::Branch, None)
     {
-        if let Ok(detail) = file_impl(db, &caller.room_id, cwd, path, Scope::Branch, None) {
-            for t in &detail.threads {
-                ctx.placed
-                    .insert(t.id.clone(), (t.line_start, t.line_end, t.outdated));
-            }
-            diff_context = ctx
-                .placed
-                .get(&row.id)
-                .and_then(|(start, _, _)| *start)
-                .and_then(|line| covering_hunk(&detail.hunks, line))
-                .map(render_hunk);
+        for t in &detail.threads {
+            ctx.placed
+                .insert(t.id.clone(), (t.line_start, t.line_end, t.outdated));
         }
+        diff_context = ctx
+            .placed
+            .get(&row.id)
+            .and_then(|(start, _, _)| *start)
+            .and_then(|line| covering_hunk(&detail.hunks, line))
+            .map(render_hunk);
     }
 
     let thread = ctx.to_agent_thread(&row);
@@ -349,12 +348,12 @@ pub fn get_diff(db: &Database, caller: &Caller, args: &DiffArgs) -> VerbResult<D
             deletions: f.deletions,
         })
         .collect();
-    if files.is_empty() {
-        if let Some(w) = wanted {
-            return Err(VerbError::NotFound(format!(
-                "{w} is not in this review's diff"
-            )));
-        }
+    if files.is_empty()
+        && let Some(w) = wanted
+    {
+        return Err(VerbError::NotFound(format!(
+            "{w} is not in this review's diff"
+        )));
     }
 
     // One diff for every file this call needs, not one per file (#171

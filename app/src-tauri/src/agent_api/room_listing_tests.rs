@@ -413,7 +413,7 @@ async fn list_harnesses_skips_the_round_trip_when_nothing_needs_a_phase() {
     let out = verbs::list_harnesses(&state, &verbs::ListHarnessesArgs { room: None })
         .await
         .unwrap();
-    assert!(out.harnesses.is_empty());
+    assert_eq!(out.harnesses, Vec::new());
 }
 
 #[tokio::test]

@@ -75,10 +75,10 @@ pub(crate) fn scope_impl(
                 entry.1 += 1;
             }
         }
-        if t.scope == thread_scope::COMMIT {
-            if let Some(sha) = t.commit_sha.as_deref() {
-                *per_commit.entry(sha.to_owned()).or_default() += 1;
-            }
+        if t.scope == thread_scope::COMMIT
+            && let Some(sha) = t.commit_sha.as_deref()
+        {
+            *per_commit.entry(sha.to_owned()).or_default() += 1;
         }
     }
 
@@ -566,17 +566,17 @@ mod tests {
         let big_detail = file_impl(&db, "r1", cwd, "big.txt", Scope::Branch, None).unwrap();
         assert_eq!(big_detail.blocked, Some("toolarge"));
         assert!(!big_detail.binary, "too-large is not the same as binary");
-        assert!(big_detail.hunks.is_empty());
+        assert_eq!(big_detail.hunks, Vec::new());
 
         let binary_detail = file_impl(&db, "r1", cwd, "bin.dat", Scope::Branch, None).unwrap();
         assert_eq!(binary_detail.blocked, Some("binary"));
         assert!(binary_detail.binary);
-        assert!(binary_detail.hunks.is_empty());
+        assert_eq!(binary_detail.hunks, Vec::new());
 
         let small_detail = file_impl(&db, "r1", cwd, "small.txt", Scope::Branch, None).unwrap();
         assert_eq!(small_detail.blocked, None);
         assert!(!small_detail.binary);
-        assert!(!small_detail.hunks.is_empty());
+        assert_ne!(small_detail.hunks, Vec::new());
     }
 
     #[test]

@@ -316,15 +316,15 @@ fn file_digest(root: &Path, rel: &str) -> String {
     let Ok(mut file) = std::fs::File::open(full) else {
         return "missing".into();
     };
-    if let Ok(meta) = file.metadata() {
-        if meta.len() > MAX_SERVED {
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_millis());
-            return format!("toolarge:{}:{mtime}", meta.len());
-        }
+    if let Ok(meta) = file.metadata()
+        && meta.len() > MAX_SERVED
+    {
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_millis());
+        return format!("toolarge:{}:{mtime}", meta.len());
     }
     let mut h = Fnv::new();
     let mut buf = vec![0u8; 64 * 1024];

@@ -137,7 +137,7 @@ fn find_rooms_for_path_finds_nothing_for_an_unrelated_path() {
     let f = fixture();
     save(&f.db, &[room_with_cwd("r1", "C:/repo-wt/task-1")]);
     let out = find_paths(&f.db, "C:/somewhere/else").unwrap();
-    assert!(out.rooms.is_empty());
+    assert_eq!(out.rooms, Vec::new());
     assert_eq!(out.unreadable_rooms, 0);
 }
 

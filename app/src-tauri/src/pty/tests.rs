@@ -427,7 +427,7 @@ fn stripping_can_be_turned_off() {
         None,
         &Injection::default(),
     );
-    assert!(applied.stripped.is_empty());
+    assert_eq!(applied.stripped, Vec::<String>::new());
 }
 
 #[test]

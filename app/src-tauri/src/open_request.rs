@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(ids(&rooms, "/code/mono/packages/app/src"), ["inner"]);
         assert_eq!(ids(&rooms, "/code/mono"), ["outer"]);
         // A parent folder of every room owns none of them.
-        assert!(ids(&rooms, "/code").is_empty());
+        assert_eq!(ids(&rooms, "/code"), Vec::<String>::new());
     }
 
     #[test]

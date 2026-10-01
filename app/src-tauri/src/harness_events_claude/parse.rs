@@ -247,12 +247,12 @@ pub(super) fn parse_value(
                 .and_then(serde_json::Value::as_array)
             {
                 for block in content {
-                    if block.get("type").and_then(serde_json::Value::as_str) == Some("tool_use") {
-                        if let Some(name) = block.get("name").and_then(serde_json::Value::as_str) {
-                            tool_event = Some(ClaudeEvent::ToolUseStart {
-                                name: name.to_owned(),
-                            });
-                        }
+                    if block.get("type").and_then(serde_json::Value::as_str) == Some("tool_use")
+                        && let Some(name) = block.get("name").and_then(serde_json::Value::as_str)
+                    {
+                        tool_event = Some(ClaudeEvent::ToolUseStart {
+                            name: name.to_owned(),
+                        });
                     }
                 }
             }

@@ -179,10 +179,10 @@ pub fn content_hash(state: &FileState) -> u64 {
 /// Write `text` to `path`, creating parent directories. Used by reject
 /// to restore baseline content, including for a file the agent deleted.
 pub fn write_text(path: &Path, text: &str) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
     }
     fs::write(path, text.as_bytes())
 }

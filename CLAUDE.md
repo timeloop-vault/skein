@@ -858,6 +858,9 @@ stderr; `RUST_LOG` overrides the default `info` filter.
 - **Rust:** edition 2024. `unsafe_code = "forbid"`. Clippy pedantic
   warn, `-D warnings`. Tauri commands collapse `GitError` / `PtyError`
   to `String` at the boundary — they round-trip via JSON anyway.
+  The toolchain is pinned in `rust-toolchain.toml` (currently 1.99, also
+  the MSRV) and bumped deliberately in its own commit, not by whatever
+  `stable` a machine auto-updates to.
 - **TS:** strict, `noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`. Biome with tabs + double quotes — run
   it from `app/` (`cd app && npx biome check .`), never from the repo

@@ -91,13 +91,13 @@ pub(super) fn mail_refusal_for(
              the messaging tool"
         ));
     }
-    if let (Some(agent), Some(cwd)) = (agent, cwd) {
-        if !agent_sees_mcp(kind, agent, cwd) {
-            return Some(format!(
-                "the agent {agent:?} this harness runs hides MCP tools behind its \
+    if let (Some(agent), Some(cwd)) = (agent, cwd)
+        && !agent_sees_mcp(kind, agent, cwd)
+    {
+        return Some(format!(
+            "the agent {agent:?} this harness runs hides MCP tools behind its \
                  own tool allowlist"
-            ));
-        }
+        ));
     }
     None
 }
