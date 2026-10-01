@@ -18,6 +18,7 @@ import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import { attachClaudeEvents } from "./harnessEvents.ts";
 import { harnessInput } from "./harnessInput.ts";
+import { bufferPtyInput } from "./ptyInputBuffer.ts";
 import { subagents } from "./subagents.ts";
 import { attachTerminalInteractions } from "./terminalInteractions.ts";
 import { createXterm } from "./terminalSetup.ts";
@@ -252,6 +253,10 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// pty_spawn is slow. recordOutput in the channel handler
 			// will flip it to `running` on the first chunk. Epic #50.
 			harnessActivity.spawned(harnessId);
+			// #484: catch xterm's reply to ConPTY's cursor query (portable-pty
+			// 0.9 waits for it), which can arrive before pty_spawn resolves. If
+			// unmounted meanwhile, the settle paths below dispose it.
+			const early = bufferPtyInput(term);
 			try {
 				const { id, injected } = await invoke<PtySpawnResult>("pty_spawn", {
 					cmd: cmdToSpawn,
@@ -277,6 +282,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					onEvent: channel,
 				});
 				if (cancelled) {
+					early.dispose();
 					void invoke("pty_kill", { id });
 					return;
 				}
@@ -298,9 +304,14 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					sessionIdRef,
 					claudeAdapterRef,
 				});
+				// No await between taking the buffer and attaching the real
+				// listener, so no reply is lost or sent twice.
+				const buffered = early.takeAndDispose();
 				dataDisposable = attachPtyInput(term, harnessId, id);
+				if (buffered.length > 0) void invoke("pty_write", { id, data: buffered.join("") });
 				if (!resizeObserver) resizeObserver = observeResize(term, fit, host, ptyIdRef);
 			} catch (err: unknown) {
+				early.dispose();
 				const msg = err instanceof Error ? err.message : String(err);
 				term.write(`\r\n\x1b[31m[skein] pty_spawn failed: ${msg}\x1b[0m\r\n`);
 				// Reprompt — without this the user sees the error and has
