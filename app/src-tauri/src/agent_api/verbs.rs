@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use super::auth::Caller;
 use super::element;
+use super::element_source::SourceGuess;
 use super::render::{covering_hunk, read_around, render_file, render_hunk};
 use super::state::AgentApiState;
 use crate::db::{
@@ -185,11 +186,16 @@ pub struct AgentThread {
     pub scope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
-    /// `"element"` for an element thread, which has no line to be
-    /// unmoved from; `outdated` is true unless the design pane's last
-    /// report still matches the files on disk.
+    /// An element thread has no line to be unmoved from: `"source_guess"`
+    /// when `source` found a guess, `"element"` when it found none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placement: Option<&'static str>,
+    /// A guess at where an element thread's element is written in source
+    /// (file, 1-based inclusive lines, and `via` which evidence found
+    /// it). Never a position the reviewer confirmed. Absent for other
+    /// threads and when nothing matched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceGuess>,
     /// An element thread's stored anchor and state, as the review pane
     /// receives it (`anchor`, `lastSeen`, `state` — camelCase, verbatim).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -203,6 +209,9 @@ pub struct AgentThread {
     pub line_end: Option<usize>,
     /// The code could not be found where the comment was written, so
     /// the position is a guess or missing entirely. Read the anchor.
+    /// For an element thread this is true unless the design pane last
+    /// reported `anchored` and its content stamp still matches the files
+    /// on disk.
     pub outdated: bool,
     pub resolved: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -372,8 +381,13 @@ pub fn get_comment(
     }
 
     let thread = ctx.to_agent_thread(&row);
-    let current_context = match (caller.cwd.as_deref(), row.file_path.as_deref()) {
-        (Some(cwd), Some(path)) => match (thread.line_start, thread.line_end) {
+    let current_context = match (
+        &thread.source,
+        caller.cwd.as_deref(),
+        row.file_path.as_deref(),
+    ) {
+        (Some(s), Some(cwd), _) => read_around(cwd, &s.file, s.line_start, s.line_end),
+        (None, Some(cwd), Some(path)) => match (thread.line_start, thread.line_end) {
             (Some(start), Some(end)) => read_around(cwd, path, start, end),
             _ => None,
         },
@@ -2810,6 +2824,8 @@ struct RoomCtx {
     placed: BTreeMap<String, (Option<usize>, Option<usize>, bool)>,
     /// Element threads' anchor and state (#434).
     elements: BTreeMap<String, ElementDto>,
+    /// Element threads' guessed source, by thread id (#435).
+    sources: BTreeMap<String, SourceGuess>,
 }
 
 impl RoomCtx {
@@ -2863,6 +2879,7 @@ impl RoomCtx {
         }
 
         let elements = element::load(db, caller, threads)?;
+        let sources = element::locate_all(caller, threads, &elements);
 
         Ok(Self {
             comments,
@@ -2870,11 +2887,12 @@ impl RoomCtx {
             labels,
             placed,
             elements,
+            sources,
         })
     }
 
     fn to_agent_thread(&self, t: &ReviewThreadRow) -> AgentThread {
-        let view = element::view(&self.elements, t);
+        let view = element::view(&self.elements, &self.sources, t);
         let (line_start, line_end, outdated) = match &view {
             Some(v) => (None, None, v.outdated),
             None => self.placed.get(&t.id).copied().unwrap_or_else(|| {
@@ -2889,7 +2907,8 @@ impl RoomCtx {
             thread_id: t.id.clone(),
             scope: t.scope.clone(),
             file: t.file_path.clone(),
-            placement: view.as_ref().map(|_| element::PLACEMENT),
+            placement: view.as_ref().map(|v| v.placement),
+            source: view.as_ref().and_then(|v| v.source.clone()),
             element: view.and_then(|v| v.json),
             commit_sha: t.commit_sha.clone(),
             line_start,

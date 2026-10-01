@@ -33,6 +33,7 @@ export interface ElementLastSeen {
 	state: ElementState;
 	selector?: string;
 	rect?: ElementRect;
+	stamp?: string;
 	seenMs: number;
 }
 

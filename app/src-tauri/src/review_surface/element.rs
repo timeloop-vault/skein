@@ -116,6 +116,8 @@ pub struct LastSeenDto {
     pub selector: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rect: Option<ElementRect>,
+    /// The content stamp the pane's report was made against.
+    pub stamp: String,
     pub seen_ms: i64,
 }
 
@@ -400,6 +402,7 @@ pub fn element_dto(
             state: s.state,
             selector: s.selector,
             rect: s.rect,
+            stamp: s.stamp,
             seen_ms: s.seen_ms,
         }),
         state,

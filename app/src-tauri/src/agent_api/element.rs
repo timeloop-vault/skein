@@ -10,10 +10,13 @@ use crate::review_surface::element::{DigestCache, ElementDto, element_dto};
 use crate::review_surface::thread_scope;
 
 use super::auth::Caller;
+use super::element_source::{SourceGuess, SourceIndex};
 use super::verbs::VerbError;
 
 /// The `placement` an element thread reports in place of line numbers.
 pub(super) const PLACEMENT: &str = "element";
+/// The `placement` when its source could be guessed.
+pub(super) const PLACEMENT_GUESS: &str = "source_guess";
 
 pub(super) fn is_element(t: &ReviewThreadRow) -> bool {
     t.scope == thread_scope::ELEMENT
@@ -36,6 +39,8 @@ pub(super) struct View {
     /// — also when the anchor could not be read.
     pub outdated: bool,
     pub json: Option<serde_json::Value>,
+    pub placement: &'static str,
+    pub source: Option<SourceGuess>,
 }
 
 /// Element threads' anchor and state for the room, if `threads` holds any.
@@ -62,14 +67,61 @@ pub(super) fn load(
     Ok(elements)
 }
 
-/// `None` for a non-element thread.
-pub(super) fn view(elements: &BTreeMap<String, ElementDto>, t: &ReviewThreadRow) -> Option<View> {
+/// A guess at the source of each element thread in `threads`, by thread
+/// id. One [`SourceIndex`] serves the whole call, so the tree is walked
+/// and each file read at most once however many threads there are.
+pub(super) fn locate_all(
+    caller: &Caller,
+    threads: &[ReviewThreadRow],
+    elements: &BTreeMap<String, ElementDto>,
+) -> BTreeMap<String, SourceGuess> {
+    let mut sources = BTreeMap::new();
+    let Some(root) = caller.cwd.as_deref().map(Path::new) else {
+        return sources;
+    };
+    let mut index = SourceIndex::new(root);
+    for t in threads.iter().filter(|t| is_element(t)) {
+        if let Some(guess) = elements.get(&t.id).and_then(|e| index.locate(&e.anchor)) {
+            sources.insert(t.id.clone(), guess);
+        }
+    }
+    sources
+}
+
+/// `None` for a non-element thread. Only an `anchored` report counts as
+/// current for the agent; `reanchored` is still a guess to it.
+pub(super) fn view(
+    elements: &BTreeMap<String, ElementDto>,
+    sources: &BTreeMap<String, SourceGuess>,
+    t: &ReviewThreadRow,
+) -> Option<View> {
     if !is_element(t) {
         return None;
     }
     let dto = elements.get(&t.id);
+    let source = sources.get(&t.id).cloned();
     Some(View {
-        outdated: dto.is_none_or(ElementDto::is_outdated),
-        json: dto.and_then(|e| serde_json::to_value(e).ok()),
+        outdated: dto.is_none_or(|e| e.state != "anchored"),
+        json: dto.and_then(agent_json),
+        placement: if source.is_some() {
+            PLACEMENT_GUESS
+        } else {
+            PLACEMENT
+        },
+        source,
     })
+}
+
+/// The element as the agent sees it. When the stamp no longer holds
+/// (`unknown`) the old selector and rect describe a page that is gone, so
+/// they are dropped; state, stamp and time stay.
+fn agent_json(dto: &ElementDto) -> Option<serde_json::Value> {
+    let mut dto = dto.clone();
+    if dto.state == "unknown"
+        && let Some(seen) = dto.last_seen.as_mut()
+    {
+        seen.selector = None;
+        seen.rect = None;
+    }
+    serde_json::to_value(&dto).ok()
 }

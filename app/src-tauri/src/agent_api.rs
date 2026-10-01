@@ -45,12 +45,15 @@
 pub mod auth;
 pub mod commands;
 mod element;
+mod element_source;
 pub mod http;
 pub mod mcp;
 mod render;
 pub mod state;
 pub mod verbs;
 
+#[cfg(test)]
+mod element_tests;
 #[cfg(test)]
 mod tests;
 
