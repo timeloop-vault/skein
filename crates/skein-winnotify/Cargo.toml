@@ -42,9 +42,9 @@ undocumented_unsafe_blocks = "deny"
 # the foreground-window recovery in `bring_to_front`
 # (Win32_System_Threading, Win32_UI_Input_KeyboardAndMouse,
 # Win32_UI_WindowsAndMessaging). Same major version as the transitive
-# copy already in app/src-tauri/Cargo.lock (0.61.x) so Cargo resolves
+# copy already in app/src-tauri/Cargo.lock (0.62.x) so Cargo resolves
 # one copy, not two.
-windows = { version = "0.61", default-features = false, features = [
+windows = { version = "0.62", default-features = false, features = [
     "Data_Xml_Dom",
     "Foundation",
     "UI_Notifications",
@@ -62,5 +62,5 @@ windows = { version = "0.61", default-features = false, features = [
 # at the crate root, so it must be resolvable there — re-exporting it
 # through `windows::core` isn't enough. Same version as `windows`
 # pulls transitively, so Cargo still resolves one copy.
-windows-core = "0.61"
+windows-core = "0.62"
 thiserror.workspace = true
