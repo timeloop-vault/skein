@@ -10,13 +10,9 @@ app/src-tauri/src/agent_api/http.rs 1075 #455
 app/src-tauri/src/agent_api/tests.rs 5838 #455
 app/src-tauri/src/agent_api/verbs.rs 3475 #455
 app/src-tauri/src/db.rs 4261 #454
-app/src-tauri/src/harness_actions_claude.rs 1577 #457
 app/src-tauri/src/harness_events_claude.rs 7791 #453
-app/src-tauri/src/harness_events_opencode.rs 1338 #457
 app/src-tauri/src/lib.rs 1390 #456
-app/src-tauri/src/pty.rs 2552 #457
-app/src-tauri/src/review.rs 1765 #457
-app/src-tauri/src/spawn_env.rs 1319 #457
+app/src-tauri/src/pty.rs 1628 #457
 app/src/App.tsx 884 #459
 app/src/FilesBody.tsx 449 #461
 app/src/NewRoomDialog.tsx 416 #461
@@ -43,6 +39,3 @@ app/src/useMailDelivery.ts 669 #459
 app/src/useNewRoomForm.tsx 447 #461
 app/src/useRoomsStore.ts 812 #459
 app/src/useTerminalSpawn.ts 544 #459
-crates/skein-git/tests/repo.rs 1055 #457
-crates/skein-harness/src/claude.rs 1451 #457
-crates/skein-harness/src/claude/background.rs 1300 #457
