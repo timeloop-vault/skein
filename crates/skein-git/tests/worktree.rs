@@ -87,7 +87,7 @@ fn restore_worktree_after_directory_deleted_metadata_left() {
     assert!(wt_path.exists(), "worktree dir should exist: {wt_path:?}");
 
     let restored = Repository::open(&wt_path).unwrap();
-    assert_eq!(restored.head().unwrap().shorthand(), Some("feat/foo"));
+    assert_eq!(restored.head().unwrap().shorthand().unwrap(), "feat/foo");
 
     let oid_after = raw_repo
         .find_branch("feat/foo", git2::BranchType::Local)
@@ -123,7 +123,7 @@ fn restore_worktree_after_metadata_also_pruned() {
     assert!(wt_path.exists(), "worktree dir should exist: {wt_path:?}");
 
     let restored = Repository::open(&wt_path).unwrap();
-    assert_eq!(restored.head().unwrap().shorthand(), Some("feat/foo"));
+    assert_eq!(restored.head().unwrap().shorthand().unwrap(), "feat/foo");
 }
 
 #[test]

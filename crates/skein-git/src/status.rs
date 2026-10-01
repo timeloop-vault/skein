@@ -53,10 +53,10 @@ impl Repo {
         let statuses = self.repo.statuses(Some(&mut opts))?;
         let mut out = Vec::new();
         for entry in statuses.iter() {
-            let path = match entry.path() {
-                Some(p) => p.to_owned(),
-                None => continue, // non-UTF-8 path — skip rather than surface
+            let Ok(path) = entry.path() else {
+                continue; // non-UTF-8 path — skip rather than surface
             };
+            let path = path.to_owned();
             if self.is_dir_entry(&path) {
                 continue;
             }

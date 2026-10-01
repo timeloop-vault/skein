@@ -188,7 +188,7 @@ impl Repo {
     /// `remote.origin.url`, if configured. For display only.
     pub fn origin_url(&self) -> Option<String> {
         let remote = self.repo.find_remote("origin").ok()?;
-        remote.url().map(str::to_owned)
+        remote.url().ok().map(str::to_owned)
     }
 
     pub(crate) fn head_branch_name(&self) -> Option<String> {
@@ -196,7 +196,7 @@ impl Repo {
         if !head.is_branch() {
             return None;
         }
-        head.shorthand().map(str::to_owned)
+        head.shorthand().ok().map(str::to_owned)
     }
 
     /// The repo's working directory (i.e. the directory containing

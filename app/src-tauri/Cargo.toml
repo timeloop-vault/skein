@@ -116,7 +116,7 @@ skein-winnotify = { path = "../../crates/skein-winnotify" }
 tempfile = "3"
 # Same feature set as the workspace: local repos only, no OpenSSL/libssh2.
 # Used to build real repos in the review-baseline tests (#211).
-git2 = { version = "0.20", default-features = false }
+git2 = { version = "0.21", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -346,7 +346,7 @@ impl Repo {
                     .repo
                     .find_reference("refs/remotes/origin/HEAD")
                     .ok()
-                    .and_then(|r| r.symbolic_target().map(str::to_owned))
+                    .and_then(|r| r.symbolic_target().ok().flatten().map(str::to_owned))
                     .and_then(|t| t.strip_prefix("refs/remotes/").map(str::to_owned))
                 else {
                     continue;

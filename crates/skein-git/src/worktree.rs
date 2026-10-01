@@ -54,7 +54,14 @@ impl Repo {
 
         // Reject before calling git2 so we get a tidy error rather than
         // git2's slightly muddier "exists" message.
-        if self.repo.worktrees()?.iter().flatten().any(|n| n == name) {
+        if self
+            .repo
+            .worktrees()?
+            .iter()
+            .flatten()
+            .flatten()
+            .any(|n| n == name)
+        {
             return Err(GitError::WorktreeExists(name));
         }
 
@@ -142,7 +149,14 @@ impl Repo {
             })?
             .to_owned();
 
-        if self.repo.worktrees()?.iter().flatten().any(|n| n == name) {
+        if self
+            .repo
+            .worktrees()?
+            .iter()
+            .flatten()
+            .flatten()
+            .any(|n| n == name)
+        {
             let existing = self.repo.find_worktree(&name)?;
             if existing.validate().is_ok() {
                 return Err(GitError::WorktreeExists(name));
@@ -204,7 +218,7 @@ impl Repo {
         if Self::head_is_branch(&main_repo, branch_name) {
             return Ok(true);
         }
-        for other_name in self.repo.worktrees()?.iter().flatten() {
+        for other_name in self.repo.worktrees()?.iter().flatten().flatten() {
             let other = self.repo.find_worktree(other_name)?;
             if other.validate().is_err() {
                 continue;
@@ -221,13 +235,13 @@ impl Repo {
         let Ok(head) = repo.head() else {
             return false;
         };
-        head.is_branch() && head.shorthand() == Some(branch_name)
+        head.is_branch() && head.shorthand().ok() == Some(branch_name)
     }
 
     pub fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
         let mut out = Vec::new();
         let names = self.repo.worktrees()?;
-        for name in names.iter().flatten() {
+        for name in names.iter().flatten().flatten() {
             let wt = self.repo.find_worktree(name)?;
             out.push(WorktreeInfo {
                 name: name.to_owned(),
