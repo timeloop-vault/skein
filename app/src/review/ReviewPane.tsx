@@ -28,22 +28,18 @@
 // alongside the worktree watcher.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { HChip } from "../components.tsx";
-import { HARNESS_KINDS } from "../data.tsx";
-import { useHarnessActivity } from "../harnessActivity.ts";
-import { canSendPrompt, harnessInput, sendPrompt } from "../harnessInput.ts";
 import { acceptReview, attributeHunks, rejectReview } from "../liveContext/review.ts";
 import type { ReviewHunk } from "../liveContext/review.ts";
 import type { HarnessAction } from "../liveContext/store.ts";
-import { useNudgeOverrides } from "../nudgeStore.ts";
 import type { Harness, HarnessKind } from "../types.ts";
-import { CommitList } from "./CommitList.tsx";
-import { DiffBody, type LineSelection, type ThreadHandlers } from "./DiffBody.tsx";
-import { FileList } from "./FileList.tsx";
-import { ImageDiff } from "./ImageDiff.tsx";
+import type { LineSelection, ThreadHandlers } from "./DiffBody.tsx";
+import { ReviewBody } from "./ReviewBody.tsx";
+import { ReviewFileBar } from "./ReviewFileBar.tsx";
+import { ReviewFileSection } from "./ReviewFileSection.tsx";
 import { ReviewHeader } from "./ReviewHeader.tsx";
+import { ReviewLevelThreads } from "./ReviewLevelThreads.tsx";
 import { SignoffConfirm, type SignoffIntent, SignoffNotice } from "./SignoffControl.tsx";
-import { Composer, type DesignLink, ThreadView } from "./Thread.tsx";
+import type { DesignLink } from "./Thread.tsx";
 import {
 	type ReviewFile,
 	type ReviewScope,
@@ -58,9 +54,7 @@ import {
 	resolveThread,
 	unplacedThreads,
 } from "./api.ts";
-import { type SvgViewMode, chooseReviewBody, isSvgPath } from "./imageDiffModel.ts";
-import { selectNudge } from "./nudges.ts";
-import { signoffState } from "./signoff.ts";
+import type { SvgViewMode } from "./imageDiffModel.ts";
 import {
 	useAgentWrites,
 	useReviewFile,
@@ -68,6 +62,7 @@ import {
 	useSignoff,
 	useWorktreeWatcher,
 } from "./useReviewData.ts";
+import { useReviewNudge } from "./useReviewNudge.ts";
 import "./review.css";
 
 export const ReviewPane = ({
@@ -140,35 +135,13 @@ export const ReviewPane = ({
 		set: setSignoffState,
 	} = useSignoff(roomId, cwd, visible, nonce);
 
-	// #238: the Nudge button. Target is always the room's active
-	// harness — no picker — and which prompt applies is a pure function
-	// of the review's own state (sign-off, then unresolved threads).
-	// `useHarnessActivity` keeps enablement live as the harness's phase
-	// moves, without this component polling anything itself.
-	const activeCapabilities = activeHarness ? HARNESS_KINDS[activeHarness.kind].capabilities : null;
-	const activeActivity = useHarnessActivity(activeHarness?.id ?? null);
-	const nudgeOverrides = useNudgeOverrides();
-	const nudge = selectNudge(signoffState(signoff), data?.unresolvedCount ?? 0, nudgeOverrides);
-	const nudgeGate =
-		activeHarness && nudge
-			? canSendPrompt({
-					capabilities: HARNESS_KINDS[activeHarness.kind].capabilities,
-					activity: activeActivity,
-					registered: harnessInput.isRegistered(activeHarness.id),
-					bracketedPasteOn: harnessInput.bracketedPaste(activeHarness.id),
-					body: nudge.body,
-				})
-			: undefined;
-	const nudgeDisabledReason = !nudge
-		? "Nothing to nudge about"
-		: nudgeGate && !nudgeGate.ok
-			? nudgeGate.reason
-			: undefined;
-	const onNudge = () => {
-		if (!activeHarness || !nudge) return;
-		const result = sendPrompt(activeHarness.id, activeHarness.kind, nudge.body);
-		if (!result.ok) setActionError(result.reason);
-	};
+	// #238: the Nudge button — see `useReviewNudge`.
+	const { activeCapabilities, nudge, nudgeGate, nudgeDisabledReason, onNudge } = useReviewNudge(
+		activeHarness,
+		signoff,
+		data?.unresolvedCount ?? 0,
+		setActionError,
+	);
 
 	const { file, error: fileError } = useReviewFile(
 		roomId,
@@ -302,123 +275,6 @@ export const ReviewPane = ({
 		/>
 	);
 
-	// ── body ──────────────────────────────────────────────────────
-
-	let body: React.ReactNode;
-	if (scope === "commit" && !commitSha) {
-		body = (
-			<CommitList
-				commits={data?.commits ?? []}
-				truncated={data?.truncated ?? false}
-				activeSha={commitSha}
-				threads={reviewThreads}
-				busy={busy}
-				handlers={handlers}
-				onSelect={setCommitSha}
-				onComment={(sha, cbody) =>
-					run(() =>
-						addThread(roomId, cwd, {
-							scope: "commit",
-							commitSha: sha,
-							anchorLines: [],
-							body: cbody,
-						}),
-					)
-				}
-			/>
-		);
-	} else if (files.length === 0) {
-		body = (
-			<div className="rv-empty">
-				{loading
-					? "reading the review…"
-					: scope === "pending"
-						? "nothing uncommitted — when an agent edits a file, it appears here"
-						: data?.isRepo === false
-							? "this room's folder is not a git repository, so there is no branch to review"
-							: "nothing on this branch yet"}
-			</div>
-		);
-	} else if (!file) {
-		body = <div className="rv-empty">select a file to review it</div>;
-	} else {
-		// #409: an image gets a before/after instead of the "no line diff"
-		// message a binary/toolarge block would otherwise show. SVG is
-		// also text, so it gets a toggle between the two rather than only
-		// ever the image — comments stay attached to the text view, which
-		// is why the toggle lives beside the body rather than replacing it.
-		const rb = chooseReviewBody({
-			hasFile: true,
-			path: file.path,
-			blocked: file.blocked,
-			hunksLength: file.hunks.length,
-			svgMode,
-		});
-		let content: React.ReactNode;
-		switch (rb.kind) {
-			case "image":
-				content = (
-					<ImageDiff
-						roomId={roomId}
-						cwd={cwd}
-						scope={scope}
-						commitSha={effectiveCommit}
-						path={file.path}
-						change={file.change}
-						contentHash={file.contentHash}
-					/>
-				);
-				break;
-			case "blocked":
-				content = <div className="rv-empty">{rb.blocked} — no line diff to show</div>;
-				break;
-			case "no-diff":
-				content = (
-					<div className="rv-empty">
-						{file.change === "unchanged" ? "no changes in this file" : "no diff in this scope"}
-						{orphans.length > 0 && " — its comments are above"}
-					</div>
-				);
-				break;
-			default:
-				content = (
-					<DiffBody
-						hunks={file.hunks}
-						threads={file.threads}
-						busy={busy}
-						owners={owners}
-						harnessKindOf={harnessKindOf}
-						verbs={verbs}
-						handlers={handlers}
-						onComment={commentOnLines}
-					/>
-				);
-		}
-		body = (
-			<>
-				{isSvgPath(file.path) && (
-					<div className="rv-imgtoggle">
-						<button
-							type="button"
-							className={`rv-btn${svgMode === "image" ? " primary" : ""}`}
-							onClick={() => setSvgMode("image")}
-						>
-							image
-						</button>
-						<button
-							type="button"
-							className={`rv-btn${svgMode === "text" ? " primary" : ""}`}
-							onClick={() => setSvgMode("text")}
-						>
-							text
-						</button>
-					</div>
-				)}
-				{content}
-			</>
-		);
-	}
-
 	return (
 		<div className="rv">
 			{header}
@@ -452,186 +308,71 @@ export const ReviewPane = ({
 			)}
 
 			{files.length > 0 && (
-				<div className="rv-section">
-					<div className="rv-section-bar">
-						<button
-							type="button"
-							className="rv-section-head"
-							onClick={() => setShowFiles(!showFiles)}
-						>
-							<span className="chev">{showFiles ? "▾" : "▸"}</span>
-							<span>files</span>
-							<span className="rv-section-count">{files.length}</span>
-						</button>
-						{/* D4: harness is a chip and a filter, never a partition.
-						    Shown only once more than one harness has touched the
-						    review — with one, it is a control that does nothing. */}
-						{harnesses.length > 1 && (
-							<span className="rv-filter">
-								<button
-									type="button"
-									className={`rv-chip${harnessFilter === undefined ? " on" : ""}`}
-									onClick={() => setHarnessFilter(undefined)}
-									title="show every harness's files"
-								>
-									all
-								</button>
-								{harnesses.map((h) => (
-									<button
-										type="button"
-										key={h}
-										className={`rv-chip${harnessFilter === h ? " on" : ""}`}
-										onClick={() => setHarnessFilter(harnessFilter === h ? undefined : h)}
-										title={`only files last written by ${harnessKindOf(h)}`}
-									>
-										<HChip kind={harnessKindOf(h)} />
-									</button>
-								))}
-							</span>
-						)}
-					</div>
-					{showFiles && (
-						<FileList
-							files={files}
-							activePath={activePath}
-							harnessKindOf={harnessKindOf}
-							onSelect={setActivePath}
-							onToggleViewed={toggleViewed}
-						/>
-					)}
-				</div>
+				<ReviewFileSection
+					files={files}
+					harnesses={harnesses}
+					harnessFilter={harnessFilter}
+					setHarnessFilter={setHarnessFilter}
+					showFiles={showFiles}
+					setShowFiles={setShowFiles}
+					activePath={activePath}
+					setActivePath={setActivePath}
+					harnessKindOf={harnessKindOf}
+					toggleViewed={toggleViewed}
+				/>
 			)}
 
-			{activeFile && (
-				<div className="rv-filebar">
-					<span className="rv-filebar-path" title={activeFile.path}>
-						{activeFile.path}
-					</span>
-					{activeFile.harnessId && <HChip kind={harnessKindOf(activeFile.harnessId)} />}
-					{scope === "pending" && (
-						<span className="rv-verbs">
-							<button
-								type="button"
-								className="rv-act accept"
-								disabled={busy}
-								title={`accept all of ${activeFile.name} — advances the baseline, leaves the file as it is`}
-								onClick={() =>
-									run(() => acceptReview(roomId, cwd, activeFile.path, [], activeFile.contentHash))
-								}
-							>
-								✓
-							</button>
-							<button
-								type="button"
-								className="rv-act reject"
-								disabled={busy}
-								title={`reject all of ${activeFile.name} — restores the baseline content on disk`}
-								onClick={() =>
-									run(() => rejectReview(roomId, cwd, activeFile.path, [], activeFile.contentHash))
-								}
-							>
-								↶
-							</button>
-						</span>
-					)}
-					<button
-						type="button"
-						className="rv-linkbtn"
-						disabled={busy}
-						title="comment on this file as a whole"
-						onClick={() => setFileComposerOpen(true)}
-					>
-						comment on file
-					</button>
-				</div>
-			)}
+			<ReviewFileBar
+				roomId={roomId}
+				cwd={cwd}
+				scope={scope}
+				activeFile={activeFile}
+				orphans={orphans}
+				busy={busy}
+				run={run}
+				handlers={handlers}
+				fileComposerOpen={fileComposerOpen}
+				setFileComposerOpen={setFileComposerOpen}
+				harnessKindOf={harnessKindOf}
+				designLinkFor={designLinkFor}
+			/>
 
-			{activeFile && fileComposerOpen && (
-				<div className="rv-orphans">
-					<Composer
-						placeholder={`a comment on ${activeFile.name} as a whole`}
-						busy={busy}
-						submitLabel="comment"
-						autoFocus
-						onSubmit={(body) => {
-							run(() =>
-								addThread(roomId, cwd, {
-									scope: "file",
-									filePath: activeFile.path,
-									anchorLines: [],
-									body,
-								}),
-							);
-							setFileComposerOpen(false);
-						}}
-						onCancel={() => setFileComposerOpen(false)}
-					/>
-				</div>
-			)}
-
-			{/* Threads with nowhere to sit — file-scoped ones, and every
-			    line thread the matcher could not place. Above the diff so
-			    an orphaned comment is impossible to miss (D6). */}
-			{orphans.length > 0 && (
-				<div className="rv-orphans">
-					{orphans.map((t) => (
-						<ThreadView
-							key={t.id}
-							thread={t}
-							busy={busy}
-							design={t.scope === "element" ? designLinkFor?.(t) : undefined}
-							onReply={(b) => handlers.onReply(t.id, b)}
-							onResolve={(r) => handlers.onResolve(t.id, r)}
-							onDelete={() => handlers.onDeleteThread(t.id)}
-							onEditComment={handlers.onEditComment}
-							onDeleteComment={handlers.onDeleteComment}
-						/>
-					))}
-				</div>
-			)}
-
-			<div className="rv-body">{body}</div>
-
-			{/* Review-level comments (D5) — the remark about the change as
-			    a whole, which belongs to no file and no commit. */}
-			<div className="rv-review-threads">
-				{reviewThreads
-					.filter((t) => t.scope === "review")
-					.map((t) => (
-						<ThreadView
-							key={t.id}
-							thread={t}
-							busy={busy}
-							onReply={(b) => handlers.onReply(t.id, b)}
-							onResolve={(r) => handlers.onResolve(t.id, r)}
-							onDelete={() => handlers.onDeleteThread(t.id)}
-							onEditComment={handlers.onEditComment}
-							onDeleteComment={handlers.onDeleteComment}
-						/>
-					))}
-				{reviewComposerOpen ? (
-					<Composer
-						placeholder="a comment on the whole review"
-						busy={busy}
-						submitLabel="comment"
-						autoFocus
-						onSubmit={(body) => {
-							run(() => addThread(roomId, cwd, { scope: "review", anchorLines: [], body }));
-							setReviewComposerOpen(false);
-						}}
-						onCancel={() => setReviewComposerOpen(false)}
-					/>
-				) : (
-					<button
-						type="button"
-						className="rv-linkbtn"
-						onClick={() => setReviewComposerOpen(true)}
-						disabled={busy}
-					>
-						+ comment on the whole review
-					</button>
-				)}
+			<div className="rv-body">
+				<ReviewBody
+					roomId={roomId}
+					cwd={cwd}
+					scope={scope}
+					commitSha={commitSha}
+					effectiveCommit={effectiveCommit}
+					setCommitSha={setCommitSha}
+					data={data}
+					loading={loading}
+					filesCount={files.length}
+					file={file}
+					orphanCount={orphans.length}
+					reviewThreads={reviewThreads}
+					busy={busy}
+					run={run}
+					handlers={handlers}
+					svgMode={svgMode}
+					setSvgMode={setSvgMode}
+					owners={owners}
+					harnessKindOf={harnessKindOf}
+					verbs={verbs}
+					commentOnLines={commentOnLines}
+				/>
 			</div>
+
+			<ReviewLevelThreads
+				roomId={roomId}
+				cwd={cwd}
+				reviewThreads={reviewThreads}
+				busy={busy}
+				run={run}
+				handlers={handlers}
+				composerOpen={reviewComposerOpen}
+				setComposerOpen={setReviewComposerOpen}
+			/>
 		</div>
 	);
 };
