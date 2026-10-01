@@ -1,4 +1,19 @@
-use super::*;
+use std::ffi::OsString;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex, PoisonError};
+use std::time::{Duration, Instant};
+
+use portable_pty::CommandBuilder;
+
+use super::env::{RESERVED_ENV_KEYS, apply_env};
+use super::preview::{describe_probe, env_preview, resolve_program};
+use super::probe::{ProbeFailure, ProbeOutcome, probe_snapshot, run_probe};
+use super::{PtyEvent, PtyManager, SpawnRequest};
+use crate::harness_config::Injection;
+use crate::harness_kind::HarnessKind;
+use crate::spawn_env;
+use crate::spawn_settings::{CaptureMode, SpawnSettings};
 use std::os::unix::fs::PermissionsExt as _;
 
 /// Write an executable stand-in shell. `probe_args` dispatches on the

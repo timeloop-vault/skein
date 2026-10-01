@@ -1,4 +1,7 @@
-use super::{AGENT_IDENTITY_ENV_KEYS, HarnessIdentity, Injection, apply_env, probe_snapshot};
+use super::HarnessIdentity;
+use super::env::{AGENT_IDENTITY_ENV_KEYS, apply_env};
+use super::probe::probe_snapshot;
+use crate::harness_config::Injection;
 use crate::spawn_settings::SpawnSettings;
 use portable_pty::CommandBuilder;
 use std::collections::HashMap;
