@@ -6,9 +6,6 @@
 # An allowlisted file warns only if it grows past its recorded count.
 # A refactor PR that brings a file under its limit deletes its entry here
 # (the hook reminds you).
-app/src-tauri/src/agent_api/http.rs 1075 #455
-app/src-tauri/src/agent_api/tests.rs 5838 #455
-app/src-tauri/src/agent_api/verbs.rs 3475 #455
 app/src-tauri/src/lib.rs 1390 #456
 app/src/liveContext/activity.css 542 #462
 app/src/review/review.css 1041 #462
