@@ -15,9 +15,6 @@ app/src/App.tsx 884 #459
 app/src/SettingsModal.tsx 601 #460
 app/src/SpawnEnvPanel.tsx 624 #460
 app/src/agentRequests.ts 534 #459
-app/src/harnessActivity.ts 920 #458
-app/src/harnessEvents.ts 706 #458
-app/src/harnessInput.ts 792 #458
 app/src/liveContext/ActivityCard.tsx 461 #460
 app/src/liveContext/activity.css 542 #462
 app/src/liveContext/feedItems.tsx 544 #460
