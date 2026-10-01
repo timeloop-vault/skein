@@ -12,65 +12,20 @@
 // `.sk-app` ancestor so it inherits the active theme tokens.
 
 import { backgroundTasks } from "./backgroundTasks.ts";
-import { HARNESS_KINDS } from "./data.tsx";
-import { activityToStatus, harnessActivity, statusLabel } from "./harnessActivity.ts";
-import { mailPopoverText } from "./mailNudge.ts";
-import {
-	type Breakdown,
-	type BreakdownRoomInput,
-	type BreakdownRow,
-	type BreakdownSubagent,
-	buildBreakdown,
-} from "./statusBreakdown.ts";
-import { type TaskState, renderTaskLines, resolveTasks } from "./statusPopoverTasks.ts";
+import { harnessActivity } from "./harnessActivity.ts";
+import { buildFor, renderBreakdown } from "./statusPopoverBreakdown.ts";
+import { render } from "./statusPopoverRender.ts";
+import { resolve } from "./statusPopoverResolve.ts";
 import { subagents } from "./subagents.ts";
-import type { HarnessKind, Room, Status } from "./types.ts";
+import type { Room } from "./types.ts";
 
 // #329: `.tab-mail` (the harness tab's unread-mail marker) is a trigger
 // too — it sits inside a `.sk-harness-tab` row without being the row's
 // chip or dot, so it needs its own entry point into `resolve()` rather
 // than relying on bubbling to reach one.
 const TARGET_SEL = ".h-chip, .tab-status, .tab-mail";
-// Rows where a lone status dot describes the same harness as the row's
-// chip, so the dot can borrow that chip for its kind (harness tab, feed
-// row, status-bar seg). The room tab is excluded: its dot is the room
-// *aggregate* and the chip's state comes from the store, not the dot.
-// #331: an AGGREGATE dot (room tab, group tab — carries `data-room-ids`,
-// see `StatusDot`) never goes through this one-line path at all; it
-// gets its own multi-row breakdown popover instead, built fresh from
-// `getRooms()` and kept live while shown. A harness-tab/chip dot has no
-// `data-room-ids` and is unaffected.
-const ROW_SEL = ".sk-harness-tab, .lc-row, .sk-statusbar .seg";
 const HOVER_DELAY_MS = 90;
 const EDGE = 8;
-
-const isKind = (k: string): k is HarnessKind => k in HARNESS_KINDS;
-
-interface Resolved {
-	kind: string | null;
-	status: string | null;
-	agent: { key: string; value: string } | null;
-	/** #86: the tool a `permission` status is blocked on, when the
-	 *  adapter could say. Only ever populated via the chip's live
-	 *  harnessId lookup — a lone status dot has no harness id to ask. */
-	tool: string | null;
-	/** #298: the subagent name when the `permission` dialog belongs to
-	 *  one rather than the main session. Same lookup restriction as
-	 *  `tool`. */
-	agentType: string | null;
-	/** #277: how many subagents are currently working, for the
-	 *  "delegating · N agents" wording. Only ever populated via the
-	 *  chip's live harnessId lookup, same restriction as `tool`. */
-	workingCount: number;
-	/** #447: live background tasks, same lookup restriction. */
-	tasks: TaskState;
-	/** #329: this harness's current unread-mail count/senders, read off
-	 *  the row's chip regardless of which element (chip, dot, or the ✉
-	 *  marker itself) was hovered — so the segment shows up no matter
-	 *  where on the tab the pointer is. 0/[] when there's none. */
-	mailCount: number;
-	mailFrom: readonly string[];
-}
 
 export function attachStatusPopover(getRooms: () => readonly Room[]): () => void {
 	let pop: HTMLDivElement | null = null;
@@ -157,250 +112,6 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 		}
 	};
 
-	// Resolve the {kind, status} to show for a hovered chip/dot. A chip
-	// contributes the kind; a dot the status. The row supplies the other
-	// half only when it's unambiguous (exactly one chip / one dot) — so a
-	// harness tab pairs both, while a room tab's multi-chip row-2 shows
-	// just the kind and the room dot shows just the state.
-	const resolve = (el: HTMLElement): Resolved | null => {
-		const isChip = el.classList.contains("h-chip");
-		const isDot = el.classList.contains("tab-status");
-		const isMail = el.classList.contains("tab-mail");
-		if (!isChip && !isDot && !isMail) return null;
-		let kind = isChip ? (el.dataset.kind ?? null) : null;
-		let status = isDot ? (el.dataset.status ?? null) : null;
-		let tool: string | null = null;
-		let agentType: string | null = null;
-		let workingCount = 0;
-		let tasks: TaskState = { workingCount: 0, text: null };
-		// #248: the chip carries its harness's agent label, already worded
-		// by `agentLabel` — the popover repeats it rather than deciding
-		// for itself what an opencode agent can be said to be.
-		const chip = isChip
-			? el
-			: el.closest<HTMLElement>(ROW_SEL)?.querySelector<HTMLElement>(".h-chip[data-agent-key]");
-		const agent =
-			chip?.dataset.agentKey && chip.dataset.agentValue
-				? { key: chip.dataset.agentKey, value: chip.dataset.agentValue }
-				: null;
-		// A chip knows its harness → read that harness's OWN live state from
-		// the store, so a room-tab summary chip shows its real state rather
-		// than borrowing the room's aggregate dot (#141). Also picks up
-		// `permissionTool` (#86). #329: the mail marker, and a harness-tab
-		// dot, borrow the same chip (by id, not by the agent-key-filtered
-		// `chip` above, which would miss a Claude harness with no agent), so
-		// hovering them shows identical state to the rest of the tab. Feed
-		// rows and status-bar segments don't: their dot may not be live state.
-		const row = el.closest<HTMLElement>(ROW_SEL);
-		const chips = row?.querySelectorAll<HTMLElement>(".h-chip[data-harness-id]");
-		const stateChip = isChip
-			? el
-			: isMail || (isDot && row?.matches(".sk-harness-tab") && chips?.length === 1)
-				? chips?.[0]
-				: undefined;
-		if (stateChip?.dataset.harnessId) {
-			const a = harnessActivity.get(stateChip.dataset.harnessId);
-			if (a) {
-				status = activityToStatus(a);
-				tool = a.permissionTool;
-				agentType = a.permissionAgentType;
-			}
-			workingCount = subagents.workingCount(stateChip.dataset.harnessId);
-			tasks = resolveTasks(stateChip.dataset.harnessId);
-		}
-		// A lone status dot (or the mail marker) borrows its row's chip for
-		// the kind (harness tab etc.); skipped for the room dot, which is
-		// an aggregate.
-		if ((isDot || isMail) && !kind) {
-			const chips = el.closest<HTMLElement>(ROW_SEL)?.querySelectorAll<HTMLElement>(".h-chip");
-			if (chips?.length === 1) kind = chips[0]?.dataset.kind ?? null;
-		}
-		// #329: unread-mail count/senders, carried on the chip as data
-		// attributes (mailStore's own state, but this popover is vanilla
-		// DOM with no React access to it) — read for every trigger in the
-		// row, so the segment shows whether the chip, dot or ✉ itself was
-		// hovered.
-		const mailChip = isChip
-			? el
-			: el.closest<HTMLElement>(ROW_SEL)?.querySelector<HTMLElement>(".h-chip[data-mail-count]");
-		const mailCount = mailChip?.dataset.mailCount ? Number(mailChip.dataset.mailCount) : 0;
-		let mailFrom: readonly string[] = [];
-		if (mailChip?.dataset.mailFrom) {
-			try {
-				mailFrom = JSON.parse(mailChip.dataset.mailFrom) as string[];
-			} catch {
-				mailFrom = [];
-			}
-		}
-		return kind || status
-			? { kind, status, agent, tool, agentType, workingCount, tasks, mailCount, mailFrom }
-			: null;
-	};
-
-	const render = (el: HTMLDivElement, c: Resolved) => {
-		el.classList.remove("sk-pop-breakdown");
-		el.replaceChildren();
-		const seg = (label: string, value: string, valueClass?: string) => {
-			if (el.childElementCount > 0) {
-				const sep = document.createElement("span");
-				sep.className = "sep";
-				sep.textContent = "·";
-				el.appendChild(sep);
-			}
-			const k = document.createElement("span");
-			k.className = "pk";
-			k.textContent = label;
-			const v = document.createElement("span");
-			if (valueClass) v.className = valueClass;
-			v.textContent = value;
-			el.append(k, document.createTextNode(" "), v);
-		};
-		if (c.kind && isKind(c.kind)) seg("harness", HARNESS_KINDS[c.kind].name);
-		if (c.agent) seg(c.agent.key, c.agent.value);
-		// #86: "permission needed" (+ tool) rather than the bare word —
-		// the dataset value stays the raw Status for the `pv-*` class,
-		// only the printed text goes through `statusLabel`. #277:
-		// "delegating · N agents" in place of bare "running" likewise.
-		if (c.status)
-			seg(
-				"state",
-				statusLabel(c.status as Status, c.tool, c.agentType, c.workingCount, c.tasks.workingCount),
-				`pv-${c.status}`,
-			);
-		if (c.tasks.text) seg("tasks", c.tasks.text);
-		// #329: the tab's unread-mail marker, as a segment rather than its
-		// own native tooltip — same one-line style as everything else here.
-		if (c.mailCount > 0) seg("mail", mailPopoverText(c.mailCount, c.mailFrom));
-	};
-
-	// ── #331: aggregate breakdown popover ───────────────────────────
-
-	const rule = (): HTMLDivElement => {
-		const r = document.createElement("div");
-		r.className = "bd-rule";
-		return r;
-	};
-
-	const renderRow = (row: BreakdownRow, single: boolean): HTMLDivElement => {
-		const div = document.createElement("div");
-		div.className = "bd-row";
-		const dot = document.createElement("span");
-		dot.className = `bd-dot pv-${row.status}`;
-		dot.textContent = "●";
-		const path = document.createElement("span");
-		path.className = "bd-path";
-		path.textContent = single ? row.harnessName : `${row.roomName} › ${row.harnessName}`;
-		const chip = document.createElement("span");
-		const kindMeta = HARNESS_KINDS[row.kind];
-		chip.className = `bd-chip ${kindMeta.chip}`;
-		chip.textContent = kindMeta.label;
-		const label = document.createElement("span");
-		label.className = `bd-label pv-${row.status}`;
-		label.textContent = row.label;
-		div.append(dot, path, chip, label);
-		return div;
-	};
-
-	const renderSubagentLine = (sa: BreakdownSubagent): HTMLDivElement => {
-		const div = document.createElement("div");
-		div.className = sa.preRestart ? "bd-sub bd-sub-pre" : "bd-sub";
-		const type = sa.agentType ?? "agent";
-		const desc = sa.description ? ` "${sa.description}"` : "";
-		const suffix = sa.preRestart ? " (pre-restart)" : "";
-		div.textContent = `↳ ${type}${desc}${suffix}`;
-		return div;
-	};
-
-	const quietFooterText = (b: Breakdown, single: boolean): string => {
-		const parts = b.quiet.map((q) => {
-			const kinds = q.kinds.map((k) => HARNESS_KINDS[k].label).join(", ");
-			return single ? kinds : `${q.roomName}: ${kinds}`;
-		});
-		return `+ ${b.quietCount} idle  (${parts.join(" · ")})`;
-	};
-
-	const renderBreakdown = (el: HTMLDivElement, aggName: string, b: Breakdown, single: boolean) => {
-		el.classList.add("sk-pop-breakdown");
-		el.replaceChildren();
-
-		const header = document.createElement("div");
-		header.className = "bd-header";
-		const nameSpan = document.createElement("span");
-		nameSpan.className = "bd-name";
-		nameSpan.textContent = aggName;
-		const sep = document.createElement("span");
-		sep.className = "sep";
-		sep.textContent = "·";
-		const statusSpan = document.createElement("span");
-		statusSpan.className = `pv-${b.status}`;
-		statusSpan.textContent = statusLabel(b.status);
-		header.append(nameSpan, sep, statusSpan);
-		el.appendChild(header);
-
-		if (b.rows.length > 0) {
-			el.appendChild(rule());
-			for (const row of b.rows) {
-				el.appendChild(renderRow(row, single));
-				for (const sa of row.subagents) el.appendChild(renderSubagentLine(sa));
-				if (row.hiddenSubagents > 0) {
-					const more = document.createElement("div");
-					more.className = "bd-sub bd-sub-more";
-					more.textContent = `↳ + ${row.hiddenSubagents} more`;
-					el.appendChild(more);
-				}
-				el.append(...renderTaskLines(row));
-			}
-			if (b.moreRows > 0) {
-				const more = document.createElement("div");
-				more.className = "bd-more";
-				more.textContent = `+ ${b.moreRows} more`;
-				el.appendChild(more);
-			}
-		}
-
-		if (b.quietCount > 0) {
-			el.appendChild(rule());
-			const footer = document.createElement("div");
-			footer.className = "bd-footer";
-			footer.textContent = quietFooterText(b, single);
-			el.appendChild(footer);
-		}
-	};
-
-	// Resolve this dot's room ids against the latest `getRooms()`
-	// snapshot and build the breakdown payload. Re-run on every show
-	// AND on every live-store emit while shown (see `startBreakdown`) —
-	// `getRooms()` itself is a live ref read, so a room closed/renamed
-	// mid-hover is picked up too.
-	const buildFor = (
-		roomIds: readonly string[],
-	): { breakdown: Breakdown; rooms: readonly BreakdownRoomInput[] } => {
-		const byId = new Map(getRooms().map((r) => [r.id, r]));
-		const rooms: BreakdownRoomInput[] = [];
-		for (const id of roomIds) {
-			const r = byId.get(id);
-			if (!r) continue;
-			rooms.push({
-				id: r.id,
-				name: r.name,
-				harnesses: r.harnesses.map((h) => ({
-					id: h.id,
-					kind: h.kind,
-					name: h.name,
-					pendingNotifications: h.pendingNotifications,
-				})),
-			});
-		}
-		const breakdown = buildBreakdown(rooms, {
-			activity: harnessActivity.get,
-			subagents: subagents.live,
-			workingCount: subagents.workingCount,
-			backgroundTasks: backgroundTasks.live,
-			workingTaskCount: backgroundTasks.workingCount,
-		});
-		return { breakdown, rooms };
-	};
-
 	const startBreakdown = (p: HTMLDivElement, el: HTMLElement) => {
 		const roomIds = (el.dataset.roomIds ?? "").split(" ").filter((s) => s.length > 0);
 		const aggName = el.dataset.aggName ?? "";
@@ -424,7 +135,7 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 				hide();
 				return;
 			}
-			const { breakdown, rooms } = buildFor(roomIds);
+			const { breakdown, rooms } = buildFor(getRooms, roomIds);
 			const harnessIds = rooms.flatMap((r) => r.harnesses.map((h) => h.id));
 			renderBreakdown(p, aggName, breakdown, rooms.length === 1);
 			positionPopover(p, el);

@@ -13,14 +13,11 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
-import type {
-	CaptureMode,
-	DropReason,
-	EnvPreview,
-	EnvVar,
-	HarnessConfigStatus,
-	SpawnSettings,
-} from "./types.ts";
+import { EnvPreviewSection } from "./spawnEnv/EnvPreviewSection.tsx";
+import { EnvToggles } from "./spawnEnv/EnvToggles.tsx";
+import { CAPTURE_OPTIONS } from "./spawnEnv/constants.ts";
+import { EnvVarList, StringList } from "./spawnEnv/lists.tsx";
+import type { CaptureMode, EnvPreview, HarnessConfigStatus, SpawnSettings } from "./types.ts";
 
 interface SpawnEnvPanelProps {
 	settings: SpawnSettings | null;
@@ -32,170 +29,6 @@ interface SpawnEnvPanelProps {
 	 *  instantly, so dismissing used to be lossless. */
 	onDirtyChange: (dirty: boolean) => void;
 }
-
-const CAPTURE_OPTIONS: { value: CaptureMode; label: string; desc: string }[] = [
-	{
-		value: "login-interactive",
-		label: "Login + interactive shell",
-		desc: "Sources your whole startup chain (.zshenv, .zprofile, .zshrc). Closest to what a new terminal window gives you — interactive-only files are where version managers and package managers install themselves.",
-	},
-	{
-		value: "login",
-		label: "Login files only",
-		desc: "Skips .zshrc and friends. Faster, and avoids prompt frameworks and completion loading. Use this if your interactive config is slow or fragile.",
-	},
-	{
-		value: "none",
-		label: "Don't ask a shell",
-		desc: "Use the environment Skein itself was launched with, plus your additions below. Honest choice if you always start Skein from a terminal — and the escape hatch if a probe misbehaves.",
-	},
-];
-
-const PROBE_TONE: Record<string, "ok" | "warn" | "err" | "muted"> = {
-	captured: "ok",
-	pending: "muted",
-	// A deliberate setting, not a failure — see ProbeFailure::Disabled.
-	disabled: "muted",
-	not_applicable: "muted",
-	unsupported_shell: "warn",
-	timeout: "err",
-	spawn_failed: "err",
-	no_payload: "warn",
-};
-
-const DROP_REASON: Record<DropReason, string> = {
-	unresolved: "unset variable",
-	not_absolute: "not an absolute path",
-	separator: "contains a path separator",
-	missing: "directory not found",
-	duplicate: "already on PATH",
-};
-
-const SOURCE_LABEL: Record<string, string> = {
-	added: "yours",
-	shell: "shell",
-	inherited: "inherited",
-};
-
-/** A list of freeform strings with add / remove / reorder. */
-const StringList = ({
-	items,
-	placeholder,
-	addLabel,
-	onChange,
-}: {
-	items: string[];
-	placeholder: string;
-	addLabel: string;
-	onChange: (next: string[]) => void;
-}) => {
-	const replace = (i: number, value: string) =>
-		onChange(items.map((v, j) => (j === i ? value : v)));
-	const move = (i: number, delta: number) => {
-		const j = i + delta;
-		if (j < 0 || j >= items.length) return;
-		const next = [...items];
-		const [row] = next.splice(i, 1);
-		if (row === undefined) return;
-		next.splice(j, 0, row);
-		onChange(next);
-	};
-	return (
-		<div className="sk-list">
-			{items.map((item, i) => (
-				// Index keys are correct here: rows are positional, the
-				// list is short, and the value itself is user-editable
-				// (so it is not a stable identity).
-				<div className="sk-list-row" key={i}>
-					<input
-						className="sk-input"
-						value={item}
-						placeholder={placeholder}
-						spellCheck={false}
-						onChange={(e) => replace(i, e.target.value)}
-					/>
-					<button
-						type="button"
-						className="sk-btn sk-list-btn"
-						title="Move up"
-						disabled={i === 0}
-						onClick={() => move(i, -1)}
-					>
-						↑
-					</button>
-					<button
-						type="button"
-						className="sk-btn sk-list-btn"
-						title="Move down"
-						disabled={i === items.length - 1}
-						onClick={() => move(i, 1)}
-					>
-						↓
-					</button>
-					<button
-						type="button"
-						className="sk-btn sk-list-btn"
-						title="Remove"
-						onClick={() => onChange(items.filter((_, j) => j !== i))}
-					>
-						✕
-					</button>
-				</div>
-			))}
-			<button type="button" className="sk-btn sk-list-add" onClick={() => onChange([...items, ""])}>
-				{addLabel}
-			</button>
-		</div>
-	);
-};
-
-const EnvVarList = ({
-	items,
-	onChange,
-}: {
-	items: EnvVar[];
-	onChange: (next: EnvVar[]) => void;
-}) => (
-	<div className="sk-list">
-		{items.map((item, i) => (
-			<div className="sk-list-row" key={i}>
-				<input
-					className="sk-input sk-env-key"
-					value={item.key}
-					placeholder="NAME"
-					spellCheck={false}
-					onChange={(e) =>
-						onChange(items.map((v, j) => (j === i ? { ...v, key: e.target.value } : v)))
-					}
-				/>
-				<input
-					className="sk-input"
-					value={item.value}
-					placeholder="value"
-					spellCheck={false}
-					onChange={(e) =>
-						onChange(items.map((v, j) => (j === i ? { ...v, value: e.target.value } : v)))
-					}
-				/>
-				<button
-					type="button"
-					className="sk-btn sk-list-btn"
-					title="Remove"
-					onClick={() => onChange(items.filter((_, j) => j !== i))}
-				>
-					✕
-				</button>
-			</div>
-		))}
-		<button
-			type="button"
-			className="sk-btn sk-list-add"
-			onClick={() => onChange([...items, { key: "", value: "" }])}
-		>
-			Add variable
-		</button>
-	</div>
-);
 
 export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: SpawnEnvPanelProps) => {
 	const [draft, setDraft] = useState<SpawnSettings | null>(settings);
@@ -283,8 +116,6 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 		return <div className="sk-help">Loading environment settings…</div>;
 	}
 
-	const probeTone = preview ? (PROBE_TONE[preview.probe.state] ?? "muted") : "muted";
-	const missingPrograms = preview?.programs.filter((p) => p.resolved === null) ?? [];
 	// Windows has no login shell to ask, so the capture controls do
 	// nothing there and the shell setting only feeds new Shell harnesses.
 	const canProbe = preview?.probe.state !== "not_applicable";
@@ -294,95 +125,7 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 			{degraded && <div className="sk-env-banner sk-env-err">{degraded}</div>}
 			{error && <div className="sk-env-banner sk-env-err">{error}</div>}
 
-			<div className="sk-help">
-				Harnesses don't inherit your terminal's environment — a Skein launched from Finder or the
-				Dock starts with a bare <code>PATH</code>. Skein asks your shell what it uses, then adds the
-				directories below. This is what a harness spawned right now would get.
-			</div>
-
-			<div className="sk-env-status">
-				<span className={`sk-env-dot sk-env-${probeTone}`} />
-				<span className="sk-env-status-text">
-					{preview
-						? {
-								captured: `PATH captured from ${preview.probe.shell} in ${preview.probe.elapsedMs} ms`,
-								pending: "Asking your shell…",
-								disabled: "PATH capture is turned off",
-								not_applicable: "Using the live Windows registry PATH",
-								unsupported_shell: "No PATH capture for this shell",
-								timeout: "Your shell did not answer in time",
-								spawn_failed: "Could not start your shell",
-								no_payload: "Your shell answered with nothing usable",
-							}[preview.probe.state]
-						: "Reading…"}
-				</span>
-				<span className="sk-env-launch">
-					launched from {preview?.launchContext === "terminal" ? "a terminal" : "the desktop"}
-				</span>
-				<button type="button" className="sk-btn" onClick={() => void reprobe()} disabled={busy}>
-					Re-probe
-				</button>
-			</div>
-
-			{preview?.probe.message && <div className="sk-help">{preview.probe.message}</div>}
-
-			{missingPrograms.length > 0 && (
-				<div className="sk-env-banner sk-env-warn">
-					Not on this PATH: {missingPrograms.map((p) => p.name).join(", ")}. A harness for one of
-					these would fail to start.
-				</div>
-			)}
-
-			<div className="sk-field">
-				<label>Resolved PATH</label>
-				<div className="sk-env-path">
-					{preview?.path.map((row) => (
-						<div
-							className={`sk-env-path-row${row.exists ? "" : " sk-env-missing"}`}
-							key={row.entry}
-						>
-							<span className={`sk-env-badge sk-env-badge-${row.source}`}>
-								{SOURCE_LABEL[row.source] ?? row.source}
-							</span>
-							<span className="sk-env-path-entry">{row.entry}</span>
-							{!row.exists && <span className="sk-env-note">missing</span>}
-						</div>
-					))}
-				</div>
-				<div className="sk-env-programs">
-					{preview?.programs.map((p) => (
-						<div className="sk-env-program" key={p.name}>
-							<span className="sk-env-program-name">{p.name}</span>
-							<span className={p.resolved ? "sk-env-program-ok" : "sk-env-program-missing"}>
-								{p.resolved ?? "not found"}
-							</span>
-						</div>
-					))}
-				</div>
-			</div>
-
-			{preview && preview.droppedAdditions.length > 0 && (
-				<div className="sk-env-banner sk-env-warn">
-					Skipped:{" "}
-					{preview.droppedAdditions
-						.map((d) => `${d.entry} (${DROP_REASON[d.reason] ?? d.reason})`)
-						.join(", ")}
-				</div>
-			)}
-
-			{preview?.shellRejected && (
-				<div className="sk-env-banner sk-env-warn">
-					<code>{preview.shellRejected}</code> isn't a runnable file, so it's being ignored — Skein
-					is using <code>{preview.shell}</code>.
-				</div>
-			)}
-
-			{preview && preview.ignoredEnvKeys.length > 0 && (
-				<div className="sk-env-banner sk-env-warn">
-					Skein sets these itself, so your values are ignored: {preview.ignoredEnvKeys.join(", ")}.
-					Use “Additional directories” to change PATH.
-				</div>
-			)}
+			<EnvPreviewSection preview={preview} busy={busy} onReprobe={() => void reprobe()} />
 
 			<div className="sk-field">
 				<label>Additional directories</label>
@@ -453,149 +196,12 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 				/>
 			</div>
 
-			<div className="sk-field">
-				<label>Review tools in your agents</label>
-				<div className="sk-help">
-					So an agent can read your review comments (#215), Skein points each CLI at a small
-					configuration it ships. Both are <strong>session-scoped and additive</strong> — nothing is
-					written into the worktree, and your own plugins, connectors and config are left alone. A
-					repo's own <code>opencode.json</code> still wins over Skein's.
-				</div>
-				{harnessConfig?.error && (
-					<div className="sk-env-banner sk-env-err">
-						{harnessConfig.error} — agents in every room will have no review tools.
-					</div>
-				)}
-				<div className="sk-toggles">
-					<label className="sk-toggle">
-						<input
-							type="checkbox"
-							checked={draft.injectClaudePlugin}
-							disabled={!harnessConfig?.claudePlugin}
-							onChange={(e) => setDraft({ ...draft, injectClaudePlugin: e.target.checked })}
-						/>
-						<span className="sk-toggle-label">
-							<span className="sk-toggle-title">Claude Code</span>
-							<span className="sk-toggle-sub">
-								{harnessConfig?.claudePlugin ? (
-									<>
-										Appends{" "}
-										<code>
-											{harnessConfig.claudeFlag} {harnessConfig.claudePlugin}
-										</code>{" "}
-										to the command. Loads for that session only — nothing is installed, and a plugin
-										you installed yourself is untouched unless it is also named <code>skein</code>.
-									</>
-								) : (
-									<>The shipped plugin didn't resolve, so there is nothing to inject.</>
-								)}
-							</span>
-						</span>
-					</label>
-					<label className="sk-toggle">
-						<input
-							type="checkbox"
-							checked={draft.injectOpencodeConfig}
-							disabled={!harnessConfig?.opencodeConfig}
-							onChange={(e) => setDraft({ ...draft, injectOpencodeConfig: e.target.checked })}
-						/>
-						<span className="sk-toggle-label">
-							<span className="sk-toggle-title">opencode</span>
-							<span className="sk-toggle-sub">
-								{harnessConfig?.opencodeConfig ? (
-									<>
-										Sets{" "}
-										<code>
-											{harnessConfig.opencodeVar}={harnessConfig.opencodeConfig}
-										</code>
-										, which opencode merges between your global config and the project's. Turn this
-										off to use that variable for a config file of your own.
-									</>
-								) : (
-									<>The shipped config didn't resolve, so there is nothing to inject.</>
-								)}
-							</span>
-						</span>
-					</label>
-					<label className="sk-toggle">
-						<input
-							type="checkbox"
-							checked={draft.allowAgentMessaging}
-							onChange={(e) => setDraft({ ...draft, allowAgentMessaging: e.target.checked })}
-						/>
-						<span className="sk-toggle-label">
-							<span className="sk-toggle-title">Let agents message other harnesses</span>
-							<span className="sk-toggle-sub">
-								When off, an agent's <code>send_message</code> and <code>read_messages</code> calls
-								are refused with the reason.
-							</span>
-						</span>
-					</label>
-					<label className="sk-toggle">
-						<input
-							type="checkbox"
-							checked={draft.allowAgentRoomCreation}
-							onChange={(e) => setDraft({ ...draft, allowAgentRoomCreation: e.target.checked })}
-						/>
-						<span className="sk-toggle-label">
-							<span className="sk-toggle-title">Let agents open rooms</span>
-							<span className="sk-toggle-sub">
-								When off, an agent's <code>create_room</code> calls are refused with the reason.
-							</span>
-						</span>
-					</label>
-					<label className="sk-toggle">
-						<input
-							type="checkbox"
-							checked={draft.allowAgentRoomClosing}
-							onChange={(e) => setDraft({ ...draft, allowAgentRoomClosing: e.target.checked })}
-						/>
-						<span className="sk-toggle-label">
-							<span className="sk-toggle-title">Let agents close rooms they created</span>
-							<span className="sk-toggle-sub">
-								When off, an agent's <code>close_room</code> calls are refused with the reason.
-							</span>
-						</span>
-					</label>
-					<label className="sk-toggle">
-						<input
-							type="checkbox"
-							checked={draft.allowAgentHarnessControl}
-							onChange={(e) => setDraft({ ...draft, allowAgentHarnessControl: e.target.checked })}
-						/>
-						<span className="sk-toggle-label">
-							<span className="sk-toggle-title">Let agents open or close harnesses</span>
-							<span className="sk-toggle-sub">
-								When off, an agent's <code>open_harness</code> and <code>close_harness</code> calls
-								are refused with the reason.
-							</span>
-						</span>
-					</label>
-				</div>
-			</div>
-
-			<div className="sk-field">
-				<div className="sk-toggles">
-					<label className="sk-toggle">
-						<input
-							type="checkbox"
-							checked={draft.stripHostEnv}
-							onChange={(e) => setDraft({ ...draft, stripHostEnv: e.target.checked })}
-						/>
-						<span className="sk-toggle-label">
-							<span className="sk-toggle-title">Hide the host terminal from harnesses</span>
-							<span className="sk-toggle-sub">
-								When Skein is started from tmux, VS Code or Windows Terminal, markers like
-								TERM_PROGRAM and TMUX leak into the agent CLIs — which sniff them and adopt the host
-								terminal's key and clipboard behaviour instead of Skein's.
-								{preview && preview.stripped.length > 0 && (
-									<> Currently hiding: {preview.stripped.join(", ")}.</>
-								)}
-							</span>
-						</span>
-					</label>
-				</div>
-			</div>
+			<EnvToggles
+				draft={draft}
+				setDraft={setDraft}
+				harnessConfig={harnessConfig}
+				preview={preview}
+			/>
 
 			<div className="sk-env-actions">
 				<button
