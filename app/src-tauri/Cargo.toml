@@ -44,7 +44,7 @@ portable-pty = "0.9"
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
-notify-debouncer-mini = "0.6"
+notify-debouncer-mini = "0.7"
 # reqwest is already in the tree transitively (via tauri-plugin-updater);
 # making it a direct dep is essentially free at compile time. We use it
 # for the opencode `/event` SSE stream — chunked streaming GET against
