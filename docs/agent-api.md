@@ -115,13 +115,27 @@ like `claude · main`).
 A thread's `scope` is `line`, `file`, `commit`, `review` or `element`
 (#434: a comment on an element of a rendered design, `file` being its
 entry HTML). An `element` thread has no line range and is never
-`unmoved`: it carries `placement: "element"` and an `element` object
-(`anchor` — the picker's evidence: selector, tag, text, attributes,
-optional source file and line; `lastSeen`; `state`). `state` is what the
-design pane last reported (`anchored`, `reanchored`, `stale` or `lost`),
-believed only while every file that report was computed from is
-unchanged on disk, and `unknown` otherwise; `outdated` is true unless the
-state is `anchored` or `reanchored`. Read the anchor, not a position.
+`unmoved`: it carries a `placement`, a `source` guess and an `element`
+object (`anchor` — the picker's evidence: selector, tag, text,
+attributes, optional source file and line; `lastSeen`, with its `state`,
+content `stamp` and `seenMs`; `state`). `state` is what the design pane
+last reported (`anchored`, `reanchored`, `stale` or `lost`), believed
+only while every file that report was computed from is unchanged on
+disk, and `unknown` otherwise. When it is `unknown` the old
+`lastSeen.selector` and `lastSeen.rect` describe a page that no longer
+exists, so they are left out.
+
+`source` is a guess at where the element is written in the room's
+files: `{ file, line_start, line_end, via }`, 1-based inclusive, with
+`via` one of `anchor_source` (the picker's own source hint), `od_id` or
+`text` (a match on the element's text). It is never a position the
+reviewer confirmed. The search is bounded (file count, bytes read, depth), so a
+missing guess is not proof the element isn't in source, and an `od_id` or
+`text` guess can hit an unrelated occurrence; `via` says how it was found. `placement` is `"source_guess"` when a guess was
+found and `"element"` when none was. `outdated` is true unless the
+pane's last report was `anchored` and its stamp still matches the files
+on disk; `reanchored` counts as outdated for the agent. Read the anchor,
+not a position.
 
 ### `get_comment`
 
@@ -134,8 +148,11 @@ state is `anchored` or `reanchored`. Read the anchor, not a position.
   1-based line numbers and `>` marking the commented lines.
 - `diff_context` — the hunk the comment lands in, as unified diff.
 
-For an `element` thread `anchor_lines`, `current_context` and
-`diff_context` are absent; the `element` object above is the evidence.
+For an `element` thread `anchor_lines` is the empty array `[]` (an element
+has no text lines) and `diff_context` is absent; the
+`element` object above is the evidence. `current_context` is the guessed
+source region (`source.file` around `source.line_start`..`line_end`),
+and is absent when there is no guess.
 
 ### `get_diff`
 
