@@ -290,12 +290,12 @@ mod tests {
             ..SpawnSettings::default()
         };
         // No resolved bundle: nothing to pass, and not a failure.
-        assert!(claude_probe_args(&on, None).is_empty());
+        assert_eq!(claude_probe_args(&on, None), Vec::<String>::new());
         let off = SpawnSettings {
             inject_claude_plugin: false,
             ..SpawnSettings::default()
         };
-        assert!(claude_probe_args(&off, None).is_empty());
+        assert_eq!(claude_probe_args(&off, None), Vec::<String>::new());
     }
 }
 

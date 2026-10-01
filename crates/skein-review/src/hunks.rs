@@ -261,8 +261,8 @@ mod tests {
 
     #[test]
     fn identical_texts_have_no_pending_hunks() {
-        assert!(diff_lines("a\nb\n", "a\nb\n").is_empty());
-        assert!(diff_lines("", "").is_empty());
+        assert_eq!(diff_lines("a\nb\n", "a\nb\n"), Vec::<Hunk>::new());
+        assert_eq!(diff_lines("", ""), Vec::<Hunk>::new());
     }
 
     #[test]
@@ -273,7 +273,7 @@ mod tests {
         let next = accept(&baseline, &current, &hunks).unwrap();
         assert_eq!(next, current);
         // And the file is now fully reviewed.
-        assert!(diff_lines(&next, &current).is_empty());
+        assert_eq!(diff_lines(&next, &current), Vec::<Hunk>::new());
     }
 
     #[test]
@@ -282,7 +282,7 @@ mod tests {
         let hunks = diff_lines(&baseline, &current);
         let disk = reject(&baseline, &current, &hunks).unwrap();
         assert_eq!(disk, baseline);
-        assert!(diff_lines(&baseline, &disk).is_empty());
+        assert_eq!(diff_lines(&baseline, &disk), Vec::<Hunk>::new());
     }
 
     #[test]

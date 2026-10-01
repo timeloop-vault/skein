@@ -172,23 +172,23 @@ fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
     // Resolve a linked worktree back to its main checkout, then re-open
     // there: the branch list and HEAD the user picks from must describe
     // the repo the worktree will actually be created in.
-    if let Some(root) = repo_root_for_path(picked) {
-        if root != path {
-            info.resolved_from_worktree = true;
-            info.root.clone_from(&root);
-            // If the resolved root somehow will not open, keep the branches
-            // of the worktree we did open rather than reporting none.
-            if let Ok(main) = Repo::open(Path::new(&root)) {
-                info.branches = main
-                    .branches()
-                    .map_err(|e| e.to_string())?
-                    .into_iter()
-                    .map(|b| BranchDto::from_info(&main, b))
-                    .collect();
-                info.head = main.head_branch();
-                info.remote_branches = main.remote_branches().unwrap_or_default();
-                return Ok(info);
-            }
+    if let Some(root) = repo_root_for_path(picked)
+        && root != path
+    {
+        info.resolved_from_worktree = true;
+        info.root.clone_from(&root);
+        // If the resolved root somehow will not open, keep the branches
+        // of the worktree we did open rather than reporting none.
+        if let Ok(main) = Repo::open(Path::new(&root)) {
+            info.branches = main
+                .branches()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|b| BranchDto::from_info(&main, b))
+                .collect();
+            info.head = main.head_branch();
+            info.remote_branches = main.remote_branches().unwrap_or_default();
+            return Ok(info);
         }
     }
     info.branches = repo
@@ -660,7 +660,7 @@ mod tests {
         let e = repo_identity_impl(&empty.path().to_string_lossy())
             .unwrap()
             .unwrap();
-        assert!(e.root_commits.is_empty());
+        assert_eq!(e.root_commits, Vec::<String>::new());
         assert!(!e.shallow);
 
         let plain = TempDir::new().unwrap();
@@ -687,7 +687,7 @@ mod tests {
         // graft boundary.
         std::fs::write(dir.path().join(".git").join("shallow"), format!("{head}\n")).unwrap();
         let id = repo_identity_impl(&p).unwrap().unwrap();
-        assert!(id.root_commits.is_empty());
+        assert_eq!(id.root_commits, Vec::<String>::new());
         assert!(id.shallow);
         assert_eq!(
             check_identity(Some(&stored), dir.path()),

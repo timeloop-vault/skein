@@ -258,7 +258,7 @@ fn mark_addressed_is_a_claim_and_a_reviewer_reply_withdraws_it() {
         updated_ms: 5,
     })
     .unwrap();
-    assert!(f.db.addressed_for_room("r1").unwrap().is_empty());
+    assert_eq!(f.db.addressed_for_room("r1").unwrap(), Vec::new());
 
     // An agent reply, by contrast, leaves an existing claim standing.
     verbs::mark_addressed(
@@ -323,7 +323,7 @@ fn listing_defaults_to_what_is_still_open() {
         },
     )
     .unwrap();
-    assert!(elsewhere.threads.is_empty());
+    assert_eq!(elsewhere.threads, Vec::new());
 }
 
 #[test]

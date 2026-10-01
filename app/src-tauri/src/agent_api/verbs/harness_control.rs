@@ -113,12 +113,12 @@ pub async fn open_harness(
     if room_id.is_empty() {
         return Err(VerbError::Refused("open_harness needs a room id".into()));
     }
-    if let Some(kind) = args.kind.as_deref() {
-        if !KNOWN_HARNESS_KINDS.contains(&kind) {
-            return Err(VerbError::Refused(format!(
-                "unknown kind {kind:?} — use one of {KNOWN_HARNESS_KINDS:?}"
-            )));
-        }
+    if let Some(kind) = args.kind.as_deref()
+        && !KNOWN_HARNESS_KINDS.contains(&kind)
+    {
+        return Err(VerbError::Refused(format!(
+            "unknown kind {kind:?} — use one of {KNOWN_HARNESS_KINDS:?}"
+        )));
     }
     if let Some(prompt) = args.prompt.as_deref() {
         if prompt.is_empty() {
@@ -193,17 +193,16 @@ pub async fn open_harness(
             target.name
         )));
     }
-    if let Some(cwd) = target.cwd.as_deref() {
-        if check_identity(target.repo_identity.as_ref(), Path::new(cwd)) == IdentityCheck::Mismatch
-        {
-            log_open_harness_outcome(&caller.room_id, room_id, "repo_mismatch");
-            return Err(VerbError::Refused(format!(
-                "repo_mismatch: the folder of {} now holds a different repository \
+    if let Some(cwd) = target.cwd.as_deref()
+        && check_identity(target.repo_identity.as_ref(), Path::new(cwd)) == IdentityCheck::Mismatch
+    {
+        log_open_harness_outcome(&caller.room_id, room_id, "repo_mismatch");
+        return Err(VerbError::Refused(format!(
+            "repo_mismatch: the folder of {} now holds a different repository \
                  than the room was made for; the user must resolve the room's \
                  \"different repository\" card before a harness can open there",
-                target.name
-            )));
-        }
+            target.name
+        )));
     }
     if target.harnesses.len() >= MAX_HARNESSES_PER_ROOM {
         log_open_harness_outcome(&caller.room_id, room_id, "room_full");
@@ -247,19 +246,19 @@ pub async fn open_harness(
         )));
     }
 
-    if args.prompt.is_some() {
-        if let Some(reason) = mail_refusal_for(
+    if args.prompt.is_some()
+        && let Some(reason) = mail_refusal_for(
             &resolved.kind,
             resolved.agent.as_deref(),
             target.cwd.as_deref(),
             mail.policy,
             mail.agent_sees_mcp,
-        ) {
-            log_open_harness_outcome(&caller.room_id, room_id, "prompt_unreachable");
-            return Err(VerbError::Refused(format!(
-                "cannot queue the prompt: the new harness {reason}"
-            )));
-        }
+        )
+    {
+        log_open_harness_outcome(&caller.room_id, room_id, "prompt_unreachable");
+        return Err(VerbError::Refused(format!(
+            "cannot queue the prompt: the new harness {reason}"
+        )));
     }
 
     let opened = match state

@@ -147,7 +147,7 @@ fn error_result_is_not_a_start() {
         true,
         &json!({"backgroundTaskId":"b0000006a"}),
     ));
-    assert!(out.is_empty());
+    assert_eq!(out, Vec::<BackgroundTransition>::new());
     assert!(s.task("b0000006a").is_none());
 }
 
@@ -161,7 +161,7 @@ fn foreground_result_is_not_a_start() {
         false,
         &json!({"stdout":"file"}),
     ));
-    assert!(out.is_empty());
+    assert_eq!(out, Vec::<BackgroundTransition>::new());
 }
 
 #[test]
@@ -297,15 +297,21 @@ fn enqueue_then_delivery_ends_once() {
     let mut s = BackgroundTasks::default();
     bash_start(&mut s, "b0000001a");
     assert_eq!(s.observe(&enqueue(&text)).len(), 1);
-    assert!(s.observe(&delivery(&text)).is_empty());
-    assert!(s.outstanding(TS_MS).is_empty());
+    assert_eq!(
+        s.observe(&delivery(&text)),
+        Vec::<BackgroundTransition>::new()
+    );
+    assert_eq!(s.outstanding(TS_MS), Vec::<&BackgroundTask>::new());
 }
 
 #[test]
 fn duplicate_start_is_ignored() {
     let mut s = BackgroundTasks::default();
     assert_eq!(bash_start(&mut s, "b0000001a").len(), 1);
-    assert!(bash_start(&mut s, "b0000001a").is_empty());
+    assert_eq!(
+        bash_start(&mut s, "b0000001a"),
+        Vec::<BackgroundTransition>::new()
+    );
 }
 
 #[test]
@@ -327,7 +333,7 @@ fn task_stop_ends_the_task() {
         panic!("{out:?}")
     };
     assert_eq!(outcome.status, OutcomeStatus::TaskStopped);
-    assert!(s.outstanding(TS_MS).is_empty());
+    assert_eq!(s.outstanding(TS_MS), Vec::<&BackgroundTask>::new());
 }
 
 #[test]
@@ -350,7 +356,10 @@ fn agent_notification_is_ignored() {
     assert_eq!(n.task_id, "a0123456789abcdef");
     let mut s = BackgroundTasks::default();
     bash_start(&mut s, "b0000001a");
-    assert!(s.observe(&enqueue(text)).is_empty());
+    assert_eq!(
+        s.observe(&enqueue(text)),
+        Vec::<BackgroundTransition>::new()
+    );
     assert_eq!(s.outstanding(TS_MS).len(), 1);
 }
 
@@ -367,7 +376,10 @@ fn monitor_event_yields_once_from_enqueue_only() {
             line: "hit".into()
         }]
     );
-    assert!(s.observe(&delivery(text)).is_empty());
+    assert_eq!(
+        s.observe(&delivery(text)),
+        Vec::<BackgroundTransition>::new()
+    );
     assert_eq!(s.outstanding(TS_MS).len(), 1);
 }
 
@@ -391,18 +403,25 @@ fn monitor_deadline_excludes_non_persistent_only() {
 fn terminal_before_start_gives_same_end_state() {
     let text = notif("b0000001a", "completed", "done (exit code 0)");
     let mut late = BackgroundTasks::default();
-    assert!(late.observe(&enqueue(&text)).is_empty());
+    assert_eq!(
+        late.observe(&enqueue(&text)),
+        Vec::<BackgroundTransition>::new()
+    );
     let out = bash_start(&mut late, "b0000001a");
     assert!(matches!(
         out.as_slice(),
         [BackgroundTransition::Started(_), BackgroundTransition::Ended { outcome, .. }]
             if outcome.status == OutcomeStatus::Completed && outcome.exit_code == Some(0)
     ));
-    assert!(late.observe(&delivery(&text)).is_empty());
+    assert_eq!(
+        late.observe(&delivery(&text)),
+        Vec::<BackgroundTransition>::new()
+    );
     let mut normal = BackgroundTasks::default();
     bash_start(&mut normal, "b0000001a");
     normal.observe(&enqueue(&text));
-    assert!(late.outstanding(TS_MS).is_empty() && normal.outstanding(TS_MS).is_empty());
+    assert_eq!(late.outstanding(TS_MS), Vec::<&BackgroundTask>::new());
+    assert_eq!(normal.outstanding(TS_MS), Vec::<&BackgroundTask>::new());
 }
 
 #[test]
@@ -421,7 +440,7 @@ fn task_stop_before_start_is_remembered() {
     ));
     let out = bash_start(&mut s, "b0000001a");
     assert_eq!(out.len(), 2);
-    assert!(s.outstanding(TS_MS).is_empty());
+    assert_eq!(s.outstanding(TS_MS), Vec::<&BackgroundTask>::new());
 }
 
 #[test]
@@ -430,14 +449,20 @@ fn expire_overdue_respects_grace_and_persistence() {
     monitor_start(&mut s, "b0000004a", false);
     monitor_start(&mut s, "b0000005a", true);
     bash_start(&mut s, "b0000001a");
-    assert!(s.expire_overdue(TS_MS + 600_000 + 999, 1000).is_empty());
+    assert_eq!(
+        s.expire_overdue(TS_MS + 600_000 + 999, 1000),
+        Vec::<BackgroundTransition>::new()
+    );
     let out = s.expire_overdue(TS_MS + 600_000 + 1000, 1000);
     let [BackgroundTransition::Ended { task, outcome }] = out.as_slice() else {
         panic!("{out:?}")
     };
     assert_eq!(task.task_id, "b0000004a");
     assert_eq!(outcome, &Outcome::new(OutcomeStatus::Expired));
-    assert!(s.expire_overdue(TS_MS + 10_000_000, 0).is_empty());
+    assert_eq!(
+        s.expire_overdue(TS_MS + 10_000_000, 0),
+        Vec::<BackgroundTransition>::new()
+    );
 }
 
 #[test]

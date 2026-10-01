@@ -80,12 +80,21 @@ fn patch_targets_reads_the_shapes_both_adapters_emit() {
 #[test]
 fn patch_targets_ignores_errors_and_the_opencode_commit_snapshot() {
     // Errored patch — nothing landed on disk.
-    assert!(patch_targets(r#"{"tool":"Edit","files":["/w/a.rs"],"is_error":true}"#).is_empty());
+    assert_eq!(
+        patch_targets(r#"{"tool":"Edit","files":["/w/a.rs"],"is_error":true}"#),
+        Vec::<String>::new()
+    );
     // opencode's multi-file commit snapshot: no tool, so it must
     // not own a baseline (same exclusion as diff.ts's patchInfo).
-    assert!(patch_targets(r#"{"files":["/w/a.rs","/w/b.rs"],"hash":"abc"}"#).is_empty());
-    assert!(patch_targets(r#"{"tool":"Read","files":["/w/a.rs"]}"#).is_empty());
-    assert!(patch_targets("not json").is_empty());
+    assert_eq!(
+        patch_targets(r#"{"files":["/w/a.rs","/w/b.rs"],"hash":"abc"}"#),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        patch_targets(r#"{"tool":"Read","files":["/w/a.rs"]}"#),
+        Vec::<String>::new()
+    );
+    assert_eq!(patch_targets("not json"), Vec::<String>::new());
 }
 
 // ── fixtures ──────────────────────────────────────────────────
@@ -476,7 +485,7 @@ fn a_binary_file_is_reported_as_blocked_and_still_clears_on_accept() {
     let pending = room.pending();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].blocked, Some("binary"));
-    assert!(pending[0].hunks.is_empty());
+    assert_eq!(pending[0].hunks, Vec::new());
 
     accept_impl(&room.db, "r1", &room.cwd, Some("logo.png"), &[], None).unwrap();
     assert!(room.pending().is_empty(), "an accepted binary must clear");

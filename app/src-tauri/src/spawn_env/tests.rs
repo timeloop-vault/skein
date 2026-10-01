@@ -425,7 +425,7 @@ fn merge_path_reports_why_each_addition_was_dropped() {
             ("~/bin".to_owned(), DropReason::Duplicate),
         ]
     );
-    assert!(out.added.is_empty());
+    assert_eq!(out.added, Vec::<String>::new());
 }
 
 #[test]
@@ -655,7 +655,7 @@ mod windows_merge_path {
                 (r"~\bin".to_owned(), DropReason::Duplicate),
             ]
         );
-        assert!(out.added.is_empty());
+        assert_eq!(out.added, Vec::<String>::new());
     }
 
     /// Windows-only: `%VAR%` is the native form, and an addition

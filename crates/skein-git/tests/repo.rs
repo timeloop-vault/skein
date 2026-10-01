@@ -165,7 +165,7 @@ fn root_commits_empty_repo_is_empty() {
     let tmp = TempDir::new().unwrap();
     Repository::init(tmp.path()).unwrap();
     let repo = Repo::open(tmp.path()).unwrap();
-    assert!(repo.root_commits().unwrap().is_empty());
+    assert_eq!(repo.root_commits().unwrap(), Vec::<String>::new());
     assert!(repo.head_commit_id().is_none());
 }
 

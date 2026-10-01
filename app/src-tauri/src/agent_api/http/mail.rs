@@ -91,10 +91,10 @@ pub(super) async fn api_read_messages(
     );
     match out {
         Ok(v) => {
-            if v.newly_marked_read > 0 {
-                if let Some(harness_id) = caller.harness_id.as_deref() {
-                    state.notify_mail_changed(&caller.room_id, harness_id);
-                }
+            if v.newly_marked_read > 0
+                && let Some(harness_id) = caller.harness_id.as_deref()
+            {
+                state.notify_mail_changed(&caller.room_id, harness_id);
             }
             match json_of(v) {
                 Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),

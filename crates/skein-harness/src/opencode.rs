@@ -522,10 +522,9 @@ mod tests {
         let conn = fixture();
         let ids = session_ids_for_directory(&conn, "/w/proj").unwrap();
         assert_eq!(ids, ["ses_grand", "ses_child", "ses_root"]);
-        assert!(
-            session_ids_for_directory(&conn, "/w/other")
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            session_ids_for_directory(&conn, "/w/other").unwrap(),
+            Vec::<String>::new()
         );
         assert!(session_exists(&conn, "ses_root").unwrap());
         assert!(!session_exists(&conn, "ses_old").unwrap());

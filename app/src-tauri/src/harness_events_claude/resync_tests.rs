@@ -301,7 +301,7 @@ fn reappear_truncated_resyncs_as_backfill() {
     {
         let s = state.lock();
         assert_eq!(s.last_pos, len);
-        assert!(s.partial.is_empty());
+        assert_eq!(s.partial, "");
     }
     assert_eq!(
         db.recent_harness_actions_by_room("r1", -1, 100)
@@ -387,7 +387,7 @@ fn reappear_same_completes_a_carried_partial_line() {
     fs::write(&path, &before).unwrap();
     let first = t425_tick(&state);
     assert!(matches!(first.as_slice(), [ClaudeEvent::UserPrompt { .. }]));
-    assert!(!state.lock().partial.is_empty());
+    assert_ne!(state.lock().partial, "");
     fs::remove_file(&path).unwrap();
     assert!(matches!(
         t425_tick(&state).as_slice(),
@@ -522,7 +522,7 @@ fn subagent_shrink_reseeds_without_replay() {
     let s = state.lock();
     let t = s.subagents.get("x").unwrap();
     assert_eq!(t.last_pos, content.len() as u64);
-    assert!(t.partial.is_empty());
+    assert_eq!(t.partial, "");
     assert_eq!(
         t.lifecycle.is_finished(),
         skein_harness::claude::subagent_transcript_is_finished(content)

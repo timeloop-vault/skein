@@ -158,16 +158,16 @@ pub(super) fn place_threads(
                 placement = index.place(&anchor);
                 // Write the new position back so the next round searches
                 // from where the thread was last seen.
-                if let Some(new_start) = placement.start() {
-                    if new_start != start {
-                        let end = new_start + anchor_lines.len().saturating_sub(1);
-                        if let Err(e) = db.update_review_thread_anchor(
-                            &t.id,
-                            i64::try_from(new_start).unwrap_or(i64::MAX),
-                            i64::try_from(end).unwrap_or(i64::MAX),
-                        ) {
-                            tracing::warn!(thread = %t.id, error = %e, "review: re-anchor write failed");
-                        }
+                if let Some(new_start) = placement.start()
+                    && new_start != start
+                {
+                    let end = new_start + anchor_lines.len().saturating_sub(1);
+                    if let Err(e) = db.update_review_thread_anchor(
+                        &t.id,
+                        i64::try_from(new_start).unwrap_or(i64::MAX),
+                        i64::try_from(end).unwrap_or(i64::MAX),
+                    ) {
+                        tracing::warn!(thread = %t.id, error = %e, "review: re-anchor write failed");
                     }
                 }
             }
@@ -333,8 +333,8 @@ mod tests {
         // A row written by something else, or corrupted, must not panic
         // — it degrades to an unanchorable thread, which renders as
         // outdated rather than crashing the pane.
-        assert!(parse_anchor_lines(Some("not json")).is_empty());
-        assert!(parse_anchor_lines(None).is_empty());
+        assert_eq!(parse_anchor_lines(Some("not json")), Vec::<String>::new());
+        assert_eq!(parse_anchor_lines(None), Vec::<String>::new());
     }
 
     #[test]

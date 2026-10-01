@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(d.capture, CaptureMode::LoginInteractive);
         assert!(d.shell.is_none());
         assert_eq!(d.path_prepend, default_path_prepend());
-        assert!(!d.path_prepend.is_empty());
+        assert_ne!(d.path_prepend, Vec::<String>::new());
     }
 
     #[test]

@@ -322,7 +322,7 @@ fn t445_attach_over_outstanding_task_seeds_initial_start() {
     assert_eq!(task_id, "b0000001a");
     assert!(initial);
     assert!(t445_ends(&events).is_empty(), "{events:?}");
-    assert!(t445_end_rows(&db).is_empty());
+    assert_eq!(t445_end_rows(&db), Vec::<serde_json::Value>::new());
 }
 
 /// Case 3.
@@ -345,7 +345,7 @@ fn t445_attach_over_finished_task_seeds_nothing() {
     let events = drain_brief(&rx);
     assert!(t445_starts(&events).is_empty(), "{events:?}");
     assert!(t445_ends(&events).is_empty(), "{events:?}");
-    assert!(t445_end_rows(&db).is_empty());
+    assert_eq!(t445_end_rows(&db), Vec::<serde_json::Value>::new());
 }
 
 /// Case 4, attach half: a `[killed]` trailer is the only record.
@@ -364,7 +364,7 @@ fn t445_attach_killed_trailer_seeds_nothing() {
     let events = drain_brief(&rx);
     assert!(t445_starts(&events).is_empty(), "{events:?}");
     assert!(t445_ends(&events).is_empty(), "{events:?}");
-    assert!(t445_end_rows(&db).is_empty());
+    assert_eq!(t445_end_rows(&db), Vec::<serde_json::Value>::new());
 }
 
 /// Case 4, live half: `TaskStop` leaves no notification.

@@ -185,12 +185,12 @@ fn a_token_cannot_touch_another_rooms_thread_through_any_verb() {
 
     // Listing never sees it either.
     let list = verbs::list_comments(&f.db, &intruder, &ListArgs::default()).unwrap();
-    assert!(list.threads.is_empty());
+    assert_eq!(list.threads, Vec::new());
     assert_eq!(list.unresolved_total, 0);
 
     // And none of that left a trace on room 2's thread.
     assert_eq!(f.db.review_comments_for_room("r2").unwrap().len(), 1);
-    assert!(f.db.addressed_for_room("r2").unwrap().is_empty());
+    assert_eq!(f.db.addressed_for_room("r2").unwrap(), Vec::new());
 }
 
 #[test]

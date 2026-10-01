@@ -350,13 +350,11 @@ pub(crate) fn discover(
     let repo = skein_git::Repo::open(Path::new(cwd)).ok();
     let (mut inserted, needs_catch_up) =
         discover_batch(db, room_id, cwd, repo.as_ref(), reported, true);
-    if needs_catch_up {
-        if let Some(repo) = &repo {
-            inserted += catch_up_with(db, room_id, cwd, repo);
-        }
-        // A non-git room has nothing to catch up against — nothing
-        // else to do.
+    if needs_catch_up && let Some(repo) = &repo {
+        inserted += catch_up_with(db, room_id, cwd, repo);
     }
+    // A non-git room has nothing to catch up against — nothing
+    // else to do.
     inserted
 }
 
@@ -435,17 +433,15 @@ fn discover_batch(
                 continue;
             }
         }
-        if check_ignores {
-            if let Some(repo) = repo {
-                match repo.is_path_ignored(&key) {
-                    Ok(true) => continue,
-                    Ok(false) => {}
-                    // Can't prove it's ignored — the safe direction is
-                    // to keep going rather than silently drop a real
-                    // change.
-                    Err(e) => {
-                        tracing::warn!(path = %key, error = %e, "review: discovery ignore check failed");
-                    }
+        if check_ignores && let Some(repo) = repo {
+            match repo.is_path_ignored(&key) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                // Can't prove it's ignored — the safe direction is
+                // to keep going rather than silently drop a real
+                // change.
+                Err(e) => {
+                    tracing::warn!(path = %key, error = %e, "review: discovery ignore check failed");
                 }
             }
         }

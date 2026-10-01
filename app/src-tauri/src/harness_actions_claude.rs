@@ -365,13 +365,13 @@ fn extract_patch_info(result: &Value) -> Option<Value> {
     for hunk in hunks {
         if let Some(lines) = hunk.get("lines").and_then(Value::as_array) {
             for line in lines {
-                if let Some(s) = line.as_str() {
-                    if let Some(first) = s.chars().next() {
-                        match first {
-                            '+' => additions += 1,
-                            '-' => deletions += 1,
-                            _ => {}
-                        }
+                if let Some(s) = line.as_str()
+                    && let Some(first) = s.chars().next()
+                {
+                    match first {
+                        '+' => additions += 1,
+                        '-' => deletions += 1,
+                        _ => {}
                     }
                 }
             }

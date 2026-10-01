@@ -46,7 +46,7 @@ fn a_thread_round_trips_with_its_anchor_intact() {
     assert_eq!(db.review_thread("t1").unwrap().as_ref(), Some(&t));
     assert_eq!(db.review_threads_for_room("r1").unwrap(), vec![t]);
     // Another room's review is not this one's.
-    assert!(db.review_threads_for_room("r2").unwrap().is_empty());
+    assert_eq!(db.review_threads_for_room("r2").unwrap(), Vec::new());
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn deleting_a_thread_takes_every_comment_on_it() {
     db.insert_review_comment(&comment("c2", "t1", "two", 200))
         .unwrap();
     assert!(db.delete_review_thread("t1").unwrap());
-    assert!(db.review_comments_for_room("r1").unwrap().is_empty());
+    assert_eq!(db.review_comments_for_room("r1").unwrap(), Vec::new());
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn a_viewed_marker_records_what_was_looked_at_not_merely_that_it_was() {
         vec![("a.rs".to_string(), "hash-v2".to_string())]
     );
     db.clear_review_viewed("r1", "a.rs").unwrap();
-    assert!(db.review_viewed_for_room("r1").unwrap().is_empty());
+    assert_eq!(db.review_viewed_for_room("r1").unwrap(), Vec::new());
 }
 
 // ── base ref ──────────────────────────────────────────────────

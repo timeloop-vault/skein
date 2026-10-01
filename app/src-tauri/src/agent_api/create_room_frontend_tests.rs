@@ -275,10 +275,10 @@ async fn create_room_happy_path_without_a_prompt() {
     assert_eq!(out.kind, "claude");
     assert_eq!(out.session_id.as_deref(), Some("sess-1"));
     assert_eq!(out.message_id, None, "no prompt was given");
-    assert!(
+    assert_eq!(
         f.db.all_harness_messages("new-room", "new-harness")
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        Vec::new()
     );
 }
 

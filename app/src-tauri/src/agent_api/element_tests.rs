@@ -331,7 +331,7 @@ fn an_anchored_report_goes_stale_when_a_stamped_file_changes() {
     assert_eq!(seen["selector"], "#root > div:nth-of-type(1)");
     assert_eq!(seen["rect"]["w"], 70.0);
     let stamp = seen["stamp"].as_str().unwrap().to_owned();
-    assert!(!stamp.is_empty());
+    assert_ne!(stamp, "");
 
     // The agent edits a stamped file; the pane has not re-rendered.
     std::fs::write(f.root.join(APP), format!("{APP_BODY}// edited\n")).unwrap();

@@ -203,12 +203,12 @@ pub async fn create_room(
         }
     };
 
-    if let Some(kind) = args.kind.as_deref() {
-        if !KNOWN_HARNESS_KINDS.contains(&kind) {
-            return Err(VerbError::Refused(format!(
-                "unknown kind {kind:?} — use one of {KNOWN_HARNESS_KINDS:?}"
-            )));
-        }
+    if let Some(kind) = args.kind.as_deref()
+        && !KNOWN_HARNESS_KINDS.contains(&kind)
+    {
+        return Err(VerbError::Refused(format!(
+            "unknown kind {kind:?} — use one of {KNOWN_HARNESS_KINDS:?}"
+        )));
     }
 
     if let Some(prompt) = args.prompt.as_deref() {
@@ -340,18 +340,18 @@ pub async fn create_room(
         )));
     }
 
-    if args.prompt.is_some() {
-        if let Some(reason) = mail_refusal_for(
+    if args.prompt.is_some()
+        && let Some(reason) = mail_refusal_for(
             &resolved.kind,
             resolved.agent.as_deref(),
             Some(&path),
             mail.policy,
             mail.agent_sees_mcp,
-        ) {
-            return Err(VerbError::Refused(format!(
-                "cannot queue the prompt: the new harness {reason}"
-            )));
-        }
+        )
+    {
+        return Err(VerbError::Refused(format!(
+            "cannot queue the prompt: the new harness {reason}"
+        )));
     }
 
     let created = state

@@ -5,7 +5,7 @@
 
 use std::fs;
 
-use skein_git::{DiffLineKind, Repo, StatusKind, propose_worktree_path};
+use skein_git::{DiffHunk, DiffLineKind, FileDiff, Repo, StatusKind, propose_worktree_path};
 mod common;
 
 use common::init_repo;
@@ -14,7 +14,7 @@ use common::init_repo;
 fn diff_clean_repo_is_empty() {
     let (_tmp, path) = init_repo();
     let repo = Repo::open(&path).unwrap();
-    assert!(repo.diff_workdir().unwrap().is_empty());
+    assert_eq!(repo.diff_workdir().unwrap(), Vec::<FileDiff>::new());
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn diff_modified_file_has_add_and_delete_lines() {
     assert_eq!(f.path, "README.md");
     assert_eq!(f.kind, StatusKind::Modified);
     assert!(!f.binary);
-    assert!(!f.hunks.is_empty());
+    assert_ne!(f.hunks, Vec::<DiffHunk>::new());
 
     // Collect the line kinds from the first hunk so we can assert
     // both `-hello` and `+goodbye` appear.

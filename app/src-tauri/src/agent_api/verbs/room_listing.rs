@@ -78,10 +78,10 @@ async fn harness_phases(state: &AgentApiState, harness_ids: &[String]) -> BTreeM
         return phases;
     };
     for (id, phase) in &mut phases {
-        if let Some(p) = reported.get(id).and_then(serde_json::Value::as_str) {
-            if KNOWN_PHASES.contains(&p) {
-                p.clone_into(phase);
-            }
+        if let Some(p) = reported.get(id).and_then(serde_json::Value::as_str)
+            && KNOWN_PHASES.contains(&p)
+        {
+            p.clone_into(phase);
         }
     }
     phases
@@ -203,12 +203,12 @@ pub async fn list_rooms(
     mail: &MailContext,
 ) -> VerbResult<ListRoomsOut> {
     let db = &state.db;
-    if let Some(cb) = args.created_by.as_deref() {
-        if cb != "me" {
-            return Err(VerbError::Refused(format!(
-                "unknown created_by {cb:?} — the only supported value is \"me\""
-            )));
-        }
+    if let Some(cb) = args.created_by.as_deref()
+        && cb != "me"
+    {
+        return Err(VerbError::Refused(format!(
+            "unknown created_by {cb:?} — the only supported value is \"me\""
+        )));
     }
 
     let rooms = db.all_rooms().map_err(internal)?;

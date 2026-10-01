@@ -273,7 +273,10 @@ mod tests {
 
     #[test]
     fn missing_root_is_empty() {
-        assert!(list_html_entries(Path::new("/definitely/not/here")).is_empty());
+        assert_eq!(
+            list_html_entries(Path::new("/definitely/not/here")),
+            Vec::<String>::new()
+        );
     }
 
     #[cfg(unix)]
@@ -283,7 +286,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         touch(outside.path(), "out.html");
         std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
-        assert!(list_html_entries(dir.path()).is_empty());
+        assert_eq!(list_html_entries(dir.path()), Vec::<String>::new());
     }
 
     fn reload(root: &str, paths: &[&str]) -> bool {
