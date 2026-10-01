@@ -11,6 +11,7 @@
 // The element is created lazily and appended to the hovered element's
 // `.sk-app` ancestor so it inherits the active theme tokens.
 
+import { backgroundTasks } from "./backgroundTasks.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { activityToStatus, harnessActivity, statusLabel } from "./harnessActivity.ts";
 import { mailPopoverText } from "./mailNudge.ts";
@@ -21,6 +22,7 @@ import {
 	type BreakdownSubagent,
 	buildBreakdown,
 } from "./statusBreakdown.ts";
+import { type TaskState, renderTaskLines, resolveTasks } from "./statusPopoverTasks.ts";
 import { subagents } from "./subagents.ts";
 import type { HarnessKind, Room, Status } from "./types.ts";
 
@@ -60,6 +62,8 @@ interface Resolved {
 	 *  "delegating · N agents" wording. Only ever populated via the
 	 *  chip's live harnessId lookup, same restriction as `tool`. */
 	workingCount: number;
+	/** #447: live background tasks, same lookup restriction. */
+	tasks: TaskState;
 	/** #329: this harness's current unread-mail count/senders, read off
 	 *  the row's chip regardless of which element (chip, dot, or the ✉
 	 *  marker itself) was hovered — so the segment shows up no matter
@@ -113,9 +117,11 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 			if (idSubs.has(id)) continue;
 			const unActivity = harnessActivity.subscribe(id, scheduleRebuild);
 			const unSubagents = subagents.subscribe(id, scheduleRebuild);
+			const unTasks = backgroundTasks.subscribe(id, scheduleRebuild);
 			idSubs.set(id, () => {
 				unActivity();
 				unSubagents();
+				unTasks();
 			});
 		}
 	};
@@ -166,6 +172,7 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 		let tool: string | null = null;
 		let agentType: string | null = null;
 		let workingCount = 0;
+		let tasks: TaskState = { workingCount: 0, text: null };
 		// #248: the chip carries its harness's agent label, already worded
 		// by `agentLabel` — the popover repeats it rather than deciding
 		// for itself what an opencode agent can be said to be.
@@ -197,6 +204,7 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 				agentType = a.permissionAgentType;
 			}
 			workingCount = subagents.workingCount(stateChip.dataset.harnessId);
+			tasks = resolveTasks(stateChip.dataset.harnessId);
 		}
 		// A lone status dot (or the mail marker) borrows its row's chip for
 		// the kind (harness tab etc.); skipped for the room dot, which is
@@ -223,7 +231,7 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 			}
 		}
 		return kind || status
-			? { kind, status, agent, tool, agentType, workingCount, mailCount, mailFrom }
+			? { kind, status, agent, tool, agentType, workingCount, tasks, mailCount, mailFrom }
 			: null;
 	};
 
@@ -254,9 +262,10 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 		if (c.status)
 			seg(
 				"state",
-				statusLabel(c.status as Status, c.tool, c.agentType, c.workingCount),
+				statusLabel(c.status as Status, c.tool, c.agentType, c.workingCount, c.tasks.workingCount),
 				`pv-${c.status}`,
 			);
+		if (c.tasks.text) seg("tasks", c.tasks.text);
 		// #329: the tab's unread-mail marker, as a segment rather than its
 		// own native tooltip — same one-line style as everything else here.
 		if (c.mailCount > 0) seg("mail", mailPopoverText(c.mailCount, c.mailFrom));
@@ -337,6 +346,7 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 					more.textContent = `↳ + ${row.hiddenSubagents} more`;
 					el.appendChild(more);
 				}
+				el.append(...renderTaskLines(row));
 			}
 			if (b.moreRows > 0) {
 				const more = document.createElement("div");
@@ -383,6 +393,8 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 			activity: harnessActivity.get,
 			subagents: subagents.live,
 			workingCount: subagents.workingCount,
+			backgroundTasks: backgroundTasks.live,
+			workingTaskCount: backgroundTasks.workingCount,
 		});
 		return { breakdown, rooms };
 	};

@@ -109,6 +109,26 @@ describe("backgroundTasks", () => {
 		expect(backgroundTasks.workingCount(H)).toBe(0);
 	});
 
+	it("takeUnreportedOverdue counts each overdue task once, silently", () => {
+		const cb = vi.fn();
+		const off = backgroundTasks.subscribe(H, cb);
+		backgroundTasks.record(H, task("a"), false);
+		backgroundTasks.record(H, task("o"), true);
+		expect(backgroundTasks.takeUnreportedOverdue(H)).toBe(0);
+		backgroundTasks.markOverdue(H, ["a"]);
+		cb.mockClear();
+		expect(backgroundTasks.takeUnreportedOverdue(H)).toBe(1);
+		expect(backgroundTasks.takeUnreportedOverdue(H)).toBe(0);
+		expect(cb).not.toHaveBeenCalled();
+		// Survives a re-record; a newly overdue task is counted on its own.
+		backgroundTasks.record(H, task("a"), false);
+		backgroundTasks.record(H, task("b"), false);
+		backgroundTasks.markOverdue(H, ["b"]);
+		expect(backgroundTasks.takeUnreportedOverdue(H)).toBe(1);
+		expect(backgroundTasks.overdueCount(H)).toBe(2);
+		off();
+	});
+
 	it("presumeGone marks working entries overdue without deleting", () => {
 		backgroundTasks.record(H, task("a"), false);
 		backgroundTasks.record(H, task("b"), false);

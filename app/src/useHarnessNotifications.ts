@@ -300,9 +300,18 @@ export function useHarnessNotifications(
 			// into `waiting` (including `DelegationSettled`) can say so
 			// honestly. #441: a ceiling/watchdog flush instead says how many
 			// background tasks are presumed still running, never "finished".
+			// Only a ceiling/watchdog flush consumes the overdue tasks, so an
+			// ordinary waiting never swallows them and a later notice never
+			// repeats ones already announced.
+			const flushed =
+				source === TRANSITION_SOURCE.DelegationCeiling || source === TRANSITION_SOURCE.WorkWatchdog;
 			const delegationNote =
 				to === "waiting"
-					? waitingNote(source, a.delegatedCount, backgroundTasks.overdueCount(harnessId))
+					? waitingNote(
+							source,
+							a.delegatedCount,
+							flushed ? backgroundTasks.takeUnreportedOverdue(harnessId) : 0,
+						)
 					: null;
 			// hasUserInput gate applies only to the passive transition.
 			// `→ waiting` and `→ permission` are both unconditional.

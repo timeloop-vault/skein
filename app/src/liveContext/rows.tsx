@@ -10,6 +10,7 @@ import { useMemo } from "react";
 import type { HarnessKind } from "../types.ts";
 import { type PreviewExpansion, PreviewExpansionContext, ResultPreview } from "./ResultPreview.tsx";
 import { Row, basename, formatDuration } from "./Row.tsx";
+import { BackgroundEndRow } from "./backgroundRows.tsx";
 import {
 	type Payload,
 	messageInLabel,
@@ -82,6 +83,8 @@ export const ActivityRow = ({
 				return <SlashRow payload={payload} harness={harness} timestampMs={ts} />;
 			case "subagent_end":
 				return <SubagentEndRow payload={payload} harness={harness} timestampMs={ts} />;
+			case "background_end":
+				return <BackgroundEndRow payload={payload} harness={harness} timestampMs={ts} />;
 			case "message_in":
 				return <MessageInRow payload={payload} harness={harness} timestampMs={ts} />;
 			case "message_out":

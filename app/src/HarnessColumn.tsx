@@ -3,6 +3,7 @@ import { DesignBody } from "./DesignBody.tsx";
 import { FilesBody } from "./FilesBody.tsx";
 import { HarnessActionsMenu } from "./HarnessActionsMenu.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
+import { useWorkingBackgroundTaskCount } from "./backgroundTasks.ts";
 import { HarnessPicker, HarnessTab } from "./components.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
 import {
@@ -49,6 +50,8 @@ export const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
 	// as subagents start/finish, not just on the next unrelated
 	// harnessActivity emit.
 	const workingCount = useWorkingSubagentCount(harness.id);
+	// #447: background tasks join the same label.
+	const taskCount = useWorkingBackgroundTaskCount(harness.id);
 	// Dot color uses effectiveStatus so a waiting-but-acknowledged
 	// harness renders grey (no pulse) in the bottom bar. The TEXT
 	// keeps the underlying phase via activityToStatus — telling the
@@ -66,6 +69,7 @@ export const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
 				activity.permissionTool,
 				activity.permissionAgentType,
 				workingCount,
+				taskCount,
 			)
 		: harness.status;
 	return (

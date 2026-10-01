@@ -38,9 +38,15 @@ export interface BackgroundTaskEntry {
 	fromAttach: boolean;
 	/// Held an end of turn past the ceiling. Sticky until removed.
 	overdue: boolean;
+	/// An overdue ceiling/watchdog notice already counted this task.
+	/// Bookkeeping for `takeUnreportedOverdue`; never affects display.
+	overdueReported: boolean;
 }
 
-export type BackgroundTaskInput = Omit<BackgroundTaskEntry, "startedAt" | "fromAttach" | "overdue">;
+export type BackgroundTaskInput = Omit<
+	BackgroundTaskEntry,
+	"startedAt" | "fromAttach" | "overdue" | "overdueReported"
+>;
 
 const live = new Map<string, Map<string, BackgroundTaskEntry>>();
 const listeners = new Map<string, Set<() => void>>();
@@ -100,6 +106,7 @@ export const backgroundTasks = {
 			startedAt: existing?.startedAt ?? Date.now(),
 			fromAttach: (existing?.fromAttach ?? true) && initial === true,
 			overdue: existing?.overdue ?? false,
+			overdueReported: existing?.overdueReported ?? false,
 		});
 		commit(harnessId);
 	},
@@ -134,6 +141,19 @@ export const backgroundTasks = {
 	overdueCount(harnessId: string): number {
 		let n = 0;
 		for (const e of live.get(harnessId)?.values() ?? []) if (!e.fromAttach && e.overdue) n++;
+		return n;
+	},
+
+	/// Overdue tasks (attach-only excluded) no earlier ceiling notice has
+	/// announced; marks them reported. Silent: the flag is display-irrelevant,
+	/// so the snapshot is untouched and nothing is emitted.
+	takeUnreportedOverdue(harnessId: string): number {
+		let n = 0;
+		for (const e of live.get(harnessId)?.values() ?? []) {
+			if (e.fromAttach || !e.overdue || e.overdueReported) continue;
+			e.overdueReported = true;
+			n++;
+		}
 		return n;
 	},
 
