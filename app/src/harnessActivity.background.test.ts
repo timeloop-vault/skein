@@ -182,6 +182,18 @@ describe("background-task deferral + stale-work watchdog (#446, #441)", () => {
 		expect(harnessActivity.get(id)?.delegationDeferredAt).toBeNull();
 	});
 
+	it("3b: a ceiling flush resets delegatedCount so a later waiting claims nothing finished", () => {
+		const id = attached();
+		startSub();
+		endSub();
+		startTask();
+		endTurn();
+		expect(harnessActivity.get(id)?.delegatedCount).toBe(1);
+		vi.advanceTimersByTime(BACKGROUND_TASK_CEILING_MS + 5_000);
+		expect(phase(id)).toBe("waiting");
+		expect(harnessActivity.get(id)?.delegatedCount).toBe(0);
+	});
+
 	it("4: a persistent Monitor with a timeout uses the Bash ceiling, not its deadline", () => {
 		const id = attached();
 		startTask({ task_kind: "monitor", timeout_ms: 60_000, persistent: true });

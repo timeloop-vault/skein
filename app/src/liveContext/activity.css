@@ -221,6 +221,9 @@
 .lc-row.k-agent .glyph {
 	color: var(--waiting);
 }
+.lc-row.k-background .glyph {
+	color: var(--waiting);
+}
 .lc-row.k-pr .glyph {
 	color: var(--ok);
 }

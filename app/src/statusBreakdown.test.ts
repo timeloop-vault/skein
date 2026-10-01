@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { BackgroundTaskEntry } from "./backgroundTasks.ts";
 import type { ActivityPhase, HarnessActivity } from "./harnessActivityTypes.ts";
 import {
 	BREAKDOWN_MAX_ROWS,
 	BREAKDOWN_MAX_SUBAGENTS,
+	BREAKDOWN_MAX_TASKS,
 	type BreakdownDeps,
 	type BreakdownHarnessInput,
 	type BreakdownRoomInput,
@@ -69,7 +71,11 @@ const makeDeps = (
 	activities: Record<string, HarnessActivity>,
 	subagentsById: Record<string, readonly SubagentEntry[]> = {},
 	workingCounts: Record<string, number> = {},
+	tasksById: Record<string, readonly BackgroundTaskEntry[]> = {},
+	workingTaskCounts: Record<string, number> = {},
 ): BreakdownDeps => ({
+	backgroundTasks: (id) => tasksById[id] ?? [],
+	workingTaskCount: (id) => workingTaskCounts[id] ?? 0,
 	activity: (id) => activities[id] ?? null,
 	subagents: (id) => subagentsById[id] ?? [],
 	workingCount: (id) => workingCounts[id] ?? 0,
@@ -83,7 +89,38 @@ const subagent = (over: Partial<SubagentEntry> & { agentId: string }): SubagentE
 	...over,
 });
 
+const bgTask = (taskId: string): BackgroundTaskEntry => ({
+	taskId,
+	kind: "bash",
+	description: null,
+	command: null,
+	timeoutMs: null,
+	persistent: false,
+	agentId: null,
+	startedAt: 0,
+	fromAttach: false,
+	overdue: false,
+	overdueReported: false,
+});
+
 describe("buildBreakdown", () => {
+	it("lists background tasks capped at BREAKDOWN_MAX_TASKS and words them in the label", () => {
+		const rooms = [room("r1", [harness({ id: "h1" })])];
+		const tasks = ["t1", "t2", "t3", "t4", "t5"].map(bgTask);
+		const deps = makeDeps({ h1: phaseActivity("running") }, {}, {}, { h1: tasks }, { h1: 5 });
+		const [row] = buildBreakdown(rooms, deps).rows;
+		expect(row?.label).toBe("background · 5 tasks");
+		expect(row?.tasks.map((t) => t.taskId)).toEqual(["t1", "t2", "t3"]);
+		expect(row?.tasks).toHaveLength(BREAKDOWN_MAX_TASKS);
+		expect(row?.hiddenTasks).toBe(2);
+	});
+
+	it("combines agents and tasks in the label", () => {
+		const rooms = [room("r1", [harness({ id: "h1" })])];
+		const deps = makeDeps({ h1: phaseActivity("running") }, {}, { h1: 2 }, {}, { h1: 1 });
+		expect(buildBreakdown(rooms, deps).rows[0]?.label).toBe("delegating · 2 agents, 1 task");
+	});
+
 	it("returns idle with no rows for no rooms at all", () => {
 		const result = buildBreakdown([], makeDeps({}));
 		expect(result.status).toBe("idle");

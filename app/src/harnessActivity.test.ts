@@ -283,6 +283,11 @@ describe("activityToStatus / statusLabel", () => {
 	it("passes other statuses through unchanged", () => {
 		expect(statusLabel("waiting")).toBe("waiting");
 		expect(statusLabel("running")).toBe("running");
+		expect(statusLabel("running", null, null, 0, 1)).toBe("background · 1 task");
+		expect(statusLabel("running", null, null, 0, 3)).toBe("background · 3 tasks");
+		expect(statusLabel("running", null, null, 2, 1)).toBe("delegating · 2 agents, 1 task");
+		expect(statusLabel("waiting", null, null, 2, 1)).toBe("waiting");
+		expect(statusLabel("permission", null, null, 2, 1)).toBe("permission needed");
 	});
 
 	it("reads 'delegating · N agents' for a running harness with working subagents (#277)", () => {

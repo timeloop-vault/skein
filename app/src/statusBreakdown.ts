@@ -6,6 +6,7 @@
 // working count) is injected via `BreakdownDeps`, same seam
 // `aggregateRoomStatus` uses for `lookup` — see harnessActivityLabels.ts.
 
+import type { BackgroundTaskEntry } from "./backgroundTasks.ts";
 import {
 	aggregateRoomStatus,
 	effectiveStatus,
@@ -45,7 +46,14 @@ export interface BreakdownDeps {
 	activity(id: string): HarnessActivity | null | undefined;
 	subagents(id: string): readonly SubagentEntry[];
 	workingCount(id: string): number;
+	/// #447: live background tasks and how many of them count as working.
+	backgroundTasks(id: string): readonly BackgroundTaskEntry[];
+	workingTaskCount(id: string): number;
 }
+
+/// One background task as shown in the breakdown. The entry itself:
+/// `taskLine` words it, and it carries `fromAttach`/`overdue` already.
+export type BreakdownTask = BackgroundTaskEntry;
 
 /// One subagent as shown in the breakdown, trimmed from `SubagentEntry`
 /// to what the popover prints. `preRestart` mirrors `fromAttach` — worded
@@ -73,6 +81,8 @@ export interface BreakdownRow {
 	label: string;
 	subagents: BreakdownSubagent[];
 	hiddenSubagents: number;
+	tasks: BreakdownTask[];
+	hiddenTasks: number;
 }
 
 /// One room's worth of quiet harnesses, grouped for the popover's
@@ -96,6 +106,7 @@ export interface Breakdown {
 
 export const BREAKDOWN_MAX_ROWS = 6;
 export const BREAKDOWN_MAX_SUBAGENTS = 3;
+export const BREAKDOWN_MAX_TASKS = 3;
 
 /// A status is "surfaced" (gets its own row) rather than folded into
 /// the quiet summary — permission/waiting/running are exactly the
@@ -128,10 +139,11 @@ const compareRowStatus = (a: Status, b: Status): number => {
 export function buildBreakdown(
 	rooms: readonly BreakdownRoomInput[],
 	deps: BreakdownDeps,
-	opts?: { maxRows?: number; maxSubagents?: number },
+	opts?: { maxRows?: number; maxSubagents?: number; maxTasks?: number },
 ): Breakdown {
 	const maxRows = opts?.maxRows ?? BREAKDOWN_MAX_ROWS;
 	const maxSubagents = opts?.maxSubagents ?? BREAKDOWN_MAX_SUBAGENTS;
+	const maxTasks = opts?.maxTasks ?? BREAKDOWN_MAX_TASKS;
 
 	const allRefs = rooms.flatMap((r) =>
 		r.harnesses.map((h) => ({ id: h.id, pendingNotifications: h.pendingNotifications })),
@@ -169,6 +181,7 @@ export function buildBreakdown(
 					preRestart: e.fromAttach,
 				}),
 			);
+			const liveTasks = deps.backgroundTasks(h.id);
 			rows.push({
 				roomId: room.id,
 				roomName: room.name,
@@ -176,9 +189,17 @@ export function buildBreakdown(
 				kind: h.kind,
 				harnessName: h.name,
 				status: s,
-				label: statusLabel(s, a.permissionTool, a.permissionAgentType, deps.workingCount(h.id)),
+				label: statusLabel(
+					s,
+					a.permissionTool,
+					a.permissionAgentType,
+					deps.workingCount(h.id),
+					deps.workingTaskCount(h.id),
+				),
 				subagents: shown,
 				hiddenSubagents: Math.max(0, liveSubagents.length - maxSubagents),
+				tasks: liveTasks.slice(0, maxTasks),
+				hiddenTasks: Math.max(0, liveTasks.length - maxTasks),
 			});
 		}
 		if (quietKinds.length > 0) {

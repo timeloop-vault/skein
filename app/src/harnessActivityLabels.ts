@@ -3,6 +3,7 @@
 // harnessActivity.ts (#19). See harnessActivity.ts for the module this
 // belongs to.
 
+import { workLabel } from "./backgroundTaskLabels.ts";
 import {
 	type HarnessActivity,
 	TRANSITION_SOURCE,
@@ -48,11 +49,16 @@ export function activityToStatus(activity: HarnessActivity | null): Status {
 /// other status ignores the count entirely, `permission` included —
 /// a harness can't be both blocked on a dialog and shown as
 /// delegating.
+///
+/// #447: `workingTaskCount` (live background tasks) joins the same
+/// label via `workLabel`: tasks alone read "background · N tasks", both
+/// "delegating · 2 agents, 1 task".
 export function statusLabel(
 	status: Status,
 	permissionTool?: string | null,
 	permissionAgentType?: string | null,
 	workingSubagentCount?: number,
+	workingTaskCount?: number,
 ): string {
 	if (status === "permission") {
 		const parts = [permissionAgentType, permissionTool].filter(
@@ -60,8 +66,9 @@ export function statusLabel(
 		);
 		return parts.length > 0 ? `permission needed · ${parts.join(" · ")}` : "permission needed";
 	}
-	if (status === "running" && workingSubagentCount) {
-		return `delegating · ${workingSubagentCount} agent${workingSubagentCount === 1 ? "" : "s"}`;
+	if (status === "running") {
+		const work = workLabel(workingSubagentCount ?? 0, workingTaskCount ?? 0);
+		if (work) return work;
 	}
 	return status;
 }

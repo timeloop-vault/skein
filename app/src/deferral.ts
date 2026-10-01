@@ -81,6 +81,10 @@ function tickDeferred(
 		// the source that tells notifications not to claim completion.
 		a.delegationDeferredAt = null;
 		a.delegationEmptiedAt = null;
+		// Nothing was claimed finished, so a later ordinary waiting
+		// notification must not report these as "delegated agents finished".
+		// `waitingNote` ignores `delegatedCount` for this source.
+		a.delegatedCount = 0;
 		setPhase(id, "waiting", TRANSITION_SOURCE.DelegationCeiling);
 		return;
 	}
@@ -125,6 +129,7 @@ function tickStaleWork(id: string, a: HarnessActivity, now: number, setPhase: Se
 		`[skein] harness ${id}: no signal for ${DELEGATION_CEILING_MS / 60_000} min with work outstanding; ` +
 			`presumed ${subs} subagent(s) and ${tasks} background task(s) gone (nothing claimed finished)`,
 	);
+	a.delegatedCount = 0;
 	setPhase(id, "waiting", TRANSITION_SOURCE.WorkWatchdog);
 	return true;
 }
