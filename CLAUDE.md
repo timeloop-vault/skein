@@ -815,6 +815,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
 
     # First time:
     git config core.hooksPath .githooks
+    git config blame.ignoreRevsFile .git-blame-ignore-revs
     cd app && npm install
 
 Three build profiles (issue #21), each with its own bundle identifier
