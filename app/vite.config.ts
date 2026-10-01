@@ -26,7 +26,10 @@ export default defineConfig(async () => ({
 	// larger. No upstream xterm.js issue matches our exact symptom
 	// — worth filing once we have a minimal repro.
 	build: {
-		minify: "terser",
+		minify: "terser" as const,
+		// Vite 8's default moved to Chrome 111 / Safari 16.4. Releases are Apple Silicon
+		// only (macOS 11 = Safari 14), so keep Vite 6's default list: same output targets.
+		target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
 	},
 
 	// Vite options tailored for Tauri development.
