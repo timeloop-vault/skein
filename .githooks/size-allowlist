@@ -10,13 +10,6 @@ app/src-tauri/src/agent_api/http.rs 1075 #455
 app/src-tauri/src/agent_api/tests.rs 5838 #455
 app/src-tauri/src/agent_api/verbs.rs 3475 #455
 app/src-tauri/src/lib.rs 1390 #456
-app/src/App.tsx 884 #459
-app/src/agentRequests.ts 534 #459
 app/src/liveContext/activity.css 542 #462
 app/src/review/review.css 1041 #462
 app/src/styles.css 2966 #462
-app/src/useHarnessCreation.ts 465 #459
-app/src/useHarnessNotifications.ts 585 #459
-app/src/useMailDelivery.ts 669 #459
-app/src/useRoomsStore.ts 812 #459
-app/src/useTerminalSpawn.ts 544 #459
