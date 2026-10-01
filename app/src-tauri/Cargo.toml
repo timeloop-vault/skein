@@ -43,7 +43,7 @@ dunce = "1.0.5"
 portable-pty = "0.8"
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }
-rusqlite = { version = "0.34", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 notify-debouncer-mini = "0.6"
 # reqwest is already in the tree transitively (via tauri-plugin-updater);
 # making it a direct dep is essentially free at compile time. We use it
