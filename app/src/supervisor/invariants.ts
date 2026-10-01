@@ -83,8 +83,7 @@ export const INVARIANTS: readonly Invariant[] = [
 				!s.authoritative &&
 				!s.adapterSilent &&
 				s.phase !== "exited" &&
-				e !== null &&
-				e.restoresAuthority &&
+				e?.restoresAuthority &&
 				(s.authorityLostAt === null || e.at > s.authorityLostAt)
 			) {
 				return fired(

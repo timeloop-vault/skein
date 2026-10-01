@@ -23,11 +23,7 @@ function folder(opts: Partial<FolderInfoDto> = {}): FolderInfoDto {
  *  path), `proposeWorktreePath` and `addWorktree` are recorded so tests
  *  can assert what they were called with. */
 function fakeGit(
-	opts: {
-		folder?: FolderInfoDto;
-		worktreeExists?: boolean;
-		proposedPath?: string;
-	} = {},
+	opts: { folder?: FolderInfoDto; worktreeExists?: boolean; proposedPath?: string } = {},
 ): WorktreeGit & { addWorktreeCalls: unknown[]; proposeCalls: unknown[] } {
 	const info = opts.folder ?? folder();
 	const proposedPath = opts.proposedPath ?? "/repo-wt/leaf";
