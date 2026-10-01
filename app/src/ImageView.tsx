@@ -7,6 +7,7 @@
 import { type SyntheticEvent, useEffect, useId, useState } from "react";
 import { describeImageError, formatBytes } from "./imageFiles.ts";
 import { useImageBytes } from "./imageLoad.ts";
+import "./ImageView.css";
 
 interface ImageViewProps {
 	/** Fetches the raw bytes; rejects with the same error strings

@@ -25,6 +25,7 @@
 import { GroupTab } from "./GroupTab.tsx";
 import { type StripSegment, segmentId } from "./roomGroups.ts";
 import { LiveRoomTab, type RenameTarget, type RoomDragWiring } from "./roomStripShared.tsx";
+import "./RoomStrip.css";
 
 export { GroupRow } from "./GroupRow.tsx";
 export { GroupTab } from "./GroupTab.tsx";

@@ -1,0 +1,161 @@
+.sk-empty-harness {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	padding: 40px;
+	gap: 24px;
+	/* #189: anchor for the cancel ×. */
+	position: relative;
+}
+.sk-empty-harness-x {
+	position: absolute;
+	top: 10px;
+	right: 14px;
+	font-size: 1.3em;
+	color: var(--fg-3);
+	cursor: pointer;
+	padding: 2px 6px;
+}
+.sk-empty-harness-x:hover {
+	color: var(--fg-0);
+}
+.sk-empty-harness h3 {
+	font-size: calc(var(--cfs) * 1.1667);
+	font-weight: 500;
+	color: var(--fg-0);
+	margin: 0;
+	font-family: var(--sk-mono);
+	letter-spacing: -0.01em;
+}
+.sk-empty-harness p {
+	color: var(--fg-2);
+	font-size: calc(var(--cfs) * 1);
+	max-width: 360px;
+	text-align: center;
+	margin: 0;
+	line-height: 1.6;
+}
+.sk-harness-grid {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 8px;
+	width: 320px;
+}
+.sk-harness-card {
+	padding: 14px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--bg-1);
+	cursor: pointer;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	transition: border-color 0.12s, background 0.12s;
+}
+.sk-harness-card:hover {
+	border-color: var(--line-strong);
+	background: var(--bg-2);
+}
+.sk-harness-card .head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.sk-harness-card .h-name {
+	font-size: calc(var(--cfs) * 1);
+	font-weight: 500;
+	color: var(--fg-0);
+}
+.sk-harness-card .h-desc {
+	font-size: calc(var(--cfs) * 0.875);
+	color: var(--fg-2);
+	line-height: 1.5;
+	font-family: var(--sk-mono);
+}
+
+/* #247 step 2: the agent list. Narrower than the kind grid is wide
+   because these are rows, not cards, and taller than it can be — a box
+   with a lot of plugin agents in it has to scroll rather than push the
+   Back button off the pane. */
+.sk-agent-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	width: 420px;
+	max-width: 100%;
+	max-height: 46vh;
+	overflow-y: auto;
+}
+.sk-agent-row {
+	padding: 8px 10px;
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	background: var(--bg-1);
+	cursor: pointer;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	transition: border-color 0.12s, background 0.12s;
+}
+.sk-agent-row:hover {
+	border-color: var(--line-strong);
+	background: var(--bg-2);
+}
+.sk-agent-row .head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.sk-agent-row .a-name {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 1);
+	color: var(--fg-0);
+}
+.sk-agent-row .a-desc {
+	font-size: calc(var(--cfs) * 0.875);
+	color: var(--fg-2);
+	line-height: 1.45;
+	/* Descriptions are prose written for a model, and some run to a
+	   paragraph. Two lines is enough to tell agents apart; the rest is
+	   not worth a scrolling list of unequal cards. */
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+.sk-agent-warn {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.8);
+	color: var(--warn);
+	border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
+	background: color-mix(in srgb, var(--warn) 10%, transparent);
+	border-radius: 4px;
+	padding: 0 5px;
+	white-space: nowrap;
+	cursor: help;
+}
+.sk-agent-note {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.875);
+	color: var(--fg-3);
+	padding: 6px 2px;
+}
+.sk-agent-note.warn {
+	color: var(--warn);
+}
+/* #248: the row Enter takes — the kind's Settings default, or
+   (tool default) when there is none. */
+.sk-agent-row.selected {
+	border-color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 8%, var(--bg-1));
+}
+.sk-agent-tag {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.8);
+	color: var(--accent);
+	white-space: nowrap;
+}
+
+/* Empty harness picker */

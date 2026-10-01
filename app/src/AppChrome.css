@@ -1,0 +1,121 @@
+.sk-app {
+	width: 100%;
+	height: 100%;
+	background: var(--bg-0);
+	color: var(--fg-0);
+	font-family: var(--sk-sans);
+	/* #17: chrome font-size lever. All chrome type is em off this base;
+	   the terminal keeps its own --term-fs and is unaffected. */
+	font-size: var(--cfs, 12px);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	letter-spacing: -0.005em;
+}
+
+/* Title bar */
+.sk-titlebar {
+	/* #17: height scales with --cfs (30px ÷ 12 = 2.5) so a bigger chrome
+	   font never clips. Same pattern for every fixed-height chrome bar. */
+	height: calc(var(--cfs, 12px) * 2.5);
+	flex: 0 0 calc(var(--cfs, 12px) * 2.5);
+	display: flex;
+	align-items: center;
+	background: var(--bg-0);
+	border-bottom: 1px solid var(--line);
+	/* No right padding: window controls hug the corner like Windows. */
+	padding: 0 0 0 10px;
+	gap: 10px;
+}
+
+.sk-app[data-platform="mac"] .sk-titlebar {
+	padding-left: 80px;
+}
+.sk-app-name {
+	font-family: var(--sk-mono);
+	font-size: 0.92em;
+	font-weight: 500;
+	color: var(--fg-1);
+	letter-spacing: 0.02em;
+}
+.sk-app-name .dot {
+	color: var(--accent);
+}
+.sk-titlebar-session {
+	font-family: var(--sk-mono);
+	font-size: 0.92em;
+	color: var(--fg-2);
+	letter-spacing: 0.01em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+.sk-titlebar-session::before {
+	content: "·";
+	color: var(--fg-3);
+	margin-right: 8px;
+}
+
+/* Right-side titlebar action cluster (cog, etc.) */
+.sk-titlebar-actions {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+}
+.sk-cog-btn {
+	width: 38px;
+	height: calc(var(--cfs, 12px) * 2.5);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent;
+	border: 0;
+	color: var(--fg-1);
+	cursor: pointer;
+	padding: 0;
+}
+.sk-cog-btn:hover {
+	background: var(--bg-2);
+	color: var(--fg-0);
+}
+.sk-light .sk-cog-btn:hover {
+	background: var(--bg-3);
+}
+
+/* Window controls — minimize / toggle-maximize / close.
+   #148: height scales with --cfs to match the titlebar (same pattern as
+   .sk-titlebar / .sk-cog-btn) so the buttons don't desync from the bar
+   when the chrome font grows. 46 px wide is the Windows convention.
+   Close hovers red (#c42b1c is the standard Win11 close-button red). */
+.sk-window-controls {
+	display: flex;
+	height: calc(var(--cfs, 12px) * 2.5);
+}
+.sk-wc-btn {
+	width: 46px;
+	height: calc(var(--cfs, 12px) * 2.5);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent;
+	border: 0;
+	color: var(--fg-1);
+	cursor: pointer;
+	padding: 0;
+}
+.sk-wc-btn:hover {
+	background: var(--bg-2);
+	color: var(--fg-0);
+}
+.sk-wc-close:hover {
+	background: #c42b1c;
+	color: #fff;
+}
+.sk-light .sk-wc-btn:hover {
+	background: var(--bg-3);
+}
+.sk-light .sk-wc-close:hover {
+	background: #c42b1c;
+	color: #fff;
+}

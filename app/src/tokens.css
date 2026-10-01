@@ -1,0 +1,102 @@
+:root {
+	--sk-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+	--sk-sans: "Inter", system-ui, sans-serif;
+}
+
+.sk-dark {
+	--bg-0: #0d0e10;
+	--bg-1: #131418;
+	--bg-2: #181a1f;
+	--bg-3: #20232a;
+	--line: rgba(255, 255, 255, 0.06);
+	--line-strong: rgba(255, 255, 255, 0.12);
+	--fg-0: #e8e6df;
+	--fg-1: #b6b3aa;
+	--fg-2: #7a786f;
+	--fg-3: #4a4944;
+	--accent: #c96442;
+	--ok: #7aa37f;
+	--warn: #d4a657;
+	--err: #c97163;
+	--waiting: #8a96c9;
+	/* #68 status palette — four separated hues, AA on --bg-0. Kept
+	   distinct from --ok/--warn/--err so diff/semantic colours are
+	   unaffected. The decisive move: waiting indigo → amber. */
+	--st-running: #6cb585;
+	--st-waiting: #e0ad48;
+	/* #86: same warm family as --st-waiting but pushed toward orange —
+	   a harder stop (blocked on an approval dialog) than plain waiting
+	   (blocked on the next prompt), so it reads as related but not
+	   interchangeable. */
+	--st-permission: #e0863a;
+	--st-idle: #82807a;
+	--st-error: #dd685a;
+	--diff-add: rgba(122, 163, 127, 0.18);
+	--diff-del: rgba(201, 113, 99, 0.16);
+	/* Live Context card surface (issue #80). */
+	--bg-card: #14161b;
+	/* #185 Files editor syntax palette (design prototype .tk-*). */
+	--syn-keyword: #c97163;
+	--syn-fn: #d4a657;
+	--syn-string: #7aa37f;
+	--syn-number: #b08bd4;
+	--syn-comment: #4a4944;
+}
+.sk-light {
+	--bg-0: #f5f3ee;
+	--bg-1: #faf8f3;
+	--bg-2: #ffffff;
+	--bg-3: #ece9e1;
+	--line: rgba(20, 18, 14, 0.07);
+	--line-strong: rgba(20, 18, 14, 0.14);
+	--fg-0: #1a1814;
+	--fg-1: #4a4740;
+	--fg-2: #7a766c;
+	--fg-3: #b0aca0;
+	--accent: #b8513a;
+	--ok: #547f5b;
+	--warn: #a87a2c;
+	--err: #a64f3f;
+	--waiting: #5a6aa0;
+	/* #68 status palette (light). */
+	--st-running: #3f8a5a;
+	--st-waiting: #b07d1f;
+	--st-permission: #b0611f;
+	--st-idle: #8a877e;
+	--st-error: #c0503f;
+	--diff-add: rgba(84, 127, 91, 0.14);
+	--diff-del: rgba(166, 79, 63, 0.12);
+	--bg-card: #ffffff;
+	/* #185 Files editor syntax palette (light variants). */
+	--syn-keyword: #a64f3f;
+	--syn-fn: #8a6420;
+	--syn-string: #4a7050;
+	--syn-number: #7a4fa0;
+	--syn-comment: #9b9789;
+}
+
+.density-compact {
+	--row-h: 28px;
+	--pad-x: 12px;
+	--gap: 10px;
+	/* #68/#137 indicator scale. Chips sit next to text labels, so they
+	   track the chrome font (--cfs) and Density just modulates the factor
+	   (factor = old-px ÷ 12, so the default look is unchanged). Status
+	   dots stay Density-only — they're abstract indicators, not text. */
+	--chip: calc(var(--cfs, 12px) * 1);
+	--dot: 7px;
+}
+.density-regular {
+	--row-h: 36px;
+	--pad-x: 14px;
+	--gap: 14px;
+	--chip: calc(var(--cfs, 12px) * 1.0833);
+	--dot: 8px;
+}
+.density-comfy {
+	--row-h: 44px;
+	--pad-x: 18px;
+	--gap: 18px;
+	--chip: calc(var(--cfs, 12px) * 1.25);
+	--dot: 9px;
+}

@@ -1,0 +1,179 @@
+.sk-default-agent {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-top: 8px;
+}
+.sk-default-agent > label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.sk-default-agent-note {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.875);
+	line-height: 1.5;
+}
+.sk-default-agent-note.err {
+	color: var(--err);
+}
+.sk-default-agent-note.warn {
+	color: var(--warn);
+}
+
+/* Stepper used in the settings modal — labelled −/value/+ row. */
+.sk-stepper {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 1);
+	color: var(--fg-1);
+}
+.sk-stepper .sk-btn {
+	min-width: 28px;
+	padding: 4px 8px;
+	font-size: calc(var(--cfs) * 1.0833);
+}
+.sk-stepper-value {
+	min-width: 56px;
+	text-align: center;
+	color: var(--fg-0);
+}
+.sk-stepper-hint {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.875);
+	color: var(--fg-2);
+	margin-left: 8px;
+}
+
+/* Updater UI inside the settings modal — current version + check button
+   plus a multi-state result row underneath. */
+.sk-update {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.sk-update-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.sk-update-version {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 1);
+	color: var(--fg-1);
+}
+.sk-update-msg {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.9167);
+	color: var(--fg-2);
+}
+.sk-update-msg.ok {
+	color: var(--ok);
+}
+.sk-update-msg.err {
+	color: var(--err);
+}
+.sk-update-notes {
+	margin: 6px 0 0;
+	padding: 8px 10px;
+	background: var(--bg-2);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	font-size: calc(var(--cfs) * 0.875);
+	color: var(--fg-1);
+	white-space: pre-wrap;
+	max-height: 120px;
+	overflow: auto;
+}
+
+.sk-toggles {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-top: 4px;
+}
+.sk-toggle {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 8px 10px;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	background: var(--bg-2);
+	cursor: pointer;
+}
+.sk-toggle:hover {
+	border-color: var(--line-strong);
+}
+.sk-toggle input[type="checkbox"] {
+	margin: 2px 0 0;
+	flex: 0 0 auto;
+	accent-color: var(--accent);
+}
+.sk-toggle-label {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.sk-toggle-title {
+	font-size: calc(var(--cfs) * 1);
+	color: var(--fg-0);
+	font-weight: 500;
+}
+.sk-toggle-sub {
+	font-size: calc(var(--cfs) * 0.9167);
+	color: var(--fg-3);
+	line-height: 1.4;
+}
+.sk-nudges {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.sk-nudge-group {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.sk-nudge-group-label {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.8333);
+	color: var(--fg-3);
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+}
+.sk-nudge {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 8px 10px;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	background: var(--bg-2);
+}
+.sk-nudge-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.sk-nudge-label {
+	font-size: calc(var(--cfs) * 1);
+	color: var(--fg-0);
+	font-weight: 500;
+}
+.sk-nudge-edited {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.8333);
+	color: var(--fg-3);
+}
+.sk-nudge-reset {
+	margin-left: auto;
+}
+.sk-nudge-body {
+	resize: vertical;
+	min-height: 4.5em;
+}

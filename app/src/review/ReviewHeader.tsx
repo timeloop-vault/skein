@@ -9,6 +9,7 @@ import { SignoffControl, type SignoffIntent } from "./SignoffControl.tsx";
 import { type ReviewScope, type ReviewScopeData, setBaseRef } from "./api.ts";
 import type { Nudge } from "./nudges.ts";
 import type { SignoffStatus } from "./signoff.ts";
+import "./ReviewHeader.css";
 
 const SCOPES: Array<{ id: ReviewScope; label: string; title: string }> = [
 	{

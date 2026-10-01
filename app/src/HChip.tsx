@@ -1,9 +1,10 @@
 import { HARNESS_KINDS } from "./data.tsx";
 import type { AgentLabel } from "./harnessAgent.ts";
 import type { HarnessKind, Status } from "./types.ts";
+import "./components.css";
 
 // #68: size is owned by CSS (density --chip / --dot tokens + context
-// overrides in styles.css), not per-call-site numbers.
+// overrides in components.css), not per-call-site numbers.
 // #132: data-kind / data-status feed the shared hover popover
 // (statusPopover.ts), which replaces the native title= (slow, unstyled,
 // and it couldn't show state). aria-label keeps the info available to

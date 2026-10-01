@@ -5,6 +5,10 @@ import { requestDeliverNow } from "./mailDeliverNow.ts";
 import { useMailHold } from "./mailHold.ts";
 import { useUnreadMail } from "./mailStore.ts";
 import type { Harness } from "./types.ts";
+import "./RoomStrip.css";
+import "./HarnessColumn.css";
+import "./tabDrag.css";
+import "./HarnessTab.css";
 
 export const HarnessTab = ({
 	h,

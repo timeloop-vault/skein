@@ -12,6 +12,7 @@
 import type { ThreadHandlers } from "./DiffBody.tsx";
 import { Composer, ThreadView, ago } from "./Thread.tsx";
 import type { ReviewCommit, ReviewThread } from "./api.ts";
+import "./CommitList.css";
 
 export const CommitList = ({
 	commits,

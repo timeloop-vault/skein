@@ -17,6 +17,7 @@ import {
 import { useDesignComments } from "./useDesignComments.ts";
 import { useDesignPreview } from "./useDesignPreview.ts";
 import "./design.css";
+import "./FilesBody.css";
 
 /** How long after the iframe's `load` we wait for the `ready` beacon
  *  before saying Skein's preview script did not run. */

@@ -1,0 +1,64 @@
+/* Issue #26 — drag-and-drop reorder, rebuilt on pointer events for
+ * #271 (tabDrag.ts / useTabDrag.ts). `dragging` marks the source tab
+ * as a placeholder while its clone (the drag ghost, below) follows the
+ * pointer; `drop-before` / `drop-after` paint a 2px accent-coloured
+ * bar at the matching edge of the tab the gap (see tabDrag.ts) has
+ * resolved to, showing where the drop will land. */
+/* Only the source tab's CHILDREN dim, not the tab element itself —
+ * dimming the element also dims its own ::before/::after (the active
+ * tab's accent line / seam-hider below), which used to turn a dragged
+ * active tab's accent bar a muddy brown. A dashed inset outline marks
+ * the placeholder instead of the old whole-tab opacity. */
+.sk-tab.dragging > *,
+.sk-harness-tab.dragging > * {
+	opacity: 0.4;
+}
+.sk-tab.dragging,
+.sk-harness-tab.dragging {
+	outline: 1px dashed var(--line-strong);
+	outline-offset: -3px;
+}
+/* Drawn as a pseudo-element INSIDE the tab's own box (not a box-shadow
+ * outside it) so it can't be clipped by the strip's overflow:hidden —
+ * the old box-shadow version barely showed on the rightmost tab for
+ * exactly that reason. Room tabs use ::after (::before is the active
+ * tab's top accent line); harness tabs use ::before (::after is the
+ * active tab's seam-hider) — whichever pseudo-element isn't already
+ * spoken for on that tab kind. */
+.sk-tab.drop-before::after,
+.sk-tab.drop-after::after,
+.sk-harness-tab.drop-before::before,
+.sk-harness-tab.drop-after::before {
+	content: "";
+	position: absolute;
+	top: 4px;
+	bottom: 4px;
+	width: 2px;
+	background: var(--accent);
+	z-index: 2;
+	pointer-events: none;
+}
+.sk-tab.drop-before::after,
+.sk-harness-tab.drop-before::before {
+	left: 0;
+}
+.sk-tab.drop-after::after,
+.sk-harness-tab.drop-after::before {
+	right: 0;
+}
+
+/* #271: a floating clone of the tab being dragged (useTabDrag's
+ * createGhost), so the user sees what they're holding instead of only
+ * an edge indicator elsewhere on screen. Fixed + transformed on every
+ * pointermove; width/height are pinned inline to the source tab's own
+ * size since the clone isn't inside the strip's flex layout. */
+.tab-drag-ghost {
+	position: fixed;
+	top: 0;
+	left: 0;
+	pointer-events: none;
+	z-index: 9500;
+	opacity: 0.9;
+	box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+	overflow: hidden;
+}

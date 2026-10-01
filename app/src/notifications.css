@@ -1,0 +1,108 @@
+/* In-app toast notifications (#12 L5c). Stack lives bottom-right
+   of the viewport and floats above every layout pane. Each toast
+   auto-dismisses after a few seconds; click to jump to the source
+   harness, × to dismiss. */
+.sk-toast-stack {
+	position: fixed;
+	bottom: 16px;
+	right: 16px;
+	display: flex;
+	flex-direction: column-reverse;
+	gap: 8px;
+	z-index: 2000;
+	pointer-events: none;
+	max-width: calc(100% - 32px);
+}
+.sk-toast {
+	pointer-events: auto;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 240px;
+	max-width: 360px;
+	padding: 9px 10px 9px 12px;
+	background: var(--bg-2);
+	border: 1px solid var(--line-strong);
+	border-radius: 6px;
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+	font-family: var(--sk-sans);
+	cursor: pointer;
+	animation: sk-toast-slide 160ms ease-out;
+}
+.sk-toast:hover {
+	background: var(--bg-3);
+	border-color: var(--accent);
+}
+.sk-toast-body {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.sk-toast-title {
+	font-size: calc(var(--cfs) * 1);
+	color: var(--fg-0);
+	font-weight: 500;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sk-toast-sub {
+	font-size: calc(var(--cfs) * 0.9167);
+	color: var(--fg-2);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* D2f (#80) — api_error toast variant. Red-edge treatment lifted from
+   the design's lc-toast (Live Context.html "errored" frame). */
+.sk-toast.error {
+	border-left: 3px solid var(--err);
+}
+.sk-toast.error .sk-toast-sub {
+	color: var(--err);
+}
+/* #86: same treatment, permission's own hue. */
+.sk-toast.permission {
+	border-left: 3px solid var(--st-permission);
+}
+.sk-toast.permission .sk-toast-sub {
+	color: var(--st-permission);
+}
+/* #330: the create_room receipt — same border treatment, the app's
+   accent hue rather than a status color since this isn't a status. */
+.sk-toast.created {
+	border-left: 3px solid var(--accent);
+}
+.sk-toast-detail {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.7917);
+	color: var(--fg-3);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sk-toast-x {
+	color: var(--fg-3);
+	font-size: calc(var(--cfs) * 1.3333);
+	line-height: 1;
+	padding: 0 4px;
+	cursor: pointer;
+	user-select: none;
+}
+.sk-toast-x:hover {
+	color: var(--fg-0);
+}
+@keyframes sk-toast-slide {
+	from {
+		opacity: 0;
+		transform: translateX(12px);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(0);
+	}
+}
+
+/* ── Settings → Shell & environment (#72, #3, #1) ────────────────── */

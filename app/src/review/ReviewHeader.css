@@ -1,0 +1,119 @@
+/* ── header ──────────────────────────────────────────────────────── */
+
+.rv-head {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	background: var(--bg-card);
+	border-bottom: 1px solid var(--line);
+	padding: 4px 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+.rv-head-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	min-height: 20px;
+}
+.rv-base {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+}
+.rv-base-label,
+.rv-nonrepo {
+	color: var(--fg-3);
+	font-size: 0.85em;
+}
+.rv-select {
+	background: var(--bg-2);
+	color: var(--fg-1);
+	border: 1px solid var(--line-strong);
+	border-radius: 3px;
+	font-family: var(--sk-mono);
+	font-size: 0.9em;
+	padding: 1px 4px;
+	max-width: 180px;
+}
+.rv-counts {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--fg-3);
+	font-size: 0.85em;
+	white-space: nowrap;
+	overflow: hidden;
+}
+.rv-branch {
+	color: var(--fg-1);
+}
+.rv-scopes {
+	display: flex;
+	gap: 2px;
+}
+.rv-scope {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	background: none;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	color: var(--fg-2);
+	font-family: var(--sk-mono);
+	font-size: 0.9em;
+	padding: 2px 8px;
+	cursor: pointer;
+}
+.rv-scope:hover {
+	color: var(--fg-1);
+}
+.rv-scope.on {
+	color: var(--fg-0);
+	border-bottom-color: var(--accent);
+}
+.rv-head-right {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.rv-unresolved {
+	color: var(--warn);
+	font-size: 0.85em;
+}
+
+.delta-add {
+	color: var(--ok);
+}
+.delta-del {
+	color: var(--err);
+}
+
+.rv-err {
+	background: color-mix(in srgb, var(--err) 12%, transparent);
+	border-bottom: 1px solid color-mix(in srgb, var(--err) 30%, transparent);
+	color: var(--err);
+	padding: 3px 8px;
+	font-size: 0.85em;
+}
+.rv-note {
+	color: var(--fg-3);
+	font-size: 0.85em;
+	padding: 3px 8px;
+}
+.rv-backlink {
+	align-self: flex-start;
+	background: none;
+	border: 0;
+	color: var(--fg-2);
+	font-family: var(--sk-mono);
+	font-size: 0.85em;
+	cursor: pointer;
+	padding: 3px 8px;
+}
+.rv-backlink:hover {
+	color: var(--accent);
+}

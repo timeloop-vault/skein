@@ -3,6 +3,7 @@ import { HChip, StatusDot } from "./HChip.tsx";
 import { RoomNameInput } from "./RoomNameInput.tsx";
 import type { DragProps } from "./dragProps.ts";
 import type { Room } from "./types.ts";
+import "./RoomStrip.css";
 
 export const RoomTab = ({
 	r,

@@ -4,6 +4,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFocusRestore } from "./useFocusRestore.ts";
+import "./modal.css";
+import "./CommandPalette.css";
 
 export interface PaletteItem {
 	id: string;

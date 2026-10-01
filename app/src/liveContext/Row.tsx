@@ -7,6 +7,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { HChip } from "../components.tsx";
 import type { HarnessKind } from "../types.ts";
+import "./Row.css";
 
 /// Default glyph per displayKind (the CSS class suffix). An explicit
 /// `glyph` prop on <Row> wins; otherwise this map; otherwise "·".

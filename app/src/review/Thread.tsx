@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ReviewComment, ReviewThread } from "./api.ts";
+import "./Thread.css";
 import "./element.css";
 
 /// Short relative time — the review reads in minutes and hours, and a

@@ -13,6 +13,8 @@ import { HChip } from "./components.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
 import { type DefaultAgents, defaultAgentFor } from "./prefs.ts";
 import type { HarnessKind } from "./types.ts";
+import "./HarnessPicker.css";
+import "./empty.css";
 
 /** The ⚠ an agent earns by not being able to see the review tools.
  *

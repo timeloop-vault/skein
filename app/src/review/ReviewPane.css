@@ -1,0 +1,37 @@
+/* Review surface (#212, epic #52 sub-issue B).
+
+   One column, because the pane shares the window with the harness
+   terminal and the point is reading the diff while the agent is still
+   visible. Everything stacks: header, files, the open file's diff,
+   review-level comments at the bottom.
+
+   Diff line rendering deliberately mirrors .lc-line from the Diff card
+   it replaces — same gutter widths, same add/del washes — so the
+   surface reads as the same tool rather than a second one. Syntax
+   highlighting stays parked (docs/backlog.md). */
+
+.rv {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bg-3) transparent;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs, 12px) * 0.9167);
+}
+
+/* ── empty ───────────────────────────────────────────────────────── */
+
+.rv-empty {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	min-height: 80px;
+	padding: 16px 24px;
+	color: var(--fg-3);
+	font-size: 0.9em;
+	line-height: 1.5;
+}

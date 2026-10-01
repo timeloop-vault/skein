@@ -1,0 +1,49 @@
+/* On macOS the OS draws traffic lights at the upper-left of our custom
+   titlebar (titleBarStyle: Overlay). 80 px clears the standard cluster
+   so the wordmark and session label don't overlap them. */
+/* Boot surface (#39): fills the area below the titlebar with the app
+   background while rooms hydrate from sqlite — quiet, not onboarding. */
+.sk-boot {
+	flex: 1;
+	min-height: 0;
+}
+/* #167: boot-load failure card (autosave parked, retry offered) and
+   the quarantined-rows banner for partially-degraded loads. */
+.sk-boot-error {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.sk-boot-error-card {
+	background: var(--bg-1);
+	border: 1px solid var(--line-strong);
+	border-radius: 10px;
+	box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+	width: 480px;
+	max-width: 92vw;
+	padding: 20px 22px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.sk-boot-error-title {
+	font-weight: 600;
+	color: var(--err);
+}
+.sk-boot-error-msg {
+	font-family: var(--sk-mono);
+	font-size: 12px;
+	color: var(--fg-1);
+	word-break: break-word;
+}
+.sk-boot-error-hint {
+	font-size: 12px;
+	color: var(--fg-2);
+}
+.sk-boot-error-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}

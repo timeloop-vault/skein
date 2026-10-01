@@ -34,6 +34,7 @@ import {
 	staleExplanation,
 	withdrawPrompt,
 } from "./signoff.ts";
+import "./SignoffControl.css";
 
 /// Which confirmation is open, if any.
 export type SignoffIntent = "approve" | "withdraw";

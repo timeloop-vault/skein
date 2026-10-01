@@ -25,6 +25,7 @@ import {
 	nudgesInScope,
 } from "./nudgeRegistry.ts";
 import { resetNudgeBody, setNudgeBody, useNudgeOverrides } from "./nudgeStore.ts";
+import "./Settings.css";
 
 const SCOPE_LABEL: Record<NudgeScope, string> = {
 	review: "Review",

@@ -18,6 +18,7 @@ import { EnvToggles } from "./spawnEnv/EnvToggles.tsx";
 import { CAPTURE_OPTIONS } from "./spawnEnv/constants.ts";
 import { EnvVarList, StringList } from "./spawnEnv/lists.tsx";
 import type { CaptureMode, EnvPreview, HarnessConfigStatus, SpawnSettings } from "./types.ts";
+import "./SpawnEnvPanel.css";
 
 interface SpawnEnvPanelProps {
 	settings: SpawnSettings | null;

@@ -13,6 +13,7 @@
 // are exported for the rows that compute a size pill.
 
 import { createContext, useContext, useLayoutEffect, useRef, useState } from "react";
+import "./ResultPreview.css";
 
 /// Per-row preview expansion, lifted out of ResultPreview so it survives
 /// the row unmounting/remounting as the virtualized feed scrolls (D2g) —

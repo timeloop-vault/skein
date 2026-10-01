@@ -5,6 +5,7 @@ import type { HarnessKind } from "../types.ts";
 import { Row, formatClock, formatDuration } from "./Row.tsx";
 import type { FeedItem } from "./feedItemTypes.ts";
 import { formatTokensShort, formatUsd } from "./feedTotals.ts";
+import "./feedItemViews.css";
 
 /// Head-styled session cost/token pair. Each half is omitted when it has
 /// nothing to report, so a Claude room on a build with no `cost_state`

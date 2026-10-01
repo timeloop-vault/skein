@@ -68,3 +68,54 @@
 	flex-direction: column;
 	gap: 4px;
 }
+
+.dp-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 5px 12px;
+	background: var(--bg-1);
+	border-bottom: 1px solid var(--line);
+	font-family: var(--sk-mono);
+	font-size: 11px;
+	color: var(--fg-2);
+}
+.dp-toolbar select {
+	max-width: 320px;
+	font: inherit;
+	color: var(--fg-1);
+	background: var(--bg-2, var(--bg-1));
+	border: 1px solid var(--line);
+}
+.dp-toolbar button {
+	font: inherit;
+	color: var(--fg-1);
+	background: transparent;
+	border: 1px solid var(--line);
+	cursor: pointer;
+}
+.dp-status {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.dp-frame {
+	flex: 1;
+	min-height: 0;
+	border: 0;
+	background: #fff;
+}
+.dp-beacons {
+	max-height: 120px;
+	overflow: auto;
+	margin: 0;
+	padding: 4px 12px;
+	list-style: none;
+	font-family: var(--sk-mono);
+	font-size: 11px;
+	color: var(--warn);
+	background: var(--bg-1);
+	border-top: 1px solid var(--line);
+}

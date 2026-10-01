@@ -19,6 +19,9 @@ import { SpawnEnvPanel } from "./SpawnEnvPanel.tsx";
 import type { DefaultAgents } from "./prefs.ts";
 import type { Density, HarnessKind, SpawnSettings, Theme } from "./types.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
+import "./Settings.css";
+import "./modal.css";
+import "./SpawnEnvPanel.css";
 
 interface SettingsModalProps {
 	theme: Theme;

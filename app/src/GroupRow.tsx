@@ -1,5 +1,6 @@
 import { type StripSegment, segmentId } from "./roomGroups.ts";
 import { LiveRoomTab, type RenameTarget, type RoomDragWiring } from "./roomStripShared.tsx";
+import "./RoomStrip.css";
 
 /// The SECOND row: the active group's own rooms, main pinned first —
 /// a real lead renders as a normal (undraggable) room tab, an unopen

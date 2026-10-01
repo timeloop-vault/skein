@@ -35,6 +35,7 @@ import type { GateResult } from "./harnessInput.ts";
 import type { HarnessKind } from "./types.ts";
 import { OVERLAY_CLOSED_EVENT } from "./useFocusRestore.ts";
 import { useTerminalSpawn } from "./useTerminalSpawn.ts";
+import "./LiveTerminal.css";
 
 interface LiveTerminalProps {
 	cmd: string[];
@@ -252,7 +253,7 @@ export const LiveTerminal = ({
 	// size; we then tell the PTY to match so the child sees the resize.
 	//
 	// Containment for #16: the harness column and per-harness wrapper
-	// have `overflow: hidden` set (`.sk-harness-col` in styles.css and
+	// have `overflow: hidden` set (`.sk-harness-col` in HarnessColumn.css and
 	// the inline style in `App.tsx`). Without that, xterm's canvas
 	// pushes the flex column taller when the font grows, fit reads the
 	// stretched parent height, and the row count never decreases —

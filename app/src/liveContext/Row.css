@@ -1,0 +1,237 @@
+/* Live Context — the generic Activity row (issue #80). Imported by
+   Row.tsx. */
+
+/* The generic Activity row layout. */
+.lc-row {
+	display: grid;
+	grid-template-columns: 38px 14px 1fr auto;
+	align-items: baseline;
+	gap: 8px;
+	padding: var(--row-py, 3px) 12px;
+	font-family: var(--sk-mono);
+	font-size: 0.92em;
+	line-height: 1.5;
+	color: var(--fg-1);
+	position: relative;
+	border-left: 2px solid transparent;
+}
+.lc-row:hover {
+	background: rgba(255, 255, 255, 0.02);
+}
+.sk-light .lc-row:hover {
+	background: rgba(0, 0, 0, 0.02);
+}
+.lc-row .time {
+	color: var(--fg-3);
+	font-size: 0.79em;
+	align-self: center;
+}
+.lc-row .by {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	align-self: center;
+}
+.lc-row .gist {
+	color: var(--fg-1);
+	min-width: 0;
+}
+.lc-row .gist .tool {
+	color: var(--fg-2);
+}
+.lc-row .gist .target {
+	color: var(--fg-0);
+}
+.lc-row .gist .arg {
+	color: var(--accent);
+}
+.lc-row .gist .ok {
+	color: var(--ok);
+}
+.lc-row .gist .err-text {
+	color: var(--err);
+}
+.lc-row .gist .dim {
+	color: var(--fg-3);
+}
+.lc-row .gist .pill {
+	font-size: calc(var(--cfs) * 0.7083);
+	padding: 1px 5px;
+	border-radius: 3px;
+	margin-left: 6px;
+	font-family: var(--sk-mono);
+	letter-spacing: 0.04em;
+	background: var(--bg-3);
+	color: var(--fg-2);
+	text-transform: uppercase;
+}
+.lc-row .right {
+	font-family: var(--sk-mono);
+	font-size: 0.79em;
+	color: var(--fg-3);
+	align-self: center;
+	white-space: nowrap;
+}
+.lc-row .right .delta-add {
+	color: var(--ok);
+}
+.lc-row .right .delta-del {
+	color: var(--err);
+}
+
+/* Glyphs per kind. */
+.lc-row .glyph {
+	font-family: var(--sk-mono);
+	font-weight: 600;
+	text-align: center;
+	color: var(--fg-2);
+}
+.lc-row.k-edit .glyph,
+.lc-row.k-write .glyph {
+	color: var(--ok);
+}
+.lc-row.k-read .glyph {
+	color: var(--fg-3);
+}
+.lc-row.k-grep .glyph,
+.lc-row.k-glob .glyph {
+	color: var(--fg-2);
+}
+.lc-row.k-bash .glyph {
+	color: var(--warn);
+}
+.lc-row.k-task .glyph {
+	color: var(--accent);
+}
+.lc-row.k-todowrite .glyph {
+	color: var(--accent);
+}
+.lc-row.k-ask .glyph {
+	color: var(--waiting);
+}
+.lc-row.k-agent .glyph {
+	color: var(--waiting);
+}
+.lc-row.k-background .glyph {
+	color: var(--waiting);
+}
+.lc-row.k-pr .glyph {
+	color: var(--ok);
+}
+.lc-row.k-error .glyph {
+	color: var(--err);
+}
+.lc-row.k-error {
+	border-left-color: var(--err);
+}
+.lc-row.k-error .gist .err-text {
+	font-weight: 500;
+}
+.lc-row.k-queue .glyph {
+	color: var(--fg-2);
+}
+.lc-row.k-userfile .glyph {
+	color: var(--warn);
+}
+.lc-row.k-slash .glyph {
+	color: var(--accent);
+}
+.lc-row.k-compact .glyph {
+	color: var(--fg-2);
+}
+.lc-row.k-cost .glyph {
+	color: var(--fg-3);
+}
+.lc-row.k-perm .glyph {
+	color: var(--waiting);
+}
+.lc-row.k-perm {
+	border-left-color: var(--waiting);
+	background: color-mix(in srgb, var(--waiting) 5%, transparent);
+	cursor: pointer;
+}
+.lc-row.k-perm:hover {
+	background: color-mix(in srgb, var(--waiting) 10%, transparent);
+}
+.lc-row.k-burst {
+	color: var(--fg-0);
+	cursor: pointer;
+}
+
+/* user_prompt — distinct from agent rows; left-edge accent. */
+.lc-row.k-user {
+	border-left-color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.lc-row.k-user:hover {
+	background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.lc-row.k-user .glyph {
+	color: var(--accent);
+}
+
+/* permission_mode / ai_title / bridge_status — quiet context rows.
+   (Glyphs come from the GLYPH map as text, not CSS ::before.) */
+.lc-row.k-perm-mode .glyph {
+	color: var(--waiting);
+}
+.lc-row.k-title .glyph {
+	color: var(--fg-3);
+}
+.lc-row.k-bridge .glyph {
+	color: var(--fg-2);
+}
+.lc-row.bridge-connected .glyph {
+	color: var(--ok);
+}
+.lc-row.bridge-disconnected,
+.lc-row.bridge-reconnecting {
+	border-left-color: var(--warn);
+	background: color-mix(in srgb, var(--warn) 4%, transparent);
+}
+.lc-row.bridge-disconnected .glyph,
+.lc-row.bridge-reconnecting .glyph {
+	color: var(--warn);
+}
+
+/* Burst row internals + shimmer for an active burst (D2e). */
+.lc-row.k-burst .gist .tool {
+	background: var(--bg-3);
+	padding: 1px 6px;
+	border-radius: 3px;
+	color: var(--fg-0);
+}
+.lc-row.k-burst .gist .target {
+	color: var(--fg-1);
+}
+.lc-row.k-burst.live::before {
+	content: "";
+	position: absolute;
+	left: -2px;
+	right: 0;
+	top: 0;
+	bottom: 0;
+	background: linear-gradient(
+		90deg,
+		transparent,
+		color-mix(in srgb, var(--accent) 8%, transparent),
+		transparent
+	);
+	background-size: 60% 100%;
+	background-repeat: no-repeat;
+	animation: lc-shimmer 1.6s linear infinite;
+	pointer-events: none;
+}
+@keyframes lc-shimmer {
+	0% {
+		background-position: -100% 0;
+	}
+	100% {
+		background-position: 200% 0;
+	}
+}
+/* The live burst's accent pill (the prototype inlined these styles). */
+.lc-row.k-burst .gist .pill.live {
+	background: color-mix(in srgb, var(--accent) 18%, transparent);
+	color: var(--accent);
+}

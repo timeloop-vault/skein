@@ -17,6 +17,7 @@ import type { ReviewHunk } from "../liveContext/review.ts";
 import type { HarnessKind } from "../types.ts";
 import { Composer, ThreadView } from "./Thread.tsx";
 import { type ReviewThread, type Side, threadsByLine } from "./api.ts";
+import "./DiffBody.css";
 
 /// A pending anchor: the lines the user has picked but not yet
 /// commented on.

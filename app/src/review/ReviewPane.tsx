@@ -63,7 +63,7 @@ import {
 	useWorktreeWatcher,
 } from "./useReviewData.ts";
 import { useReviewNudge } from "./useReviewNudge.ts";
-import "./review.css";
+import "./ReviewPane.css";
 
 export const ReviewPane = ({
 	roomId,

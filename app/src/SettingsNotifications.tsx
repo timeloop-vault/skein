@@ -1,6 +1,8 @@
 // Settings → notification surface toggles (#12 L5e). Each controls one
 // surface independently; defaults are in App.tsx (in-app on, OS off).
 
+import "./Settings.css";
+
 export const NotificationSettings = ({
 	notifyBadge,
 	notifyToast,

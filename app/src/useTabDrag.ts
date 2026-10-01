@@ -37,6 +37,7 @@ import {
 	release as releaseDrag,
 	sideFor,
 } from "./tabDrag.ts";
+import "./tabDrag.css";
 
 export type { DropSide };
 

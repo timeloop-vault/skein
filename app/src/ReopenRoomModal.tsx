@@ -32,6 +32,8 @@ import {
 } from "./reopenList.ts";
 import type { Room } from "./types.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
+import "./modal.css";
+import "./ReopenRoomModal.css";
 
 interface ReopenRoomModalProps {
 	// Every archived room, retired included, sorted newest-first; the modal

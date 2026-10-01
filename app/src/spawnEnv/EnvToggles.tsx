@@ -1,4 +1,6 @@
 import type { EnvPreview, HarnessConfigStatus, SpawnSettings } from "../types.ts";
+import "../Settings.css";
+import "../SpawnEnvPanel.css";
 
 /** The checkbox groups: agent review-tool injection and the agent-control
  *  kill switches, then the host-terminal stripping toggle. */

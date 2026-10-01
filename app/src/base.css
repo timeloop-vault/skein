@@ -1,0 +1,69 @@
+html,
+body {
+	margin: 0;
+	padding: 0;
+	height: 100%;
+}
+body {
+	font-family: "Inter", system-ui, sans-serif;
+	background: #0d0e10;
+	color: #e8e6df;
+	overflow: hidden;
+}
+#root {
+	height: 100vh;
+	width: 100vw;
+}
+
+/* #271: pointer-drag has no native "no-drop" cursor to fall back on —
+ * unlike HTML5 DnD, nothing stops the browser from showing whatever
+ * cursor the hovered element underneath declares. Force one everywhere
+ * for the duration of the drag instead; `tab-drag-refused` (set while
+ * a harness drag hovers a different room's tab) swaps it to
+ * not-allowed. useTabDrag toggles both classes on <html>. */
+html.tab-dragging,
+html.tab-dragging * {
+	cursor: grabbing !important;
+	/* #271: the pointer moves over terminal/right-pane text during a
+	 * drag, not just the tab strip; without this WebKit (macOS
+	 * WKWebView) highlights it as a selection. -webkit- prefix needed
+	 * there, unlike WebView2. */
+	-webkit-user-select: none !important;
+	user-select: none !important;
+}
+html.tab-dragging.tab-drag-refused,
+html.tab-dragging.tab-drag-refused * {
+	cursor: not-allowed !important;
+}
+
+/* Buttons */
+.sk-btn {
+	font: inherit;
+	font-family: var(--sk-sans);
+	font-size: calc(var(--cfs) * 0.9167);
+	padding: 5px 10px;
+	border-radius: 4px;
+	border: 1px solid var(--line-strong);
+	background: var(--bg-2);
+	color: var(--fg-0);
+	font-weight: 500;
+	cursor: pointer;
+}
+.sk-btn:hover {
+	background: var(--bg-3);
+}
+.sk-btn.primary {
+	background: var(--accent);
+	color: #fff;
+	border-color: var(--accent);
+}
+.sk-btn.primary:hover {
+	filter: brightness(1.08);
+}
+.sk-btn.ghost {
+	background: transparent;
+	color: var(--fg-1);
+}
+.sk-btn.ghost:hover {
+	background: var(--bg-3);
+}

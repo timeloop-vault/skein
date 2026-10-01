@@ -4,7 +4,7 @@
 // behaves the same: basicSetup (line numbers, undo/redo history,
 // find/replace panel, multi-cursor, bracket matching), the Skein
 // token theme + the design's syntax palette (--syn-* vars in
-// styles.css, dark + light), a per-extension language, the Mod+S
+// tokens.css, dark + light), a per-extension language, the Mod+S
 // save hook, and read-only wiring for truncated large files —
 // editing a 256 KB-truncated read and saving it would destroy the
 // file's tail, so truncated buffers are view-only by construction.
@@ -60,7 +60,7 @@ const langFor = (path: string): Extension | null => {
 };
 
 // The design prototype's syntax palette, themed through CSS vars so
-// dark/light both work (values in styles.css .sk-dark / .sk-light).
+// dark/light both work (values in tokens.css .sk-dark / .sk-light).
 const skeinHighlight = HighlightStyle.define([
 	{ tag: [tags.keyword, tags.operatorKeyword, tags.modifier], color: "var(--syn-keyword)" },
 	{

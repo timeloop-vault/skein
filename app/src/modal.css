@@ -1,0 +1,150 @@
+/* Modal scrim — shared by New room, the command palette, Reopen room and
+ * Settings. Deliberately NO backdrop-filter, departing from the design
+ * archive's blur(6px) (#235): you often read something behind a modal to
+ * type it into it, and blur destroys glyphs. The scrim alone keeps the
+ * layering cue while leaving text behind dimmed but legible. */
+.sk-modal-bg {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.45);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 100;
+}
+.sk-light .sk-modal-bg {
+	background: rgba(20, 18, 14, 0.32);
+}
+.sk-modal {
+	background: var(--bg-1);
+	border: 1px solid var(--line-strong);
+	border-radius: 10px;
+	width: 560px;
+	max-width: 92vw;
+	/* #134: bound to the viewport so a large chrome font (#17/#131)
+	   can't push the modal off-screen; the body scrolls instead. */
+	max-height: 90vh;
+	box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+}
+.sk-modal-head {
+	padding: 16px 20px 12px;
+	border-bottom: 1px solid var(--line);
+}
+.sk-modal-head h2 {
+	margin: 0;
+	font-size: calc(var(--cfs) * 1.1667);
+	font-weight: 500;
+	color: var(--fg-0);
+	letter-spacing: -0.01em;
+}
+.sk-modal-head .sub {
+	margin-top: 4px;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.875);
+	color: var(--fg-2);
+}
+.sk-modal-body {
+	padding: 16px 20px;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	/* #134: head stays fixed, body scrolls within the max-height modal.
+	   min-height:0 lets this flex child shrink below content size so the
+	   overflow actually engages. */
+	overflow-y: auto;
+	min-height: 0;
+}
+.sk-field {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+}
+.sk-field label {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.8333);
+	color: var(--fg-2);
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+}
+.sk-help {
+	font-size: calc(var(--cfs) * 0.9167);
+	color: var(--fg-3);
+	line-height: 1.5;
+	max-width: 60ch;
+}
+
+.sk-input,
+.sk-select,
+.sk-textarea {
+	background: var(--bg-2);
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	padding: 8px 10px;
+	color: var(--fg-0);
+	font: inherit;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 1);
+	outline: none;
+}
+.sk-input:focus,
+.sk-select:focus,
+.sk-textarea:focus {
+	border-color: var(--accent);
+}
+.sk-radio-row {
+	display: flex;
+	gap: 6px;
+}
+.sk-radio-card {
+	flex: 1;
+	padding: 10px;
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	background: var(--bg-2);
+	cursor: pointer;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	transition: border-color 0.12s, background 0.12s;
+}
+.sk-radio-card:hover {
+	border-color: var(--line-strong);
+}
+.sk-radio-card.selected {
+	border-color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 8%, var(--bg-2));
+}
+.sk-radio-card .top {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: calc(var(--cfs) * 0.9583);
+	color: var(--fg-0);
+	font-weight: 500;
+}
+.sk-radio-card .desc {
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.7917);
+	color: var(--fg-2);
+}
+.sk-modal-foot {
+	padding: 12px 20px;
+	border-top: 1px solid var(--line);
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+	background: var(--bg-0);
+}
+
+/* Confirm dialog (#242): a small variant of .sk-modal — replaces
+   `@tauri-apps/plugin-dialog`'s native confirm() for close room, close
+   a dirty Files harness, and quit-with-unsaved-buffers. */
+.sk-confirm-modal {
+	width: 420px;
+}
+.sk-confirm-modal.warning .sk-modal-head h2 {
+	color: var(--warn);
+}
