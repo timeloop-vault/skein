@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type Mock, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./confirmDialog.ts", () => ({ confirmDialog: vi.fn() }));
 
@@ -86,7 +86,7 @@ describe("harnessInput.readComposerNow", () => {
 
 describe("requestDeliverNow", () => {
 	const confirm = vi.mocked(confirmDialog);
-	let release: ReturnType<typeof vi.fn>;
+	let release: Mock<(harnessId: string) => void>;
 	beforeEach(() => {
 		confirm.mockReset();
 		release = vi.fn();
