@@ -40,7 +40,7 @@ serde_json = "1"
 # compares equal to a room's stored path and seeds New room readably
 # (#255). Already in the tree via tauri.
 dunce = "1.0.5"
-portable-pty = "0.9"
+portable-pty = "0.8"
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
