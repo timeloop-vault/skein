@@ -13,20 +13,17 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { useEffect } from "react";
-import { listHarnessAgents, unknownAgentMessage, validateAgent } from "./agents.ts";
 import { backgroundTasks } from "./backgroundTasks.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
-import {
-	attachClaudeEvents,
-	attachOpencodeEvents,
-	hasClaudeTranscriptTail,
-} from "./harnessEvents.ts";
+import { attachClaudeEvents } from "./harnessEvents.ts";
 import { harnessInput } from "./harnessInput.ts";
-import type { ScreenCell } from "./promptScreen.ts";
 import { subagents } from "./subagents.ts";
 import { attachTerminalInteractions } from "./terminalInteractions.ts";
 import { createXterm } from "./terminalSetup.ts";
+import { attachAdapters } from "./terminalSpawnAdapters.ts";
+import { agentResolves } from "./terminalSpawnAgent.ts";
+import { attachPtyInput, observeResize, registerInputTarget } from "./terminalSpawnInput.ts";
 import type { HarnessKind } from "./types.ts";
 
 type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
@@ -230,50 +227,24 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			term.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
 		};
 
-		/** Refuse the spawn when the harness names an agent the CLI no
-		 *  longer has (#247).
-		 *
-		 *  Here rather than at pick time *as well as* at pick time: a room
-		 *  restored from sqlite names an agent chosen weeks ago, and only
-		 *  one of the four spawn paths fails loudly on its own. Claude
-		 *  refuses a fresh spawn, but `claude --resume` and both opencode
-		 *  paths accept a dead name and quietly run as something else —
-		 *  #176's category, and invisible in a TUI where the warning
-		 *  scrolls past. Returning false costs one CLI probe (~0.35 s) and
-		 *  only for a harness that names an agent at all.
-		 *
-		 *  Verdicts other than `unknown` spawn: a degraded list cannot
-		 *  prove a name is gone, and refusing on a CLI that would not run
-		 *  would strand every harness in the app.
-		 *
-		 *  Gated on the argv actually carrying the flag, because the
-		 *  record outlives the process it described: a harness swapped to
-		 *  a shell by "Enter for shell" keeps `agent` set, and a dead
-		 *  agent name must not stop the user getting a shell. That is a
-		 *  question about *this* argv, not an attempt to recover a
-		 *  decision from it — the name still comes from the record. */
-		const agentResolves = async (cmdToSpawn: string[]): Promise<boolean> => {
-			if (!agent || !cmdToSpawn.includes("--agent")) return true;
-			const verdict = validateAgent(agent, await listHarnessAgents(harnessKind, cwd));
-			if (cancelled) return false;
-			if (verdict.kind === "unverified") {
-				console.warn(`[skein] could not verify agent "${agent}": ${verdict.why}`);
-			}
-			if (verdict.kind !== "unknown") return true;
-			term.write(`\r\n\x1b[31m[skein] ${unknownAgentMessage(agent, harnessKind)}\x1b[0m\r\n`);
-			// Same footer every other dead-harness path writes, and for the
-			// same reason: without it the pane is a wall of red with no
-			// visible way forward.
-			term.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
-			phase = "exited";
-			harnessActivity.exited(harnessId, null);
-			return false;
-		};
+		const agentResolvesFor = (cmdToSpawn: string[]) =>
+			agentResolves({
+				agent,
+				cmdToSpawn,
+				harnessKind,
+				harnessId,
+				cwd,
+				term,
+				isCancelled: () => cancelled,
+				onRefused: () => {
+					phase = "exited";
+				},
+			});
 
 		const startPty = async (cmdToSpawn: string[]) => {
 			if (cancelled) return;
 			programName = cmdToSpawn[0] ?? "child";
-			if (!(await agentResolves(cmdToSpawn))) return;
+			if (!(await agentResolvesFor(cmdToSpawn))) return;
 			if (cancelled) return;
 			phase = "running";
 			// Record the spawn before we await — gives a deterministic
@@ -312,167 +283,23 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				ptyIdRef.current = id;
 				harnessActivity.setInjected(harnessId, injected);
 				// #238: publish this harness to the `harnessInput` seam now
-				// that its PTY is live. `paste`/`bracketedPaste` read xterm
-				// state directly; `submit` is a separate `pty_write` of a
-				// bare "\r" after the paste, per the seam's contract.
-				detachInputTarget = harnessInput.register(harnessId, {
-					paste: (text) => term.paste(text),
-					bracketedPaste: () => term.modes.bracketedPasteMode,
-					submit: () => {
-						void invoke("pty_write", { id, data: "\r" });
-					},
-					kind: harnessKind,
-					// #413: the visible screen only (baseY.., not viewportY, so a
-					// user scrolled into history doesn't matter); null when any
-					// line is missing.
-					screen: () => {
-						const buf = term.buffer.active;
-						const reuse = buf.getNullCell();
-						const rows: ScreenCell[][] = [];
-						for (let y = 0; y < term.rows; y++) {
-							const line = buf.getLine(buf.baseY + y);
-							if (!line) return null;
-							const cells: ScreenCell[] = [];
-							for (let x = 0; x < term.cols; x++) {
-								const cell = line.getCell(x, reuse);
-								if (!cell) return null;
-								cells.push({ ch: cell.getChars(), dim: cell.isDim() !== 0 });
-							}
-							rows.push(cells);
-						}
-						return { rows, cursorX: buf.cursorX, cursorY: buf.cursorY };
-					},
+				// that its PTY is live.
+				detachInputTarget = registerInputTarget(term, harnessId, harnessKind, id);
+				// L2c attach point — see terminalSpawnAdapters.ts.
+				detachOpencodeAdapter = attachAdapters({
+					harnessId,
+					roomId,
+					cwd,
+					harnessKind,
+					sessionId,
+					opencodePort,
+					onSessionCaptured,
+					onSessionFollowed,
+					sessionIdRef,
+					claudeAdapterRef,
 				});
-				// L2c-1 attach point: after PTY is alive, hook into the
-				// Claude session log for authoritative running/waiting
-				// signals. Only fires for Claude harnesses that own a
-				// session uuid (chapter 5 `--session-id` pre-allocation).
-				// The translator marks the activity store authoritative
-				// once Rust confirms attach; until then L2a keeps
-				// ticking, so a slow attach is a graceful degradation.
-				if (hasClaudeTranscriptTail(harnessKind, sessionIdRef.current)) {
-					const attachedSessionId = sessionIdRef.current;
-					claudeAdapterRef.current = {
-						detach: attachClaudeEvents(harnessId, roomId, attachedSessionId, cwd),
-						sessionId: attachedSessionId,
-					};
-				}
-				// L2c-2: attach the opencode SSE adapter when we have a
-				// port (App allocated one via pick_free_port before the
-				// spawn argv was finalized). Without a port the adapter
-				// can't know where to subscribe — graceful fallback to
-				// L2a + the sqlite-poll session-id capture.
-				if (harnessKind === "opencode" && opencodePort !== undefined) {
-					detachOpencodeAdapter = attachOpencodeEvents(
-						harnessId,
-						roomId,
-						cwd,
-						opencodePort,
-						sessionId,
-						onSessionCaptured,
-						// #116: live, not the `sessionId` closed over above —
-						// this harness's session id can change under a
-						// long-lived adapter (`/new`, a `/sessions` pick).
-						() => sessionIdRef.current,
-						onSessionFollowed,
-					);
-				}
-				dataDisposable = term.onData((data) => {
-					// Focus-in / focus-out escapes are sent by xterm
-					// when the child enabled DECSET 1004 (Claude Code,
-					// opencode both do). The child typically reacts
-					// with a full screen redraw — those bytes come
-					// back through channel.onmessage and would
-					// otherwise count as "activity" and reset the
-					// idle timer. Mute the activity window for this
-					// harness so the induced redraw doesn't lie about
-					// what the child is doing. Covers every focus
-					// path: harness switch, alt+tab back to Skein,
-					// modal-close focus return, click into pane. Epic
-					// #50.
-					if (data === "\x1b[I" || data === "\x1b[O") {
-						harnessActivity.muteInducedOutput(harnessId);
-					}
-					// #383: a bracketed paste (middle-click, a right-click/
-					// menu paste) never reaches `onKey` below, so it's the
-					// only paste path this store would otherwise miss
-					// entirely. The seam's own `term.paste()` lands here
-					// too — harmless, since the composer read is `unknown`
-					// either way and its own `seamSubmit` clears it.
-					if (data.startsWith("\x1b[200~")) {
-						harnessInput.noteDraftEvent(harnessId, { type: "userPaste" });
-					}
-					void invoke("pty_write", { id, data });
-				});
-				// Separate hook for "did the user actually press a
-				// key in this terminal?" — used by L5a notification
-				// gating to tell real work cycles apart from startup
-				// banner cycles, and (#86) to tell whether a keystroke
-				// answered a permission dialog. onKey is the right
-				// primitive for both: onData fires for *anything* the
-				// terminal sends to the child, including auto-responses
-				// to queries like `\x1b[6n` (cursor position) and
-				// `\x1b[5n` (device status). Treating those as input was
-				// the bug that lit up every room on Skein restart, and
-				// would just as wrongly clear a permission dialog nobody
-				// answered. `key` is the exact bytes this keystroke sends
-				// to the child — the same string `onData` would carry for
-				// it — so `recordInput` can classify it without a second
-				// copy of the escape-sequence logic.
-				// Caveat: onKey doesn't fire for paste — if the user
-				// pastes without ever typing, their first task-idle
-				// transition won't bump, and pasting an answer into a
-				// permission dialog won't clear it either. Corner-case
-				// false negative we'll address with a paste listener if
-				// it matters in practice.
-				term.onKey(({ key }) => {
-					harnessActivity.recordInput(harnessId, key);
-					// #380: a human is typing — `sendPrompt`'s gap/retry
-					// checks need to tell that apart from its own
-					// machine-written "\r".
-					harnessInput.noteUserInput(harnessId);
-					// #383: fold the same keystroke into the composer-draft
-					// inference.
-					harnessInput.noteDraftEvent(harnessId, { type: "key", key });
-				});
-				if (!resizeObserver) {
-					// Track the dims we last sent so we can skip the
-					// pty_resize round-trip when nothing actually
-					// changed. Most ResizeObserver fires on a hidden→
-					// visible flip end up with the same rows/cols xterm
-					// already had — and many TUIs (Claude Code, opencode)
-					// react to SIGWINCH by repainting their entire screen,
-					// which then comes back to us as PTY output and
-					// counts as "activity" in the harnessActivity store.
-					// The visible symptom before this guard: switching
-					// to an idle background harness made its tab dot go
-					// green for 8s before settling back to idle. Epic #50.
-					let lastSentRows = term.rows;
-					let lastSentCols = term.cols;
-					resizeObserver = new ResizeObserver(() => {
-						// Phase 3 guard: when the room goes display:none,
-						// the host shrinks to 0×0 and the observer fires.
-						// Fitting to that size would tell xterm + the child
-						// that the terminal is 1×1, permanently squishing
-						// whatever's already in the scrollback. Skip while
-						// hidden — the next tick (visible again) refits.
-						if (host.clientWidth === 0 || host.clientHeight === 0) return;
-						try {
-							fit.fit();
-						} catch {
-							// fit can throw during teardown when the host
-							// element has been detached; ignore.
-							return;
-						}
-						const cur = ptyIdRef.current;
-						if (!cur) return;
-						if (term.rows === lastSentRows && term.cols === lastSentCols) return;
-						lastSentRows = term.rows;
-						lastSentCols = term.cols;
-						void invoke("pty_resize", { id: cur, rows: term.rows, cols: term.cols });
-					});
-					resizeObserver.observe(host);
-				}
+				dataDisposable = attachPtyInput(term, harnessId, id);
+				if (!resizeObserver) resizeObserver = observeResize(term, fit, host, ptyIdRef);
 			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : String(err);
 				term.write(`\r\n\x1b[31m[skein] pty_spawn failed: ${msg}\x1b[0m\r\n`);

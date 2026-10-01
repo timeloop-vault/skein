@@ -5,79 +5,28 @@
 // tracking (#164), opencode embedded-server port allocation, and the
 // close/unarchive/delete/restore room lifecycle. App.tsx destructures the
 // return value at the spot this state used to be declared.
+//
+// #459: the state and refs stay here; the behaviour is split by the
+// question a reader has — useRoomsHydrate (boot load, autosave, repo
+// metadata sync), useRoomsArchive (close / unarchive / delete / retire)
+// and useRoomsRepoIdentity (missing-folder recovery, #418 identity
+// actions) — over roomsStoreProbe (the non-React probes).
 
-import { invoke } from "@tauri-apps/api/core";
 import {
 	type Dispatch,
 	type MutableRefObject,
 	type SetStateAction,
 	useCallback,
-	useEffect,
 	useMemo,
 	useRef,
 	useState,
 } from "react";
-import type { FolderInfoDto } from "./NewRoomDialog.tsx";
 import type { RenameTarget } from "./RoomStrip.tsx";
-import { type CloseRoomAttribution, type RequestResult, decideCloseRoom } from "./agentRequests.ts";
-import { confirmDialog } from "./confirmDialog.ts";
-import { filesRegistry } from "./filesRegistry.ts";
-import { unarchiveRoomTransform, withResumeCmds } from "./harnessCmd.ts";
-import { repointRoom } from "./missingFolder.ts";
-import {
-	retireRooms as retireRoomsPure,
-	unretireRooms as unretireRoomsPure,
-} from "./reopenList.ts";
-import {
-	type IdentityCheck,
-	type RepoIdentityDto,
-	compareIdentity,
-	identityFromDto,
-	isStorable,
-	nextRepoRoot,
-} from "./repoIdentity.ts";
-import { nextActiveAfterClose } from "./roomGroups.ts";
-import type { Harness, RepoIdentity, Room } from "./types.ts";
-
-/** #418: what is at `path` right now: the folder facts and its repo
- *  identity. null on a failed invoke: callers treat that as "unknown",
- *  never as a mismatch. */
-interface FolderProbe {
-	info: FolderInfoDto;
-	identity: RepoIdentity | null;
-	shallow: boolean;
-}
-async function probeFolder(path: string): Promise<FolderProbe | null> {
-	try {
-		const info = await invoke<FolderInfoDto>("git_inspect_folder", { path });
-		if (!info.exists) return { info, identity: null, shallow: false };
-		const dto = await invoke<RepoIdentityDto | null>("git_repo_identity", { path });
-		return {
-			info,
-			identity: dto ? identityFromDto(dto) : null,
-			shallow: dto?.shallow === true,
-		};
-	} catch (err) {
-		console.warn(`[skein] folder probe failed for ${path}:`, err);
-		return null;
-	}
-}
-const checkProbe = (stored: RepoIdentity | undefined, p: FolderProbe): IdentityCheck =>
-	compareIdentity(stored, {
-		exists: p.info.exists,
-		identity: p.identity,
-		shallow: p.shallow,
-	});
-
-/** Wire shape of `db_load_rooms` (#167): the rooms that parsed plus
- *  any rows the backend quarantined instead of failing the load.
- *  `backupRooms` arrives only when the live table was empty but the
- *  skein.db.bak snapshot still holds rooms. */
-interface DbLoadOutcome {
-	rooms: Room[];
-	skipped: { id: string; error: string }[];
-	backupRooms?: number;
-}
+import { inspectFolderMissing } from "./roomsStoreProbe.ts";
+import type { Room } from "./types.ts";
+import { useRoomsArchive } from "./useRoomsArchive.ts";
+import { useRoomsHydrate } from "./useRoomsHydrate.ts";
+import { useRoomsRepoIdentity } from "./useRoomsRepoIdentity.ts";
 
 export function useRoomsStore(
 	defaultShell: string[],
@@ -109,14 +58,14 @@ export function useRoomsStore(
 				.sort((a, b) => (b.archived ?? 0) - (a.archived ?? 0)),
 		[rooms],
 	);
-	// #76: mirrors `unarchiveRoomRef` below — a placeholder-lead click
+	// #76: mirrors `unarchiveRoomRef` — a placeholder-lead click
 	// needs the current archived list without becoming a dep of the
 	// callback that's stashed in a ref itself.
 	const archivedRoomsRef = useRef(archivedRooms);
 	archivedRoomsRef.current = archivedRooms;
 
 	// Phase 3: hydrate rooms from sqlite on boot. Until that round-trips,
-	// `loaded` stays false and the auto-save effect below stays parked —
+	// `loaded` stays false and the auto-save effect stays parked —
 	// otherwise the empty initial state would clobber the DB before we read it.
 	const [loaded, setLoaded] = useState(false);
 	// #167: the boot load failed wholesale (sqlite open/read error).
@@ -138,7 +87,7 @@ export function useRoomsStore(
 	// active.
 	const [missingFolders, setMissingFolders] = useState<Set<string>>(new Set());
 	// #164: guards `checkRoomFolder` against a stale in-flight result.
-	// It runs both on unarchive and from the active-room effect below
+	// It runs both on unarchive and from the active-room effect
 	// with no ordering guarantee between them, and a slow check can
 	// resolve after a recovery action (recreateMissingWorktree /
 	// pickMissingFolder) already cleared the flag — re-adding the room
@@ -175,264 +124,56 @@ export function useRoomsStore(
 	const hydratedOnceRef = useRef(false);
 	// #294: mirrors `loaded`, set at the exact same call site — unlike
 	// `hydratedOnceRef` (flipped earlier, before the resume/port-alloc
-	// await chain below), this is only true once `rooms` actually holds
+	// await chain), this is only true once `rooms` actually holds
 	// the hydrated set. A live click-listener poke that lands in that
 	// gap must not drain against the still-empty `roomsRef`.
 	const loadedRef = useRef(false);
-	// #164: does `cwd` exist right now? A failed invoke is treated as
-	// "unknown" rather than missing — the check is conservative in the
-	// same direction as the #153 sessionId-existence probes above: a
-	// transient rusqlite/fs hiccup must not park a perfectly good room
-	// behind a false "folder missing" card.
-	const inspectFolderMissing = useCallback(
-		async (cwd: string, roomId: string): Promise<boolean> => {
-			try {
-				const info = await invoke<FolderInfoDto>("git_inspect_folder", { path: cwd });
-				return !info.exists;
-			} catch (err) {
-				console.warn(`[skein] git_inspect_folder folder-check failed for room ${roomId}:`, err);
-				return false;
-			}
-		},
-		[],
-	);
 	// #164: re-check a single room and flip its membership in
 	// `missingFolders` if the answer changed. Used on unarchive and
 	// whenever a room becomes active — hydrate's own initial pass
-	// below fills the whole set at once, before any room mounts.
-	const checkRoomFolder = useCallback(
-		async (room: Room) => {
-			const token = (folderCheckTokenRef.current.get(room.id) ?? 0) + 1;
-			folderCheckTokenRef.current.set(room.id, token);
-			if (!room.cwd) {
-				setMissingFolders((prev) => {
-					if (!prev.has(room.id)) return prev;
-					const next = new Set(prev);
-					next.delete(room.id);
-					return next;
-				});
-				return;
-			}
-			const missing = await inspectFolderMissing(room.cwd, room.id);
-			// A newer check or a recovery action already ran for this room
-			// while this one was in flight — its answer is stale, drop it.
-			if (folderCheckTokenRef.current.get(room.id) !== token) return;
+	// fills the whole set at once, before any room mounts.
+	const checkRoomFolder = useCallback(async (room: Room) => {
+		const token = (folderCheckTokenRef.current.get(room.id) ?? 0) + 1;
+		folderCheckTokenRef.current.set(room.id, token);
+		if (!room.cwd) {
 			setMissingFolders((prev) => {
-				if (prev.has(room.id) === missing) return prev;
+				if (!prev.has(room.id)) return prev;
 				const next = new Set(prev);
-				if (missing) next.add(room.id);
-				else next.delete(room.id);
+				next.delete(room.id);
 				return next;
 			});
-		},
-		[inspectFolderMissing],
-	);
-	// #76 + #418: background repo metadata for rooms; never awaited by a
-	// caller, so a slow or failing repo cannot delay or break hydrate/
-	// reopen. Per room, in parallel: (1) a room without `repoRoot` gets
-	// it filled (#76); (2) a room without `repoIdentity` gets it stored
-	// unless it is currently mismatched (the folder's repo is not the
-	// room's, so it must not be recorded as the room's); (3) a stored
-	// `repoRoot` is re-derived when it differs, but ONLY when the
-	// identity check says "same": unknown or mismatch keep the old
-	// group. Never clears anything.
-	const syncRepoMeta = useCallback((targets: Room[]) => {
-		const pending = targets.filter((r) => r.cwd);
-		if (pending.length === 0) return;
-		void Promise.all(
-			pending.map(async (r) => {
-				identityTriedRef.current.add(r.id);
-				if (!r.cwd) return;
-				const probe = await probeFolder(r.cwd);
-				if (!probe) return;
-				const check = checkProbe(r.repoIdentity, probe);
-				if (check === "mismatch" || mismatchedRef.current.has(r.id)) return;
-				const derived = probe.info.exists && probe.info.isRepo ? probe.info.root : undefined;
-				const fillIdentity =
-					!r.repoIdentity && isStorable(probe.identity) ? probe.identity : undefined;
-				setRooms((prev) =>
-					prev.map((x) => {
-						if (x.id !== r.id || x.cwd !== r.cwd) return x;
-						const root = nextRepoRoot(x.repoRoot, derived, check);
-						const identity = x.repoIdentity ?? fillIdentity;
-						if (root === x.repoRoot && identity === x.repoIdentity) return x;
-						return {
-							...x,
-							...(root ? { repoRoot: root } : {}),
-							...(identity ? { repoIdentity: identity } : {}),
-						};
-					}),
-				);
-			}),
-		);
-	}, []);
-	const hydrateRooms = useCallback(() => {
-		// Chapter 5 phase 4: drop any stored sessionId that no longer
-		// exists on disk before resumeCmd uses it. claude --resume <id>
-		// or opencode --session <id> against a deleted conversation
-		// would either error or attach to nothing useful; falling back
-		// to picker / --continue is the safer default.
-		//
-		// Errors from the existence checks are conservative: keep the
-		// id (return true). The follow-up resume might fail noisily,
-		// but at least we don't drop a legitimate id over a transient
-		// rusqlite or fs hiccup.
-		const stillExists = async (h: Harness): Promise<boolean> => {
-			if (!h.sessionId) return true;
-			try {
-				if (h.kind === "claude") {
-					return await invoke<boolean>("claude_session_exists", { id: h.sessionId });
-				}
-				if (h.kind === "opencode") {
-					return await invoke<boolean>("opencode_session_exists", { id: h.sessionId });
-				}
-			} catch (err) {
-				console.warn(`[skein] ${h.kind} session_exists failed for ${h.sessionId}:`, err);
-				return true;
-			}
-			return true;
-		};
-
-		invoke<DbLoadOutcome>("db_load_rooms")
-			.then(async ({ rooms: rows, skipped, backupRooms }) => {
-				hydratedOnceRef.current = true;
-				// Clear any failure from a concurrent sibling call —
-				// success wins, and a stale loadFailed would silently
-				// park the autosave (#167 review).
-				setLoadFailed(null);
-				if (skipped.length > 0) {
-					console.warn(
-						`[skein] ${skipped.length} room row(s) failed to parse and were quarantined:`,
-						skipped,
-					);
-					setQuarantinedCount(skipped.length);
-				}
-				if (rows.length === 0 && backupRooms !== undefined && backupRooms > 0) {
-					console.warn(`[skein] rooms table is empty but skein.db.bak holds ${backupRooms}`);
-					setBackupRoomCount(backupRooms);
-				}
-				if (rows.length > 0) {
-					const verified = await Promise.all(
-						rows.map(async (s) => ({
-							...s,
-							harnesses: await Promise.all(
-								s.harnesses.map(async (h) => {
-									if (await stillExists(h)) return h;
-									console.info(
-										`[skein] dropping stale ${h.kind} sessionId ${h.sessionId} on harness ${h.id}`,
-									);
-									const { sessionId, ...rest } = h;
-									return rest;
-								}),
-							),
-						})),
-					);
-					// Epic #50 L2c-2: pre-allocate fresh embedded-server
-					// ports for every resumed opencode harness. The
-					// previous Skein run released its ports on exit;
-					// resumeCmd needs the new ones to bake into the
-					// argv. Awaiting in parallel keeps boot fast even
-					// with many opencode rooms.
-					const opencodeHarnesses = verified.flatMap((r) =>
-						r.harnesses.filter((h) => h.kind === "opencode" && h.cmd),
-					);
-					const allocations = await Promise.all(
-						opencodeHarnesses.map(async (h) => {
-							try {
-								const port = await invoke<number>("pick_free_port");
-								return [h.id, port] as const;
-							} catch (err) {
-								console.warn(
-									`[skein] pick_free_port failed for ${h.id}; L2c-2 adapter disabled for this harness`,
-									err,
-								);
-								return null;
-							}
-						}),
-					);
-					const portMap = new Map<string, number>(
-						allocations.filter((a): a is readonly [string, number] => a !== null),
-					);
-					setOpencodePorts(portMap);
-					// Rewrite each harness's cmd to its resume form before
-					// mounting, so the PTY spawn re-attaches to the prior
-					// conversation instead of starting fresh.
-					const withResume = verified.map((r) => withResumeCmds(r, portMap));
-					// #164: check every active room's folder in parallel and
-					// have the full missing-set ready BEFORE rooms mount, so
-					// a vanished folder never gets even one spawn attempt.
-					// Archived rooms aren't mounted, so they're not checked
-					// here — unarchive (below) checks on the way back in.
-					const initialMissing = new Set<string>();
-					await Promise.all(
-						withResume.map(async (r) => {
-							if (r.archived || !r.cwd) return;
-							if (await inspectFolderMissing(r.cwd, r.id)) initialMissing.add(r.id);
-						}),
-					);
-					setMissingFolders(initialMissing);
-					// #418: same gate for a folder that now holds a different
-					// repo, decided before mount so nothing resumes there.
-					const initialMismatch = new Set<string>();
-					await Promise.all(
-						withResume.map(async (r) => {
-							if (r.archived || !r.cwd || !r.repoIdentity || initialMissing.has(r.id)) return;
-							const probe = await probeFolder(r.cwd);
-							if (probe && checkProbe(r.repoIdentity, probe) === "mismatch") {
-								initialMismatch.add(r.id);
-							}
-						}),
-					);
-					mismatchedRef.current = initialMismatch;
-					setMismatchedRooms(initialMismatch);
-					setRooms(withResume);
-					syncRepoMeta(withResume);
-					// Pick the first *active* room; archived ones aren't
-					// supposed to be the boot-time selection.
-					const first = withResume.find((r) => !r.archived);
-					if (first) setActiveRoomId(first.id);
-				}
-				loadedRef.current = true;
-				setLoaded(true);
-			})
-			.catch((err: unknown) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				console.error("[skein] db_load_rooms failed:", msg);
-				if (hydratedOnceRef.current) return;
-				// #167: deliberately NOT setLoaded(true) here. Flipping
-				// `loaded` with the initial [] still in state arms the
-				// autosave, whose next write is DELETE FROM sessions —
-				// the boot-wipe chain this issue exists to break.
-				setLoadFailed(msg);
-			});
-	}, [syncRepoMeta, inspectFolderMissing]);
-
-	useEffect(() => {
-		hydrateRooms();
-	}, [hydrateRooms]);
-
-	// Phase 3: any time `rooms` changes after the initial load, mirror
-	// the new state to sqlite. Wipe-and-insert is fine at prototype scale.
-	useEffect(() => {
-		if (!loaded || loadFailed !== null) return;
-		void invoke("db_save_rooms", { rooms }).catch((err: unknown) => {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.error("[skein] db_save_rooms failed:", msg);
+			return;
+		}
+		const missing = await inspectFolderMissing(room.cwd, room.id);
+		// A newer check or a recovery action already ran for this room
+		// while this one was in flight — its answer is stale, drop it.
+		if (folderCheckTokenRef.current.get(room.id) !== token) return;
+		setMissingFolders((prev) => {
+			if (prev.has(room.id) === missing) return prev;
+			const next = new Set(prev);
+			if (missing) next.add(room.id);
+			else next.delete(room.id);
+			return next;
 		});
-	}, [rooms, loaded, loadFailed]);
-
-	// #418: a room created this session (New room, worktree room,
-	// agent create_room) reaches `rooms` through setRooms with no
-	// identity; one effect keyed on that fact covers every creation path
-	// instead of patching each. Rooms already handled by hydrate or
-	// unarchive are in `identityTriedRef`.
-	useEffect(() => {
-		if (!loaded) return;
-		const fresh = rooms.filter(
-			(r) => !r.repoIdentity && r.cwd && !identityTriedRef.current.has(r.id),
-		);
-		if (fresh.length > 0) syncRepoMeta(fresh);
-	}, [rooms, loaded, syncRepoMeta]);
+	}, []);
+	const { syncRepoMeta, hydrateRooms } = useRoomsHydrate({
+		rooms,
+		loaded,
+		loadFailed,
+		setRooms,
+		setActiveRoomId,
+		setOpencodePorts,
+		setLoaded,
+		setLoadFailed,
+		setQuarantinedCount,
+		setBackupRoomCount,
+		setMissingFolders,
+		setMismatchedRooms,
+		mismatchedRef,
+		identityTriedRef,
+		hydratedOnceRef,
+		loadedRef,
+	});
 
 	const room = useMemo(() => rooms.find((r) => r.id === activeRoomId), [rooms, activeRoomId]);
 	const activeHarness = room?.harnesses.find((h) => h.id === room.activeHarnessId);
@@ -440,331 +181,57 @@ export function useRoomsStore(
 	const switchRoom = (id: string) => {
 		setActiveRoomId(id);
 		// Pending-notification clearing for the now-displayed harness
-		// is handled by a useEffect below — it covers every path
+		// is handled by a useEffect elsewhere — it covers every path
 		// that changes the (active room, active harness) tuple, not
 		// just tab clicks (Mod+1..9, Mod+Tab, palette, initial load).
 	};
 
-	const closeRoom = async (id: string) => {
-		// Confirm before close — rooms can hold a lot of state and the
-		// prototype has no undo (well, now there's the reopen modal —
-		// but the user shouldn't have to discover that). #242: an
-		// in-app dialog (confirmDialog.ts / ConfirmDialog.tsx), not
-		// `plugin-dialog`'s native confirm() — it doesn't pick up
-		// Skein's theme, and window.confirm is silently no-op'd in
-		// WebKit without a host-side handler.
-		// #185: name unsaved editor buffers — archived rooms come back,
-		// unsaved buffer text doesn't.
-		const target = roomsRef.current.find((r) => r.id === id);
-		const dirty = filesRegistry.anyDirty(target?.harnesses.map((h) => h.id) ?? []);
-		const msg =
-			dirty.length > 0
-				? `Close this room? Any running harnesses will be killed and ${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${dirty.join(", ")}) discarded.`
-				: "Close this room? Any running harnesses will be killed.";
-		let ok: boolean;
-		try {
-			ok = await confirmDialog({
-				title: "Close room",
-				message: msg,
-				confirmLabel: "Close room",
-				cancelLabel: "Cancel",
-				kind: "warning",
-			});
-		} catch (err) {
-			console.error("[skein] confirmDialog failed:", err);
-			return;
-		}
-		if (!ok) return;
-		// Chapter 6 phase 2: archive instead of delete. Tab strip filters
-		// archived out; reopen modal lists them.
-		setRooms((prev) => prev.map((r) => (r.id === id ? { ...r, archived: Date.now() } : r)));
-		if (id === activeRoomId) {
-			const nextActive = nextActiveAfterClose(activeRooms, id, lastUsedByGroupRef.current);
-			setActiveRoomId(nextActive?.id ?? "");
-		}
-		// #241: archiving is the only path that can remove a room out from
-		// under an in-progress rename (the tab strip only ever renders
-		// active rooms, and rename is only ever started on one) — clear
-		// explicitly rather than relying on the input's own blur-on-unmount
-		// commit, which would otherwise write the room's name right back
-		// onto an archived room no tab shows any more.
-		setRenaming((cur) => (cur?.roomId === id ? null : cur));
-	};
+	const {
+		closeRoom,
+		closeRoomForAgent,
+		allocateOpencodePorts,
+		unarchiveRoom,
+		unarchiveRoomRef,
+		deleteRoomForever,
+		restoreRoom,
+		deleteRoomsForever,
+		restoreRooms,
+		retireRooms,
+		unretireRooms,
+	} = useRoomsArchive({
+		activeRoomId,
+		activeRooms,
+		roomsRef,
+		activeRoomIdRef,
+		mismatchedRef,
+		lastUsedByGroupRef,
+		setRooms,
+		setActiveRoomId,
+		setOpencodePorts,
+		setRenaming,
+		setMismatch,
+		syncRepoMeta,
+		checkRoomFolder,
+	});
 
-	// #411: `close_room` agent verb — same archive `closeRoom` above
-	// performs, but never prompts (there's no dialog for an agent call
-	// to answer) and refuses outright instead of asking. The refusal
-	// ladder (unknown room / already archived / unsaved Files buffers)
-	// lives in the pure `decideCloseRoom` so it's unit-tested without
-	// this hook; this is only the state mutation once decided.
-	const closeRoomForAgent = (
-		roomId: string,
-		closedBy: CloseRoomAttribution,
-	): RequestResult<{ roomId: string; archived: number }> => {
-		const decision = decideCloseRoom(
-			roomsRef.current,
-			roomId,
-			closedBy,
-			(ids) => filesRegistry.anyDirty(ids),
-			Date.now(),
-		);
-		if (!decision.ok) return decision;
-		const { closedBy: stamped } = decision.value;
-		setRooms((prev) =>
-			prev.map((r) => (r.id === roomId ? { ...r, archived: stamped.at, closedBy: stamped } : r)),
-		);
-		if (roomId === activeRoomIdRef.current) {
-			const nextActive = nextActiveAfterClose(activeRooms, roomId, lastUsedByGroupRef.current);
-			setActiveRoomId(nextActive?.id ?? "");
-		}
-		// Same reasoning as the user's close, above: archiving can remove
-		// a room out from under an in-progress rename.
-		setRenaming((cur) => (cur?.roomId === roomId ? null : cur));
-		return { ok: true, value: { roomId, archived: stamped.at } };
-	};
-
-	// Fresh embedded-server ports for every opencode harness in a room
-	// about to be (re)mounted. The ports from sqlite are dead — the run
-	// that bound them released them on exit — and resumeCmd needs the
-	// new ones to bake into the argv. Allocation failure is survivable:
-	// that harness resumes without --port and its L2c-2 SSE adapter
-	// simply doesn't attach.
-	const allocateOpencodePorts = useCallback(async (room: Room | undefined) => {
-		const portMap = new Map<string, number>();
-		if (!room) return portMap;
-		await Promise.all(
-			room.harnesses
-				.filter((h) => h.kind === "opencode" && h.cmd)
-				.map(async (h) => {
-					try {
-						portMap.set(h.id, await invoke<number>("pick_free_port"));
-					} catch (err) {
-						console.warn(`[skein] pick_free_port failed for ${h.id} on unarchive`, err);
-					}
-				}),
-		);
-		if (portMap.size > 0) {
-			setOpencodePorts((prev) => new Map([...prev, ...portMap]));
-		}
-		return portMap;
-	}, []);
-
-	// #153 / #170: un-archiving a room re-mounts it, which re-spawns
-	// every harness, so their cmds must be in resume form *before* the
-	// state change lands. A harness created this session still carries
-	// its fresh-spawn cmd (`claude --session-id <uuid>`); re-running that
-	// against an existing session makes Claude reject it with "Session ID
-	// is already in use".
-	//
-	// This is the single un-archive path. #153 fixed the reopen modal,
-	// #170 was the OS-notification click doing the same job with the
-	// resume half missing — every future caller gets both halves by
-	// construction.
-	const unarchiveRoom = useCallback(
-		async (id: string) => {
-			const room = roomsRef.current.find((r) => r.id === id);
-			// Already active: it's mounted and running, so rewriting its
-			// cmds would change LiveTerminal's mountKey and kill a live
-			// harness. Just focus it.
-			if (!room?.archived) {
-				setActiveRoomId(id);
-				return;
-			}
-			const portMap = await allocateOpencodePorts(room);
-			const transformed = unarchiveRoomTransform(room, portMap);
-			// #418: decide identity BEFORE the remount so a room whose
-			// folder now holds another repo opens on the card, resuming
-			// nothing. React batches this with the setRooms below.
-			if (room.repoIdentity && room.cwd) {
-				const probe = await probeFolder(room.cwd);
-				if (probe && checkProbe(room.repoIdentity, probe) === "mismatch") {
-					mismatchedRef.current = new Set(mismatchedRef.current).add(id);
-					setMismatch(id, true);
-				}
-			}
-			setRooms((prev) => prev.map((r) => (r.id === id ? transformed : r)));
-			setActiveRoomId(id);
-			// #76 / #418: repoRoot + identity backfill, as hydrate does.
-			syncRepoMeta([room]);
-			// #164: an archived room's folder may have vanished while it
-			// was closed — check on the way back in, same as hydrate does
-			// for rooms that were already active.
-			void checkRoomFolder(transformed);
-		},
-		[allocateOpencodePorts, syncRepoMeta, setMismatch, checkRoomFolder],
-	);
-	// The OS-notification listener is []-keyed (re-registering it on
-	// every render would leak native listeners), so it reaches the
-	// current unarchiveRoom through a ref rather than closing over it.
-	const unarchiveRoomRef = useRef(unarchiveRoom);
-	unarchiveRoomRef.current = unarchiveRoom;
-
-	// #164: "Recreate worktree" on a MissingFolderCard. Only ever called
-	// when `recoveryOptions` offered it (room.branch/repoRoot set, cwd a
-	// worktree, branch still in the repo) — `git_restore_worktree`
-	// re-attaches that branch at the room's existing `cwd`, so no argv
-	// or sessionId needs rebuilding: the folder just reappears where
-	// every harness already expects it.
-	const recreateMissingWorktree = useCallback(
-		async (room: Room): Promise<{ ok: true } | { ok: false; error: string }> => {
-			if (!room.repoRoot || !room.branch || !room.cwd) {
-				return { ok: false, error: "This room is missing a branch or repository record." };
-			}
-			try {
-				await invoke("git_restore_worktree", {
-					repoPath: room.repoRoot,
-					branch: room.branch,
-					worktreePath: room.cwd,
-				});
-				// #164: bump before clearing so an older in-flight
-				// checkRoomFolder for this room can't re-add it after.
-				folderCheckTokenRef.current.set(
-					room.id,
-					(folderCheckTokenRef.current.get(room.id) ?? 0) + 1,
-				);
-				setMissingFolders((prev) => {
-					if (!prev.has(room.id)) return prev;
-					const next = new Set(prev);
-					next.delete(room.id);
-					return next;
-				});
-				return { ok: true };
-			} catch (err) {
-				return { ok: false, error: err instanceof Error ? err.message : String(err) };
-			}
-		},
-		[],
-	);
-
-	// #164: "Pick another folder" on a MissingFolderCard. Unlike the
-	// worktree recreate above, the room's `cwd` itself changes, so every
-	// harness that resumed into the old folder needs `repointRoom`'s
-	// full treatment (dropped sessionId, fresh argv) — same port
-	// allocation unarchive already does for opencode harnesses.
-	const pickMissingFolder = useCallback(
-		async (room: Room, newCwd: string) => {
-			const portMap = await allocateOpencodePorts(room);
-			// The picked folder may belong to a different repo (or none at
-			// all) — inspect it before committing the repoint rather than
-			// clearing `repoRoot` and relying on backfill: a repo gets its
-			// own root, a plain folder gets no group, and a failed invoke
-			// keeps the room's old repoRoot rather than losing it.
-			let nextRepoRoot = room.repoRoot;
-			try {
-				const info = await invoke<FolderInfoDto>("git_inspect_folder", { path: newCwd });
-				nextRepoRoot = info.isRepo ? info.root : undefined;
-			} catch (err) {
-				console.warn(`[skein] git_inspect_folder repoint check failed for room ${room.id}:`, err);
-			}
-			// #418: the new folder is judged against the room's stored
-			// identity; a room with none adopts the new folder's.
-			let identityCheck: IdentityCheck = "unknown";
-			let adopted: RepoIdentity | undefined;
-			const probe = await probeFolder(newCwd);
-			if (probe) {
-				identityCheck = checkProbe(room.repoIdentity, probe);
-				if (!room.repoIdentity && isStorable(probe.identity)) adopted = probe.identity;
-			}
-			const base = repointRoom(room, newCwd, {
-				fallbackShell: defaultShell,
-				opencodePorts: portMap,
-			});
-			// `exactOptionalPropertyTypes` forbids `repoRoot: undefined` —
-			// a plain (non-repo) folder, or one with no known root, must
-			// drop the key entirely rather than set it to undefined.
-			const { repoRoot: _droppedRepoRoot, ...rest } = base;
-			const withRoot: Room = nextRepoRoot ? { ...rest, repoRoot: nextRepoRoot } : rest;
-			const repointed: Room = adopted ? { ...withRoot, repoIdentity: adopted } : withRoot;
-			identityTriedRef.current.add(room.id);
-			mismatchedRef.current = new Set(mismatchedRef.current);
-			if (identityCheck === "mismatch") mismatchedRef.current.add(room.id);
-			else mismatchedRef.current.delete(room.id);
-			setMismatch(room.id, identityCheck === "mismatch");
-			setRooms((prev) => prev.map((r) => (r.id === room.id ? repointed : r)));
-			// #164: bump before clearing so an older in-flight
-			// checkRoomFolder for this room can't re-add it after.
-			folderCheckTokenRef.current.set(room.id, (folderCheckTokenRef.current.get(room.id) ?? 0) + 1);
-			setMissingFolders((prev) => {
-				if (!prev.has(room.id)) return prev;
-				const next = new Set(prev);
-				next.delete(room.id);
-				return next;
-			});
-		},
-		[allocateOpencodePorts, defaultShell, setMismatch],
-	);
-
-	// #418: the user says the folder's repo IS the room's (a re-clone,
-	// a history rewrite). Store the folder's current identity, lift the
-	// gate, then let the normal repoRoot re-derive run against it.
-	const confirmSameRepo = async (id: string) => {
-		const target = roomsRef.current.find((r) => r.id === id);
-		if (!target) return;
-		const probe = target.cwd ? await probeFolder(target.cwd) : null;
-		// Not storable (not a repo / unborn / shallow: empty roots) lifts the
-		// gate for this session but stores nothing, so the next hydrate may
-		// flag the room again.
-		const identity = probe && isStorable(probe.identity) ? probe.identity : undefined;
-		const updated: Room = identity ? { ...target, repoIdentity: identity } : target;
-		if (identity) setRooms((prev) => prev.map((r) => (r.id === id ? updated : r)));
-		mismatchedRef.current = new Set(mismatchedRef.current);
-		mismatchedRef.current.delete(id);
-		setMismatch(id, false);
-		syncRepoMeta([updated]);
-	};
-
-	// #418: the folder holds another repo and the room's history is
-	// what is left worth keeping: archive + retire (#417) without the
-	// close confirm, moving focus as closeRoom does.
-	const retireMismatchedRoom = (id: string) => {
-		const now = Date.now();
-		setRooms((prev) => prev.map((r) => (r.id === id ? { ...r, archived: now, retired: now } : r)));
-		setMismatch(id, false);
-		if (id === activeRoomIdRef.current) {
-			const nextActive = nextActiveAfterClose(activeRooms, id, lastUsedByGroupRef.current);
-			setActiveRoomId(nextActive?.id ?? "");
-		}
-		setRenaming((cur) => (cur?.roomId === id ? null : cur));
-	};
-
-	// #89: permanently drop an archived room. `db_save_rooms` is a full
-	// DELETE + re-insert of the current `rooms` array, so removing it
-	// from state *is* the delete — the autosave effect mirrors it out.
-	// (Orphaned `harness_actions`/`harness_events` rows for the room are
-	// harmless activity-log leftovers; a later pass can vacuum them.)
-	const deleteRoomForever = (id: string) => {
-		setRooms((prev) => prev.filter((r) => r.id !== id));
-	};
-
-	// #89: undo a just-deleted room — re-insert it with its `archived`
-	// flag intact, so it returns to the reopen list (not the tab strip).
-	// The archivedRooms memo re-sorts it back into place.
-	const restoreRoom = (room: Room) => {
-		setRooms((prev) => (prev.some((r) => r.id === room.id) ? prev : [...prev, room]));
-	};
-
-	// #417: batch forms for Reopen's multi-select.
-	const deleteRoomsForever = (ids: readonly string[]) => {
-		const gone = new Set(ids);
-		setRooms((prev) => prev.filter((r) => !gone.has(r.id)));
-	};
-
-	const restoreRooms = (restored: Room[]) => {
-		setRooms((prev) => {
-			const have = new Set(prev.map((r) => r.id));
-			const add = restored.filter((r) => !have.has(r.id));
-			return add.length === 0 ? prev : [...prev, ...add];
+	const { recreateMissingWorktree, pickMissingFolder, confirmSameRepo, retireMismatchedRoom } =
+		useRoomsRepoIdentity({
+			defaultShell,
+			activeRooms,
+			roomsRef,
+			activeRoomIdRef,
+			mismatchedRef,
+			identityTriedRef,
+			folderCheckTokenRef,
+			lastUsedByGroupRef,
+			setRooms,
+			setActiveRoomId,
+			setRenaming,
+			setMissingFolders,
+			setMismatch,
+			syncRepoMeta,
+			allocateOpencodePorts,
 		});
-	};
-
-	const retireRooms = (ids: readonly string[]) => {
-		const now = Date.now();
-		setRooms((prev) => retireRoomsPure(prev, ids, now));
-	};
-
-	const unretireRooms = (ids: readonly string[]) => {
-		setRooms((prev) => unretireRoomsPure(prev, ids));
-	};
 
 	return {
 		retireRooms,
