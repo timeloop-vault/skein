@@ -1,16 +1,7 @@
-import { AgentFieldNote } from "./NewRoomAgentFieldNote.tsx";
+import { BranchSection } from "./NewRoomBranchSection.tsx";
 import type { CreateRoomArgs } from "./NewRoomDialogTypes.ts";
-import { kindHasAgents } from "./agents.ts";
-import { branchFieldAttachedAfterBlur } from "./branchName.ts";
-import { HChip } from "./components.tsx";
-import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
-import {
-	type DefaultAgents,
-	type FolderDefaults,
-	type NewRoomMemory,
-	type RecentFolder,
-	defaultAgentFor,
-} from "./prefs.ts";
+import { HarnessSection } from "./NewRoomHarnessSection.tsx";
+import type { DefaultAgents, FolderDefaults, NewRoomMemory, RecentFolder } from "./prefs.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
 import { useNewRoomForm } from "./useNewRoomForm.tsx";
 
@@ -207,179 +198,32 @@ export const NewRoomDialog = ({
 					</div>
 
 					{repoStatus.kind === "valid" && (
-						<div className="sk-field">
-							<label>Branch</label>
-							<div className="sk-radio-row">
-								<div
-									className={`sk-radio-card ${branchMode === "worktree" ? "selected" : ""}`}
-									onClick={() => setBranchMode("worktree")}
-								>
-									<div className="top">New worktree</div>
-									<div className="desc">own branch + folder</div>
-								</div>
-								<div
-									className={`sk-radio-card ${branchMode === "current" ? "selected" : ""}`}
-									onClick={() => setBranchMode("current")}
-								>
-									<div className="top">Current branch</div>
-									<div className="desc">{repoStatus.head ?? "HEAD"} · in place</div>
-								</div>
-							</div>
-							{branchMode === "worktree" && (
-								<div className="sk-field" style={{ marginTop: 6 }}>
-									<label htmlFor="sk-worktree-branch">Worktree branch</label>
-									<input
-										id="sk-worktree-branch"
-										className="sk-input"
-										value={branch}
-										title={worktreePath ? `→ ${worktreePath}` : undefined}
-										onChange={(e) => {
-											// Detach unconditionally, including on an edit to
-											// empty — otherwise clear-and-retype would have the
-											// proposal silently reappear before the next
-											// keystroke landed (#227 review).
-											setBranch(e.target.value);
-											setBranchAttached(false);
-										}}
-										onBlur={(e) => {
-											if (branchFieldAttachedAfterBlur(e.target.value)) setBranchAttached(true);
-										}}
-										onKeyDown={(e) => {
-											if (e.key === "Enter") void submit();
-											if (e.key === "Escape") onCancel();
-										}}
-									/>
-									{(branchProblem || worktreeShortPath) && (
-										<div
-											style={{
-												fontFamily: "var(--sk-mono)",
-												fontSize: 10.5,
-												marginTop: 2,
-												color: branchProblem ? "var(--err)" : undefined,
-											}}
-										>
-											{branchProblem ?? `→ ${worktreeShortPath}`}
-										</div>
-									)}
-								</div>
-							)}
-							{branchMode === "worktree" && (
-								<div style={{ marginTop: 6 }}>
-									<label
-										style={{
-											fontFamily: "var(--sk-mono)",
-											fontSize: 10,
-											color: "var(--fg-2)",
-											textTransform: "uppercase",
-											letterSpacing: "0.08em",
-										}}
-									>
-										Based on
-									</label>
-									<select
-										className="sk-select"
-										style={{ marginTop: 4, width: "100%" }}
-										value={baseBranch}
-										onChange={(e) => setBaseBranch(e.target.value)}
-									>
-										{repoStatus.branches.map((b) => (
-											<option key={b.name} value={b.name}>
-												{b.name}
-												{b.isHead ? " (HEAD)" : ""}
-											</option>
-										))}
-									</select>
-									{(() => {
-										const behind = repoStatus.branches.find(
-											(b) => b.name === baseBranch,
-										)?.behindUpstream;
-										if (!behind) return null;
-										return (
-											<div
-												style={{
-													fontFamily: "var(--sk-mono)",
-													fontSize: 10.5,
-													marginTop: 4,
-													lineHeight: 1.5,
-													color: "var(--warn)",
-												}}
-											>
-												{baseBranch} is {behind} commit{behind === 1 ? "" : "s"} behind its upstream
-												(as of last fetch)
-											</div>
-										);
-									})()}
-								</div>
-							)}
-						</div>
+						<BranchSection
+							repoStatus={repoStatus}
+							branchMode={branchMode}
+							setBranchMode={setBranchMode}
+							branch={branch}
+							setBranch={setBranch}
+							setBranchAttached={setBranchAttached}
+							worktreePath={worktreePath}
+							branchProblem={branchProblem}
+							worktreeShortPath={worktreeShortPath}
+							baseBranch={baseBranch}
+							setBaseBranch={setBaseBranch}
+							submit={submit}
+							onCancel={onCancel}
+						/>
 					)}
 
-					<div className="sk-field">
-						<label>Starting harness</label>
-						<div className="sk-radio-row">
-							{HARNESS_ORDER.map((id) => {
-								const k = HARNESS_KINDS[id];
-								return (
-									<div
-										key={id}
-										className={`sk-radio-card ${harness === id ? "selected" : ""}`}
-										onClick={() => {
-											if (id === harness) return;
-											setHarness(id);
-											// The agent belongs to the kind it was picked for —
-											// leaving it set would hand Claude's `--agent coder`
-											// to opencode. Switching kind takes that kind's
-											// Settings default instead (#248), which is
-											// undefined for a kind with no agents at all.
-											setAgent(defaultAgentFor(defaultAgents, id));
-										}}
-									>
-										<div className="top">
-											<HChip kind={id} /> {k.name}
-										</div>
-										<div className="desc">{k.desc}</div>
-									</div>
-								);
-							})}
-						</div>
-					</div>
-
-					{/* #247: only for kinds that bind `--agent` at launch. The
-					    field is a <select> rather than the picker's row list
-					    because the modal has one column and four fields above
-					    it; the full list with descriptions is what the `+
-					    harness` picker is for. */}
-					{kindHasAgents(harness) && (
-						<div className="sk-field">
-							<label htmlFor="sk-agent">Agent</label>
-							<select
-								id="sk-agent"
-								className="sk-select"
-								value={agent ?? ""}
-								onChange={(e) => setAgent(e.target.value || undefined)}
-							>
-								<option value="">(tool default) — no agent named</option>
-								{/* A remembered name the CLI no longer offers still
-								    renders, so the field shows what it is actually set
-								    to instead of silently sliding to (default). */}
-								{agentMissing && agent !== undefined && (
-									<option value={agent}>{agent} — not found</option>
-								)}
-								{(agentListing?.agents ?? []).map((a) => (
-									<option key={a.name} value={a.name}>
-										{a.name}
-										{a.allowsReviewTools ? "" : "  ⚠ no review tools"}
-									</option>
-								))}
-							</select>
-							<AgentFieldNote
-								agent={agent}
-								listing={agentListing}
-								missing={agentMissing}
-								kind={harness}
-							/>
-						</div>
-					)}
+					<HarnessSection
+						harness={harness}
+						setHarness={setHarness}
+						agent={agent}
+						setAgent={setAgent}
+						agentListing={agentListing}
+						agentMissing={agentMissing}
+						defaultAgents={defaultAgents}
+					/>
 
 					{error && (
 						<div
