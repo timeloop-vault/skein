@@ -1,6 +1,6 @@
 ---
 name: pr-workflow
-description: Push branches and open pull requests following Skein's conventions, merge them once the reviewer has signed off, and keep a stack healthy after merges. Use when opening a PR, pushing for review, merging a PR, or when the user says "create PR", "open pull request", "push and create PR", "merge the PR", "merge it". Covers the gh CLI body traps (--body-file, never --body @-, and verifying the body landed), the PR description shape, stacked PRs, the rebase every stacked PR needs after a squash-merge, and the sign-off-gated self-merge (review_status approved and not stale for the PR head, checks green, then gh pr merge --squash).
+description: Push branches and open pull requests following Skein's conventions, merge them once the reviewer has signed off, and keep a stack healthy after merges. Use when opening a PR, pushing for review, merging a PR, or when the user says "create PR", "open pull request", "push and create PR", "merge the PR", "merge it". Covers the gh CLI body traps (--body-file, never --body @-, and verifying the body landed), the PR description shape, stacked PRs, the rebase every stacked PR needs after a squash-merge, and the sign-off-gated self-merge (review_status approved and not stale for the PR head, the head containing current origin/main, checks green, then gh pr merge --squash).
 ---
 
 # PR Workflow
@@ -169,8 +169,9 @@ Only on non-`main` branches, only `--force-with-lease`, never plain
 `--force`.
 
 **Never force-push after review has started** — it can orphan review
-comments. The exceptions are the stack rebase above (mechanical, no
-content change) and a reviewer explicitly asking for a history rewrite.
+comments. The exceptions are the stack rebase above and the up-to-date
+rebase before a merge (§8 gate 2) — both mechanical, no content change —
+and a reviewer explicitly asking for a history rewrite.
 
 ## 7. Review
 
@@ -181,8 +182,8 @@ sign-off (§8); you cannot grant it yourself.
 
 ## 8. Merge
 
-You merge your own PR, but only when both gates hold. If either fails,
-stop and say which.
+You merge your own PR, but only when all three gates hold. If any
+fails, stop and say which.
 
 1. **Sign-off.** Call the Skein MCP tool `review_status`
    (`docs/agent-api.md`). Merge only if `approved` is true, `stale` is
@@ -190,25 +191,65 @@ stop and say which.
    signed off must be exactly what was pushed. If you committed or
    pushed after the sign-off it reads stale: ask the reviewer to look
    again. Never merge on an old approval.
-2. **Green.** If the PR has checks, every one must pass — none pending,
+2. **Up to date.** The PR head must contain the current `origin/main`:
+   after `git fetch origin`, `git merge-base --is-ancestor origin/main
+   <head>` must exit 0. That ancestry check is the authority, not
+   GitHub. Without branch protection `mergeStateStatus` can read `CLEAN`
+   for a branch that is behind, and a squash-merge then lands a combined
+   tree that no gate and no reviewer ever saw — #476 and #488 both
+   merged that way, harmless only because their changes were
+   file-disjoint. If the head is behind, bring it up to date before
+   anything else:
+
+   ```bash
+   git rebase origin/main
+   bash .githooks/pre-commit          # rebases bypass the hook
+   git push --force-with-lease origin <branch>
+   ```
+
+   The head changed, so the sign-off now reads stale by design: ask the
+   reviewer for a fresh one on the new head, then start again at gate 1.
+   Never merge on the sign-off of the pre-rebase head. If the rebase
+   conflicted, say so when you ask — the resolution is new content the
+   reviewer has not read.
+3. **Green.** If the PR has checks, every one must pass — none pending,
    none failing. CI here is `workflow_dispatch`-only, so most PRs have
    none; `gh pr checks` then prints "no checks reported" and exits 1,
    which passes the gate — the pre-commit gate the commit already passed
    is sufficient. Read the output, not just the exit code: exit 8
    (pending) or any failing check does not pass. The PR must also be
    mergeable, and `mergeStateStatus` must be `CLEAN` — anything else
-   (`BEHIND`, `BLOCKED`, `UNSTABLE`, `DIRTY`, …) stops the merge.
+   (`BEHIND`, `BLOCKED`, `UNSTABLE`, `DIRTY`, …) stops the merge. `CLEAN`
+   is necessary, not sufficient: it does not replace gate 2.
+
+**Re-check right before merging.** `main` can move while you wait for
+the sign-off, so run gates 1 and 2 again immediately before
+`gh pr merge`, in the same sequence as the merge itself. If `origin/main`
+moved past the head, go back to gate 2 — rebase, gate, push, fresh
+sign-off — and loop until both hold at once.
 
 ```bash
 n=<pr-number>
-gh pr view $n --json headRefOid -q .headRefOid   # must equal review_status.approved_sha
+git fetch origin main "pull/$n/head"            # pull/<n>/head guarantees the head object is local
+head=$(gh pr view $n --json headRefOid -q .headRefOid)  # must equal review_status.approved_sha
+git merge-base --is-ancestor origin/main "$head" || echo "NOT UP TO DATE: stop"  # any non-zero exit stops (gate 2)
 gh pr checks $n                                  # all pass, or "no checks reported"
 gh pr view $n --json mergeable,mergeStateStatus  # MERGEABLE / CLEAN
 
-gh pr merge $n --squash
+gh pr merge $n --squash --match-head-commit "$head"
 gh pr view $n --json state,mergeCommit           # MERGED + a merge commit
 git push origin --delete <branch>                # remote only; "remote ref does not exist" is harmless
 ```
+
+`--match-head-commit` makes GitHub refuse the merge if the head moved
+after you checked it, so what merges is the head that was signed off.
+Every check above is a stop, not a log line: a sha that differs from
+`approved_sha`, or any non-zero exit from `merge-base --is-ancestor`
+(1 = behind, 128 = the head object is missing), means you do not run
+`gh pr merge`. Nothing GitHub-side guards `main` itself: if it moves in
+the seconds between the ancestry check and the merge, the squash still
+lands on the newer `main`. Keep that window to the length of this block
+and do not pause inside it.
 
 ⚠️ **Do not pass `--delete-branch`.** It deletes the local branch too,
 and that branch is checked out in the room's worktree; the worktree-sweep
