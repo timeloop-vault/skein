@@ -14,13 +14,9 @@ app/src-tauri/src/harness_events_claude.rs 7791 #453
 app/src-tauri/src/lib.rs 1390 #456
 app/src-tauri/src/pty.rs 1628 #457
 app/src/App.tsx 884 #459
-app/src/FilesBody.tsx 449 #461
-app/src/NewRoomDialog.tsx 416 #461
-app/src/RoomStrip.tsx 458 #461
 app/src/SettingsModal.tsx 601 #460
 app/src/SpawnEnvPanel.tsx 624 #460
 app/src/agentRequests.ts 534 #459
-app/src/components.tsx 470 #461
 app/src/harnessActivity.ts 920 #458
 app/src/harnessEvents.ts 706 #458
 app/src/harnessInput.ts 792 #458
@@ -30,12 +26,10 @@ app/src/liveContext/feedItems.tsx 544 #460
 app/src/liveContext/toolRows.tsx 558 #460
 app/src/review/ReviewPane.tsx 632 #460
 app/src/review/review.css 1041 #462
-app/src/roomGroups.ts 438 #461
 app/src/statusPopover.ts 507 #460
 app/src/styles.css 2966 #462
 app/src/useHarnessCreation.ts 465 #459
 app/src/useHarnessNotifications.ts 585 #459
 app/src/useMailDelivery.ts 669 #459
-app/src/useNewRoomForm.tsx 447 #461
 app/src/useRoomsStore.ts 812 #459
 app/src/useTerminalSpawn.ts 544 #459

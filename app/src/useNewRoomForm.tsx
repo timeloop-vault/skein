@@ -2,8 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import type { CreateRoomArgs, FolderInfoDto, RepoStatus } from "./NewRoomDialogTypes.ts";
+import { folderStatusBlurb } from "./NewRoomStatusBlurb.tsx";
 import { kindHasAgents } from "./agents.ts";
-import { applyBranchTemplate, branchFieldProblem, taskSlug, worktreeLeaf } from "./branchName.ts";
+import { applyBranchTemplate, branchFieldProblem, taskSlug } from "./branchName.ts";
 import { useAgentListing } from "./components.tsx";
 import {
 	type DefaultAgents,
@@ -14,6 +15,7 @@ import {
 	startingAgent,
 } from "./prefs.ts";
 import type { HarnessKind } from "./types.ts";
+import { useWorktreeProbe } from "./useWorktreeProbe.ts";
 import { createRoomArgs } from "./worktreeRoom.ts";
 
 // Split out of `NewRoomDialog.tsx` (#19): the folder-inspection /
@@ -242,49 +244,12 @@ export const useNewRoomForm = ({
 	// and cancelled like the folder-validation effect above (#181: the
 	// cancellation there was dead code until a prefilled field made a
 	// stale response actually reachable; the same shape applies here).
-	const [worktreePath, setWorktreePath] = useState("");
-	const [worktreeFolderExists, setWorktreeFolderExists] = useState(false);
-	// #227 review: `worktreeFolderExists` only reflects the *last landed*
-	// probe, which `canCreate` read synchronously — a branch typed after
-	// the last probe answered could submit before this one comes back.
-	// Tracked separately from `busy`/`repoStatus.kind === "checking"`
-	// because it is its own async gate with its own debounce.
-	const [worktreeCheckPending, setWorktreeCheckPending] = useState(false);
-	useEffect(() => {
-		if (!isRepo || branchMode !== "worktree" || !branch.trim()) {
-			setWorktreePath("");
-			setWorktreeFolderExists(false);
-			setWorktreeCheckPending(false);
-			return undefined;
-		}
-		setWorktreeCheckPending(true);
-		let cancelled = false;
-		const handle = window.setTimeout(() => {
-			void (async () => {
-				try {
-					const path = await invoke<string>("git_propose_worktree_path", {
-						repoPath: cwd,
-						taskSlug: worktreeLeaf(branch),
-					});
-					if (cancelled) return;
-					setWorktreePath(path);
-					const info = await invoke<FolderInfoDto>("git_inspect_folder", { path });
-					if (cancelled) return;
-					setWorktreeFolderExists(info.exists);
-				} catch {
-					if (cancelled) return;
-					setWorktreePath("");
-					setWorktreeFolderExists(false);
-				} finally {
-					if (!cancelled) setWorktreeCheckPending(false);
-				}
-			})();
-		}, 200);
-		return () => {
-			cancelled = true;
-			window.clearTimeout(handle);
-		};
-	}, [isRepo, branchMode, branch, cwd]);
+	const { worktreePath, worktreeFolderExists, worktreeCheckPending } = useWorktreeProbe({
+		isRepo,
+		branchMode,
+		branch,
+		cwd,
+	});
 
 	const branchProblem =
 		isRepo && branchMode === "worktree" && repoStatus.kind === "valid"
@@ -381,33 +346,7 @@ export const useNewRoomForm = ({
 		}
 	};
 
-	const statusBlurb = (() => {
-		switch (repoStatus.kind) {
-			case "empty":
-				return null;
-			case "checking":
-				return <span style={{ color: "var(--fg-3)" }}>checking…</span>;
-			case "valid":
-				// The worktree's *name* is deliberately not repeated here: the
-				// blurb slot is ~82 characters wide and a real branch name eats
-				// most of it, and the user just browsed there anyway. The only
-				// thing they need told is that the field moved.
-				return (
-					<span style={{ color: "var(--ok)" }}>
-						✓ git repo{repoStatus.head ? ` (HEAD: ${repoStatus.head})` : ""}
-						{resolvedFromWorktree ? " · resolved from a worktree" : ""}
-					</span>
-				);
-			case "not-a-repo":
-				return (
-					<span style={{ color: "var(--fg-3)" }}>
-						not a git repo — harnesses run in this folder as-is.
-					</span>
-				);
-			case "missing":
-				return <span style={{ color: "var(--err)" }}>folder not found — pick another.</span>;
-		}
-	})();
+	const statusBlurb = folderStatusBlurb(repoStatus, resolvedFromWorktree);
 
 	return {
 		cwd,
