@@ -195,7 +195,7 @@
 	const rawSourceOf = (el) => {
 		try {
 			const key = Object.keys(el).find((k) => k.startsWith("__reactFiber$"));
-			const src = key && el[key] && el[key]._debugSource;
+			const src = key && el[key]?._debugSource;
 			if (!src || typeof src.fileName !== "string") return undefined;
 			const out = { fileName: clipTo(src.fileName, 1000), lineNumber: src.lineNumber };
 			if (src.columnNumber != null) out.columnNumber = src.columnNumber;
@@ -223,7 +223,6 @@
 	// ---- pick mode -------------------------------------------------------
 
 	let picking = false;
-	let hover = null;
 	let box = null;
 
 	const ensureOverlay = () => {
@@ -255,15 +254,14 @@
 
 	const onMove = (e) => {
 		const el = e.target;
-		if (!el || el.nodeType !== 1 || isOverlay(el)) return;
-		hover = el;
+		if (el?.nodeType !== 1 || isOverlay(el)) return;
 		moveBox(el);
 	};
 	const onClick = (e) => {
 		e.preventDefault();
 		e.stopPropagation();
 		const el = e.target;
-		if (!el || el.nodeType !== 1 || isOverlay(el)) return;
+		if (el?.nodeType !== 1 || isOverlay(el)) return;
 		stopPick();
 		post({ type: "picked", element: describe(el) });
 	};
@@ -301,7 +299,6 @@
 		document.removeEventListener("auxclick", swallow, true);
 		if (box) box.remove();
 		box = null;
-		hover = null;
 	}
 
 	// ---- locate ----------------------------------------------------------
@@ -414,12 +411,13 @@
 		pinNodes.clear();
 		const pins = Array.isArray(msg.pins) ? msg.pins : [];
 		for (const p of pins) {
-			if (!p || !p.rect || !Number.isFinite(p.n)) continue;
+			if (!p?.rect || !Number.isFinite(p.n)) continue;
 			const { x, y } = p.rect;
 			if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
 			const node = document.createElement("div");
 			node.setAttribute(OVERLAY, "pin");
 			node.textContent = String(p.n);
+			// biome-ignore lint/suspicious/noPrototypeBuiltins: Object.hasOwn needs Safari 15.4; this script is served untranspiled into the WebView
 			node.style.cssText = `position:absolute;left:${x}px;top:${y}px;min-width:18px;height:18px;padding:0 4px;box-sizing:border-box;border-radius:9px;color:#fff;font:600 11px/14px system-ui,sans-serif;text-align:center;pointer-events:none;transform:translate(-50%,-50%);${Object.prototype.hasOwnProperty.call(STATE_STYLE, p.state) ? STATE_STYLE[p.state] : STATE_STYLE.anchored}`;
 			root.appendChild(node);
 			pinNodes.set(p.n, node);

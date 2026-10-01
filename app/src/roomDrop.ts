@@ -92,7 +92,7 @@ export function resolveRowDrop(
 		return rooms as Room[];
 	}
 	const seg = segments[segIndex];
-	if (!seg || seg.kind !== "group") {
+	if (seg?.kind !== "group") {
 		return rooms as Room[];
 	}
 	if (seg.lead && (seg.lead.id === dragRoomId || seg.lead.id === targetRoomId)) {

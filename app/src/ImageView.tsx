@@ -69,7 +69,7 @@ export const ImageView = ({ load, path, loadKey }: ImageViewProps) => {
 				: null;
 
 	return (
-		<div className="iv-view" aria-labelledby={titleId}>
+		<div className="iv-view" role="group" aria-labelledby={titleId}>
 			<div className="iv-toolbar" id={titleId}>
 				<button
 					type="button"

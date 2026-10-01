@@ -75,7 +75,7 @@ export function useHarnessHookEvents(
 			harnessActivity.noteLaunchSignal(event.payload.harnessId);
 			const room = roomsRef.current.find((r) => r.id === event.payload.roomId);
 			const h = room?.harnesses.find((x) => x.id === event.payload.harnessId);
-			if (!h || h.kind !== "claude") return;
+			if (h?.kind !== "claude") return;
 			const next = followedSession(h.sessionId, event.payload);
 			if (next !== null) {
 				replaceHarnessSessionId(event.payload.roomId, event.payload.harnessId, next.sessionId);

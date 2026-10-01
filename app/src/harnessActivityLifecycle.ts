@@ -256,7 +256,7 @@ export const lifecycleMethods = {
 	detachAuthoritativeSource(id: string): void {
 		disarmDelegation(id);
 		const cur = store.get(id);
-		if (!cur || !cur.authoritative) return;
+		if (!cur?.authoritative) return;
 		store.set(id, { ...cur, authoritative: false, authorityLostAt: Date.now() });
 	},
 

@@ -117,7 +117,6 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 		const roomIds = (el.dataset.roomIds ?? "").split(" ").filter((s) => s.length > 0);
 		const aggName = el.dataset.aggName ?? "";
 
-		// biome-ignore lint/style/useConst: rebuild and scheduleRebuild are mutually recursive — rebuild re-diffs subscriptions via a scheduler that itself calls rebuild — so both are declared with `let` before either body runs.
 		let rebuild: () => void;
 		const scheduleRebuild = () => {
 			if (rebuildRaf !== null) return;

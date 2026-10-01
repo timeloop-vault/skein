@@ -44,6 +44,7 @@ export const HChip = ({
 			data-mail-from={
 				mailCount && mailCount > 0 ? JSON.stringify(mailFromRoomNames ?? []) : undefined
 			}
+			role="group"
 			aria-label={k.name}
 		>
 			{k.label}
@@ -74,6 +75,7 @@ export const StatusDot = ({
 		data-status={status}
 		data-room-ids={roomIds?.join(" ")}
 		data-agg-name={aggName}
+		role="img"
 		aria-label={status}
 	/>
 );
