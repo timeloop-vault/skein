@@ -255,8 +255,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │                            #   nudges.ts (#238: the header Nudge button's three
     │   │                            #   fixed prompts, picked by sign-off state + open count)
     │   └── src-tauri/               # Tauri Rust shell
-    │       ├── src/lib.rs           # Builder + 72-command registry; tracing → daily-rotating
-    │       │                        #   file in app_log_dir() + stderr (RUST_LOG overrides)
+    │       ├── src/lib.rs           # Entry point (#456): plugin chain (order is behaviour)
+    │       │                        #   + the one generate_handler! list, grouped by module
+    │       ├── src/setup.rs + setup/ # setup() in order: logging (daily-rotating file in
+    │       │                        #   app_log_dir() + stderr, RUST_LOG overrides), managed
+    │       │                        #   state, agent-API/design servers, window, macOS menu
+    │       ├── src/commands.rs +    # The shell's own commands by domain: pty, harness
+    │       │   commands/            #   events, harness log rows, rooms, spawn env, app
     │       ├── src/pty.rs           # PtyManager (portable-pty); 4 threads per spawn (raw
     │       │                        #   reader + coalescer + writer + waiter — the waiter is
     │       │                        #   load-bearing on Windows ConPTY; #171 split the reader
