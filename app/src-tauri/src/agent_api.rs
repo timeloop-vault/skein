@@ -53,8 +53,44 @@ pub mod state;
 pub mod verbs;
 
 #[cfg(test)]
+mod close_harness_tests;
+#[cfg(test)]
+mod close_room_tests;
+#[cfg(test)]
+mod create_room_ceiling_tests;
+#[cfg(test)]
+mod create_room_frontend_tests;
+#[cfg(test)]
+mod create_room_tests;
+#[cfg(test)]
 mod element_tests;
 #[cfg(test)]
+mod find_rooms_tests;
+#[cfg(test)]
+mod frontend_request_tests;
+#[cfg(test)]
+mod hook_route_tests;
+#[cfg(test)]
+mod http_route_tests;
+#[cfg(test)]
+mod mail_history_tests;
+#[cfg(test)]
+mod mail_notice_tests;
+#[cfg(test)]
+mod mail_send_tests;
+#[cfg(test)]
+mod mcp_protocol_tests;
+#[cfg(test)]
+mod open_harness_tests;
+#[cfg(test)]
+mod refusal_tests;
+#[cfg(test)]
+mod review_tests;
+#[cfg(test)]
+mod room_listing_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod token_tests;
 
 pub use state::AgentApiState;

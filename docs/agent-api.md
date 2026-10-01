@@ -42,7 +42,7 @@ Skein process
 
 `/mcp` is what Claude Code and opencode talk to. `/api/*` is the same
 verbs as ordinary JSON, for the `skein` CLI epic #52 D10 defers; both go
-through the same functions in `agent_api/verbs.rs`.
+through the same functions in `agent_api/verbs/` (rooted at `verbs.rs`).
 
 The port is **ephemeral** and changes every launch. Nothing has to agree
 on a number in advance because the URL reaches the harness in its
@@ -1010,10 +1010,10 @@ Settings → About shows the bound port, or says why there is none.
 | :-- | :-- |
 | `agent_api/state.rs` | shared state, the `skein://review-changed`, `skein://harness-permission`, `skein://harness-session-start` and `skein://mail-changed` (#327) events, `HarnessIdentity` |
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
-| `agent_api/verbs.rs` | the seventeen verbs — the whole testable core, including the mailbox (#327, plus `message_history`, #364), the cross-room reads (#354, #356), and `close_room`/`open_harness`/`close_harness` (#411) |
+| `agent_api/verbs.rs` + `verbs/` | the seventeen verbs — the whole testable core, including the mailbox (#327, plus `message_history`, #364), the cross-room reads (#354, #356), and `close_room`/`open_harness`/`close_harness` (#411) |
 | `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve/approve refusals, and the `archive_room`/`remove_worktree`/`delete_room` refusals (#411) |
-| `agent_api/http.rs` | the routes, including `/api/messages` and `/api/messages/history` (#327, #364), `/api/rooms`/`/api/rooms/{id}`/`/api/harnesses` (#356), `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
-| `agent_api/tests.rs` | scoping, both prohibitions, lifecycle, real HTTP |
+| `agent_api/http.rs` + `http/` | the routes, including `/api/messages` and `/api/messages/history` (#327, #364), `/api/rooms`/`/api/rooms/{id}`/`/api/harnesses` (#356), `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
+| `agent_api/tests.rs` + `*_tests.rs` | `tests.rs` holds the shared fixtures; the `*_tests.rs` siblings hold the tests by concern: scoping, both prohibitions (`refusal_tests.rs`), lifecycle, real HTTP |
 | `review_surface/signoff.rs` | the sign-off itself, and the staleness rule (#214) |
 | `harness_config.rs` | what Skein injects at spawn so a CLI finds all this (#215) |
 | `harness-config/` | the shipped plugin + opencode config themselves |

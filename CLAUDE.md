@@ -313,9 +313,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   the head_sha it approved — a later commit makes it
     │       │                        #   STALE rather than silently covering unread work
     │       ├── src/agent_api/       # The agent-facing review API (#213, epic #52 D8):
-    │       │   {state,auth,verbs,   #   an axum server on 127.0.0.1:<ephemeral> inside the
-    │       │    mcp,http,commands,  #   Tauri process, exposed as MCP over HTTP so Claude
-    │       │    tests}.rs           #   Code and opencode both consume it. verbs = the nine
+    │       │   {state,auth,verbs/,  #   an axum server on 127.0.0.1:<ephemeral> inside the
+    │       │    mcp,http/,commands, #   Tauri process, exposed as MCP over HTTP so Claude
+    │       │    *_tests}.rs         #   Code and opencode both consume it. verbs = the nine
     │       │                        #   agent verbs (list/get_comment/get_diff/reply/
     │       │                        #   mark_addressed/review_status, #327's
     │       │                        #   send_message/read_messages mailbox, and #330's
@@ -608,7 +608,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   not that the harness is doing anything in particular.
   That "own gate" claim needed enforcing, and review caught that it
   wasn't: the hook payload carries `agent_id` when it fires inside a
-  subagent, Skein reads it (`agent_api/http.rs`), ships it on
+  subagent, Skein reads it (`agent_api/http/hooks.rs`), ships it on
   `skein://harness-permission` as `agentId`, and stores it as
   `permissionAgentId`; `clearPermission(id, source, agentId)` now clears
   only when the stored `permissionAgentId` is `null` **or** equals the
@@ -894,7 +894,7 @@ stderr; `RUST_LOG` overrides the default `info` filter.
   of App.tsx over reaching for jsdom.
 - **Never spawn a bare `git` in a test.** Build fixture repos with
   `git2`, which takes the path as an argument — the way `review.rs`,
-  `review_surface/signoff.rs` and `agent_api/tests.rs` all do. **Git
+  `review_surface/signoff.rs` and `agent_api/review_tests.rs` all do. **Git
   exports `GIT_DIR` (and `GIT_INDEX_FILE`) to every hook it runs**, so
   a test spawned from the pre-commit gate inherits them and a
   `Command::new("git")` in a `TempDir` silently operates on *this
