@@ -194,7 +194,7 @@ fn seen_impl(
     root: &Path,
     thread_id: &str,
     seen: &SeenInput,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     super::seen_impl(db, room_id, root, thread_id, seen, &HashMap::new())
 }
 
@@ -324,6 +324,20 @@ fn a_new_element_thread_is_never_unmoved_and_starts_unknown() {
     let e = dto.element.unwrap();
     assert_eq!(e.state, "unknown");
     assert!(e.last_seen.is_none());
+}
+
+#[test]
+fn a_report_says_whether_the_placement_changed() {
+    let f = Fixture::new();
+    let id = f.add_element().id;
+    let root = f.tmp.path();
+    let report = |st: &str| seen_impl(&f.db, "r1", root, &id, &seen(st, &["proto/shell.jsx"]));
+    assert!(report("anchored").unwrap(), "first report");
+    assert!(!report("anchored").unwrap(), "identical re-report");
+    assert!(report("lost").unwrap(), "different state");
+    assert!(!report("lost").unwrap());
+    std::fs::write(root.join("proto/shell.jsx"), "v2").unwrap();
+    assert!(report("lost").unwrap(), "same state, file edited");
 }
 
 #[test]

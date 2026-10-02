@@ -16,6 +16,12 @@
 	color: var(--fg-2);
 	overflow-wrap: anywhere;
 }
+.rv-sourcenote-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 6px;
+}
 .rv-badge-source {
 	background: transparent;
 	color: var(--fg-3);

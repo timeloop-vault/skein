@@ -530,6 +530,10 @@ pub(crate) fn element_threads_impl(
 /// is now: an edit landing between the load and this report then reads
 /// `unknown` instead of being stamped as the new content with the old
 /// state. Only a file never served falls back to disk.
+///
+/// Returns whether the placement materially changed: no previous report,
+/// or a different state, selector, rect or stamp. `seen_ms` alone does
+/// not count, so an identical re-report is quiet.
 pub(crate) fn seen_impl(
     db: &Database,
     room_id: &str,
@@ -537,15 +541,22 @@ pub(crate) fn seen_impl(
     thread_id: &str,
     seen: &SeenInput,
     served: &HashMap<String, String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let reported = validate_seen(seen)?;
     let thread = db
         .review_thread(thread_id)?
         .filter(|t| t.room_id == room_id)
         .ok_or("that thread no longer exists")?;
-    if thread.scope != thread_scope::ELEMENT || db.review_element_anchor(thread_id)?.is_none() {
+    let Some(anchor_row) = db.review_element_anchor(thread_id)? else {
+        return Err("only an element thread has a placement".into());
+    };
+    if thread.scope != thread_scope::ELEMENT {
         return Err("only an element thread has a placement".into());
     }
+    let previous: Option<StoredSeen> = anchor_row
+        .last_seen_json
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok());
     // The entry itself is always part of what the placement was
     // computed from, whether or not the pane listed it.
     let mut files: BTreeSet<String> = reported.into_iter().collect();
@@ -563,7 +574,12 @@ pub(crate) fn seen_impl(
     };
     let json = serde_json::to_string(&stored).map_err(|e| e.to_string())?;
     if db.set_review_element_last_seen(thread_id, &json, stored.seen_ms)? {
-        Ok(())
+        Ok(previous.is_none_or(|p| {
+            p.state != stored.state
+                || p.selector != stored.selector
+                || p.rect != stored.rect
+                || p.stamp != stored.stamp
+        }))
     } else {
         Err("that thread has no element anchor".into())
     }

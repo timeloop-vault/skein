@@ -337,8 +337,8 @@ export const ThreadView = ({
 			{open && (
 				<>
 					<PlacementNote thread={thread} />
-					<SourceNote thread={thread} inline={inline} />
-					{!hideElementNote && <ElementNote thread={thread} design={design} />}
+					<SourceNote thread={thread} inline={inline} design={design} />
+					{!hideElementNote && !thread.viaSource && <ElementNote thread={thread} design={design} />}
 					<AddressedNote thread={thread} />
 					{thread.comments.map((c) => (
 						<CommentBody
