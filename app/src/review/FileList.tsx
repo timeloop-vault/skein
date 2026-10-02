@@ -97,6 +97,14 @@ export const FileList = ({
 								✓
 							</span>
 						)}
+						{f.sourceUnresolvedCount > 0 && (
+							<span
+								className="rv-badge rv-badge-source"
+								title={`${f.sourceUnresolvedCount} open design comment${f.sourceUnresolvedCount === 1 ? "" : "s"} point here — counted under their design file`}
+							>
+								◇ {f.sourceUnresolvedCount}
+							</span>
+						)}
 						{f.binary ? (
 							<span className="rv-binary">{isImagePath(f.path) ? "img" : "bin"}</span>
 						) : (

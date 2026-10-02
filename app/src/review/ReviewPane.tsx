@@ -246,7 +246,7 @@ export const ReviewPane = ({
 			: undefined;
 
 	const activeFile = files.find((f) => f.path === activePath);
-	const orphans = file ? unplacedThreads(file.threads) : [];
+	const orphans = file ? unplacedThreads(file.threads, file.hunks) : [];
 	const reviewThreads = data?.threads ?? [];
 
 	// ── header ────────────────────────────────────────────────────

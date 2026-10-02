@@ -58,11 +58,17 @@ pub struct ElementRect {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ElementSource {
     pub file: String,
     pub line: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column: Option<u32>,
+    /// The source line's text as served when the element was picked,
+    /// captured by the host, never by the webview; absent when the bytes
+    /// could not be vouched for or on threads created before #467.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_text: Option<String>,
 }
 
 /// The picker's evidence for one element (recon §3.1).
@@ -251,9 +257,46 @@ pub fn validate_anchor(a: ElementAnchor, file_path: &str) -> Result<ElementAncho
         tag: a.tag,
         text: clip(&a.text, MAX_TEXT_CHARS),
         attrs,
-        source: a.source,
+        // The webview is not trusted with the line text; the host
+        // captures it itself (`capture_source_line`).
+        source: a.source.map(|s| ElementSource {
+            line_text: None,
+            ..s
+        }),
         rect: a.rect,
     })
+}
+
+/// The text of `source.line` (1-based, terminator stripped), but only
+/// when the disk bytes are provably the bytes the design pane picked
+/// from: `served` must hold a digest for `source.file` that equals the
+/// digest of what is on disk now. `None` for anything else — unserved,
+/// changed since, too large, not UTF-8, no such line, or a blank one.
+///
+/// One narrow race is accepted: picked at version A, preview reloaded
+/// and served B before submit, so the line number is read against B. A
+/// wrong capture only ever mirrors to the text it holds, never to a
+/// guessed line.
+pub(super) fn capture_source_line(
+    root: &Path,
+    source: &ElementSource,
+    served: &HashMap<String, String>,
+) -> Option<String> {
+    let want = served.get(&source.file)?;
+    let full = resolve_under(root, &source.file).ok()?;
+    let mut bytes = Vec::new();
+    std::fs::File::open(full)
+        .ok()?
+        .take(MAX_SERVED + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_SERVED || digest_bytes(&bytes) != *want {
+        return None;
+    }
+    let text = std::str::from_utf8(&bytes).ok()?;
+    let line = text.split('\n').nth(source.line.checked_sub(1)? as usize)?;
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    (!line.trim().is_empty()).then(|| clip(line, MAX_TEXT_CHARS))
 }
 
 /// Check a report and return the file list worth stamping. A bad state,

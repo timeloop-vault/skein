@@ -11,6 +11,16 @@
 	align-items: baseline;
 	gap: 6px;
 }
+.rv-sourcenote {
+	font-size: 0.85em;
+	color: var(--fg-2);
+	overflow-wrap: anywhere;
+}
+.rv-badge-source {
+	background: transparent;
+	color: var(--fg-3);
+	border: 1px solid var(--bg-3);
+}
 .rv-element .rv-linkbtn {
 	align-self: flex-start;
 }

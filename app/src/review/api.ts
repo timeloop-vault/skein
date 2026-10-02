@@ -98,6 +98,9 @@ export interface ReviewThread {
 	addressed?: ReviewAddressed;
 	/** Only on `scope === "element"` (#434). */
 	element?: ElementThreadInfo;
+	/** An element thread shown in its JSX source file rather than its home
+	 *  (`filePath` is still the entry HTML). Same thread, same id. */
+	viaSource?: boolean;
 	createdMs: number;
 	updatedMs: number;
 	comments: ReviewComment[];
@@ -130,6 +133,10 @@ export interface ReviewFile {
 	changedSinceViewed: boolean;
 	threadCount: number;
 	unresolvedCount: number;
+	/** Element threads whose JSX source is this file (#467). Not part of
+	 *  the two counts above, which count a thread once, under its home. */
+	sourceThreadCount: number;
+	sourceUnresolvedCount: number;
 	hasPending: boolean;
 	/** Last harness to write it, when Skein knows (D4). */
 	harnessId?: string;
@@ -312,10 +319,14 @@ export const setBaseRef = (
 
 /// Threads that hang on a specific line of the rendered diff, keyed
 /// `<side>:<line>` so a hunk row can look up its own in one hit.
-export function threadsByLine(threads: ReviewThread[]): Map<string, ReviewThread[]> {
+export function threadsByLine(
+	threads: ReviewThread[],
+	hunks: ReviewHunk[] = [],
+): Map<string, ReviewThread[]> {
 	const map = new Map<string, ReviewThread[]>();
+	const rendered = renderedNewLines(hunks);
 	for (const t of threads) {
-		if (t.scope !== "line" || t.lineStart == null) continue;
+		if (!isInline(t, rendered) || t.lineStart == null) continue;
 		// Anchor to the *end* of the range: a comment on lines 10-14
 		// belongs under 14, the way GitHub renders a multi-line remark.
 		const key = `${t.side ?? "new"}:${t.lineEnd ?? t.lineStart}`;
@@ -330,10 +341,36 @@ export function threadsByLine(threads: ReviewThread[]): Map<string, ReviewThread
 /// they live on the page, not a line), plus every line thread the matcher
 /// could not place. All render above the diff, so an orphaned comment is
 /// impossible to miss (D6: never silently drop).
-export function unplacedThreads(threads: ReviewThread[]): ReviewThread[] {
+export function unplacedThreads(threads: ReviewThread[], hunks: ReviewHunk[] = []): ReviewThread[] {
+	const rendered = renderedNewLines(hunks);
 	return threads.filter(
 		(t) =>
-			t.scope === "file" || t.scope === "element" || (t.scope === "line" && t.lineStart == null),
+			!isInline(t, rendered) &&
+			(t.scope === "file" || t.scope === "element" || (t.scope === "line" && t.lineStart == null)),
+	);
+}
+
+/// New-side line numbers actually drawn in the file's hunks.
+export function renderedNewLines(hunks: ReviewHunk[]): Set<number> {
+	const out = new Set<number>();
+	for (const h of hunks) {
+		for (const l of h.lines) if (l.newLineno != null) out.add(l.newLineno);
+	}
+	return out;
+}
+
+/// Whether a thread sits inline under a diff line. Line threads with a
+/// position always do; an element thread shown via its JSX source (#467)
+/// only when its re-matched line is really rendered in a hunk — otherwise
+/// it falls back to above the diff, never dropped.
+export function isInline(t: ReviewThread, rendered: Set<number>): boolean {
+	if (t.lineStart == null) return false;
+	if (t.scope === "line") return true;
+	return (
+		t.scope === "element" &&
+		t.viaSource === true &&
+		!t.outdated &&
+		rendered.has(t.lineEnd ?? t.lineStart)
 	);
 }
 

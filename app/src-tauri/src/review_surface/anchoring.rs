@@ -90,7 +90,7 @@ impl<'a> PlaceCtx<'a> {
     /// deleted line lives in the old text and would be permanently
     /// outdated if searched for in the new. Keeping the side is what
     /// makes such a thread anchorable at all.
-    fn anchor_text(&self, side: Side, path: &str) -> String {
+    pub(super) fn anchor_text(&self, side: Side, path: &str) -> String {
         match (side, self.scope) {
             (Side::New, Scope::Commit) => self.blob_text(self.commit_sha, path),
             (Side::Old, Scope::Commit) => self.blob_text(self.parent_sha.as_deref(), path),
@@ -230,6 +230,7 @@ pub(super) fn to_thread_dto(
         addressed: None,
         // Stamped afterwards by `apply_element`.
         element: None,
+        via_source: false,
         created_ms: t.created_ms,
         updated_ms: t.updated_ms,
     }

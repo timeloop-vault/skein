@@ -110,11 +110,16 @@ pub async fn review_add_thread(
     cwd: String,
     thread: NewThread,
     db: tauri::State<'_, Arc<Database>>,
+    preview: tauri::State<'_, Arc<PreviewState>>,
 ) -> Result<ThreadDto, String> {
     let db = Arc::clone(&db);
-    tauri::async_runtime::spawn_blocking(move || add_thread_impl(&db, &room_id, &cwd, &thread))
-        .await
-        .map_err(|e| e.to_string())?
+    let preview = Arc::clone(&preview);
+    tauri::async_runtime::spawn_blocking(move || {
+        let served = preview.served_digests(&room_id);
+        add_thread_impl(&db, &room_id, &cwd, &thread, &served)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Record where the design pane found an element thread's element

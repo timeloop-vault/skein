@@ -237,12 +237,27 @@ pub fn list_comments(db: &Database, caller: &Caller, args: &ListArgs) -> VerbRes
         .map_err(internal)?;
     let unresolved_total = rows.iter().filter(|t| t.resolved_ms.is_none()).count();
 
+    // An element thread lives on its entry HTML, but the file the agent
+    // must edit is the JSX the element was rendered from, so a filter
+    // also matches that source. Anchors load only when a filter is given.
+    let elements = if filter.is_some() {
+        element::load(db, caller, &rows)?
+    } else {
+        std::collections::BTreeMap::new()
+    };
+
     let kept: Vec<ReviewThreadRow> = rows
         .into_iter()
         .filter(|t| all || t.resolved_ms.is_none())
         .filter(|t| match filter.as_deref() {
             None => true,
-            Some(want) => t.file_path.as_deref().map(normalize).as_deref() == Some(want),
+            Some(want) => {
+                t.file_path.as_deref().map(normalize).as_deref() == Some(want)
+                    || elements
+                        .get(&t.id)
+                        .and_then(|e| e.anchor.source.as_ref())
+                        .is_some_and(|s| normalize(&s.file) == want)
+            }
         })
         .collect();
 

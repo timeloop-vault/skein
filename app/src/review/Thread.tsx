@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ReviewComment, ReviewThread } from "./api.ts";
+import { SourceNote } from "./SourceNote.tsx";
 import "./Thread.css";
 import "./element.css";
 
@@ -282,12 +283,15 @@ export const ThreadView = ({
 	onDeleteComment,
 	design,
 	hideElementNote = false,
+	inline = false,
 }: {
 	thread: ReviewThread;
 	busy: boolean;
 	design?: DesignLink | undefined;
 	/// The design pane prints its own element header, so it asks for it once.
 	hideElementNote?: boolean;
+	/// Rendered under a diff line rather than above the diff.
+	inline?: boolean;
 	onReply: (body: string) => void;
 	onResolve: (resolved: boolean) => void;
 	onDelete: () => void;
@@ -333,6 +337,7 @@ export const ThreadView = ({
 			{open && (
 				<>
 					<PlacementNote thread={thread} />
+					<SourceNote thread={thread} inline={inline} />
 					{!hideElementNote && <ElementNote thread={thread} design={design} />}
 					<AddressedNote thread={thread} />
 					{thread.comments.map((c) => (

@@ -25,6 +25,7 @@ fn anchor(entry: &str, od_id: Option<&str>, text: &str, src: Option<(&str, u32)>
             file: f.into(),
             line,
             column: None,
+            line_text: None,
         }),
         rect: ElementRect {
             x: 0.0,

@@ -64,6 +64,7 @@ pub(crate) mod query;
 // must be answered by one function, or the pane and the agent will
 // eventually disagree about whether the gate is open.
 pub(crate) mod signoff;
+mod source_view;
 mod write;
 
 /// Which view of the room's work the caller wants.
