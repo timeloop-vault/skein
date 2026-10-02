@@ -167,6 +167,11 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 
 		const channel = new Channel<PtyEvent>();
 		channel.onmessage = (ev) => {
+			// #490: a killed PTY can still deliver its shutdown redraw after
+			// this effect's cleanup ran. Without this guard those chunks
+			// land on the respawned harness's fresh activity record and flip
+			// `spawning` → `running` before SessionStart can claim it.
+			if (cancelled) return;
 			if (ev.kind === "data") {
 				term.write(ev.chunk);
 				// Feed the activity model. Every PTY chunk is an
