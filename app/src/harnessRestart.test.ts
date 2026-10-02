@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ComposerDraft } from "./composerDraft.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { ActivityPhase } from "./harnessActivityTypes.ts";
-import { type CanRestartInput, canRestart, restartArgv } from "./harnessRestart.ts";
+import { type CanRestartInput, canRestart, restartedHarness } from "./harnessRestart.ts";
 import type { Harness, HarnessKind } from "./types.ts";
 
 const input = (over: Partial<CanRestartInput> = {}): CanRestartInput => ({
@@ -109,7 +109,7 @@ describe("canRestart: precedence", () => {
 	});
 });
 
-describe("restartArgv", () => {
+describe("restartedHarness", () => {
 	const h = (over: Partial<Harness>): Harness => ({
 		id: "h1",
 		kind: "claude",
@@ -121,10 +121,18 @@ describe("restartArgv", () => {
 		...over,
 	});
 	it("claude resumes by session id", () => {
-		expect(restartArgv(h({ sessionId: "abc" }))).toEqual(["claude", "--resume", "abc"]);
+		const r = restartedHarness(h({ sessionId: "abc" }));
+		expect(r.cmd).toEqual(["claude", "--resume", "abc"]);
+		expect(r.sessionId).toBe("abc");
+	});
+	it("claude with no session id mints one and starts fresh", () => {
+		const r = restartedHarness(h({}), undefined, () => "minted-1");
+		expect(r.sessionId).toBe("minted-1");
+		expect(r.cmd).toEqual(["claude", "--session-id", "minted-1"]);
 	});
 	it("opencode bakes in the new port", () => {
-		expect(restartArgv(h({ kind: "opencode", cmd: ["opencode"], sessionId: "s" }), 4123)).toEqual([
+		const r = restartedHarness(h({ kind: "opencode", cmd: ["opencode"], sessionId: "s" }), 4123);
+		expect(r.cmd).toEqual([
 			"opencode",
 			"--port",
 			"4123",

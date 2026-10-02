@@ -11,7 +11,7 @@ import { checkDraft } from "./composerDraft.ts";
 import type { HarnessCapabilities } from "./data.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { ActivityPhase } from "./harnessActivityTypes.ts";
-import { resumeCmd } from "./harnessCmd.ts";
+import { resumeHarness } from "./harnessCmd.ts";
 import type { GateResult } from "./harnessInputGate.ts";
 import type { Harness, HarnessKind } from "./types.ts";
 
@@ -63,9 +63,13 @@ export function canRestart(input: CanRestartInput): GateResult {
 	return { ok: true };
 }
 
-/// The ONE place the respawn argv is built. Sibling issue #486 will add
-/// `resumeHarness(h, port, mint?)` returning `{sessionId, cmd}`; this
-/// helper is the one-line switch point to it.
-export function restartArgv(h: Harness, opencodePort?: number): string[] {
-	return resumeCmd(h, opencodePort);
+/// The ONE place the respawn record is built: `resumeHarness` returns the
+/// whole harness, so a session id minted for a Claude harness with none
+/// (#486) comes back on the record for the caller to persist.
+export function restartedHarness(
+	h: Harness,
+	opencodePort?: number,
+	mintSessionId?: () => string,
+): Harness {
+	return resumeHarness(h, opencodePort, mintSessionId);
 }

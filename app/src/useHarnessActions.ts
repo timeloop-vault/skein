@@ -30,7 +30,7 @@ import { filesRegistry } from "./filesRegistry.ts";
 import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { harnessInput } from "./harnessInput.ts";
 import type { GateResult } from "./harnessInputGate.ts";
-import { canRestart, restartArgv } from "./harnessRestart.ts";
+import { canRestart, restartedHarness } from "./harnessRestart.ts";
 import { mailHold } from "./mailHold.ts";
 import type { RenameTarget } from "./RoomStrip.tsx";
 import { stillExists } from "./roomsStoreProbe.ts";
@@ -205,7 +205,12 @@ export function useHarnessActions(
 	// When a harness's child exits and the user picks the shell-fallback
 	// path, LiveTerminal calls this so the new cmd persists to the DB
 	// and a Skein restart re-spawns the shell.
-	const updateHarnessCmd = (roomId: string, harnessId: string, cmd: string[]) => {
+	const updateHarnessCmd = (
+		roomId: string,
+		harnessId: string,
+		cmd: string[],
+		sessionId?: string,
+	) => {
 		// Every cmd change is a deliberate respawn (Enter-for-shell), so
 		// bump spawnGen too — that's what remounts the terminal when the
 		// new cmd equals the old one (shell→shell, #53).
@@ -215,7 +220,14 @@ export function useHarnessActions(
 					? {
 							...r,
 							harnesses: r.harnesses.map((h) =>
-								h.id === harnessId ? { ...h, cmd, spawnGen: (h.spawnGen ?? 0) + 1 } : h,
+								h.id === harnessId
+									? {
+											...h,
+											cmd,
+											...(sessionId !== undefined ? { sessionId } : {}),
+											spawnGen: (h.spawnGen ?? 0) + 1,
+										}
+									: h,
 							),
 						}
 					: r,
@@ -259,14 +271,14 @@ export function useHarnessActions(
 			});
 		const first = gate();
 		if (!first.ok) return first;
-		// No sessionId = nothing to resume. Claude would land in its session
-		// picker; opencode's `--continue` would pick the most recent
-		// conversation in the cwd, which harnesses in a room share, so it
-		// could attach a sibling's conversation. Both refuse. A fresh Claude
-		// harness spawned with `--session-id` whose transcript isn't written
-		// yet also refuses here; that is acceptable. Existence uses the boot
-		// path's probe.
-		if (!h.sessionId || !(await stillExists(h))) {
+		// opencode with no (or a vanished) session refuses: its `--continue`
+		// would pick the most recent conversation in the cwd, which
+		// harnesses in a room share, so it could attach a sibling's.
+		// Claude never refuses for session reasons: with no id, or a
+		// transcript that's gone (the boot path's rule, useRoomsHydrate),
+		// resumeHarness mints a fresh session instead.
+		const gone = !h.sessionId || !(await stillExists(h));
+		if (gone && h.kind === "opencode") {
 			return { ok: false, reason: "no conversation to resume yet" };
 		}
 		// A fresh embedded-server port: the old one dies with the process.
@@ -295,7 +307,13 @@ export function useHarnessActions(
 			const p = port;
 			setOpencodePorts((prev) => new Map(prev).set(harnessId, p));
 		}
-		updateHarnessCmd(roomId, harnessId, restartArgv(fresh, port));
+		// Drop a vanished Claude id (unless /clear etc. changed it meanwhile)
+		// so resumeHarness mints a fresh one; cmd and sessionId persist
+		// together so the telemetry tail follows the new id.
+		const { sessionId: _stale, ...noId } = fresh;
+		const base = gone && fresh.sessionId === h.sessionId ? noId : fresh;
+		const next = restartedHarness(base, port);
+		updateHarnessCmd(roomId, harnessId, next.cmd ?? [], next.sessionId);
 		// Source "user-restart" marks a user-initiated respawn: the new
 		// process starts out `spawning`.
 		invoke("db_record_harness_event", {
