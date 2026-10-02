@@ -36,7 +36,8 @@ export function attachAdapters(a: AdapterAttach): (() => void) | null {
 	if (hasClaudeTranscriptTail(harnessKind, a.sessionIdRef.current)) {
 		const attachedSessionId = a.sessionIdRef.current;
 		a.claudeAdapterRef.current = {
-			detach: attachClaudeEvents(harnessId, roomId, attachedSessionId, cwd),
+			// #336: the process was just spawned, so it cannot be mid-turn.
+			detach: attachClaudeEvents(harnessId, roomId, attachedSessionId, cwd, true),
 			sessionId: attachedSessionId,
 		};
 	}

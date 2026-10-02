@@ -32,6 +32,7 @@ pub(crate) async fn claude_events_attach(
     room_id: String,
     session_id: String,
     cwd: String,
+    fresh_process: bool,
     on_event: Channel<ClaudeEvent>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -45,6 +46,7 @@ pub(crate) async fn claude_events_attach(
         harness_id,
         room_id,
         session_id,
+        fresh_process,
         "claude_events_attach: called"
     );
     let started = std::time::Instant::now();
@@ -54,20 +56,27 @@ pub(crate) async fn claude_events_attach(
     let send_failed_harness_id = harness_id.clone();
     let join_result = tauri::async_runtime::spawn_blocking(move || {
         let manager = app.state::<ClaudeEventsManager>();
-        manager.attach(harness_id, room_id, &session_id, &cwd, move |event| {
-            if on_event.send(event).is_err()
-                && !send_failed_cb.swap(true, std::sync::atomic::Ordering::Relaxed)
-            {
-                // Only logged once per attach — a dead webview channel
-                // (window closed, harness torn down) fails on every
-                // subsequent event otherwise, and that's noise, not
-                // new information.
-                tracing::warn!(
-                    harness_id = %send_failed_harness_id,
-                    "claude_events_attach: channel send failed; webview likely gone"
-                );
-            }
-        })
+        manager.attach(
+            harness_id,
+            room_id,
+            &session_id,
+            &cwd,
+            move |event| {
+                if on_event.send(event).is_err()
+                    && !send_failed_cb.swap(true, std::sync::atomic::Ordering::Relaxed)
+                {
+                    // Only logged once per attach — a dead webview channel
+                    // (window closed, harness torn down) fails on every
+                    // subsequent event otherwise, and that's noise, not
+                    // new information.
+                    tracing::warn!(
+                        harness_id = %send_failed_harness_id,
+                        "claude_events_attach: channel send failed; webview likely gone"
+                    );
+                }
+            },
+            fresh_process,
+        )
     })
     .await;
 

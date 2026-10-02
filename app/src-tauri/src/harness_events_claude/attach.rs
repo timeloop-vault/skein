@@ -21,6 +21,45 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// #336: a transcript that ends mid-turn (a `tool_use` assistant row, a
+/// tool result, a user prompt) replays on attach as a non-terminal event,
+/// which the frontend reads as `running`. When `fresh_process` is true the
+/// attach is the one right after `pty_spawn`: the new `claude --resume`
+/// process has done no work yet, so that tail describes a turn the
+/// PREVIOUS (dead) process never finished. Claude then sits waiting for
+/// the user ("Interrupted · What should Claude do instead?") and writes
+/// nothing until they act, so nothing would ever correct the phase. Such
+/// an event is replaced by `AwaitingPrompt`.
+///
+/// A reattach (#410, manual or automatic) must NEVER apply this: the
+/// process has lived across it and may genuinely be mid long tool call, so
+/// `reattach_at_impl` always passes `false` and the flag is not kept in
+/// `ReattachRecipe`.
+///
+/// Known limit: the rewrite cannot tell a row the NEW process wrote
+/// before the initial scan from one the dead process left. Accepted
+/// because no Skein spawn passes a prompt in argv (an agent
+/// `create_room` prompt is delivered by the mailbox nudge, which itself
+/// waits for `waiting`), and the scan runs within one IPC round-trip of
+/// `pty_spawn`, before Claude has drawn a prompt a user could submit
+/// into. Any such misread is corrected by the next live row.
+fn settle_initial_event_for_fresh_process(
+    harness_id: &str,
+    event: ClaudeEvent,
+    fresh_process: bool,
+) -> ClaudeEvent {
+    if !fresh_process || matches!(event, ClaudeEvent::AwaitingPrompt) {
+        return event;
+    }
+    tracing::info!(
+        harness_id,
+        replaced = ?event,
+        "claude_events: fresh process attached to an unfinished transcript tail; \
+         reporting awaiting-prompt instead (#336)"
+    );
+    ClaudeEvent::AwaitingPrompt
+}
+
 /// Builds a fully-armed `Adapter` from scratch — all the real work of
 /// an attach (reading history, arming watches, running the first
 /// catch-up tick) — WITHOUT ever touching `Registry` (#410 review fix).
@@ -37,6 +76,7 @@ pub(super) fn build_adapter<F>(
     path: PathBuf,
     on_event: F,
     actions: Option<ActionPersistence>,
+    fresh_process: bool,
 ) -> Result<(Adapter, AttachInfo), ClaudeEventsError>
 where
     F: Fn(ClaudeEvent) + Send + Sync + 'static,
@@ -320,7 +360,11 @@ where
         // first, live events second; that ordering matches their
         // expectation.
         if let Some(event) = initial_event {
-            on_event(event);
+            on_event(settle_initial_event_for_fresh_process(
+                harness_id,
+                event,
+                fresh_process,
+            ));
         }
         // Same reasoning, for the subagents discovered above: emit
         // unconditionally — `initial_subagent_starts` is only ever
@@ -382,11 +426,12 @@ pub(super) fn attach_at_impl<F>(
     path: PathBuf,
     on_event: F,
     actions: Option<ActionPersistence>,
+    fresh_process: bool,
 ) -> Result<AttachInfo, ClaudeEventsError>
 where
     F: Fn(ClaudeEvent) + Send + Sync + 'static,
 {
-    let (mut adapter, info) = build_adapter(harness_id, path, on_event, actions)?;
+    let (mut adapter, info) = build_adapter(harness_id, path, on_event, actions, fresh_process)?;
     let mut reg = inner.lock();
     reg.next_generation += 1;
     adapter.generation = reg.next_generation;
@@ -445,7 +490,8 @@ pub(super) fn reattach_at_impl<F>(
 where
     F: Fn(ClaudeEvent) + Send + Sync + 'static,
 {
-    let (mut adapter, _info) = build_adapter(harness_id, path, on_event, actions)?;
+    // Always `false`: a reattach never follows a fresh spawn (#336).
+    let (mut adapter, _info) = build_adapter(harness_id, path, on_event, actions, false)?;
     let mut reg = inner.lock();
     let current_generation = reg.adapters.get(harness_id).map(|a| a.generation);
     if current_generation != Some(expected_generation) {

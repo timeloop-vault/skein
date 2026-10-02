@@ -193,6 +193,8 @@ mod persist_tests;
 #[cfg(test)]
 mod reattach_tests;
 #[cfg(test)]
+mod resume_tests;
+#[cfg(test)]
 mod resync_tests;
 #[cfg(test)]
 mod subagent_tail_tests;

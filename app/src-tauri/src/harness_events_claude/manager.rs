@@ -169,6 +169,7 @@ impl ClaudeEventsManager {
         session_id: &str,
         cwd: &str,
         on_event: F,
+        fresh_process: bool,
     ) -> Result<AttachInfo, ClaudeEventsError>
     where
         F: Fn(ClaudeEvent) + Send + Sync + 'static,
@@ -184,7 +185,7 @@ impl ClaudeEventsManager {
             cwd: cwd.to_string(),
             app: self.app.clone(),
         });
-        self.attach_at(&harness_id, path, on_event, persistence)
+        self.attach_at_with(&harness_id, path, on_event, persistence, fresh_process)
     }
 
     /// Path-injected variant — used by tests to point the adapter at
@@ -195,13 +196,9 @@ impl ClaudeEventsManager {
     /// `actions` is the persistence sink; pass `None` from phase-only
     /// tests to skip the `harness_actions` table entirely.
     ///
-    /// Thin wrapper over `attach_at_impl` (#410): the actual body only
-    /// ever touches `self.inner`, never `self.db`/`self.app`, so it's a
-    /// free function taking `&Arc<Mutex<Registry>>` directly — that's
-    /// what lets `supervise_map`'s dead-tail re-attach and the manual
-    /// `reattach` verb call the exact same attach logic without needing
-    /// a whole `&ClaudeEventsManager` (the background supervisor thread
-    /// only ever holds a `Weak` to `inner`, not to the manager itself).
+    /// Test-only shorthand for `attach_at_with(..., false)`: a non-fresh
+    /// attach, i.e. one that keeps the transcript's own verdict (#336).
+    #[cfg(test)]
     pub(super) fn attach_at<F>(
         &self,
         harness_id: &str,
@@ -212,7 +209,30 @@ impl ClaudeEventsManager {
     where
         F: Fn(ClaudeEvent) + Send + Sync + 'static,
     {
-        attach_at_impl(&self.inner, harness_id, path, on_event, actions)
+        attach_at_impl(&self.inner, harness_id, path, on_event, actions, false)
+    }
+
+    /// `attach_at` plus `fresh_process` (#336): true only for the attach
+    /// right after `pty_spawn`. See `settle_initial_event_for_fresh_process`.
+    pub(super) fn attach_at_with<F>(
+        &self,
+        harness_id: &str,
+        path: PathBuf,
+        on_event: F,
+        actions: Option<ActionPersistence>,
+        fresh_process: bool,
+    ) -> Result<AttachInfo, ClaudeEventsError>
+    where
+        F: Fn(ClaudeEvent) + Send + Sync + 'static,
+    {
+        attach_at_impl(
+            &self.inner,
+            harness_id,
+            path,
+            on_event,
+            actions,
+            fresh_process,
+        )
     }
 }
 
