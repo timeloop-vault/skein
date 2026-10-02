@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { cmdForKind, resumeCmd, unarchiveRoomTransform, withResumeCmds } from "./harnessCmd.ts";
+import {
+	cmdForKind,
+	resumeCmd,
+	resumeHarness,
+	unarchiveRoomTransform,
+	withResumeCmds,
+} from "./harnessCmd.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
 
 const SID = "3c8c4693-3838-46ab-8680-3e60df6fdefe";
@@ -62,8 +68,55 @@ describe("resumeCmd — Claude", () => {
 		expect(resumeCmd(h)).toEqual(["claude", "--resume", SID]);
 	});
 
-	it("falls back to Claude's picker with no session id", () => {
-		expect(resumeCmd(harness("claude", { cmd: ["claude"] }))).toEqual(["claude", "--resume"]);
+	it("never yields bare --resume (the picker) with no session id", () => {
+		const cmd = resumeCmd(harness("claude", { cmd: ["claude"] }));
+		expect(cmd).not.toEqual(["claude", "--resume"]);
+		expect(cmd.slice(0, 2)).toEqual(["claude", "--session-id"]);
+	});
+
+	describe("resumeHarness (#486)", () => {
+		const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+		it("mints a fresh session id and records it, with the agent", () => {
+			const h = harness("claude", { cmd: ["claude"], agent: "X" });
+			const out = resumeHarness(h);
+			expect(out.cmd?.slice(0, 2)).toEqual(["claude", "--session-id"]);
+			expect(out.cmd?.slice(3)).toEqual(["--agent", "X"]);
+			expect(out.cmd?.[2]).toMatch(UUID);
+			expect(out.sessionId).toBe(out.cmd?.[2]);
+		});
+
+		it("uses the injected minter, and treats a blank id as absent", () => {
+			const h = harness("claude", { cmd: ["claude"], sessionId: "  " });
+			const out = resumeHarness(h, undefined, () => SID);
+			expect(out.cmd).toEqual(["claude", "--session-id", SID]);
+			expect(out.sessionId).toBe(SID);
+		});
+
+		it("resumes an existing session unchanged, with the agent", () => {
+			const h = harness("claude", { cmd: ["claude"], sessionId: SID, agent: "X" });
+			const out = resumeHarness(h, undefined, () => "never");
+			expect(out.cmd).toEqual(["claude", "--resume", SID, "--agent", "X"]);
+			expect(out.sessionId).toBe(SID);
+		});
+
+		it("withResumeCmds persists the minted id on the room", () => {
+			const out = withResumeCmds(room([harness("claude", { cmd: ["claude"] })]), ports());
+			const h = out.harnesses[0];
+			expect(h?.sessionId).toMatch(UUID);
+			expect(h?.cmd).toEqual(["claude", "--session-id", h?.sessionId]);
+		});
+
+		it("mints nothing for a shell-swapped or cmd-less harness", () => {
+			const out = withResumeCmds(
+				room([harness("claude", { id: "a", cmd: ["pwsh.exe"] }), harness("claude", { id: "b" })]),
+				ports(),
+			);
+			expect(out.harnesses[0]?.sessionId).toBeUndefined();
+			expect(out.harnesses[0]?.cmd).toEqual(["pwsh.exe"]);
+			expect(out.harnesses[1]).not.toHaveProperty("cmd");
+			expect(out.harnesses[1]?.sessionId).toBeUndefined();
+		});
 	});
 
 	it("is idempotent, so every boot and reopen can run it", () => {
