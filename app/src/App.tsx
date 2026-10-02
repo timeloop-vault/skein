@@ -134,6 +134,8 @@ export default function App() {
 		activeRooms,
 		setShowPicker,
 		setRenaming,
+		roomsRef,
+		setOpencodePorts,
 	);
 	const {
 		startRenameRoom,
@@ -187,6 +189,26 @@ export default function App() {
 
 	// #410: manual "Reattach telemetry" action — see useReattachTelemetry.ts.
 	const onReattachTelemetry = useReattachTelemetry(roomsRef, pushToast);
+	// #490: palette entry point — a refusal (the gate re-checks live) surfaces
+	// as an info toast, since the palette has no disabled state.
+	const onRestartHarness = (roomId: string, harnessId: string) => {
+		void actions.restartHarness(roomId, harnessId).then((result) => {
+			if (result.ok) return;
+			const owningRoom = roomsRef.current.find((r) => r.id === roomId);
+			const harness = owningRoom?.harnesses.find((h) => h.id === harnessId);
+			if (!owningRoom || !harness) return;
+			pushToast({
+				id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+				roomId,
+				harnessId,
+				kind: harness.kind,
+				roomName: owningRoom.name,
+				harnessName: harness.name,
+				state: "info",
+				message: `Can't restart: ${result.reason}`,
+			});
+		});
+	};
 
 	// Pointer-based drag-to-reorder (#271) — see tabDrag.ts's header.
 	const { drag, dropTarget, startDrag, dragHandlers, suppressClick } = useTabDrag(
@@ -257,6 +279,7 @@ export default function App() {
 		cycleAlertedRoom,
 		cycleAlertedHarness,
 		onReattachTelemetry,
+		onRestartHarness,
 	});
 
 	const overlayProps = {

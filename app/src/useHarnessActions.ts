@@ -20,14 +20,24 @@
 // — everything below moved into this single hook call rather than
 // splitting across two.
 
-import type { Dispatch, SetStateAction } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { useCallback } from "react";
 import { decideCloseHarness, type RequestResult } from "./agentRequests.ts";
 import { confirmDialog } from "./confirmDialog.ts";
+import { HARNESS_KINDS } from "./data.tsx";
 import { filesRegistry } from "./filesRegistry.ts";
-import { harnessActivity } from "./harnessActivity.ts";
+import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
+import { harnessInput } from "./harnessInput.ts";
+import type { GateResult } from "./harnessInputGate.ts";
+import { canRestart, restartArgv } from "./harnessRestart.ts";
+import { mailHold } from "./mailHold.ts";
 import type { RenameTarget } from "./RoomStrip.tsx";
+import { stillExists } from "./roomsStoreProbe.ts";
 import type { Room } from "./types.ts";
+
+/// #490: harness ids with a restart currently awaiting.
+const restartsInFlight = new Set<string>();
 
 export function useHarnessActions(
 	setRooms: Dispatch<SetStateAction<Room[]>>,
@@ -36,6 +46,8 @@ export function useHarnessActions(
 	activeRooms: Room[],
 	setShowPicker: Dispatch<SetStateAction<string | null>>,
 	setRenaming: Dispatch<SetStateAction<RenameTarget | null>>,
+	roomsRef: MutableRefObject<Room[]>,
+	setOpencodePorts: Dispatch<SetStateAction<Map<string, number>>>,
 ) {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: setRenaming is a plain useState setter passed in from App.tsx (#19) — stable across renders like any local useState, but biome can't prove that through a function parameter.
 	const startRenameRoom = useCallback(
@@ -211,6 +223,96 @@ export function useHarnessActions(
 		);
 	};
 
+	// #490: restart a harness in place — kill its process and respawn from
+	// its own record (resume form). Callable from code (#491); refuses with
+	// a reason, doing nothing, unless `canRestart` passes against LIVE state
+	// read now, not render-time props. The gate is evaluated twice: up
+	// front, and again after the async port/probe work, because a turn or
+	// keystroke can land while awaiting.
+	const restartHarness = async (roomId: string, harnessId: string): Promise<GateResult> => {
+		// One restart per harness at a time: the awaits below leave a window
+		// where a second call would pass the same gates and respawn twice.
+		if (restartsInFlight.has(harnessId)) {
+			return { ok: false, reason: "a restart is already in progress" };
+		}
+		restartsInFlight.add(harnessId);
+		try {
+			return await doRestart(roomId, harnessId);
+		} finally {
+			restartsInFlight.delete(harnessId);
+		}
+	};
+
+	const findHarness = (roomId: string, harnessId: string) =>
+		roomsRef.current.find((r) => r.id === roomId)?.harnesses.find((x) => x.id === harnessId);
+
+	const doRestart = async (roomId: string, harnessId: string): Promise<GateResult> => {
+		const h = findHarness(roomId, harnessId);
+		if (!h) return { ok: false, reason: "that harness no longer exists" };
+		const gate = (): GateResult =>
+			canRestart({
+				kind: h.kind,
+				capabilities: HARNESS_KINDS[h.kind].capabilities,
+				phase: harnessActivity.get(harnessId)?.phase ?? null,
+				mailHeld: mailHold.get(harnessId).held,
+				draft: harnessInput.draft(harnessId),
+			});
+		const first = gate();
+		if (!first.ok) return first;
+		// No sessionId = nothing to resume. Claude would land in its session
+		// picker; opencode's `--continue` would pick the most recent
+		// conversation in the cwd, which harnesses in a room share, so it
+		// could attach a sibling's conversation. Both refuse. A fresh Claude
+		// harness spawned with `--session-id` whose transcript isn't written
+		// yet also refuses here; that is acceptable. Existence uses the boot
+		// path's probe.
+		if (!h.sessionId || !(await stillExists(h))) {
+			return { ok: false, reason: "no conversation to resume yet" };
+		}
+		// A fresh embedded-server port: the old one dies with the process.
+		// The opencode SSE adapter reads its port from the `opencodePorts`
+		// map (HarnessColumn -> LiveTerminal prop), not from the argv.
+		let port: number | undefined;
+		if (h.kind === "opencode") {
+			try {
+				port = await invoke<number>("pick_free_port");
+			} catch (err) {
+				console.warn("[skein] pick_free_port failed; not restarting:", err);
+				return { ok: false, reason: "couldn't allocate a port for the restarted harness" };
+			}
+		}
+		const second = gate();
+		if (!second.ok) return second;
+		// Re-read: sessionId may have changed (/clear, /resume) during the awaits.
+		const fresh = findHarness(roomId, harnessId);
+		if (!fresh) return { ok: false, reason: "that harness no longer exists" };
+		const activity = harnessActivity.get(harnessId);
+		const fromPhase = activity?.phase ?? "unknown";
+		// Both updates below must land in the same render (React batches
+		// them in this tick); otherwise LiveTerminal remounts on the
+		// spawnGen bump with the OLD port.
+		if (port !== undefined) {
+			const p = port;
+			setOpencodePorts((prev) => new Map(prev).set(harnessId, p));
+		}
+		updateHarnessCmd(roomId, harnessId, restartArgv(fresh, port));
+		// Source "user-restart" marks a user-initiated respawn: the new
+		// process starts out `spawning`.
+		invoke("db_record_harness_event", {
+			harnessId,
+			roomId,
+			fromPhase,
+			toPhase: "spawning",
+			timestampMs: Date.now(),
+			hasUserInput: activity?.hasUserInput ?? false,
+			source: TRANSITION_SOURCE.UserRestart,
+		}).catch((err: unknown) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[skein] db_record_harness_event failed for ${harnessId}:`, msg);
+		});
+		return { ok: true };
+	};
+
 	// #433: a design harness's chosen preview entry. Persisted with the
 	// rooms blob; no spawnGen bump — there is no process to respawn.
 	const setHarnessDesignEntry = (roomId: string, harnessId: string, entry: string) => {
@@ -242,6 +344,7 @@ export function useHarnessActions(
 		closeHarness,
 		closeHarnessForAgent,
 		updateHarnessCmd,
+		restartHarness,
 		setHarnessDesignEntry,
 		addHarness,
 	};

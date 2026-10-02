@@ -9,7 +9,11 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { PaletteItem } from "./CommandPalette.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
+import { harnessActivity } from "./harnessActivity.ts";
 import { hasClaudeTranscriptTail } from "./harnessEvents.ts";
+import { harnessInput } from "./harnessInput.ts";
+import { canRestart } from "./harnessRestart.ts";
+import { mailHold } from "./mailHold.ts";
 import { hints } from "./shortcuts.ts";
 import type { Harness, Room, Theme } from "./types.ts";
 
@@ -35,6 +39,8 @@ export interface BuildPaletteItemsParams {
 	// #410: "Reattach telemetry" — only offered when `activeHarness`
 	// passes `hasClaudeTranscriptTail` below.
 	onReattachTelemetry: (roomId: string, harnessId: string) => void;
+	// #490: fire-and-forget; the handler owns surfacing a refusal.
+	onRestartHarness: (roomId: string, harnessId: string) => void;
 }
 
 export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[] {
@@ -58,6 +64,7 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 		cycleAlertedRoom,
 		cycleAlertedHarness,
 		onReattachTelemetry,
+		onRestartHarness,
 	} = params;
 
 	const paletteItems: PaletteItem[] = [];
@@ -137,6 +144,28 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 		});
 		// #410: only for the active room's active harness, and only when
 		// it's a harness `attachClaudeEvents` would ever attach to.
+		// #490: the active harness only, like reattach below. The gate is
+		// computed now; a refusal rides in the hint, and invoke still goes
+		// through `onRestartHarness`, which refuses safely and says why.
+		if (activeHarness) {
+			const caps = HARNESS_KINDS[activeHarness.kind].capabilities;
+			if (caps.pty && caps.resume) {
+				const gate = canRestart({
+					kind: activeHarness.kind,
+					capabilities: caps,
+					phase: harnessActivity.get(activeHarness.id)?.phase ?? null,
+					mailHeld: mailHold.get(activeHarness.id).held,
+					draft: harnessInput.draft(activeHarness.id),
+				});
+				const entry: PaletteItem = {
+					id: "cmd:restart-harness",
+					label: `Restart harness: ${activeHarness.name}`,
+					invoke: () => onRestartHarness(activeRoomId, activeHarness.id),
+				};
+				if (!gate.ok) entry.hint = `unavailable — ${gate.reason}`;
+				paletteItems.push(entry);
+			}
+		}
 		if (activeHarness && hasClaudeTranscriptTail(activeHarness.kind, activeHarness.sessionId)) {
 			paletteItems.push({
 				id: "cmd:reattach-telemetry",
