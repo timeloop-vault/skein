@@ -112,6 +112,13 @@ like `claude · main`).
 
 `unresolved_total` is the room's count, not the filter's.
 
+Filtering by a source file (`file: "proto/card.jsx"`) also returns the
+element threads whose element was rendered from that file, per the
+anchor's own `source.file`. Their `file` is still the entry HTML, and
+`source` names the file and line to edit — a guess unless `outdated` is
+false. An element thread whose anchor carries no source hint is matched
+by its entry only. A thread appears once, however many ways it matches.
+
 A thread's `scope` is `line`, `file`, `commit`, `review` or `element`
 (#434: a comment on an element of a rendered design, `file` being its
 entry HTML). An `element` thread has no line range and is never

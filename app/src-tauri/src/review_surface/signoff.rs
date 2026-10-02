@@ -317,6 +317,7 @@ mod tests {
                 ),
                 body: "bigger".into(),
             },
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 

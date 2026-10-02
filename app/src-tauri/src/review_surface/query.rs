@@ -24,6 +24,10 @@ use super::git::{
     Range, additions, deletions, file_hash, norm, resolve_range, scope_diffs, status_str,
     to_review_hunk,
 };
+use super::source_view::{
+    SourceIndex, apply_source_counts, index_sources, mirror_threads, push_source_only_files,
+    source_counts,
+};
 use super::{Scope, thread_scope};
 use crate::db::{Database, ReviewElementAnchorRow, ReviewThreadRow};
 use crate::review::{PendingFileDto, pending_impl, relative_key};
@@ -53,6 +57,8 @@ pub(crate) fn scope_impl(
 
     let unresolved_count = threads.iter().filter(|t| t.resolved_ms.is_none()).count();
     let addressed = addressed_by_thread(db, room_id)?;
+    let sources = index_sources(&threads, &element_rows_by_thread(db, room_id)?);
+    let source_counts = source_counts(&sources);
     let mut review_threads: Vec<ThreadDto> = threads
         .iter()
         .filter(|t| t.scope == thread_scope::REVIEW)
@@ -94,6 +100,15 @@ pub(crate) fn scope_impl(
             &pending_paths,
             |_| String::new(),
         );
+        push_source_only_files(
+            &mut files,
+            &sources,
+            &per_file,
+            &viewed,
+            &pending_paths,
+            |_| String::new(),
+        );
+        apply_source_counts(&mut files, &source_counts);
         return Ok(ReviewScopeDto {
             is_repo: false,
             base_ref: None,
@@ -168,6 +183,8 @@ pub(crate) fn scope_impl(
                     content_hash: hash,
                     thread_count: threads,
                     unresolved_count: unresolved,
+                    source_thread_count: 0,
+                    source_unresolved_count: 0,
                     has_pending: pending_paths.contains(&path),
                     harness_id: harness_of.get(&path).cloned(),
                     path,
@@ -175,20 +192,30 @@ pub(crate) fn scope_impl(
             })
             .collect()
     };
+    let hash_of = |p: &str| {
+        if scope == Scope::Pending {
+            String::new()
+        } else {
+            file_hash(cwd, p, scope, commit_sha, &repo)
+        }
+    };
     push_element_only_files(
         &mut files,
         &threads,
         &per_file,
         &viewed,
         &pending_paths,
-        |p| {
-            if scope == Scope::Pending {
-                String::new()
-            } else {
-                file_hash(cwd, p, scope, commit_sha, &repo)
-            }
-        },
+        hash_of,
     );
+    push_source_only_files(
+        &mut files,
+        &sources,
+        &per_file,
+        &viewed,
+        &pending_paths,
+        hash_of,
+    );
+    apply_source_counts(&mut files, &source_counts);
 
     let error = if range.base_ref.is_some() && !range.base_resolved {
         Some(format!(
@@ -256,6 +283,8 @@ fn push_element_only_files(
             content_hash: hash,
             thread_count,
             unresolved_count,
+            source_thread_count: 0,
+            source_unresolved_count: 0,
             has_pending: pending_paths.contains(&path),
             harness_id: None,
             path,
@@ -286,6 +315,8 @@ fn pending_files(
                 content_hash: p.content_hash.clone(),
                 thread_count: threads,
                 unresolved_count: unresolved,
+                source_thread_count: 0,
+                source_unresolved_count: 0,
                 has_pending: true,
                 harness_id: (!p.harness_id.is_empty()).then(|| p.harness_id.clone()),
             }
@@ -313,6 +344,8 @@ pub(crate) struct ScopeFiles {
     addressed: HashMap<String, AddressedDto>,
     /// Anchor rows of the room's element threads (#434).
     elements: HashMap<String, ReviewElementAnchorRow>,
+    /// Element threads by the JSX source file they also appear in (#467).
+    sources: SourceIndex,
     repo: Option<Repo>,
     /// `None` only for `Scope::Pending`, which has no git range at all.
     range: Option<Range>,
@@ -355,7 +388,9 @@ impl ScopeFiles {
         let addressed = addressed_by_thread(db, room_id)?;
         let elements = element_rows_by_thread(db, room_id)?;
         let mut threads_by_file: HashMap<String, Vec<ReviewThreadRow>> = HashMap::new();
-        for t in db.review_threads_for_room(room_id)? {
+        let all_threads = db.review_threads_for_room(room_id)?;
+        let sources = index_sources(&all_threads, &elements);
+        for t in all_threads {
             if let Some(fp) = t.file_path.as_deref() {
                 threads_by_file.entry(norm(fp)).or_default().push(t);
             }
@@ -380,6 +415,7 @@ impl ScopeFiles {
                 threads_by_file,
                 addressed,
                 elements,
+                sources,
                 repo,
                 range: None,
                 diffs: HashMap::new(),
@@ -404,12 +440,25 @@ impl ScopeFiles {
             threads_by_file,
             addressed,
             elements,
+            sources,
             repo,
             range: Some(range),
             diffs,
             pending: HashMap::new(),
             requested,
         })
+    }
+
+    fn mirrors(&self, ctx: &PlaceCtx<'_>, key: &str) -> Vec<ThreadDto> {
+        mirror_threads(
+            &self.sources,
+            key,
+            ctx,
+            &self.comments,
+            &self.addressed,
+            &self.elements,
+            Some(&self.cwd),
+        )
     }
 
     /// One file's diff, plus every thread on it re-anchored to right
@@ -424,6 +473,7 @@ impl ScopeFiles {
             let mut threads = place_threads(db, &ctx, key, file_threads, &self.comments);
             apply_addressed(&mut threads, &self.addressed);
             apply_element(&mut threads, &self.elements, Some(&self.cwd));
+            threads.extend(self.mirrors(&ctx, key));
             return Ok(match found {
                 Some(p) => FileDetailDto {
                     name: p.name,
@@ -476,6 +526,7 @@ impl ScopeFiles {
         let mut threads = place_threads(db, &ctx, key, file_threads, &self.comments);
         apply_addressed(&mut threads, &self.addressed);
         apply_element(&mut threads, &self.elements, Some(&self.cwd));
+        threads.extend(self.mirrors(&ctx, key));
 
         let hash = file_hash(
             &self.cwd,

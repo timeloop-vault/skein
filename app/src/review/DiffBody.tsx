@@ -68,6 +68,7 @@ const ThreadList = ({
 				key={t.id}
 				thread={t}
 				busy={busy}
+				inline
 				onReply={(body) => handlers.onReply(t.id, body)}
 				onResolve={(resolved) => handlers.onResolve(t.id, resolved)}
 				onDelete={() => handlers.onDeleteThread(t.id)}
@@ -100,7 +101,7 @@ export const DiffBody = ({
 	onComment: (selection: LineSelection, body: string) => void;
 }) => {
 	const [selection, setSelection] = useState<LineSelection | null>(null);
-	const byLine = threadsByLine(threads);
+	const byLine = threadsByLine(threads, hunks);
 
 	const pick = (side: Side, lineno: number, content: string, extend: boolean) => {
 		setSelection((prev) => {

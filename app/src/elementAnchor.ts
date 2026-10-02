@@ -6,7 +6,7 @@
 // on now. A tie is ambiguous and ambiguity is `lost`, never a mis-point.
 
 export type ElementRect = { x: number; y: number; w: number; h: number };
-export type ElementSource = { file: string; line: number; column?: number };
+export type ElementSource = { file: string; line: number; column?: number; lineText?: string };
 export type ElementDescriptor = {
 	odId?: string;
 	selector: string;

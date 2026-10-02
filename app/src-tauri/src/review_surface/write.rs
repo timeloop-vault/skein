@@ -10,11 +10,14 @@
 //! that landed between the click and the submit — the one moment where
 //! an anchor could be wrong from birth.
 
+use std::collections::HashMap;
+use std::path::Path;
+
 use skein_review::{FileState, Placement, Side, capture_lines};
 
 use super::anchoring::{comments_by_thread, side_of, to_thread_dto};
 use super::dto::{NewThread, ThreadDto};
-use super::element::{apply_element, element_rows_by_thread, validate_anchor};
+use super::element::{apply_element, capture_source_line, element_rows_by_thread, validate_anchor};
 use super::git::norm;
 use super::thread_scope;
 use crate::db::{Database, ReviewCommentRow, ReviewElementAnchorRow, ReviewThreadRow};
@@ -25,6 +28,7 @@ pub(super) fn add_thread_impl(
     room_id: &str,
     cwd: &str,
     input: &NewThread,
+    served: &HashMap<String, String>,
 ) -> Result<ThreadDto, String> {
     if input.body.trim().is_empty() {
         return Err("a comment needs a body".into());
@@ -54,11 +58,16 @@ pub(super) fn add_thread_impl(
     }
     // Validated before anything is written, and what is stored is the
     // validated struct, not the caller's JSON.
-    let element = match (&input.element, &file_path) {
+    let mut element = match (&input.element, &file_path) {
         (Some(a), Some(path)) => Some(validate_anchor(a.clone(), path)?),
         (Some(_), None) => return Err("an element comment needs a file".into()),
         (None, _) => None,
     };
+    // #467: the source line's text, only when the disk bytes are the
+    // bytes the preview served.
+    if let Some(src) = element.as_mut().and_then(|e| e.source.as_mut()) {
+        src.line_text = capture_source_line(Path::new(cwd), src, served);
+    }
 
     // Fall back to reading the anchor from disk only when the caller
     // sent none — a line comment with no anchor text could never be

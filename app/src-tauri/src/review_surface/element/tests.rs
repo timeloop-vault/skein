@@ -1,6 +1,16 @@
 use super::super::dto::NewThread;
-use super::super::write::add_thread_impl;
+use super::super::write::add_thread_impl as add_thread_served;
 use super::*;
+
+/// `add_thread_impl` with nothing served: no source line is captured.
+fn add_thread_impl(
+    db: &Database,
+    room_id: &str,
+    cwd: &str,
+    input: &NewThread,
+) -> Result<ThreadDto, String> {
+    add_thread_served(db, room_id, cwd, input, &HashMap::new())
+}
 
 fn anchor() -> ElementAnchor {
     ElementAnchor {
@@ -14,6 +24,7 @@ fn anchor() -> ElementAnchor {
             file: "proto/shell.jsx".into(),
             line: 16,
             column: Some(9),
+            line_text: None,
         }),
         rect: ElementRect {
             x: 41.0,
@@ -123,6 +134,7 @@ fn source_and_rect_are_range_checked() {
             file: file.into(),
             line,
             column,
+            line_text: None,
         })
     };
     assert!(check(|a| a.source = src("../x.jsx", 1, None)).is_err());
@@ -182,7 +194,7 @@ fn seen_impl(
     root: &Path,
     thread_id: &str,
     seen: &SeenInput,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     super::seen_impl(db, room_id, root, thread_id, seen, &HashMap::new())
 }
 
@@ -312,6 +324,20 @@ fn a_new_element_thread_is_never_unmoved_and_starts_unknown() {
     let e = dto.element.unwrap();
     assert_eq!(e.state, "unknown");
     assert!(e.last_seen.is_none());
+}
+
+#[test]
+fn a_report_says_whether_the_placement_changed() {
+    let f = Fixture::new();
+    let id = f.add_element().id;
+    let root = f.tmp.path();
+    let report = |st: &str| seen_impl(&f.db, "r1", root, &id, &seen(st, &["proto/shell.jsx"]));
+    assert!(report("anchored").unwrap(), "first report");
+    assert!(!report("anchored").unwrap(), "identical re-report");
+    assert!(report("lost").unwrap(), "different state");
+    assert!(!report("lost").unwrap());
+    std::fs::write(root.join("proto/shell.jsx"), "v2").unwrap();
+    assert!(report("lost").unwrap(), "same state, file edited");
 }
 
 #[test]
@@ -561,4 +587,100 @@ fn a_corrupt_anchor_row_degrades_instead_of_failing() {
     assert!(got[0].element.is_none());
     assert_eq!(got[0].placement, "element");
     assert!(got[0].outdated);
+}
+
+// ── #467: the source line's text ──
+
+/// A shell.jsx whose line 16 is real code, line 17 blank and line 18
+/// CRLF-terminated; returns what the preview "served".
+fn serve_shell(f: &Fixture) -> HashMap<String, String> {
+    let mut body = "// x\n".repeat(15);
+    body.push_str("  <button className=\"rgroup-h\">First run</button>\n\n  <b/>\r\n");
+    std::fs::write(f.tmp.path().join("proto/shell.jsx"), &body).unwrap();
+    HashMap::from([("proto/shell.jsx".to_owned(), digest_bytes(body.as_bytes()))])
+}
+
+fn line_text_after_add(
+    f: &Fixture,
+    a: ElementAnchor,
+    served: &HashMap<String, String>,
+) -> Option<String> {
+    let dto = add_thread_served(
+        &f.db,
+        "r1",
+        f.cwd(),
+        &Fixture::new_thread("element", Some(a)),
+        served,
+    )
+    .unwrap();
+    let row = f.db.review_element_anchor(&dto.id).unwrap().unwrap();
+    serde_json::from_str::<ElementAnchor>(&row.anchor_json)
+        .unwrap()
+        .source
+        .unwrap()
+        .line_text
+}
+
+fn at_line(line: u32) -> ElementAnchor {
+    let mut a = anchor();
+    a.source.as_mut().unwrap().line = line;
+    a
+}
+
+#[test]
+fn line_text_is_captured_when_the_served_digest_matches_disk() {
+    let f = Fixture::new();
+    let served = serve_shell(&f);
+    assert_eq!(
+        line_text_after_add(&f, anchor(), &served).as_deref(),
+        Some("  <button className=\"rgroup-h\">First run</button>")
+    );
+    assert_eq!(
+        line_text_after_add(&f, at_line(18), &served).as_deref(),
+        Some("  <b/>")
+    );
+}
+
+#[test]
+fn line_text_is_dropped_when_disk_changed_after_serving() {
+    let f = Fixture::new();
+    let served = serve_shell(&f);
+    std::fs::write(f.tmp.path().join("proto/shell.jsx"), "edited\n").unwrap();
+    assert_eq!(line_text_after_add(&f, anchor(), &served), None);
+}
+
+#[test]
+fn line_text_is_dropped_for_a_file_never_served() {
+    let f = Fixture::new();
+    serve_shell(&f);
+    assert_eq!(line_text_after_add(&f, anchor(), &HashMap::new()), None);
+}
+
+#[test]
+fn a_client_supplied_line_text_is_discarded() {
+    let f = Fixture::new();
+    let mut a = anchor();
+    a.source.as_mut().unwrap().line_text = Some("forged".into());
+    assert_eq!(
+        check(|x| *x = a.clone()).unwrap().source.unwrap().line_text,
+        None
+    );
+    assert_eq!(line_text_after_add(&f, a, &HashMap::new()), None);
+}
+
+#[test]
+fn line_text_is_none_for_a_missing_or_blank_line() {
+    let f = Fixture::new();
+    let served = serve_shell(&f);
+    assert_eq!(line_text_after_add(&f, at_line(17), &served), None);
+    assert_eq!(line_text_after_add(&f, at_line(500), &served), None);
+}
+
+#[test]
+fn an_anchor_stored_without_line_text_still_parses() {
+    let json = r##"{"entry":"a.html","selector":"#a","tag":"div","text":"","attrs":{},
+        "source":{"file":"a.jsx","line":3,"column":2},
+        "rect":{"x":0,"y":0,"w":1,"h":1}}"##;
+    let a: ElementAnchor = serde_json::from_str(json).unwrap();
+    assert_eq!(a.source.unwrap().line_text, None);
 }

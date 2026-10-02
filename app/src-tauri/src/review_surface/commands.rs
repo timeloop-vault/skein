@@ -18,6 +18,7 @@ use super::image::image_bytes_impl;
 use super::query::{file_impl, scope_impl};
 use super::signoff::{self, SignoffStatus};
 use super::write::add_thread_impl;
+use crate::agent_api::state::{REVIEW_CHANGED_EVENT, ReviewChanged};
 use crate::db::{Database, ReviewCommentRow};
 use crate::design::PreviewState;
 use crate::design::commands::room_root;
@@ -110,34 +111,55 @@ pub async fn review_add_thread(
     cwd: String,
     thread: NewThread,
     db: tauri::State<'_, Arc<Database>>,
+    preview: tauri::State<'_, Arc<PreviewState>>,
 ) -> Result<ThreadDto, String> {
     let db = Arc::clone(&db);
-    tauri::async_runtime::spawn_blocking(move || add_thread_impl(&db, &room_id, &cwd, &thread))
-        .await
-        .map_err(|e| e.to_string())?
+    let preview = Arc::clone(&preview);
+    tauri::async_runtime::spawn_blocking(move || {
+        let served = preview.served_digests(&room_id);
+        add_thread_impl(&db, &room_id, &cwd, &thread, &served)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Record where the design pane found an element thread's element
-/// (#434). Updates the last-seen placement only, never the anchor. No
-/// review-changed event: the pane that calls this already holds the
-/// answer, and the other Tauri-side writes do not emit either.
+/// (#434). Updates the last-seen placement only, never the anchor.
+/// Emits `skein://review-changed` only when the placement materially
+/// changed (state, selector, rect or stamp), so the review pane, which
+/// shows `unknown` until the design pane reports, refetches once; an
+/// identical re-report stays quiet, which keeps the refetch loop closed.
 #[tauri::command]
 pub async fn review_element_seen(
     room_id: String,
     thread_id: String,
     seen: SeenInput,
+    app: tauri::AppHandle,
     db: tauri::State<'_, Arc<Database>>,
     preview: tauri::State<'_, Arc<PreviewState>>,
 ) -> Result<(), String> {
     let db = Arc::clone(&db);
     let preview = Arc::clone(&preview);
-    tauri::async_runtime::spawn_blocking(move || {
+    let emit_room = room_id.clone();
+    let changed = tauri::async_runtime::spawn_blocking(move || {
         let root = room_root(&db, &room_id)?;
         let served = preview.served_digests(&room_id);
         seen_impl(&db, &room_id, &root, &thread_id, &seen, &served)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    if changed
+        && let Err(e) = tauri::Emitter::emit(
+            &app,
+            REVIEW_CHANGED_EVENT,
+            ReviewChanged {
+                room_id: emit_room.clone(),
+            },
+        )
+    {
+        tracing::warn!(room_id = emit_room, error = %e, "review: element-seen emit failed");
+    }
+    Ok(())
 }
 
 /// Every element thread on one entry HTML, resolved included — the

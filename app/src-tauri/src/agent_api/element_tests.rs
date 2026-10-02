@@ -243,6 +243,37 @@ fn the_anchors_own_source_beats_a_search_and_nothing_found_is_no_guess() {
     assert!(d.get("current_context").is_none());
 }
 
+fn ids_for(f: &Fx, file: &str) -> Vec<String> {
+    let args = ListArgs {
+        file: Some(file.into()),
+        ..ListArgs::default()
+    };
+    verbs::list_comments(&f.db, &caller(f), &args)
+        .unwrap()
+        .threads
+        .into_iter()
+        .map(|t| t.thread_id)
+        .collect()
+}
+
+#[test]
+fn a_file_filter_finds_element_threads_by_their_source_file() {
+    let f = fixture();
+    seed_element(
+        &f,
+        "e1",
+        &anchor(Some(json!({"file": APP, "line": 3})), None, "Welcome"),
+    );
+    seed_element(&f, "e2", &anchor(None, None, "no hint"));
+
+    assert_eq!(ids_for(&f, APP), vec!["e1"]);
+    assert_eq!(ids_for(&f, "design\\App.jsx"), vec!["e1"]);
+    assert_eq!(ids_for(&f, "design/Other.jsx"), Vec::<String>::new());
+    let mut by_entry = ids_for(&f, ENTRY);
+    by_entry.sort();
+    assert_eq!(by_entry, vec!["e1", "e2"]);
+}
+
 #[test]
 fn replies_and_addressing_reach_both_of_the_reviewers_read_paths() {
     let f = fixture();

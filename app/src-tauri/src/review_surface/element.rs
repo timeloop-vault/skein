@@ -58,11 +58,17 @@ pub struct ElementRect {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ElementSource {
     pub file: String,
     pub line: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column: Option<u32>,
+    /// The source line's text as served when the element was picked,
+    /// captured by the host, never by the webview; absent when the bytes
+    /// could not be vouched for or on threads created before #467.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_text: Option<String>,
 }
 
 /// The picker's evidence for one element (recon §3.1).
@@ -251,9 +257,46 @@ pub fn validate_anchor(a: ElementAnchor, file_path: &str) -> Result<ElementAncho
         tag: a.tag,
         text: clip(&a.text, MAX_TEXT_CHARS),
         attrs,
-        source: a.source,
+        // The webview is not trusted with the line text; the host
+        // captures it itself (`capture_source_line`).
+        source: a.source.map(|s| ElementSource {
+            line_text: None,
+            ..s
+        }),
         rect: a.rect,
     })
+}
+
+/// The text of `source.line` (1-based, terminator stripped), but only
+/// when the disk bytes are provably the bytes the design pane picked
+/// from: `served` must hold a digest for `source.file` that equals the
+/// digest of what is on disk now. `None` for anything else — unserved,
+/// changed since, too large, not UTF-8, no such line, or a blank one.
+///
+/// One narrow race is accepted: picked at version A, preview reloaded
+/// and served B before submit, so the line number is read against B. A
+/// wrong capture only ever mirrors to the text it holds, never to a
+/// guessed line.
+pub(super) fn capture_source_line(
+    root: &Path,
+    source: &ElementSource,
+    served: &HashMap<String, String>,
+) -> Option<String> {
+    let want = served.get(&source.file)?;
+    let full = resolve_under(root, &source.file).ok()?;
+    let mut bytes = Vec::new();
+    std::fs::File::open(full)
+        .ok()?
+        .take(MAX_SERVED + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_SERVED || digest_bytes(&bytes) != *want {
+        return None;
+    }
+    let text = std::str::from_utf8(&bytes).ok()?;
+    let line = text.split('\n').nth(source.line.checked_sub(1)? as usize)?;
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    (!line.trim().is_empty()).then(|| clip(line, MAX_TEXT_CHARS))
 }
 
 /// Check a report and return the file list worth stamping. A bad state,
@@ -487,6 +530,10 @@ pub(crate) fn element_threads_impl(
 /// is now: an edit landing between the load and this report then reads
 /// `unknown` instead of being stamped as the new content with the old
 /// state. Only a file never served falls back to disk.
+///
+/// Returns whether the placement materially changed: no previous report,
+/// or a different state, selector, rect or stamp. `seen_ms` alone does
+/// not count, so an identical re-report is quiet.
 pub(crate) fn seen_impl(
     db: &Database,
     room_id: &str,
@@ -494,15 +541,22 @@ pub(crate) fn seen_impl(
     thread_id: &str,
     seen: &SeenInput,
     served: &HashMap<String, String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let reported = validate_seen(seen)?;
     let thread = db
         .review_thread(thread_id)?
         .filter(|t| t.room_id == room_id)
         .ok_or("that thread no longer exists")?;
-    if thread.scope != thread_scope::ELEMENT || db.review_element_anchor(thread_id)?.is_none() {
+    let Some(anchor_row) = db.review_element_anchor(thread_id)? else {
+        return Err("only an element thread has a placement".into());
+    };
+    if thread.scope != thread_scope::ELEMENT {
         return Err("only an element thread has a placement".into());
     }
+    let previous: Option<StoredSeen> = anchor_row
+        .last_seen_json
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok());
     // The entry itself is always part of what the placement was
     // computed from, whether or not the pane listed it.
     let mut files: BTreeSet<String> = reported.into_iter().collect();
@@ -520,7 +574,12 @@ pub(crate) fn seen_impl(
     };
     let json = serde_json::to_string(&stored).map_err(|e| e.to_string())?;
     if db.set_review_element_last_seen(thread_id, &json, stored.seen_ms)? {
-        Ok(())
+        Ok(previous.is_none_or(|p| {
+            p.state != stored.state
+                || p.selector != stored.selector
+                || p.rect != stored.rect
+                || p.stamp != stored.stamp
+        }))
     } else {
         Err("that thread has no element anchor".into())
     }

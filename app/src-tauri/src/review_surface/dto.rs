@@ -56,6 +56,11 @@ pub struct ReviewFileDto {
     pub changed_since_viewed: bool,
     pub thread_count: usize,
     pub unresolved_count: usize,
+    /// Element threads whose anchor names this file as their JSX source
+    /// (#467). Mirrors of threads filed under another file, so they are
+    /// NOT part of `thread_count` / `unresolved_count`.
+    pub source_thread_count: usize,
+    pub source_unresolved_count: usize,
     /// Also has uncommitted changes pending review (#211). Only
     /// meaningful in `Scope::Branch`.
     pub has_pending: bool,
@@ -198,6 +203,11 @@ pub struct ThreadDto {
     /// Set on `element` threads only (#434).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub element: Option<ElementDto>,
+    /// This is an element thread mirrored into its JSX source file's view
+    /// (#467): the same thread as under its entry, placed by the source
+    /// line's text. Never counted twice; false everywhere else.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub via_source: bool,
     pub created_ms: i64,
     pub updated_ms: i64,
     pub comments: Vec<CommentDto>,
