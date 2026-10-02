@@ -29,6 +29,7 @@ use skein_review::Placement;
 use super::anchoring::{addressed_by_thread, apply_addressed, comments_by_thread, to_thread_dto};
 use super::dto::ThreadDto;
 use super::git::norm;
+use super::proposal::{apply_proposals, proposals_by_thread};
 use super::thread_scope;
 use crate::db::{Database, ReviewElementAnchorRow};
 use crate::design::{MAX_SERVED, resolve_under};
@@ -516,6 +517,7 @@ pub(crate) fn element_threads_impl(
         &element_rows_by_thread(db, room_id)?,
         root.to_str(),
     );
+    apply_proposals(&mut threads, &proposals_by_thread(db, room_id)?);
     Ok(threads)
 }
 

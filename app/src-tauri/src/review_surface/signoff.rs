@@ -315,6 +315,7 @@ mod tests {
                     }))
                     .unwrap(),
                 ),
+                proposal: None,
                 body: "bigger".into(),
             },
             &std::collections::HashMap::new(),

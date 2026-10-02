@@ -26,6 +26,7 @@ use super::anchoring::{PlaceCtx, apply_addressed, to_thread_dto};
 use super::dto::{AddressedDto, CommentDto, ReviewFileDto, ThreadDto};
 use super::element::{DigestCache, ElementAnchor, ElementSource, element_dto};
 use super::git::norm;
+use super::proposal::{Proposal, apply_proposals};
 use super::thread_scope;
 use crate::db::{ReviewElementAnchorRow, ReviewThreadRow};
 
@@ -141,6 +142,7 @@ pub(super) fn push_source_only_files(
 
 /// The mirrors that belong in `key`'s view, placed against the file as
 /// `ctx`'s scope sees it. Resolved ones are included, like any thread.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn mirror_threads(
     index: &SourceIndex,
     key: &str,
@@ -148,6 +150,7 @@ pub(super) fn mirror_threads(
     comments: &HashMap<String, Vec<CommentDto>>,
     addressed: &HashMap<String, AddressedDto>,
     elements: &HashMap<String, ReviewElementAnchorRow>,
+    proposals: &HashMap<String, Proposal>,
     cwd: Option<&str>,
 ) -> Vec<ThreadDto> {
     let Some(mirrors) = index.get(key) else {
@@ -179,6 +182,7 @@ pub(super) fn mirror_threads(
         })
         .collect();
     apply_addressed(&mut out, addressed);
+    apply_proposals(&mut out, proposals);
     out
 }
 

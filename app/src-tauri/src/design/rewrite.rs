@@ -6,10 +6,19 @@
 //! is deliberately NOT rewritten around: the picker may be blocked, and
 //! the pane detects that by the missing `ready` beacon instead.
 
-/// Inject `picker` and add `data-plugins` to Babel scripts.
-pub fn rewrite_html(src: &str, picker: &str) -> String {
+/// Inject `picker`, then each `(attribute, source)` of `extras` as its own
+/// script after it (in order, they read what the picker leaves), and add
+/// `data-plugins` to Babel scripts.
+pub fn rewrite_html(src: &str, picker: &str, extras: &[(&str, &str)]) -> String {
     let src = tag_babel_scripts(src);
-    let script = format!("<script data-skein-picker>{picker}</script>");
+    let mut script = format!("<script data-skein-picker>{picker}</script>");
+    for (attr, source) in extras {
+        script.push_str("<script ");
+        script.push_str(attr);
+        script.push('>');
+        script.push_str(source);
+        script.push_str("</script>");
+    }
     let lower = src.to_ascii_lowercase();
     let at = if let Some(i) = close_head(&lower) {
         i
@@ -199,7 +208,11 @@ mod tests {
 
     #[test]
     fn injects_before_closing_head() {
-        let out = rewrite_html("<html><head><title>x</title></head><body></body></html>", P);
+        let out = rewrite_html(
+            "<html><head><title>x</title></head><body></body></html>",
+            P,
+            &[],
+        );
         assert_eq!(
             out,
             format!("<html><head><title>x</title>{S}</head><body></body></html>")
@@ -208,27 +221,35 @@ mod tests {
 
     #[test]
     fn injects_before_uppercase_head() {
-        let out = rewrite_html("<HTML><HEAD></HEAD><BODY></BODY></HTML>", P);
+        let out = rewrite_html("<HTML><HEAD></HEAD><BODY></BODY></HTML>", P, &[]);
         assert_eq!(out, format!("<HTML><HEAD>{S}</HEAD><BODY></BODY></HTML>"));
     }
 
     #[test]
     fn falls_back_to_after_open_head_then_html_then_prepend() {
         assert_eq!(
-            rewrite_html("<head lang=\"a>b\"><p>", P),
+            rewrite_html("<head lang=\"a>b\"><p>", P, &[]),
             format!("<head lang=\"a>b\">{S}<p>")
         );
         assert_eq!(
-            rewrite_html("<html lang=en><body>", P),
+            rewrite_html("<html lang=en><body>", P, &[]),
             format!("<html lang=en>{S}<body>")
         );
-        assert_eq!(rewrite_html("<p>hi</p>", P), format!("{S}<p>hi</p>"));
+        assert_eq!(rewrite_html("<p>hi</p>", P, &[]), format!("{S}<p>hi</p>"));
+    }
+
+    #[test]
+    fn extra_scripts_follow_the_picker_in_order() {
+        assert_eq!(
+            rewrite_html("<head></head>", P, &[("data-a", "A"), ("data-b", "B")]),
+            format!("<head>{S}<script data-a>A</script><script data-b>B</script></head>")
+        );
     }
 
     #[test]
     fn header_element_is_not_head() {
         assert_eq!(
-            rewrite_html("<header>x</header>", P),
+            rewrite_html("<header>x</header>", P, &[]),
             format!("{S}<header>x</header>")
         );
     }
@@ -238,6 +259,7 @@ mod tests {
         let out = rewrite_html(
             "<script type=\"text/babel\" src=\"a.jsx\"></script><SCRIPT TYPE='text/babel'>x</SCRIPT>",
             P,
+            &[],
         );
         assert_eq!(
             out.matches("data-plugins=\"transform-react-jsx-source\"")
@@ -249,18 +271,18 @@ mod tests {
     #[test]
     fn headless_page_keeps_its_doctype_first() {
         assert_eq!(
-            rewrite_html("<!DOCTYPE html>\n<p>hi</p>", P),
+            rewrite_html("<!DOCTYPE html>\n<p>hi</p>", P, &[]),
             format!("<!DOCTYPE html>{S}\n<p>hi</p>")
         );
         assert_eq!(
-            rewrite_html("  <!-- a -->\n<!doctype html><p>", P),
+            rewrite_html("  <!-- a -->\n<!doctype html><p>", P, &[]),
             format!("  <!-- a -->\n<!doctype html>{S}<p>")
         );
-        assert_eq!(rewrite_html("<!-- open", P), format!("{S}<!-- open"));
+        assert_eq!(rewrite_html("<!-- open", P, &[]), format!("{S}<!-- open"));
     }
 
     fn plugins(src: &str) -> usize {
-        rewrite_html(src, P)
+        rewrite_html(src, P, &[])
             .matches("data-plugins=\"transform-react-jsx-source\"")
             .count()
     }
@@ -280,7 +302,7 @@ mod tests {
     #[test]
     fn existing_data_plugins_and_other_scripts_untouched() {
         let src = "<script type=\"text/babel\" data-plugins=\"mine\"></script><script src=\"a.js\"></script>";
-        let out = rewrite_html(src, P);
+        let out = rewrite_html(src, P, &[]);
         assert!(!out.contains("transform-react-jsx-source"));
         assert!(out.ends_with(src));
     }

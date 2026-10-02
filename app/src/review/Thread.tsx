@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ReviewComment, ReviewThread } from "./api.ts";
+import { ProposalNote } from "./ProposalNote.tsx";
 import { SourceNote } from "./SourceNote.tsx";
 import "./Thread.css";
 import "./element.css";
@@ -339,6 +340,7 @@ export const ThreadView = ({
 					<PlacementNote thread={thread} />
 					<SourceNote thread={thread} inline={inline} design={design} />
 					{!hideElementNote && !thread.viaSource && <ElementNote thread={thread} design={design} />}
+					<ProposalNote thread={thread} />
 					<AddressedNote thread={thread} />
 					{thread.comments.map((c) => (
 						<CommentBody

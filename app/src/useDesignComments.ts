@@ -7,8 +7,10 @@
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+	anchorFor,
 	buildLocateAnchors,
 	buildPins,
+	buildProposalItems,
 	type ElementThread,
 	pinNumbers,
 	placementSignature,
@@ -19,7 +21,7 @@ import {
 } from "./designComments.ts";
 import { subscribeDesignFocus, takeDesignFocus } from "./designFocus.ts";
 import type { Beacon, HostMessage } from "./designPreview.ts";
-import type { ElementAnchor, ElementDescriptor, Placement } from "./elementAnchor.ts";
+import type { ElementDescriptor, Placement } from "./elementAnchor.ts";
 import { addThread, fetchElementThreads, reportElementSeen } from "./review/api.ts";
 
 /** Re-asks for an unanswered thread: 400 ms doubling, 5 tries. */
@@ -141,6 +143,13 @@ export const useDesignComments = ({
 		post({ type: "pins", pins: buildPins(threads, placements) });
 	}, [threads, placements, readyCount, post]);
 
+	// Pending proposals are previewed in the page: re-sent whenever the
+	// threads change (an addressed or resolved one drops out).
+	useEffect(() => {
+		if (readyCount === 0) return;
+		post({ type: "proposals", items: buildProposalItems(threads) });
+	}, [threads, readyCount, post]);
+
 	// Highlight the selected thread's pin once it has one.
 	const selectedId = selected?.id;
 	const selectedTick = selected?.tick;
@@ -182,7 +191,7 @@ export const useDesignComments = ({
 
 	const submitDraft = (body: string) => {
 		if (!draft || entry === undefined) return;
-		const element: ElementAnchor = { ...draft, entry };
+		const element = anchorFor(draft, entry);
 		void act(async () => {
 			await addThread(roomId, cwd, {
 				scope: "element",
@@ -202,6 +211,7 @@ export const useDesignComments = ({
 		const current = threadsRef.current;
 		const next = placeThreads(current, b.results);
 		setPlacements(next);
+		post({ type: "proposals", items: buildProposalItems(current) });
 		const load = readyCountRef.current;
 		const writes = seenWrites(current, next, b.files, writtenRef.current, load);
 		if (writes.length === 0) return;

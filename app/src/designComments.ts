@@ -5,9 +5,11 @@
 // evidence to be shown as TEXT, never as markup.
 
 import type { HostMessage } from "./designPreview.ts";
+import type { Change } from "./designProposal.ts";
 import {
 	type AnchorState,
 	type ElementAnchor,
+	type ElementDescriptor,
 	type ElementRect,
 	type LocateResult,
 	matchElement,
@@ -51,6 +53,38 @@ export const buildLocateAnchors = (threads: readonly ElementThread[]): Anchors =
 		if (a.odId) out.odId = a.odId;
 		return [out];
 	});
+
+export interface ProposalItem {
+	id: string;
+	anchor: Anchors[number];
+	changes: Change[];
+}
+
+/** The proposals the iframe should preview: open, unaddressed element
+ *  threads that carry one. Addressed or resolved ones are left out, which
+ *  is how their overlay goes away. */
+export const buildProposalItems = (threads: readonly ElementThread[]): ProposalItem[] => {
+	const withProposal = new Set(threads.filter((t) => t.proposal && !t.addressed).map((t) => t.id));
+	return buildLocateAnchors(threads.filter((t) => withProposal.has(t.id))).flatMap((anchor) => {
+		const changes = threads.find((t) => t.id === anchor.id)?.proposal?.changes;
+		return changes ? [{ id: anchor.id, anchor, changes }] : [];
+	});
+};
+
+/** The anchor a new element thread stores: what the page reported, plus
+ *  the entry it was picked in. Shared by comments and proposals. */
+export const anchorFor = (element: ElementDescriptor, entry: string): ElementAnchor => ({
+	...element,
+	entry,
+});
+
+/** Side-list label for a proposal thread; a lost one still says so. */
+export const proposalLabel = (t: ElementThread, placementState: string): string => {
+	const n = t.proposal?.changes.length ?? 0;
+	if (t.addressed) return "proposal · addressed";
+	if (placementState === "lost") return "proposal · lost";
+	return `proposal · ${n} ${n === 1 ? "change" : "changes"}`;
+};
 
 export const placeThreads = (
 	threads: readonly ElementThread[],

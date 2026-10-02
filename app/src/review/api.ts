@@ -15,6 +15,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import type { Proposal } from "../designProposal.ts";
 import type { ElementAnchor, ElementRect } from "../elementAnchor.ts";
 import type { ReviewHunk } from "../liveContext/review.ts";
 
@@ -101,6 +102,8 @@ export interface ReviewThread {
 	/** An element thread shown in its JSX source file rather than its home
 	 *  (`filePath` is still the entry HTML). Same thread, same id. */
 	viaSource?: boolean;
+	/** A proposed edit (#436) the agent is asked to apply; element threads only. */
+	proposal?: Proposal;
 	createdMs: number;
 	updatedMs: number;
 	comments: ReviewComment[];
@@ -190,6 +193,8 @@ export interface NewThread {
 	body: string;
 	/** Required for `scope === "element"`. */
 	element?: ElementAnchor | undefined;
+	/** Only with `scope === "element"` (#436); the backend validates it. */
+	proposal?: Proposal | undefined;
 }
 
 export const fetchScope = (

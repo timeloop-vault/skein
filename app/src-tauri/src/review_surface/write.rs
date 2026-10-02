@@ -19,6 +19,7 @@ use super::anchoring::{comments_by_thread, side_of, to_thread_dto};
 use super::dto::{NewThread, ThreadDto};
 use super::element::{apply_element, capture_source_line, element_rows_by_thread, validate_anchor};
 use super::git::norm;
+use super::proposal::{apply_proposals, proposals_by_thread, summary, validate_proposal};
 use super::thread_scope;
 use crate::db::{Database, ReviewCommentRow, ReviewElementAnchorRow, ReviewThreadRow};
 use crate::review::{abs_path, now_ms, relative_key};
@@ -30,7 +31,7 @@ pub(super) fn add_thread_impl(
     input: &NewThread,
     served: &HashMap<String, String>,
 ) -> Result<ThreadDto, String> {
-    if input.body.trim().is_empty() {
+    if input.proposal.is_none() && input.body.trim().is_empty() {
         return Err("a comment needs a body".into());
     }
     let scope = match input.scope.as_str() {
@@ -48,6 +49,14 @@ pub(super) fn add_thread_impl(
         } else {
             "only an element comment carries an element".into()
         });
+    }
+    // #436: a proposal is accepted only here, at creation, so there is no
+    // thread id a later message could forge one onto.
+    if let Some(p) = &input.proposal {
+        if !is_element {
+            return Err("only an element comment carries a proposal".into());
+        }
+        validate_proposal(p)?;
     }
     let file_path = input
         .file_path
@@ -132,8 +141,14 @@ pub(super) fn add_thread_impl(
         created_ms: now,
         updated_ms: now,
     };
+    let proposal_json = input
+        .proposal
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| e.to_string())?;
     match &element {
-        Some(anchor) => db.insert_review_element_thread(
+        Some(anchor) => db.insert_review_element_thread_proposal(
             &row,
             &ReviewElementAnchorRow {
                 thread_id: thread_id.clone(),
@@ -143,6 +158,7 @@ pub(super) fn add_thread_impl(
                 last_seen_json: None,
                 updated_ms: now,
             },
+            proposal_json.as_deref(),
         )?,
         None => db.insert_review_thread(&row)?,
     }
@@ -153,7 +169,17 @@ pub(super) fn add_thread_impl(
         // v1 is human-only (D7). #213 is what starts writing `agent`.
         author_kind: "user".to_owned(),
         author_id: None,
-        body: input.body.clone(),
+        body: match &input.proposal {
+            Some(p) if input.body.trim().is_empty() => summary(p),
+            Some(p) => format!(
+                "{}
+
+{}",
+                summary(p),
+                input.body.trim()
+            ),
+            None => input.body.clone(),
+        },
         created_ms: now,
         updated_ms: now,
     })?;
@@ -172,6 +198,10 @@ pub(super) fn add_thread_impl(
             std::slice::from_mut(&mut dto),
             &element_rows_by_thread(db, room_id)?,
             Some(cwd),
+        );
+        apply_proposals(
+            std::slice::from_mut(&mut dto),
+            &proposals_by_thread(db, room_id)?,
         );
     }
     Ok(dto)

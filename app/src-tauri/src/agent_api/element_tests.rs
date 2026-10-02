@@ -119,6 +119,10 @@ fn anchor(source: Option<Value>, od_id: Option<&str>, text: &str) -> Value {
 /// What `add_thread_impl` stores for an element comment, minus the
 /// validation (the anchors here are already well-formed).
 fn seed_element(f: &Fx, id: &str, anchor: &Value) {
+    seed_element_with(f, id, anchor, None);
+}
+
+fn seed_element_with(f: &Fx, id: &str, anchor: &Value, proposal: Option<&str>) {
     let row = ReviewThreadRow {
         id: id.into(),
         room_id: "r1".into(),
@@ -134,7 +138,7 @@ fn seed_element(f: &Fx, id: &str, anchor: &Value) {
         created_ms: 1,
         updated_ms: 1,
     };
-    f.db.insert_review_element_thread(
+    f.db.insert_review_element_thread_proposal(
         &row,
         &ReviewElementAnchorRow {
             thread_id: id.into(),
@@ -144,6 +148,7 @@ fn seed_element(f: &Fx, id: &str, anchor: &Value) {
             last_seen_json: None,
             updated_ms: 1,
         },
+        proposal,
     )
     .unwrap();
     f.db.insert_review_comment(&ReviewCommentRow {
@@ -390,4 +395,34 @@ fn a_reanchored_report_is_still_a_guess_to_the_agent() {
         t["element"]["lastSeen"]["selector"],
         "#root > div:nth-of-type(1)"
     );
+}
+
+#[test]
+fn an_agent_gets_the_proposal_next_to_the_element() {
+    let f = fixture();
+    hero(&f);
+    let proposal = json!({"changes": [
+        {"kind": "style", "property": "padding-left", "from": "12px", "to": "16px", "token": "--space-4"},
+        {"kind": "offset", "dx": 4.0, "dy": 0.0},
+    ]});
+    seed_element_with(
+        &f,
+        "e2",
+        &anchor(None, Some("hero"), "Welcome aboard"),
+        Some(&proposal.to_string()),
+    );
+
+    let args = GetCommentArgs {
+        thread_id: "e2".into(),
+    };
+    let got = serde_json::to_value(verbs::get_comment(&f.db, &caller(&f), &args).unwrap()).unwrap();
+    assert_eq!(got["proposal"], proposal);
+    assert!(got["element"].is_object());
+
+    let out = verbs::list_comments(&f.db, &caller(&f), &ListArgs::default()).unwrap();
+    let by_id = |id: &str| {
+        serde_json::to_value(out.threads.iter().find(|t| t.thread_id == id).unwrap()).unwrap()
+    };
+    assert_eq!(by_id("e2")["proposal"], proposal);
+    assert!(by_id("e1").get("proposal").is_none());
 }

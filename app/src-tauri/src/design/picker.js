@@ -451,10 +451,19 @@
 		return nodes.length > 0 && nodes.every((n) => n.nodeType === 1 && n.hasAttribute(OVERLAY));
 	};
 	let domTimer = null;
+	let mo = null;
+	const settleHooks = [];
 	const domChanged = () => {
 		if (domTimer !== null) clearTimeout(domTimer);
 		domTimer = setTimeout(() => {
 			domTimer = null;
+			for (const h of settleHooks) {
+				try {
+					h();
+				} catch (_) {
+					// A hook must never stop the beacon.
+				}
+			}
 			if (lastPins && !document.documentElement.querySelector(`:scope > [${OVERLAY}="root"]`)) {
 				setPins(lastPins);
 			}
@@ -485,9 +494,10 @@
 		} catch (_) {
 			// No ResizeObserver.
 		}
-		new MutationObserver((list) => {
+		mo = new MutationObserver((list) => {
 			if (list.some((m) => !ownMutation(m))) domChanged();
-		}).observe(document, {
+		});
+		mo.observe(document, {
 			childList: true,
 			subtree: true,
 			characterData: true,
@@ -500,6 +510,30 @@
 	} else {
 		startObserving();
 	}
+
+	// ---- hand-over to editor.js (#436) -------------------------------------
+	// One-shot: editor.js runs right after this script and deletes it.
+	window.__skeinPickerApi = {
+		OVERLAY,
+		HOST,
+		post,
+		describe: (el) => describe(el),
+		locateOne: (a, all) => locateOne(a, all),
+		isOverlay,
+		root: ensureOverlay,
+		rectOf,
+		query: safeQuery,
+		// Drop pending mutation records so the editor's own writes never
+		// read as a page change (which would re-send proposals forever).
+		flush: () => {
+			try {
+				if (mo) mo.takeRecords();
+			} catch (_) {
+				// No observer yet.
+			}
+		},
+		onSettle: (fn) => settleHooks.push(fn),
+	};
 
 	// ---- host messages ---------------------------------------------------
 

@@ -91,7 +91,13 @@ impl Fx {
             last_seen_json: None,
             updated_ms: 1,
         };
-        self.db.insert_review_element_thread(&thread, &row).unwrap();
+        self.db
+            .insert_review_element_thread_proposal(
+                &thread,
+                &row,
+                Some(r#"{"changes":[{"kind":"offset","dx":1,"dy":1}]}"#),
+            )
+            .unwrap();
     }
 
     fn jsx_threads(&self, scope: Scope) -> Vec<super::super::dto::ThreadDto> {
@@ -127,6 +133,7 @@ fn a_mirror_is_placed_at_its_source_line_when_the_text_matches() {
     assert_eq!(ts.len(), 1);
     let t = &ts[0];
     assert!(t.via_source);
+    assert!(t.proposal.is_some());
     assert_eq!(
         (t.scope.as_str(), t.file_path.as_deref()),
         ("element", Some(ENTRY))

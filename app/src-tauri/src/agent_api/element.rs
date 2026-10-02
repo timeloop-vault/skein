@@ -67,6 +67,30 @@ pub(super) fn load(
     Ok(elements)
 }
 
+/// Element threads' stored proposals for the room (#436), if `threads`
+/// holds any. A row that no longer parses is logged and left out.
+pub(super) fn load_proposals(
+    db: &crate::db::Database,
+    caller: &Caller,
+    threads: &[ReviewThreadRow],
+) -> Result<BTreeMap<String, serde_json::Value>, VerbError> {
+    let mut out = BTreeMap::new();
+    if threads.iter().any(is_element) {
+        let rows = db
+            .review_element_proposals_for_room(&caller.room_id)
+            .map_err(super::verbs::internal)?;
+        for (thread_id, json) in rows {
+            match serde_json::from_str(&json) {
+                Ok(v) => {
+                    out.insert(thread_id, v);
+                }
+                Err(e) => tracing::warn!(thread_id, "unreadable stored proposal: {e}"),
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// A guess at the source of each element thread in `threads`, by thread
 /// id. One [`SourceIndex`] serves the whole call, so the tree is walked
 /// and each file read at most once however many threads there are.

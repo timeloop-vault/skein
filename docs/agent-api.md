@@ -144,6 +144,22 @@ pane's last report was `anchored` and its stamp still matches the files
 on disk; `reanchored` counts as outdated for the agent. Read the anchor,
 not a position.
 
+An `element` thread opened from the design pane's edit mode (#436) also
+carries a `proposal`: a structured change request, `{ "changes": [...] }`,
+one to 32 entries of three kinds. `{ "kind": "style", "property", "from",
+"to", "token"? }` is one CSS property (from a fixed allowlist: sizes,
+margins, paddings, gaps, colours, border-radius, font and spacing
+properties, opacity); `token`, when present, is a CSS custom property
+(`--space-4`) whose value equals `to`, so prefer it over the literal.
+`{ "kind": "offset", "dx", "dy" }` is a cumulative move in CSS px.
+`{ "kind": "text", "from", "to" }` is the element's text before and after.
+The thread's first comment is a readable summary of the same changes plus
+the reviewer's note. Skein never writes source for a proposal: you make
+the edit in the file `source` points at, reply if anything is unclear, and
+`mark_addressed`. The pane's "proposed" overlay disappears once the thread
+is addressed or resolved. A proposal exists only from the moment its
+thread is created, and is absent on every other thread.
+
 ### `get_comment`
 
 `{ thread_id }` — the thread plus the code it is about:

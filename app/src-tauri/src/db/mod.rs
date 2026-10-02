@@ -38,6 +38,7 @@ use rusqlite::Connection;
 
 mod agent_tokens;
 mod element_anchors;
+mod element_proposals;
 mod harness_log;
 mod mail;
 mod review_baselines;

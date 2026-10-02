@@ -17,6 +17,7 @@ pub(super) const ROOM_KEYED_TABLES: &[&str] = &[
     "review_settings",
     "review_addressed",
     "review_element_anchors",
+    "review_element_proposals",
     "agent_tokens",
     "review_signoff",
     "harness_messages",

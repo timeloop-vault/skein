@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use skein_review::Hunk;
 
 use super::element::{ElementAnchor, ElementDto};
+use super::proposal::Proposal;
 use crate::db::ReviewCommentRow;
 
 #[derive(Debug, Clone, Serialize)]
@@ -203,6 +204,9 @@ pub struct ThreadDto {
     /// Set on `element` threads only (#434).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub element: Option<ElementDto>,
+    /// The change request an element thread was opened with (#436).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<Proposal>,
     /// This is an element thread mirrored into its JSX source file's view
     /// (#467): the same thread as under its entry, placed by the source
     /// line's text. Never counted twice; false everywhere else.
@@ -257,5 +261,9 @@ pub struct NewThread {
     /// every other (#434).
     #[serde(default)]
     pub element: Option<ElementAnchor>,
+    /// A structured change request for the element (#436). Element scope
+    /// only; with one, `body` is an optional note.
+    #[serde(default)]
+    pub proposal: Option<Proposal>,
     pub body: String,
 }
