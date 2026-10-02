@@ -27,6 +27,25 @@
 	color: var(--fg-3);
 	border: 1px solid var(--bg-3);
 }
+.rv-proposal {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	font-size: 0.85em;
+	overflow-wrap: anywhere;
+}
+.rv-proposal-head {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+}
+.rv-proposal-tag {
+	border: 1px solid var(--bg-3);
+	border-radius: 3px;
+	padding: 0 4px;
+	color: var(--fg-2);
+	white-space: nowrap;
+}
 .rv-element .rv-linkbtn {
 	align-self: flex-start;
 }

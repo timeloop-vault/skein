@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-use super::{Database, element_anchors};
+use super::{Database, element_anchors, element_proposals};
 
 impl Database {
     /// Idempotent schema setup. Each table uses `IF NOT EXISTS`; new
@@ -279,6 +279,7 @@ impl Database {
         .map_err(|e| e.to_string())?;
 
         element_anchors::init_schema(conn)?;
+        element_proposals::init_schema(conn)?;
 
         // Issue #214 (epic #52 D9, as corrected): the reviewer's
         // sign-off. One row per room, because a room is one review

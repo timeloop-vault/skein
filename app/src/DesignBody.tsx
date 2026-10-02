@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DesignComments } from "./DesignComments.tsx";
+import { DesignEditPanel } from "./DesignEditPanel.tsx";
 import {
 	type Beacon,
 	type HostMessage,
@@ -15,6 +16,7 @@ import {
 	pushBeacon,
 } from "./designPreview.ts";
 import { useDesignComments } from "./useDesignComments.ts";
+import { useDesignEdit } from "./useDesignEdit.ts";
 import { useDesignPreview } from "./useDesignPreview.ts";
 import "./design.css";
 import "./FilesBody.css";
@@ -66,6 +68,8 @@ export const DesignBody = ({
 		readyCount,
 	});
 	const { setDraft, setSelected, relocate, onLocated, clearPlacements } = c;
+	const edit = useDesignEdit({ roomId, cwd, entry, post });
+	const { onBeacon: onEditBeacon, reset: resetEdit } = edit;
 
 	// One entry and none chosen: pick it and persist.
 	useEffect(() => {
@@ -84,6 +88,7 @@ export const DesignBody = ({
 		setNoReady(false);
 		readyRef.current = false;
 		setPicking(false);
+		resetEdit();
 		clearPlacements();
 		if (timerRef.current !== null) window.clearTimeout(timerRef.current);
 		timerRef.current = null;
@@ -101,14 +106,41 @@ export const DesignBody = ({
 		return () => window.removeEventListener("keydown", onKey);
 	}, [picking, post]);
 
+	// Likewise for edit mode before an element is chosen; once one is,
+	// Escape belongs to the frame (it cancels the edit in progress).
+	const { active: editActive, target: editTarget, stop: stopEdit } = edit;
+	useEffect(() => {
+		if (!editActive || editTarget !== null) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") stopEdit();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [editActive, editTarget, stopEdit]);
+
 	const togglePick = () => {
 		if (picking) {
 			setPicking(false);
 			post({ type: "pick-cancel" });
 		} else {
+			// Pick and edit are exclusive: leaving edit reverts its preview.
+			if (edit.active) edit.stop();
 			setPicking(true);
 			post({ type: "pick-start" });
 		}
+	};
+
+	const toggleEdit = () => {
+		if (edit.active) {
+			edit.stop();
+			return;
+		}
+		if (picking) {
+			setPicking(false);
+			post({ type: "pick-cancel" });
+		}
+		setDraft(null);
+		edit.start();
 	};
 
 	useEffect(
@@ -140,13 +172,19 @@ export const DesignBody = ({
 				setPicking(false);
 			} else if (b.type === "located") {
 				onLocated(b);
+			} else if (
+				b.type === "edit-picked" ||
+				b.type === "edit-change" ||
+				b.type === "edit-cancelled"
+			) {
+				onEditBeacon(b);
 			} else {
 				setBeacons((prev) => pushBeacon(prev, b));
 			}
 		};
 		window.addEventListener("message", onMessage);
 		return () => window.removeEventListener("message", onMessage);
-	}, [setDraft, relocate, onLocated]);
+	}, [setDraft, relocate, onLocated, onEditBeacon]);
 
 	const onFrameLoad = () => {
 		if (readyRef.current) return;
@@ -196,6 +234,16 @@ export const DesignBody = ({
 				>
 					Comment
 				</button>
+				<button
+					type="button"
+					className={`dp-comment-toggle${edit.active ? " on" : ""}`}
+					title="Pick an element to propose style, position or text edits (Esc cancels)"
+					aria-pressed={edit.active}
+					disabled={!ready || entry === undefined}
+					onClick={toggleEdit}
+				>
+					Edit
+				</button>
 				<span className="dp-status">{status}</span>
 			</div>
 			{error !== null && (
@@ -228,23 +276,37 @@ export const DesignBody = ({
 						src={url}
 						onLoad={onFrameLoad}
 					/>
-					{(c.draft !== null || c.threads.length > 0 || c.commentError !== null) && (
-						<DesignComments
-							roomId={roomId}
-							entry={entry}
-							ready={ready}
-							threads={c.threads}
-							placements={c.placements}
-							draft={c.draft}
-							selected={c.selected}
-							busy={c.busy}
-							commentError={c.commentError}
-							act={c.act}
-							onSelect={(id) => setSelected((s) => ({ id, tick: (s?.tick ?? 0) + 1 }))}
-							onSubmitDraft={c.submitDraft}
-							onCancelDraft={() => setDraft(null)}
+					{edit.target !== null && (
+						<DesignEditPanel
+							target={edit.target}
+							computed={edit.computed}
+							tokens={edit.tokens}
+							batch={edit.batch}
+							busy={edit.busy}
+							error={edit.error}
+							onSetProperty={edit.setProperty}
+							onPropose={(note) => void edit.propose(note)}
+							onDiscard={edit.stop}
 						/>
 					)}
+					{edit.target === null &&
+						(c.draft !== null || c.threads.length > 0 || c.commentError !== null) && (
+							<DesignComments
+								roomId={roomId}
+								entry={entry}
+								ready={ready}
+								threads={c.threads}
+								placements={c.placements}
+								draft={c.draft}
+								selected={c.selected}
+								busy={c.busy}
+								commentError={c.commentError}
+								act={c.act}
+								onSelect={(id) => setSelected((s) => ({ id, tick: (s?.tick ?? 0) + 1 }))}
+								onSubmitDraft={c.submitDraft}
+								onCancelDraft={() => setDraft(null)}
+							/>
+						)}
 				</div>
 			) : (
 				<div className="fp-empty" />

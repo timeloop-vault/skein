@@ -230,6 +230,7 @@ pub(super) fn to_thread_dto(
         addressed: None,
         // Stamped afterwards by `apply_element`.
         element: None,
+        proposal: None,
         via_source: false,
         created_ms: t.created_ms,
         updated_ms: t.updated_ms,

@@ -107,6 +107,11 @@ pub struct AgentThread {
     /// receives it (`anchor`, `lastSeen`, `state` — camelCase, verbatim).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub element: Option<serde_json::Value>,
+    /// The structured change request an element thread was opened with
+    /// (#436): `{changes: [{kind: "style"|"offset"|"text", ...}]}`. Skein
+    /// never applies it — the agent does, then marks the thread addressed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit_sha: Option<String>,
     /// Where the comment sits *now*, 1-based inclusive.

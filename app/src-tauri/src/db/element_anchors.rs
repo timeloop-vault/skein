@@ -3,7 +3,7 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::{Database, ReviewThreadRow};
+use super::{Database, ReviewThreadRow, element_proposals};
 
 /// #434: what an element-scoped thread is anchored to. A sibling
 /// table for the same reason as `review_addressed` — no
@@ -41,6 +41,7 @@ pub(super) fn delete_thread(conn: &Connection, thread_id: &str) -> Result<(), St
         params![thread_id],
     )
     .map_err(|e| e.to_string())?;
+    element_proposals::delete_thread(conn, thread_id)?;
     conn.execute(
         "DELETE FROM review_threads WHERE id = ?1",
         params![thread_id],
@@ -83,10 +84,22 @@ impl Database {
     /// Create an element thread and its anchor row together (#434): a
     /// thread with no anchor row would render as an element comment with
     /// nothing to point at, so either both exist or neither does.
+    #[cfg(test)]
     pub fn insert_review_element_thread(
         &self,
         t: &ReviewThreadRow,
         a: &ReviewElementAnchorRow,
+    ) -> Result<(), String> {
+        self.insert_review_element_thread_proposal(t, a, None)
+    }
+
+    /// [`Database::insert_review_element_thread`], plus the thread's
+    /// validated proposal JSON (#436) in the same transaction.
+    pub fn insert_review_element_thread_proposal(
+        &self,
+        t: &ReviewThreadRow,
+        a: &ReviewElementAnchorRow,
+        proposal_json: Option<&str>,
     ) -> Result<(), String> {
         let mut conn = self.conn.lock();
         let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -126,6 +139,9 @@ impl Database {
             ],
         )
         .map_err(|e| e.to_string())?;
+        if let Some(json) = proposal_json {
+            element_proposals::insert_in_tx(&tx, &a.thread_id, &a.room_id, json, t.created_ms)?;
+        }
         tx.commit().map_err(|e| e.to_string())
     }
 

@@ -5,6 +5,7 @@
 // `e.source === iframe.contentWindow`; this module checks the shape,
 // caps every string and never yields anything but plain text.
 
+import { type Change, type EditBeacon, parseEditBeacon } from "./designProposal";
 import type { ElementDescriptor, ElementRect, ElementSource, LocateResult } from "./elementAnchor";
 
 export const MAX_BEACON_TEXT = 500;
@@ -26,7 +27,8 @@ export type Beacon =
 			results: { id: string; found: LocateResult }[];
 			/** Worktree-relative paths of the files the page loaded. */
 			files: string[];
-	  };
+	  }
+	| EditBeacon;
 
 const MAX_ATTRS = 16;
 const MAX_ANCHORS = 100;
@@ -175,7 +177,18 @@ export type HostMessage =
 			anchors: { id: string; odId?: string; selector: string; tag: string; text: string }[];
 	  }
 	| { type: "pins"; pins: { n: number; state: string; rect: ElementRect }[] }
-	| { type: "highlight"; n: number };
+	| { type: "highlight"; n: number }
+	| { type: "edit-start" }
+	| { type: "edit-set"; property: string; value: string }
+	| { type: "edit-end"; revert: boolean }
+	| {
+			type: "proposals";
+			items: {
+				id: string;
+				anchor: { id: string; odId?: string; selector: string; tag: string; text: string };
+				changes: Change[];
+			}[];
+	  };
 
 /** Wrap a host message in the envelope the injected script checks. */
 export const hostMessage = (msg: HostMessage): HostMessage & { source: "skein-host"; v: 1 } => ({
@@ -214,6 +227,10 @@ export const parseBeacon = (data: unknown): Beacon | null => {
 			return { type: "dom-changed" };
 		case "located":
 			return parseLocated(d);
+		case "edit-picked":
+		case "edit-change":
+		case "edit-cancelled":
+			return parseEditBeacon(d, parseDescriptor);
 		default:
 			return null;
 	}

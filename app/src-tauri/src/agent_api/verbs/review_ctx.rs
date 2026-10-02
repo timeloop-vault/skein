@@ -57,6 +57,8 @@ pub(super) struct RoomCtx {
     pub(super) placed: BTreeMap<String, (Option<usize>, Option<usize>, bool)>,
     /// Element threads' anchor and state (#434).
     elements: BTreeMap<String, ElementDto>,
+    /// Element threads' proposals (#436), as stored.
+    proposals: BTreeMap<String, serde_json::Value>,
     /// Element threads' guessed source, by thread id (#435).
     sources: BTreeMap<String, SourceGuess>,
 }
@@ -116,6 +118,7 @@ impl RoomCtx {
         }
 
         let elements = element::load(db, caller, threads)?;
+        let proposals = element::load_proposals(db, caller, threads)?;
         let sources = element::locate_all(caller, threads, &elements);
 
         Ok(Self {
@@ -124,6 +127,7 @@ impl RoomCtx {
             labels,
             placed,
             elements,
+            proposals,
             sources,
         })
     }
@@ -147,6 +151,7 @@ impl RoomCtx {
             placement: view.as_ref().map(|v| v.placement),
             source: view.as_ref().and_then(|v| v.source.clone()),
             element: view.and_then(|v| v.json),
+            proposal: self.proposals.get(&t.id).cloned(),
             commit_sha: t.commit_sha.clone(),
             line_start,
             line_end,

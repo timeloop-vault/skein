@@ -55,6 +55,7 @@ mod dto;
 pub(crate) mod element;
 mod git;
 mod image;
+pub(crate) mod proposal;
 // `pub(crate)` for the agent API (#213): an agent asking "what is this
 // comment about" must get the same re-anchored thread and the same
 // hunks the pane renders, which means calling the same two functions

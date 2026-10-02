@@ -83,6 +83,7 @@ fn seed_row(db: &Database, table: &str, room_id: &str) {
              VALUES ('thread-' || ?1, ?1, NULL, 'h1', NULL, 1)"
         }
         "review_element_anchors" => element_anchors::SEED_SQL,
+        "review_element_proposals" => crate::db::element_proposals::SEED_SQL,
         "agent_tokens" => {
             "INSERT INTO agent_tokens (token, room_id, created_ms, revoked_ms) \
              VALUES ('token-' || ?1, ?1, 1, NULL)"

@@ -15,6 +15,11 @@ use super::PreviewState;
 use super::rewrite::rewrite_html;
 
 const PICKER: &str = include_str!("picker.js");
+/// Edit mode and proposal previews (#436), in dependency order: each reads
+/// what the script before it leaves on the picker's one-shot API object.
+const TOKENS: &str = include_str!("tokens.js");
+const EDITOR: &str = include_str!("editor.js");
+const PROPOSALS: &str = include_str!("proposals.js");
 
 /// Largest file the preview will serve.
 pub const MAX_SERVED: u64 = 32 * 1024 * 1024;
@@ -209,7 +214,16 @@ async fn serve_file(
     let ctype = content_type(&full);
     let body = if ctype.starts_with("text/html") {
         match String::from_utf8(bytes) {
-            Ok(src) => rewrite_html(&src, PICKER).into_bytes(),
+            Ok(src) => rewrite_html(
+                &src,
+                PICKER,
+                &[
+                    ("data-skein-tokens", TOKENS),
+                    ("data-skein-editor", EDITOR),
+                    ("data-skein-proposals", PROPOSALS),
+                ],
+            )
+            .into_bytes(),
             Err(e) => e.into_bytes(),
         }
     } else {
@@ -455,6 +469,10 @@ mod tests {
         assert_eq!(html.headers()["content-type"], "text/html; charset=utf-8");
         let body = html.text().await.unwrap();
         assert!(body.contains("data-skein-picker"));
+        assert!(body.contains("data-skein-tokens"));
+        assert!(body.contains("data-skein-editor"));
+        assert!(body.contains("data-skein-proposals"));
+        assert!(body.contains("__skeinPickerApi"));
         assert!(body.contains("data-plugins=\"transform-react-jsx-source\""));
     }
 }

@@ -227,6 +227,7 @@ impl Fixture {
             line_end: None,
             anchor_lines: Vec::new(),
             element,
+            proposal: None,
             body: "make it bigger".into(),
         }
     }
@@ -683,4 +684,112 @@ fn an_anchor_stored_without_line_text_still_parses() {
         "rect":{"x":0,"y":0,"w":1,"h":1}}"##;
     let a: ElementAnchor = serde_json::from_str(json).unwrap();
     assert_eq!(a.source.unwrap().line_text, None);
+}
+
+fn proposal_of(changes: Vec<super::super::proposal::Change>) -> super::super::proposal::Proposal {
+    super::super::proposal::Proposal { changes }
+}
+
+fn padding(from: &str, to: &str) -> super::super::proposal::Change {
+    super::super::proposal::Change::Style {
+        property: "padding-left".into(),
+        from: from.into(),
+        to: to.into(),
+        token: Some("--space-4".into()),
+    }
+}
+
+fn with_proposal(
+    p: super::super::proposal::Proposal,
+    body: &str,
+    scope: &str,
+    element: Option<ElementAnchor>,
+) -> NewThread {
+    NewThread {
+        proposal: Some(p),
+        body: body.into(),
+        ..Fixture::new_thread(scope, element)
+    }
+}
+
+#[test]
+fn a_proposal_is_stored_and_writes_the_first_comment() {
+    let f = Fixture::new();
+    let p = proposal_of(vec![padding("12px", "16px")]);
+    let input = with_proposal(p.clone(), "  tighter please ", "element", Some(anchor()));
+    let dto = add_thread_impl(&f.db, "r1", f.cwd(), &input).unwrap();
+
+    assert_eq!(dto.proposal.as_ref(), Some(&p));
+    assert_eq!(
+        dto.comments[0].body,
+        "Proposed edit:\n- padding-left 12px → 16px (token --space-4)\n\ntighter please"
+    );
+    let stored = f.db.review_element_proposal(&dto.id).unwrap().unwrap();
+    assert_eq!(
+        serde_json::from_str::<super::super::proposal::Proposal>(&stored).unwrap(),
+        p
+    );
+
+    // An empty note is allowed with a proposal, and adds no suffix.
+    let input = with_proposal(p, "  ", "element", Some(anchor()));
+    let dto = add_thread_impl(&f.db, "r1", f.cwd(), &input).unwrap();
+    assert_eq!(
+        dto.comments[0].body,
+        "Proposed edit:\n- padding-left 12px → 16px (token --space-4)"
+    );
+}
+
+#[test]
+fn a_proposal_off_the_element_scope_is_refused() {
+    let f = Fixture::new();
+    let p = proposal_of(vec![padding("12px", "16px")]);
+    for (scope, element) in [("file", None), ("line", None), ("file", Some(anchor()))] {
+        let input = with_proposal(p.clone(), "x", scope, element);
+        assert!(
+            add_thread_impl(&f.db, "r1", f.cwd(), &input).is_err(),
+            "{scope}"
+        );
+    }
+    assert_eq!(f.db.review_threads_for_room("r1").unwrap().len(), 0);
+}
+
+#[test]
+fn an_invalid_proposal_leaves_no_thread() {
+    use super::super::proposal::Change;
+    let f = Fixture::new();
+    let bad = [
+        proposal_of(vec![]),
+        proposal_of(vec![Change::Style {
+            property: "z-index".into(),
+            from: "1".into(),
+            to: "2".into(),
+            token: None,
+        }]),
+        proposal_of(vec![Change::Text {
+            from: "a".into(),
+            to: "b".repeat(2001),
+        }]),
+    ];
+    for p in bad {
+        let input = with_proposal(p, "x", "element", Some(anchor()));
+        assert!(add_thread_impl(&f.db, "r1", f.cwd(), &input).is_err());
+    }
+    assert_eq!(f.db.review_threads_for_room("r1").unwrap().len(), 0);
+    assert_eq!(
+        f.db.review_element_proposals_for_room("r1").unwrap().len(),
+        0
+    );
+}
+
+#[test]
+fn the_pane_fetch_carries_the_proposal() {
+    let f = Fixture::new();
+    let p = proposal_of(vec![padding("12px", "16px")]);
+    let input = with_proposal(p.clone(), "", "element", Some(anchor()));
+    let dto = add_thread_impl(&f.db, "r1", f.cwd(), &input).unwrap();
+    f.add_element();
+    let threads = element_threads_impl(&f.db, "r1", f.tmp.path(), "proto/index.html").unwrap();
+    let got = threads.iter().find(|t| t.id == dto.id).unwrap();
+    assert_eq!(got.proposal.as_ref(), Some(&p));
+    assert_eq!(threads.iter().filter(|t| t.proposal.is_some()).count(), 1);
 }

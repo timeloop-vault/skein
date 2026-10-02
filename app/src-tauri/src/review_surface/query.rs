@@ -24,6 +24,7 @@ use super::git::{
     Range, additions, deletions, file_hash, norm, resolve_range, scope_diffs, status_str,
     to_review_hunk,
 };
+use super::proposal::{Proposal, apply_proposals, proposals_by_thread};
 use super::source_view::{
     SourceIndex, apply_source_counts, index_sources, mirror_threads, push_source_only_files,
     source_counts,
@@ -344,6 +345,7 @@ pub(crate) struct ScopeFiles {
     addressed: HashMap<String, AddressedDto>,
     /// Anchor rows of the room's element threads (#434).
     elements: HashMap<String, ReviewElementAnchorRow>,
+    proposals: HashMap<String, Proposal>,
     /// Element threads by the JSX source file they also appear in (#467).
     sources: SourceIndex,
     repo: Option<Repo>,
@@ -387,6 +389,7 @@ impl ScopeFiles {
         let comments = comments_by_thread(db, room_id)?;
         let addressed = addressed_by_thread(db, room_id)?;
         let elements = element_rows_by_thread(db, room_id)?;
+        let proposals = proposals_by_thread(db, room_id)?;
         let mut threads_by_file: HashMap<String, Vec<ReviewThreadRow>> = HashMap::new();
         let all_threads = db.review_threads_for_room(room_id)?;
         let sources = index_sources(&all_threads, &elements);
@@ -415,6 +418,7 @@ impl ScopeFiles {
                 threads_by_file,
                 addressed,
                 elements,
+                proposals,
                 sources,
                 repo,
                 range: None,
@@ -440,6 +444,7 @@ impl ScopeFiles {
             threads_by_file,
             addressed,
             elements,
+            proposals,
             sources,
             repo,
             range: Some(range),
@@ -457,6 +462,7 @@ impl ScopeFiles {
             &self.comments,
             &self.addressed,
             &self.elements,
+            &self.proposals,
             Some(&self.cwd),
         )
     }
@@ -473,6 +479,7 @@ impl ScopeFiles {
             let mut threads = place_threads(db, &ctx, key, file_threads, &self.comments);
             apply_addressed(&mut threads, &self.addressed);
             apply_element(&mut threads, &self.elements, Some(&self.cwd));
+            apply_proposals(&mut threads, &self.proposals);
             threads.extend(self.mirrors(&ctx, key));
             return Ok(match found {
                 Some(p) => FileDetailDto {
@@ -526,6 +533,7 @@ impl ScopeFiles {
         let mut threads = place_threads(db, &ctx, key, file_threads, &self.comments);
         apply_addressed(&mut threads, &self.addressed);
         apply_element(&mut threads, &self.elements, Some(&self.cwd));
+        apply_proposals(&mut threads, &self.proposals);
         threads.extend(self.mirrors(&ctx, key));
 
         let hash = file_hash(

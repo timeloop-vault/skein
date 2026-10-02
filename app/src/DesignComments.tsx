@@ -3,7 +3,13 @@
 // string here came from the page or the comment author and is rendered
 // as text.
 
-import { displayState, type ElementThread, elementSummary, sourceLabel } from "./designComments.ts";
+import {
+	displayState,
+	type ElementThread,
+	elementSummary,
+	proposalLabel,
+	sourceLabel,
+} from "./designComments.ts";
 import type { ElementDescriptor, Placement } from "./elementAnchor.ts";
 import {
 	deleteComment,
@@ -49,6 +55,9 @@ const ElementThreadItem = ({
 			<button type="button" className="dp-comment-head" onClick={onSelect}>
 				<span className="dp-comment-n">{n}</span>
 				<span className={`dp-comment-state ${state}`}>{state}</span>
+				{thread.proposal && (
+					<span className="dp-comment-state proposal">{proposalLabel(thread, state)}</span>
+				)}
 				{a && (
 					<span className="dp-comment-el" title={elementSummary(a)}>
 						{elementSummary(a)}

@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
 	buildLocateAnchors,
 	buildPins,
+	buildProposalItems,
 	displayState,
 	type ElementThread,
 	placementSignature,
 	placeThreads,
+	proposalLabel,
 	seenWrites,
 	unplaced,
 	type WrittenSeen,
@@ -152,5 +154,39 @@ describe("badge and unanswered threads", () => {
 
 	it("lists open threads with no placement", () => {
 		expect(unplaced([a, b], live).map((t) => t.id)).toEqual(["b"]);
+	});
+});
+
+describe("proposals", () => {
+	const proposal = { changes: [{ kind: "offset" as const, dx: 1, dy: 2 }] };
+	const withProposal = (id: string, over: Partial<ElementThread> = {}) =>
+		thread(id, { proposal, ...over });
+
+	it("sends open, unaddressed proposal threads with their anchor", () => {
+		const items = buildProposalItems([
+			withProposal("a"),
+			withProposal("b", { resolvedMs: 1 }),
+			withProposal("c", { addressed: { by: "x", addressedMs: 1 } }),
+			thread("d"),
+		]);
+		expect(items).toEqual([
+			{
+				id: "a",
+				anchor: { id: "a", selector: "main > h1", tag: "h1", text: "Hello" },
+				changes: proposal.changes,
+			},
+		]);
+	});
+
+	it("labels by state", () => {
+		const two = withProposal("a", {
+			proposal: { changes: [proposal.changes[0], proposal.changes[0]] as never },
+		});
+		expect(proposalLabel(two, "anchored")).toBe("proposal · 2 changes");
+		expect(proposalLabel(withProposal("a"), "anchored")).toBe("proposal · 1 change");
+		expect(proposalLabel(withProposal("a"), "lost")).toBe("proposal · lost");
+		expect(
+			proposalLabel(withProposal("a", { addressed: { by: "x", addressedMs: 1 } }), "lost"),
+		).toBe("proposal · addressed");
 	});
 });
