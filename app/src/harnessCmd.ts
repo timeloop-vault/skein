@@ -97,13 +97,31 @@ export const cmdForKind = (
  *    1. harness.sessionId set by phase 2a (Claude pre-allocate).
  *    2. harness.sessionId set by phase 2b (opencode capture-after-spawn).
  *    3. None — legacy harness created before chapter 5, or capture
- *       timed out. We fall back to chapter 2 phase 5a's behaviour:
- *       Claude shows its picker, opencode resumes most-recent-in-cwd. */
-export const resumeCmd = (h: Harness, opencodePort?: number): string[] => {
+ *       timed out. Claude starts a FRESH session (`--session-id <new
+ *       uuid>`, #486) rather than bare `--resume` (which opens its
+ *       picker) or `--continue` (which could latch onto another
+ *       harness's conversation in the same worktree). opencode keeps
+ *       resuming most-recent-in-cwd (`--continue`).
+ *
+ *  Case 3 for Claude mints an id this function CANNOT persist: it
+ *  returns only an argv. Any caller that needs telemetry or the next
+ *  resume to work must use `resumeHarness`, which writes the id back. */
+export const resumeCmd = (h: Harness, opencodePort?: number): string[] =>
+	resumeHarness(h, opencodePort).cmd ?? [];
+
+const hasSessionId = (h: Harness): boolean => (h.sessionId ?? "").trim() !== "";
+
+/** `resumeCmd`, but returning the whole harness so a session id minted
+ *  here (Claude with none stored, #486) lands on the record. */
+export const resumeHarness = (
+	h: Harness,
+	opencodePort?: number,
+	mintSessionId: () => string = () => crypto.randomUUID(),
+): Harness => {
 	const cmd = h.cmd ?? [];
 	// Capability gate first (#184): kinds without a resume concept
 	// (copilot, shell, files) pass through untouched.
-	if (!HARNESS_KINDS[h.kind].capabilities.resume) return cmd;
+	if (!HARNESS_KINDS[h.kind].capabilities.resume) return { ...h, cmd };
 	// Only rebuild argvs Skein still owns. The app has exactly one
 	// cmd-mutation path — Enter-for-shell after a child exits
 	// (LiveTerminal.tsx), which replaces the whole argv with the user's
@@ -111,17 +129,20 @@ export const resumeCmd = (h: Harness, opencodePort?: number): string[] => {
 	// old argv-length matching it does not care how many flags Skein
 	// adds. A shell-swapped harness keeps its shell; rebuilding it into
 	// `claude --resume` would resurrect a harness the user retired.
-	if (cmd[0] !== HARNESS_KINDS[h.kind].program) return cmd;
+	if (cmd[0] !== HARNESS_KINDS[h.kind].program) return { ...h, cmd };
 	switch (h.kind) {
 		case "claude": {
+			if (!hasSessionId(h)) {
+				const id = mintSessionId();
+				return { ...h, sessionId: id, cmd: withAgent(["claude", "--session-id", id], h.agent) };
+			}
 			// #247: the agent is re-passed, not left to the session.
 			// `claude --resume <sid>` with no flag restores whatever agent
 			// the conversation *started* as — so dropping it here would
 			// make the record and the process disagree the first time the
 			// user changes a harness's agent, silently and permanently.
 			// Re-passing overrides cleanly (measured on #219).
-			const args = h.sessionId ? ["claude", "--resume", h.sessionId] : ["claude", "--resume"];
-			return withAgent(args, h.agent);
+			return { ...h, cmd: withAgent(["claude", "--resume", h.sessionId as string], h.agent) };
 		}
 		case "opencode": {
 			// The port from sqlite is dead — the previous Skein run
@@ -133,10 +154,10 @@ export const resumeCmd = (h: Harness, opencodePort?: number): string[] => {
 			}
 			if (h.sessionId) args.push("--session", h.sessionId);
 			else args.push("--continue");
-			return withAgent(args, h.agent);
+			return { ...h, cmd: withAgent(args, h.agent) };
 		}
 		default:
-			return cmd;
+			return { ...h, cmd };
 	}
 };
 
@@ -146,7 +167,7 @@ export const resumeCmd = (h: Harness, opencodePort?: number): string[] => {
  *  become an empty argv, or HarnessBody would try to spawn it. */
 export const withResumeCmds = (room: Room, ports: ReadonlyMap<string, number>): Room => ({
 	...room,
-	harnesses: room.harnesses.map((h) => (h.cmd ? { ...h, cmd: resumeCmd(h, ports.get(h.id)) } : h)),
+	harnesses: room.harnesses.map((h) => (h.cmd ? resumeHarness(h, ports.get(h.id)) : h)),
 });
 
 /** Un-archive a room: drop the `archived` stamp and put every harness
