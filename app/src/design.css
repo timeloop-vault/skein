@@ -166,3 +166,36 @@
 .dp-comment-toggle.on {
 	background: var(--bg-2, #333);
 }
+
+.dp-edit-prop input,
+.dp-edit textarea {
+	background: var(--bg-0);
+	color: var(--fg-0);
+	border: 1px solid var(--line-strong);
+	border-radius: 3px;
+	padding: 2px 6px;
+}
+.dp-edit-prop input:focus,
+.dp-edit textarea:focus {
+	outline: 1px solid var(--accent);
+	border-color: var(--accent);
+}
+.dp-edit-actions button {
+	background: var(--bg-3);
+	color: var(--fg-1);
+	border: 1px solid var(--line-strong);
+	border-radius: 3px;
+	font-family: var(--sk-mono);
+	font-size: 0.85em;
+	padding: 2px 8px;
+	cursor: pointer;
+}
+.dp-edit-actions button:first-child:not(:disabled) {
+	background: var(--accent);
+	color: var(--bg-0);
+	border-color: var(--accent);
+}
+.dp-edit-actions button:disabled {
+	opacity: 0.45;
+	cursor: default;
+}

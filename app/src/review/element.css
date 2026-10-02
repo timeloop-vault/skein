@@ -46,11 +46,6 @@
 	color: var(--fg-2);
 	white-space: nowrap;
 }
-.rv-proposal-changes {
-	margin: 0;
-	padding-left: 16px;
-	font-family: var(--mono, monospace);
-}
 .rv-element .rv-linkbtn {
 	align-self: flex-start;
 }
