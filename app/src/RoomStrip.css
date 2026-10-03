@@ -118,8 +118,8 @@
 .sk-tab.active .sk-tab-close {
 	opacity: 0.7;
 }
-.sk-tab-close:hover {
-	opacity: 1 !important;
+.sk-tab .sk-tab-close:hover {
+	opacity: 1;
 	color: var(--fg-0);
 	background: var(--bg-3);
 }
@@ -181,9 +181,6 @@
 	flex: 0 0 calc(var(--cfs, 12px) * 3.4);
 	overflow: hidden;
 }
-.sk-grouprow .sk-tab-newbtn {
-	height: calc(var(--cfs, 12px) * 3.4);
-}
 .sk-tab-placeholder {
 	opacity: 0.55;
 }
@@ -214,6 +211,9 @@
 	border-left: 1px solid var(--line);
 	margin-left: 2px;
 	cursor: pointer;
+}
+.sk-grouprow .sk-tab-newbtn {
+	height: calc(var(--cfs, 12px) * 3.4);
 }
 .sk-tab-newbtn:hover {
 	color: var(--fg-0);

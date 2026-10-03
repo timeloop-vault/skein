@@ -29,15 +29,15 @@
 /* The two deliberate size exceptions, by context (not magic number):
    the small harness glyphs under a room tab, and the big chip in the
    harness pickers (add-harness picker + new-room kind cards). */
-.sk-tab .row-2 .h-chip {
-	/* compact summary glyphs — smaller than a full chip but still track
-	   the chrome font (≈10px at the 12pt default). #137 */
-	--chip: calc(var(--cfs, 12px) * 0.83);
-}
 .sk-harness-card .h-chip,
 .sk-radio-card .h-chip {
 	/* big picker chips (≈18px at 12pt). #137 */
 	--chip: calc(var(--cfs, 12px) * 1.5);
+}
+.sk-tab .row-2 .h-chip {
+	/* compact summary glyphs — smaller than a full chip but still track
+	   the chrome font (≈10px at the 12pt default). #137 */
+	--chip: calc(var(--cfs, 12px) * 0.83);
 }
 .h-claude {
 	background: #c96442;

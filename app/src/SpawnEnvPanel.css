@@ -72,10 +72,6 @@
 .sk-env-path-row + .sk-env-path-row {
 	border-top: 1px solid var(--line);
 }
-.sk-env-path-row.sk-env-missing .sk-env-path-entry {
-	color: var(--fg-3);
-	text-decoration: line-through;
-}
 .sk-env-badge {
 	flex: 0 0 auto;
 	min-width: 62px;
@@ -96,6 +92,10 @@
 	color: var(--fg-0);
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+.sk-env-path-row.sk-env-missing .sk-env-path-entry {
+	color: var(--fg-3);
+	text-decoration: line-through;
 }
 .sk-env-note {
 	color: var(--fg-2);
