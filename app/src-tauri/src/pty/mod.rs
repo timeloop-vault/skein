@@ -42,6 +42,7 @@ mod env;
 mod output;
 mod preview;
 mod probe;
+pub(crate) mod procscan;
 
 use env::apply_env;
 use output::{COALESCE_BYTE_CAP, COALESCE_WINDOW, run_coalescer, spawn_pty_writer};
@@ -110,6 +111,8 @@ struct Pty {
     master: Box<dyn MasterPty + Send>,
     writer_tx: mpsc::Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    /// The child's OS pid, kept so #517 can scan its descendants.
+    pid: Option<u32>,
 }
 
 /// One spawn's inputs. A struct rather than six positional parameters
@@ -294,6 +297,7 @@ impl PtyManager {
             PtyError::from_err(e)
         })?;
         let killer = child.clone_killer();
+        let pid = child.process_id();
 
         // Drop the slave handle so EOF reaches the read end correctly
         // when the child exits *and* the master is closed. (On Windows
@@ -439,6 +443,7 @@ impl PtyManager {
             master: pair.master,
             writer_tx,
             killer,
+            pid,
         };
         self.inner.lock().insert(id, pty);
         Ok(injected)
@@ -472,6 +477,11 @@ impl PtyManager {
             })
             .map_err(PtyError::from_err)?;
         Ok(())
+    }
+
+    /// The PTY child's OS pid, if the PTY exists and the OS reported one.
+    pub fn pid(&self, id: &str) -> Option<u32> {
+        self.inner.lock().get(id).and_then(|p| p.pid)
     }
 
     /// Best-effort: if the child has already exited, this is a no-op.

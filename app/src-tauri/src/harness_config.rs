@@ -314,6 +314,17 @@ pub(crate) fn injection_for(
                 ],
             };
         }
+        // Likewise opencode's (#517): its injection is already purely
+        // environmental, so the shell gets the same `OPENCODE_CONFIG`.
+        if kind == HarnessKind::Opencode
+            && settings.inject_opencode_config
+            && let Some(file) = config.opencode_config.as_ref()
+        {
+            return Injection {
+                args: Vec::new(),
+                env: vec![(OPENCODE_CONFIG_VAR.to_owned(), file.display().to_string())],
+            };
+        }
         return Injection::default();
     }
     match kind {
@@ -589,10 +600,49 @@ mod tests {
     }
 
     #[test]
-    fn an_opencode_post_exit_shell_gets_nothing() {
+    fn an_opencode_post_exit_shell_gets_opencode_config() {
         let (_tmp, config) = bundle();
         let injection = injection_for(
             HarnessKind::Opencode,
+            "zsh",
+            Some(&config),
+            &SpawnSettings::default(),
+            Some(&identity()),
+        );
+        assert_eq!(injection.args, Vec::<String>::new());
+        assert_eq!(injection.env.len(), 1);
+        assert_eq!(injection.env[0].0, OPENCODE_CONFIG_VAR);
+        let off = SpawnSettings {
+            inject_opencode_config: false,
+            ..SpawnSettings::default()
+        };
+        assert!(
+            injection_for(
+                HarnessKind::Opencode,
+                "zsh",
+                Some(&config),
+                &off,
+                Some(&identity())
+            )
+            .is_empty()
+        );
+        assert!(
+            injection_for(
+                HarnessKind::Opencode,
+                "zsh",
+                Some(&config),
+                &SpawnSettings::default(),
+                None
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_non_opencode_shell_gets_no_opencode_config() {
+        let (_tmp, config) = bundle();
+        let injection = injection_for(
+            HarnessKind::Byoh,
             "zsh",
             Some(&config),
             &SpawnSettings::default(),

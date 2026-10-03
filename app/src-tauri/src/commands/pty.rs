@@ -150,6 +150,40 @@ pub(crate) fn pty_kill(id: String, manager: tauri::State<'_, PtyManager>) {
     manager.kill(&id);
 }
 
+/// Wire shape for `pty_scan_opencode` (#517).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OpencodeScanDto {
+    pid: u32,
+    session_id: Option<String>,
+    port: Option<u16>,
+    port_confirmed: bool,
+    continue_last: bool,
+}
+
+/// Look for an opencode TUI among the descendants of one PTY's child and
+/// report the session id and port from its argv (#517). Unknown PTY, or
+/// none found, is `Ok(None)`. No caching: the frontend decides when to ask.
+/// Async because the process scan takes tens of milliseconds.
+#[tauri::command]
+pub(crate) async fn pty_scan_opencode(
+    id: String,
+    app: tauri::AppHandle,
+) -> Result<Option<OpencodeScanDto>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let pid = app.state::<PtyManager>().pid(&id)?;
+        crate::pty::procscan::scan_opencode(pid).map(|f| OpencodeScanDto {
+            pid: f.pid,
+            session_id: f.session_id,
+            port: f.port,
+            port_confirmed: f.port_confirmed,
+            continue_last: f.continue_last,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Allocate a free TCP port on `127.0.0.1` for opencode's embedded
 /// HTTP server. Epic #50 L2c-2.
 ///

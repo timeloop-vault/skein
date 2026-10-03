@@ -1013,7 +1013,9 @@ and the project's, so your providers and credentials survive and a
 repo's own `opencode.json` still wins. **Settings → Shell &
 environment** shows exactly what is injected and can switch either off
 — turning the opencode one off is how you reclaim `OPENCODE_CONFIG`
-for a config file of your own.
+for a config file of your own. The shell Skein leaves behind after
+opencode exits gets `OPENCODE_CONFIG` as well, so an `opencode` typed
+there sees the review tools too.
 
 The Claude Code plugin also carries a `skein-review` skill describing
 the review loop, and a `skein-mail` skill covering the mailbox and
