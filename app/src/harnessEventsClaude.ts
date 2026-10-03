@@ -125,6 +125,10 @@ export function attachClaudeEvents(
 	roomId: string,
 	sessionId: string,
 	cwd: string,
+	// #336: true when the PTY was spawned just now, so a transcript that
+	// stops mid-turn belongs to a dead process and Rust replays it as
+	// `awaiting_prompt`. False for a re-point under a running process.
+	freshProcess = false,
 ): () => void {
 	const channel = new Channel<ClaudeEvent>();
 	let closed = false;
@@ -165,6 +169,7 @@ export function attachClaudeEvents(
 		roomId,
 		sessionId,
 		cwd,
+		freshProcess,
 		onEvent: channel,
 	}).catch((err: unknown) => {
 		const msg = err instanceof Error ? err.message : String(err);

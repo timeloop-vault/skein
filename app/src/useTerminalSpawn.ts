@@ -382,7 +382,9 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		if (typeof sessionId !== "string" || sessionId === current.sessionId) return;
 		current.detach();
 		claudeAdapterRef.current = {
-			detach: attachClaudeEvents(harnessId, roomId, sessionId, cwd),
+			// #336: the process has lived across this re-point; a long tool
+			// call may be genuinely live, so no fresh-process replay.
+			detach: attachClaudeEvents(harnessId, roomId, sessionId, cwd, false),
 			sessionId,
 		};
 	}, [sessionId, harnessId, roomId, cwd, claudeAdapterRef]);
