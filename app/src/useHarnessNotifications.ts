@@ -36,6 +36,8 @@ export function useHarnessNotifications(
 	notifyToast: boolean,
 	notifyOs: boolean,
 	replaceHarnessSessionId: (targetRoomId: string, harnessId: string, sessionId: string) => void,
+	setHarnessShellClaim: (targetRoomId: string, harnessId: string, sessionId: string) => void,
+	clearHarnessShellClaim: (targetRoomId: string, harnessId: string) => void,
 	jumpToHarness: (roomId: string, harnessId: string) => void,
 ) {
 	// L5c — in-app toasts. Ephemeral (no DB mirror) since they
@@ -93,7 +95,12 @@ export function useHarnessNotifications(
 		windowFocusedRef,
 		notificationPermissionRef,
 	);
-	useHarnessHookEvents(roomsRef, replaceHarnessSessionId);
+	useHarnessHookEvents(
+		roomsRef,
+		replaceHarnessSessionId,
+		setHarnessShellClaim,
+		clearHarnessShellClaim,
+	);
 	useTransitionNotifications(
 		roomsRef,
 		activeRoomIdRef,

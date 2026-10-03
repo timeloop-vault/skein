@@ -24,9 +24,19 @@
 //     lost, which would otherwise ignore every later claude forever. The
 //     caller supplies `claimedBusy` and does the probe; this module does
 //     no IO. Anything else ignored while claimed is logged by the caller.
-//   - `clear`/`resume`/`fork` with a different id are the claimed
-//     claude's own and MOVE the claim (a nested `--resume` is an
-//     accepted residual risk).
+//   - `clear`/`resume`/`fork` with a different id MOVE the claim only
+//     while the claimed claude's MAIN session is NOT mid-turn (#521,
+//     `mainBusy`: permission, or running with no end-of-turn after the last
+//     work signal): its own /clear, in-tool /resume and /branch happen at
+//     its prompt, whereas a nested child (`claude -p --resume X`,
+//     `--fork-session`) is started from a main-session tool call. Unlike
+//     `claimedBusy` this ignores outstanding background work, so a /clear
+//     typed at the prompt while a task runs still moves. Accepted residual:
+//     a nested claude started from a background SUBAGENT's tool call while
+//     the main session sits at its prompt looks the same and moves the
+//     claim; a phase wrongly stuck mid-turn misses the claude's own
+//     /resume until it settles. The claim is persisted (#520), so a wrong
+//     move would survive restarts.
 //   - SessionEnd for the claimed id releases the claim so the next claude
 //     typed in the same shell can claim — except reason `clear`/`resume`,
 //     which are followed by a SessionStart for the new id. Other ids are
@@ -64,13 +74,23 @@ export function shouldReplaceClaim(claimedExists: boolean, claimedBusy: boolean)
 	return !claimedExists || !claimedBusy;
 }
 
+/// Whether a SessionEnd `reason` also clears the PERSISTED claim: only a
+/// deliberate exit; `other`/missing is what a Skein quit killing the PTY
+/// looks like, and clearing then would defeat the restart resume.
+export function releasePersists(reason: string | null | undefined): boolean {
+	return typeof reason === "string" && reason.length > 0 && reason !== "other";
+}
+
 /// Pure decision. `shell` null = not in shell mode. `claimedBusy`: the
-/// claimed harness is mid-turn (running/permission or outstanding work).
+/// claimed harness is working (running/permission or outstanding work), for
+/// the startup probe-then-replace. `mainBusy`: its main session is mid-turn,
+/// for the resume/clear/fork ignore.
 export function decideSessionStart(
 	shell: { claim: Claim | null } | null,
 	current: string | undefined,
 	payload: Payload,
 	claimedBusy = false,
+	mainBusy = false,
 ): ShellDecision {
 	if (shell === null) {
 		const f = followedSession(current, payload);
@@ -87,6 +107,10 @@ export function decideSessionStart(
 	if (source === "startup") {
 		return { kind: "probe-then-replace", claimedId: claim.sessionId, sessionId, claimedBusy };
 	}
+	// resume/clear/fork with a different id while the main session is mid-turn
+	// is a nested child (`claude -p --resume X`, `--fork-session`), not the
+	// claimed claude's own (#521).
+	if (mainBusy) return { kind: "ignore" };
 	return { kind: "follow", sessionId, source, claim: true, repoint: sessionId !== current };
 }
 
@@ -110,9 +134,10 @@ export const shellClaim = {
 		current: string | undefined,
 		payload: Payload,
 		claimedBusy = false,
+		mainBusy = false,
 	): ShellDecision {
 		const state = shells.get(id) ?? null;
-		const d = decideSessionStart(state, current, payload, claimedBusy);
+		const d = decideSessionStart(state, current, payload, claimedBusy, mainBusy);
 		if (state !== null && d.kind === "follow" && d.claim) {
 			// Fresh is armed only on unclaimed -> claimed (and in replaceClaim).
 			// clear/resume/fork moves are the same process, so they don't re-arm.

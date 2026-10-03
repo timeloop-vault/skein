@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { withResumeCmds } from "./harnessCmd.ts";
 import {
 	buildHarness,
 	buildRoom,
@@ -6,7 +7,10 @@ import {
 	harnessDisplayName,
 	resolveAgentName,
 	withCapturedSessionId,
+	withoutShellClaim,
 	withReplacedSessionId,
+	withRespawnedCmd,
+	withShellClaim,
 } from "./harnessCreation.ts";
 import type { Room } from "./types.ts";
 
@@ -108,5 +112,59 @@ describe("harnessCreation", () => {
 
 	it("collects claimed session ids", () => {
 		expect([...claimedSessionIdsOf([room("a"), room()])]).toEqual(["a"]);
+	});
+});
+
+describe("shell claim helpers (#520)", () => {
+	const SHELL = ["/bin/zsh", "-l"];
+	const shellRoom = (sessionId = "old"): Room => {
+		const r = room(sessionId);
+		return { ...r, harnesses: r.harnesses.map((h) => ({ ...h, cmd: SHELL })) };
+	};
+	const h0 = (rooms: Room[]) => rooms[0]?.harnesses[0];
+
+	it("withShellClaim sets sessionId and the claim together", () => {
+		const out = withShellClaim([shellRoom("old")], "s1", "h1", "new");
+		expect(h0(out)?.sessionId).toBe("new");
+		expect(h0(out)?.shellClaim).toEqual({ sessionId: "new" });
+	});
+
+	it("withShellClaim is an identity no-op when already claimed or harness missing", () => {
+		const once = withShellClaim([shellRoom()], "s1", "h1", "new");
+		expect(withShellClaim(once, "s1", "h1", "new")).toBe(once);
+		expect(withShellClaim(once, "nope", "h1", "x")).toBe(once);
+		expect(withShellClaim(once, "s1", "nope", "x")).toBe(once);
+	});
+
+	it("withoutShellClaim removes the key and is a no-op when absent", () => {
+		const once = withShellClaim([shellRoom()], "s1", "h1", "new");
+		const out = withoutShellClaim(once, "s1", "h1");
+		expect(h0(out)).not.toHaveProperty("shellClaim");
+		expect(h0(out)?.sessionId).toBe("new");
+		expect(withoutShellClaim(out, "s1", "h1")).toBe(out);
+		expect(withoutShellClaim(out, "nope", "h1")).toBe(out);
+	});
+
+	it("withRespawnedCmd replaces cmd, bumps spawnGen and drops the claim", () => {
+		const claimed = withShellClaim([shellRoom()], "s1", "h1", "new");
+		const out = withRespawnedCmd(claimed, "s1", "h1", ["claude"], "fresh");
+		expect(h0(out)).not.toHaveProperty("shellClaim");
+		expect(h0(out)).toMatchObject({ cmd: ["claude"], sessionId: "fresh", spawnGen: 1 });
+		const keep = withRespawnedCmd(claimed, "s1", "h1", SHELL);
+		expect(h0(keep)?.sessionId).toBe("new");
+		expect(h0(keep)?.spawnGen).toBe(1);
+	});
+
+	it("claim -> restart rebuild resumes claude; claim -> release keeps the shell", () => {
+		const claimed = withShellClaim([shellRoom("old")], "s1", "h1", "sid-1");
+		const [claimedRoom] = claimed;
+		const [releasedRoom] = withoutShellClaim(claimed, "s1", "h1");
+		if (!claimedRoom || !releasedRoom) throw new Error("room missing");
+		expect(h0([withResumeCmds(claimedRoom, new Map())])?.cmd).toEqual([
+			"claude",
+			"--resume",
+			"sid-1",
+		]);
+		expect(h0([withResumeCmds(releasedRoom, new Map())])?.cmd).toEqual(SHELL);
 	});
 });

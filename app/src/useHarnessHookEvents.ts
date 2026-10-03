@@ -10,12 +10,14 @@ import { useEffect } from "react";
 import { outstandingWork } from "./deferral.ts";
 import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { followedSession } from "./sessionTracking.ts";
-import { shellClaim, shouldReplaceClaim } from "./shellClaim.ts";
+import { releasePersists, shellClaim, shouldReplaceClaim } from "./shellClaim.ts";
 import type { Room } from "./types.ts";
 
 export function useHarnessHookEvents(
 	roomsRef: MutableRefObject<Room[]>,
 	replaceHarnessSessionId: (targetRoomId: string, harnessId: string, sessionId: string) => void,
+	setHarnessShellClaim: (targetRoomId: string, harnessId: string, sessionId: string) => void,
+	clearHarnessShellClaim: (targetRoomId: string, harnessId: string) => void,
 ) {
 	// #86: Claude's PermissionRequest hook fires this global event the
 	// moment a permission dialog is on screen — the Rust side owns the
@@ -61,7 +63,12 @@ export function useHarnessHookEvents(
 		const act = harnessActivity.get(harnessId);
 		const claimedBusy =
 			act?.phase === "running" || act?.phase === "permission" || outstandingWork(harnessId) > 0;
-		let d = shellClaim.onSessionStart(harnessId, current, payload, claimedBusy);
+		// Main session mid-turn: a deferral-held `running` after an end of turn
+		// has lastTurnSignal "end", so background work alone does not count.
+		const mainBusy =
+			act?.phase === "permission" ||
+			(act?.phase === "running" && act.lastTurnSignal?.kind !== "end");
+		let d = shellClaim.onSessionStart(harnessId, current, payload, claimedBusy, mainBusy);
 		if (d.kind === "probe-then-replace") {
 			// A different-id `startup` while claimed: a nested child (claimed
 			// claude busy, transcript real), a phantom's successor, or a new
@@ -93,8 +100,11 @@ export function useHarnessHookEvents(
 			return;
 		}
 		harnessActivity.noteLaunchSignal(harnessId);
+		// #520: persist the claim (and the id, in one update) so a restart
+		// can resume it; also covers `repoint: false` (same id).
+		if (d.claim) setHarnessShellClaim(roomId, harnessId, d.sessionId);
 		if (d.repoint) {
-			replaceHarnessSessionId(roomId, harnessId, d.sessionId);
+			if (!d.claim) replaceHarnessSessionId(roomId, harnessId, d.sessionId);
 			// `startup` has no phase source of its own; it reads like a resume.
 			harnessActivity.sessionSwitched(
 				harnessId,
@@ -160,6 +170,7 @@ export function useHarnessHookEvents(
 
 	// #318: SessionEnd releases the shell claim so the next claude typed in
 	// the same shell can claim. No phase change.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: clearHarnessShellClaim only wraps the stable setRooms (#520).
 	useEffect(() => {
 		const un = listen<{
 			roomId: string;
@@ -167,7 +178,13 @@ export function useHarnessHookEvents(
 			sessionId: string | null;
 			reason: string | null;
 		}>("skein://harness-session-end", (event) => {
-			shellClaim.onSessionEnd(event.payload.harnessId, event.payload);
+			// Released in memory always; the persisted claim only on a deliberate exit.
+			if (
+				shellClaim.onSessionEnd(event.payload.harnessId, event.payload) &&
+				releasePersists(event.payload.reason)
+			) {
+				clearHarnessShellClaim(event.payload.roomId, event.payload.harnessId);
+			}
 		});
 		return () => {
 			void un.then((f) => f());

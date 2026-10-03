@@ -28,7 +28,9 @@ import {
 	newId,
 	resolveAgentName,
 	withCapturedSessionId,
+	withoutShellClaim,
 	withReplacedSessionId,
+	withShellClaim,
 } from "./harnessCreation.ts";
 import type { CreateRoomArgs } from "./NewRoomDialog.tsx";
 import { captureOpencodeSessionId } from "./opencodeCapture.ts";
@@ -85,6 +87,15 @@ export function useHarnessCreation(
 	// one resumed.
 	const replaceHarnessSessionId = (targetRoomId: string, harnessId: string, sessionId: string) => {
 		setRooms((prev) => withReplacedSessionId(prev, targetRoomId, harnessId, sessionId));
+	};
+
+	// #520: persist the post-exit-shell claim (sessionId + claim in one
+	// update) so a restart can resume it; release removes it again.
+	const setHarnessShellClaim = (targetRoomId: string, harnessId: string, sessionId: string) => {
+		setRooms((prev) => withShellClaim(prev, targetRoomId, harnessId, sessionId));
+	};
+	const clearHarnessShellClaim = (targetRoomId: string, harnessId: string) => {
+		setRooms((prev) => withoutShellClaim(prev, targetRoomId, harnessId));
 	};
 
 	// #49 phase A: harness creation, callable from both the + harness
@@ -327,6 +338,8 @@ export function useHarnessCreation(
 		claimedSessionIds,
 		setHarnessSessionId,
 		replaceHarnessSessionId,
+		setHarnessShellClaim,
+		clearHarnessShellClaim,
 		createHarnessInRoom,
 		pickHarness,
 		toggleFilesHarness,

@@ -168,7 +168,8 @@ export default function App() {
 		setShowNewRoom,
 		switchHarnessInRoom,
 	);
-	const { createRoom, replaceHarnessSessionId } = creation;
+	const { createRoom, replaceHarnessSessionId, setHarnessShellClaim, clearHarnessShellClaim } =
+		creation;
 
 	// #19: the notification engine (badge/toast/OS notifications, permission
 	// and session-start listeners, transition logging) — see
@@ -185,6 +186,8 @@ export default function App() {
 		settings.notifyToast,
 		settings.notifyOs,
 		replaceHarnessSessionId,
+		setHarnessShellClaim,
+		clearHarnessShellClaim,
 		jumpToHarness,
 	);
 

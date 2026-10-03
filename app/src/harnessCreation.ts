@@ -158,3 +158,71 @@ export const withReplacedSessionId = (
 			harnesses: r.harnesses.map((h) => (h.id === harnessId ? { ...h, sessionId } : h)),
 		};
 	});
+
+// Map one harness; the original array and room objects come back untouched
+// when `fn` returns the same harness (no churn for autosave/renders).
+const mapHarness = (
+	rooms: Room[],
+	targetRoomId: string,
+	harnessId: string,
+	fn: (h: Harness) => Harness,
+): Room[] => {
+	let changed = false;
+	const next = rooms.map((r) => {
+		if (r.id !== targetRoomId) return r;
+		let roomChanged = false;
+		const harnesses = r.harnesses.map((h) => {
+			if (h.id !== harnessId) return h;
+			const n = fn(h);
+			if (n !== h) roomChanged = true;
+			return n;
+		});
+		if (!roomChanged) return r;
+		changed = true;
+		return { ...r, harnesses };
+	});
+	return changed ? next : rooms;
+};
+
+// #520: the post-exit-shell claim. Writes `sessionId` AND the claim in one
+// update, so the invariant "claim.sessionId === sessionId" holds on the record.
+export const withShellClaim = (
+	rooms: Room[],
+	targetRoomId: string,
+	harnessId: string,
+	sessionId: string,
+): Room[] =>
+	mapHarness(rooms, targetRoomId, harnessId, (h) =>
+		h.sessionId === sessionId &&
+		h.shellClaim?.sessionId === sessionId &&
+		h.shellClaim.port === undefined
+			? h
+			: { ...h, sessionId, shellClaim: { sessionId } },
+	);
+
+// #520: the claim was released; the key is removed, not set to undefined.
+export const withoutShellClaim = (rooms: Room[], targetRoomId: string, harnessId: string): Room[] =>
+	mapHarness(rooms, targetRoomId, harnessId, (h) => {
+		if (!("shellClaim" in h)) return h;
+		const { shellClaim: _released, ...rest } = h;
+		return rest;
+	});
+
+// A cmd replacement (Enter-for-shell, restart) is a fresh process: bump
+// spawnGen, optionally set the session id, and drop any shell claim (#520).
+export const withRespawnedCmd = (
+	rooms: Room[],
+	targetRoomId: string,
+	harnessId: string,
+	cmd: string[],
+	sessionId?: string,
+): Room[] =>
+	mapHarness(rooms, targetRoomId, harnessId, (h) => {
+		const { shellClaim: _dropped, ...rest } = h;
+		return {
+			...rest,
+			cmd,
+			...(sessionId !== undefined ? { sessionId } : {}),
+			spawnGen: (h.spawnGen ?? 0) + 1,
+		};
+	});

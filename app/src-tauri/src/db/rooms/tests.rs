@@ -144,6 +144,56 @@ fn closed_by_and_harness_created_by_round_trip_through_save_and_load() {
     );
 }
 
+/// #520: `shellClaim` round-trips with and without a port, and an old
+/// blob without it still parses.
+#[test]
+fn shell_claim_round_trips_with_and_without_a_port() {
+    let (_dir, db) = fresh_db();
+    let mut r = room("r1");
+    let mut a = harness("h1");
+    a.shell_claim = Some(ShellClaim {
+        session_id: "s1".into(),
+        port: Some(4096),
+    });
+    let mut b = harness("h2");
+    b.shell_claim = Some(ShellClaim {
+        session_id: "s2".into(),
+        port: None,
+    });
+    r.harnesses = vec![a, b];
+    r.active_harness_id = "h1".into();
+    db.save_all(&[r]).unwrap();
+    let loaded = db.load_all().unwrap().rooms.remove(0);
+    assert_eq!(
+        loaded.harnesses[0].shell_claim,
+        Some(ShellClaim {
+            session_id: "s1".into(),
+            port: Some(4096),
+        })
+    );
+    assert_eq!(
+        loaded.harnesses[1].shell_claim,
+        Some(ShellClaim {
+            session_id: "s2".into(),
+            port: None,
+        })
+    );
+    let json = serde_json::to_string(&loaded.harnesses[1]).unwrap();
+    assert!(
+        json.contains(r#""shellClaim":{"sessionId":"s2"}"#),
+        "{json}"
+    );
+}
+
+#[test]
+fn a_pre_520_blob_loads_without_a_shell_claim() {
+    let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+        "harnesses":[{"id":"h1","kind":"claude","name":"h1","status":"running",
+        "model":"","tokens":"0"}],"activeHarnessId":"h1"}"#;
+    let room: Room = serde_json::from_str(json).unwrap();
+    assert_eq!(room.harnesses[0].shell_claim, None);
+}
+
 /// #417: `retired` round-trips through save and load.
 #[test]
 fn retired_round_trips_through_save_and_load() {
