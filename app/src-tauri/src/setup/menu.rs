@@ -36,7 +36,7 @@ pub(super) fn build(
 
     let about = AboutMetadataBuilder::new()
         .name(Some(product_name.to_owned()))
-        .version(Some(env!("CARGO_PKG_VERSION")))
+        .version(Some(crate::build_info::VERSION))
         .build();
 
     let preferences = MenuItemBuilder::new("Preferences…")
