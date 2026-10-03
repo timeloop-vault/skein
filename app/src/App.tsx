@@ -29,6 +29,7 @@ import { useHarnessActions } from "./useHarnessActions.ts";
 import { useHarnessCreation } from "./useHarnessCreation.ts";
 import { useHarnessNotifications } from "./useHarnessNotifications.ts";
 import { useReattachTelemetry } from "./useReattachTelemetry.ts";
+import { useRestartHarness } from "./useRestartHarness.ts";
 import { useRoomStripNav } from "./useRoomStripNav.ts";
 import { useRoomsStore } from "./useRoomsStore.ts";
 import { useTabDrag } from "./useTabDrag.ts";
@@ -134,6 +135,8 @@ export default function App() {
 		activeRooms,
 		setShowPicker,
 		setRenaming,
+		roomsRef,
+		setOpencodePorts,
 	);
 	const {
 		startRenameRoom,
@@ -187,6 +190,8 @@ export default function App() {
 
 	// #410: manual "Reattach telemetry" action — see useReattachTelemetry.ts.
 	const onReattachTelemetry = useReattachTelemetry(roomsRef, pushToast);
+	// #490: palette restart — see useRestartHarness.ts.
+	const onRestartHarness = useRestartHarness(roomsRef, actions.restartHarness, pushToast);
 
 	// Pointer-based drag-to-reorder (#271) — see tabDrag.ts's header.
 	const { drag, dropTarget, startDrag, dragHandlers, suppressClick } = useTabDrag(
@@ -257,6 +262,7 @@ export default function App() {
 		cycleAlertedRoom,
 		cycleAlertedHarness,
 		onReattachTelemetry,
+		onRestartHarness,
 	});
 
 	const overlayProps = {

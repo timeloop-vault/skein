@@ -16,7 +16,9 @@ import { HARNESS_KINDS } from "./data.tsx";
 import { type ActionsMenuItem, actionsButtonState } from "./harnessActionsMenu.ts";
 import { useHarnessActivity } from "./harnessActivity.ts";
 import { hasClaudeTranscriptTail } from "./harnessEvents.ts";
-import { canSendPrompt, harnessInput, sendPrompt } from "./harnessInput.ts";
+import { canSendPrompt, type GateResult, harnessInput, sendPrompt } from "./harnessInput.ts";
+import { canRestart } from "./harnessRestart.ts";
+import { useMailHold } from "./mailHold.ts";
 import { actionNudges } from "./nudgeRegistry.ts";
 import { useNudgeOverrides } from "./nudgeStore.ts";
 import { loadRepoSkills, type RepoSkill } from "./repoSkills.ts";
@@ -31,9 +33,13 @@ export const HarnessActionsMenu = ({
 	activeHarness,
 	cwd,
 	onReattachTelemetry,
+	onRestart,
 }: {
 	activeHarness: Harness | undefined;
 	cwd: string | undefined;
+	// #490: re-checks its own gate against live state and refuses with a
+	// reason, so a stale enabled item is harmless.
+	onRestart: (harnessId: string) => Promise<GateResult>;
 	// #410: manual recovery for a Claude harness whose Rust-side JSONL
 	// tail died — only ever called for a harness that passes
 	// `hasClaudeTranscriptTail` below, same as the automatic attach in
@@ -47,6 +53,16 @@ export const HarnessActionsMenu = ({
 	const rootRef = useRef<HTMLDivElement | null>(null);
 
 	const activity = useHarnessActivity(activeHarness?.id ?? null);
+	const mailHeld = useMailHold(activeHarness?.id ?? "").held;
+	// The composer draft has no change subscription (only "cleared"), so
+	// while the menu is open re-render on a short tick to keep the restart
+	// gate's draft check live. Closed menu = no ticking.
+	const [, setTick] = useState(0);
+	useEffect(() => {
+		if (!open) return undefined;
+		const t = setInterval(() => setTick((n) => n + 1), 400);
+		return () => clearInterval(t);
+	}, [open]);
 	const overrides = useNudgeOverrides();
 	const capabilities = activeHarness ? HARNESS_KINDS[activeHarness.kind].capabilities : null;
 	const skillInvocation = activeHarness ? HARNESS_KINDS[activeHarness.kind].skillInvocation : null;
@@ -110,7 +126,23 @@ export const HarnessActionsMenu = ({
 				: { ok: false, reason: "no active harness" },
 		skills,
 		skillInvocation,
+		activeHarness && capabilities.pty && capabilities.resume
+			? canRestart({
+					kind: activeHarness.kind,
+					capabilities,
+					phase: activity?.phase ?? null,
+					mailHeld,
+					draft: harnessInput.draft(activeHarness.id),
+				})
+			: undefined,
 	);
+
+	const onRestartClick = async () => {
+		if (!activeHarness) return;
+		setOpen(false);
+		const result = await onRestart(activeHarness.id);
+		setError(result.ok ? undefined : result.reason);
+	};
 
 	const onChoose = (item: ActionsMenuItem) => {
 		if (!activeHarness || !item.gate.ok) return;
@@ -162,6 +194,26 @@ export const HarnessActionsMenu = ({
 								</button>
 							</Fragment>
 						))}
+					{state.kind === "menu" && state.restart && (
+						<>
+							{(state.items.length > 0 || canReattach) && (
+								<div className="sk-harness-actions-divider" />
+							)}
+							<button
+								type="button"
+								className="sk-harness-actions-item"
+								disabled={!state.restart.gate.ok}
+								title={
+									state.restart.gate.ok
+										? "Kill and respawn this harness, resuming its conversation"
+										: state.restart.gate.reason
+								}
+								onClick={() => void onRestartClick()}
+							>
+								Restart harness
+							</button>
+						</>
+					)}
 					{canReattach && (
 						<>
 							{state.kind === "menu" && state.items.length > 0 && (

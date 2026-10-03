@@ -117,6 +117,7 @@ export const RoomWorkspace = (p: RoomWorkspaceProps) => {
 								p.creation.replaceHarnessSessionId(r.id, harnessId, sid)
 							}
 							onReattachTelemetry={(harnessId) => p.onReattachTelemetry(r.id, harnessId)}
+							onRestartHarness={(harnessId) => p.actions.restartHarness(r.id, harnessId)}
 						/>
 					)}
 				</div>

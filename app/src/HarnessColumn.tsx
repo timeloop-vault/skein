@@ -12,6 +12,7 @@ import {
 	useHarnessActivity,
 } from "./harnessActivity.ts";
 import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
+import type { GateResult } from "./harnessInputGate.ts";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import type { DefaultAgents } from "./prefs.ts";
 import { useWorkingSubagentCount } from "./subagents.ts";
@@ -227,6 +228,8 @@ export interface HarnessColumnProps {
 	// #410: "Reattach telemetry" — room scope already bound by App,
 	// forwarded to `HarnessActionsMenu` for the room's active harness.
 	onReattachTelemetry: (harnessId: string) => void;
+	// #490: room scope already bound by RoomWorkspace.
+	onRestartHarness: (harnessId: string) => Promise<GateResult>;
 }
 
 export const HarnessColumn = ({
@@ -249,6 +252,7 @@ export const HarnessColumn = ({
 	onOpencodeSessionCaptured,
 	onOpencodeSessionFollowed,
 	onReattachTelemetry,
+	onRestartHarness,
 }: HarnessColumnProps) => {
 	const tablistRef = useRef<HTMLDivElement | null>(null);
 
@@ -314,6 +318,7 @@ export const HarnessColumn = ({
 					activeHarness={room.harnesses.find((h) => h.id === room.activeHarnessId)}
 					cwd={room.cwd}
 					onReattachTelemetry={onReattachTelemetry}
+					onRestart={onRestartHarness}
 				/>
 				<div className="sk-harness-meta">
 					<span>{room.branch ? `${room.repo} · ${room.branch}` : (room.cwd ?? "")}</span>

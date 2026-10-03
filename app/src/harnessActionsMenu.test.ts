@@ -144,4 +144,24 @@ describe("actionsButtonState", () => {
 		const state = actionsButtonState(true, [], {}, ok, [], "/{name}");
 		expect(state).toEqual<ActionsButtonState>({ kind: "disabled", reason: "no actions yet" });
 	});
+
+	it("restart alone makes a menu rather than 'no actions yet' (#490)", () => {
+		const state = actionsButtonState(true, [], {}, ok, [], null, ok());
+		expect(state).toEqual<ActionsButtonState>({
+			kind: "menu",
+			items: [],
+			restart: { gate: { ok: true } },
+		});
+	});
+
+	it("carries a refusing restart gate through for the tooltip (#490)", () => {
+		const state = actionsButtonState(true, [def()], {}, ok, [], null, refused("busy"));
+		if (state.kind !== "menu") throw new Error("expected menu");
+		expect(state.items).toHaveLength(1);
+		expect(state.restart).toEqual({ gate: { ok: false, reason: "busy" } });
+	});
+
+	it("is hidden without a terminal even if a restart gate is passed (#490)", () => {
+		expect(actionsButtonState(false, [], {}, ok, [], null, ok())).toEqual({ kind: "hidden" });
+	});
 });

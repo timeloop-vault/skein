@@ -48,7 +48,15 @@ export interface ActionsMenuItem {
 export type ActionsButtonState =
 	| { kind: "hidden" }
 	| { kind: "disabled"; reason: string }
-	| { kind: "menu"; items: readonly ActionsMenuItem[] };
+	| {
+			kind: "menu";
+			items: readonly ActionsMenuItem[];
+			/** #490: the "Restart harness" entry — not a prompt, so it is not
+			 *  an `ActionsMenuItem` (no `body`). Absent when the kind can't be
+			 *  restarted at all; present with a refusing `gate` when it can
+			 *  but not right now. */
+			restart?: { gate: GateResult };
+	  };
 
 /** The button's state, computed fresh from its inputs — no store reads
  *  here, so a caller (or a test) supplies the harness's nudge list, its
@@ -67,6 +75,10 @@ export type ActionsButtonState =
  *     slash convention), each gated individually — a multi-line body
  *     can be refused (no bracketed paste) while a single-line sibling
  *     is still sendable.
+ *
+ *   `restartGate` (#490): `undefined` = no restart entry (the kind has
+ *   no pty+resume); otherwise the entry is offered, disabled when the
+ *   gate refuses. Restart alone is enough to make the button a menu.
  */
 export function actionsButtonState(
 	hasPty: boolean,
@@ -75,6 +87,7 @@ export function actionsButtonState(
 	gateFor: (body: string) => GateResult,
 	skills: readonly RepoSkill[],
 	skillInvocation: string | null,
+	restartGate?: GateResult,
 ): ActionsButtonState {
 	if (!hasPty) return { kind: "hidden" };
 	const nudgeItems: ActionsMenuItem[] = nudges.map((def) => {
@@ -102,8 +115,11 @@ export function actionsButtonState(
 						source: "skill",
 					};
 				});
-	if (nudgeItems.length === 0 && skillItems.length === 0) {
+	const items = [...nudgeItems, ...skillItems];
+	if (items.length === 0 && restartGate === undefined) {
 		return { kind: "disabled", reason: "no actions yet" };
 	}
-	return { kind: "menu", items: [...nudgeItems, ...skillItems] };
+	return restartGate === undefined
+		? { kind: "menu", items }
+		: { kind: "menu", items, restart: { gate: restartGate } };
 }

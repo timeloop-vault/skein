@@ -311,4 +311,8 @@ export const TRANSITION_SOURCE = {
 	// #423: the harness supervisor moved a harness whose phase had gone
 	// stale (`supervisorSetWaiting`).
 	SupervisorRecovered: "supervisor-recovered",
+	// #490: the user (or an agent on their behalf) restarted the harness;
+	// logged straight to harness_events by `restartHarness`, not through
+	// the phase store.
+	UserRestart: "user-restart",
 } as const;
