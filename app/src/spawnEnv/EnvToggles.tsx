@@ -46,8 +46,13 @@ export const EnvToggles = ({
 									<code>
 										{harnessConfig.claudeFlag} {harnessConfig.claudePlugin}
 									</code>{" "}
-									to the command. Loads for that session only — nothing is installed, and a plugin
-									you installed yourself is untouched unless it is also named <code>skein</code>.
+									to the command. In the shell after Claude exits it sets{" "}
+									<code>
+										{harnessConfig.claudeShellVar}={harnessConfig.claudePlugin}
+									</code>{" "}
+									instead, added to any value you already have. Loads for that session only —
+									nothing is installed, and a plugin you installed yourself is untouched unless it
+									is also named <code>skein</code>.
 								</>
 							) : (
 								<>The shipped plugin didn't resolve, so there is nothing to inject.</>

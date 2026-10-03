@@ -145,3 +145,66 @@ fn an_injected_variable_is_reserved_only_while_it_is_being_injected() {
         .map(|(_, v)| v.to_owned());
     assert_eq!(value.as_deref(), Some("/home/me/mine.json"));
 }
+
+/// The final `CLAUDE_CODE_PLUGIN_DIRS` after `apply_env` (#318), with
+/// the user's extra env and/or an inherited value seeded first.
+fn plugin_dirs_after(inherited: Option<&str>, user: Option<&str>, ours: &str) -> Option<String> {
+    use crate::harness_config::CLAUDE_PLUGIN_DIRS_VAR as VAR;
+    let mut settings = SpawnSettings::default();
+    if let Some(v) = user {
+        settings.extra_env.push(crate::spawn_settings::EnvVar {
+            key: VAR.to_owned(),
+            value: v.to_owned(),
+        });
+    }
+    let injection = Injection {
+        env: vec![(VAR.to_owned(), ours.to_owned())],
+        ..Injection::default()
+    };
+    let mut builder = CommandBuilder::new("skein-preview");
+    if let Some(v) = inherited {
+        builder.env(VAR, v);
+    }
+    apply_env(&mut builder, &settings, probe_snapshot(), None, &injection);
+    builder
+        .iter_full_env_as_str()
+        .find(|(k, _)| k.eq_ignore_ascii_case(VAR))
+        .map(|(_, v)| v.to_owned())
+}
+
+const SEP: &str = if cfg!(windows) { ";" } else { ":" };
+
+#[test]
+fn plugin_dirs_is_exactly_ours_with_no_prior_value() {
+    assert_eq!(
+        plugin_dirs_after(None, None, "/skein/plugin").as_deref(),
+        Some("/skein/plugin")
+    );
+}
+
+#[test]
+fn plugin_dirs_keeps_the_users_extra_env_value() {
+    let want = format!("/mine{SEP}/skein/plugin");
+    assert_eq!(
+        plugin_dirs_after(None, Some("/mine"), "/skein/plugin").as_deref(),
+        Some(want.as_str())
+    );
+}
+
+#[test]
+fn plugin_dirs_keeps_an_inherited_value() {
+    let want = format!("/inherited{SEP}/skein/plugin");
+    assert_eq!(
+        plugin_dirs_after(Some("/inherited"), None, "/skein/plugin").as_deref(),
+        Some(want.as_str())
+    );
+}
+
+#[test]
+fn plugin_dirs_does_not_duplicate_our_dir() {
+    let already = format!("/mine{SEP}/skein/plugin");
+    assert_eq!(
+        plugin_dirs_after(None, Some(&already), "/skein/plugin").as_deref(),
+        Some(already.as_str())
+    );
+}

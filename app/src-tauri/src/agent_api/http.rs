@@ -47,7 +47,7 @@ use super::mcp;
 use super::state::AgentApiState;
 use super::verbs::{MailContext, MailPolicy, VerbError};
 use harnesses::{api_close_harness, api_list_harnesses, api_open_harness};
-use hooks::{api_harness_permission, api_harness_session_start};
+use hooks::{api_harness_permission, api_harness_session_end, api_harness_session_start};
 use mail::{api_message_history, api_read_messages, api_send_message};
 use review::{
     api_addressed, api_diff, api_get, api_list, api_reply, api_resolve, api_signoff, api_status,
@@ -96,6 +96,7 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
             "/api/harness/session-start",
             post(api_harness_session_start),
         )
+        .route("/api/harness/session-end", post(api_harness_session_end))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
         .with_state(state)
 }

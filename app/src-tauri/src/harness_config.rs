@@ -79,6 +79,26 @@ use crate::spawn_settings::SpawnSettings;
 /// writing it* — see [`Injection::env`].
 pub(crate) const OPENCODE_CONFIG_VAR: &str = "OPENCODE_CONFIG";
 
+/// Claude Code's env-var form of `--plugin-dir`, set for a Claude
+/// harness's post-exit shell (#318) so a `claude` typed there loads the
+/// plugin too.
+pub(crate) const CLAUDE_PLUGIN_DIRS_VAR: &str = "CLAUDE_CODE_PLUGIN_DIRS";
+/// Marker telling the plugin's `SessionStart` hook the plugin arrived via
+/// [`CLAUDE_PLUGIN_DIRS_VAR`], so it can keep it out of nested `claude`
+/// runs started through the Bash tool.
+pub(crate) const CLAUDE_PLUGIN_VIA_ENV_VAR: &str = "SKEIN_CLAUDE_PLUGIN_VIA_ENV";
+
+/// Append `ours` to the user's own `CLAUDE_CODE_PLUGIN_DIRS` value,
+/// using the platform path-list separator, without duplicating it.
+pub(crate) fn merge_plugin_dirs(existing: Option<&str>, ours: &str) -> String {
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    match existing.map(str::trim).filter(|e| !e.is_empty()) {
+        None => ours.to_owned(),
+        Some(e) if e.split(sep).any(|part| part == ours) => e.to_owned(),
+        Some(e) => format!("{e}{sep}{ours}"),
+    }
+}
+
 /// Where the shipped bundle lives inside the resource directory, and
 /// the two entry points inside it. Kept as constants because
 /// `tauri.conf.json` names the same paths and the two have to agree.
@@ -140,6 +160,8 @@ pub struct HarnessConfigStatus {
     /// The flag Skein appends for Claude Code, spelled out so the panel
     /// shows the argument rather than describing it.
     pub claude_flag: String,
+    /// The variable set for a Claude harness's post-exit shell (#318).
+    pub claude_shell_var: String,
     pub opencode_var: String,
 }
 
@@ -222,6 +244,7 @@ impl HarnessConfig {
                 .map(|p| p.display().to_string()),
             error: self.error.clone(),
             claude_flag: "--plugin-dir".to_owned(),
+            claude_shell_var: CLAUDE_PLUGIN_DIRS_VAR.to_owned(),
             opencode_var: OPENCODE_CONFIG_VAR.to_owned(),
         }
     }
@@ -266,9 +289,7 @@ pub(crate) fn injection_for(
     // swapped the command, and Skein's configuration for a program that
     // is not running would at best be noise and at worst a broken
     // spawn.
-    if !kind.program().is_some_and(|p| program_is(program, p)) {
-        return Injection::default();
-    }
+    let program_matches = kind.program().is_some_and(|p| program_is(program, p));
     // No live endpoint means the config would interpolate a variable
     // that is not set — see the module docs.
     if agent.is_none() {
@@ -277,6 +298,24 @@ pub(crate) fn injection_for(
     let Some(config) = config else {
         return Injection::default();
     };
+    if !program_matches {
+        // The one exception (#318): a Claude harness's post-exit shell.
+        // A `claude` typed there must still load the plugin, but the
+        // shell takes no `--plugin-dir`, so it goes in the environment.
+        if kind == HarnessKind::Claude
+            && settings.inject_claude_plugin
+            && let Some(dir) = config.claude_plugin.as_ref()
+        {
+            return Injection {
+                args: Vec::new(),
+                env: vec![
+                    (CLAUDE_PLUGIN_DIRS_VAR.to_owned(), dir.display().to_string()),
+                    (CLAUDE_PLUGIN_VIA_ENV_VAR.to_owned(), "1".to_owned()),
+                ],
+            };
+        }
+        return Injection::default();
+    }
     match kind {
         HarnessKind::Claude if settings.inject_claude_plugin => config
             .claude_plugin
@@ -462,7 +501,7 @@ mod tests {
     }
 
     #[test]
-    fn a_kind_whose_command_was_swapped_gets_nothing() {
+    fn a_kind_whose_command_was_swapped_gets_no_args() {
         // "Press Enter for shell" rewrites cmd but not the record, so
         // the kind still says `claude`. Appending --plugin-dir to bash
         // would break the spawn outright.
@@ -474,7 +513,105 @@ mod tests {
             &SpawnSettings::default(),
             Some(&identity()),
         );
+        assert_eq!(injection.args, Vec::<String>::new());
+    }
+
+    #[test]
+    fn claude_post_exit_shell_gets_the_env_vars() {
+        let (_tmp, config) = bundle();
+        let injection = injection_for(
+            HarnessKind::Claude,
+            "pwsh",
+            Some(&config),
+            &SpawnSettings::default(),
+            Some(&identity()),
+        );
+        assert_eq!(injection.args, Vec::<String>::new());
+        assert_eq!(injection.env.len(), 2);
+        let dirs = injection
+            .env
+            .iter()
+            .find(|(k, _)| k == CLAUDE_PLUGIN_DIRS_VAR)
+            .expect("plugin dirs var");
+        assert!(dirs.1.ends_with(CLAUDE_PLUGIN_SUBDIR), "{dirs:?}");
+        assert!(
+            injection
+                .env
+                .iter()
+                .any(|(k, v)| k == CLAUDE_PLUGIN_VIA_ENV_VAR && v == "1")
+        );
+    }
+
+    #[test]
+    fn the_real_claude_spawn_gets_no_env_var() {
+        let (_tmp, config) = bundle();
+        let injection = injection_for(
+            HarnessKind::Claude,
+            "claude",
+            Some(&config),
+            &SpawnSettings::default(),
+            Some(&identity()),
+        );
+        assert_eq!(
+            injection.args.first().map(String::as_str),
+            Some("--plugin-dir")
+        );
+        assert_eq!(injection.env, Vec::new());
+    }
+
+    #[test]
+    fn the_post_exit_shell_env_respects_the_toggle_and_the_endpoint() {
+        let (_tmp, config) = bundle();
+        let off = SpawnSettings {
+            inject_claude_plugin: false,
+            ..SpawnSettings::default()
+        };
+        assert!(
+            injection_for(
+                HarnessKind::Claude,
+                "zsh",
+                Some(&config),
+                &off,
+                Some(&identity())
+            )
+            .is_empty()
+        );
+        assert!(
+            injection_for(
+                HarnessKind::Claude,
+                "zsh",
+                Some(&config),
+                &SpawnSettings::default(),
+                None
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_opencode_post_exit_shell_gets_nothing() {
+        let (_tmp, config) = bundle();
+        let injection = injection_for(
+            HarnessKind::Opencode,
+            "zsh",
+            Some(&config),
+            &SpawnSettings::default(),
+            Some(&identity()),
+        );
         assert!(injection.is_empty());
+    }
+
+    #[test]
+    fn plugin_dirs_merge_additively_without_duplicating() {
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        assert_eq!(merge_plugin_dirs(None, "/ours"), "/ours");
+        assert_eq!(merge_plugin_dirs(Some("  "), "/ours"), "/ours");
+        assert_eq!(
+            merge_plugin_dirs(Some("/theirs"), "/ours"),
+            format!("/theirs{sep}/ours")
+        );
+        let already = format!("/theirs{sep}/ours");
+        assert_eq!(merge_plugin_dirs(Some(&already), "/ours"), already);
     }
 
     /// An absolute path is the normal case once #207's Windows

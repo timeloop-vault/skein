@@ -142,13 +142,14 @@ pub(super) fn apply_env(
         if key.is_empty() {
             continue;
         }
+        // `CLAUDE_CODE_PLUGIN_DIRS` is the exception (#318): the user's
+        // own list is merged with ours below, never ignored.
         let reserved = RESERVED_ENV_KEYS
             .iter()
             .any(|r| r.eq_ignore_ascii_case(key))
-            || injection
-                .env
-                .iter()
-                .any(|(k, _)| k.eq_ignore_ascii_case(key));
+            || injection.env.iter().any(|(k, _)| {
+                k.eq_ignore_ascii_case(key) && k != crate::harness_config::CLAUDE_PLUGIN_DIRS_VAR
+            });
         if reserved {
             ignored_env_keys.push(key.to_owned());
             continue;
@@ -202,7 +203,17 @@ pub(super) fn apply_env(
     // opencode's `OPENCODE_CONFIG`. After the variables above, because
     // the file it points at interpolates them.
     for (key, value) in &injection.env {
-        builder.env(key, value);
+        if key == crate::harness_config::CLAUDE_PLUGIN_DIRS_VAR {
+            // #318: additive — keep the user's own plugin dirs (from the
+            // inherited env or their extra env) and append ours.
+            let existing = builder
+                .get_env(key)
+                .map(|v| v.to_string_lossy().into_owned());
+            let merged = crate::harness_config::merge_plugin_dirs(existing.as_deref(), value);
+            builder.env(key, merged);
+        } else {
+            builder.env(key, value);
+        }
     }
 
     AppliedEnv {
