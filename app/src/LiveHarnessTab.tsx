@@ -1,7 +1,8 @@
 import type { VersionNoticeMode } from "./claudeVersion.ts";
 import { claudeVersionStore, useVersionNotice } from "./claudeVersionStore.ts";
 import { HarnessTab } from "./components.tsx";
-import { effectiveStatus, useHarnessActivity } from "./harnessActivity.ts";
+import { HARNESS_KINDS } from "./data.tsx";
+import { harnessDisplayStatus, useHarnessActivity } from "./harnessActivity.ts";
 import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
 import type { GateResult } from "./harnessInputGate.ts";
 
@@ -33,12 +34,16 @@ export const LiveHarnessTab = ({
 					},
 				}
 			: undefined;
-	if (!activity) return <HarnessTab {...props} agent={agent} update={update} />;
 	// Apply the acknowledged-downgrade: a waiting harness with no
 	// pending notifications has already been seen, so render it as
 	// idle (grey) instead of waiting (blue pulse). The phase in
 	// the store stays `waiting` — only the visual indicator
-	// collapses.
-	const status = effectiveStatus(activity, props.h.pendingNotifications ?? 0);
+	// collapses. No activity at all reads idle, never the persisted
+	// status (#421).
+	const { status } = harnessDisplayStatus(
+		HARNESS_KINDS[props.h.kind].capabilities.pty,
+		activity,
+		props.h.pendingNotifications ?? 0,
+	);
 	return <HarnessTab {...props} agent={agent} update={update} h={{ ...props.h, status }} />;
 };

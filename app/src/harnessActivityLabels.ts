@@ -126,6 +126,35 @@ export function effectiveStatus(
 	return base;
 }
 
+/// The dot status and text label for one harness. With no activity
+/// entry nothing has reported in (e.g. a room gated by MissingFolderCard
+/// or RepoMismatchCard mounts no LiveTerminal), so the persisted
+/// `harness.status` — stamped "running" at creation and restored at
+/// hydrate — is not live state and is never consulted. Mirrors
+/// `aggregateRoomStatus` (#290), which reads unknown ids as idle; #421.
+/// A non-PTY harness (`files`, `design`) never gets an activity entry,
+/// since only LiveTerminal reports one, so for it "no activity" is the
+/// normal open state and reads "idle", not "not started".
+export function harnessDisplayStatus(
+	pty: boolean,
+	activity: HarnessActivity | null | undefined,
+	pendingNotifications: number,
+	workingSubagentCount = 0,
+	workingTaskCount = 0,
+): { status: Status; label: string } {
+	if (!activity) return { status: "idle", label: pty ? "not started" : "idle" };
+	return {
+		status: effectiveStatus(activity, pendingNotifications),
+		label: statusLabel(
+			activityToStatus(activity),
+			activity.permissionTool,
+			activity.permissionAgentType,
+			workingSubagentCount,
+			workingTaskCount,
+		),
+	};
+}
+
 /// Priority order for combining multiple harness statuses into a
 /// single room-level status (epic #50 L4). Higher = more important
 /// to surface on the room dot. `permission` lands top (#86) — a
