@@ -76,8 +76,9 @@ export const EnvToggles = ({
 									<code>
 										{harnessConfig.opencodeVar}={harnessConfig.opencodeConfig}
 									</code>
-									, which opencode merges between your global config and the project's. Turn this
-									off to use that variable for a config file of your own.
+									, which opencode merges between your global config and the project's. The shell
+									after opencode exits gets it too. Turn this off to use that variable for a config
+									file of your own.
 								</>
 							) : (
 								<>The shipped config didn't resolve, so there is nothing to inject.</>

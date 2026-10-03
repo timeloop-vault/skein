@@ -17,8 +17,8 @@ import { backgroundTasks } from "./backgroundTasks.ts";
 import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
-import { attachClaudeEvents } from "./harnessEvents.ts";
 import { harnessInput } from "./harnessInput.ts";
+import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
 import { shellClaim } from "./shellClaim.ts";
 import { subagents } from "./subagents.ts";
@@ -28,6 +28,7 @@ import { attachAdapters } from "./terminalSpawnAdapters.ts";
 import { agentResolves } from "./terminalSpawnAgent.ts";
 import { attachPtyInput, observeResize, registerInputTarget } from "./terminalSpawnInput.ts";
 import type { HarnessKind } from "./types.ts";
+import { useClaudeRepoint } from "./useClaudeRepoint.ts";
 
 type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
 
@@ -184,6 +185,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				// / Press Enter prompts on non-adapter harness
 				// kinds) reads from.
 				harnessActivity.recordOutput(harnessId, ev.chunk);
+				shellFollow?.onOutput(); // #517
 			} else {
 				handleExit(ev.code);
 			}
@@ -206,7 +208,9 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		// captures the auto-allocated sessionID via the SSE
 		// `session.created` event (chapter 5 phase 2b's sqlite poll
 		// stays as fallback in App.tsx).
-		let detachOpencodeAdapter: (() => void) | null = null;
+		const opencodeAdapter: { current: OpencodeAdapter | null } = { current: null };
+		// #517: opencode typed into the post-exit shell.
+		let shellFollow: ReturnType<typeof followOpencodeShell> | null = null;
 		// #238: this harness's entry in the `harnessInput` seam (the
 		// Nudge button today, #41's file drop later). Registered once
 		// the PTY is live, unregistered on exit/unmount/respawn — a
@@ -217,6 +221,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		const handleExit = (code: number | null) => {
 			if (cancelled) return;
 			phase = "exited";
+			shellFollow?.dispose();
 			harnessActivity.exited(harnessId, code);
 			detachInputTarget?.();
 			detachInputTarget = null;
@@ -302,7 +307,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				// that its PTY is live.
 				detachInputTarget = registerInputTarget(term, harnessId, harnessKind, id);
 				// L2c attach point — see terminalSpawnAdapters.ts.
-				detachOpencodeAdapter = attachAdapters({
+				const detach = attachAdapters({
 					harnessId,
 					roomId,
 					cwd,
@@ -313,6 +318,22 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					onSessionFollowed,
 					sessionIdRef,
 					claudeAdapterRef,
+				});
+				if (detach && opencodePort !== undefined) {
+					opencodeAdapter.current = { detach, port: opencodePort };
+				}
+				shellFollow?.dispose();
+				shellFollow = followOpencodeShell(harnessKind, cmdToSpawn[0], {
+					harnessId,
+					roomId,
+					cwd,
+					ptyIdRef,
+					sessionIdRef,
+					adapter: opencodeAdapter,
+					onSessionCaptured,
+					onSessionFollowed,
+					setHint,
+					hintTimerRef,
 				});
 				// No await between taking the buffer and attaching the real
 				// listener, so no reply is lost or sent twice.
@@ -347,7 +368,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// system row on exit and we don't need to react to it.
 			claudeAdapterRef.current?.detach();
 			claudeAdapterRef.current = null;
-			detachOpencodeAdapter?.();
+			shellFollow?.dispose();
+			opencodeAdapter.current?.detach();
 			detachInputTarget?.();
 			// Key handling + copy-on-select cleanup — see
 			// terminalInteractions.ts.
@@ -372,28 +394,6 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			shellClaim.forget(harnessId);
 		};
 	}, [mountKey]);
-
-	// #116: re-point the Claude JSONL adapter when `sessionId` changes
-	// under an already-running PTY — Claude's own `/clear` or in-tool
-	// `/resume` moving to a different conversation, reported via
-	// App.tsx's `skein://harness-session-start` listener updating the
-	// harness record, which flows back down here as a new prop. The PTY
-	// itself is untouched: only the tail target moves. A no-op when no
-	// adapter is attached (PTY not live yet, or a non-Claude harness) —
-	// the mount effect's own attach (above) picks up the current
-	// sessionId whenever it eventually runs.
-	useEffect(() => {
-		const current = claudeAdapterRef.current;
-		if (!current) return;
-		if (typeof sessionId !== "string" || sessionId === current.sessionId) return;
-		current.detach();
-		const fresh = shellClaim.consumeFreshProcess(harnessId); // #318
-		claudeAdapterRef.current = {
-			// #336: the process has lived across this re-point; a long tool
-			// call may be genuinely live, so no fresh-process replay —
-			// except #318's shell-claimed `claude`, a new process.
-			detach: attachClaudeEvents(harnessId, roomId, sessionId, cwd, fresh),
-			sessionId,
-		};
-	}, [sessionId, harnessId, roomId, cwd, claudeAdapterRef]);
+	// #116 re-point effect: see useClaudeRepoint.ts.
+	useClaudeRepoint({ sessionId, harnessId, roomId, cwd, claudeAdapterRef });
 }

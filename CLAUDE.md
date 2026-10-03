@@ -139,6 +139,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   lifecycle + L2c adapter attach), terminalInteractions.ts
     │   │   │                        #   (keys/clipboard/post-exit shell gate), terminalSetup.ts
     │   │   │                        #   (xterm.js Terminal + addon construction)
+    │   │   ├── opencodeShellFollow.ts # Follows an opencode restarted from the post-exit
+    │   │   │                        #   shell (#517): re-binds sessionId, re-points the SSE port
     │   │   ├── harnessActivity.ts   # Source of truth for harness phase (spawning/running/
     │   │   │                        #   idle/waiting/exited); L2a idle heuristic + L2b
     │   │   │                        #   patterns + L2c authoritative adapters. #277 defers
@@ -267,6 +269,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   load-bearing on Windows ConPTY; #171 split the reader
     │       │                        #   in two to batch output and gave stdin its own thread
     │       │                        #   so a wedged child can't block write/resize/kill)
+    │       ├── src/pty/procscan.rs  # Scans a PTY's own process descendants (#517): finds an
+    │       │                        #   opencode TUI restarted from the post-exit shell
     │       ├── src/git.rs           # DTO wrappers around skein-git; GitError → String
     │       ├── src/watcher.rs       # notify-debouncer-mini, 200 ms, .git/ deliberately unfiltered
     │       ├── src/db.rs            # rusqlite: rooms (table `sessions` — legacy name),
@@ -738,6 +742,16 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   environment shows what is injected and switches either off; turning
   the opencode one off is how `OPENCODE_CONFIG` becomes the user's
   again, which is why that key is reserved only *while* being injected.
+  **Opencode restarted from the post-exit shell (#517)**: that shell now
+  gets `OPENCODE_CONFIG` too, and while the pane is in post-exit-shell
+  mode `pty/procscan.rs` scans that PTY's own process descendants (never
+  a pane sharing the cwd) on output ticks; `opencodeShellFollow.ts`
+  acts on what it finds. `--session <id>` re-binds `Harness.sessionId`;
+  `--port <p>`, once that process is confirmed listening, re-points the
+  live SSE adapter. opencode's TUI binds no port without `--port`, so a
+  bare `opencode` or `--session` alone has no event source: the session
+  follows when given, the status is not live until Restart harness
+  (#490), and a one-time hint in the pane says so.
 - **The sign-off** (#214, epic #52 D9 as corrected): a `review_signoff`
   row per room — the reviewer's approval, and **the only thing in Skein
   an agent treats as permission**. The whole design is the `head_sha`

@@ -88,6 +88,7 @@ pub fn run() {
             commands::pty::pty_write,
             commands::pty::pty_resize,
             commands::pty::pty_kill,
+            commands::pty::pty_scan_opencode,
             commands::spawn_env::default_shell,
             commands::spawn_env::spawn_settings_load,
             commands::spawn_env::spawn_settings_save,
