@@ -18,12 +18,17 @@
 //! - `patch` — `edit` / `write` / `multiedit` tool parts, plus
 //!   dedicated `patch` part-type rows (file-list snapshots).
 //! - `turn_cost` — `step-finish` parts (carry tokens + cost).
-//! - `user_prompt` — user-role messages.
+//! - `user_prompt` — the human's prompt: live, from a user-role
+//!   `message.updated` plus its non-synthetic text part (see
+//!   `UserPromptTracker`); backfill, from the same text parts in the DB.
 //! - `ai_title` — `session.updated` SSE events with a title change.
 //!
 //! opencode-specific kinds not present in Claude today:
 //! - `compaction` — context-window compaction events.
-//! - `reasoning` — the model's reasoning blocks (text + opaque blob).
+//! - `reasoning` — the model's COMPLETED reasoning blocks (text + opaque
+//!   blob); in-progress updates are skipped.
+
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{Value, json};
 
@@ -283,6 +288,11 @@ fn extract_reasoning(part: &Value, out: &mut Vec<ExtractedAction>) {
         .and_then(|t| t.get("end"))
         .and_then(Value::as_i64)
         .unwrap_or(0);
+    if ended_at == 0 {
+        // Still streaming: the completed update carries the text, and
+        // emitting both would give every block two rows.
+        return;
+    }
     let duration_ms = ended_at.saturating_sub(started_at);
     let opaque = part
         .get("metadata")
@@ -303,6 +313,116 @@ fn extract_reasoning(part: &Value, out: &mut Vec<ExtractedAction>) {
         payload: payload.to_string(),
         source: None,
     });
+}
+
+/// Bound on remembered ids; a session's user messages are few, so this
+/// only guards against unbounded growth over a very long-lived adapter.
+const TRACKER_CAP: usize = 512;
+
+/// A human prompt found on the live stream, with the session it was
+/// written in so the caller can decide whether that session is root.
+#[derive(Debug, Clone)]
+pub struct ObservedPrompt {
+    pub session_id: String,
+    pub action: ExtractedAction,
+}
+
+/// Stateful observer turning opencode's two-event user prompt (a
+/// user-role `message.updated`, then a text `message.part.updated`)
+/// into one `user_prompt` action. The text part carries no role, so the
+/// message ids seen with `role == "user"` are remembered. A text part
+/// that arrives before its message is ignored (opencode sends the
+/// message first); each part id emits at most once.
+#[derive(Debug, Default)]
+pub struct UserPromptTracker {
+    /// user message id → (session id, `time.created`)
+    user_messages: HashMap<String, (String, i64)>,
+    emitted_parts: HashSet<String>,
+}
+
+impl UserPromptTracker {
+    pub fn observe(&mut self, payload: &Value) -> Option<ObservedPrompt> {
+        let ty = payload.get("type").and_then(Value::as_str)?;
+        let props = payload.get("properties")?;
+        match ty {
+            "message.updated" => {
+                let info = props.get("info")?;
+                if info.get("role").and_then(Value::as_str) != Some("user") {
+                    return None;
+                }
+                let id = info.get("id").and_then(Value::as_str)?;
+                let session = info
+                    .get("sessionID")
+                    .or_else(|| props.get("sessionID"))
+                    .and_then(Value::as_str)?;
+                let created = info
+                    .get("time")
+                    .and_then(|t| t.get("created"))
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                if self.user_messages.len() >= TRACKER_CAP {
+                    self.user_messages.clear();
+                    self.emitted_parts.clear();
+                }
+                self.user_messages
+                    .insert(id.to_owned(), (session.to_owned(), created));
+                None
+            }
+            "message.part.updated" => {
+                let part = props.get("part")?;
+                let text = user_text_of(part)?;
+                let part_id = part.get("id").and_then(Value::as_str)?;
+                let message_id = part.get("messageID").and_then(Value::as_str)?;
+                let (session, created) = self.user_messages.get(message_id)?.clone();
+                if self.emitted_parts.contains(part_id) {
+                    return None;
+                }
+                if self.emitted_parts.len() >= TRACKER_CAP {
+                    self.user_messages.clear();
+                    self.emitted_parts.clear();
+                }
+                self.emitted_parts.insert(part_id.to_owned());
+                let timestamp_ms = if created > 0 {
+                    created
+                } else {
+                    props.get("time").and_then(Value::as_i64).unwrap_or(0)
+                };
+                Some(ObservedPrompt {
+                    session_id: session,
+                    action: ExtractedAction {
+                        kind: action_kind::USER_PROMPT,
+                        timestamp_ms,
+                        payload: json!({"prompt": text}).to_string(),
+                        source: Some(part_id.to_owned()),
+                    },
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The text of a non-synthetic, non-empty `text` part.
+fn user_text_of(part: &Value) -> Option<&str> {
+    if part.get("type").and_then(Value::as_str) != Some("text")
+        || part.get("synthetic").and_then(Value::as_bool) == Some(true)
+    {
+        return None;
+    }
+    part.get("text")
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty())
+}
+
+/// Join the non-synthetic text parts of one user message (`part.data`
+/// values, in order) into the prompt; `None` when there is no text.
+///
+/// Live emits one row per text part, backfill one joined row per
+/// message. opencode sends a single text part per typed prompt, so the
+/// two agree in practice.
+fn join_prompt_text(parts: &[Value]) -> Option<String> {
+    let texts: Vec<&str> = parts.iter().filter_map(user_text_of).collect();
+    (!texts.is_empty()).then(|| texts.join("\n"))
 }
 
 /// Read the opencode `SQLite` DB and extract all actions for a session,
@@ -328,27 +448,39 @@ pub fn backfill_from_db(
     };
 
     let mut rows_to_insert: Vec<crate::db::NewHarnessAction> = Vec::new();
+    // Text parts per message id, in part order, for the user prompts below.
+    let mut texts_by_message: HashMap<String, Vec<Value>> = HashMap::new();
 
     // Parts — the main source of tool calls, patches, step-finish.
     let Ok(mut stmt) = conn.prepare(
-        "SELECT data, time_created FROM part \
+        "SELECT data, time_created, message_id FROM part \
          WHERE session_id = ?1 \
          ORDER BY time_created, id",
     ) else {
         return 0;
     };
     let Ok(rows) = stmt.query_map(rusqlite::params![session_id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
     }) else {
         return 0;
     };
     for row in rows {
-        let Ok((data, ts_created)) = row else {
+        let Ok((data, ts_created, message_id)) = row else {
             continue;
         };
         let Ok(value) = serde_json::from_str::<Value>(&data) else {
             continue;
         };
+        if value.get("type").and_then(Value::as_str) == Some("text") {
+            texts_by_message
+                .entry(message_id)
+                .or_default()
+                .push(value.clone());
+        }
         let mut actions = Vec::new();
         extract_from_part(&value, &mut actions);
         for mut action in actions {
@@ -369,14 +501,18 @@ pub fn backfill_from_db(
 
     // User-role messages as user_prompt.
     if let Ok(mut msg_stmt) = conn.prepare(
-        "SELECT data, time_created FROM message \
+        "SELECT data, time_created, id FROM message \
          WHERE session_id = ?1 \
          ORDER BY time_created, id",
     ) && let Ok(msg_rows) = msg_stmt.query_map(rusqlite::params![session_id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
     }) {
         for row in msg_rows {
-            let Ok((data, ts_created)) = row else {
+            let Ok((data, ts_created, message_id)) = row else {
                 continue;
             };
             let Ok(value) = serde_json::from_str::<Value>(&data) else {
@@ -394,8 +530,11 @@ pub fn backfill_from_db(
                 .and_then(|s| s.get("diffs"))
                 .cloned()
                 .unwrap_or(Value::Null);
+            let prompt = texts_by_message
+                .get(&message_id)
+                .and_then(|parts| join_prompt_text(parts));
             let payload = json!({
-                "prompt": null,
+                "prompt": prompt,
                 "summary_diffs": summary_text,
             });
             rows_to_insert.push(crate::db::NewHarnessAction {
@@ -419,312 +558,4 @@ pub fn backfill_from_db(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    // ── SSE extraction ───────────────────────────────────────────
-
-    #[test]
-    fn completed_bash_tool_emits_tool_call() {
-        let payload = json!({
-            "type": "message.part.updated",
-            "properties": {"part": {
-                "type": "tool", "tool": "bash",
-                "callID": "toolu_1",
-                "state": {
-                    "status": "completed",
-                    "input": {"command": "ls", "description": "list files"},
-                    "output": "file1\nfile2\n",
-                    "metadata": {"output": "file1\nfile2\n", "exit": 0, "truncated": false},
-                    "title": "list files",
-                    "time": {"start": 1000, "end": 1050},
-                }
-            }}
-        });
-        let actions = extract_from_sse(&payload);
-        assert_eq!(actions.len(), 1);
-        let a = &actions[0];
-        assert_eq!(a.kind, action_kind::TOOL_CALL);
-        assert_eq!(a.timestamp_ms, 1000);
-        assert_eq!(a.source.as_deref(), Some("toolu_1"));
-        let p: Value = serde_json::from_str(&a.payload).unwrap();
-        assert_eq!(p["tool"], "bash");
-        assert_eq!(p["duration_ms"], 50);
-        assert_eq!(p["title"], "list files");
-    }
-
-    #[test]
-    fn edit_tool_classified_as_patch() {
-        let payload = json!({
-            "type": "message.part.updated",
-            "properties": {"part": {
-                "type": "tool", "tool": "edit",
-                "callID": "toolu_2",
-                "state": {
-                    "status": "completed",
-                    "input": {"filePath": "/foo.rs", "oldString": "a", "newString": "b"},
-                    "output": "Edit applied successfully.",
-                    "metadata": {
-                        "filediff": {"file": "/foo.rs", "patch": "@@ ...", "additions": 1, "deletions": 1},
-                        "truncated": false,
-                    },
-                    "title": "foo.rs",
-                    "time": {"start": 2000, "end": 2001},
-                }
-            }}
-        });
-        let actions = extract_from_sse(&payload);
-        assert_eq!(actions.len(), 1);
-        let a = &actions[0];
-        assert_eq!(a.kind, action_kind::PATCH);
-        let p: Value = serde_json::from_str(&a.payload).unwrap();
-        assert_eq!(p["files"], json!(["/foo.rs"]));
-        assert_eq!(p["patch_info"]["additions"], 1);
-        assert_eq!(p["patch_info"]["deletions"], 1);
-    }
-
-    #[test]
-    fn todowrite_classified_as_plan_change() {
-        let payload = json!({
-            "type": "message.part.updated",
-            "properties": {"part": {
-                "type": "tool", "tool": "todowrite",
-                "callID": "toolu_3",
-                "state": {
-                    "status": "completed",
-                    "input": {"todos": [
-                        {"content": "Do thing A", "status": "pending", "priority": "high"},
-                        {"content": "Do thing B", "status": "completed", "priority": "high"},
-                    ]},
-                    "output": "[...]",
-                    "metadata": {"todos": [
-                        {"content": "Do thing A", "status": "pending", "priority": "high"},
-                        {"content": "Do thing B", "status": "completed", "priority": "high"},
-                    ], "truncated": false},
-                    "title": "2 todos",
-                    "time": {"start": 3000, "end": 3001},
-                }
-            }}
-        });
-        let actions = extract_from_sse(&payload);
-        assert_eq!(actions.len(), 1);
-        let a = &actions[0];
-        assert_eq!(a.kind, action_kind::PLAN_CHANGE);
-        let p: Value = serde_json::from_str(&a.payload).unwrap();
-        assert_eq!(p["plan_item"]["count"], 2);
-    }
-
-    #[test]
-    fn error_tool_emits_with_error_flag() {
-        let payload = json!({
-            "type": "message.part.updated",
-            "properties": {"part": {
-                "type": "tool", "tool": "edit",
-                "callID": "toolu_err",
-                "state": {
-                    "status": "error",
-                    "input": {},
-                    "error": "Found multiple matches",
-                    "metadata": {"interrupted": false},
-                    "time": {"start": 4000, "end": 4001},
-                }
-            }}
-        });
-        let actions = extract_from_sse(&payload);
-        assert_eq!(actions.len(), 1);
-        let p: Value = serde_json::from_str(&actions[0].payload).unwrap();
-        assert_eq!(p["is_error"], true);
-        assert_eq!(p["error"], "Found multiple matches");
-    }
-
-    #[test]
-    fn pending_or_running_tool_does_not_emit() {
-        for status in ["pending", "running"] {
-            let payload = json!({
-                "type": "message.part.updated",
-                "properties": {"part": {
-                    "type": "tool", "tool": "bash",
-                    "callID": "toolu_x",
-                    "state": {
-                        "status": status,
-                        "input": {"command": "ls"},
-                        "time": {"start": 5000},
-                    }
-                }}
-            });
-            let actions = extract_from_sse(&payload);
-            assert!(actions.is_empty(), "{status} should not emit");
-        }
-    }
-
-    #[test]
-    fn step_finish_emits_turn_cost() {
-        let payload = json!({
-            "type": "message.part.updated",
-            "properties": {"part": {
-                "type": "step-finish",
-                "reason": "tool-calls",
-                "snapshot": "abc123",
-                "tokens": {"total": 1000, "input": 800, "output": 200, "reasoning": 0,
-                           "cache": {"write": 0, "read": 700}},
-                "cost": 0.005,
-            }}
-        });
-        let actions = extract_from_sse(&payload);
-        assert_eq!(actions.len(), 1);
-        let a = &actions[0];
-        assert_eq!(a.kind, action_kind::TURN_COST);
-        let p: Value = serde_json::from_str(&a.payload).unwrap();
-        assert_eq!(p["reason"], "tool-calls");
-        assert_eq!(p["tokens"]["total"], 1000);
-    }
-
-    #[test]
-    fn patch_part_emits_patch_action() {
-        let payload = json!({
-            "type": "message.part.updated",
-            "properties": {"part": {
-                "type": "patch",
-                "hash": "abc123",
-                "files": ["/foo.rs", "/bar.rs"],
-            }}
-        });
-        let actions = extract_from_sse(&payload);
-        assert_eq!(actions.len(), 1);
-        let a = &actions[0];
-        assert_eq!(a.kind, action_kind::PATCH);
-        let p: Value = serde_json::from_str(&a.payload).unwrap();
-        assert_eq!(p["files"], json!(["/foo.rs", "/bar.rs"]));
-    }
-
-    #[test]
-    fn session_updated_with_title_emits_ai_title() {
-        let payload = json!({
-            "type": "session.updated",
-            "properties": {
-                "title": "Refactoring the parser",
-                "time": {"created": 1000, "updated": 2000},
-            }
-        });
-        let actions = extract_from_sse(&payload);
-        assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].kind, action_kind::AI_TITLE);
-        let p: Value = serde_json::from_str(&actions[0].payload).unwrap();
-        assert_eq!(p["ai_title"], "Refactoring the parser");
-    }
-
-    #[test]
-    fn irrelevant_sse_events_emit_nothing() {
-        for ty in [
-            "server.heartbeat",
-            "server.connected",
-            "session.status",
-            "session.idle",
-            "session.created",
-            "session.diff",
-            "mcp.tools.changed",
-            "message.part.delta",
-        ] {
-            let payload = json!({"type": ty, "properties": {}});
-            assert!(
-                extract_from_sse(&payload).is_empty(),
-                "{ty} should not emit"
-            );
-        }
-    }
-
-    #[test]
-    fn narration_and_step_start_parts_do_not_emit() {
-        for part_type in ["text", "step-start", "file"] {
-            let payload = json!({
-                "type": "message.part.updated",
-                "properties": {"part": {"type": part_type, "text": "hello"}}
-            });
-            assert!(
-                extract_from_sse(&payload).is_empty(),
-                "{part_type} part should not emit"
-            );
-        }
-    }
-
-    #[test]
-    fn compaction_part_emits_compaction_action() {
-        let payload = json!({
-            "type": "message.part.updated",
-            "properties": {"part": {"type": "compaction", "auto": true}}
-        });
-        let actions = extract_from_sse(&payload);
-        assert_eq!(actions.len(), 1);
-        let a = &actions[0];
-        assert_eq!(a.kind, action_kind::COMPACTION);
-        let p: Value = serde_json::from_str(&a.payload).unwrap();
-        assert_eq!(p["auto"], true);
-    }
-
-    #[test]
-    fn reasoning_part_emits_reasoning_action() {
-        let payload = json!({
-            "type": "message.part.updated",
-            "properties": {"part": {
-                "type": "reasoning",
-                "text": "Update summary with progress.",
-                "time": {"start": 1_000, "end": 1_500},
-                "metadata": {"copilot": {"reasoningOpaque": "OPAQUE_BLOB"}},
-            }}
-        });
-        let actions = extract_from_sse(&payload);
-        assert_eq!(actions.len(), 1);
-        let a = &actions[0];
-        assert_eq!(a.kind, action_kind::REASONING);
-        assert_eq!(a.timestamp_ms, 1_000);
-        let p: Value = serde_json::from_str(&a.payload).unwrap();
-        assert_eq!(p["text"], "Update summary with progress.");
-        assert_eq!(p["duration_ms"], 500);
-        assert_eq!(p["reasoning_opaque"], "OPAQUE_BLOB");
-    }
-
-    #[test]
-    fn reasoning_part_without_opaque_blob_still_emits() {
-        // Some providers don't supply the opaque blob — we still
-        // capture the text.
-        let payload = json!({
-            "type": "message.part.updated",
-            "properties": {"part": {
-                "type": "reasoning",
-                "text": "Thinking through the problem.",
-                "time": {"start": 2_000, "end": 2_200},
-            }}
-        });
-        let actions = extract_from_sse(&payload);
-        assert_eq!(actions.len(), 1);
-        let p: Value = serde_json::from_str(&actions[0].payload).unwrap();
-        assert_eq!(p["text"], "Thinking through the problem.");
-        assert!(p["reasoning_opaque"].is_null());
-    }
-
-    #[test]
-    fn question_tool_classified_as_tool_call() {
-        let payload = json!({
-            "type": "message.part.updated",
-            "properties": {"part": {
-                "type": "tool", "tool": "question",
-                "callID": "toolu_q",
-                "state": {
-                    "status": "completed",
-                    "input": {"questions": [{"question": "Which?"}]},
-                    "output": "User answered",
-                    "metadata": {"answers": [["Option A"]], "truncated": false},
-                    "title": "Asked 1 question",
-                    "time": {"start": 6000, "end": 6500},
-                }
-            }}
-        });
-        let actions = extract_from_sse(&payload);
-        assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].kind, action_kind::TOOL_CALL);
-        let p: Value = serde_json::from_str(&actions[0].payload).unwrap();
-        assert_eq!(p["tool"], "question");
-        assert_eq!(p["title"], "Asked 1 question");
-    }
-}
+mod tests;
