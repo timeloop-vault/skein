@@ -199,6 +199,8 @@ mod cli_version_tests;
 #[cfg(test)]
 mod concurrent_tests;
 #[cfg(test)]
+mod monitor_event_tests;
+#[cfg(test)]
 mod parse_tests;
 #[cfg(test)]
 mod persist_tests;

@@ -850,7 +850,9 @@ pub fn tool_specs() -> Vec<Value> {
                  opened. Refuses loudly, naming the id, if it does not exist or is \
                  archived; never answers with nothing. Reports every harness in the \
                  room with its live phase (\"unknown\" when Skein cannot currently \
-                 vouch for it), and the same sign-off block review_status returns, \
+                 vouch for it) plus outstanding_subagents and \
+                 outstanding_background_tasks (the work a running harness is \
+                 waiting on; null when unknown), and the same sign-off block review_status returns, \
                  for that room's own review.",
             "inputSchema": {
                 "type": "object",
@@ -871,7 +873,9 @@ pub fn tool_specs() -> Vec<Value> {
                  does not exist or is archived. Archived rooms are otherwise skipped \
                  entirely: none of their harnesses have a live process to ask a \
                  phase of. Each entry names its room and reports a live phase \
-                 (\"unknown\" when Skein cannot currently vouch for it).",
+                 (\"unknown\" when Skein cannot currently vouch for it), plus \
+                 outstanding_subagents and outstanding_background_tasks (the work \
+                 a running harness is waiting on; null when unknown).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
