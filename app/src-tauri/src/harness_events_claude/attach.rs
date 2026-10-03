@@ -4,6 +4,7 @@ use super::adapter::{
     ActionPersistence, Adapter, AttachInfo, ReattachRecipe, Registry, SubagentTail, TailState,
 };
 use super::background_tasks::{BackgroundState, now_ms, reconcile_background};
+use super::cli_version::latest_cli_version_event;
 use super::paths::{DirId, desired_watches};
 use super::persist::{persist_extracted_batch, scan_history};
 use super::resync::fingerprint_of;
@@ -121,8 +122,10 @@ where
         });
         let mut background = BackgroundState::default();
         let mut local_command = LocalCommandTracker::default();
+        let mut seed_cli_version = None;
         let (last_pos, attached, initial_event, fingerprint) = match fs::read_to_string(&path) {
             Ok(content) => {
+                seed_cli_version = latest_cli_version_event(&content);
                 let (init, fresh) = scan_history(
                     &content,
                     actions.as_mut(),
@@ -283,6 +286,7 @@ where
             utf8_stall_at: None,
             utf8_stall_count: 0,
             utf8_stall_warned: false,
+            last_cli_version: None,
         }));
         let cb_state = Arc::clone(&state);
         let on_event: Arc<dyn Fn(ClaudeEvent) + Send + Sync> = Arc::new(on_event);
@@ -375,6 +379,9 @@ where
             on_event(event);
         }
         for event in initial_background_starts {
+            on_event(event);
+        }
+        if let Some(event) = seed_cli_version {
             on_event(event);
         }
 

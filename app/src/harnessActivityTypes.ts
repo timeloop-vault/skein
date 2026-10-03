@@ -315,4 +315,7 @@ export const TRANSITION_SOURCE = {
 	// logged straight to harness_events by `restartHarness`, not through
 	// the phase store.
 	UserRestart: "user-restart",
+	// #491: the same restart, started by the Claude Code update notice's
+	// auto mode rather than by a person.
+	VersionAutoRestart: "version-auto-restart",
 } as const;

@@ -10,12 +10,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { CliShimPanel } from "./CliShimPanel.tsx";
+import type { VersionNoticeMode } from "./claudeVersion.ts";
 import { NudgesPanel } from "./NudgesPanel.tsx";
 import type { DefaultAgents } from "./prefs.ts";
 import { AboutSettings } from "./SettingsAbout.tsx";
 import { AgentSettings } from "./SettingsAgents.tsx";
 import { AppearanceSettings } from "./SettingsAppearance.tsx";
 import { NotificationSettings } from "./SettingsNotifications.tsx";
+import { VersionNoticeSettings } from "./SettingsVersionNotice.tsx";
 import { SpawnEnvPanel } from "./SpawnEnvPanel.tsx";
 import type { Density, HarnessKind, SpawnSettings, Theme } from "./types.ts";
 import { useFocusRestore } from "./useFocusRestore.ts";
@@ -62,6 +64,9 @@ interface SettingsModalProps {
 	// the frontend builds the argv the agent goes into.
 	defaultAgents: DefaultAgents;
 	onDefaultAgent: (kind: HarnessKind, agent: string | undefined) => void;
+	// #491: Claude Code update notice mode.
+	versionNoticeMode: VersionNoticeMode;
+	onVersionNoticeMode: (mode: VersionNoticeMode) => void;
 	/** The folder the agent lists are asked about — the active room's.
 	 *  Project agents differ per repo; user and plugin agents do not. */
 	agentCwd: string;
@@ -102,6 +107,8 @@ export const SettingsModal = ({
 	onSpawnSettings,
 	defaultAgents,
 	onDefaultAgent,
+	versionNoticeMode,
+	onVersionNoticeMode,
 	agentCwd,
 	branchTemplate,
 	onBranchTemplate,
@@ -183,6 +190,8 @@ export const SettingsModal = ({
 						branchTemplate={branchTemplate}
 						onBranchTemplate={onBranchTemplate}
 					/>
+
+					<VersionNoticeSettings mode={versionNoticeMode} onChange={onVersionNoticeMode} />
 
 					<div className="sk-field">
 						<label>Nudges</label>

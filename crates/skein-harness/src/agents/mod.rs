@@ -80,7 +80,7 @@ use std::process::{Command, Stdio};
 /// through `cmd.exe` — gets a brand-new one allocated for it regardless
 /// of `Stdio::null`/piping, which only redirects the streams, not the
 /// allocation (#263).
-fn clean_command(program: &OsStr) -> Command {
+pub(crate) fn clean_command(program: &OsStr) -> Command {
     let mut cmd = Command::new(program);
     for key in [
         "GIT_DIR",

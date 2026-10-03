@@ -447,6 +447,9 @@ pub(super) struct TailState {
     /// once past the threshold. Rearmed by the same reset as
     /// `utf8_stall_count`.
     pub(super) utf8_stall_warned: bool,
+    /// Last Claude Code version the LIVE tail emitted (#491). Not seeded
+    /// from the attach scan, so the first live row with a version emits.
+    pub(super) last_cli_version: Option<String>,
 }
 
 /// Action-extraction context bundled per attached harness. The

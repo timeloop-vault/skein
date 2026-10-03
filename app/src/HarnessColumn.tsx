@@ -1,6 +1,6 @@
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef } from "react";
 import { useWorkingBackgroundTaskCount } from "./backgroundTasks.ts";
-import { HarnessPicker, HarnessTab } from "./components.tsx";
+import { HarnessPicker } from "./components.tsx";
 import { DesignBody } from "./DesignBody.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
 import { FilesBody } from "./FilesBody.tsx";
@@ -13,8 +13,9 @@ import {
 } from "./harnessActivity.ts";
 import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
 import type { GateResult } from "./harnessInputGate.ts";
+import { LiveHarnessTab } from "./LiveHarnessTab.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
-import type { DefaultAgents } from "./prefs.ts";
+import { type DefaultAgents, type VersionNoticeModes, versionNoticeModeFor } from "./prefs.ts";
 import { useWorkingSubagentCount } from "./subagents.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
 import "./StatusBar.css";
@@ -29,19 +30,6 @@ import "./HarnessColumn.css";
 // they only re-render on real phase changes so a harness streaming
 // output continuously doesn't churn its tab. Epic #50 (foundation
 // for #29, #12, etc.).
-
-const LiveHarnessTab = (props: Parameters<typeof HarnessTab>[0]) => {
-	const activity = useHarnessActivity(props.h.id);
-	const agent = agentLabel(props.h, useObservedAgent(props.h.id));
-	if (!activity) return <HarnessTab {...props} agent={agent} />;
-	// Apply the acknowledged-downgrade: a waiting harness with no
-	// pending notifications has already been seen, so render it as
-	// idle (grey) instead of waiting (blue pulse). The phase in
-	// the store stays `waiting` — only the visual indicator
-	// collapses.
-	const status = effectiveStatus(activity, props.h.pendingNotifications ?? 0);
-	return <HarnessTab {...props} agent={agent} h={{ ...props.h, status }} />;
-};
 
 // L4/L5a — per-room aggregate status + derived badge now live in
 // RoomStrip.tsx (#76): `LiveRoomTab` for one room, `GroupTab` for a
@@ -230,6 +218,8 @@ export interface HarnessColumnProps {
 	onReattachTelemetry: (harnessId: string) => void;
 	// #490: room scope already bound by RoomWorkspace.
 	onRestartHarness: (harnessId: string) => Promise<GateResult>;
+	/** #491: per-kind update-notice mode (Settings). */
+	versionNoticeModes: VersionNoticeModes;
 }
 
 export const HarnessColumn = ({
@@ -253,7 +243,9 @@ export const HarnessColumn = ({
 	onOpencodeSessionFollowed,
 	onReattachTelemetry,
 	onRestartHarness,
+	versionNoticeModes,
 }: HarnessColumnProps) => {
+	const activeHarness = room.harnesses.find((h) => h.id === room.activeHarnessId);
 	const tablistRef = useRef<HTMLDivElement | null>(null);
 
 	// The tab list scrolls; the active tab follows. scrollLeft only —
@@ -293,6 +285,8 @@ export const HarnessColumn = ({
 						<LiveHarnessTab
 							key={h.id}
 							h={h}
+							versionMode={versionNoticeModeFor(versionNoticeModes, h.kind)}
+							onVersionRestart={onRestartHarness}
 							active={h.id === room.activeHarnessId}
 							closable={room.harnesses.length > 1}
 							onClick={() => onSwitchHarness(room.id, h.id)}
@@ -315,7 +309,10 @@ export const HarnessColumn = ({
 					+ harness
 				</div>
 				<HarnessActionsMenu
-					activeHarness={room.harnesses.find((h) => h.id === room.activeHarnessId)}
+					activeHarness={activeHarness}
+					versionMode={
+						activeHarness ? versionNoticeModeFor(versionNoticeModes, activeHarness.kind) : "off"
+					}
 					cwd={room.cwd}
 					onReattachTelemetry={onReattachTelemetry}
 					onRestart={onRestartHarness}

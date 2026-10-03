@@ -202,6 +202,7 @@ pub(super) fn t425_state(path: &Path, actions: Option<ActionPersistence>) -> Arc
         utf8_stall_at: None,
         utf8_stall_count: 0,
         utf8_stall_warned: false,
+        last_cli_version: None,
     }))
 }
 

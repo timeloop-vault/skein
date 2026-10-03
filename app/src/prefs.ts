@@ -7,6 +7,7 @@
 import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
 
 import { DEFAULT_BRANCH_TEMPLATE } from "./branchName.ts";
+import { DEFAULT_VERSION_NOTICE_MODE, type VersionNoticeMode } from "./claudeVersion.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { NudgeOverrides } from "./nudgeRegistry.ts";
 import type { HarnessKind } from "./types";
@@ -158,6 +159,36 @@ export const withDefaultAgent = (
 	else delete next[kind];
 	return next;
 };
+
+// ── Claude Code update notice mode per kind (#491) ─────────────────
+//
+// Only Claude has a version to compare; every other kind is always off.
+// Absent key = the default, never a stored "off".
+
+export type VersionNoticeModes = Partial<Record<HarnessKind, VersionNoticeMode>>;
+
+const isMode = (m: unknown): m is VersionNoticeMode => m === "off" || m === "badge" || m === "auto";
+
+/** The notice mode for `kind`. Tolerates a blob of the wrong shape. */
+export const versionNoticeModeFor = (
+	modes: VersionNoticeModes,
+	kind: HarnessKind,
+): VersionNoticeMode => {
+	if (kind !== "claude") return "off";
+	if (typeof modes !== "object" || modes === null) return DEFAULT_VERSION_NOTICE_MODE;
+	const stored = modes[kind];
+	return isMode(stored) ? stored : DEFAULT_VERSION_NOTICE_MODE;
+};
+
+/** `modes` with `kind` set to `mode`. */
+export const withVersionNoticeMode = (
+	modes: VersionNoticeModes,
+	kind: HarnessKind,
+	mode: VersionNoticeMode,
+): VersionNoticeModes => ({
+	...(typeof modes === "object" && modes !== null ? modes : {}),
+	[kind]: mode,
+});
 
 /** The agent New Room starts `kind` with in a folder it remembers.
  *

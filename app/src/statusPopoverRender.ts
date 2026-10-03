@@ -40,6 +40,8 @@ export const render = (el: HTMLDivElement, c: Resolved) => {
 			`pv-${c.status}`,
 		);
 	if (c.tasks.text) seg("tasks", c.tasks.text);
+	// #491: the Claude Code update notice (and any refused auto-restart).
+	if (c.update) seg("update", c.update);
 	// #329: the tab's unread-mail marker, as a segment rather than its
 	// own native tooltip — same one-line style as everything else here.
 	if (c.mailCount > 0) seg("mail", mailPopoverText(c.mailCount, c.mailFrom));

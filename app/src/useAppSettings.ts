@@ -16,7 +16,7 @@
 
 import { useCallback, useState } from "react";
 import { DEFAULT_BRANCH_TEMPLATE } from "./branchName.ts";
-import { type DefaultAgents, usePersistedState } from "./prefs.ts";
+import { type DefaultAgents, usePersistedState, type VersionNoticeModes } from "./prefs.ts";
 import type { RightPaneTab } from "./RightPane.tsx";
 import type { Density, Theme } from "./types.ts";
 
@@ -60,6 +60,11 @@ export function useAppSettings() {
 	// #248: default agent per harness kind, set in Settings. Read by the
 	// `+ harness` picker (preselected) and New room (prefilled).
 	const [defaultAgents, setDefaultAgents] = usePersistedState<DefaultAgents>("defaultAgents", {});
+	// #491: Claude Code update notice mode, set in Settings.
+	const [versionNoticeModes, setVersionNoticeModes] = usePersistedState<VersionNoticeModes>(
+		"versionNoticeModes",
+		{},
+	);
 	// #227: the app-wide worktree branch template, set in Settings. A
 	// folder's own remembered template still wins — see `branchTemplateFor`.
 	const [branchTemplate, setBranchTemplate] = usePersistedState<string>(
@@ -123,6 +128,8 @@ export function useAppSettings() {
 		handleToggleTurnCosts,
 		defaultAgents,
 		setDefaultAgents,
+		versionNoticeModes,
+		setVersionNoticeModes,
 		branchTemplate,
 		setBranchTemplate,
 		rightPaneTabs,

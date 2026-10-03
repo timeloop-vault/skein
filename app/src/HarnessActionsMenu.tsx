@@ -12,6 +12,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { Fragment, useEffect, useRef, useState } from "react";
+import type { VersionNoticeMode } from "./claudeVersion.ts";
+import { useVersionNotice } from "./claudeVersionStore.ts";
+import { restartMenuLabel } from "./claudeVersionText.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { type ActionsMenuItem, actionsButtonState } from "./harnessActionsMenu.ts";
 import { useHarnessActivity } from "./harnessActivity.ts";
@@ -34,12 +37,15 @@ export const HarnessActionsMenu = ({
 	cwd,
 	onReattachTelemetry,
 	onRestart,
+	versionMode,
 }: {
 	activeHarness: Harness | undefined;
 	cwd: string | undefined;
 	// #490: re-checks its own gate against live state and refuses with a
 	// reason, so a stale enabled item is harmless.
 	onRestart: (harnessId: string) => Promise<GateResult>;
+	// #491: with a notice showing, Restart is worded as the update.
+	versionMode: VersionNoticeMode;
 	// #410: manual recovery for a Claude harness whose Rust-side JSONL
 	// tail died — only ever called for a harness that passes
 	// `hasClaudeTranscriptTail` below, same as the automatic attach in
@@ -53,6 +59,7 @@ export const HarnessActionsMenu = ({
 	const rootRef = useRef<HTMLDivElement | null>(null);
 
 	const activity = useHarnessActivity(activeHarness?.id ?? null);
+	const versionNotice = useVersionNotice(activeHarness?.id ?? "").notice;
 	const mailHeld = useMailHold(activeHarness?.id ?? "").held;
 	// The composer draft has no change subscription (only "cleared"), so
 	// while the menu is open re-render on a short tick to keep the restart
@@ -210,7 +217,7 @@ export const HarnessActionsMenu = ({
 								}
 								onClick={() => void onRestartClick()}
 							>
-								Restart harness
+								{restartMenuLabel(versionMode !== "off" ? versionNotice : null)}
 							</button>
 						</>
 					)}

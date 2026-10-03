@@ -95,6 +95,7 @@ pub fn run() {
             commands::spawn_env::spawn_env_reprobe,
             commands::spawn_env::harness_config_status,
             commands::spawn_env::list_harness_agents,
+            commands::spawn_env::claude_cli_version,
             commands::spawn_env::default_cwd,
             commands::rooms::db_load_rooms,
             commands::rooms::db_save_rooms,

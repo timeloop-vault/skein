@@ -3,6 +3,7 @@
 use super::ClaudeEvent;
 use super::adapter::TailState;
 use super::background_tasks::{BackgroundOut, now_ms};
+use super::cli_version::live_cli_version_event;
 use super::parse::parse_value;
 use super::persist::persist_extracted;
 use super::resync::{Reappear, classify_reappear, extend_fingerprint, finish_resync};
@@ -310,6 +311,9 @@ pub(super) fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent
             continue;
         };
         if let Some(event) = parse_value(&value, &mut in_assistant_turn, &mut local_command) {
+            events.push(event);
+        }
+        if let Some(event) = live_cli_version_event(&value, &mut s.last_cli_version) {
             events.push(event);
         }
         if let Some(ap) = s.actions.as_mut() {

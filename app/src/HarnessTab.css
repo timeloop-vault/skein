@@ -55,3 +55,21 @@
 	color: var(--fg-1);
 	background: var(--bg-2);
 }
+/* #491: a newer Claude Code is installed; click restarts this harness. */
+.tab-update {
+	display: inline-flex;
+	align-items: center;
+	padding: 1px 4px;
+	font: inherit;
+	font-size: calc(var(--cfs, 12px) * 0.78);
+	line-height: 1;
+	color: var(--accent);
+	background: transparent;
+	border: 1px solid var(--accent);
+	border-radius: 3px;
+	cursor: pointer;
+}
+.tab-update:hover,
+.tab-update:focus-visible {
+	background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
