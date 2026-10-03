@@ -56,13 +56,21 @@ const HARNESS_PHASE_TIMEOUT: Duration = Duration::from_secs(3);
 /// is empty — every caller already filters out archived-room harnesses
 /// (no PTY is mounted for one, so there is nothing to ask) before
 /// building that list.
-async fn harness_phases(state: &AgentApiState, harness_ids: &[String]) -> BTreeMap<String, String> {
-    let mut phases: BTreeMap<String, String> = harness_ids
+///
+/// The same answer carries the outstanding-work counts (#448) from its
+/// optional `work` map; they ride the one round trip and are `None`
+/// whenever the phase is unknown for the same reasons, or `work` (or
+/// this id in it) is absent or not a non-negative integer.
+async fn harness_snapshots(
+    state: &AgentApiState,
+    harness_ids: &[String],
+) -> BTreeMap<String, HarnessSnapshot> {
+    let mut snapshots: BTreeMap<String, HarnessSnapshot> = harness_ids
         .iter()
-        .map(|id| (id.clone(), "unknown".to_owned()))
+        .map(|id| (id.clone(), HarnessSnapshot::default()))
         .collect();
     if harness_ids.is_empty() {
-        return phases;
+        return snapshots;
     }
     let Ok(answer) = state
         .request_frontend(
@@ -72,19 +80,48 @@ async fn harness_phases(state: &AgentApiState, harness_ids: &[String]) -> BTreeM
         )
         .await
     else {
-        return phases;
+        return snapshots;
     };
-    let Some(reported) = answer.get("phases").and_then(serde_json::Value::as_object) else {
-        return phases;
+    let phases = answer.get("phases").and_then(serde_json::Value::as_object);
+    let work = answer.get("work").and_then(serde_json::Value::as_object);
+    let count = |entry: Option<&serde_json::Value>, key: &str| {
+        entry
+            .and_then(|w| w.get(key))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
     };
-    for (id, phase) in &mut phases {
-        if let Some(p) = reported.get(id).and_then(serde_json::Value::as_str)
+    for (id, snap) in &mut snapshots {
+        if let Some(p) = phases
+            .and_then(|m| m.get(id))
+            .and_then(serde_json::Value::as_str)
             && KNOWN_PHASES.contains(&p)
         {
-            p.clone_into(phase);
+            p.clone_into(&mut snap.phase);
+        }
+        let entry = work.and_then(|m| m.get(id));
+        snap.subagents = count(entry, "subagents");
+        snap.background_tasks = count(entry, "backgroundTasks");
+    }
+    snapshots
+}
+
+/// One harness as the webview reported it: its phase (`"unknown"` when
+/// it could not vouch for one) and the outstanding work (#448) the
+/// end-of-turn deferral counts, `None` when unknown.
+struct HarnessSnapshot {
+    phase: String,
+    subagents: Option<u32>,
+    background_tasks: Option<u32>,
+}
+
+impl Default for HarnessSnapshot {
+    fn default() -> Self {
+        Self {
+            phase: "unknown".to_owned(),
+            subagents: None,
+            background_tasks: None,
         }
     }
-    phases
 }
 
 /// The room named `room_id`, refusing the way every #356 single-room
@@ -234,7 +271,7 @@ pub async fn list_rooms(
             mail_lead_harness(r, mail.policy, mail.agent_sees_mcp).map(|h| h.id.clone())
         })
         .collect();
-    let phases = harness_phases(state, &needed).await;
+    let phases = harness_snapshots(state, &needed).await;
 
     let mut out = Vec::with_capacity(filtered.len());
     for r in filtered {
@@ -247,8 +284,7 @@ pub async fn list_rooms(
                 |h| {
                     phases
                         .get(&h.id)
-                        .cloned()
-                        .unwrap_or_else(|| "unknown".to_owned())
+                        .map_or_else(|| "unknown".to_owned(), |s| s.phase.clone())
                 },
             )
         };
@@ -302,6 +338,12 @@ pub struct HarnessSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     pub phase: String,
+    /// Subagents the end-of-turn deferral counts as still working
+    /// (#448); `null` when the webview did not say.
+    pub outstanding_subagents: Option<u32>,
+    /// Background tasks running and not overdue (#448); `null` when
+    /// the webview did not say.
+    pub outstanding_background_tasks: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -344,20 +386,22 @@ pub async fn get_room(state: &AgentApiState, args: &GetRoomArgs) -> VerbResult<G
     let room = require_open_room(&rooms, room_id)?;
 
     let harness_ids: Vec<String> = room.harnesses.iter().map(|h| h.id.clone()).collect();
-    let phases = harness_phases(state, &harness_ids).await;
+    let snapshots = harness_snapshots(state, &harness_ids).await;
     let harnesses = room
         .harnesses
         .iter()
-        .map(|h| HarnessSummary {
-            harness_id: h.id.clone(),
-            name: h.name.clone(),
-            kind: h.kind.clone(),
-            agent: h.agent.clone(),
-            session_id: h.session_id.clone(),
-            phase: phases
-                .get(&h.id)
-                .cloned()
-                .unwrap_or_else(|| "unknown".to_owned()),
+        .map(|h| {
+            let snap = snapshots.get(&h.id);
+            HarnessSummary {
+                harness_id: h.id.clone(),
+                name: h.name.clone(),
+                kind: h.kind.clone(),
+                agent: h.agent.clone(),
+                session_id: h.session_id.clone(),
+                phase: snap.map_or_else(|| "unknown".to_owned(), |s| s.phase.clone()),
+                outstanding_subagents: snap.and_then(|s| s.subagents),
+                outstanding_background_tasks: snap.and_then(|s| s.background_tasks),
+            }
         })
         .collect();
 
@@ -409,6 +453,10 @@ pub struct HarnessListing {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     pub phase: String,
+    /// See [`HarnessSummary::outstanding_subagents`].
+    pub outstanding_subagents: Option<u32>,
+    /// See [`HarnessSummary::outstanding_background_tasks`].
+    pub outstanding_background_tasks: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -445,11 +493,12 @@ pub async fn list_harnesses(
         .iter()
         .flat_map(|r| r.harnesses.iter().map(|h| h.id.clone()))
         .collect();
-    let phases = harness_phases(state, &all_harness_ids).await;
+    let snapshots = harness_snapshots(state, &all_harness_ids).await;
 
     let mut out = Vec::new();
     for r in selected {
         for h in &r.harnesses {
+            let snap = snapshots.get(&h.id);
             out.push(HarnessListing {
                 room_id: r.id.clone(),
                 room_name: r.name.clone(),
@@ -458,10 +507,9 @@ pub async fn list_harnesses(
                 kind: h.kind.clone(),
                 agent: h.agent.clone(),
                 session_id: h.session_id.clone(),
-                phase: phases
-                    .get(&h.id)
-                    .cloned()
-                    .unwrap_or_else(|| "unknown".to_owned()),
+                phase: snap.map_or_else(|| "unknown".to_owned(), |s| s.phase.clone()),
+                outstanding_subagents: snap.and_then(|s| s.subagents),
+                outstanding_background_tasks: snap.and_then(|s| s.background_tasks),
             });
         }
     }

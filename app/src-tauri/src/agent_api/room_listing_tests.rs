@@ -341,6 +341,96 @@ async fn get_room_reports_unknown_when_the_webview_never_answers() {
     assert_eq!(out.harnesses[0].phase, "unknown");
 }
 
+async fn work_for(answer: serde_json::Value) -> verbs::HarnessSummary {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let state = agent_api_state(&f);
+    state.set_test_frontend(move |_kind, _args| Ok(answer.clone()));
+    let mut out = verbs::get_room(
+        &state,
+        &verbs::GetRoomArgs {
+            room: "r1".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    out.harnesses.remove(0)
+}
+
+#[tokio::test]
+async fn get_room_maps_outstanding_work_counts() {
+    let h = work_for(json!({
+        "phases": { "h1": "running" },
+        "work": { "h1": { "subagents": 2, "backgroundTasks": 1 } }
+    }))
+    .await;
+    assert_eq!(h.outstanding_subagents, Some(2));
+    assert_eq!(h.outstanding_background_tasks, Some(1));
+}
+
+#[tokio::test]
+async fn work_counts_are_null_when_work_is_absent() {
+    let h = work_for(json!({ "phases": { "h1": "waiting" } })).await;
+    assert_eq!(h.phase, "waiting");
+    assert_eq!(h.outstanding_subagents, None);
+    assert_eq!(h.outstanding_background_tasks, None);
+}
+
+#[tokio::test]
+async fn work_counts_are_null_for_an_id_missing_from_work() {
+    let h = work_for(json!({
+        "phases": { "h1": "running" },
+        "work": { "other": { "subagents": 3, "backgroundTasks": 3 } }
+    }))
+    .await;
+    assert_eq!(h.outstanding_subagents, None);
+    assert_eq!(h.outstanding_background_tasks, None);
+}
+
+#[tokio::test]
+async fn work_counts_that_are_not_non_negative_integers_are_null() {
+    let h = work_for(json!({
+        "phases": { "h1": "running" },
+        "work": { "h1": { "subagents": -1, "backgroundTasks": "two" } }
+    }))
+    .await;
+    assert_eq!(h.phase, "running");
+    assert_eq!(h.outstanding_subagents, None);
+    assert_eq!(h.outstanding_background_tasks, None);
+}
+
+#[tokio::test]
+async fn work_counts_are_null_and_serialized_when_the_webview_never_answers() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let state = agent_api_state(&f);
+    let out = verbs::list_harnesses(&state, &verbs::ListHarnessesArgs::default())
+        .await
+        .unwrap();
+    assert_eq!(out.harnesses[0].outstanding_subagents, None);
+    let v = serde_json::to_value(&out.harnesses[0]).unwrap();
+    assert!(v["outstanding_subagents"].is_null());
+    assert!(v["outstanding_background_tasks"].is_null());
+}
+
+#[tokio::test]
+async fn list_harnesses_maps_outstanding_work_counts() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|_kind, _args| {
+        Ok(json!({
+            "phases": { "h1": "running" },
+            "work": { "h1": { "subagents": 0, "backgroundTasks": 4 } }
+        }))
+    });
+    let out = verbs::list_harnesses(&state, &verbs::ListHarnessesArgs::default())
+        .await
+        .unwrap();
+    assert_eq!(out.harnesses[0].outstanding_subagents, Some(0));
+    assert_eq!(out.harnesses[0].outstanding_background_tasks, Some(4));
+}
+
 #[tokio::test]
 async fn list_harnesses_refuses_an_unknown_room_id_by_name() {
     let f = fixture();

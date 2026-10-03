@@ -790,7 +790,8 @@ room it does not own.
 Reports the same room fields as `list_rooms` (minus `lifecycle` and
 `last_status`, which are cross-room-specific), plus `harnesses` — each
 with `harness_id`, `name`, `kind`, `agent`, `session_id` and its live
-`phase` — and a `signoff` block: the **same sign-off `review_status`
+`phase`, `outstanding_subagents` and `outstanding_background_tasks`
+(#448, below) — and a `signoff` block: the **same sign-off `review_status`
 returns**, produced by the same function, so `get_room` can never
 report a different answer than that room would give about itself.
 `signoff_unavailable` (with `signoff` then absent) explains why there
@@ -798,6 +799,21 @@ is none — today, only because the room has no worktree.
 
 There is no `review_status { room }` alias: `get_room` is the one
 read path for another room's sign-off.
+
+**Outstanding work (#448).** `outstanding_subagents` and
+`outstanding_background_tasks` (on `list_harnesses` entries too) are
+the counts behind a harness that reads `running` while Skein's UI says
+"delegating" or "background": subagents still working, and background
+tasks running and not overdue — exactly what the end-of-turn deferral
+counts, nothing more. They let a planner tell "waiting on a task" from
+"waiting on you": a `running` harness with a non-zero count is
+waiting on its own delegated work, not on anyone's input. Both are
+always present and are `null` when Skein cannot say — no webview, a
+timeout, an answer without a `work` map (an older webview), an answer
+whose `work` omits the harness, or a count that is not a non-negative
+integer — never `0` as a guess. They come from the same webview round
+trip as `phase`, so they are as fresh as it is; `phase` and the counts
+can be unknown independently.
 
 ### `list_harnesses`
 

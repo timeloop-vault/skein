@@ -37,6 +37,7 @@ import {
 	specFromCreateArgs,
 } from "./agentRequests.ts";
 import { listHarnessAgents } from "./agents.ts";
+import { workSnapshot } from "./deferral.ts";
 import { harnessActivity } from "./harnessActivity.ts";
 import type { CreateRoomArgs } from "./NewRoomDialogTypes.ts";
 import { branchTemplateFor, type DefaultAgents, defaultsFor, type NewRoomMemory } from "./prefs.ts";
@@ -210,8 +211,11 @@ export function useAgentRequests(
 		// uses. `args` is unused: every harness this process knows about
 		// answers at once, and the caller picks out the ids it cares
 		// about.
-		const handlePhases = async (id: string): Promise<void> =>
-			complete(id, { phases: harnessActivity.phaseSnapshot() });
+		const handlePhases = async (id: string): Promise<void> => {
+			const phases = harnessActivity.phaseSnapshot();
+			// #448: outstanding subagent / background-task counts, same ids.
+			return complete(id, { phases, work: workSnapshot(Object.keys(phases)) });
+		};
 
 		// #411: `close_room` — parsing/refusal-ladder is all in the pure
 		// `parseCloseRoomArgs`/`decideCloseRoom`; this is only the plumbing

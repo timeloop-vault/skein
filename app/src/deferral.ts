@@ -22,6 +22,26 @@ export function outstandingWork(id: string): number {
 	return subagents.workingCount(id) + backgroundTasks.workingCount(id);
 }
 
+/// #448: the two counts behind `outstandingWork`, per harness, for the
+/// `harness_phases` agent-request answer. Same `workingCount`s, so
+/// attach-seeded and overdue entries are excluded exactly as they are
+/// from the deferral.
+export interface WorkCounts {
+	subagents: number;
+	backgroundTasks: number;
+}
+
+export function workSnapshot(ids: Iterable<string>): Record<string, WorkCounts> {
+	const work: Record<string, WorkCounts> = {};
+	for (const id of ids) {
+		work[id] = {
+			subagents: subagents.workingCount(id),
+			backgroundTasks: backgroundTasks.workingCount(id),
+		};
+	}
+	return work;
+}
+
 type SetPhase = (id: string, phase: ActivityPhase, source: TransitionSource) => void;
 
 /// Ceiling for background tasks that have no deadline of their own: a
