@@ -23,7 +23,17 @@ where
     let mut buf = Vec::new();
     for (i, chunk) in input.iter().enumerate() {
         buf.extend_from_slice(&frame_each(i, chunk));
-        process_buffer(&mut buf, &cb, &db, None, "h-test", "r-test", "", &cache);
+        process_buffer(
+            &mut buf,
+            &cb,
+            &db,
+            None,
+            "h-test",
+            "r-test",
+            "",
+            &cache,
+            &Mutex::default(),
+        );
     }
     let mut out = Vec::new();
     while let Ok(e) = rx.try_recv() {
@@ -38,6 +48,13 @@ fn frame(s: &str) -> Vec<u8> {
     v.extend_from_slice(s.as_bytes());
     v.extend_from_slice(b"\n\n");
     v
+}
+
+#[test]
+fn prompt_is_dropped_only_for_a_known_child_session() {
+    assert!(should_emit_prompt(Some(true)));
+    assert!(should_emit_prompt(None));
+    assert!(!should_emit_prompt(Some(false)));
 }
 
 #[test]
@@ -159,7 +176,17 @@ fn user_message_in_unknown_session_is_returned_for_lookup_not_guessed() {
     let mut buf = frame(
         r#"{"type":"message.updated","properties":{"info":{"role":"user","sessionID":"ses_unknown"}}}"#,
     );
-    let unresolved = process_buffer(&mut buf, &cb, &db, None, "h-test", "r-test", "", &cache);
+    let unresolved = process_buffer(
+        &mut buf,
+        &cb,
+        &db,
+        None,
+        "h-test",
+        "r-test",
+        "",
+        &cache,
+        &Mutex::default(),
+    );
     assert_eq!(unresolved, vec!["ses_unknown".to_owned()]);
     assert!(
         rx.try_recv().is_err(),
@@ -374,11 +401,31 @@ fn partial_chunk_split_across_writes() {
     buf.extend_from_slice(
         br#"data: {"type":"session.status","properties":{"sessionID":"s","status":{"type":"#,
     );
-    process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "", &cache);
+    process_buffer(
+        &mut buf,
+        &cb,
+        &tdb,
+        None,
+        "h-test",
+        "r-test",
+        "",
+        &cache,
+        &Mutex::default(),
+    );
     assert!(rx.try_recv().is_err(), "partial frame must not emit");
     buf.extend_from_slice(br#""idle"}}}"#);
     buf.extend_from_slice(b"\n\n");
-    process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "", &cache);
+    process_buffer(
+        &mut buf,
+        &cb,
+        &tdb,
+        None,
+        "h-test",
+        "r-test",
+        "",
+        &cache,
+        &Mutex::default(),
+    );
     let mut out: Vec<OpencodeEvent> = Vec::new();
     while let Ok(e) = rx.try_recv() {
         out.push(e);
@@ -405,7 +452,17 @@ fn multiple_frames_in_one_chunk_all_emit() {
         tx.send(e).unwrap();
     };
     let cache: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
-    process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "", &cache);
+    process_buffer(
+        &mut buf,
+        &cb,
+        &tdb,
+        None,
+        "h-test",
+        "r-test",
+        "",
+        &cache,
+        &Mutex::default(),
+    );
     let mut out = Vec::new();
     while let Ok(e) = rx.try_recv() {
         out.push(e);
@@ -429,7 +486,17 @@ fn data_field_with_no_space_after_colon_still_parsed() {
         tx.send(e).unwrap();
     };
     let cache: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
-    process_buffer(&mut buf, &cb, &tdb, None, "h-test", "r-test", "", &cache);
+    process_buffer(
+        &mut buf,
+        &cb,
+        &tdb,
+        None,
+        "h-test",
+        "r-test",
+        "",
+        &cache,
+        &Mutex::default(),
+    );
     let mut out: Vec<OpencodeEvent> = Vec::new();
     while let Ok(e) = rx.try_recv() {
         out.push(e);

@@ -318,6 +318,9 @@ async fn run_adapter(
     if let Some((sid, is_root)) = seed_own_session_root(session_id.as_deref()) {
         root_cache.lock().insert(sid, is_root);
     }
+    // Survives reconnects like `root_cache`: a user message and its text
+    // part can straddle one.
+    let prompts = Mutex::new(harness_actions_opencode::UserPromptTracker::default());
     let mut attempt: usize = 0;
     loop {
         // Race the SSE attempt against cancellation. If `cancel` ever
@@ -336,6 +339,7 @@ async fn run_adapter(
             &room_id,
             &cwd,
             &root_cache,
+            &prompts,
         );
         tokio::select! {
             biased;
@@ -404,6 +408,7 @@ async fn stream_events(
     room_id: &str,
     cwd: &str,
     root_cache: &Mutex<HashMap<String, bool>>,
+    prompts: &Mutex<harness_actions_opencode::UserPromptTracker>,
 ) -> Result<(), reqwest::Error> {
     use futures_util::StreamExt;
 
@@ -448,7 +453,7 @@ async fn stream_events(
                 let chunk = chunk?;
                 buf.extend_from_slice(&chunk);
                 let unresolved =
-                    process_buffer(&mut buf, on_event, db, app, harness_id, room_id, cwd, root_cache);
+                    process_buffer(&mut buf, on_event, db, app, harness_id, room_id, cwd, root_cache, prompts);
                 // Resolve outside process_buffer: this is the only
                 // point in the adapter allowed to do network I/O, and
                 // process_buffer stays synchronous and unit-testable.
@@ -499,6 +504,7 @@ fn process_buffer(
     room_id: &str,
     cwd: &str,
     root_cache: &Mutex<HashMap<String, bool>>,
+    prompts: &Mutex<harness_actions_opencode::UserPromptTracker>,
 ) -> Vec<String> {
     let mut unresolved = Vec::new();
     loop {
@@ -559,47 +565,72 @@ fn process_buffer(
         // Action extraction (issue #80). Live rows broadcast to the
         // frontend; backfill (in attach()) is silent.
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) {
-            for action in harness_actions_opencode::extract_from_sse(&value) {
-                match db.record_harness_action(
+            let mut actions = harness_actions_opencode::extract_from_sse(&value);
+            // The human's prompt text (#525). A known child session's
+            // "user" message is the parent's task text, so drop it. An
+            // unknown session is emitted: a missing prompt makes the
+            // feed look dead (the #525 bug), so the safe direction is to
+            // show it. A child announces itself via `session.created`
+            // with a `parentID` before its first message, so unknown is
+            // almost always a root seen after a reconnect or a mid-life
+            // attach.
+            if let Some(prompt) = prompts.lock().observe(&value)
+                && should_emit_prompt(root_cache.lock().get(&prompt.session_id).copied())
+            {
+                actions.push(prompt.action);
+            }
+            for action in actions {
+                record_and_emit(db, app, harness_id, room_id, cwd, &action);
+            }
+        }
+    }
+}
+
+/// Whether a user prompt is shown: dropped only for a known child
+/// session (`Some(false)`); root or unknown is emitted.
+fn should_emit_prompt(root: Option<bool>) -> bool {
+    root != Some(false)
+}
+
+/// Persist one live action and broadcast it. SSE rows are live by
+/// definition; the DB backfill path deliberately does not capture
+/// baselines (see review.rs).
+fn record_and_emit(
+    db: &Database,
+    app: Option<&tauri::AppHandle>,
+    harness_id: &str,
+    room_id: &str,
+    cwd: &str,
+    action: &harness_actions_opencode::ExtractedAction,
+) {
+    match db.record_harness_action(
+        harness_id,
+        room_id,
+        action.timestamp_ms,
+        action.kind,
+        &action.payload,
+        action.source.as_deref(),
+    ) {
+        Ok(id) => {
+            if action.kind == crate::db::action_kind::PATCH {
+                crate::review::note_patch(db, room_id, cwd, harness_id, &action.payload);
+            }
+            if let Some(app) = app {
+                crate::harness_action_event::emit(
+                    app,
+                    id,
                     harness_id,
                     room_id,
                     action.timestamp_ms,
                     action.kind,
                     &action.payload,
                     action.source.as_deref(),
-                ) {
-                    Ok(id) => {
-                        // SSE rows are live by definition; the DB
-                        // backfill path deliberately does not capture
-                        // baselines (see review.rs).
-                        if action.kind == crate::db::action_kind::PATCH {
-                            crate::review::note_patch(
-                                db,
-                                room_id,
-                                cwd,
-                                harness_id,
-                                &action.payload,
-                            );
-                        }
-                        if let Some(app) = app {
-                            crate::harness_action_event::emit(
-                                app,
-                                id,
-                                harness_id,
-                                room_id,
-                                action.timestamp_ms,
-                                action.kind,
-                                &action.payload,
-                                action.source.as_deref(),
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::trace!(harness_id, kind = action.kind, error = %e,
-                            "opencode_events: record_harness_action failed");
-                    }
-                }
+                );
             }
+        }
+        Err(e) => {
+            tracing::trace!(harness_id, kind = action.kind, error = %e,
+                "opencode_events: record_harness_action failed");
         }
     }
 }
