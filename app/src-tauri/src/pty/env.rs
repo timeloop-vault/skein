@@ -50,6 +50,8 @@ pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
     "SKEIN_REVIEW_TOKEN",
     "SKEIN_ROOM_ID",
     "SKEIN_HARNESS_ID",
+    // #535: the build this harness runs under; always set by Skein.
+    "SKEIN_VERSION",
 ];
 
 /// The four variables `pty_spawn` sets from a `HarnessIdentity` — and
@@ -172,6 +174,12 @@ pub(super) fn apply_env(
     // user configured, so they are forced last and unconditionally.
     builder.env("TERM", "xterm-256color");
     builder.env("COLORTERM", "truecolor");
+
+    // #535: which Skein build spawned this harness. Not secret and not
+    // tied to the agent API, so it is set even with no identity — a hook
+    // can read it when the server never bound. Overwrites an inherited
+    // value, so a nested Skein reports its own version, not the outer's.
+    builder.env("SKEIN_VERSION", crate::build_info::VERSION);
 
     // #213: how this harness reaches its room's review. After the
     // host-terminal strip and after the user's extra env, because these

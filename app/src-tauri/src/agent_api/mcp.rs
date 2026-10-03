@@ -223,7 +223,7 @@ fn initialize_result(params: &Value) -> Value {
         "serverInfo": {
             "name": SERVER_NAME,
             "title": "Skein agent API",
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": crate::build_info::VERSION,
         },
         "instructions": instructions(),
     })
@@ -302,6 +302,7 @@ pub async fn call_tool(
         "reply" => to_value(verbs::reply(db, caller, &parse(args)?)?),
         "mark_addressed" => to_value(verbs::mark_addressed(db, caller, &parse(args)?)?),
         "review_status" => to_value(verbs::review_status(db, caller)?),
+        "skein_info" => to_value(verbs::skein_info(state)),
         "send_message" => to_value(verbs::send_message(
             db,
             caller,
@@ -884,6 +885,21 @@ pub fn tool_specs() -> Vec<Value> {
                         "description": "Optional — default: every open room.",
                     },
                 },
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": true },
+        }),
+        json!({
+            "name": "skein_info",
+            "title": "Which Skein build is this?",
+            "description":
+                "Which Skein build you are running under: version, build profile \
+                 (release, local, dev or unknown), bundle identifier and commit \
+                 (null when unknown). Use it to check whether a verb or fix exists \
+                 in this build.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
                 "additionalProperties": false,
             },
             "annotations": { "readOnlyHint": true },

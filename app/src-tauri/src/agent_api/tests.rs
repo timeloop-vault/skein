@@ -29,6 +29,7 @@
 //! | `frontend_request_tests.rs` | the frontend request round-trip (#328): the pending-request map |
 //! | `hook_route_tests.rs` | the hook routes over real HTTP: permission (#86) and session-start (#273) |
 //! | `http_route_tests.rs` | the endpoint over real HTTP: handshake, refused ways in, the `/api` routes |
+//! | `info_tests.rs` | `skein_info` (#535): MCP and `/api/info` agree with `build_info` |
 //! | `mail_history_tests.rs` | `message_history` (#364): direction, filters, paging and scope |
 //! | `mail_notice_tests.rs` | unread summary (#329) and the `message_in` / `message_out` rows |
 //! | `mail_send_tests.rs` | `send_message` and `read_messages` (#327), plus the shared mail fixtures |

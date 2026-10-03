@@ -44,6 +44,10 @@ fn a_harness_is_told_where_its_rooms_review_lives() {
         env.get("SKEIN_HARNESS_ID").map(String::as_str),
         Some("h_a91")
     );
+    assert_eq!(
+        env.get("SKEIN_VERSION").map(String::as_str),
+        Some(crate::build_info::VERSION)
+    );
 
     // And without an identity — the settings preview, or a boot
     // where the server never bound — nothing is set at all, rather
@@ -69,6 +73,11 @@ fn a_harness_is_told_where_its_rooms_review_lives() {
         .filter(|k| AGENT_IDENTITY_ENV_KEYS.contains(&k.as_str()))
         .collect();
     assert!(leaked.is_empty(), "identity vars survived: {leaked:?}");
+    // The version is not identity: it is there with or without one.
+    assert_eq!(
+        bare.get_env("SKEIN_VERSION").and_then(|v| v.to_str()),
+        Some(crate::build_info::VERSION)
+    );
 }
 
 #[test]

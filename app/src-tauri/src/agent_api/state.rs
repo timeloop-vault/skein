@@ -118,6 +118,9 @@ impl Drop for PendingRequestGuard<'_> {
 pub struct AgentApiState {
     pub db: Arc<Database>,
     pub app: Option<tauri::AppHandle>,
+    /// The Tauri bundle identifier, captured at construction so the
+    /// `skein_info` verb (#535) needs no live `AppHandle`.
+    pub identifier: String,
     /// Requests sent to the webview and not yet answered, keyed by a
     /// fresh id per request. Every insertion is matched by exactly one
     /// removal — on completion, on timeout, or immediately if the
@@ -229,6 +232,7 @@ impl AgentApiState {
     pub fn new(db: Arc<Database>, app: tauri::AppHandle) -> Self {
         Self {
             db,
+            identifier: app.config().identifier.clone(),
             app: Some(app),
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
@@ -244,6 +248,7 @@ impl AgentApiState {
     pub fn for_test(db: Arc<Database>) -> Self {
         Self {
             db,
+            identifier: "com.timeloop-vault.skein.dev".to_owned(),
             app: None,
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),

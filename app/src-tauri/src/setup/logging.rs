@@ -36,8 +36,11 @@ pub(super) fn init(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
         .with_writer(std::io::stderr.and(non_blocking))
         .init();
     app.manage(LogGuard(guard));
+    let identifier = &app.config().identifier;
     tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
+        version = crate::build_info::VERSION,
+        profile = crate::build_info::profile_for_identifier(identifier),
+        commit = crate::build_info::commit().unwrap_or("unknown"),
         log_dir = %log_dir.display(),
         "Skein starting"
     );

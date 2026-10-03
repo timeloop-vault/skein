@@ -73,6 +73,8 @@ mod hook_route_tests;
 #[cfg(test)]
 mod http_route_tests;
 #[cfg(test)]
+mod info_tests;
+#[cfg(test)]
 mod mail_history_tests;
 #[cfg(test)]
 mod mail_notice_tests;

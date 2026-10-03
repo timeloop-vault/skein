@@ -34,6 +34,7 @@
 //! | `verbs/room_close.rs` | How an agent archives a room it created (#411). |
 //! | `verbs/harness_control.rs` | How an agent opens or closes a harness in a room (#411). |
 //! | `verbs/room_listing.rs` | The cross-room reads: rooms, one room, a room's harnesses (#356). |
+//! | `verbs/info.rs` | Which Skein build the agent runs under (#535). |
 //! | `verbs/shared.rs` | Constants and helpers more than one family uses. |
 //!
 //! This file keeps [`VerbError`] and re-exports every verb, argument
@@ -41,6 +42,7 @@
 
 mod find_rooms;
 mod harness_control;
+mod info;
 mod mail;
 mod mail_routing;
 mod review;
@@ -52,6 +54,7 @@ mod shared;
 
 pub use find_rooms::*;
 pub use harness_control::*;
+pub use info::*;
 pub use mail::*;
 pub use review::*;
 pub use room_close::*;

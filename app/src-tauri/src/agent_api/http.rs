@@ -19,6 +19,7 @@
 //! | File | The question it answers |
 //! |---|---|
 //! | `http/review.rs` | What the reviewer said, what the diff is, has it been signed off — and the two routes that only refuse. |
+//! | `http/info.rs` | Which Skein build the agent runs under (#535). |
 //! | `http/mail.rs` | How a harness sends, reads and pages back through mail over plain JSON (#327, #364). |
 //! | `http/rooms.rs` | How rooms are opened, closed, found, listed and read (#330, #354, #356, #411). |
 //! | `http/harnesses.rs` | How harnesses are opened, closed and listed (#356, #411). |
@@ -29,6 +30,7 @@
 
 mod harnesses;
 mod hooks;
+mod info;
 mod mail;
 mod review;
 mod rooms;
@@ -48,6 +50,7 @@ use super::state::AgentApiState;
 use super::verbs::{MailContext, MailPolicy, VerbError};
 use harnesses::{api_close_harness, api_list_harnesses, api_open_harness};
 use hooks::{api_harness_permission, api_harness_session_end, api_harness_session_start};
+use info::api_info;
 use mail::{api_message_history, api_read_messages, api_send_message};
 use review::{
     api_addressed, api_diff, api_get, api_list, api_reply, api_resolve, api_signoff, api_status,
@@ -77,6 +80,7 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
         .route("/api/diff", get(api_diff))
         // POST is present and always refuses — see `api_signoff`.
         .route("/api/status", get(api_status).post(api_signoff))
+        .route("/api/info", get(api_info))
         .route(
             "/api/messages",
             post(api_send_message).get(api_read_messages),
@@ -244,7 +248,7 @@ async fn health() -> Response {
         StatusCode::OK,
         axum::Json(json!({
             "name": mcp::SERVER_NAME,
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": crate::build_info::VERSION,
             "protocolVersion": mcp::PROTOCOL_VERSION,
             "mcp": "/mcp",
         })),

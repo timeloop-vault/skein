@@ -82,6 +82,9 @@ jobs:
             VERSION="0.0.0-dev"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # build.rs bakes these in as the app's honest version/commit (#535).
+          echo "SKEIN_BUILD_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "SKEIN_BUILD_COMMIT=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           echo "Using version: $VERSION"
 
       # MSI and Cargo.toml require strict numeric semver (X.Y.Z), so

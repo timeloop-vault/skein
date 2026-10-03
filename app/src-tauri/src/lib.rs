@@ -7,6 +7,7 @@
 //! per-spawn `tauri::ipc::Channel<PtyEvent>` (tagged data/exit).
 mod agent_api;
 mod agents;
+mod build_info;
 mod cli_shim;
 mod commands;
 mod db;

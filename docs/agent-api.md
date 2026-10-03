@@ -19,6 +19,7 @@ Skein process
      ├─ GET    /mcp                    405: no server→client stream
      ├─ DELETE /mcp                    405: stateless, no sessions
      ├─ GET    /api/health             unauthenticated, carries nothing private
+     ├─ GET    /api/info               skein_info
      ├─ GET    /api/comments           list_comments
      ├─ GET    /api/comments/{id}      get_comment
      ├─ POST   /api/comments/{id}/reply
@@ -61,6 +62,10 @@ Every harness Skein spawns gets four variables:
 | `SKEIN_ROOM_ID` | the room, for logs and prompts |
 | `SKEIN_HARNESS_ID` | this harness, for attribution |
 
+A fifth, `SKEIN_VERSION` (#535), is set on every harness whether or not
+the server bound: the build's version string (see `skein_info`). It is
+not secret and carries no authority.
+
 Two headers carry them:
 
 ```
@@ -82,8 +87,8 @@ at the next boot.
 
 ## The verbs
 
-All seventeen verbs carry the token, but not all seventeen are scoped
-by it to the calling room. Nine of them read or act only within that
+All eighteen verbs carry the token, but not all eighteen are scoped
+by it to the calling room. Ten of them read or act only within that
 room; `create_room` opens a *different* room, though still only from
 the calling room's token, which is what its own rate cap below is
 keyed to; `close_room`, `open_harness` and `close_harness` (#411) act
@@ -100,6 +105,30 @@ registered by the plugin Skein injects (#215), keyed `api` in the
 plugin's `.mcp.json`, and plugin-provided MCP servers carry a
 `plugin_<plugin>_<server>` prefix. opencode presents them as
 `skein_<name>`, from the `skein` key in `opencode.json`.
+
+### `skein_info`
+
+No arguments (#535). Which Skein build this agent is running under.
+
+```json
+{
+  "version": "0.4.2-dev+5ed2893",
+  "profile": "dev",
+  "identifier": "com.timeloop-vault.skein.dev",
+  "commit": "5ed2893"
+}
+```
+
+`version` is fixed at build time. A release build carries the full tag,
+pre-release suffix included (`release.yml` exports `SKEIN_BUILD_VERSION`);
+a dev or local build is `<nearest tag>-dev+<short sha>`, or `0.0.0-dev`
+when git was unavailable at build time. `profile` is `release`, `local`
+or `dev`, read from the bundle identifier (`com.timeloop-vault.skein`,
+`.local`, `.dev`), and `unknown` for any other. `commit` is the short sha,
+or `null` when there is none.
+
+The same `version` is MCP `initialize`'s `serverInfo.version`, `/api/health`'s
+`version`, and the `SKEIN_VERSION` environment variable.
 
 ### `list_comments`
 
