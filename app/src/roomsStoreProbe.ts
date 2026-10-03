@@ -66,6 +66,29 @@ export async function inspectFolderMissing(cwd: string, roomId: string): Promise
 	}
 }
 
+/** #508: strip the sessionId of every Claude harness whose transcript
+ *  was never written, so the reopen path mints a fresh `--session-id`
+ *  (#486) instead of spawning `claude --resume <id>` against nothing.
+ *  A fresh harness's id is pre-allocated by `cmdForKind`, and a room
+ *  archived in the same run never passed hydrate's probe. opencode
+ *  harnesses are returned untouched. `exists` errors are the caller's
+ *  to make conservative (`stillExists` returns true on a failed invoke). */
+export async function dropUnwrittenClaudeSessions(
+	room: Room,
+	exists: (h: Harness) => Promise<boolean>,
+): Promise<Room> {
+	const harnesses = await Promise.all(
+		room.harnesses.map(async (h) => {
+			if (h.kind !== "claude" || !h.sessionId) return h;
+			if (await exists(h)) return h;
+			console.info(`[skein] dropping unwritten claude session ${h.sessionId} on reopen`);
+			const { sessionId: _dropped, ...rest } = h;
+			return rest;
+		}),
+	);
+	return { ...room, harnesses };
+}
+
 // Chapter 5 phase 4: drop any stored sessionId that no longer
 // exists on disk before resumeCmd uses it. claude --resume <id>
 // or opencode --session <id> against a deleted conversation

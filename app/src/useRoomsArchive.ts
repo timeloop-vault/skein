@@ -21,7 +21,12 @@ import {
 	unretireRooms as unretireRoomsPure,
 } from "./reopenList.ts";
 import { nextActiveAfterClose } from "./roomGroups.ts";
-import { checkProbe, probeFolder } from "./roomsStoreProbe.ts";
+import {
+	checkProbe,
+	dropUnwrittenClaudeSessions,
+	probeFolder,
+	stillExists,
+} from "./roomsStoreProbe.ts";
 import type { Room } from "./types.ts";
 
 export interface RoomsArchiveDeps {
@@ -178,6 +183,10 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 	// #170 was the OS-notification click doing the same job with the
 	// resume half missing — every future caller gets both halves by
 	// construction.
+	//
+	// #508: a Claude id whose transcript was never written (archived in the
+	// run that created it, so hydrate's probe never saw it) is dropped
+	// here, so the harness starts fresh instead of `--resume`-ing nothing.
 	const unarchiveRoom = useCallback(
 		async (id: string) => {
 			const room = roomsRef.current.find((r) => r.id === id);
@@ -189,7 +198,8 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 				return;
 			}
 			const portMap = await allocateOpencodePorts(room);
-			const transformed = unarchiveRoomTransform(room, portMap);
+			const probed = await dropUnwrittenClaudeSessions(room, stillExists);
+			const transformed = unarchiveRoomTransform(probed, portMap);
 			// #418: decide identity BEFORE the remount so a room whose
 			// folder now holds another repo opens on the card, resuming
 			// nothing. React batches this with the setRooms below.
@@ -199,6 +209,14 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 					mismatchedRef.current = new Set(mismatchedRef.current).add(id);
 					setMismatch(id, true);
 				}
+			}
+			// The awaits above leave a window: a second unarchive of the
+			// same room (double-click, notification click) that already
+			// landed would be replaced by this one's different fresh
+			// --session-id, changing the mountKey and orphaning its PTY.
+			if (!roomsRef.current.find((r) => r.id === id)?.archived) {
+				setActiveRoomId(id);
+				return;
 			}
 			setRooms((prev) => prev.map((r) => (r.id === id ? transformed : r)));
 			setActiveRoomId(id);
