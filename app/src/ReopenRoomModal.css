@@ -57,9 +57,6 @@
 	border-color: var(--accent);
 	background: color-mix(in srgb, var(--accent) 16%, var(--bg-2));
 }
-.sk-archived-row.retired .sk-archived-open {
-	opacity: 0.55;
-}
 .sk-archived-tag {
 	margin-left: 8px;
 	padding: 1px 6px;
@@ -137,6 +134,9 @@
 	text-align: left;
 	font: inherit;
 	color: inherit;
+}
+.sk-archived-row.retired .sk-archived-open {
+	opacity: 0.55;
 }
 .sk-archived-row .top {
 	font-size: calc(var(--cfs) * 1);

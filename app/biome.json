@@ -5,7 +5,7 @@
 	},
 	"assist": { "actions": { "source": { "organizeImports": "on" } } },
 	"css": {
-		"linter": { "enabled": false },
+		"linter": { "enabled": true },
 		"formatter": { "enabled": true }
 	},
 	"linter": {

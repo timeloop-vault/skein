@@ -57,10 +57,6 @@
 	font-size: 0.79em;
 	flex: 0 0 auto;
 }
-.lc-subtitle.is-empty .text {
-	color: var(--fg-3);
-	font-style: italic;
-}
 
 /* Stack of cards with drag dividers. */
 .lc-stack {
@@ -119,10 +115,8 @@
 .lc-card.collapsed .chev {
 	transform: rotate(-90deg);
 }
-.lc-card.collapsed .lc-card-body {
-	display: none;
-}
 .lc-card.collapsed {
+	/* biome-ignore lint/complexity/noImportantStyles: must beat the inline style={{ flex }} CardStack.tsx sets on every card */
 	flex: 0 0 calc(var(--cfs, 12px) * 2.5) !important;
 }
 .lc-card-head .label {
@@ -251,6 +245,10 @@
 	flex: 1;
 	min-width: 0;
 }
+.lc-subtitle.is-empty .text {
+	color: var(--fg-3);
+	font-style: italic;
+}
 .lc-plan-row.cancelled .text {
 	text-decoration: line-through;
 }
@@ -304,6 +302,9 @@
 	overflow-y: auto;
 	scrollbar-width: thin;
 	scrollbar-color: var(--bg-3) transparent;
+}
+.lc-card.collapsed .lc-card-body {
+	display: none;
 }
 .lc-card-body::-webkit-scrollbar {
 	width: 7px;

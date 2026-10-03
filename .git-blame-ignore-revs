@@ -1,3 +1,5 @@
 # Mechanical rewrites to skip in git blame (git config blame.ignoreRevsFile .git-blame-ignore-revs)
 # chore: apply biome 2 import organizer (#498)
 cecf99cf2dc5778099eaa163564d65121e570ad3
+# chore(#501): enable and apply biome css formatter (#531)
+1067283ed40cb157caf25f3b10a92894a1c13171

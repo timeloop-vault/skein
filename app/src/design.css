@@ -4,10 +4,6 @@
 	flex: 1;
 	min-height: 0;
 }
-.dp-main .dp-frame {
-	flex: 1;
-	min-width: 0;
-}
 .dp-comments {
 	width: 300px;
 	flex: none;
@@ -48,13 +44,6 @@
 .dp-comment-state.stale {
 	color: #d9a400;
 }
-.dp-comment-head .dp-comment-el {
-	flex: 1;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
 .dp-comment-el,
 .dp-comment-src,
 .dp-comment-lost {
@@ -62,6 +51,13 @@
 	font-size: 11px;
 	overflow-wrap: anywhere;
 	opacity: 0.85;
+}
+.dp-comment-head .dp-comment-el {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .dp-comment-draft {
 	display: flex;
@@ -106,6 +102,10 @@
 	min-height: 0;
 	border: 0;
 	background: #fff;
+}
+.dp-main .dp-frame {
+	flex: 1;
+	min-width: 0;
 }
 .dp-beacons {
 	max-height: 120px;

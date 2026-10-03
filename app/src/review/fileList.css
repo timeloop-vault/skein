@@ -20,11 +20,6 @@
 .rv-file.active {
 	background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
-/* A reviewed file recedes but never disappears — it is still part of
-   the change, and hiding it would make the list lie about the size. */
-.rv-file.viewed .rv-file-main {
-	opacity: 0.55;
-}
 .rv-viewed {
 	flex: 0 0 auto;
 	margin: 0;
@@ -45,6 +40,11 @@
 	padding: 0;
 	cursor: pointer;
 	text-align: left;
+}
+/* A reviewed file recedes but never disappears — it is still part of
+   the change, and hiding it would make the list lie about the size. */
+.rv-file.viewed .rv-file-main {
+	opacity: 0.55;
 }
 .rv-change {
 	flex: 0 0 10px;

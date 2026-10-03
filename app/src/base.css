@@ -23,16 +23,20 @@ body {
  * not-allowed. useTabDrag toggles both classes on <html>. */
 html.tab-dragging,
 html.tab-dragging * {
+	/* biome-ignore lint/complexity/noImportantStyles: a tab drag must override every cursor style beneath it, including xterm's own */
 	cursor: grabbing !important;
 	/* #271: the pointer moves over terminal/right-pane text during a
 	 * drag, not just the tab strip; without this WebKit (macOS
 	 * WKWebView) highlights it as a selection. -webkit- prefix needed
 	 * there, unlike WebView2. */
+	/* biome-ignore lint/complexity/noImportantStyles: a tab drag must override every selection style beneath it, including xterm's own */
 	-webkit-user-select: none !important;
+	/* biome-ignore lint/complexity/noImportantStyles: same as the -webkit- prefixed declaration above */
 	user-select: none !important;
 }
 html.tab-dragging.tab-drag-refused,
 html.tab-dragging.tab-drag-refused * {
+	/* biome-ignore lint/complexity/noImportantStyles: a refused tab drag must still override every cursor style beneath it */
 	cursor: not-allowed !important;
 }
 
