@@ -83,7 +83,14 @@ export interface Harness {
 		roomId: string;
 		harnessId?: string;
 	};
+	// #520: the session a post-exit shell's re-bound CLI is running
+	// (#318). Kind-agnostic; `port` is reserved for opencode (#517).
+	// Absent = no live claim. Resume honours it only while it still
+	// equals `sessionId` (see `resumeHarness`).
+	shellClaim?: ShellClaim;
 }
+
+export type ShellClaim = { sessionId: string; port?: number };
 
 export interface Room {
 	id: string;

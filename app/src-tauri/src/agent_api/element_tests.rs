@@ -68,6 +68,7 @@ fn fixture() -> Fx {
         design_entry: None,
         pending_notifications: None,
         created_by: None,
+        shell_claim: None,
     };
     let r1 = Room {
         id: "r1".into(),

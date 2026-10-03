@@ -425,3 +425,68 @@ describe("#247 round-trip: the selection survives restart and reopen", () => {
 		expect(out.harnesses[0]?.agent).toBe("reviewer");
 	});
 });
+
+describe("shellClaim (#520)", () => {
+	const claimed = (over: Partial<Harness> = {}) =>
+		harness("claude", { cmd: SHELL, sessionId: SID, shellClaim: { sessionId: SID }, ...over });
+
+	it("a live claim puts the shell harness back on claude --resume and is consumed", () => {
+		const out = resumeHarness(claimed());
+		expect(out.cmd).toEqual(["claude", "--resume", SID]);
+		expect(out).not.toHaveProperty("shellClaim");
+	});
+
+	it("re-passes --agent for a live claim", () => {
+		expect(resumeHarness(claimed({ agent: "reviewer" })).cmd).toEqual([
+			"claude",
+			"--resume",
+			SID,
+			"--agent",
+			"reviewer",
+		]);
+	});
+
+	it("a claim that no longer matches sessionId restores the shell", () => {
+		const out = resumeHarness(claimed({ sessionId: "other" }));
+		expect(out.cmd).toEqual(SHELL);
+		expect(out).not.toHaveProperty("shellClaim");
+	});
+
+	it("a claim with no sessionId (probe dropped it) restores the shell", () => {
+		const { sessionId: _s, ...h } = claimed();
+		const out = resumeHarness(h);
+		expect(out.cmd).toEqual(SHELL);
+		expect(out).not.toHaveProperty("shellClaim");
+	});
+
+	it("an empty claim sessionId never counts as live", () => {
+		const out = resumeHarness(claimed({ sessionId: "", shellClaim: { sessionId: "" } }));
+		expect(out.cmd).toEqual(SHELL);
+		expect(out).not.toHaveProperty("shellClaim");
+	});
+
+	it("no claim keeps the shell", () => {
+		expect(resumeHarness(harness("claude", { cmd: SHELL, sessionId: SID })).cmd).toEqual(SHELL);
+	});
+
+	it("strips a claim from a harness already on claude", () => {
+		const out = resumeHarness(claimed({ cmd: ["claude", "--resume", SID] }));
+		expect(out.cmd).toEqual(["claude", "--resume", SID]);
+		expect(out).not.toHaveProperty("shellClaim");
+	});
+
+	it("leaves other kinds' claims untouched", () => {
+		const h = harness("opencode", { cmd: SHELL, shellClaim: { sessionId: "ses_1", port: 1 } });
+		expect(resumeHarness(h, 5).shellClaim).toEqual({ sessionId: "ses_1", port: 1 });
+	});
+
+	it("withResumeCmds and unarchiveRoomTransform carry it, idempotently", () => {
+		const r = room([claimed()]);
+		const viaResume = withResumeCmds(r, ports());
+		expect(viaResume.harnesses[0]?.cmd).toEqual(["claude", "--resume", SID]);
+		const viaUnarchive = unarchiveRoomTransform({ ...r, archived: 1 }, ports());
+		expect(viaUnarchive.harnesses[0]?.cmd).toEqual(["claude", "--resume", SID]);
+		expect(viaUnarchive.harnesses[0]).not.toHaveProperty("shellClaim");
+		expect(withResumeCmds(viaUnarchive, ports())).toEqual(viaUnarchive);
+	});
+});

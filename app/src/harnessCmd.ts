@@ -93,6 +93,9 @@ export const cmdForKind = (
  *  same cmd (with the new port for opencode), which is what makes it
  *  safe to run on every boot and every reopen.
  *
+ *  A shell argv is passed through, except that a LIVE `shellClaim`
+ *  (#520, see `resumeShell`) turns it back into `claude --resume`.
+ *
  *  Three sources of session ids feed in:
  *    1. harness.sessionId set by phase 2a (Claude pre-allocate).
  *    2. harness.sessionId set by phase 2b (opencode capture-after-spawn).
@@ -110,6 +113,30 @@ export const resumeCmd = (h: Harness, opencodePort?: number): string[] =>
 	resumeHarness(h, opencodePort).cmd ?? [];
 
 const hasSessionId = (h: Harness): boolean => (h.sessionId ?? "").trim() !== "";
+
+const withoutClaim = (h: Harness): Harness => {
+	const { shellClaim: _consumed, ...rest } = h;
+	return rest;
+};
+
+/** #520: a harness whose stored argv is the user's shell (Enter after
+ *  the child exited). Derived from the record, never the argv: a
+ *  `shellClaim` is LIVE when its `sessionId` is non-empty and equals
+ *  `h.sessionId`. Hydrate/unarchive's existence probe drops a
+ *  `sessionId` whose transcript is gone, so a claim that no longer
+ *  matches was a phantom or was dropped. A live claim puts the harness
+ *  back on its own program (`claude --resume <sid>`, and the claim is
+ *  consumed — the field is removed); a stale one restores the shell
+ *  (claim removed, cmd unchanged). Claude only; other kinds keep their
+ *  `shellClaim` untouched (#517 adds opencode here). */
+const resumeShell = (h: Harness, cmd: string[]): Harness => {
+	if (h.kind !== "claude" || !h.shellClaim) return { ...h, cmd };
+	const sid = h.shellClaim.sessionId;
+	if (sid.trim() !== "" && sid === h.sessionId) {
+		return { ...withoutClaim(h), cmd: withAgent(["claude", "--resume", sid], h.agent) };
+	}
+	return { ...withoutClaim(h), cmd };
+};
 
 /** `resumeCmd`, but returning the whole harness so a session id minted
  *  here (Claude with none stored, #486) lands on the record. */
@@ -129,7 +156,10 @@ export const resumeHarness = (
 	// old argv-length matching it does not care how many flags Skein
 	// adds. A shell-swapped harness keeps its shell; rebuilding it into
 	// `claude --resume` would resurrect a harness the user retired.
-	if (cmd[0] !== HARNESS_KINDS[h.kind].program) return { ...h, cmd };
+	if (cmd[0] !== HARNESS_KINDS[h.kind].program) return resumeShell(h, cmd);
+	if (h.kind === "claude" && h.shellClaim) {
+		return resumeHarness(withoutClaim(h), opencodePort, mintSessionId);
+	}
 	switch (h.kind) {
 		case "claude": {
 			if (!hasSessionId(h)) {

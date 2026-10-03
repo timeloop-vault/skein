@@ -54,6 +54,22 @@ pub struct Harness {
     /// "+ harness". Round-tripped only, the same as `Room.createdBy`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub created_by: Option<HarnessCreatedBy>,
+    /// The session a post-exit shell's re-bound CLI is running (#520).
+    /// `None` = no live claim. Round-tripped only: the frontend decides
+    /// at resume whether the claim still holds.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub shell_claim: Option<ShellClaim>,
+}
+
+/// A CLI the user re-launched from a harness's post-exit shell and
+/// that Skein re-bound to the pane (#520). Kind-agnostic; `port` is
+/// reserved for opencode's embedded server (#517).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellClaim {
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub port: Option<u16>,
 }
 
 /// Who asked for a harness `open_harness` (#411) added, so the UI can

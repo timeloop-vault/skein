@@ -919,6 +919,28 @@ characters) and emits `skein://harness-session-end` —
 `{ roomId, harnessId, sessionId: string | null, reason: string | null }`.
 The permission event likewise gained `sessionId: string | null`.
 
+#### Nested claude via the PowerShell tool (#521)
+
+The Bash tool is covered by the `CLAUDE_ENV_FILE` unset; the PowerShell
+tool does not source `CLAUDE_ENV_FILE` (upstream
+anthropics/claude-code#60697, closed not planned), so a nested `claude`
+started there loads the plugin. Probed on Claude Code 2.1.288 (Windows):
+the outer and nested hook environments differ only in per-session values
+(`CLAUDECODE` and `CLAUDE_CODE_CHILD_SESSION` are 1 in both), and a
+PreToolUse `updatedInput` prefix that clears the variable is refused by
+the PowerShell tool's own env-mutation check, so there is no environment
+guard. The frontend gate makes the posts change nothing: `startup` is
+ignored while the claimed claude is busy; `resume`/`clear`/`fork` with a
+different id are ignored while its main session is mid-turn (outstanding
+background work alone does not count); permission pings are dropped unless
+the session id matches the claim; SessionEnd for another id is ignored.
+Residual: a nested claude started from a background subagent's PowerShell
+call while the main session sits at its prompt looks like the user's own
+`resume`/`fork` and moves the claim. The posts are still received and logged (one `tracing::info!`
+each), and the nested claude also has Skein's MCP review/mail tools
+loaded under the harness's room token (the token is in the shell env
+regardless).
+
 ## What it will not do
 
 There is no `resolve` and no `approve`, and there never will be here.

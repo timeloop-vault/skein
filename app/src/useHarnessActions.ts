@@ -29,6 +29,7 @@ import { confirmDialog } from "./confirmDialog.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { filesRegistry } from "./filesRegistry.ts";
 import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
+import { withRespawnedCmd } from "./harnessCreation.ts";
 import { harnessInput } from "./harnessInput.ts";
 import type { GateResult } from "./harnessInputGate.ts";
 import { canRestart, restartedHarness } from "./harnessRestart.ts";
@@ -218,25 +219,8 @@ export function useHarnessActions(
 		// Every cmd change is a deliberate respawn (Enter-for-shell), so
 		// bump spawnGen too — that's what remounts the terminal when the
 		// new cmd equals the old one (shell→shell, #53).
-		setRooms((prev) =>
-			prev.map((r) =>
-				r.id === roomId
-					? {
-							...r,
-							harnesses: r.harnesses.map((h) =>
-								h.id === harnessId
-									? {
-											...h,
-											cmd,
-											...(sessionId !== undefined ? { sessionId } : {}),
-											spawnGen: (h.spawnGen ?? 0) + 1,
-										}
-									: h,
-							),
-						}
-					: r,
-			),
-		);
+		// #520: also drops any shell claim: the new cmd is a fresh process.
+		setRooms((prev) => withRespawnedCmd(prev, roomId, harnessId, cmd, sessionId));
 	};
 
 	// #490: restart a harness in place — kill its process and respawn from

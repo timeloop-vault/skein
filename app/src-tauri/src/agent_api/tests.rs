@@ -82,6 +82,7 @@ pub(super) fn harness(id: &str, kind: &str, name: &str) -> Harness {
         design_entry: None,
         pending_notifications: None,
         created_by: None,
+        shell_claim: None,
     }
 }
 

@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { runsKindProgram, shellClaim as sc, shouldReplaceClaim } from "./shellClaim";
+import {
+	releasePersists,
+	runsKindProgram,
+	shellClaim as sc,
+	shouldReplaceClaim,
+} from "./shellClaim";
 
 const H = "h1";
 const start = (
@@ -7,7 +12,8 @@ const start = (
 	sessionId: string | null,
 	source: string | null,
 	busy = false,
-) => sc.onSessionStart(H, current, { sessionId, source }, busy);
+	mainBusy = false,
+) => sc.onSessionStart(H, current, { sessionId, source }, busy, mainBusy);
 
 beforeEach(() => {
 	sc.forget(H);
@@ -81,6 +87,29 @@ describe("nested child", () => {
 	it("compact and same-id events are ignored", () => {
 		expect(start("A", "A", "compact")).toEqual({ kind: "ignore" });
 		expect(start("A", "A", "clear")).toEqual({ kind: "ignore" });
+	});
+	it.each(["resume", "clear", "fork"])(
+		"main mid-turn: different-id %s is ignored, claim kept",
+		(source) => {
+			expect(start("A", "B", source, true, true)).toEqual({ kind: "ignore" });
+			expect(sc.claimedId(H)).toBe("A");
+			expect(sc.acceptsPermission(H, "B")).toBe(false);
+		},
+	);
+	it.each(["resume", "clear", "fork"])("idle: different-id %s moves the claim", (source) => {
+		expect(start("A", "B", source, false)).toMatchObject({ kind: "follow", claim: true });
+		expect(sc.claimedId(H)).toBe("B");
+	});
+	it.each(["resume", "clear", "fork"])(
+		"main at prompt with background work: different-id %s moves the claim",
+		(source) => {
+			expect(start("A", "B", source, true, false)).toMatchObject({ kind: "follow", claim: true });
+			expect(sc.claimedId(H)).toBe("B");
+		},
+	);
+	it("busy: same-id resume stays ignored", () => {
+		expect(start("A", "A", "resume", true, true)).toEqual({ kind: "ignore" });
+		expect(sc.claimedId(H)).toBe("A");
 	});
 	it("SessionEnd for B is ignored", () => {
 		expect(sc.onSessionEnd(H, { sessionId: "B", reason: "other" })).toBe(false);
@@ -157,6 +186,21 @@ describe("phantom startup", () => {
 		expect(sc.claimedId(H)).toBe("R");
 		expect(sc.consumeFreshProcess(H)).toBe(true);
 		expect(sc.consumeFreshProcess(H)).toBe(false);
+	});
+});
+
+describe("releasePersists", () => {
+	it.each([
+		["clear", true],
+		["logout", true],
+		["prompt_input_exit", true],
+		["bypass_permissions_disabled", true],
+		["other", false],
+		["", false],
+		[null, false],
+		[undefined, false],
+	])("reason %s -> %s", (reason, expected) => {
+		expect(releasePersists(reason)).toBe(expected);
 	});
 });
 
