@@ -37,7 +37,8 @@ Skein process
      ├─ POST   /api/harnesses          open_harness
      ├─ POST   /api/harnesses/{harness_id}/close   close_harness
      ├─ POST   /api/harness/permission     see below — not an agent verb
-     └─ POST   /api/harness/session-start  see below — not an agent verb
+     ├─ POST   /api/harness/session-start  see below — not an agent verb
+     └─ POST   /api/harness/session-end    see below — not an agent verb
 ```
 
 `/mcp` is what Claude Code and opencode talk to. `/api/*` is the same
@@ -905,6 +906,18 @@ twice is fine.
 
 A successful call emits `skein://harness-session-start` —
 `{ roomId, harnessId }` — and answers `204 No Content`.
+
+### The session-end signal (#318)
+
+`POST /api/harness/session-end` mirrors the route above, fed by the
+plugin's async `SessionEnd` hook. In a Claude harness's post-exit shell
+(where the plugin loads via `CLAUDE_CODE_PLUGIN_DIRS`), Skein binds the
+pane to the first claude that starts there and releases it when that
+claude's session ends. Same headers and `400`/`204` rules. It reads
+`session_id` (validated like session-start's) and `reason` (at most 32
+characters) and emits `skein://harness-session-end` —
+`{ roomId, harnessId, sessionId: string | null, reason: string | null }`.
+The permission event likewise gained `sessionId: string | null`.
 
 ## What it will not do
 

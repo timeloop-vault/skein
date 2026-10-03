@@ -58,12 +58,14 @@ pub(super) async fn api_harness_permission(
         .get("agent_id")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    let session_id = valid_session_id(&payload);
     tracing::info!(
         harness_id = %harness_id,
         room_id = %caller.room_id,
         tool_name = tool_name.as_deref(),
         agent_type = agent_type.as_deref(),
         agent_id = agent_id.as_deref(),
+        session_id = session_id.as_deref(),
         "agent api: harness permission ping"
     );
     state.notify_harness_permission(
@@ -72,6 +74,7 @@ pub(super) async fn api_harness_permission(
         tool_name,
         agent_type,
         agent_id,
+        session_id,
     );
     StatusCode::NO_CONTENT.into_response()
 }
@@ -151,7 +154,16 @@ const MAX_SESSION_ID_LEN: usize = 128;
 /// [`MAX_SOURCE_LEN`]; longer or non-string values become `None`.
 fn session_start_fields(body: &str) -> (Option<String>, Option<String>) {
     let payload: Value = serde_json::from_str(body).unwrap_or(Value::Null);
-    let session_id = payload
+    (
+        valid_session_id(&payload),
+        short_string_field(&payload, "source"),
+    )
+}
+
+/// `session_id` from a hook payload, validated as described on
+/// [`session_start_fields`].
+fn valid_session_id(payload: &Value) -> Option<String> {
+    payload
         .get("session_id")
         .and_then(Value::as_str)
         .filter(|s| {
@@ -160,13 +172,57 @@ fn session_start_fields(body: &str) -> (Option<String>, Option<String>) {
                 && s.bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         })
-        .map(str::to_owned);
-    let source = payload
-        .get("source")
+        .map(str::to_owned)
+}
+
+/// A string field of at most [`MAX_SOURCE_LEN`], verbatim; else `None`.
+fn short_string_field(payload: &Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
         .and_then(Value::as_str)
         .filter(|s| s.len() <= MAX_SOURCE_LEN)
-        .map(str::to_owned);
-    (session_id, source)
+        .map(str::to_owned)
+}
+
+/// `session_id` and `reason` out of a `SessionEnd` hook body (#318),
+/// validated the same way as [`session_start_fields`].
+fn session_end_fields(body: &str) -> (Option<String>, Option<String>) {
+    let payload: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+    (
+        valid_session_id(&payload),
+        short_string_field(&payload, "reason"),
+    )
+}
+
+/// The injected plugin's `SessionEnd` hook posts here (#318). Mirrors
+/// [`api_harness_session_start`]: same auth, same `X-Skein-Harness`
+/// rule, a non-JSON body still answers `204`.
+pub(super) async fn api_harness_session_end(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let (Some(harness_id), Some(_)) = (caller.harness_id.clone(), caller.harness_label.as_ref())
+    else {
+        return error_body(
+            StatusCode::BAD_REQUEST,
+            "X-Skein-Harness must name a harness this room actually contains",
+        );
+    };
+    let (session_id, reason) = session_end_fields(&body);
+    tracing::info!(
+        harness_id = %harness_id,
+        room_id = %caller.room_id,
+        session_id = session_id.as_deref(),
+        reason = reason.as_deref(),
+        "agent api: harness session-end ping"
+    );
+    state.notify_harness_session_end(&caller.room_id, &harness_id, session_id, reason);
+    StatusCode::NO_CONTENT.into_response()
 }
 
 #[cfg(test)]
@@ -221,5 +277,36 @@ mod tests {
     fn session_start_fields_ignores_an_overlong_source() {
         let body = json!({ "source": "x".repeat(MAX_SOURCE_LEN + 1) }).to_string();
         assert_eq!(session_start_fields(&body).1, None);
+    }
+
+    #[test]
+    fn session_end_fields_reads_a_valid_id_and_reason() {
+        let body = r#"{"session_id":"9c1f2e3a-1111","reason":"prompt_input_exit"}"#;
+        assert_eq!(
+            session_end_fields(body),
+            (
+                Some("9c1f2e3a-1111".to_owned()),
+                Some("prompt_input_exit".to_owned())
+            )
+        );
+    }
+
+    #[test]
+    fn session_end_fields_tolerates_garbage_and_rejects_bad_values() {
+        assert_eq!(session_end_fields("not json"), (None, None));
+        assert_eq!(session_end_fields("{}"), (None, None));
+        let body =
+            json!({ "session_id": "../x", "reason": "x".repeat(MAX_SOURCE_LEN + 1) }).to_string();
+        assert_eq!(session_end_fields(&body), (None, None));
+    }
+
+    #[test]
+    fn valid_session_id_is_what_the_permission_route_reads() {
+        assert_eq!(
+            valid_session_id(&json!({ "session_id": "abc-1_2" })),
+            Some("abc-1_2".to_owned())
+        );
+        assert_eq!(valid_session_id(&json!({ "session_id": "a/b" })), None);
+        assert_eq!(valid_session_id(&json!({ "session_id": 5 })), None);
     }
 }

@@ -282,6 +282,8 @@ export interface HarnessConfigStatus {
 	/** The flag Skein appends, so the panel shows the argument itself
 	 *  rather than describing it. */
 	claudeFlag: string;
+	/** The variable set for a Claude harness's post-exit shell (#318). */
+	claudeShellVar: string;
 	opencodeVar: string;
 }
 

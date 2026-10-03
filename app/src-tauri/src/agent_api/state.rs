@@ -40,6 +40,12 @@ pub const HARNESS_PERMISSION_EVENT: &str = "skein://harness-permission";
 /// frontend can follow a `/clear` onto the new conversation id.
 pub const HARNESS_SESSION_START_EVENT: &str = "skein://harness-session-start";
 
+/// Fired by `POST /api/harness/session-end` (#318), which the injected
+/// plugin's `SessionEnd` hook calls when a Claude session ends. In a
+/// harness's post-exit shell it is how the frontend knows the claude it
+/// bound the pane to has finished.
+pub const HARNESS_SESSION_END_EVENT: &str = "skein://harness-session-end";
+
 /// The event a harness's mailbox badge listens for (#327, feeding
 /// #329's unread indicator). Fired on a successful `send_message` (for
 /// the *recipient*, which is usually not the caller's own room) and on
@@ -175,6 +181,9 @@ pub struct HarnessPermission {
     /// main-session dialog, and injection (#215) can be switched off
     /// entirely.
     pub agent_id: Option<String>,
+    /// The claude session the dialog belongs to (#318), validated like
+    /// `HarnessSessionStart::session_id`; `None` when absent or invalid.
+    pub session_id: Option<String>,
 }
 
 /// Payload of [`MAIL_CHANGED_EVENT`].
@@ -201,6 +210,19 @@ pub struct HarnessSessionStart {
     /// One of Claude's own `startup`/`resume`/`clear`/`compact`/`fork`.
     /// `None` when the hook payload had no `source`.
     pub source: Option<String>,
+}
+
+/// Payload of [`HARNESS_SESSION_END_EVENT`]. Frontend contract.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessSessionEnd {
+    pub room_id: String,
+    pub harness_id: String,
+    /// The session that ended; `None` when absent or implausible.
+    pub session_id: Option<String>,
+    /// Claude's own end reason (`clear`, `logout`, `prompt_input_exit`,
+    /// …); `None` when absent or overlong.
+    pub reason: Option<String>,
 }
 
 impl AgentApiState {
@@ -270,6 +292,7 @@ impl AgentApiState {
         tool_name: Option<String>,
         agent_type: Option<String>,
         agent_id: Option<String>,
+        session_id: Option<String>,
     ) {
         let Some(app) = self.app.as_ref() else { return };
         if let Err(e) = app.emit(
@@ -280,6 +303,7 @@ impl AgentApiState {
                 tool_name,
                 agent_type,
                 agent_id,
+                session_id,
             },
         ) {
             tracing::warn!(room_id, harness_id, error = %e, "agent api: harness-permission emit failed");
@@ -340,6 +364,29 @@ impl AgentApiState {
             },
         ) {
             tracing::warn!(room_id, harness_id, error = %e, "agent api: harness-session-start emit failed");
+        }
+    }
+
+    /// Tell the frontend that a Claude session in this harness ended
+    /// (#318).
+    pub fn notify_harness_session_end(
+        &self,
+        room_id: &str,
+        harness_id: &str,
+        session_id: Option<String>,
+        reason: Option<String>,
+    ) {
+        let Some(app) = self.app.as_ref() else { return };
+        if let Err(e) = app.emit(
+            HARNESS_SESSION_END_EVENT,
+            HarnessSessionEnd {
+                room_id: room_id.to_owned(),
+                harness_id: harness_id.to_owned(),
+                session_id,
+                reason,
+            },
+        ) {
+            tracing::warn!(room_id, harness_id, error = %e, "agent api: harness-session-end emit failed");
         }
     }
 

@@ -1,5 +1,5 @@
 {
-	"description": "Tell Skein about two things Claude Code otherwise never reports on its own. SessionStart (#273): a freshly spawned harness can leave the \"spawning\" activity phase even before a first prompt writes anything to its transcript. It carries no matcher on purpose, so it fires for every `source` (`startup`, `resume`, `clear`, `compact`, `fork`) rather than only the first — a repeat or phantom fire is harmless because the frontend handler is idempotent, recording a timestamp and only moving the phase when the transcript tail hasn't already spoken for itself, never overriding a permission dialog or an exited harness. PermissionRequest (#86): Claude Code is blocked on a permission dialog, so the room can show \"permission required\" as its own activity phase instead of folding it into end-of-turn waiting.",
+	"description": "Tell Skein about things Claude Code otherwise never reports on its own. SessionStart (#273): a freshly spawned harness can leave the \"spawning\" activity phase even before a first prompt writes anything to its transcript. It carries no matcher on purpose, so it fires for every `source` (`startup`, `resume`, `clear`, `compact`, `fork`) rather than only the first — a repeat or phantom fire is harmless because the frontend handler is idempotent, recording a timestamp and only moving the phase when the transcript tail hasn't already spoken for itself, never overriding a permission dialog or an exited harness. A second, synchronous SessionStart entry (#318) only acts when Skein loaded this plugin through CLAUDE_CODE_PLUGIN_DIRS (a `claude` typed into a harness's post-exit shell): it appends an `unset` to CLAUDE_ENV_FILE, which Claude Code sources before each Bash-tool command, so a nested `claude -p` started through the Bash tool does not load Skein's plugin too (it does NOT cover the PowerShell tool). SessionEnd (#318): in a post-exit shell Skein binds the pane to the first claude that starts there and releases it when that claude's session ends. PermissionRequest (#86): Claude Code is blocked on a permission dialog, so the room can show \"permission required\" as its own activity phase instead of folding it into end-of-turn waiting. The env-file `unset` of CLAUDE_CODE_PLUGIN_DIRS also removes, from Bash-tool children, a value the user set themselves; that is an accepted cost of keeping nested claude children off Skein's hooks.",
 	"hooks": {
 		"SessionStart": [
 			{
@@ -7,6 +7,25 @@
 					{
 						"type": "command",
 						"command": "[ -n \"$SKEIN_REVIEW_URL\" ] && [ -n \"$SKEIN_REVIEW_TOKEN\" ] && curl -fsS -m 3 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"Authorization: Bearer $SKEIN_REVIEW_TOKEN\" -H \"X-Skein-Harness: $SKEIN_HARNESS_ID\" --data-binary @- \"${SKEIN_REVIEW_URL%/mcp}/api/harness/session-start\"; exit 0",
+						"async": true
+					}
+				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "[ -n \"$SKEIN_CLAUDE_PLUGIN_VIA_ENV\" ] && [ -n \"$CLAUDE_ENV_FILE\" ] && printf 'unset CLAUDE_CODE_PLUGIN_DIRS SKEIN_CLAUDE_PLUGIN_VIA_ENV\\n' >> \"$CLAUDE_ENV_FILE\"; exit 0"
+					}
+				]
+			}
+		],
+		"SessionEnd": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "[ -n \"$SKEIN_REVIEW_URL\" ] && [ -n \"$SKEIN_REVIEW_TOKEN\" ] && curl -fsS -m 3 -o /dev/null -X POST -H 'Content-Type: application/json' -H \"Authorization: Bearer $SKEIN_REVIEW_TOKEN\" -H \"X-Skein-Harness: $SKEIN_HARNESS_ID\" --data-binary @- \"${SKEIN_REVIEW_URL%/mcp}/api/harness/session-end\"; exit 0",
 						"async": true
 					}
 				]

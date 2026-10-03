@@ -20,6 +20,7 @@ import { harnessActivity } from "./harnessActivity.ts";
 import { attachClaudeEvents } from "./harnessEvents.ts";
 import { harnessInput } from "./harnessInput.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
+import { shellClaim } from "./shellClaim.ts";
 import { subagents } from "./subagents.ts";
 import { attachTerminalInteractions } from "./terminalInteractions.ts";
 import { createXterm } from "./terminalSetup.ts";
@@ -251,6 +252,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		const startPty = async (cmdToSpawn: string[]) => {
 			if (cancelled) return;
 			programName = cmdToSpawn[0] ?? "child";
+			shellClaim.noteSpawn(harnessId, harnessKind, cmdToSpawn[0]); // #318
 			if (!(await agentResolvesFor(cmdToSpawn))) return;
 			if (cancelled) return;
 			phase = "running";
@@ -367,6 +369,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// attach, so nothing is lost by dropping the cache here.
 			subagents.forget(harnessId);
 			backgroundTasks.forget(harnessId);
+			shellClaim.forget(harnessId);
 		};
 	}, [mountKey]);
 
@@ -384,10 +387,12 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		if (!current) return;
 		if (typeof sessionId !== "string" || sessionId === current.sessionId) return;
 		current.detach();
+		const fresh = shellClaim.consumeFreshProcess(harnessId); // #318
 		claudeAdapterRef.current = {
 			// #336: the process has lived across this re-point; a long tool
-			// call may be genuinely live, so no fresh-process replay.
-			detach: attachClaudeEvents(harnessId, roomId, sessionId, cwd, false),
+			// call may be genuinely live, so no fresh-process replay —
+			// except #318's shell-claimed `claude`, a new process.
+			detach: attachClaudeEvents(harnessId, roomId, sessionId, cwd, fresh),
 			sessionId,
 		};
 	}, [sessionId, harnessId, roomId, cwd, claudeAdapterRef]);
