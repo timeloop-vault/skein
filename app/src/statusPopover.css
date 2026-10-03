@@ -16,7 +16,9 @@
 	white-space: nowrap;
 	opacity: 0;
 	transform: translate(-50%, 3px);
-	transition: opacity 0.12s, transform 0.12s;
+	transition:
+		opacity 0.12s,
+		transform 0.12s;
 }
 .sk-pop.show {
 	opacity: 1;

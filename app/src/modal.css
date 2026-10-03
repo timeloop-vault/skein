@@ -108,7 +108,9 @@
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
-	transition: border-color 0.12s, background 0.12s;
+	transition:
+		border-color 0.12s,
+		background 0.12s;
 }
 .sk-radio-card:hover {
 	border-color: var(--line-strong);

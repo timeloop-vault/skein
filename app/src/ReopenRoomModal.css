@@ -44,7 +44,9 @@
 	border: 1px solid var(--line);
 	border-radius: 5px;
 	overflow: hidden;
-	transition: border-color 0.12s, background 0.12s;
+	transition:
+		border-color 0.12s,
+		background 0.12s;
 }
 .sk-archived-row:hover,
 .sk-archived-row.selected {
@@ -163,7 +165,10 @@
 	cursor: pointer;
 	font-size: calc(var(--cfs) * 1.0833);
 	opacity: 0.55;
-	transition: opacity 0.12s, background 0.12s, color 0.12s;
+	transition:
+		opacity 0.12s,
+		background 0.12s,
+		color 0.12s;
 }
 .sk-archived-del:hover {
 	opacity: 1;

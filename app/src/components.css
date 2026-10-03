@@ -66,7 +66,9 @@
    these dots live on). */
 .st-waiting {
 	background: var(--st-waiting);
-	box-shadow: 0 0 0 2px var(--bg-0), 0 0 0 3.5px var(--st-waiting);
+	box-shadow:
+		0 0 0 2px var(--bg-0),
+		0 0 0 3.5px var(--st-waiting);
 	animation: sk-pulse 1.6s ease-in-out infinite;
 }
 /* #86: permission is a harder stop than waiting, so it doesn't just
@@ -76,7 +78,9 @@
 .st-permission {
 	position: relative;
 	background: var(--st-permission);
-	box-shadow: 0 0 0 2px var(--bg-0), 0 0 0 3.5px var(--st-permission);
+	box-shadow:
+		0 0 0 2px var(--bg-0),
+		0 0 0 3.5px var(--st-permission);
 	animation: sk-pulse 0.9s ease-in-out infinite;
 }
 .st-permission::after {
