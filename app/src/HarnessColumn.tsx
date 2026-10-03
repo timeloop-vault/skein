@@ -10,6 +10,7 @@ import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
 import type { GateResult } from "./harnessInputGate.ts";
 import { LiveHarnessTab } from "./LiveHarnessTab.tsx";
 import { LiveTerminal } from "./LiveTerminal.tsx";
+import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { type DefaultAgents, type VersionNoticeModes, versionNoticeModeFor } from "./prefs.ts";
 import { useWorkingSubagentCount } from "./subagents.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
@@ -104,6 +105,8 @@ interface HarnessBodyProps {
 	// replaceHarnessSessionId, same as Claude's clear/resume/fork
 	// follow; `undefined` for non-opencode harnesses.
 	onSessionFollowed: ((sessionId: string) => void) | undefined;
+	// #517: persists/releases an opencode followed from the post-exit shell.
+	opencodeClaim: ShellClaimSink | undefined;
 }
 
 const HarnessBody = ({
@@ -117,6 +120,7 @@ const HarnessBody = ({
 	opencodePort,
 	onSessionCaptured,
 	onSessionFollowed,
+	opencodeClaim,
 }: HarnessBodyProps) => {
 	if (harness.cmd && harness.cwd !== undefined) {
 		// mountKey changes on cmd content OR spawnGen — the trigger for a
@@ -139,6 +143,7 @@ const HarnessBody = ({
 				opencodePort={opencodePort}
 				onSessionCaptured={onSessionCaptured}
 				onSessionFollowed={onSessionFollowed}
+				opencodeClaim={opencodeClaim}
 				fontSize={fontSize}
 				copyOnSelect={copyOnSelect}
 				defaultShell={defaultShell}
@@ -204,6 +209,8 @@ export interface HarnessColumnProps {
 	// #116: opencode followed its TUI onto a different root session
 	// (per harness, room scope already bound by App).
 	onOpencodeSessionFollowed: (harnessId: string, sessionId: string) => void;
+	// #517: persist / release an opencode followed from the post-exit shell.
+	opencodeShellClaim: (harnessId: string) => ShellClaimSink;
 	// #410: "Reattach telemetry" — room scope already bound by App,
 	// forwarded to `HarnessActionsMenu` for the room's active harness.
 	onReattachTelemetry: (harnessId: string) => void;
@@ -232,6 +239,7 @@ export const HarnessColumn = ({
 	opencodePorts,
 	onOpencodeSessionCaptured,
 	onOpencodeSessionFollowed,
+	opencodeShellClaim,
 	onReattachTelemetry,
 	onRestartHarness,
 	versionNoticeModes,
@@ -367,6 +375,7 @@ export const HarnessColumn = ({
 								opencodePort={opencodePorts.get(h.id)}
 								onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
 								onSessionFollowed={(sid) => onOpencodeSessionFollowed(h.id, sid)}
+								opencodeClaim={opencodeShellClaim(h.id)}
 							/>
 						) : h.kind === "design" ? (
 							<DesignBody

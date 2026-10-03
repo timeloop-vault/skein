@@ -91,8 +91,13 @@ export function useHarnessCreation(
 
 	// #520: persist the post-exit-shell claim (sessionId + claim in one
 	// update) so a restart can resume it; release removes it again.
-	const setHarnessShellClaim = (targetRoomId: string, harnessId: string, sessionId: string) => {
-		setRooms((prev) => withShellClaim(prev, targetRoomId, harnessId, sessionId));
+	const setHarnessShellClaim = (
+		targetRoomId: string,
+		harnessId: string,
+		sessionId: string,
+		port?: number,
+	) => {
+		setRooms((prev) => withShellClaim(prev, targetRoomId, harnessId, sessionId, port));
 	};
 	const clearHarnessShellClaim = (targetRoomId: string, harnessId: string) => {
 		setRooms((prev) => withoutShellClaim(prev, targetRoomId, harnessId));

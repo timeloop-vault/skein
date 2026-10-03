@@ -32,6 +32,7 @@ import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import type { GateResult } from "./harnessInput.ts";
 import { canInsertText, formatDroppedPaths, harnessInput, insertText } from "./harnessInput.ts";
+import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import type { HarnessKind } from "./types.ts";
 import { OVERLAY_CLOSED_EVENT } from "./useFocusRestore.ts";
 import { useTerminalSpawn } from "./useTerminalSpawn.ts";
@@ -84,6 +85,8 @@ interface LiveTerminalProps {
 	// stored sessionId, same as Claude's clear/resume/fork follow.
 	// `undefined` for non-opencode harnesses.
 	onSessionFollowed: ((sessionId: string) => void) | undefined;
+	// #517: persists/releases an opencode followed from the post-exit shell.
+	opencodeClaim: ShellClaimSink | undefined;
 	fontSize: number;
 	// #158: copy a mouse selection to the clipboard the moment it's made
 	// (Settings → "Copy on select", default true). Read through a ref
@@ -119,6 +122,7 @@ export const LiveTerminal = ({
 	opencodePort,
 	onSessionCaptured,
 	onSessionFollowed,
+	opencodeClaim,
 	fontSize,
 	copyOnSelect,
 	defaultShell,
@@ -206,6 +210,7 @@ export const LiveTerminal = ({
 		opencodePort,
 		onSessionCaptured,
 		onSessionFollowed,
+		opencodeClaim,
 		fontSize,
 		containerRef,
 		spawnedRef,

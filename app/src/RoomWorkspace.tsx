@@ -116,6 +116,10 @@ export const RoomWorkspace = (p: RoomWorkspaceProps) => {
 							onOpencodeSessionFollowed={(harnessId, sid) =>
 								p.creation.replaceHarnessSessionId(r.id, harnessId, sid)
 							}
+							opencodeShellClaim={(harnessId) => ({
+								set: (sid, port) => p.creation.setHarnessShellClaim(r.id, harnessId, sid, port),
+								release: () => p.creation.clearHarnessShellClaim(r.id, harnessId),
+							})}
 							onReattachTelemetry={(harnessId) => p.onReattachTelemetry(r.id, harnessId)}
 							versionNoticeModes={s.versionNoticeModes}
 							onRestartHarness={(harnessId) => p.actions.restartHarness(r.id, harnessId)}

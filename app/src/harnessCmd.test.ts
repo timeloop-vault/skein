@@ -475,9 +475,75 @@ describe("shellClaim (#520)", () => {
 		expect(out).not.toHaveProperty("shellClaim");
 	});
 
-	it("leaves other kinds' claims untouched", () => {
-		const h = harness("opencode", { cmd: SHELL, shellClaim: { sessionId: "ses_1", port: 1 } });
+	it("leaves kinds without a claim arm (copilot) untouched", () => {
+		const h = harness("copilot", { cmd: SHELL, shellClaim: { sessionId: "ses_1", port: 1 } });
 		expect(resumeHarness(h, 5).shellClaim).toEqual({ sessionId: "ses_1", port: 1 });
+	});
+
+	describe("opencode (#517)", () => {
+		const oc = (over: Partial<Harness> = {}) =>
+			harness("opencode", {
+				cmd: SHELL,
+				sessionId: "ses_1",
+				shellClaim: { sessionId: "ses_1", port: 1 },
+				...over,
+			});
+
+		it("a live claim resumes on the fresh port and is consumed", () => {
+			const out = resumeHarness(oc(), 5);
+			expect(out.cmd).toEqual([
+				"opencode",
+				"--port",
+				"5",
+				"--hostname",
+				"127.0.0.1",
+				"--session",
+				"ses_1",
+			]);
+			expect(out).not.toHaveProperty("shellClaim");
+		});
+
+		it("ignores the persisted claim.port", () => {
+			expect(resumeHarness(oc(), 9).cmd).not.toContain("1");
+		});
+
+		it("re-passes --agent", () => {
+			expect(resumeHarness(oc({ agent: "build" }), 5).cmd).toEqual([
+				"opencode",
+				"--port",
+				"5",
+				"--hostname",
+				"127.0.0.1",
+				"--session",
+				"ses_1",
+				"--agent",
+				"build",
+			]);
+		});
+
+		it("no port passed resumes without --port", () => {
+			expect(resumeHarness(oc()).cmd).toEqual(["opencode", "--session", "ses_1"]);
+		});
+
+		it("a mismatched sessionId restores the shell", () => {
+			const out = resumeHarness(oc({ sessionId: "other" }), 5);
+			expect(out.cmd).toEqual(SHELL);
+			expect(out).not.toHaveProperty("shellClaim");
+		});
+
+		it("a missing sessionId restores the shell", () => {
+			const { sessionId: _s, ...h } = oc();
+			const out = resumeHarness(h, 5);
+			expect(out.cmd).toEqual(SHELL);
+			expect(out).not.toHaveProperty("shellClaim");
+		});
+
+		it("withResumeCmds is idempotent for a claim", () => {
+			const once = withResumeCmds(room([oc()]), new Map([["h1", 5]]));
+			expect(once.harnesses[0]?.cmd?.[0]).toBe("opencode");
+			expect(once.harnesses[0]).not.toHaveProperty("shellClaim");
+			expect(withResumeCmds(once, new Map([["h1", 5]]))).toEqual(once);
+		});
 	});
 
 	it("withResumeCmds and unarchiveRoomTransform carry it, idempotently", () => {

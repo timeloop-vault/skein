@@ -136,6 +136,16 @@ describe("shell claim helpers (#520)", () => {
 		expect(withShellClaim(once, "s1", "nope", "x")).toBe(once);
 	});
 
+	it("withShellClaim records a port, omits the key otherwise, and stays no-churn", () => {
+		const withPort = withShellClaim([shellRoom()], "s1", "h1", "new", 7);
+		expect(h0(withPort)?.shellClaim).toEqual({ sessionId: "new", port: 7 });
+		expect(withShellClaim(withPort, "s1", "h1", "new", 7)).toBe(withPort);
+		expect(h0(withShellClaim(withPort, "s1", "h1", "new", 8))?.shellClaim?.port).toBe(8);
+		const bare = h0(withShellClaim(withPort, "s1", "h1", "new"));
+		expect(bare?.shellClaim).toEqual({ sessionId: "new" });
+		expect(bare?.shellClaim).not.toHaveProperty("port");
+	});
+
 	it("withoutShellClaim removes the key and is a no-op when absent", () => {
 		const once = withShellClaim([shellRoom()], "s1", "h1", "new");
 		const out = withoutShellClaim(once, "s1", "h1");

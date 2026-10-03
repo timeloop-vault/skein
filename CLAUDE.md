@@ -751,7 +751,11 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   live SSE adapter. opencode's TUI binds no port without `--port`, so a
   bare `opencode` or `--session` alone has no event source: the session
   follows when given, the status is not live until Restart harness
-  (#490), and a one-time hint in the pane says so.
+  (#490), and a one-time hint in the pane says so. A proven re-bind is
+  persisted as `Harness.shellClaim` (#520's field; `opencodeShellClaim.ts`),
+  so a restart resumes `opencode --session <sid>` on a freshly allocated
+  port — the claimed port is recorded, never reused — and two empty scans
+  in a row (the user quit opencode) release it, restoring the shell.
 - **The sign-off** (#214, epic #52 D9 as corrected): a `review_signoff`
   row per room — the reviewer's approval, and **the only thing in Skein
   an agent treats as permission**. The whole design is the `head_sha`

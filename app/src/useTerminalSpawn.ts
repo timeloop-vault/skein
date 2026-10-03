@@ -18,6 +18,7 @@ import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import { harnessInput } from "./harnessInput.ts";
+import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
 import { shellClaim } from "./shellClaim.ts";
@@ -55,6 +56,7 @@ export interface UseTerminalSpawnParams {
 	opencodePort: number | undefined;
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
 	onSessionFollowed: ((sessionId: string) => void) | undefined;
+	opencodeClaim: ShellClaimSink | undefined;
 	fontSize: number;
 	containerRef: { current: HTMLDivElement | null };
 	spawnedRef: { current: string | null };
@@ -89,6 +91,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		opencodePort,
 		onSessionCaptured,
 		onSessionFollowed,
+		opencodeClaim,
 		fontSize,
 		containerRef,
 		spawnedRef,
@@ -122,11 +125,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		if (spawnedRef.current === mountKey) return;
 		spawnedRef.current = mountKey;
 
-		const { term, fit } = createXterm(
-			host,
-			fontSize,
-			HARNESS_KINDS[harnessKind].capabilities.opensClickedLinks,
-		);
+		const caps = HARNESS_KINDS[harnessKind].capabilities;
+		const { term, fit } = createXterm(host, fontSize, caps.opensClickedLinks);
 		termRef.current = term;
 		fitRef.current = fit;
 		// #383 follow-up: xterm's IME composition (CJK, an emoji picker,
@@ -157,7 +157,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		// plain closure locals owned by this effect.
 		const detachInteractions = attachTerminalInteractions(term, host, {
 			harnessId,
-			imagePaste: HARNESS_KINDS[harnessKind].capabilities.imagePaste,
+			imagePaste: caps.imagePaste,
 			getPhase: () => phase,
 			isCancelled: () => cancelled,
 			defaultShellRef,
@@ -209,7 +209,6 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		// `session.created` event (chapter 5 phase 2b's sqlite poll
 		// stays as fallback in App.tsx).
 		const opencodeAdapter: { current: OpencodeAdapter | null } = { current: null };
-		// #517: opencode typed into the post-exit shell.
 		let shellFollow: ReturnType<typeof followOpencodeShell> | null = null;
 		// #238: this harness's entry in the `harnessInput` seam (the
 		// Nudge button today, #41's file drop later). Registered once
@@ -332,6 +331,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					adapter: opencodeAdapter,
 					onSessionCaptured,
 					onSessionFollowed,
+					claim: opencodeClaim,
 					setHint,
 					hintTimerRef,
 				});
