@@ -67,6 +67,7 @@ export {
 	aggregateRoomStatus,
 	delegationSummary,
 	effectiveStatus,
+	harnessDisplayStatus,
 	higherPriorityStatus,
 	statusLabel,
 	stillRunningSummary,

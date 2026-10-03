@@ -5,12 +5,7 @@ import { DesignBody } from "./DesignBody.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
 import { FilesBody } from "./FilesBody.tsx";
 import { HarnessActionsMenu } from "./HarnessActionsMenu.tsx";
-import {
-	activityToStatus,
-	effectiveStatus,
-	statusLabel,
-	useHarnessActivity,
-} from "./harnessActivity.ts";
+import { harnessDisplayStatus, useHarnessActivity } from "./harnessActivity.ts";
 import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
 import type { GateResult } from "./harnessInputGate.ts";
 import { LiveHarnessTab } from "./LiveHarnessTab.tsx";
@@ -48,21 +43,17 @@ export const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
 	// keeps the underlying phase via activityToStatus — telling the
 	// user "idle" when Claude is sitting at a prompt would be a lie;
 	// the visual collapse to grey is a UX choice, the text isn't.
-	const dotStatus = activity
-		? effectiveStatus(activity, harness.pendingNotifications ?? 0)
-		: harness.status;
 	// #86: "permission needed" (+ tool) rather than the bare word.
 	// #277: "delegating · N agents" in place of bare "running" while
-	// subagents are working.
-	const label = activity
-		? statusLabel(
-				activityToStatus(activity),
-				activity.permissionTool,
-				activity.permissionAgentType,
-				workingCount,
-				taskCount,
-			)
-		: harness.status;
+	// subagents are working. #421: no activity reads idle / "not
+	// started", never the persisted status.
+	const { status: dotStatus, label } = harnessDisplayStatus(
+		HARNESS_KINDS[harness.kind].capabilities.pty,
+		activity,
+		harness.pendingNotifications ?? 0,
+		workingCount,
+		taskCount,
+	);
 	return (
 		<span className="seg">
 			<span className={`dot-tiny st-${dotStatus}`} />
