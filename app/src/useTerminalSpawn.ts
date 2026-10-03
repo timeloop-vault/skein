@@ -14,6 +14,7 @@ import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { useEffect } from "react";
 import { backgroundTasks } from "./backgroundTasks.ts";
+import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import { attachClaudeEvents } from "./harnessEvents.ts";
@@ -258,6 +259,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// pty_spawn is slow. recordOutput in the channel handler
 			// will flip it to `running` on the first chunk. Epic #50.
 			harnessActivity.spawned(harnessId);
+			// #491: transcript rows older than this process say nothing about it.
+			claudeVersionStore.markSpawned(harnessId, Date.now());
 			// #484: catch xterm's reply to ConPTY's cursor query (portable-pty
 			// 0.9 waits for it), which can arrive before pty_spawn resolves. If
 			// unmounted meanwhile, the settle paths below dispose it.

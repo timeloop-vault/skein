@@ -15,6 +15,7 @@ export const HChip = ({
 	agent,
 	mailCount,
 	mailFromRoomNames,
+	versionUpdate,
 }: {
 	kind: HarnessKind;
 	harnessId?: string;
@@ -28,6 +29,10 @@ export const HChip = ({
 	 *  Omitted (no attribute) when there's no mail to show. */
 	mailCount?: number;
 	mailFromRoomNames?: readonly string[];
+	/** #491: the Claude Code update text (and a refused restart's reason)
+	 *  for the popover's `update` segment, carried here for the same
+	 *  reason as the mail attributes. Omitted when there is no notice. */
+	versionUpdate?: { text: string; refusal: string | null } | undefined;
 }) => {
 	const k = HARNESS_KINDS[kind];
 	// #141: harnessId lets the popover read this harness's OWN live state
@@ -44,6 +49,7 @@ export const HChip = ({
 			data-mail-from={
 				mailCount && mailCount > 0 ? JSON.stringify(mailFromRoomNames ?? []) : undefined
 			}
+			data-version-notice={versionUpdate?.text}
 			role="group"
 			aria-label={k.name}
 		>

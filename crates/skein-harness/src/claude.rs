@@ -43,6 +43,7 @@ use serde_json::Value;
 use crate::time::parse_iso8601_ms;
 
 pub mod background;
+pub mod cli_version;
 pub mod local_command;
 
 // ── paths ─────────────────────────────────────────────────────────

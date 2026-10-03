@@ -43,6 +43,7 @@ use skein_harness::claude::background::{BackgroundKind, OutcomeStatus};
 mod adapter;
 mod attach;
 mod background_tasks;
+mod cli_version;
 mod manager;
 mod parse;
 mod paths;
@@ -161,6 +162,15 @@ pub enum ClaudeEvent {
         status: OutcomeStatus,
         exit_code: Option<i32>,
     },
+    /// The Claude Code version that wrote a main-transcript row (#491).
+    /// Sent once at attach for the newest row that has one, then on each
+    /// live change (and for the first live row after an attach).
+    /// `timestamp_ms` is the row's own time, so the consumer can tell a
+    /// live row from the attach seed.
+    CliVersion {
+        version: String,
+        timestamp_ms: Option<i64>,
+    },
 }
 
 #[derive(Debug)]
@@ -184,6 +194,8 @@ impl ClaudeEventsError {
 mod background_resync_tests;
 #[cfg(test)]
 mod background_tests;
+#[cfg(test)]
+mod cli_version_tests;
 #[cfg(test)]
 mod concurrent_tests;
 #[cfg(test)]

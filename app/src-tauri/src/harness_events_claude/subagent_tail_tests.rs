@@ -476,6 +476,7 @@ fn missing_subagents_dir_does_not_trip_the_read_failure_guard() {
         utf8_stall_at: None,
         utf8_stall_count: 0,
         utf8_stall_warned: false,
+        last_cli_version: None,
     }));
 
     tick(&state, &|_| {});

@@ -24,6 +24,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { useCallback } from "react";
 import { decideCloseHarness, type RequestResult } from "./agentRequests.ts";
+import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { confirmDialog } from "./confirmDialog.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { filesRegistry } from "./filesRegistry.ts";
@@ -132,7 +133,8 @@ export function useHarnessActions(
 	};
 
 	const closeHarness = (roomId: string, harnessId: string) => {
-		const proceed = () =>
+		const proceed = () => {
+			claudeVersionStore.forget(harnessId);
 			setRooms((prev) =>
 				prev.map((r) => {
 					if (r.id !== roomId) return r;
@@ -143,6 +145,7 @@ export function useHarnessActions(
 					return { ...r, harnesses: remaining, activeHarnessId: first.id };
 				}),
 			);
+		};
 		// #185: a files harness may hold unsaved buffers (memory-only).
 		// #242: in-app confirm, not plugin-dialog's native one.
 		const dirty = filesRegistry.dirtyNames(harnessId);
@@ -189,6 +192,7 @@ export function useHarnessActions(
 		);
 		if (!decision.ok) return decision;
 		const { phase } = decision.value;
+		claudeVersionStore.forget(harnessId);
 		setRooms((prev) =>
 			prev.map((r) => {
 				if (r.id !== roomId) return r;
@@ -241,7 +245,11 @@ export function useHarnessActions(
 	// read now, not render-time props. The gate is evaluated twice: up
 	// front, and again after the async port/probe work, because a turn or
 	// keystroke can land while awaiting.
-	const restartHarness = async (roomId: string, harnessId: string): Promise<GateResult> => {
+	const restartHarness = async (
+		roomId: string,
+		harnessId: string,
+		source: string = TRANSITION_SOURCE.UserRestart,
+	): Promise<GateResult> => {
 		// One restart per harness at a time: the awaits below leave a window
 		// where a second call would pass the same gates and respawn twice.
 		if (restartsInFlight.has(harnessId)) {
@@ -249,7 +257,7 @@ export function useHarnessActions(
 		}
 		restartsInFlight.add(harnessId);
 		try {
-			return await doRestart(roomId, harnessId);
+			return await doRestart(roomId, harnessId, source);
 		} finally {
 			restartsInFlight.delete(harnessId);
 		}
@@ -258,7 +266,11 @@ export function useHarnessActions(
 	const findHarness = (roomId: string, harnessId: string) =>
 		roomsRef.current.find((r) => r.id === roomId)?.harnesses.find((x) => x.id === harnessId);
 
-	const doRestart = async (roomId: string, harnessId: string): Promise<GateResult> => {
+	const doRestart = async (
+		roomId: string,
+		harnessId: string,
+		source: string,
+	): Promise<GateResult> => {
 		const h = findHarness(roomId, harnessId);
 		if (!h) return { ok: false, reason: "that harness no longer exists" };
 		const gate = (): GateResult =>
@@ -323,7 +335,7 @@ export function useHarnessActions(
 			toPhase: "spawning",
 			timestampMs: Date.now(),
 			hasUserInput: activity?.hasUserInput ?? false,
-			source: TRANSITION_SOURCE.UserRestart,
+			source,
 		}).catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.warn(`[skein] db_record_harness_event failed for ${harnessId}:`, msg);

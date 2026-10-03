@@ -1,3 +1,5 @@
+import type { VersionNotice } from "./claudeVersion.ts";
+import { badgeAriaLabel, badgeTitle, updateSegmentText } from "./claudeVersionText.ts";
 import type { DragProps } from "./dragProps.ts";
 import { HChip, StatusDot } from "./HChip.tsx";
 import type { AgentLabel } from "./harnessAgent.ts";
@@ -28,6 +30,7 @@ export const HarnessTab = ({
 	onPointerCancel,
 	onLostPointerCapture,
 	suppressClick,
+	update,
 }: {
 	h: Harness;
 	/** #248: surfaced in the hover popover, not on the tab — the tab is
@@ -37,6 +40,9 @@ export const HarnessTab = ({
 	closable: boolean;
 	onClick: () => void;
 	onClose: () => void;
+	/** #491: a newer Claude Code is installed than this harness runs.
+	 *  Absent when there is no notice or the kind's mode is off. */
+	update?: { notice: VersionNotice; refusal: string | null; onRestart: () => void } | undefined;
 } & DragProps) => {
 	// #329: the mailbox unread marker — read live so a message arriving
 	// (or being read) updates the tab without a re-render trigger from
@@ -68,6 +74,11 @@ export const HarnessTab = ({
 				agent={agent}
 				mailCount={mail.count}
 				mailFromRoomNames={mail.fromRoomNames}
+				versionUpdate={
+					update
+						? { text: updateSegmentText(update.notice, update.refusal), refusal: update.refusal }
+						: undefined
+				}
 			/>
 			<span className="ht-name">{h.name}</span>
 			{/* #329: no `title` here — the hover popover (statusPopover.ts)
@@ -91,6 +102,23 @@ export const HarnessTab = ({
 				</span>
 			)}
 			{mail.count > 0 && !hold.held && <span className="tab-mail">✉ {mail.count}</span>}
+			{update && (
+				// #491: a real button so it is keyboard-reachable; the click
+				// restarts in place (#490) and must not also switch tabs.
+				<button
+					type="button"
+					className="tab-update"
+					title={badgeTitle(update.notice, update.refusal)}
+					aria-label={badgeAriaLabel(update.notice)}
+					onPointerDown={(e) => e.stopPropagation()}
+					onClick={(e) => {
+						e.stopPropagation();
+						update.onRestart();
+					}}
+				>
+					↑
+				</button>
+			)}
 			{closable && (
 				<span
 					className="ht-x"

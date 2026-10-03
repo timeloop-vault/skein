@@ -321,6 +321,7 @@ fn first_read_logged_flips_once_per_attach() {
         utf8_stall_at: None,
         utf8_stall_count: 0,
         utf8_stall_warned: false,
+        last_cli_version: None,
     }));
 
     // Nothing written yet — a tick that reads zero bytes must not
@@ -383,6 +384,7 @@ fn events_sent_counts_only_events_dispatched_before_a_panic() {
         utf8_stall_at: None,
         utf8_stall_count: 0,
         utf8_stall_warned: false,
+        last_cli_version: None,
     }));
 
     let calls = std::sync::atomic::AtomicUsize::new(0);
@@ -502,6 +504,7 @@ fn utf8_stall_counter_tracks_consecutive_failures_and_resets_on_recovery() {
         utf8_stall_at: None,
         utf8_stall_count: 0,
         utf8_stall_warned: false,
+        last_cli_version: None,
     }));
 
     for expected in 1..UTF8_STALL_WARN_THRESHOLD {

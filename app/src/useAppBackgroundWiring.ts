@@ -1,7 +1,9 @@
 import { useEffect } from "react";
+import { versionNoticeModeFor } from "./prefs.ts";
 import { startSupervisor } from "./supervisor/runtime.ts";
 import { useAgentRequests } from "./useAgentRequests.ts";
 import type { useAppSettings } from "./useAppSettings.ts";
+import { useClaudeVersionWatch } from "./useClaudeVersionWatch.ts";
 import type { useHarnessActions } from "./useHarnessActions.ts";
 import type { useHarnessCreation } from "./useHarnessCreation.ts";
 import { useMailDelivery } from "./useMailDelivery.ts";
@@ -44,6 +46,13 @@ export function useAppBackgroundWiring(a: {
 	// keeps the tab marker fresh. Scoped to active rooms only: an archived
 	// room's harnesses have no live PTY to nudge.
 	useMailDelivery(store.activeRooms);
+
+	// #491: Claude Code update notice — installed-version probe + auto policy.
+	useClaudeVersionWatch(
+		roomsRef,
+		actions.restartHarness,
+		versionNoticeModeFor(settings.versionNoticeModes, "claude"),
+	);
 
 	// #423: the harness supervisor rides the activity tick; idempotent, so
 	// StrictMode's double mount is harmless.

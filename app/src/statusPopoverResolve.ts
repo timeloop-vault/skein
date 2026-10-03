@@ -41,6 +41,8 @@ export interface Resolved {
 	 *  where on the tab the pointer is. 0/[] when there's none. */
 	mailCount: number;
 	mailFrom: readonly string[];
+	/** #491: "Claude Code X → Y available" (+ refusal), off the chip. */
+	update: string | null;
 }
 
 // Resolve the {kind, status} to show for a hovered chip/dot. A chip
@@ -118,7 +120,11 @@ export const resolve = (el: HTMLElement): Resolved | null => {
 			mailFrom = [];
 		}
 	}
+	const updateChip = isChip
+		? el
+		: el.closest<HTMLElement>(ROW_SEL)?.querySelector<HTMLElement>(".h-chip[data-version-notice]");
+	const update = updateChip?.dataset.versionNotice ?? null;
 	return kind || status
-		? { kind, status, agent, tool, agentType, workingCount, tasks, mailCount, mailFrom }
+		? { kind, status, agent, tool, agentType, workingCount, tasks, mailCount, mailFrom, update }
 		: null;
 };

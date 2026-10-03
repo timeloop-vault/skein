@@ -143,6 +143,35 @@ pub(crate) async fn list_harness_agents(
     .map_err(|e| format!("agent discovery panicked: {e}"))
 }
 
+/// The installed Claude Code version, from `claude --version` (#491).
+/// Resolves the program exactly like `list_harness_agents`. Anything that
+/// stops an answer (not installed, non-zero exit, unrecognised output,
+/// the 10 s timeout) is `Ok(None)`: the caller just has no version to
+/// compare, which is not an error worth a toast.
+#[tauri::command]
+pub(crate) async fn claude_cli_version(
+    spawn_env: tauri::State<'_, SpawnEnvState>,
+) -> Result<Option<String>, String> {
+    let settings = spawn_env.snapshot();
+    tauri::async_runtime::spawn_blocking(move || {
+        let program = crate::harness_kind::HarnessKind::Claude
+            .program()
+            .expect("claude has a program");
+        let (resolved, _path) = crate::pty::harness_program_lookup(program, &settings);
+        let exe = resolved.unwrap_or_else(|| program.to_owned());
+        let version = skein_harness::claude::cli_version::probe_version(
+            std::ffi::OsStr::new(&exe),
+            std::time::Duration::from_secs(10),
+        );
+        if version.is_none() {
+            tracing::debug!(program = %exe, "claude --version gave no usable version");
+        }
+        version
+    })
+    .await
+    .map_err(|e| format!("claude version probe panicked: {e}"))
+}
+
 /// What Skein injects into each agent CLI so it can reach the review
 /// API, and where the shipped bundle resolved to (#215 E3). Read by the
 /// spawn-environment panel — the injection is additive, but the user

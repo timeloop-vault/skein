@@ -13,6 +13,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { backgroundTasks } from "./backgroundTasks.ts";
+import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { logToRust } from "./frontendLog.ts";
 import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { beginAttach, endAttach, guardChannelHandler } from "./harnessEventsShared.ts";
@@ -82,7 +83,10 @@ export type ClaudeEvent =
 			agent_id: string | null;
 			status: BackgroundEndStatus;
 			exit_code: number | null;
-	  };
+	  }
+	// #491 — the Claude Code version that wrote a main-transcript row;
+	// `timestamp_ms` is the row's own time (null if it had none).
+	| { kind: "cli_version"; version: string; timestamp_ms: number | null };
 
 export type BackgroundTaskKind = "bash" | "powershell" | "monitor";
 
@@ -278,6 +282,9 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			// User-side action between turns — doesn't shift phase
 			// (the harness is still effectively waiting until the
 			// user submits). No-op.
+			return;
+		case "cli_version":
+			claudeVersionStore.recordRunning(harnessId, event.version, event.timestamp_ms);
 			return;
 		case "session_end":
 			// File vanished. Fall back to L2a — chunk-driven idle
