@@ -128,14 +128,30 @@ const withoutClaim = (h: Harness): Harness => {
  *  back on its own program (`claude --resume <sid>`, and the claim is
  *  consumed — the field is removed); a stale one restores the shell
  *  (claim removed, cmd unchanged). Claude only; other kinds keep their
- *  `shellClaim` untouched (#517 adds opencode here). */
-const resumeShell = (h: Harness, cmd: string[]): Harness => {
-	if (h.kind !== "claude" || !h.shellClaim) return { ...h, cmd };
+ *  `shellClaim` untouched. opencode (#517) resumes the same way via
+ *  `opencodeResumeArgv`. */
+const resumeShell = (h: Harness, cmd: string[], opencodePort?: number): Harness => {
+	if ((h.kind !== "claude" && h.kind !== "opencode") || !h.shellClaim) return { ...h, cmd };
 	const sid = h.shellClaim.sessionId;
 	if (sid.trim() !== "" && sid === h.sessionId) {
-		return { ...withoutClaim(h), cmd: withAgent(["claude", "--resume", sid], h.agent) };
+		// The persisted `claim.port` is deliberately NOT reused: the previous
+		// run's port is dead and may be taken now, and opencode fails hard on
+		// a busy explicit --port rather than falling back.
+		const argv =
+			h.kind === "claude" ? ["claude", "--resume", sid] : opencodeResumeArgv(sid, opencodePort);
+		return { ...withoutClaim(h), cmd: withAgent(argv, h.agent) };
 	}
 	return { ...withoutClaim(h), cmd };
+};
+
+/** The opencode resume argv (before `--agent`), shared by the rebuild
+ *  and the shell-claim paths so they cannot drift. */
+const opencodeResumeArgv = (sessionId: string | undefined, port?: number): string[] => {
+	const args = ["opencode"];
+	if (port !== undefined) args.push("--port", String(port), "--hostname", "127.0.0.1");
+	if (sessionId) args.push("--session", sessionId);
+	else args.push("--continue");
+	return args;
 };
 
 /** `resumeCmd`, but returning the whole harness so a session id minted
@@ -156,7 +172,7 @@ export const resumeHarness = (
 	// old argv-length matching it does not care how many flags Skein
 	// adds. A shell-swapped harness keeps its shell; rebuilding it into
 	// `claude --resume` would resurrect a harness the user retired.
-	if (cmd[0] !== HARNESS_KINDS[h.kind].program) return resumeShell(h, cmd);
+	if (cmd[0] !== HARNESS_KINDS[h.kind].program) return resumeShell(h, cmd, opencodePort);
 	if (h.kind === "claude" && h.shellClaim) {
 		return resumeHarness(withoutClaim(h), opencodePort, mintSessionId);
 	}
@@ -178,13 +194,7 @@ export const resumeHarness = (
 			// The port from sqlite is dead — the previous Skein run
 			// released it when the harness exited — so a fresh one is
 			// baked in on every rebuild.
-			const args = ["opencode"];
-			if (opencodePort !== undefined) {
-				args.push("--port", String(opencodePort), "--hostname", "127.0.0.1");
-			}
-			if (h.sessionId) args.push("--session", h.sessionId);
-			else args.push("--continue");
-			return { ...h, cmd: withAgent(args, h.agent) };
+			return { ...h, cmd: withAgent(opencodeResumeArgv(h.sessionId, opencodePort), h.agent) };
 		}
 		default:
 			return { ...h, cmd };

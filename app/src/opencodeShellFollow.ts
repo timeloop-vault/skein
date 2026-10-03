@@ -9,6 +9,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { attachOpencodeEvents } from "./harnessEventsOpencode.ts";
+import { createShellClaimTracker, type ShellClaimSink } from "./opencodeShellClaim.ts";
 import { runsKindProgram } from "./shellClaim.ts";
 
 /** Mirror of the Rust `OpencodeScan`. */
@@ -193,6 +194,8 @@ export interface ShellFollowDeps {
 	getSessionId: () => string | undefined;
 	getPort: () => number | undefined;
 	onSessionFollowed: ((sessionId: string) => void) | undefined;
+	/** #517: persists the proven process as the harness's shell claim. */
+	claim?: ShellClaimSink | undefined;
 	/** Detach the current adapter and attach one on `port`. */
 	repoint: (port: number) => void;
 	hint: (text: string) => void;
@@ -201,12 +204,15 @@ export interface ShellFollowDeps {
 /** Starts following; call `onOutput` for every PTY data chunk. */
 export function startOpencodeShellFollow(deps: ShellFollowDeps): {
 	onOutput: () => void;
+	/** Session change from the re-pointed SSE adapter (claimed while proven). */
+	followed: (sessionId: string) => void;
 	dispose: () => void;
 } {
 	let disposed = false;
 	let lastPid: number | null = null;
 	let lastArgvSession: string | null = null;
 	const hinted = new Set<number>();
+	const tracker = createShellClaimTracker({ claim: deps.claim, followed: deps.onSessionFollowed });
 	const proof = createStartupProof(() => Date.now());
 	const portWait = createPortWait(() => Date.now());
 	const scheduler = createScanScheduler({
@@ -221,8 +227,10 @@ export function startOpencodeShellFollow(deps: ShellFollowDeps): {
 			if (scan === null) {
 				proof.clear();
 				portWait.clear();
-				return { again: true, settledPid: null };
+				tracker.gone();
+				return { again: true, retry: tracker.releasePending(), settledPid: null };
 			}
+			tracker.seen(scan.pid);
 			if (!proof.proven(scan)) return { again: true, retry: true, settledPid: null };
 			// The argv id is only news when this process or its id is new;
 			// otherwise opencode's own /new (followed over SSE) would be
@@ -235,7 +243,7 @@ export function startOpencodeShellFollow(deps: ShellFollowDeps): {
 				sessionId: stale ? (scan.sessionId ?? live) : live,
 				port: deps.getPort(),
 			});
-			if (change?.sessionId !== undefined) deps.onSessionFollowed?.(change.sessionId);
+			tracker.observe(scan, change?.sessionId);
 			if (change?.port !== undefined) deps.repoint(change.port);
 			if (scan.port === null && !hinted.has(scan.pid)) {
 				hinted.add(scan.pid);
@@ -258,6 +266,7 @@ export function startOpencodeShellFollow(deps: ShellFollowDeps): {
 	});
 	return {
 		onOutput: () => scheduler.tick(),
+		followed: tracker.followed,
 		dispose() {
 			disposed = true;
 			scheduler.dispose();
@@ -279,6 +288,7 @@ export interface PaneFollowParams {
 	adapter: { current: OpencodeAdapter | null };
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
 	onSessionFollowed: ((sessionId: string) => void) | undefined;
+	claim?: ShellClaimSink | undefined;
 	setHint: (hint: string | null) => void;
 	hintTimerRef: { current: ReturnType<typeof setTimeout> | null };
 }
@@ -293,11 +303,12 @@ export function followOpencodeShell(
 	p: PaneFollowParams,
 ) {
 	if (!isOpencodeShellSpawn(kind, program)) return null;
-	return startOpencodeShellFollow({
+	const follow: ReturnType<typeof startOpencodeShellFollow> = startOpencodeShellFollow({
 		ptyIdRef: p.ptyIdRef,
 		getSessionId: () => p.sessionIdRef.current,
 		getPort: () => p.adapter.current?.port,
 		onSessionFollowed: p.onSessionFollowed,
+		claim: p.claim,
 		repoint: (port) => {
 			p.adapter.current?.detach();
 			const detach = attachOpencodeEvents(
@@ -308,7 +319,7 @@ export function followOpencodeShell(
 				p.sessionIdRef.current,
 				p.onSessionCaptured,
 				() => p.sessionIdRef.current,
-				p.onSessionFollowed,
+				(sid) => follow.followed(sid),
 			);
 			p.adapter.current = { detach, port };
 		},
@@ -321,4 +332,5 @@ export function followOpencodeShell(
 			}, HINT_MS);
 		},
 	});
+	return follow;
 }

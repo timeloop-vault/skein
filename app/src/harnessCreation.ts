@@ -191,13 +191,12 @@ export const withShellClaim = (
 	targetRoomId: string,
 	harnessId: string,
 	sessionId: string,
+	port?: number,
 ): Room[] =>
 	mapHarness(rooms, targetRoomId, harnessId, (h) =>
-		h.sessionId === sessionId &&
-		h.shellClaim?.sessionId === sessionId &&
-		h.shellClaim.port === undefined
+		h.sessionId === sessionId && h.shellClaim?.sessionId === sessionId && h.shellClaim.port === port
 			? h
-			: { ...h, sessionId, shellClaim: { sessionId } },
+			: { ...h, sessionId, shellClaim: port === undefined ? { sessionId } : { sessionId, port } },
 	);
 
 // #520: the claim was released; the key is removed, not set to undefined.
