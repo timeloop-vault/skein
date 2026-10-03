@@ -593,3 +593,49 @@ fn trailer_read_from_large_file_tail() {
         OutputTrailer::Unreadable
     );
 }
+
+/// Field report on epic #439 (Claude Code 2.1.287): a 30-minute Monitor
+/// delivers each event as enqueue + dequeue + an `origin.kind:
+/// "task-notification"` user row (no `<status>`) + a text-only `end_turn`.
+/// None of that may end the Monitor; only its deadline does.
+#[test]
+fn monitor_event_rows_keep_the_monitor_live_until_its_deadline() {
+    let fixture = include_str!("fixtures/monitor_events.jsonl");
+    let mut s = BackgroundTasks::default();
+    let mut events = 0;
+    let mut started = 0;
+    let mut live_after_event = Vec::new();
+    for line in fixture.lines() {
+        let row: Value = serde_json::from_str(line).unwrap();
+        for t in s.observe(&row) {
+            match t {
+                BackgroundTransition::Started(_) => started += 1,
+                BackgroundTransition::MonitorEvent { task_id, line } => {
+                    assert_eq!(task_id, "b0000004a");
+                    events += 1;
+                    assert_eq!(line, format!("line {}", events - 1));
+                }
+                other @ BackgroundTransition::Ended { .. } => panic!("ended early: {other:?}"),
+            }
+        }
+        if row["type"] == "assistant" && row["message"]["stop_reason"] == "end_turn" {
+            live_after_event.push(s.outstanding(TS_MS + 60_000).len());
+        }
+    }
+    assert_eq!((started, events), (1, 4));
+    assert_eq!(live_after_event, vec![1; 4]);
+
+    // Alive just inside the deadline, listed no longer past it, and the
+    // sweep ends it as expired once, after the grace.
+    let deadline = TS_MS + 1_800_000;
+    assert_eq!(s.outstanding(deadline).len(), 1);
+    assert_eq!(
+        s.expire_overdue(deadline + 999, 1000),
+        Vec::<BackgroundTransition>::new()
+    );
+    let out = s.expire_overdue(deadline + 1000, 1000);
+    let [BackgroundTransition::Ended { outcome, .. }] = out.as_slice() else {
+        panic!("{out:?}")
+    };
+    assert_eq!(outcome, &Outcome::new(OutcomeStatus::Expired));
+}

@@ -1,0 +1,18 @@
+{"type": "assistant", "timestamp": "2026-01-01T00:00:00.000Z", "message": {"content": [{"type": "tool_use", "id": "toolu_m", "name": "Monitor", "input": {"description": "watch", "timeout_ms": 1800000, "command": "tail -f log", "persistent": false}}]}}
+{"type": "user", "timestamp": "2026-01-01T00:00:01.000Z", "toolUseResult": {"taskId": "b0000004a", "timeoutMs": 1800000, "persistent": false}, "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_m", "content": "Monitor started (task b0000004a)", "is_error": false}]}}
+{"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-01-01T00:00:10.000Z", "content": "<task-notification>\n<task-id>b0000004a</task-id>\n<summary>Monitor event: \"watch\"</summary>\n<event>line 0</event>\n</task-notification>"}
+{"type": "queue-operation", "operation": "dequeue", "timestamp": "2026-01-01T00:00:10.000Z"}
+{"type": "user", "timestamp": "2026-01-01T00:00:10.000Z", "origin": {"kind": "task-notification"}, "message": {"role": "user", "content": "<task-notification>\n<task-id>b0000004a</task-id>\n<summary>Monitor event: \"watch\"</summary>\n<event>line 0</event>\n</task-notification>"}}
+{"type": "assistant", "timestamp": "2026-01-01T00:00:13.000Z", "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": "Noted."}]}}
+{"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-01-01T00:00:18.000Z", "content": "<task-notification>\n<task-id>b0000004a</task-id>\n<summary>Monitor event: \"watch\"</summary>\n<event>line 1</event>\n</task-notification>"}
+{"type": "queue-operation", "operation": "dequeue", "timestamp": "2026-01-01T00:00:18.000Z"}
+{"type": "user", "timestamp": "2026-01-01T00:00:18.000Z", "origin": {"kind": "task-notification"}, "message": {"role": "user", "content": "<task-notification>\n<task-id>b0000004a</task-id>\n<summary>Monitor event: \"watch\"</summary>\n<event>line 1</event>\n</task-notification>"}}
+{"type": "assistant", "timestamp": "2026-01-01T00:00:21.000Z", "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": "Noted."}]}}
+{"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-01-01T00:00:26.000Z", "content": "<task-notification>\n<task-id>b0000004a</task-id>\n<summary>Monitor event: \"watch\"</summary>\n<event>line 2</event>\n</task-notification>"}
+{"type": "queue-operation", "operation": "dequeue", "timestamp": "2026-01-01T00:00:26.000Z"}
+{"type": "user", "timestamp": "2026-01-01T00:00:26.000Z", "origin": {"kind": "task-notification"}, "message": {"role": "user", "content": "<task-notification>\n<task-id>b0000004a</task-id>\n<summary>Monitor event: \"watch\"</summary>\n<event>line 2</event>\n</task-notification>"}}
+{"type": "assistant", "timestamp": "2026-01-01T00:00:29.000Z", "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": "Noted."}]}}
+{"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-01-01T00:00:34.000Z", "content": "<task-notification>\n<task-id>b0000004a</task-id>\n<summary>Monitor event: \"watch\"</summary>\n<event>line 3</event>\n</task-notification>"}
+{"type": "queue-operation", "operation": "dequeue", "timestamp": "2026-01-01T00:00:34.000Z"}
+{"type": "user", "timestamp": "2026-01-01T00:00:34.000Z", "origin": {"kind": "task-notification"}, "message": {"role": "user", "content": "<task-notification>\n<task-id>b0000004a</task-id>\n<summary>Monitor event: \"watch\"</summary>\n<event>line 3</event>\n</task-notification>"}}
+{"type": "assistant", "timestamp": "2026-01-01T00:00:37.000Z", "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": "Noted."}]}}
