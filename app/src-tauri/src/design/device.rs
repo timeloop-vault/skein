@@ -20,10 +20,12 @@ fn parse_dpr(query: &str) -> Option<f64> {
 }
 
 /// The `(script attribute, source)` pairs the query asks for, in the order
-/// they are injected. This is the one place the query maps to shims:
-/// #529 and #530 add theirs here. JS only, so a shim does not reach
-/// `(resolution)` media queries or `image-set`. Only parsed numbers are
-/// ever interpolated, never raw query text.
+/// they are injected: `dpr` (#528), then the media-emulation (#530) and touch
+/// (#529) shims, both driven by the one `touch=1` switch (static scripts,
+/// nothing from the query is interpolated). This is the one place the query
+/// maps to shims. JS only, so a shim does
+/// not reach `(resolution)` media queries or `image-set`. Only parsed
+/// numbers are ever interpolated, never raw query text.
 pub fn device_shims(query: &str) -> Vec<(&'static str, String)> {
     let mut shims = Vec::new();
     if let Some(d) = parse_dpr(query) {
@@ -33,6 +35,11 @@ pub fn device_shims(query: &str) -> Vec<(&'static str, String)> {
                 "(function(){{var d={d};try{{Object.defineProperty(window,\"devicePixelRatio\",{{get:function(){{return d}},configurable:true}});}}catch(e){{}}}})();"
             ),
         ));
+    }
+    if param(query, "touch") == Some("1") {
+        // media.js first: matchMedia must be overridden before anything else runs.
+        shims.push(("data-skein-media", include_str!("media.js").to_string()));
+        shims.push(("data-skein-touch", include_str!("touch.js").to_string()));
     }
     shims
 }
@@ -73,5 +80,34 @@ mod tests {
         assert_eq!(s[0].0, "data-skein-device");
         assert!(s[0].1.contains("var d=1.5;"));
         assert!(s[0].1.contains("devicePixelRatio"));
+    }
+
+    #[test]
+    fn touch_is_injected_only_for_an_exact_one() {
+        for q in [
+            "",
+            "v=1",
+            "touch=0",
+            "touch=true",
+            "touch=1x",
+            "touch=",
+            "touch=%31",
+        ] {
+            assert!(device_shims(q).is_empty(), "{q}");
+        }
+        let s = device_shims("v=1&touch=1");
+        let names: Vec<_> = s.iter().map(|x| x.0).collect();
+        assert_eq!(names, ["data-skein-media", "data-skein-touch"]);
+        assert!(s[1].1.contains("__skeinTouch"));
+    }
+
+    #[test]
+    fn dpr_comes_before_touch() {
+        let names: Vec<_> = device_shims("touch=1&dpr=2").iter().map(|s| s.0).collect();
+        assert_eq!(
+            names,
+            ["data-skein-device", "data-skein-media", "data-skein-touch"]
+        );
+        assert_eq!(device_shims("dpr=2").len(), 1);
     }
 }

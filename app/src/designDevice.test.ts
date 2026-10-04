@@ -51,7 +51,7 @@ describe("normalizeDevice", () => {
 	});
 	it("drops unknown keys and ignores width/height on a preset", () => {
 		expect(
-			normalizeDevice({ preset: "android", width: 5, touch: true, landscape: true, dpr: 2 }),
+			normalizeDevice({ preset: "android", width: 5, future: true, landscape: true, dpr: 2 }),
 		).toEqual({ preset: "android", landscape: true, dpr: 2 });
 	});
 	it("keeps landscape only when true", () => {
@@ -61,6 +61,23 @@ describe("normalizeDevice", () => {
 		expect(normalizeDevice({ preset: "android", landscape: false })).toEqual({
 			preset: "android",
 		});
+	});
+	it.each([
+		[true, true],
+		[false, undefined],
+		["yes", undefined],
+		[1, undefined],
+	])("touch %j -> %s", (touch, want) => {
+		expect(normalizeDevice({ preset: "iphone-14", touch })?.touch).toBe(want);
+		expect(normalizeDevice({ preset: "custom", width: 500, height: 700, touch })?.touch).toBe(want);
+	});
+	it("none survives with only touch", () => {
+		expect(normalizeDevice({ preset: "none", touch: true })).toEqual({
+			preset: "none",
+			touch: true,
+		});
+		expect(normalizeDevice({ preset: "none", touch: false })).toBeUndefined();
+		expect(normalizeDevice({ preset: "none", touch: 1 })).toBeUndefined();
 	});
 	it("rounds and clamps custom sizes", () => {
 		expect(normalizeDevice({ preset: "custom", width: 500.6, height: 700.2 })).toEqual({
@@ -139,6 +156,13 @@ describe("deviceParams", () => {
 	it("emits dpr when set", () => {
 		expect(deviceParams({ preset: "iphone-14", dpr: 2 })).toEqual([["dpr", "2"]]);
 	});
+	it("emits touch after dpr", () => {
+		expect(deviceParams({ preset: "none", touch: true })).toEqual([["touch", "1"]]);
+		expect(deviceParams({ preset: "iphone-14", touch: true, dpr: 2 })).toEqual([
+			["dpr", "2"],
+			["touch", "1"],
+		]);
+	});
 });
 
 describe("deviceLabel", () => {
@@ -149,6 +173,10 @@ describe("deviceLabel", () => {
 		[{ preset: "iphone-14", landscape: true }, "iPhone 14 · 844×390"],
 		[{ preset: "custom", width: 500, height: 700 }, "Custom · 500×700"],
 		[{ preset: "ipad-air", dpr: 2 }, "iPad Air · 820×1180 · 2×"],
+		[{ preset: "none", touch: true }, "None · touch"],
+		[{ preset: "none", dpr: 2, touch: true }, "None · touch"],
+		[{ preset: "iphone-14", touch: true }, "iPhone 14 · 390×844 · touch"],
+		[{ preset: "ipad-air", dpr: 2, touch: true }, "iPad Air · 820×1180 · 2× · touch"],
 	])("%j -> %s", (d, want) => {
 		expect(deviceLabel(d)).toBe(want);
 	});

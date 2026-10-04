@@ -18,6 +18,9 @@ import "./designDevice.css";
 const DPR_TITLE =
 	"Overrides window.devicePixelRatio for scripts only — CSS (resolution) media queries and image-set still see the host's ratio. Reloads the preview.";
 
+const TOUCH_TITLE =
+	"Mobile emulation: mouse drags act as touch gestures and (hover)/(pointer) media queries report a phone. Reloads the preview.";
+
 interface Props {
 	device: DesignDevice | undefined;
 	onChange: (device: DesignDevice | undefined) => void;
@@ -27,6 +30,7 @@ export const DesignDeviceControl = ({ device, onChange }: Props) => {
 	const preset = device?.preset ?? "none";
 	const custom = preset === "custom";
 	const landscape = device?.landscape === true;
+	const touch = device?.touch === true;
 
 	const [w, setW] = useState(String(device?.width ?? ""));
 	const [h, setH] = useState(String(device?.height ?? ""));
@@ -36,9 +40,10 @@ export const DesignDeviceControl = ({ device, onChange }: Props) => {
 	}, [device?.width, device?.height]);
 
 	const emit = (next: DesignDevice) => onChange(normalizeDevice(next));
-	const carry = (): Pick<DesignDevice, "landscape" | "dpr"> => ({
+	const carry = (): Pick<DesignDevice, "landscape" | "dpr" | "touch"> => ({
 		...(landscape ? { landscape: true } : {}),
 		...(device?.dpr !== undefined ? { dpr: device.dpr } : {}),
+		...(touch ? { touch: true } : {}),
 	});
 
 	const pick = (id: string) => {
@@ -138,6 +143,15 @@ export const DesignDeviceControl = ({ device, onChange }: Props) => {
 					</option>
 				))}
 			</select>
+			<button
+				type="button"
+				title={TOUCH_TITLE}
+				className="dd-rotate"
+				aria-pressed={touch}
+				onClick={() => emit({ ...(device ?? { preset: "none" }), touch: !touch })}
+			>
+				Touch
+			</button>
 		</>
 	);
 };

@@ -5,16 +5,19 @@
  *  as plain JSON by Rust. `preset` is "none", a DEVICE_PRESETS id, or
  *  "custom" (which uses width/height). `dpr` absent = the host's DPR.
  *
- *  This object is the seam where #529 (touch mode) and #530 (hover:none /
- *  pointer:coarse emulation) add their flags: new optional fields here plus
- *  a line in `deviceParams`. Rust stores it opaquely, so no Rust change is
- *  needed. */
+ *  `touch` is mobile emulation (#529 + #530): mouse drags become touch
+ *  gestures and hover/pointer media features report a phone. One switch,
+ *  because hover styles under emulated touch would be inconsistent.
+ *
+ *  New flags are optional fields here plus a line in `deviceParams`. Rust
+ *  stores it opaquely, so no Rust change is needed. */
 export interface DesignDevice {
 	preset: string;
 	width?: number;
 	height?: number;
 	landscape?: boolean;
 	dpr?: number;
+	touch?: boolean;
 }
 
 /** Portrait CSS px. */
@@ -51,9 +54,10 @@ export const normalizeDevice = (raw: unknown): DesignDevice | undefined => {
 	if (typeof preset !== "string") return undefined;
 	const out: DesignDevice = { preset };
 	if (preset === "none") {
-		// Fills the pane, but a DPR override is independent of the size.
+		// Fills the pane, but DPR and touch are independent of the size.
 		if (isNum(r.dpr) && r.dpr >= DPR_MIN && r.dpr <= DPR_MAX) out.dpr = r.dpr;
-		return out.dpr === undefined ? undefined : out;
+		if (r.touch === true) out.touch = true;
+		return out.dpr === undefined && out.touch === undefined ? undefined : out;
 	}
 	if (preset === "custom") {
 		if (!isNum(r.width) || !isNum(r.height)) return undefined;
@@ -64,6 +68,7 @@ export const normalizeDevice = (raw: unknown): DesignDevice | undefined => {
 	}
 	if (r.landscape === true) out.landscape = true;
 	if (isNum(r.dpr) && r.dpr >= DPR_MIN && r.dpr <= DPR_MAX) out.dpr = r.dpr;
+	if (r.touch === true) out.touch = true;
 	return out;
 };
 
@@ -118,24 +123,27 @@ export const fitScale = (
 };
 
 /** Query parameters the preview server reads to inject shims at load.
- *  Today only `dpr`, which `app/src-tauri/src/design/serve.rs` accepts in
- *  [0.5, 4] and turns into a `window.devicePixelRatio` getter override.
- *  #529/#530 add their params here. */
+ *  `dpr`, which `app/src-tauri/src/design/serve.rs` accepts in [0.5, 4] and
+ *  turns into a `window.devicePixelRatio` getter override; and `touch=1`,
+ *  which injects the touch-gesture and hover/pointer media shims. */
 export const deviceParams = (device: DesignDevice | undefined): [string, string][] => {
 	const out: [string, string][] = [];
 	if (device?.dpr !== undefined) out.push(["dpr", String(device.dpr)]);
+	if (device?.touch === true) out.push(["touch", "1"]);
 	return out;
 };
 
 /** Short toolbar text, e.g. "iPhone 14 · 390×844 · 2×". */
 export const deviceLabel = (device: DesignDevice | undefined): string => {
 	const size = frameSize(device);
-	if (device === undefined || size === null) return "None";
+	if (device === undefined || size === null)
+		return device?.touch === true ? "None · touch" : "None";
 	const dims = `${size.width}×${size.height}`;
 	const name =
 		device.preset === "custom"
 			? "Custom"
 			: (DEVICE_PRESETS.find((p) => p.id === device.preset)?.label ?? device.preset);
 	const dpr = device.dpr !== undefined ? ` · ${device.dpr}×` : "";
-	return `${name} · ${dims}${dpr}`;
+	const touch = device.touch === true ? " · touch" : "";
+	return `${name} · ${dims}${dpr}${touch}`;
 };
