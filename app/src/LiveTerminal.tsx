@@ -33,6 +33,7 @@ import { harnessActivity } from "./harnessActivity.ts";
 import type { GateResult } from "./harnessInput.ts";
 import { canInsertText, formatDroppedPaths, harnessInput, insertText } from "./harnessInput.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
+import { fitTerminal } from "./terminalFit.ts";
 import type { HarnessKind } from "./types.ts";
 import { OVERLAY_CLOSED_EVENT } from "./useFocusRestore.ts";
 import { useTerminalSpawn } from "./useTerminalSpawn.ts";
@@ -273,7 +274,7 @@ export const LiveTerminal = ({
 		term.options.fontSize = fontSize;
 		if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
 		try {
-			fit.fit();
+			fitTerminal(term, fit);
 		} catch {
 			return;
 		}

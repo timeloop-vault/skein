@@ -9,6 +9,7 @@ import type { Terminal } from "@xterm/xterm";
 import { harnessActivity } from "./harnessActivity.ts";
 import { harnessInput } from "./harnessInput.ts";
 import type { ScreenCell } from "./promptScreen.ts";
+import { fitTerminal } from "./terminalFit.ts";
 import type { HarnessKind } from "./types.ts";
 
 /** The slice of xterm's `Terminal` the screen read touches. */
@@ -158,7 +159,7 @@ export function observeResize(
 		// hidden — the next tick (visible again) refits.
 		if (host.clientWidth === 0 || host.clientHeight === 0) return;
 		try {
-			fit.fit();
+			fitTerminal(term, fit);
 		} catch {
 			// fit can throw during teardown when the host
 			// element has been detached; ignore.
