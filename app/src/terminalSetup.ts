@@ -11,6 +11,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { isMac } from "./shortcuts.ts";
+import { fitTerminal } from "./terminalFit.ts";
 import { shouldHostOpenLink } from "./terminalLinks.ts";
 
 /** Creates and opens a `Terminal` into `host`, wired with the fit addon,
@@ -136,7 +137,7 @@ export function createXterm(
 	// what we'll spawn the PTY with; the ResizeObserver tick that
 	// fires when the pane becomes visible will refit and pty_resize.
 	if (host.clientWidth > 0 && host.clientHeight > 0) {
-		fit.fit();
+		fitTerminal(term, fit);
 	}
 	return { term, fit };
 }

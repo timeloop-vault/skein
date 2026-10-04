@@ -55,3 +55,17 @@
 	color: var(--fg-1);
 	opacity: 0.92;
 }
+
+/* #527 — xterm's DOM renderer gives each row an inline `overflow: hidden`
+   and a letter-spacing derived from a width Chrome quantizes to 1/64 px,
+   so text overruns its row by up to cols/64 px and the last glyph is cut.
+   Let rows overflow horizontally (terminalFit.ts keeps the overrun clear
+   of the scrollbar). Vertical stays clipped so rows don't bleed into the
+   next one; `clip`, not `hidden`, so the mixed `visible` x axis does not
+   compute to `auto` and turn the row into a scroll container. */
+.sk-terminal-drop-host .xterm .xterm-rows > div {
+	/* biome-ignore lint/complexity/noImportantStyles: beats xterm's inline overflow: hidden */
+	overflow-x: visible !important;
+	/* biome-ignore lint/complexity/noImportantStyles: beats xterm's inline overflow: hidden */
+	overflow-y: clip !important;
+}
