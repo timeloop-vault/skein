@@ -13,17 +13,17 @@ use super::verbs::{
 use crate::agent_api::state::AgentApiState;
 use crate::db::Room;
 
-type Calls = Arc<Mutex<Vec<(String, Value)>>>;
+pub(super) type Calls = Arc<Mutex<Vec<(String, Value)>>>;
 
 /// A room folder holding two html entries.
-fn folder() -> TempDir {
+pub(super) fn folder() -> TempDir {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("a.html"), "<p>a</p>").unwrap();
     std::fs::write(dir.path().join("b.html"), "<p>b</p>").unwrap();
     dir
 }
 
-fn design_room(id: &str, dir: &TempDir, design_ids: &[&str]) -> Room {
+pub(super) fn design_room(id: &str, dir: &TempDir, design_ids: &[&str]) -> Room {
     let mut hs = vec![harness(&format!("{id}-claude"), "claude", "main")];
     hs.extend(design_ids.iter().map(|d| harness(d, "design", d)));
     let mut r = room(id, hs);
@@ -32,7 +32,7 @@ fn design_room(id: &str, dir: &TempDir, design_ids: &[&str]) -> Room {
 }
 
 /// A state whose frontend records every call and answers with `answer`.
-fn recording(
+pub(super) fn recording(
     f: &Fixture,
     answer: impl Fn(&str, &Value) -> Result<Value, String> + Send + Sync + 'static,
 ) -> (AgentApiState, Calls) {
@@ -81,7 +81,7 @@ fn show_args(h: Option<&str>, selector: Option<&str>, anchor: Option<Value>) -> 
     }
 }
 
-fn is_refused(err: &VerbError, prefix: &str) -> bool {
+pub(super) fn is_refused(err: &VerbError, prefix: &str) -> bool {
     matches!(err, VerbError::Refused(m) if m.starts_with(prefix))
 }
 

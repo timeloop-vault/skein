@@ -63,6 +63,8 @@ mod create_room_frontend_tests;
 #[cfg(test)]
 mod create_room_tests;
 #[cfg(test)]
+mod design_invoke_tests;
+#[cfg(test)]
 mod design_tests;
 #[cfg(test)]
 mod element_tests;

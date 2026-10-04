@@ -8,6 +8,7 @@
 
 import { asRecord, isOmitted, type RequestResult } from "./agentRequestsShared.ts";
 import type { DesignDevice } from "./designDevice.ts";
+import type { InvokeElementRequest, InvokeElementResult } from "./designInvoke.ts";
 import type { ElementAnchor, ElementDescriptor, Placement } from "./elementAnchor.ts";
 
 export type DesignScroll = { x: number; y: number };
@@ -45,6 +46,7 @@ export interface DesignPaneApi {
 	/** True once the iframe has fired its ready beacon. */
 	ready(): boolean;
 	showElement(req: ShowElementRequest): Promise<ShowElementResult>;
+	invokeElement(req: InvokeElementRequest): Promise<InvokeElementResult>;
 }
 
 const panes = new Map<string, DesignPaneApi>();
@@ -145,7 +147,7 @@ const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFin
 
 /** The agent-facing anchor: at least a selector or a tag; the rest is
  *  optional and defaulted to what `matchElement` tolerates. */
-function parseAnchor(v: unknown): ElementAnchor | null {
+export function parseAnchor(v: unknown): ElementAnchor | null {
 	const r = asRecord(v);
 	if (!r) return null;
 	const selector = typeof r.selector === "string" ? r.selector : "";

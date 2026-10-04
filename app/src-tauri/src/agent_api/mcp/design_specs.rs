@@ -174,5 +174,84 @@ pub(super) fn design_tool_specs() -> Vec<Value> {
                 "additionalProperties": false,
             },
         }),
+        json!({
+            "name": "invoke_element",
+            "title": "Tap or swipe an element in the design pane",
+            "description":
+                "Taps or swipes one element of the page a design pane previews, \
+                 as the prototype's own page events (pointer and mouse events, \
+                 then a click for a tap). It drives the prototype, not Skein, and \
+                 creates no comment thread. Give exactly one of `selector` (a CSS \
+                 selector) or `anchor` (same shape as show_element). `action` is \
+                 \"tap\" (default) or \"swipe\"; a swipe needs `direction` \
+                 (left, right, up, down) and takes an optional `distance` (integer \
+                 CSS px 8-2000, default 120); direction and distance are refused \
+                 with tap. It acts ONLY on a single, accepted match, never a guess: \
+                 selector, anchored and reanchored matches are acted on, while \
+                 ambiguous (more than one match, see `count`), stale and not_found \
+                 (an unparsable selector also carries `invalidSelector: true`) act \
+                 on nothing. `invoked` says whether anything was done; when it \
+                 was, `domChanged` says something in the page changed within \
+                 300 ms, and false suggests the prototype ignored the event. A \
+                 touch-mode device sends touch-type pointer events. A tap fires \
+                 pointer and mouse press events at the element's centre and then \
+                 element.click(); the click event itself carries no coordinates, \
+                 and the tap is delivered to the element even if something covers \
+                 it on screen. A swipe starts 4 px inside the edge of the element \
+                 you target, so target the element that owns the gesture (e.g. the \
+                 screen or frame container whose edge opens a drawer), not an \
+                 inner child; prototypes typically measure the edge band against \
+                 their own container. Refuses with \
+                 busy while the user is picking an element in that pane, \
+                 not_mounted when the pane is not open in Skein, and not_ready \
+                 while the preview has not loaded. Never takes focus or switches \
+                 the visible room or harness. Gated by the Settings switch that \
+                 also governs open_harness/close_harness, and rate-capped with \
+                 open_design_entry, set_design_device and show_element (10 \
+                 combined per minute, checked after argument validation).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "harness": {
+                        "type": "string",
+                        "description": "A design harness id. Optional when the room has exactly one.",
+                    },
+                    "selector": {
+                        "type": "string",
+                        "description": "A CSS selector. Exclusive with anchor.",
+                    },
+                    "anchor": {
+                        "type": "object",
+                        "description": "An element anchor. Requires a `selector` or `tag` \
+                            string; optional: text, attrs, odId, source. Exclusive with selector.",
+                        "properties": {
+                            "selector": { "type": "string" },
+                            "tag": { "type": "string" },
+                            "text": { "type": "string" },
+                            "attrs": {},
+                            "odId": { "type": "string" },
+                            "source": {},
+                        },
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": ["tap", "swipe"],
+                        "description": "Default tap.",
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["left", "right", "up", "down"],
+                        "description": "Required with swipe; refused with tap.",
+                    },
+                    "distance": {
+                        "type": "integer",
+                        "minimum": 8,
+                        "maximum": 2000,
+                        "description": "Swipe length in CSS px. Default 120. Swipe only.",
+                    },
+                },
+                "additionalProperties": false,
+            },
+        }),
     ]
 }

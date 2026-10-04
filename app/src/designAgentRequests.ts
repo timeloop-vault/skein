@@ -16,6 +16,7 @@ import {
 	parseStateArgs,
 } from "./designControl.ts";
 import { type DesignDevice, normalizeDevice, validateDevice } from "./designDevice.ts";
+import { parseInvokeElementArgs } from "./designInvoke.ts";
 import type { Room } from "./types.ts";
 
 export type DesignComplete = (id: string, ok?: unknown, error?: string) => Promise<void>;
@@ -26,6 +27,7 @@ export const DESIGN_KINDS = [
 	"design.open_entry",
 	"design.set_device",
 	"design.show_element",
+	"design.invoke_element",
 ] as const;
 
 export const isDesignKind = (kind: string): boolean =>
@@ -91,6 +93,20 @@ export async function handleDesignRequest(
 		const previous = normalizeDevice(harness.designDevice) ?? null;
 		setDevice(roomId, harnessId, v.value);
 		return complete(id, { device: v.value ?? null, previous });
+	}
+
+	if (kind === "design.invoke_element") {
+		const p = parseInvokeElementArgs(raw);
+		if (bad(p)) return fail(p.error);
+		const { roomId, harnessId, ...req } = p.value;
+		const pane = getDesignPane(harnessId);
+		if (!pane || pane.roomId !== roomId) {
+			return fail(`not_mounted: no design pane is mounted for harness "${harnessId}"`);
+		}
+		if (!pane.ready()) {
+			return fail("not_ready: the design pane has not finished loading its preview yet");
+		}
+		return complete(id, await pane.invokeElement(req));
 	}
 
 	// design.show_element
