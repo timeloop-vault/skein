@@ -68,10 +68,18 @@ pub async fn design_list_entries(
     room_id: String,
     db: State<'_, Arc<Database>>,
 ) -> Result<Vec<String>, String> {
-    let root = room_root(&db, &room_id)?;
-    tauri::async_runtime::spawn_blocking(move || list_html_entries(&root))
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || list_entries_for_room(&db, &room_id))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
+}
+
+/// The previewable entries of a room's folder (blocking walk). The
+/// non-Tauri core of `design_list_entries`, shared with the agent API's
+/// design verbs (#512).
+pub fn list_entries_for_room(db: &Database, room_id: &str) -> Result<Vec<String>, String> {
+    let root = room_root(db, room_id)?;
+    Ok(list_html_entries(&root))
 }
 
 #[allow(clippy::needless_pass_by_value)]

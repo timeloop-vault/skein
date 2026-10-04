@@ -19,6 +19,7 @@ import {
 	pushBeacon,
 } from "./designPreview.ts";
 import { useDesignComments } from "./useDesignComments.ts";
+import { useDesignControl } from "./useDesignControl.ts";
 import { useDesignEdit } from "./useDesignEdit.ts";
 import { useDesignPreview } from "./useDesignPreview.ts";
 import "./design.css";
@@ -77,6 +78,19 @@ export const DesignBody = ({
 	const { setDraft, setSelected, relocate, onLocated, clearPlacements } = c;
 	const edit = useDesignEdit({ roomId, cwd, entry, post });
 	const { onBeacon: onEditBeacon, reset: resetEdit } = edit;
+	const { onBeacon: onControlBeacon, reset: resetControl } = useDesignControl({
+		harnessId,
+		roomId,
+		entry,
+		device,
+		ready,
+		loadFailed: noReady,
+		errors: beacons,
+		threads: c.threads,
+		selectedId: c.selected?.id,
+		visible,
+		post,
+	});
 
 	// One entry and none chosen: pick it and persist.
 	useEffect(() => {
@@ -101,6 +115,7 @@ export const DesignBody = ({
 		readyRef.current = false;
 		setPicking(false);
 		resetEdit();
+		resetControl();
 		clearPlacements();
 		if (timerRef.current !== null) window.clearTimeout(timerRef.current);
 		timerRef.current = null;
@@ -168,7 +183,7 @@ export const DesignBody = ({
 			const frame = frameRef.current;
 			if (!frame || e.source !== frame.contentWindow) return;
 			const b = parseBeacon(e.data);
-			if (!b) return;
+			if (!b || onControlBeacon(b)) return;
 			if (b.type === "ready") {
 				readyRef.current = true;
 				setReady(true);
@@ -196,7 +211,7 @@ export const DesignBody = ({
 		};
 		window.addEventListener("message", onMessage);
 		return () => window.removeEventListener("message", onMessage);
-	}, [setDraft, relocate, onLocated, onEditBeacon]);
+	}, [setDraft, relocate, onLocated, onEditBeacon, onControlBeacon]);
 
 	const onFrameLoad = () => {
 		if (readyRef.current) return;

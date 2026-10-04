@@ -9,7 +9,7 @@ use super::verbs::{self, MailContext, VerbError};
 // ── the two prohibitions ──────────────────────────────────────────
 
 #[test]
-fn the_tool_list_offers_eighteen_verbs_and_nothing_that_resolves_approves_or_deletes() {
+fn the_tool_list_offers_twenty_two_verbs_and_nothing_that_resolves_approves_or_deletes() {
     let names: Vec<String> = mcp::tool_specs()
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_owned())
@@ -44,6 +44,11 @@ fn the_tool_list_offers_eighteen_verbs_and_nothing_that_resolves_approves_or_del
             "list_rooms",
             "get_room",
             "list_harnesses",
+            // #512: the design pane.
+            "list_design_harnesses",
+            "get_design_state",
+            "open_design_entry",
+            "show_element",
             // #535: which Skein build this is.
             "skein_info",
         ]
@@ -53,8 +58,10 @@ fn the_tool_list_offers_eighteen_verbs_and_nothing_that_resolves_approves_or_del
         "resolve is the reviewer's, and D8 keeps it that way"
     );
     assert!(
+        // "design" (#512) contains "sign"; strip it before looking.
         !names
             .iter()
+            .map(|n| n.replace("design", ""))
             .any(|n| n.contains("approve") || n.contains("sign")),
         "signing off is the reviewer's — an agent that approves itself is no gate"
     );

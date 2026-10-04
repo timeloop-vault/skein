@@ -28,6 +28,17 @@ export type Beacon =
 			/** Worktree-relative paths of the files the page loaded. */
 			files: string[];
 	  }
+	| {
+			type: "shownElement";
+			requestId: string;
+			count: number;
+			/** Set only for a unique match. */
+			element: ElementDescriptor | null;
+			/** The selector was not valid CSS. */
+			invalid?: boolean;
+	  }
+	| { type: "shownCleared" }
+	| { type: "scroll"; x: number; y: number }
 	| EditBeacon;
 
 const MAX_ATTRS = 16;
@@ -178,6 +189,8 @@ export type HostMessage =
 	  }
 	| { type: "pins"; pins: { n: number; state: string; rect: ElementRect }[] }
 	| { type: "highlight"; n: number }
+	/** Agent show_element (#512): outline + scroll to a selector's element. */
+	| { type: "showElement"; requestId: string; selector: string }
 	| { type: "edit-start" }
 	| { type: "edit-set"; property: string; value: string }
 	| { type: "edit-end"; revert: boolean }
@@ -227,6 +240,25 @@ export const parseBeacon = (data: unknown): Beacon | null => {
 			return { type: "dom-changed" };
 		case "located":
 			return parseLocated(d);
+		case "shownElement": {
+			const requestId = idOf(d.requestId);
+			const count = num(d.count);
+			if (requestId === null || count === null) return null;
+			return {
+				type: "shownElement",
+				requestId,
+				count,
+				element: parseDescriptor(d.element),
+				...(d.invalid === true ? { invalid: true } : {}),
+			};
+		}
+		case "shownCleared":
+			return { type: "shownCleared" };
+		case "scroll": {
+			const x = num(d.x);
+			const y = num(d.y);
+			return x === null || y === null ? null : { type: "scroll", x, y };
+		}
 		case "edit-picked":
 		case "edit-change":
 		case "edit-cancelled":
