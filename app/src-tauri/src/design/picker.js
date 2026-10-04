@@ -613,6 +613,7 @@
 		describe: (el) => describe(el),
 		locateOne: (a, all) => locateOne(a, all),
 		isOverlay,
+		isPicking: () => picking,
 		root: ensureOverlay,
 		rectOf,
 		query: safeQuery,

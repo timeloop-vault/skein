@@ -91,6 +91,10 @@ export function useAgentRequests(
 	setDesignEntry: (roomId: string, harnessId: string, entry: string) => void,
 	// #548: `useHarnessActions.setHarnessDesignDevice`, for `design.set_device`.
 	setDesignDevice: (roomId: string, harnessId: string, device: DesignDevice | undefined) => void,
+	// #549: `reveal` on show_element / invoke_element: the room in front and
+	// `useHarnessActions.switchHarnessInRoom`; never switches rooms.
+	activeRoomIdRef: MutableRefObject<string | null>,
+	switchHarnessInRoom: (roomId: string, harnessId: string) => void,
 ): void {
 	// Refs so the listener (mounted once, below) always reads the latest
 	// values without re-subscribing on every settings/memory change —
@@ -116,6 +120,8 @@ export function useAgentRequests(
 	setDesignEntryRef.current = setDesignEntry;
 	const setDesignDeviceRef = useRef(setDesignDevice);
 	setDesignDeviceRef.current = setDesignDevice;
+	const switchHarnessRef = useRef(switchHarnessInRoom);
+	switchHarnessRef.current = switchHarnessInRoom;
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: roomsRef comes from useRoomsStore (#19) — a ref, stable across renders, but biome can't prove that through a parameter.
 	useEffect(() => {
@@ -336,6 +342,10 @@ export function useAgentRequests(
 							setDesignEntryRef.current,
 							setDesignDeviceRef.current,
 							complete,
+							{
+								activeRoomId: () => activeRoomIdRef.current,
+								switchHarness: (r, h) => switchHarnessRef.current(r, h),
+							},
 						);
 					} else {
 						await complete(id, undefined, `unknown agent request kind "${kind}"`);

@@ -1,4 +1,4 @@
-//! The design-pane routes (#512): the plain-JSON mirror of the four
+//! The design-pane routes (#512): the plain-JSON mirror of the
 //! design verbs.
 
 use std::sync::Arc;
@@ -10,7 +10,8 @@ use serde::Deserialize;
 
 use super::super::state::AgentApiState;
 use super::super::verbs::{
-    self, DesignTargetArgs, OpenDesignEntryArgs, SetDesignDeviceArgs, ShowElementArgs, VerbError,
+    self, DesignTargetArgs, InvokeElementArgs, OpenDesignEntryArgs, SetDesignDeviceArgs,
+    ShowElementArgs, VerbError,
 };
 use super::{authenticate, error_body, json_of, refuse};
 
@@ -100,4 +101,18 @@ pub(super) async fn api_design_show(
     };
     let enabled = state.spawn_settings().allow_agent_harness_control;
     respond(verbs::show_element(&state, &caller, &args, enabled).await)
+}
+
+/// `POST /api/design/invoke` — `invoke_element`.
+pub(super) async fn api_design_invoke(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    axum::Json(args): axum::Json<InvokeElementArgs>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let enabled = state.spawn_settings().allow_agent_harness_control;
+    respond(verbs::invoke_element(&state, &caller, &args, enabled).await)
 }

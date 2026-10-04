@@ -7,7 +7,8 @@
 //! one design harness. A harness id that is not a design harness of the
 //! caller's room is `NotFound` whether or not it exists elsewhere, so a
 //! token cannot probe other rooms. No verb takes focus or switches the
-//! visible room or harness.
+//! visible room or harness — except the opt-in `reveal` of `show_element` /
+//! `invoke_element`, bounded to the room the user is already in.
 //!
 //! The pane's state is React-local, so the live facts come from the
 //! webview through `AgentApiState::request_frontend` with these kinds:
@@ -18,10 +19,11 @@
 //! | `design.state` | `{roomId, harnessId}` | `{entry, device, ready, loadFailed, errors[], selected, scroll}` |
 //! | `design.open_entry` | `{roomId, harnessId, entry}` | `{entry, previous}` |
 //! | `design.set_device` | `{roomId, harnessId, device}` | `{device, previous}` |
-//! | `design.show_element` | `{roomId, harnessId, selector?, anchor?}` | `{tier, highlighted, element, count?, score?}` |
+//! | `design.show_element` | `{roomId, harnessId, selector?, anchor?, reveal?}` | `{tier, highlighted, element, count?, score?, revealed?}` |
+//! | `design.invoke_element` | `{roomId, harnessId, selector?, anchor?, action, direction?, distance?, reveal?}` | `{tier, invoked, action, element, count?, invalidSelector?, domChanged?, visible, revealed?}` |
 //!
 //! A frontend error string is prefixed with a code (`not_mounted: …`,
-//! `not_ready: …`) and surfaces as a refusal carrying that text.
+//! `not_ready: …`, `busy: …`) and surfaces as a refusal carrying that text.
 
 use std::time::Duration;
 
@@ -48,6 +50,12 @@ const STATE_TIMEOUT: Duration = Duration::from_secs(5);
 const OPEN_ENTRY_TIMEOUT: Duration = Duration::from_secs(10);
 const SHOW_ELEMENT_TIMEOUT: Duration = Duration::from_secs(10);
 const SET_DEVICE_TIMEOUT: Duration = Duration::from_secs(10);
+const INVOKE_ELEMENT_TIMEOUT: Duration = SHOW_ELEMENT_TIMEOUT;
+
+/// `invoke_element` swipe distance bounds and default, in CSS px.
+const MIN_SWIPE_DISTANCE: u64 = 8;
+const MAX_SWIPE_DISTANCE: u64 = 2000;
+const DEFAULT_SWIPE_DISTANCE: u64 = 120;
 
 /// How many entries an `unknown_entry` refusal lists.
 const UNKNOWN_ENTRY_LIST_CAP: usize = 20;
@@ -99,6 +107,37 @@ pub struct ShowElementArgs {
     /// The #434 element-anchor shape, passed through as JSON.
     #[serde(default)]
     pub anchor: Option<Value>,
+    /// Boolean; kept as JSON (null included) so a non-boolean is
+    /// `bad_arguments`.
+    #[serde(default, deserialize_with = "present")]
+    pub reveal: Option<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InvokeElementArgs {
+    #[serde(default)]
+    pub harness: Option<String>,
+    /// A CSS selector. Exactly one of `selector` / `anchor`.
+    #[serde(default)]
+    pub selector: Option<String>,
+    /// The #434 element-anchor shape, passed through as JSON.
+    #[serde(default)]
+    pub anchor: Option<Value>,
+    /// `tap` (default) or `swipe`.
+    #[serde(default)]
+    pub action: Option<String>,
+    /// Required with `swipe`, refused with `tap`.
+    #[serde(default)]
+    pub direction: Option<String>,
+    /// CSS px, swipe only. Kept as JSON so a non-integer is a
+    /// `bad_arguments` refusal rather than a parse error.
+    #[serde(default)]
+    pub distance: Option<Value>,
+    /// Boolean; kept as JSON (null included) so a non-boolean is
+    /// `bad_arguments`.
+    #[serde(default, deserialize_with = "present")]
+    pub reveal: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -212,7 +251,7 @@ fn guard_write(
         log_outcome(verb, &caller.room_id, "", "rate_limited");
         return Err(VerbError::Refused(format!(
             "rate_limited: this room has attempted {DESIGN_CONTROL_RATE_LIMIT} \
-             open_design_entry/set_design_device/show_element calls in the last minute"
+             open_design_entry/set_design_device/show_element/invoke_element calls in the last minute"
         )));
     }
     Ok(())
@@ -417,9 +456,18 @@ pub async fn set_design_device(
     with_harness_id(answer, &harness.id)
 }
 
+/// `reveal` must be a boolean when present; absent means false.
+fn check_reveal(reveal: Option<&Value>) -> VerbResult<bool> {
+    match reveal {
+        None => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(bad_arguments("`reveal` must be a boolean")),
+    }
+}
+
 /// Validate the selector/anchor pair before anything else runs.
-fn check_target(args: &ShowElementArgs) -> VerbResult<()> {
-    match (&args.selector, &args.anchor) {
+fn check_target(selector: Option<&String>, anchor: Option<&Value>) -> VerbResult<()> {
+    match (selector, anchor) {
         (Some(_), Some(_)) => Err(bad_arguments(
             "pass either `selector` or `anchor`, not both",
         )),
@@ -464,7 +512,8 @@ pub async fn show_element(
     args: &ShowElementArgs,
     harness_control_enabled: bool,
 ) -> VerbResult<Value> {
-    check_target(args)?;
+    check_target(args.selector.as_ref(), args.anchor.as_ref())?;
+    let reveal = check_reveal(args.reveal.as_ref())?;
     guard_write(state, caller, "show_element", harness_control_enabled)?;
     let room = caller_room(state, caller)?;
     let harness = pick_harness(&room, args.harness.as_deref())?;
@@ -476,6 +525,9 @@ pub async fn show_element(
         if let Some(a) = &args.anchor {
             obj.insert("anchor".into(), a.clone());
         }
+        if reveal {
+            obj.insert("reveal".into(), json!(true));
+        }
     }
     let answer = ask(
         state,
@@ -485,6 +537,92 @@ pub async fn show_element(
         "design.show_element",
         request,
         SHOW_ELEMENT_TIMEOUT,
+    )
+    .await?;
+    with_harness_id(answer, &harness.id)
+}
+
+/// Validate `action`/`direction`/`distance`; returns the action and, for a
+/// swipe, the direction and distance to forward.
+fn check_gesture(args: &InvokeElementArgs) -> VerbResult<(&'static str, Option<(String, u64)>)> {
+    let action = args.action.as_deref().unwrap_or("tap");
+    match action {
+        "tap" => {
+            if args.direction.is_some() || args.distance.is_some() {
+                return Err(bad_arguments(
+                    "`direction` and `distance` are only for `action: \"swipe\"`",
+                ));
+            }
+            Ok(("tap", None))
+        }
+        "swipe" => {
+            let direction = match args.direction.as_deref() {
+                None => return Err(bad_arguments("`swipe` needs a `direction`")),
+                Some(d @ ("left" | "right" | "up" | "down")) => d.to_owned(),
+                Some(_) => {
+                    return Err(bad_arguments(
+                        "`direction` must be one of left, right, up, down",
+                    ));
+                }
+            };
+            let distance = match &args.distance {
+                None => DEFAULT_SWIPE_DISTANCE,
+                Some(v) => match v.as_u64() {
+                    Some(n) if (MIN_SWIPE_DISTANCE..=MAX_SWIPE_DISTANCE).contains(&n) => n,
+                    _ => {
+                        return Err(bad_arguments(&format!(
+                            "`distance` must be an integer from {MIN_SWIPE_DISTANCE} to \
+                             {MAX_SWIPE_DISTANCE} (CSS px)"
+                        )));
+                    }
+                },
+            };
+            Ok(("swipe", Some((direction, distance))))
+        }
+        _ => Err(bad_arguments("`action` must be \"tap\" or \"swipe\"")),
+    }
+}
+
+/// Tap or swipe one element in the page the design pane previews, as the
+/// prototype's own events. It drives the prototype, not Skein, and
+/// creates no thread. The frontend acts only on a single accepted match
+/// and answers with the tier; never a guess.
+pub async fn invoke_element(
+    state: &AgentApiState,
+    caller: &Caller,
+    args: &InvokeElementArgs,
+    harness_control_enabled: bool,
+) -> VerbResult<Value> {
+    check_target(args.selector.as_ref(), args.anchor.as_ref())?;
+    let (action, swipe) = check_gesture(args)?;
+    let reveal = check_reveal(args.reveal.as_ref())?;
+    guard_write(state, caller, "invoke_element", harness_control_enabled)?;
+    let room = caller_room(state, caller)?;
+    let harness = pick_harness(&room, args.harness.as_deref())?;
+    let mut request = json!({ "roomId": room.id, "harnessId": harness.id, "action": action });
+    if let Some(obj) = request.as_object_mut() {
+        if let Some(s) = &args.selector {
+            obj.insert("selector".into(), json!(s));
+        }
+        if let Some(a) = &args.anchor {
+            obj.insert("anchor".into(), a.clone());
+        }
+        if reveal {
+            obj.insert("reveal".into(), json!(true));
+        }
+        if let Some((direction, distance)) = swipe {
+            obj.insert("direction".into(), json!(direction));
+            obj.insert("distance".into(), json!(distance));
+        }
+    }
+    let answer = ask(
+        state,
+        "invoke_element",
+        caller,
+        &harness.id,
+        "design.invoke_element",
+        request,
+        INVOKE_ELEMENT_TIMEOUT,
     )
     .await?;
     with_harness_id(answer, &harness.id)

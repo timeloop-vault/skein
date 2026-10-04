@@ -21,6 +21,8 @@ const PICKER: &str = include_str!("picker.js");
 const TOKENS: &str = include_str!("tokens.js");
 const EDITOR: &str = include_str!("editor.js");
 const PROPOSALS: &str = include_str!("proposals.js");
+/// Agent `invoke_element` (#549); before PROPOSALS, which deletes the picker API.
+const INVOKE: &str = include_str!("invoke.js");
 
 /// Largest file the preview will serve.
 pub const MAX_SERVED: u64 = 32 * 1024 * 1024;
@@ -223,6 +225,7 @@ async fn serve_file(
                 extras.extend([
                     ("data-skein-tokens", TOKENS),
                     ("data-skein-editor", EDITOR),
+                    ("data-skein-invoke", INVOKE),
                     ("data-skein-proposals", PROPOSALS),
                 ]);
                 rewrite_html(&src, PICKER, &extras).into_bytes()
@@ -474,6 +477,7 @@ mod tests {
         assert!(body.contains("data-skein-picker"));
         assert!(body.contains("data-skein-tokens"));
         assert!(body.contains("data-skein-editor"));
+        assert!(body.contains("data-skein-invoke"));
         assert!(body.contains("data-skein-proposals"));
         assert!(body.contains("__skeinPickerApi"));
         assert!(body.contains("data-plugins=\"transform-react-jsx-source\""));

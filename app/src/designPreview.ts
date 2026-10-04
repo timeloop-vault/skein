@@ -37,6 +37,17 @@ export type Beacon =
 			/** The selector was not valid CSS. */
 			invalid?: boolean;
 	  }
+	| {
+			type: "invoked";
+			requestId: string;
+			count: number;
+			element: ElementDescriptor | null;
+			invalid?: boolean;
+			busy?: boolean;
+			notVisible?: boolean;
+			visible?: boolean;
+			domChanged?: boolean;
+	  }
 	| { type: "shownCleared" }
 	| { type: "scroll"; x: number; y: number }
 	| EditBeacon;
@@ -191,6 +202,16 @@ export type HostMessage =
 	| { type: "highlight"; n: number }
 	/** Agent show_element (#512): outline + scroll to a selector's element. */
 	| { type: "showElement"; requestId: string; selector: string }
+	/** Agent invoke_element (#549): tap or swipe the element at a selector. */
+	| {
+			type: "invoke";
+			requestId: string;
+			selector: string;
+			action: "tap" | "swipe";
+			direction?: string;
+			distance?: number;
+			pointerType: "mouse" | "touch";
+	  }
 	| { type: "edit-start" }
 	| { type: "edit-set"; property: string; value: string }
 	| { type: "edit-end"; revert: boolean }
@@ -250,6 +271,22 @@ export const parseBeacon = (data: unknown): Beacon | null => {
 				count,
 				element: parseDescriptor(d.element),
 				...(d.invalid === true ? { invalid: true } : {}),
+			};
+		}
+		case "invoked": {
+			const requestId = idOf(d.requestId);
+			const count = num(d.count);
+			if (requestId === null || count === null) return null;
+			return {
+				type: "invoked",
+				requestId,
+				count,
+				element: parseDescriptor(d.element),
+				...(d.invalid === true ? { invalid: true } : {}),
+				...(d.busy === true ? { busy: true } : {}),
+				...(d.notVisible === true ? { notVisible: true } : {}),
+				...(typeof d.visible === "boolean" ? { visible: d.visible } : {}),
+				...(typeof d.domChanged === "boolean" ? { domChanged: d.domChanged } : {}),
 			};
 		}
 		case "shownCleared":

@@ -168,10 +168,11 @@ fn instructions() -> &'static str {
      buffers; closing mid-turn is allowed, and the reply names the phase \
      it interrupted.\n\n\
      Design pane: list_design_harnesses, get_design_state, \
-     open_design_entry, set_design_device and show_element read and drive the design \
+     open_design_entry, set_design_device, show_element and invoke_element read and drive the design \
      harnesses of your own room only, and never take focus or switch \
      the visible room or harness. show_element highlights an element in \
-     the pane transiently and creates no thread."
+     the pane transiently and creates no thread. invoke_element taps or \
+     swipes an element of the prototype itself, as page events."
 }
 
 /// Handle one JSON-RPC message.
@@ -380,6 +381,15 @@ pub async fn call_tool(
         ),
         "show_element" => to_value(
             verbs::show_element(
+                state,
+                caller,
+                &parse(args)?,
+                state.spawn_settings().allow_agent_harness_control,
+            )
+            .await?,
+        ),
+        "invoke_element" => to_value(
+            verbs::invoke_element(
                 state,
                 caller,
                 &parse(args)?,

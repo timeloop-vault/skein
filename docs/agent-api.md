@@ -42,6 +42,7 @@ Skein process
      ├─ POST   /api/design/entry       open_design_entry
      ├─ POST   /api/design/device      set_design_device
      ├─ POST   /api/design/show        show_element
+     ├─ POST   /api/design/invoke      invoke_element
      ├─ POST   /api/harness/permission     see below — not an agent verb
      ├─ POST   /api/harness/session-start  see below — not an agent verb
      └─ POST   /api/harness/session-end    see below — not an agent verb
@@ -688,7 +689,10 @@ The token is the scope and there is no room argument. `harness` (a
 harness id of kind `design`) is optional when the caller's room has
 exactly one design harness. No verb takes focus, raises the window, or
 switches the visible room or harness; a pane that is not visible still
-updates. None creates a thread, resolves one, or writes source.
+updates. The one exception is the opt-in `reveal: true` on `show_element` /
+`invoke_element`: it switches the room's active harness to the design pane,
+but only when the user is already in that room, and never switches rooms or
+raises the window. None creates a thread, resolves one, or writes source.
 
 | verb | route | kind |
 | :-- | :-- | :-- |
@@ -697,6 +701,7 @@ updates. None creates a thread, resolves one, or writes source.
 | `open_design_entry` | `POST /api/design/entry` | write |
 | `set_design_device` | `POST /api/design/device` | write |
 | `show_element` | `POST /api/design/show` | write (transient) |
+| `invoke_element` | `POST /api/design/invoke` | write (drives the prototype) |
 
 - **`list_design_harnesses`** — `{harnesses: [{harnessId, name, entry,
   device, entries, mounted, ready}]}`. `entry` is `Harness.designEntry`,
@@ -728,38 +733,78 @@ updates. None creates a thread, resolves one, or writes source.
   emulation). Unknown keys are refused. Answers `{device, previous,
   harnessId}` (the normalized device now stored, and the one before).
   Timeout 10 s.
-- **`show_element`** `{harness?, selector | anchor}` — exactly one of a
+- **`show_element`** `{harness?, selector | anchor, reveal?}` — exactly one of a
   CSS `selector` or an `anchor` object (the #434 shape: `selector`,
   `tag`, `text`, `attrs`, `odId`, `source`; at least a `selector` or
   `tag` string is required, everything else is optional). Answers `{tier, highlighted, element, count?, score?,
-  harnessId}`. `tier`: `anchored`, `reanchored`, `selector` (a unique
+  revealed?, harnessId}`. `tier`: `anchored`, `reanchored`, `selector` (a unique
   match) highlight the element. `stale` returns the best candidate in
   `element` but does **not** highlight it — never a guess. `ambiguous`
   means the selector matched `count` > 1 elements; nothing is
   highlighted. `not_found`: nothing highlighted; when the CSS selector does not parse
   the answer also carries `invalidSelector: true`. The pane must be
-  mounted. Timeout 10 s.
+  mounted. `reveal` (boolean, default false; a non-boolean is
+  `bad_arguments`) switches the room's active harness to this design pane,
+  only when the user is already in this room; `revealed` is then present
+  and says whether that happened. Timeout 10 s.
+- **`invoke_element`** `{harness?, selector | anchor, action?, direction?,
+  distance?, reveal?}` — taps or swipes one element of the page the pane previews,
+  as the prototype's own page events (pointer and mouse events, then a
+  click for a tap; a swipe is pointerdown, eight pointermoves, pointerup).
+  It drives the **prototype, not Skein**: nothing in Skein changes, it
+  creates **no thread** and no highlight, and it never takes focus or
+  switches room or harness, except with `reveal: true` (see above). The target is exactly one of `selector` /
+  `anchor`, same rules as `show_element`. `action` is `tap` (default) or
+  `swipe`; a swipe requires `direction` (`left`, `right`, `up`, `down`)
+  and takes an optional integer `distance` in CSS px, 8-2000, default
+  120; `direction` and `distance` are refused with `tap`. A touch-mode
+  device (`device.touch`) sends `pointerType: "touch"` events, otherwise
+  `"mouse"`. A tap fires pointer and mouse press events at the element's
+  centre and then `element.click()`; the click event itself carries no
+  coordinates, and the tap is delivered to the element even if something
+  covers it on screen. A swipe starts 4 px inside the edge of the element
+  you target, so target the element that owns the gesture (for example the
+  screen or frame container whose edge opens a drawer), not an inner
+  child; prototypes typically measure the edge band against their own
+  container. **Tiers, never a guess:** it acts only on a single, accepted
+  match. `selector` (a unique match) and the anchor tiers `show_element`
+  would highlight (`anchored`, `reanchored`) are acted on; `ambiguous`
+  (`count` > 1), `stale` and `not_found` (with `invalidSelector: true`
+  for an unparsable selector) invoke nothing. Answers `{tier, invoked,
+  action, element, count?, invalidSelector?, domChanged?, visible, revealed?,
+  harnessId}`; `visible` says the matched element had a non-zero rect when
+  acted on (a tap still acts while hidden and reports `visible: false`; a
+  swipe on a hidden pane refuses `not_visible`). `reveal` is as for
+  `show_element`, and is what makes a swipe possible from a hidden pane;
+  `domChanged` is present only when `invoked` and means something in the
+  page changed within 300 ms (Skein's own overlay nodes excluded) —
+  `false` suggests the prototype ignored the event. While the user is
+  picking an element in that pane it acts on nothing and refuses `busy`.
+  The pane must be mounted. Timeout 10 s.
 
 Refusals (a code, then a reason):
 
 | code | verbs | when |
 | :-- | :-- | :-- |
 | `archived` | all | the caller's room is archived |
-| `no_design_harness` | `get_design_state`, `open_design_entry`, `set_design_device`, `show_element` | the room has no design harness |
+| `no_design_harness` | `get_design_state`, `open_design_entry`, `set_design_device`, `show_element`, `invoke_element` | the room has no design harness |
 | `harness_required` | same | several design harnesses and no `harness` (ids listed) |
 | `not_found` (404) | same | `harness` is not a design harness of the caller's room — identical whether it exists in another room or not |
 | `unknown_entry` | `open_design_entry` | `entry` is not a listed entry (first 20 listed) |
-| `bad_arguments` | `show_element` | both or neither of `selector`/`anchor`, or an unusable one |
+| `bad_arguments` | `show_element` | both or neither of `selector`/`anchor`, or an unusable one; `reveal` not a boolean |
+| `bad_arguments` | `invoke_element` | the `show_element` target rules; `action` not `tap`/`swipe`; `swipe` without `direction`, or an unknown one; `direction`/`distance` with `tap`; `distance` not an integer in 8-2000; `reveal` not a boolean (all checked before the guards, so no rate budget is spent) |
 | `bad_arguments` | `set_design_device` | `device` missing or not an object/`null` (checked before the guards); an unknown key, bad preset or out-of-range value (reported by the webview) |
-| `not_mounted` | `get_design_state`, `show_element` | reported by the webview: the pane is not mounted |
-| `not_ready` | `show_element` | reported by the webview: the preview has not loaded (`get_design_state` answers `ready: false` instead) |
-| `disabled` | `open_design_entry`, `set_design_device`, `show_element` | Settings → "Let agents open or close harnesses" (`allowAgentHarnessControl`) is off |
-| `rate_limited` | `open_design_entry`, `set_design_device`, `show_element` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |
+| `not_mounted` | `get_design_state`, `show_element`, `invoke_element` | reported by the webview: the pane is not mounted |
+| `not_ready` | `show_element`, `invoke_element` | reported by the webview: the preview has not loaded (`get_design_state` answers `ready: false` instead) |
+| `not_visible` | `invoke_element` | reported by the webview, swipe only: the matched element has no layout. Usually the design pane is hidden: pass `reveal: true` (works when the user is in this room and no harness picker is open) or ask the user to show the design harness. It is also returned when the element itself is not rendered (zero size) on a visible pane. When `reveal: true` was passed but could not take effect (the user is in another room or has a harness picker open), the message says so instead of suggesting `reveal` |
+| `busy` | `invoke_element` | reported by the webview: the user is picking an element in this design pane; try again once they finish |
+| `disabled` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element` | Settings → "Let agents open or close harnesses" (`allowAgentHarnessControl`) is off |
+| `rate_limited` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |
 
 A webview that is absent, times out or drops the request is a 409
 (unavailable), like the other frontend-backed verbs. The frontend
 request kinds are `design.panes`, `design.state`, `design.open_entry`,
-`design.set_device` and `design.show_element` (see `agent_api/verbs/design.rs`).
+`design.set_device`, `design.show_element` and `design.invoke_element` (see `agent_api/verbs/design.rs`).
 
 **Deferred:** `show_changes` (highlight the elements a commit, branch or
 pending change touches) needs a source → element mapping that does not

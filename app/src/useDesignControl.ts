@@ -14,9 +14,12 @@ import {
 	showResultFromPlacement,
 } from "./designControl.ts";
 import type { DesignDevice } from "./designDevice.ts";
+import type { InvokedBeacon, InvokeElementRequest, InvokeElementResult } from "./designInvoke.ts";
+import { invokeAnchorResult, invokeSelectorResult, placementAccepted } from "./designInvoke.ts";
 import type { Beacon, HostMessage } from "./designPreview.ts";
+import { makeWhenVisible } from "./designReveal.ts";
 import { confirmHighlight, PendingRequests, selectorResult } from "./designShow.ts";
-import { type LocateResult, matchElement } from "./elementAnchor.ts";
+import { type ElementAnchor, type LocateResult, matchElement } from "./elementAnchor.ts";
 
 type Located = Extract<Beacon, { type: "located" }>;
 type Shown = Extract<Beacon, { type: "shownElement" }>;
@@ -34,6 +37,7 @@ export const useDesignControl = ({
 	threads,
 	selectedId,
 	visible,
+	laidOut,
 	post,
 }: {
 	harnessId: string;
@@ -46,15 +50,29 @@ export const useDesignControl = ({
 	threads: readonly ElementThread[];
 	selectedId: string | undefined;
 	visible: boolean;
+	/** True once the preview frame has a non-zero size (#549 reveal). */
+	laidOut: () => boolean;
 	post: (msg: HostMessage) => void;
 }) => {
 	const scrollRef = useRef<DesignScroll | null>(null);
 	const lastShowRef = useRef<string | null>(null);
 	const locates = useRef(new PendingRequests<LocateResult | null>("agent-loc-")).current;
 	const shows = useRef(new PendingRequests<Shown>("agent-show-")).current;
+	const invokes = useRef(new PendingRequests<InvokedBeacon>("agent-inv-")).current;
 
 	// Latest props, read by the registered api without re-registering.
-	const live = { entry, device, ready, loadFailed, errors, threads, selectedId, post };
+	const live = {
+		entry,
+		device,
+		ready,
+		loadFailed,
+		errors,
+		threads,
+		selectedId,
+		visible,
+		laidOut,
+		post,
+	};
 	const liveRef = useRef(live);
 	liveRef.current = live;
 
@@ -66,29 +84,37 @@ export const useDesignControl = ({
 		[shows],
 	);
 
+	/** Locate an anchor in the frame and match it: the verdict show_element and
+	 *  invoke_element both act on. */
+	const placeAnchor = useCallback(
+		async (a: ElementAnchor): Promise<ShowElementResult> => {
+			const found = await locates.begin((requestId) =>
+				liveRef.current.post({
+					type: "locate",
+					requestId,
+					anchors: [
+						{
+							id: "a",
+							...(a.odId ? { odId: a.odId } : {}),
+							selector: a.selector,
+							tag: a.tag,
+							text: a.text,
+						},
+					],
+				}),
+			);
+			return showResultFromPlacement(
+				matchElement(a, found ?? { bySelector: null, byOdId: [], byText: [], sameTag: [] }),
+			);
+		},
+		[locates],
+	);
+
 	const showElement = useCallback(
 		async (req: ShowElementRequest): Promise<ShowElementResult> => {
 			if (!liveRef.current.ready) throw new Error("not_ready: the design page has not loaded yet");
 			if (req.anchor) {
-				const a = req.anchor;
-				const found = await locates.begin((requestId) =>
-					liveRef.current.post({
-						type: "locate",
-						requestId,
-						anchors: [
-							{
-								id: "a",
-								...(a.odId ? { odId: a.odId } : {}),
-								selector: a.selector,
-								tag: a.tag,
-								text: a.text,
-							},
-						],
-					}),
-				);
-				const placed = showResultFromPlacement(
-					matchElement(a, found ?? { bySelector: null, byOdId: [], byText: [], sameTag: [] }),
-				);
+				const placed = await placeAnchor(req.anchor);
 				if (!placed.highlighted || !placed.element) return placed;
 				const selector = placed.element.selector;
 				const shown = await showSelector(selector).catch(() => null);
@@ -102,10 +128,40 @@ export const useDesignControl = ({
 			if (result.highlighted) lastShowRef.current = selector;
 			return result;
 		},
-		[locates, showSelector],
+		[placeAnchor, showSelector],
 	);
 	const showElementRef = useRef(showElement);
 	showElementRef.current = showElement;
+
+	const invokeElement = useCallback(
+		async (req: InvokeElementRequest): Promise<InvokeElementResult> => {
+			if (!liveRef.current.ready) throw new Error("not_ready: the design page has not loaded yet");
+			const invoke = (selector: string): Promise<InvokedBeacon> =>
+				invokes.begin((requestId) =>
+					liveRef.current.post({
+						type: "invoke",
+						requestId,
+						selector,
+						action: req.action,
+						...(req.direction ? { direction: req.direction } : {}),
+						...(req.distance !== undefined ? { distance: req.distance } : {}),
+						pointerType: liveRef.current.device?.touch === true ? "touch" : "mouse",
+					}),
+				);
+			if (req.anchor) {
+				const placed = await placeAnchor(req.anchor);
+				if (!placementAccepted(placed) || !placed.element) {
+					return invokeAnchorResult(placed, null, req.action);
+				}
+				const beacon = await invoke(placed.element.selector);
+				return invokeAnchorResult(placed, beacon, req.action);
+			}
+			return invokeSelectorResult(await invoke(req.selector ?? ""), req.action);
+		},
+		[invokes, placeAnchor],
+	);
+	const invokeElementRef = useRef(invokeElement);
+	invokeElementRef.current = invokeElement;
 
 	useEffect(() => {
 		const dispose = registerDesignPane(harnessId, {
@@ -128,14 +184,17 @@ export const useDesignControl = ({
 					scroll: scrollRef.current,
 				};
 			},
+			whenVisible: makeWhenVisible(() => liveRef.current.visible && liveRef.current.laidOut()),
 			showElement: (req) => showElementRef.current(req),
+			invokeElement: (req) => invokeElementRef.current(req),
 		});
 		return () => {
 			dispose();
 			locates.rejectAll("the design pane closed");
 			shows.rejectAll("the design pane closed");
+			invokes.rejectAll("the design pane closed");
 		};
-	}, [harnessId, roomId, locates, shows]);
+	}, [harnessId, roomId, locates, shows, invokes]);
 
 	// A hidden iframe has no layout, so a show while hidden cannot scroll:
 	// repeat the last successful one when the pane is seen again.
@@ -160,13 +219,17 @@ export const useDesignControl = ({
 				shows.settle(b.requestId, b as Shown);
 				return true;
 			}
+			if (b.type === "invoked") {
+				invokes.settle(b.requestId, b as InvokedBeacon);
+				return true;
+			}
 			if (b.type === "located" && b.requestId.startsWith("agent-loc-")) {
 				locates.settle(b.requestId, (b as Located).results[0]?.found ?? null);
 				return true;
 			}
 			return false;
 		},
-		[locates, shows],
+		[locates, shows, invokes],
 	);
 
 	/** A new page load: forget its scroll and what was shown in the old one. */
@@ -175,7 +238,8 @@ export const useDesignControl = ({
 		lastShowRef.current = null;
 		locates.rejectAll("the page reloaded");
 		shows.rejectAll("the page reloaded");
-	}, [locates, shows]);
+		invokes.rejectAll("the page reloaded");
+	}, [locates, shows, invokes]);
 
 	return { onBeacon, reset };
 };
