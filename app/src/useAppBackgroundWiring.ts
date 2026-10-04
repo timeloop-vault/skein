@@ -72,5 +72,6 @@ export function useAppBackgroundWiring(a: {
 		roomsRef,
 		creation.createHarnessInRoom,
 		actions.closeHarnessForAgent,
+		actions.setHarnessDesignEntry,
 	);
 }

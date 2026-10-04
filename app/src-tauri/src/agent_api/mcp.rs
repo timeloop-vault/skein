@@ -43,6 +43,8 @@
 //! `create_room`'s whole minute — a read-only listing call must never
 //! hang on a busy or absent webview.
 
+mod design_specs;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -164,7 +166,12 @@ fn instructions() -> &'static str {
      a room you opened — refusing on the room's last harness (use \
      close_room instead), an open permission dialog, or unsaved Files \
      buffers; closing mid-turn is allowed, and the reply names the phase \
-     it interrupted."
+     it interrupted.\n\n\
+     Design pane: list_design_harnesses, get_design_state, \
+     open_design_entry and show_element read and drive the design \
+     harnesses of your own room only, and never take focus or switch \
+     the visible room or harness. show_element highlights an element in \
+     the pane transiently and creates no thread."
 }
 
 /// Handle one JSON-RPC message.
@@ -349,6 +356,28 @@ pub async fn call_tool(
             )
             .await?,
         ),
+        "list_design_harnesses" => to_value(verbs::list_design_harnesses(state, caller).await?),
+        "get_design_state" => {
+            to_value(verbs::get_design_state(state, caller, &parse(args)?).await?)
+        }
+        "open_design_entry" => to_value(
+            verbs::open_design_entry(
+                state,
+                caller,
+                &parse(args)?,
+                state.spawn_settings().allow_agent_harness_control,
+            )
+            .await?,
+        ),
+        "show_element" => to_value(
+            verbs::show_element(
+                state,
+                caller,
+                &parse(args)?,
+                state.spawn_settings().allow_agent_harness_control,
+            )
+            .await?,
+        ),
         "read_messages" => to_value(verbs::read_messages(
             db,
             caller,
@@ -413,7 +442,7 @@ fn err(id: &Value, code: i32, message: &str) -> Value {
 
 /// The tools, in the order an agent would use them.
 pub fn tool_specs() -> Vec<Value> {
-    vec![
+    let mut specs = vec![
         json!({
             "name": "list_comments",
             "title": "List review comments",
@@ -889,7 +918,9 @@ pub fn tool_specs() -> Vec<Value> {
             },
             "annotations": { "readOnlyHint": true },
         }),
-        json!({
+    ];
+    specs.extend(design_specs::design_tool_specs());
+    specs.push(json!({
             "name": "skein_info",
             "title": "Which Skein build is this?",
             "description":
@@ -903,6 +934,6 @@ pub fn tool_specs() -> Vec<Value> {
                 "additionalProperties": false,
             },
             "annotations": { "readOnlyHint": true },
-        }),
-    ]
+    }));
+    specs
 }

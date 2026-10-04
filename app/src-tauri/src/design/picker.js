@@ -511,6 +511,99 @@
 		startObserving();
 	}
 
+	// ---- show element (agent, #512) -----------------------------------------
+	// An outline that persists until the next showElement, Escape or a click
+	// in the frame: the pane may be hidden when the agent asks, and the user
+	// must still see it when they look.
+
+	let shownEl = null;
+	let shownBox = null;
+	const clearShown = () => {
+		shownEl = null;
+		if (shownBox) shownBox.remove();
+		shownBox = null;
+	};
+	// A dismissal by the user (click / Escape): tell the host so a hidden-pane
+	// re-show does not bring the outline back.
+	const dismissShown = () => {
+		if (!shownEl) return;
+		clearShown();
+		post({ type: "shownCleared" });
+	};
+	const placeShown = () => {
+		if (!shownEl) return;
+		if (!shownEl.isConnected) {
+			clearShown();
+			return;
+		}
+		const root = ensureOverlay();
+		if (!shownBox || shownBox.parentNode !== root) {
+			if (shownBox) shownBox.remove();
+			shownBox = document.createElement("div");
+			shownBox.setAttribute(OVERLAY, "shown");
+			shownBox.style.cssText =
+				"position:absolute;box-sizing:border-box;border:3px solid #e5329b;background:rgba(229,50,155,.12);box-shadow:0 0 0 2px rgba(255,255,255,.8);pointer-events:none;";
+			root.appendChild(shownBox);
+		}
+		const r = rectOf(shownEl);
+		shownBox.style.left = `${r.x}px`;
+		shownBox.style.top = `${r.y}px`;
+		shownBox.style.width = `${r.w}px`;
+		shownBox.style.height = `${r.h}px`;
+	};
+	settleHooks.push(placeShown);
+	window.addEventListener("resize", placeShown);
+	document.addEventListener("click", dismissShown, true);
+	document.addEventListener(
+		"keydown",
+		(e) => {
+			if (e.key === "Escape") dismissShown();
+		},
+		true,
+	);
+
+	const showElement = (msg) => {
+		clearShown();
+		let nodes = [];
+		let invalid = false;
+		try {
+			nodes = Array.from(document.querySelectorAll(String(msg.selector))).filter(
+				(el) => !isOverlay(el),
+			);
+		} catch (_) {
+			nodes = [];
+			invalid = true;
+		}
+		const el = nodes.length === 1 ? nodes[0] : null;
+		if (el) {
+			shownEl = el;
+			el.scrollIntoView({ block: "center", inline: "center" });
+			placeShown();
+		}
+		post({
+			type: "shownElement",
+			requestId: msg.requestId,
+			count: nodes.length,
+			element: el ? describe(el) : null,
+			...(invalid ? { invalid: true } : {}),
+		});
+	};
+
+	// ---- scroll position -----------------------------------------------------
+	let scrollTimer = null;
+	const postScroll = () => {
+		scrollTimer = null;
+		post({ type: "scroll", x: Math.round(window.scrollX), y: Math.round(window.scrollY) });
+	};
+	window.addEventListener("scroll", () => {
+		if (scrollTimer === null) scrollTimer = setTimeout(postScroll, 200);
+	});
+	if (document.readyState === "loading") {
+		document.addEventListener("DOMContentLoaded", postScroll);
+	} else {
+		postScroll();
+	}
+
 	// ---- hand-over to editor.js (#436) -------------------------------------
 	// One-shot: editor.js runs right after this script and deletes it.
 	window.__skeinPickerApi = {
@@ -557,6 +650,9 @@
 					break;
 				case "highlight":
 					highlight(m);
+					break;
+				case "showElement":
+					showElement(m);
 					break;
 			}
 		} catch (_) {

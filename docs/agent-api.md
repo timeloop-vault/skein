@@ -37,6 +37,10 @@ Skein process
      ├─ GET    /api/harnesses          list_harnesses
      ├─ POST   /api/harnesses          open_harness
      ├─ POST   /api/harnesses/{harness_id}/close   close_harness
+     ├─ GET    /api/design/harnesses   list_design_harnesses
+     ├─ GET    /api/design/state       get_design_state
+     ├─ POST   /api/design/entry       open_design_entry
+     ├─ POST   /api/design/show        show_element
      ├─ POST   /api/harness/permission     see below — not an agent verb
      ├─ POST   /api/harness/session-start  see below — not an agent verb
      └─ POST   /api/harness/session-end    see below — not an agent verb
@@ -87,8 +91,8 @@ at the next boot.
 
 ## The verbs
 
-All eighteen verbs carry the token, but not all eighteen are scoped
-by it to the calling room. Ten of them read or act only within that
+All twenty-two verbs carry the token, but not all twenty-two are scoped
+by it to the calling room. Fourteen of them read or act only within that
 room; `create_room` opens a *different* room, though still only from
 the calling room's token, which is what its own rate cap below is
 keyed to; `close_room`, `open_harness` and `close_harness` (#411) act
@@ -675,6 +679,76 @@ bucket — 10 combined calls per calling room per rolling minute — since
 either one changes what harnesses a room has, which is the same amount
 of trust.
 
+## Driving the design pane (#512, epic #513)
+
+Four verbs let an agent read and drive the design pane of its **own**
+room, so "what did you change?" can end with the element highlighted.
+The token is the scope and there is no room argument. `harness` (a
+harness id of kind `design`) is optional when the caller's room has
+exactly one design harness. No verb takes focus, raises the window, or
+switches the visible room or harness; a pane that is not visible still
+updates. None creates a thread, resolves one, or writes source.
+
+| verb | route | kind |
+| :-- | :-- | :-- |
+| `list_design_harnesses` | `GET /api/design/harnesses` | read |
+| `get_design_state` | `GET /api/design/state?harness=` | read |
+| `open_design_entry` | `POST /api/design/entry` | write |
+| `show_element` | `POST /api/design/show` | write (transient) |
+
+- **`list_design_harnesses`** — `{harnesses: [{harnessId, name, entry,
+  device, entries, mounted, ready}]}`. `entry` is `Harness.designEntry`,
+  `device` is `Harness.designDevice` as stored (both `null` when unset;
+  `get_design_state` likewise reports `entry: null` when unset),
+  `entries` is what the toolbar picker lists. `mounted`/`ready` come from
+  the webview and are `null` when it cannot answer within 3 s. A room
+  with no design harness gets an empty list.
+- **`get_design_state`** — the pane's live state plus `harnessId`:
+  `entry`, `device`, `ready`, `loadFailed`, `errors[]`, `selected` (an
+  element anchor or `null`), `scroll`. The pane must be mounted (open in
+  Skein, not necessarily visible), otherwise it refuses `not_mounted`. A preview that has not
+  loaded is not a refusal: it answers `ready: false` (and `loadFailed`).
+  Timeout 5 s.
+- **`open_design_entry`** `{harness?, entry}` — persists
+  `Harness.designEntry`, as the toolbar picker does; works whether or not
+  the pane is mounted. `entry` must be exactly one of the listed entries.
+  Answers `{entry, previous, harnessId}`.
+- **`show_element`** `{harness?, selector | anchor}` — exactly one of a
+  CSS `selector` or an `anchor` object (the #434 shape: `selector`,
+  `tag`, `text`, `attrs`, `odId`, `source`; at least a `selector` or
+  `tag` string is required, everything else is optional). Answers `{tier, highlighted, element, count?, score?,
+  harnessId}`. `tier`: `anchored`, `reanchored`, `selector` (a unique
+  match) highlight the element. `stale` returns the best candidate in
+  `element` but does **not** highlight it — never a guess. `ambiguous`
+  means the selector matched `count` > 1 elements; nothing is
+  highlighted. `not_found`: nothing highlighted; when the CSS selector does not parse
+  the answer also carries `invalidSelector: true`. The pane must be
+  mounted. Timeout 10 s.
+
+Refusals (a code, then a reason):
+
+| code | verbs | when |
+| :-- | :-- | :-- |
+| `archived` | all | the caller's room is archived |
+| `no_design_harness` | `get_design_state`, `open_design_entry`, `show_element` | the room has no design harness |
+| `harness_required` | same | several design harnesses and no `harness` (ids listed) |
+| `not_found` (404) | same | `harness` is not a design harness of the caller's room — identical whether it exists in another room or not |
+| `unknown_entry` | `open_design_entry` | `entry` is not a listed entry (first 20 listed) |
+| `bad_arguments` | `show_element` | both or neither of `selector`/`anchor`, or an unusable one |
+| `not_mounted` | `get_design_state`, `show_element` | reported by the webview: the pane is not mounted |
+| `not_ready` | `show_element` | reported by the webview: the preview has not loaded (`get_design_state` answers `ready: false` instead) |
+| `disabled` | `open_design_entry`, `show_element` | Settings → "Let agents open or close harnesses" (`allowAgentHarnessControl`) is off |
+| `rate_limited` | `open_design_entry`, `show_element` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |
+
+A webview that is absent, times out or drops the request is a 409
+(unavailable), like the other frontend-backed verbs. The frontend
+request kinds are `design.panes`, `design.state`, `design.open_entry`
+and `design.show_element` (see `agent_api/verbs/design.rs`).
+
+**Deferred:** `show_changes` (highlight the elements a commit, branch or
+pending change touches) needs a source → element mapping that does not
+exist yet; `set_design_device` waits on the device setting settling.
+
 ## Finding rooms by path (#354, epic #266 slice A)
 
 `find_rooms_for_path` is the first verb in this API whose answer is
@@ -1124,7 +1198,7 @@ Settings → About shows the bound port, or says why there is none.
 | :-- | :-- |
 | `agent_api/state.rs` | shared state, the `skein://review-changed`, `skein://harness-permission`, `skein://harness-session-start` and `skein://mail-changed` (#327) events, `HarnessIdentity` |
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
-| `agent_api/verbs.rs` + `verbs/` | the seventeen verbs — the whole testable core, including the mailbox (#327, plus `message_history`, #364), the cross-room reads (#354, #356), and `close_room`/`open_harness`/`close_harness` (#411) |
+| `agent_api/verbs.rs` + `verbs/` | the twenty-two verbs — the whole testable core, including the mailbox (#327, plus `message_history`, #364), the cross-room reads (#354, #356), `close_room`/`open_harness`/`close_harness` (#411) and the design-pane verbs (#512) |
 | `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve/approve refusals, and the `archive_room`/`remove_worktree`/`delete_room` refusals (#411) |
 | `agent_api/http.rs` + `http/` | the routes, including `/api/messages` and `/api/messages/history` (#327, #364), `/api/rooms`/`/api/rooms/{id}`/`/api/harnesses` (#356), `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
 | `agent_api/tests.rs` + `*_tests.rs` | `tests.rs` holds the shared fixtures; the `*_tests.rs` siblings hold the tests by concern: scoping, both prohibitions (`refusal_tests.rs`), lifecycle, real HTTP |

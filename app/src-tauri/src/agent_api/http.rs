@@ -22,12 +22,14 @@
 //! | `http/info.rs` | Which Skein build the agent runs under (#535). |
 //! | `http/mail.rs` | How a harness sends, reads and pages back through mail over plain JSON (#327, #364). |
 //! | `http/rooms.rs` | How rooms are opened, closed, found, listed and read (#330, #354, #356, #411). |
+//! | `http/design.rs` | How the design pane is read and driven over plain JSON (#512). |
 //! | `http/harnesses.rs` | How harnesses are opened, closed and listed (#356, #411). |
 //! | `http/hooks.rs` | What the injected plugin's `PermissionRequest` and `SessionStart` hooks post (#86, #273). |
 //!
 //! This file keeps the router, the MCP endpoint and the plumbing every
 //! route shares (authentication, error bodies, `with_caller`).
 
+mod design;
 mod harnesses;
 mod hooks;
 mod info;
@@ -48,6 +50,7 @@ use super::auth::{self, AuthError, Caller, HARNESS_HEADER};
 use super::mcp;
 use super::state::AgentApiState;
 use super::verbs::{MailContext, MailPolicy, VerbError};
+use design::{api_design_entry, api_design_harnesses, api_design_show, api_design_state};
 use harnesses::{api_close_harness, api_list_harnesses, api_open_harness};
 use hooks::{api_harness_permission, api_harness_session_end, api_harness_session_start};
 use info::api_info;
@@ -95,6 +98,10 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
             get(api_list_harnesses).post(api_open_harness),
         )
         .route("/api/harnesses/{harness_id}/close", post(api_close_harness))
+        .route("/api/design/harnesses", get(api_design_harnesses))
+        .route("/api/design/state", get(api_design_state))
+        .route("/api/design/entry", post(api_design_entry))
+        .route("/api/design/show", post(api_design_show))
         .route("/api/harness/permission", post(api_harness_permission))
         .route(
             "/api/harness/session-start",

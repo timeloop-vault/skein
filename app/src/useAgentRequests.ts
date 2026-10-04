@@ -38,6 +38,7 @@ import {
 } from "./agentRequests.ts";
 import { listHarnessAgents } from "./agents.ts";
 import { workSnapshot } from "./deferral.ts";
+import { handleDesignRequest, isDesignKind } from "./designAgentRequests.ts";
 import { harnessActivity } from "./harnessActivity.ts";
 import type { CreateRoomArgs } from "./NewRoomDialogTypes.ts";
 import { branchTemplateFor, type DefaultAgents, defaultsFor, type NewRoomMemory } from "./prefs.ts";
@@ -84,6 +85,9 @@ export function useAgentRequests(
 		roomId: string,
 		harnessId: string,
 	) => RequestResult<{ harnessId: string; phase: string }>,
+	// #512: `useHarnessActions.setHarnessDesignEntry` — the toolbar picker's
+	// own persist path, used by `design.open_entry`.
+	setDesignEntry: (roomId: string, harnessId: string, entry: string) => void,
 ): void {
 	// Refs so the listener (mounted once, below) always reads the latest
 	// values without re-subscribing on every settings/memory change —
@@ -105,6 +109,8 @@ export function useAgentRequests(
 	createHarnessInRoomRef.current = createHarnessInRoom;
 	const closeHarnessForAgentRef = useRef(closeHarnessForAgent);
 	closeHarnessForAgentRef.current = closeHarnessForAgent;
+	const setDesignEntryRef = useRef(setDesignEntry);
+	setDesignEntryRef.current = setDesignEntry;
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: roomsRef comes from useRoomsStore (#19) — a ref, stable across renders, but biome can't prove that through a parameter.
 	useEffect(() => {
@@ -316,6 +322,15 @@ export function useAgentRequests(
 						await handleOpen(id, args);
 					} else if (kind === "close_harness") {
 						await handleCloseHarness(id, args);
+					} else if (isDesignKind(kind)) {
+						await handleDesignRequest(
+							kind,
+							id,
+							args,
+							roomsRef.current,
+							setDesignEntryRef.current,
+							complete,
+						);
 					} else {
 						await complete(id, undefined, `unknown agent request kind "${kind}"`);
 					}
