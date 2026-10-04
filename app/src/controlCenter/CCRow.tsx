@@ -3,8 +3,10 @@ import type { Status } from "../types.ts";
 import type { CCRow as CCRowData, HarnessSnapshot } from "./model.ts";
 import { relativeTime } from "./relativeTime.ts";
 
+// Same dot as the harness tabs: the app's display status, so a seen
+// waiting harness is grey, not yellow.
 function dotStatus(h: HarnessSnapshot): Status {
-	return h.status === "spawning" ? "running" : h.status;
+	return h.status === "spawning" ? "running" : h.display;
 }
 
 // "idle · idle" and "review · ready for review" say the same thing twice.
@@ -55,7 +57,7 @@ export function CCRowView({
 					) : null}
 				</span>
 				<span className="cc-cell">
-					<span className="cc-chip" data-rank={attention.rank}>
+					<span className="cc-chip" data-rank={attention.rank} data-seen={attention.seen}>
 						{chipText(attention.rank, attention.reason)}
 					</span>
 					{since !== null ? <span className="cc-sub">{relativeTime(since, now)}</span> : null}

@@ -6,13 +6,17 @@
 
 import type { ActivityPhase } from "../harnessActivityTypes";
 import { groupDisplayName, groupRooms, type StripSegment } from "../roomGroups";
-import type { HarnessKind, Room } from "../types";
+import type { HarnessKind, Room, Status } from "../types";
 
 export interface HarnessSnapshot {
 	id: string;
 	name: string;
 	kind: HarnessKind;
 	status: ActivityPhase;
+	/// The app's display status (`effectiveStatus`, pendingNotifications
+	/// applied): "waiting" only while unseen; a seen waiting harness is "idle".
+	/// The dot colour and the unseen/seen split come from this, not `status`.
+	display: Status;
 	/// Display label, e.g. "delegating · 2 agents".
 	label: string;
 	lastActivityAt: number | null;
@@ -49,6 +53,9 @@ export interface RoomAttention {
 	/// The harness that drives the rank: the permission/waiting/running one;
 	/// for status-line and sign-off ranks and idle, the lead (first) harness.
 	harnessId: string | null;
+	/// True only for a waiting rank whose waiting harnesses have all been
+	/// looked at: same text, neutral styling, sorted after unseen ones.
+	seen: boolean;
 }
 
 export interface ParsedStatusLine {
@@ -88,7 +95,7 @@ export function parseStatusLine(body: string): ParsedStatusLine | null {
 	return { state, task: (m[2] ?? "").trim(), line };
 }
 
-function maxOrNull(values: readonly (number | null)[]): number | null {
+export function maxOrNull(values: readonly (number | null)[]): number | null {
 	let best: number | null = null;
 	for (const v of values) {
 		if (v !== null && (best === null || v > best)) {
@@ -98,11 +105,12 @@ function maxOrNull(values: readonly (number | null)[]): number | null {
 	return best;
 }
 
-/// Latest sign of life in a room: harness output/phase changes and the
+/// Latest sign of life in a room: each harness's meaningful activity
+/// (`lastActivityAt`; NOT `since`, which a shell redraw also resets) and the
 /// last status message.
 export function roomLastActivity(snap: RoomSnapshot): number | null {
 	return maxOrNull([
-		...snap.harnesses.flatMap((h) => [h.lastActivityAt, h.since]),
+		...snap.harnesses.map((h) => h.lastActivityAt),
 		snap.lastStatus?.createdMs ?? null,
 	]);
 }
@@ -157,29 +165,46 @@ export function roomAttention(snap: RoomSnapshot): RoomAttention {
 			reason: "permission",
 			since: oldest(permission),
 			harnessId: oldestOf(permission)?.id ?? leadId,
+			seen: false,
 		};
 	}
 	if (status?.state === "blocked" && !busy) {
-		return { rank: "blocked", reason: "blocked on you", since: statusMs, harnessId: leadId };
+		return {
+			rank: "blocked",
+			reason: "blocked on you",
+			since: statusMs,
+			harnessId: leadId,
+			seen: false,
+		};
 	}
 
 	const approvedCurrent = signoff?.approved === true && !signoff.stale;
 	if (signoff?.approved && signoff.stale && !busy) {
-		return { rank: "review", reason: "sign-off stale", since: statusMs, harnessId: leadId };
+		return {
+			rank: "review",
+			reason: "sign-off stale",
+			since: statusMs,
+			harnessId: leadId,
+			seen: false,
+		};
 	}
 	if (status?.state === "review" && !busy && !approvedCurrent) {
 		const open = signoff?.unresolvedCount ?? 0;
 		const reason = open > 0 ? `ready for review, ${open} open threads` : "ready for review";
-		return { rank: "review", reason, since: statusMs, harnessId: leadId };
+		return { rank: "review", reason, since: statusMs, harnessId: leadId, seen: false };
 	}
 
 	const waiting = harnesses.filter((h) => h.status === "waiting");
 	if (waiting.length > 0) {
+		// Unseen (display "waiting") drives the rank when there is one.
+		const unseen = waiting.filter((h) => h.display === "waiting");
+		const driving = unseen.length > 0 ? unseen : waiting;
 		return {
 			rank: "waiting",
 			reason: "your turn",
-			since: oldest(waiting),
-			harnessId: oldestOf(waiting)?.id ?? leadId,
+			since: oldest(driving),
+			harnessId: oldestOf(driving)?.id ?? leadId,
+			seen: unseen.length === 0,
 		};
 	}
 	if (busy) {
@@ -189,9 +214,16 @@ export function roomAttention(snap: RoomSnapshot): RoomAttention {
 			reason: "working",
 			since: roomLastActivity(snap),
 			harnessId: running[0]?.id ?? leadId,
+			seen: false,
 		};
 	}
-	return { rank: "idle", reason: "idle", since: roomLastActivity(snap), harnessId: leadId };
+	return {
+		rank: "idle",
+		reason: "idle",
+		since: roomLastActivity(snap),
+		harnessId: leadId,
+		seen: false,
+	};
 }
 
 function emptySnap(roomId: string): RoomSnapshot {
@@ -209,6 +241,9 @@ function compare(a: Keyed, b: Keyed): number {
 	const rb = ATTENTION_ORDER.indexOf(b.attention.rank);
 	if (ra !== rb) {
 		return ra - rb;
+	}
+	if (a.attention.rank === "waiting" && a.attention.seen !== b.attention.seen) {
+		return a.attention.seen ? 1 : -1;
 	}
 	const needsYou = a.attention.rank !== "working" && a.attention.rank !== "idle";
 	if (needsYou) {

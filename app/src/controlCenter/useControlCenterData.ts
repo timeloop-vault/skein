@@ -11,12 +11,14 @@ import { backgroundTasks } from "../backgroundTasks.ts";
 import { HARNESS_KINDS } from "../data.tsx";
 import { harnessActivity } from "../harnessActivity.ts";
 import { harnessDisplayStatus } from "../harnessActivityLabels.ts";
+import type { HarnessActivity } from "../harnessActivityTypes.ts";
 import { fetchSignoff } from "../review/signoff.ts";
 import { subagents } from "../subagents.ts";
 import type { Harness, Room } from "../types.ts";
 import {
 	type HarnessSnapshot,
 	isTurnStart,
+	maxOrNull,
 	type RoomSnapshot,
 	type SignoffSnapshot,
 } from "./model.ts";
@@ -26,7 +28,7 @@ export const CLOCK_MS = 30_000;
 const SYNC_MS = 1_500;
 
 function snapshotSignature(s: HarnessSnapshot): string {
-	return `${s.id}:${s.status}:${s.label}:${s.lastActivityAt ?? ""}:${s.since ?? ""}`;
+	return `${s.id}:${s.status}:${s.display}:${s.label}:${s.lastActivityAt ?? ""}:${s.since ?? ""}`;
 }
 
 interface LastStatusRow {
@@ -40,25 +42,41 @@ interface Remote {
 	branch: string | null;
 }
 
+/// When something meaningful last happened. `lastOutputAt` is deliberately
+/// not used: every PTY chunk bumps it, including cursor/prompt redraws and
+/// the resize redraw when the workspace is shown or hidden. An agent
+/// (authoritative adapter) has real turn signals and phase changes; a shell
+/// or other non-adapter PTY only has a submitted line (its phase also flips
+/// idle -> running on a bare redraw, so phaseSince lies) or its spawn/exit.
+function meaningfulActivityAt(activity: HarnessActivity | null | undefined): number | null {
+	if (!activity) return null;
+	const stamps: (number | null)[] = [activity.lastSubmitAt];
+	if (activity.authoritative) {
+		stamps.push(activity.lastTurnSignal?.at ?? null, activity.phaseSince);
+	} else {
+		stamps.push(activity.spawnedAt, activity.phase === "exited" ? activity.phaseSince : null);
+	}
+	return maxOrNull(stamps);
+}
+
 function harnessSnapshot(h: Harness, turnStartedAt: number | null): HarnessSnapshot {
 	const activity = harnessActivity.get(h.id);
 	const pty = HARNESS_KINDS[h.kind].capabilities.pty;
-	const { label } = harnessDisplayStatus(
+	const { status: display, label } = harnessDisplayStatus(
 		pty,
 		activity,
 		h.pendingNotifications ?? 0,
 		subagents.workingCount(h.id),
 		backgroundTasks.workingCount(h.id),
 	);
-	const times = [activity?.lastOutputAt ?? null, activity?.lastTurnSignal?.at ?? null];
-	const stamps = [...times, activity?.phaseSince ?? null].filter((t): t is number => t !== null);
 	return {
 		id: h.id,
 		name: h.name,
 		kind: h.kind,
 		status: activity?.phase ?? "idle",
+		display,
 		label,
-		lastActivityAt: stamps.length > 0 ? Math.max(...stamps) : null,
+		lastActivityAt: meaningfulActivityAt(activity),
 		since: activity?.phaseSince ?? null,
 		turnStartedAt,
 	};

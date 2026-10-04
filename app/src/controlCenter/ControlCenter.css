@@ -127,6 +127,10 @@
 .cc-row[data-rank="waiting"]::before {
 	background: var(--st-waiting);
 }
+/* A waiting harness the user has already looked at: neutral, like a seen tab. */
+.cc-row[data-rank="waiting"][data-seen="true"]::before {
+	background: transparent;
+}
 .cc-row[data-rank="working"]::before {
 	background: var(--st-running);
 }
@@ -187,6 +191,10 @@
 .cc-chip[data-rank="waiting"] {
 	color: var(--st-waiting);
 	background: color-mix(in srgb, var(--st-waiting) 16%, transparent);
+}
+.cc-chip[data-rank="waiting"][data-seen="true"] {
+	color: var(--st-idle);
+	background: var(--bg-3);
 }
 .cc-chip[data-rank="working"] {
 	color: var(--st-running);

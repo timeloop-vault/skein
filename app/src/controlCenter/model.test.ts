@@ -34,6 +34,7 @@ function h(
 		name: "claude",
 		kind: "claude",
 		status,
+		display: status === "spawning" ? "running" : status,
 		label: status,
 		lastActivityAt: null,
 		since: null,
@@ -97,6 +98,7 @@ describe("roomAttention", () => {
 			reason: "permission",
 			since: 5,
 			harnessId: "h-permission",
+			seen: false,
 		});
 	});
 
@@ -224,7 +226,13 @@ describe("roomAttention", () => {
 				harnesses: [h("waiting", { id: "a", since: 20 }), h("waiting", { id: "b", since: 10 })],
 			}),
 		);
-		expect(a).toEqual({ rank: "waiting", reason: "your turn", since: 10, harnessId: "b" });
+		expect(a).toEqual({
+			rank: "waiting",
+			reason: "your turn",
+			since: 10,
+			harnessId: "b",
+			seen: false,
+		});
 	});
 
 	it("waiting beats working", () => {
@@ -236,7 +244,9 @@ describe("roomAttention", () => {
 	it("working and idle report room last activity", () => {
 		const w = roomAttention(snap("r", { harnesses: [h("running", { lastActivityAt: 50 })] }));
 		expect(w).toMatchObject({ rank: "working", since: 50 });
-		const i = roomAttention(snap("r", { harnesses: [h("exited"), h("idle", { since: 3 })] }));
+		const i = roomAttention(
+			snap("r", { harnesses: [h("exited"), h("idle", { lastActivityAt: 3 })] }),
+		);
 		expect(i).toMatchObject({ rank: "idle", since: 3 });
 	});
 
@@ -266,6 +276,7 @@ describe("roomAttention", () => {
 			reason: "idle",
 			since: null,
 			harnessId: null,
+			seen: false,
 		});
 	});
 });
@@ -276,7 +287,7 @@ describe("roomLastActivity", () => {
 			harnesses: [h("idle", { lastActivityAt: 5, since: 9 }), h("idle", { lastActivityAt: 7 })],
 			lastStatus: status("x", 8),
 		});
-		expect(roomLastActivity(s)).toBe(9);
+		expect(roomLastActivity(s)).toBe(8);
 	});
 
 	it("is null without data", () => {
@@ -368,7 +379,42 @@ describe("buildControlCenter", () => {
 			reason: "idle",
 			since: null,
 			harnessId: null,
+			seen: false,
 		});
 		expect(out[0]?.rows[0]?.snap.roomId).toBe("x");
+	});
+});
+
+describe("seen vs unseen waiting", () => {
+	const seenW = (id: string, since: number) =>
+		h("waiting", { id, since, display: "idle" as const });
+
+	it("an unseen waiting harness drives the rank and is not seen", () => {
+		const a = roomAttention(
+			snap("r", { harnesses: [seenW("a", 1), h("waiting", { id: "b", since: 9 })] }),
+		);
+		expect(a).toMatchObject({ rank: "waiting", harnessId: "b", since: 9, seen: false });
+	});
+
+	it("all-seen waiting keeps the rank but is flagged seen", () => {
+		const a = roomAttention(snap("r", { harnesses: [seenW("a", 4)] }));
+		expect(a).toMatchObject({ rank: "waiting", reason: "your turn", since: 4, seen: true });
+	});
+
+	it("permission is never seen", () => {
+		const a = roomAttention(snap("r", { harnesses: [h("permission", { display: "permission" })] }));
+		expect(a.seen).toBe(false);
+	});
+
+	it("within the waiting rank unseen sorts before seen, despite a later since", () => {
+		const segs = buildStrip([room("seen"), room("unseen")]);
+		const out = buildControlCenter(
+			segs,
+			new Map([
+				["seen", snap("seen", { harnesses: [seenW("s", 1)] })],
+				["unseen", snap("unseen", { harnesses: [h("waiting", { id: "u", since: 99 })] })],
+			]),
+		);
+		expect(out.map((x) => x.key)).toEqual(["unseen", "seen"]);
 	});
 });
