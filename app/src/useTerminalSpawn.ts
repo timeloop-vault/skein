@@ -22,6 +22,7 @@ import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
 import { shellClaim } from "./shellClaim.ts";
+import { startupAdoption } from "./startupAdoption.ts";
 import { subagents } from "./subagents.ts";
 import { attachTerminalInteractions } from "./terminalInteractions.ts";
 import { createXterm } from "./terminalSetup.ts";
@@ -257,6 +258,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			if (cancelled) return;
 			programName = cmdToSpawn[0] ?? "child";
 			shellClaim.noteSpawn(harnessId, harnessKind, cmdToSpawn[0]); // #318
+			startupAdoption.forget(harnessId); // #539: a new process voids the old one's candidates
 			if (!(await agentResolvesFor(cmdToSpawn))) return;
 			if (cancelled) return;
 			phase = "running";
@@ -381,17 +383,16 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			fitRef.current = null;
 			spawnedRef.current = null;
 			ptyIdRef.current = null;
-			// Drop the activity record so the store doesn't keep
-			// growing across the app's lifetime. A respawn (mountKey
-			// change for "Enter for shell") re-runs the effect and
-			// re-records via spawned() above. Epic #50.
+			// Drop the activity record so the store doesn't keep growing
+			// across the app's lifetime; a respawn (mountKey change for
+			// "Enter for shell") re-records via spawned() above. Epic #50.
 			harnessActivity.forget(harnessId);
-			// #298: same lifetime as the activity record — the Rust
-			// side rediscovers live subagents fresh on the next
-			// attach, so nothing is lost by dropping the cache here.
+			// #298: same lifetime — Rust rediscovers live subagents on the
+			// next attach, so dropping the cache loses nothing.
 			subagents.forget(harnessId);
 			backgroundTasks.forget(harnessId);
 			shellClaim.forget(harnessId);
+			startupAdoption.forget(harnessId); // #539
 		};
 	}, [mountKey]);
 	// #116 re-point effect: see useClaudeRepoint.ts.

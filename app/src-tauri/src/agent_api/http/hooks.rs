@@ -89,7 +89,9 @@ pub(super) async fn api_harness_permission(
 /// launch. Since #116, `session_id` and `source` are forwarded (see
 /// `session_start_fields`) so the frontend can follow a `/clear` or an
 /// in-tool `/resume` onto the new conversation id — `source == "clear"`
-/// and `source == "resume"` are the only values it acts on.
+/// and `source == "resume"` (and `fork`) follow at once. A `startup`
+/// with a different id is adopted only once its transcript exists while
+/// the bound one does not (#539) — the #78455 phantom never writes one.
 ///
 /// Duplicate fires are expected and must stay harmless. Upstream
 /// anthropics/claude-code#78455 reports `SessionStart` firing twice

@@ -8,8 +8,10 @@
 //   - `startup` can be a phantom fire with a DIFFERENT session id from
 //     the real one — upstream anthropics/claude-code#78455, see the
 //     comment on `api_harness_session_start` in
-//     `app/src-tauri/src/agent_api/http.rs`. Following it would chase
-//     a conversation that never materialises.
+//     `app/src-tauri/src/agent_api/http/hooks.rs`. Following it would chase
+//     a conversation that never materialises. (#539: a different-id
+//     `startup` IS adopted, but only when disk proves it — see
+//     `startupAdoption.ts`; this function still never follows it.)
 //   - `compact` keeps the same session id — there is nothing to follow.
 //   - a missing/null source is left alone: no case for it has been
 //     built yet.

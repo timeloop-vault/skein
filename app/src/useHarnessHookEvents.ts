@@ -8,9 +8,13 @@ import { listen } from "@tauri-apps/api/event";
 import type { MutableRefObject } from "react";
 import { useEffect } from "react";
 import { outstandingWork } from "./deferral.ts";
+import { logBoth } from "./frontendLog.ts";
 import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { followedSession } from "./sessionTracking.ts";
 import { releasePersists, shellClaim, shouldReplaceClaim } from "./shellClaim.ts";
+import { startupAdoption, startupCandidate } from "./startupAdoption.ts";
+import { runAdoptionCheck } from "./startupAdoptionCheck.ts";
+import { claudeTranscriptStat } from "./supervisor/transcriptStat.ts";
 import type { Room } from "./types.ts";
 
 export function useHarnessHookEvents(
@@ -116,6 +120,40 @@ export function useHarnessHookEvents(
 		}
 	};
 
+	// #539: probe pending startup candidates against the transcripts on disk.
+	const runCheck = () =>
+		runAdoptionCheck({
+			lookup: (roomId, harnessId) => {
+				const room = roomsRef.current.find((r) => r.id === roomId);
+				const h = room?.harnesses.find((x) => x.id === harnessId);
+				if (!h) return null;
+				return { kind: h.kind, sessionId: h.sessionId, cwd: h.cwd ?? room?.cwd };
+			},
+			isShell: (harnessId) => shellClaim.isShell(harnessId),
+			exists: async (sessionId, cwd) => (await claudeTranscriptStat(sessionId, cwd)) !== null,
+			adopt: (roomId, harnessId, sessionId) => {
+				const old = roomsRef.current
+					.find((r) => r.id === roomId)
+					?.harnesses.find((x) => x.id === harnessId)?.sessionId;
+				replaceHarnessSessionId(roomId, harnessId, sessionId);
+				harnessActivity.sessionSwitched(harnessId, "startup");
+				logBoth(
+					"info",
+					"skein::session",
+					`[skein] useHarnessHookEvents: adopted startup session ${sessionId} for harness ${harnessId} (was ${old}; its transcript never appeared) (#539)`,
+				);
+			},
+		});
+
+	// Candidates may arrive before their transcript exists; keep probing.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: runCheck only reads refs and stable callbacks, like the listeners here.
+	useEffect(() => {
+		const t = setInterval(() => {
+			if (startupAdoption.harnessIds().length > 0) void runCheck();
+		}, 3000);
+		return () => clearInterval(t);
+	}, []);
+
 	// #273: Claude's `SessionStart` command hook fires this global event
 	// the moment its CLI has (re)started — including before any
 	// transcript exists, which is exactly the gap that used to leave a
@@ -135,7 +173,11 @@ export function useHarnessHookEvents(
 	// `harnessActivity.sessionSwitched` forgets the old session's
 	// subagents/delegation state. Per-pane re-pointing of the live JSONL
 	// tail itself happens in LiveTerminal, keyed off the `sessionId`
-	// prop — this listener only owns the persisted record. Attribution
+	// prop — this listener only owns the persisted record.
+	//
+	// #539: a `startup` with a different id is adopted only once its
+	// transcript exists while the bound one does not (`startupAdoption.ts`,
+	// probed here and on a 3 s interval) — vs the #78455 phantom. Attribution
 	// for which pane the hook fired in comes from `SKEIN_HARNESS_ID` via
 	// the `X-Skein-Harness` header, not from anything computed here.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: roomsRef comes from useRoomsStore (#19) — a ref, stable across renders, but biome can't prove that through a destructured custom-hook return.
@@ -161,6 +203,14 @@ export function useHarnessHookEvents(
 			if (next !== null) {
 				replaceHarnessSessionId(roomId, harnessId, next.sessionId);
 				harnessActivity.sessionSwitched(harnessId, next.source);
+				return;
+			}
+			// #539: a different-id `startup` is not followed from the ping
+			// alone; remember it and let the transcripts on disk decide.
+			const cand = startupCandidate(h.sessionId, event.payload);
+			if (cand !== null && h.sessionId !== undefined) {
+				startupAdoption.note(harnessId, roomId, h.sessionId, cand);
+				void runCheck();
 			}
 		});
 		return () => {
