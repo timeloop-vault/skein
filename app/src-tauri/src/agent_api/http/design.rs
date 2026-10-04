@@ -11,7 +11,7 @@ use serde::Deserialize;
 use super::super::state::AgentApiState;
 use super::super::verbs::{
     self, DesignTargetArgs, InvokeElementArgs, OpenDesignEntryArgs, SetDesignDeviceArgs,
-    ShowElementArgs, VerbError,
+    ShowChangesArgs, ShowElementArgs, VerbError,
 };
 use super::{authenticate, error_body, json_of, refuse};
 
@@ -115,4 +115,18 @@ pub(super) async fn api_design_invoke(
     };
     let enabled = state.spawn_settings().allow_agent_harness_control;
     respond(verbs::invoke_element(&state, &caller, &args, enabled).await)
+}
+
+/// `POST /api/design/changes` — `show_changes`.
+pub(super) async fn api_design_changes(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    axum::Json(args): axum::Json<ShowChangesArgs>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let enabled = state.spawn_settings().allow_agent_harness_control;
+    respond(verbs::show_changes(&state, &caller, &args, enabled).await)
 }

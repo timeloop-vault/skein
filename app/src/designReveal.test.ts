@@ -130,6 +130,7 @@ describe("handleDesignRequest reveal", () => {
 			throw new Error("unused");
 		},
 		showElement: async () => ({ tier: "selector", highlighted: true, element: el }),
+		showChanges: async () => ({ highlighted: 0, mapped: [], unmapped: [], limits: "" }),
 		invokeElement: async () => ({
 			tier: "selector",
 			invoked: true,

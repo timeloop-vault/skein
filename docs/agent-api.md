@@ -43,6 +43,7 @@ Skein process
      ├─ POST   /api/design/device      set_design_device
      ├─ POST   /api/design/show        show_element
      ├─ POST   /api/design/invoke      invoke_element
+     ├─ POST   /api/design/changes     show_changes
      ├─ POST   /api/harness/permission     see below — not an agent verb
      ├─ POST   /api/harness/session-start  see below — not an agent verb
      └─ POST   /api/harness/session-end    see below — not an agent verb
@@ -702,6 +703,7 @@ raises the window. None creates a thread, resolves one, or writes source.
 | `set_design_device` | `POST /api/design/device` | write |
 | `show_element` | `POST /api/design/show` | write (transient) |
 | `invoke_element` | `POST /api/design/invoke` | write (drives the prototype) |
+| `show_changes` | `POST /api/design/changes` | write (transient) |
 
 - **`list_design_harnesses`** — `{harnesses: [{harnessId, name, entry,
   device, entries, mounted, ready}]}`. `entry` is `Harness.designEntry`,
@@ -782,33 +784,73 @@ raises the window. None creates a thread, resolves one, or writes source.
   picking an element in that pane it acts on nothing and refuses `busy`.
   The pane must be mounted. Timeout 10 s.
 
+- **`show_changes`** `{harness?, scope?, commit_sha?, reveal?}` — outlines,
+  in the preview, the rendered elements whose JSX opening tag is on a line
+  a diff scope changed. `scope` is `branch` (default), `pending` or
+  `commit`, with the same meaning as `get_diff`; `commit` needs
+  `commit_sha`, and `commit_sha` with any other scope is `bad_arguments`
+  (as is an unknown scope or a non-boolean `reveal`, all before the
+  guards). Skein works out each changed file's new-side lines: every added
+  line, plus, for each run of deleted lines, the line after the run (or
+  the one before it at the end of a hunk), so a deleted attribute line
+  still touches its tag. A deleted file is sent as `deleted: true` with no
+  lines; binary files are left out. At most 300 files and 20000 lines go
+  to the page, beyond that the request is cut and the answer carries
+  `truncated: true`. The page maps a line to an element only when it lies
+  within a rendered element's JSX **opening tag** (its start line to the
+  end line of the tag, so attribute lines count), all instances. **It
+  cannot show** changes to logic, styles defined outside the tag, tokens,
+  CSS, plain `.js`, closing tags, text, or elements not rendered right now:
+  those come back as `unmapped`, and the answer's `limits` says so in
+  words. It shows where changed lines render, not everything that looks
+  different. Answers `{scope, commit_sha?, harnessId, highlighted,
+  capped?, mapped: [{path, line, endLine, changedLines, elements,
+  onScreen}], unmapped: [{path, lines?, reason}], noSourceInfo?,
+  truncated?, revealed?, sitesCapped?, limits}`. `highlighted` counts
+  outlined elements, including ones with no layout right now (`capped: true`
+  when more than 200 matched and only the first 200 were outlined); the
+  page scrolls to the first outlined element that has layout. Paths match
+  case-insensitively. `sitesCapped: true` means the page stopped listing
+  rendered sites at 5000, so a `file_not_rendered` entry may be wrong and
+  the lists may be incomplete; `noSourceInfo: true` means the page reported no source sites
+  at all (a build without source info). `unmapped` reasons: `deleted`
+  (file deleted in this scope), `file_not_rendered` (no rendered element
+  comes from the file) and `no_rendered_tag` (the file renders, but these
+  lines are not in any rendered opening tag). The outline is transient
+  (Escape or any click in the preview clears it, including an
+  `invoke_element` tap), may coexist with `show_element`'s
+  highlight, and creates no thread. **A scope with no changed files does
+  not touch the pane** and answers `{scope, harnessId, files: 0,
+  highlighted: 0, mapped: [], unmapped: [], note: "no changes in this
+  scope"}`. `reveal` is as for `show_element`. The pane must be mounted
+  and loaded. Timeout 10 s.
+
 Refusals (a code, then a reason):
 
 | code | verbs | when |
 | :-- | :-- | :-- |
 | `archived` | all | the caller's room is archived |
-| `no_design_harness` | `get_design_state`, `open_design_entry`, `set_design_device`, `show_element`, `invoke_element` | the room has no design harness |
+| `no_design_harness` | `get_design_state`, `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes` | the room has no design harness |
 | `harness_required` | same | several design harnesses and no `harness` (ids listed) |
 | `not_found` (404) | same | `harness` is not a design harness of the caller's room — identical whether it exists in another room or not |
 | `unknown_entry` | `open_design_entry` | `entry` is not a listed entry (first 20 listed) |
 | `bad_arguments` | `show_element` | both or neither of `selector`/`anchor`, or an unusable one; `reveal` not a boolean |
+| `bad_arguments` | `show_changes` | unknown `scope`; `commit` without `commit_sha`; `commit_sha` without `commit`; `reveal` not a boolean (before the guards, so no rate budget is spent) |
 | `bad_arguments` | `invoke_element` | the `show_element` target rules; `action` not `tap`/`swipe`; `swipe` without `direction`, or an unknown one; `direction`/`distance` with `tap`; `distance` not an integer in 8-2000; `reveal` not a boolean (all checked before the guards, so no rate budget is spent) |
 | `bad_arguments` | `set_design_device` | `device` missing or not an object/`null` (checked before the guards); an unknown key, bad preset or out-of-range value (reported by the webview) |
-| `not_mounted` | `get_design_state`, `show_element`, `invoke_element` | reported by the webview: the pane is not mounted |
-| `not_ready` | `show_element`, `invoke_element` | reported by the webview: the preview has not loaded (`get_design_state` answers `ready: false` instead) |
+| `not_mounted` | `get_design_state`, `show_element`, `invoke_element`, `show_changes` | reported by the webview: the pane is not mounted |
+| `not_ready` | `show_element`, `invoke_element`, `show_changes` | reported by the webview: the preview has not loaded (`get_design_state` answers `ready: false` instead) |
 | `not_visible` | `invoke_element` | reported by the webview, swipe only: the matched element has no layout. Usually the design pane is hidden: pass `reveal: true` (works when the user is in this room and no harness picker is open) or ask the user to show the design harness. It is also returned when the element itself is not rendered (zero size) on a visible pane. When `reveal: true` was passed but could not take effect (the user is in another room or has a harness picker open), the message says so instead of suggesting `reveal` |
 | `busy` | `invoke_element` | reported by the webview: the user is picking an element in this design pane; try again once they finish |
-| `disabled` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element` | Settings → "Let agents open or close harnesses" (`allowAgentHarnessControl`) is off |
-| `rate_limited` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |
+| `disabled` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes` | Settings → "Let agents open or close harnesses" (`allowAgentHarnessControl`) is off |
+| `rate_limited` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |
 
 A webview that is absent, times out or drops the request is a 409
 (unavailable), like the other frontend-backed verbs. The frontend
 request kinds are `design.panes`, `design.state`, `design.open_entry`,
-`design.set_device`, `design.show_element` and `design.invoke_element` (see `agent_api/verbs/design.rs`).
-
-**Deferred:** `show_changes` (highlight the elements a commit, branch or
-pending change touches) needs a source → element mapping that does not
-exist yet; `set_design_device` waits on the device setting settling.
+`design.set_device`, `design.show_element`, `design.invoke_element` (see `agent_api/verbs/design.rs`) and
+`design.show_changes` (`{roomId, harnessId, scope, files: [{path, lines, deleted}],
+truncated?, reveal?}`, see `agent_api/verbs/design_changes.rs`).
 
 ## Finding rooms by path (#354, epic #266 slice A)
 

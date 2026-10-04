@@ -20,6 +20,7 @@ import type { Beacon, HostMessage } from "./designPreview.ts";
 import { makeWhenVisible } from "./designReveal.ts";
 import { confirmHighlight, PendingRequests, selectorResult } from "./designShow.ts";
 import { type ElementAnchor, type LocateResult, matchElement } from "./elementAnchor.ts";
+import { useDesignChanges } from "./useDesignChanges.ts";
 
 type Located = Extract<Beacon, { type: "located" }>;
 type Shown = Extract<Beacon, { type: "shownElement" }>;
@@ -163,6 +164,11 @@ export const useDesignControl = ({
 	const invokeElementRef = useRef(invokeElement);
 	invokeElementRef.current = invokeElement;
 
+	const changes = useDesignChanges({ ready: () => liveRef.current.ready, post });
+	const { onBeacon: changesOnBeacon, rejectAll: rejectChanges } = changes;
+	const showChangesRef = useRef(changes.showChanges);
+	showChangesRef.current = changes.showChanges;
+
 	useEffect(() => {
 		const dispose = registerDesignPane(harnessId, {
 			roomId,
@@ -187,14 +193,16 @@ export const useDesignControl = ({
 			whenVisible: makeWhenVisible(() => liveRef.current.visible && liveRef.current.laidOut()),
 			showElement: (req) => showElementRef.current(req),
 			invokeElement: (req) => invokeElementRef.current(req),
+			showChanges: (req) => showChangesRef.current(req),
 		});
 		return () => {
 			dispose();
+			rejectChanges("the design pane closed");
 			locates.rejectAll("the design pane closed");
 			shows.rejectAll("the design pane closed");
 			invokes.rejectAll("the design pane closed");
 		};
-	}, [harnessId, roomId, locates, shows, invokes]);
+	}, [harnessId, roomId, locates, shows, invokes, rejectChanges]);
 
 	// A hidden iframe has no layout, so a show while hidden cannot scroll:
 	// repeat the last successful one when the pane is seen again.
@@ -219,6 +227,7 @@ export const useDesignControl = ({
 				shows.settle(b.requestId, b as Shown);
 				return true;
 			}
+			if (changesOnBeacon(b)) return true;
 			if (b.type === "invoked") {
 				invokes.settle(b.requestId, b as InvokedBeacon);
 				return true;
@@ -229,7 +238,7 @@ export const useDesignControl = ({
 			}
 			return false;
 		},
-		[locates, shows, invokes],
+		[locates, shows, invokes, changesOnBeacon],
 	);
 
 	/** A new page load: forget its scroll and what was shown in the old one. */
@@ -239,7 +248,8 @@ export const useDesignControl = ({
 		locates.rejectAll("the page reloaded");
 		shows.rejectAll("the page reloaded");
 		invokes.rejectAll("the page reloaded");
-	}, [locates, shows, invokes]);
+		rejectChanges("the page reloaded");
+	}, [locates, shows, invokes, rejectChanges]);
 
 	return { onBeacon, reset };
 };

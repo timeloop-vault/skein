@@ -172,7 +172,9 @@ fn instructions() -> &'static str {
      harnesses of your own room only, and never take focus or switch \
      the visible room or harness. show_element highlights an element in \
      the pane transiently and creates no thread. invoke_element taps or \
-     swipes an element of the prototype itself, as page events."
+     swipes an element of the prototype itself, as page events. show_changes \
+     outlines the rendered elements whose JSX opening tag is on a line a \
+     diff scope changed, and lists everything it cannot map as unmapped."
 }
 
 /// Handle one JSON-RPC message.
@@ -381,6 +383,15 @@ pub async fn call_tool(
         ),
         "show_element" => to_value(
             verbs::show_element(
+                state,
+                caller,
+                &parse(args)?,
+                state.spawn_settings().allow_agent_harness_control,
+            )
+            .await?,
+        ),
+        "show_changes" => to_value(
+            verbs::show_changes(
                 state,
                 caller,
                 &parse(args)?,

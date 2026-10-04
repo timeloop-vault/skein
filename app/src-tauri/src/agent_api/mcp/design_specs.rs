@@ -268,5 +268,59 @@ pub(super) fn design_tool_specs() -> Vec<Value> {
                 "additionalProperties": false,
             },
         }),
+        json!({
+            "name": "show_changes",
+            "title": "Outline the elements a diff touches in the design pane",
+            "description":
+                "Outlines, in the design pane's preview, the rendered elements \
+                 whose JSX opening tag (including its attribute lines) is on a \
+                 line the chosen diff scope changed, every rendered instance. \
+                 `scope` is branch (default), pending or commit (needs \
+                 `commit_sha`), as for get_diff. LIMITS, stated plainly: only \
+                 changed lines inside a JSX opening tag map to elements. Changes \
+                 to logic, styles defined outside the tag, tokens, CSS, plain .js, \
+                 closing tags or text, and elements not rendered right now, are \
+                 NOT highlighted; they come back in `unmapped` with a reason \
+                 (`deleted`, `file_not_rendered`, `no_rendered_tag`). It shows \
+                 where changed lines render, not everything that looks different, \
+                 so do not read an empty highlight as no visible change. The \
+                 answer has `mapped` (path, line, endLine, changedLines, elements, \
+                 onScreen), `unmapped`, `highlighted`, `capped` (over 200 \
+                 elements), `noSourceInfo` (the page reports no source sites), \
+                 `truncated` (more than 300 files or 20000 lines) and `limits`. \
+                 A scope with no changes answers without touching the pane. The \
+                 outline is transient (Escape or a click clears it) and creates no \
+                 thread. Refuses with not_mounted when the pane is not open in \
+                 Skein and not_ready while the preview has not loaded. Never takes \
+                 focus or switches the visible room or harness, except with \
+                 `reveal: true`, which switches the room's active harness to this \
+                 design pane, only when the user is already in this room. Gated by \
+                 the Settings switch that also governs open_harness/close_harness, \
+                 and rate-capped with the other design write verbs (10 combined \
+                 per minute, checked after argument validation).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "harness": {
+                        "type": "string",
+                        "description": "A design harness id. Optional when the room has exactly one.",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["branch", "pending", "commit"],
+                        "description": "Default branch.",
+                    },
+                    "commit_sha": {
+                        "type": "string",
+                        "description": "Required with scope commit; refused otherwise.",
+                    },
+                    "reveal": {
+                        "type": "boolean",
+                        "description": "Switch the room's active harness to this design pane, only when the user is already in this room; never switches rooms or raises the window. Default false.",
+                    },
+                },
+                "additionalProperties": false,
+            },
+        }),
     ]
 }

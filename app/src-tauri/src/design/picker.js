@@ -85,6 +85,10 @@
 											t.identifier("columnNumber"),
 											t.numericLiteral(node.loc.start.column + 1),
 										),
+										t.objectProperty(
+											t.identifier("endLineNumber"),
+											t.numericLiteral(node.loc.end.line),
+										),
 									]),
 								),
 							),
@@ -199,6 +203,7 @@
 			if (!src || typeof src.fileName !== "string") return undefined;
 			const out = { fileName: clipTo(src.fileName, 1000), lineNumber: src.lineNumber };
 			if (src.columnNumber != null) out.columnNumber = src.columnNumber;
+			if (src.endLineNumber != null) out.endLineNumber = src.endLineNumber;
 			return out;
 		} catch (_) {
 			return undefined;
@@ -616,6 +621,7 @@
 		isPicking: () => picking,
 		root: ensureOverlay,
 		rectOf,
+		rawSourceOf,
 		query: safeQuery,
 		// Drop pending mutation records so the editor's own writes never
 		// read as a page change (which would re-send proposals forever).

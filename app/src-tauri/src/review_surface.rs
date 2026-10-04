@@ -44,6 +44,7 @@
 use serde::{Deserialize, Serialize};
 
 mod anchoring;
+pub(crate) mod changes;
 // `pub` because `tauri::generate_handler!` resolves each command
 // through the module that defines it — it needs the hidden macro the
 // attribute generates alongside the function, which a `pub use`
