@@ -76,6 +76,54 @@ pub(super) fn design_tool_specs() -> Vec<Value> {
             },
         }),
         json!({
+            "name": "set_design_device",
+            "title": "Set or clear a design pane's device preview",
+            "description":
+                "Sets (an object) or clears (null) the device setting of a design \
+                 harness in your own room — the viewport the preview is framed in — \
+                 persisting it the way the toolbar does. null means no device: the \
+                 pane fills, host pixel ratio, no touch. Works whether or not the \
+                 pane is mounted. `device` is required. Fields: preset (\"none\", \
+                 \"custom\", \"iphone-16-pro\", \"iphone-14\", \"android\", \
+                 \"ipad-air\"); width and height (integers 100-4000, only with \
+                 \"custom\", both required there); landscape (boolean, not with \
+                 \"none\"); dpr (0.5-4); touch (boolean: mouse drag acts as touch, \
+                 and the page sees hover: none / pointer: coarse). Unknown keys and \
+                 out-of-range values are refused with bad_arguments. Answers with \
+                 the stored device and the previous one. Never takes focus or \
+                 switches the visible room or harness. Gated by the Settings switch \
+                 that also governs open_harness/close_harness, and rate-capped with \
+                 open_design_entry and show_element (10 combined per minute, checked \
+                 before validation, so refused attempts count).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "harness": {
+                        "type": "string",
+                        "description": "A design harness id. Optional when the room has exactly one.",
+                    },
+                    "device": {
+                        "type": ["object", "null"],
+                        "description": "The device setting, or null to clear it.",
+                        "properties": {
+                            "preset": {
+                                "type": "string",
+                                "enum": ["none", "custom", "iphone-16-pro", "iphone-14", "android", "ipad-air"],
+                            },
+                            "width": { "type": "integer", "minimum": 100, "maximum": 4000 },
+                            "height": { "type": "integer", "minimum": 100, "maximum": 4000 },
+                            "landscape": { "type": "boolean" },
+                            "dpr": { "type": "number", "minimum": 0.5, "maximum": 4 },
+                            "touch": { "type": "boolean" },
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+                "required": ["device"],
+                "additionalProperties": false,
+            },
+        }),
+        json!({
             "name": "show_element",
             "title": "Scroll to and highlight an element in the design pane",
             "description":

@@ -40,6 +40,7 @@ Skein process
      ├─ GET    /api/design/harnesses   list_design_harnesses
      ├─ GET    /api/design/state       get_design_state
      ├─ POST   /api/design/entry       open_design_entry
+     ├─ POST   /api/design/device      set_design_device
      ├─ POST   /api/design/show        show_element
      ├─ POST   /api/harness/permission     see below — not an agent verb
      ├─ POST   /api/harness/session-start  see below — not an agent verb
@@ -694,6 +695,7 @@ updates. None creates a thread, resolves one, or writes source.
 | `list_design_harnesses` | `GET /api/design/harnesses` | read |
 | `get_design_state` | `GET /api/design/state?harness=` | read |
 | `open_design_entry` | `POST /api/design/entry` | write |
+| `set_design_device` | `POST /api/design/device` | write |
 | `show_element` | `POST /api/design/show` | write (transient) |
 
 - **`list_design_harnesses`** — `{harnesses: [{harnessId, name, entry,
@@ -713,6 +715,19 @@ updates. None creates a thread, resolves one, or writes source.
   `Harness.designEntry`, as the toolbar picker does; works whether or not
   the pane is mounted. `entry` must be exactly one of the listed entries.
   Answers `{entry, previous, harnessId}`.
+- **`set_design_device`** `{harness?, device}` — sets (an object) or
+  clears (`null`: the pane fills, host pixel ratio, no touch)
+  `Harness.designDevice`, as the toolbar does; works whether or not the
+  pane is mounted. `device` is required (a missing key is
+  `bad_arguments`, as is anything other than an object or `null`).
+  Fields, validated by the frontend: `preset` (`none`, `custom`,
+  `iphone-16-pro`, `iphone-14`, `android`, `ipad-air`), `width`/`height`
+  (integers 100-4000, only with `custom`, both required there),
+  `landscape` (boolean, not with `none`), `dpr` (0.5-4), `touch`
+  (boolean: mouse drag as touch, plus `hover: none` / `pointer: coarse`
+  emulation). Unknown keys are refused. Answers `{device, previous,
+  harnessId}` (the normalized device now stored, and the one before).
+  Timeout 10 s.
 - **`show_element`** `{harness?, selector | anchor}` — exactly one of a
   CSS `selector` or an `anchor` object (the #434 shape: `selector`,
   `tag`, `text`, `attrs`, `odId`, `source`; at least a `selector` or
@@ -730,20 +745,21 @@ Refusals (a code, then a reason):
 | code | verbs | when |
 | :-- | :-- | :-- |
 | `archived` | all | the caller's room is archived |
-| `no_design_harness` | `get_design_state`, `open_design_entry`, `show_element` | the room has no design harness |
+| `no_design_harness` | `get_design_state`, `open_design_entry`, `set_design_device`, `show_element` | the room has no design harness |
 | `harness_required` | same | several design harnesses and no `harness` (ids listed) |
 | `not_found` (404) | same | `harness` is not a design harness of the caller's room — identical whether it exists in another room or not |
 | `unknown_entry` | `open_design_entry` | `entry` is not a listed entry (first 20 listed) |
 | `bad_arguments` | `show_element` | both or neither of `selector`/`anchor`, or an unusable one |
+| `bad_arguments` | `set_design_device` | `device` missing or not an object/`null` (checked before the guards); an unknown key, bad preset or out-of-range value (reported by the webview) |
 | `not_mounted` | `get_design_state`, `show_element` | reported by the webview: the pane is not mounted |
 | `not_ready` | `show_element` | reported by the webview: the preview has not loaded (`get_design_state` answers `ready: false` instead) |
-| `disabled` | `open_design_entry`, `show_element` | Settings → "Let agents open or close harnesses" (`allowAgentHarnessControl`) is off |
-| `rate_limited` | `open_design_entry`, `show_element` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |
+| `disabled` | `open_design_entry`, `set_design_device`, `show_element` | Settings → "Let agents open or close harnesses" (`allowAgentHarnessControl`) is off |
+| `rate_limited` | `open_design_entry`, `set_design_device`, `show_element` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |
 
 A webview that is absent, times out or drops the request is a 409
 (unavailable), like the other frontend-backed verbs. The frontend
-request kinds are `design.panes`, `design.state`, `design.open_entry`
-and `design.show_element` (see `agent_api/verbs/design.rs`).
+request kinds are `design.panes`, `design.state`, `design.open_entry`,
+`design.set_device` and `design.show_element` (see `agent_api/verbs/design.rs`).
 
 **Deferred:** `show_changes` (highlight the elements a commit, branch or
 pending change touches) needs a source → element mapping that does not

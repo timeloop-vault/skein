@@ -48,6 +48,7 @@ fn the_tool_list_offers_twenty_two_verbs_and_nothing_that_resolves_approves_or_d
             "list_design_harnesses",
             "get_design_state",
             "open_design_entry",
+            "set_design_device",
             "show_element",
             // #535: which Skein build this is.
             "skein_info",

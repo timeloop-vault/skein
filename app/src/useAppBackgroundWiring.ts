@@ -73,5 +73,6 @@ export function useAppBackgroundWiring(a: {
 		creation.createHarnessInRoom,
 		actions.closeHarnessForAgent,
 		actions.setHarnessDesignEntry,
+		actions.setHarnessDesignDevice,
 	);
 }

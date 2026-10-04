@@ -10,6 +10,7 @@ import {
 	normalizeDevice,
 	parseDim,
 	portraitSize,
+	validateDevice,
 } from "./designDevice.ts";
 
 describe("normalizeDevice", () => {
@@ -194,4 +195,63 @@ describe("portraitSize", () => {
 		});
 		expect(portraitSize(undefined)).toEqual({ width: 390, height: 844 });
 	});
+});
+
+describe("validateDevice", () => {
+	const ok = (raw: unknown) => {
+		const r = validateDevice(raw);
+		if (!r.ok) throw new Error(r.error);
+		return r.value;
+	};
+	const err = (raw: unknown) => {
+		const r = validateDevice(raw);
+		if (r.ok) throw new Error("expected refusal");
+		return r.error;
+	};
+
+	it("null clears", () => expect(ok(null)).toBeUndefined());
+	it("none alone is undefined", () => expect(ok({ preset: "none" })).toBeUndefined());
+	it("none + touch", () =>
+		expect(ok({ preset: "none", touch: true })).toEqual({ preset: "none", touch: true }));
+	it("custom ok", () =>
+		expect(ok({ preset: "custom", width: 500, height: 700 })).toEqual({
+			preset: "custom",
+			width: 500,
+			height: 700,
+		}));
+	it("preset + landscape + dpr + touch", () =>
+		expect(ok({ preset: "iphone-14", landscape: true, dpr: 2, touch: true })).toEqual({
+			preset: "iphone-14",
+			landscape: true,
+			dpr: 2,
+			touch: true,
+		}));
+	it("boundary dims", () => {
+		expect(ok({ preset: "custom", width: 100, height: 4000 })).toBeDefined();
+		expect(err({ preset: "custom", width: 99, height: 400 })).toContain("width");
+		expect(err({ preset: "custom", width: 400, height: 4001 })).toContain("height");
+	});
+	it("dpr bounds", () => {
+		expect(ok({ preset: "android", dpr: 0.5 })).toBeDefined();
+		expect(ok({ preset: "android", dpr: 4 })).toBeDefined();
+		expect(err({ preset: "android", dpr: 0.4 })).toContain("dpr");
+		expect(err({ preset: "android", dpr: 4.1 })).toContain("dpr");
+		expect(err({ preset: "android", dpr: "2" })).toContain("dpr");
+	});
+	it.each([
+		["non-object", "x", "object or null"],
+		["array", [], "object or null"],
+		["missing preset", {}, "preset must be one of"],
+		["unknown preset", { preset: "pixel" }, "iphone-14"],
+		["unknown key", { preset: "none", zoom: 2, foo: 1 }, "zoom, foo"],
+		["custom without height", { preset: "custom", width: 400 }, "height is required"],
+		["custom without both", { preset: "custom" }, "width is required"],
+		["non-integer", { preset: "custom", width: 400.5, height: 400 }, "integer"],
+		["string dim", { preset: "custom", width: "400", height: 400 }, "integer"],
+		["width on a preset", { preset: "iphone-14", width: 400 }, "only allowed"],
+		["landscape on none", { preset: "none", landscape: true }, "not allowed"],
+		["landscape false on none", { preset: "none", landscape: false }, "not allowed"],
+		["non-boolean landscape", { preset: "android", landscape: 1 }, "landscape must be"],
+		["non-boolean touch", { preset: "none", touch: "yes" }, "touch must be"],
+	])("refuses %s", (_n, raw, msg) => expect(err(raw)).toContain(msg));
 });

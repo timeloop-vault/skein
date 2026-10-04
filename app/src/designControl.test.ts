@@ -4,6 +4,7 @@ import {
 	paneSummaries,
 	parseOpenEntryArgs,
 	parsePanesArgs,
+	parseSetDeviceArgs,
 	parseShowElementArgs,
 	parseStateArgs,
 	registerDesignPane,
@@ -123,5 +124,31 @@ describe("showResultFromPlacement", () => {
 			highlighted: false,
 			element: null,
 		});
+	});
+});
+
+describe("parseSetDeviceArgs", () => {
+	const base = { roomId: "r", harnessId: "h" };
+	it("accepts an object or null device", () => {
+		expect(parseSetDeviceArgs({ ...base, device: { preset: "none" } })).toEqual({
+			ok: true,
+			value: { ...base, device: { preset: "none" } },
+		});
+		expect(parseSetDeviceArgs({ ...base, device: null })).toEqual({
+			ok: true,
+			value: { ...base, device: null },
+		});
+	});
+	it.each([
+		["missing roomId", { harnessId: "h", device: null }],
+		["missing harnessId", { roomId: "r", device: null }],
+		["missing device", base],
+		["string device", { ...base, device: "iphone-14" }],
+		["array device", { ...base, device: [] }],
+		["non-object args", "x"],
+	])("refuses %s", (_n, args) => {
+		const r = parseSetDeviceArgs(args);
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.error.startsWith("bad_arguments: ")).toBe(true);
 	});
 });

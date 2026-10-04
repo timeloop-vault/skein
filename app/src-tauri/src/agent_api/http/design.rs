@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use super::super::state::AgentApiState;
 use super::super::verbs::{
-    self, DesignTargetArgs, OpenDesignEntryArgs, ShowElementArgs, VerbError,
+    self, DesignTargetArgs, OpenDesignEntryArgs, SetDesignDeviceArgs, ShowElementArgs, VerbError,
 };
 use super::{authenticate, error_body, json_of, refuse};
 
@@ -74,7 +74,21 @@ pub(super) async fn api_design_entry(
     respond(verbs::open_design_entry(&state, &caller, &args, enabled).await)
 }
 
-/// `POST /api/design/show` — `show_element`.
+/// `POST /api/design/device` — `set_design_device`.
+pub(super) async fn api_design_device(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    axum::Json(args): axum::Json<SetDesignDeviceArgs>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let enabled = state.spawn_settings().allow_agent_harness_control;
+    respond(verbs::set_design_device(&state, &caller, &args, enabled).await)
+}
+
+/// `POST /api/design/show`— `show_element`.
 pub(super) async fn api_design_show(
     State(state): State<Arc<AgentApiState>>,
     headers: HeaderMap,

@@ -168,7 +168,7 @@ fn instructions() -> &'static str {
      buffers; closing mid-turn is allowed, and the reply names the phase \
      it interrupted.\n\n\
      Design pane: list_design_harnesses, get_design_state, \
-     open_design_entry and show_element read and drive the design \
+     open_design_entry, set_design_device and show_element read and drive the design \
      harnesses of your own room only, and never take focus or switch \
      the visible room or harness. show_element highlights an element in \
      the pane transiently and creates no thread."
@@ -362,6 +362,15 @@ pub async fn call_tool(
         }
         "open_design_entry" => to_value(
             verbs::open_design_entry(
+                state,
+                caller,
+                &parse(args)?,
+                state.spawn_settings().allow_agent_harness_control,
+            )
+            .await?,
+        ),
+        "set_design_device" => to_value(
+            verbs::set_design_device(
                 state,
                 caller,
                 &parse(args)?,

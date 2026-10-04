@@ -1,6 +1,9 @@
-// The `design.*` agent requests (#512): panes / state / open_entry /
-// show_element. Called from useAgentRequests; answers via `complete`.
-// Never changes the active room or harness and never raises the window.
+// The `design.*` agent requests (#512, #548): panes / state / open_entry /
+// set_device / show_element. Called from useAgentRequests; answers via
+// `complete`. set_device validates strictly (`validateDevice`, never
+// clamping) and persists through the toolbar's own path; it does not need a
+// mounted pane. Never changes the active room or harness and never raises
+// the window.
 
 import type { RequestResult } from "./agentRequestsShared.ts";
 import {
@@ -8,9 +11,11 @@ import {
 	paneSummaries,
 	parseOpenEntryArgs,
 	parsePanesArgs,
+	parseSetDeviceArgs,
 	parseShowElementArgs,
 	parseStateArgs,
 } from "./designControl.ts";
+import { type DesignDevice, normalizeDevice, validateDevice } from "./designDevice.ts";
 import type { Room } from "./types.ts";
 
 export type DesignComplete = (id: string, ok?: unknown, error?: string) => Promise<void>;
@@ -19,6 +24,7 @@ export const DESIGN_KINDS = [
 	"design.panes",
 	"design.state",
 	"design.open_entry",
+	"design.set_device",
 	"design.show_element",
 ] as const;
 
@@ -31,6 +37,7 @@ export async function handleDesignRequest(
 	raw: unknown,
 	rooms: Room[],
 	setEntry: (roomId: string, harnessId: string, entry: string) => void,
+	setDevice: (roomId: string, harnessId: string, device: DesignDevice | undefined) => void,
 	complete: DesignComplete,
 ): Promise<void> {
 	const fail = (error: string) => complete(id, undefined, error);
@@ -66,6 +73,24 @@ export async function handleDesignRequest(
 		const previous = harness.designEntry ?? null;
 		setEntry(roomId, harnessId, entry);
 		return complete(id, { entry, previous });
+	}
+
+	if (kind === "design.set_device") {
+		const p = parseSetDeviceArgs(raw);
+		if (bad(p)) return fail(p.error);
+		const { roomId, harnessId, device } = p.value;
+		const room = rooms.find((r) => r.id === roomId);
+		if (!room) return fail(`not_found: room "${roomId}" not found`);
+		const harness = room.harnesses.find((h) => h.id === harnessId);
+		if (!harness) return fail(`not_found: harness "${harnessId}" not found in room "${roomId}"`);
+		if (harness.kind !== "design") {
+			return fail(`not_found: harness "${harnessId}" is not a design harness`);
+		}
+		const v = validateDevice(device);
+		if (!v.ok) return fail(`bad_arguments: ${v.error}`);
+		const previous = normalizeDevice(harness.designDevice) ?? null;
+		setDevice(roomId, harnessId, v.value);
+		return complete(id, { device: v.value ?? null, previous });
 	}
 
 	// design.show_element

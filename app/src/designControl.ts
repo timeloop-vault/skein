@@ -127,6 +127,20 @@ export function parseOpenEntryArgs(raw: unknown): RequestResult<DesignTarget & {
 	return { ok: true, value: { ...t.value, entry } };
 }
 
+/** `device` is required but may be null (clear); its content is checked by
+ *  `validateDevice`. */
+export function parseSetDeviceArgs(
+	raw: unknown,
+): RequestResult<DesignTarget & { device: object | null }> {
+	const t = parseStateArgs(raw);
+	if (!t.ok) return t;
+	const device = (raw as Record<string, unknown>).device;
+	if (device === null || (typeof device === "object" && !Array.isArray(device))) {
+		return { ok: true, value: { ...t.value, device } };
+	}
+	return { ok: false, error: "bad_arguments: device must be an object or null" };
+}
+
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /** The agent-facing anchor: at least a selector or a tag; the rest is
