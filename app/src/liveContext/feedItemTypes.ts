@@ -47,6 +47,8 @@ export type FeedItem =
 			/** `burst-<first constituent id>` — stable as the burst grows. */
 			key: string;
 			harnessId: string;
+			/** #538: first non-null stored kind among the constituents. */
+			harnessKind: string | null;
 			/** Normalized tool name (edit / write / multiedit). */
 			tool: string;
 			/** Deepest common ancestor of the constituents' directories,

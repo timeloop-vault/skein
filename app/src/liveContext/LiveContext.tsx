@@ -19,6 +19,7 @@
 // docs/design/skein/project/Live Context.html.
 
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { type HarnessKindOf, resolveHarnessKind } from "../harnessAttribution.ts";
 import { usePersistedState } from "../prefs.ts";
 import type { Harness, HarnessKind } from "../types.ts";
 import { ActivityCardBody, IDLE_AFTER_MS, useIdleBasis } from "./ActivityCard.tsx";
@@ -103,12 +104,11 @@ export const LiveContext = memo(function LiveContext({
 	);
 	const layout = useMemo(() => normalizeLayout(stored, CARD_COUNT), [stored]);
 
-	// Resolve harnessId → kind for row chips. Unknown ids (a harness
-	// closed since the action was logged) fall back to "byoh" so the
-	// chip still renders rather than crashing.
-	const harnessKindOf = useMemo(() => {
+	// Resolve harnessId → kind for row chips: the row's stored kind, else
+	// the current harness's, else null (unknown chip, #538).
+	const harnessKindOf = useMemo<HarnessKindOf>(() => {
 		const byId = new Map<string, HarnessKind>(harnesses.map((h) => [h.id, h.kind]));
-		return (harnessId: string): HarnessKind => byId.get(harnessId) ?? "byoh";
+		return (harnessId, storedKind) => resolveHarnessKind(storedKind, harnessId, byId);
 	}, [harnesses]);
 
 	// Plan-card group head wants the harness's instance name; fall back to

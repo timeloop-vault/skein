@@ -7,8 +7,10 @@ use super::{Database, element_anchors, element_proposals};
 impl Database {
     /// Idempotent schema setup. Each table uses `IF NOT EXISTS`; new
     /// tables just get added here without a separate migration step.
-    /// At prototype scale this is sufficient — once columns need to
-    /// be altered (vs added) we'll need a version table.
+    /// There is no version table: a column added to an existing table
+    /// is an `ADD COLUMN` guarded by a `PRAGMA table_info` check (see
+    /// `harness_actions.harness_kind`, #538), which is idempotent. Once a
+    /// column needs altering or dropping we'll need a version table.
     ///
     /// A new table with a `room_id` column also needs adding to
     /// `ROOM_KEYED_TABLES` (#237), or `sweep_orphans` will never clean
@@ -88,11 +90,32 @@ impl Database {
                 timestamp_ms INTEGER NOT NULL,
                 kind TEXT NOT NULL,
                 payload TEXT NOT NULL,
-                source TEXT
+                source TEXT,
+                harness_kind TEXT
             )",
             [],
         )
         .map_err(|e| e.to_string())?;
+        // #538: the kind of the harness that wrote the row, so a feed
+        // row keeps its chip after the harness is closed. NULL for rows
+        // from before this column; a database created with the old table
+        // shape gets it added here (a fresh one has it above).
+        let has_harness_kind = conn
+            .prepare("PRAGMA table_info(harness_actions)")
+            .and_then(|mut s| {
+                s.query_map([], |r| r.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|c| c == "harness_kind");
+        if !has_harness_kind {
+            conn.execute(
+                "ALTER TABLE harness_actions ADD COLUMN harness_kind TEXT",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_harness_actions_harness \
              ON harness_actions(harness_id, timestamp_ms)",

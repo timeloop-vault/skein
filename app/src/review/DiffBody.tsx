@@ -13,8 +13,8 @@
 
 import { useState } from "react";
 import { HChip } from "../components.tsx";
+import type { HarnessKindOf } from "../harnessAttribution.ts";
 import type { ReviewHunk } from "../liveContext/review.ts";
-import type { HarnessKind } from "../types.ts";
 import { type ReviewThread, type Side, threadsByLine } from "./api.ts";
 import { Composer, ThreadView } from "./Thread.tsx";
 import "./DiffBody.css";
@@ -95,7 +95,7 @@ export const DiffBody = ({
 	threads: ReviewThread[];
 	busy: boolean;
 	owners: Array<string | undefined>;
-	harnessKindOf: (harnessId: string) => HarnessKind;
+	harnessKindOf: HarnessKindOf;
 	verbs?: { onAccept: (h: ReviewHunk) => void; onReject: (h: ReviewHunk) => void } | undefined;
 	handlers: ThreadHandlers;
 	onComment: (selection: LineSelection, body: string) => void;

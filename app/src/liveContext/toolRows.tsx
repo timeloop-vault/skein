@@ -29,7 +29,7 @@ export const ToolFamilyRow = ({
 }: {
 	kind: string;
 	payload: Payload;
-	harness: HarnessKind | undefined;
+	harness: HarnessKind | null | undefined;
 	timestampMs: number;
 }) => {
 	const p: ToolRowProps = { payload, harness, timestampMs };

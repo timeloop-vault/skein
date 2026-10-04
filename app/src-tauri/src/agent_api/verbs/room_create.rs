@@ -412,6 +412,7 @@ pub async fn create_room(
             &created.name,
             &created.harness_id,
             &created.kind,
+            &created.kind,
             prompt,
         )
     });
@@ -463,6 +464,7 @@ pub(super) fn queue_first_prompt(
     to_room_name: &str,
     to_harness_id: &str,
     to_harness_label: &str,
+    to_harness_kind: &str,
     prompt: &str,
 ) -> Option<String> {
     let now = now_ms();
@@ -491,6 +493,13 @@ pub(super) fn queue_first_prompt(
         return None;
     }
 
+    let from_harness_kind = caller.harness_id.as_deref().and_then(|hid| {
+        caller_room
+            .harnesses
+            .iter()
+            .find(|h| h.id == hid)
+            .map(|h| h.kind.as_str())
+    });
     let from_harness_label = caller.harness_id.as_deref().and_then(|hid| {
         caller_room
             .harnesses
@@ -518,6 +527,10 @@ pub(super) fn queue_first_prompt(
         now,
         crate::db::action_kind::MESSAGE_IN,
         &payload,
+        // Parsed, not passed through: the kind string came from the
+        // frontend, and only a known kind is ever stored.
+        crate::harness_kind::HarnessKind::from_name(to_harness_kind)
+            .map(crate::harness_kind::HarnessKind::as_str),
     );
     record_and_emit(
         db,
@@ -527,6 +540,7 @@ pub(super) fn queue_first_prompt(
         now,
         crate::db::action_kind::MESSAGE_OUT,
         &payload,
+        from_harness_kind,
     );
     state.notify_mail_changed(to_room_id, to_harness_id);
     Some(row.id)

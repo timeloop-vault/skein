@@ -25,7 +25,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import type { HarnessKind } from "../types.ts";
+import type { HarnessKindOf } from "../harnessAttribution.ts";
 import "./activity.css";
 import { type BottomMark, bottomMarkOf, countUnseen, orderForDisplay } from "./activityOrder.ts";
 import {
@@ -64,7 +64,7 @@ export const ActivityCardBody = ({
 	 *  identity, mutated in lockstep with `actions` — additions never
 	 *  re-render on their own, only via the `actions` update they ride. */
 	liveIds: ReadonlySet<number>;
-	harnessKindOf: (harnessId: string) => HarnessKind;
+	harnessKindOf: HarnessKindOf;
 	visible: boolean;
 	/** Render per-turn cost hair-lines (user-level pref, off by default). */
 	showTurnCosts: boolean;
@@ -293,7 +293,7 @@ export const ActivityCardBody = ({
 				) : (
 					<BurstRow
 						item={item}
-						harness={harnessKindOf(item.harnessId)}
+						harness={harnessKindOf(item.harnessId, item.harnessKind)}
 						live={item.live && Date.now() - item.lastTimestampMs < BURST_LIVE_MS}
 						onToggle={() => toggleBurst(item.key)}
 					/>

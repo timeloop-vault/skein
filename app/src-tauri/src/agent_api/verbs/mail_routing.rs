@@ -143,6 +143,11 @@ pub(super) fn record_mail_actions(
             .and_then(|r| r.harnesses.iter().find(|h| h.id == hid))
             .map(|h| format!("{} · {}", h.kind, h.name))
     });
+    let from_harness_kind = caller.harness_id.as_deref().and_then(|hid| {
+        from_room
+            .and_then(|r| r.harnesses.iter().find(|h| h.id == hid))
+            .map(|h| h.kind.as_str())
+    });
     let to_harness_label = format!("{} · {}", to_harness.kind, to_harness.name);
 
     let payload = serde_json::json!({
@@ -166,6 +171,7 @@ pub(super) fn record_mail_actions(
         message.created_ms,
         crate::db::action_kind::MESSAGE_IN,
         &payload,
+        Some(&to_harness.kind),
     );
     record_and_emit(
         db,
@@ -175,6 +181,7 @@ pub(super) fn record_mail_actions(
         message.created_ms,
         crate::db::action_kind::MESSAGE_OUT,
         &payload,
+        from_harness_kind,
     );
 }
 
@@ -183,6 +190,7 @@ pub(super) fn record_mail_actions(
 /// (`harness_action_event::emit`). A write that fails is logged and
 /// dropped — the mailbox write it is describing already succeeded, and
 /// a missing feed row is recoverable, unlike a lost message.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn record_and_emit(
     db: &Database,
     app: Option<&tauri::AppHandle>,
@@ -191,8 +199,17 @@ pub(super) fn record_and_emit(
     timestamp_ms: i64,
     kind: &str,
     payload: &str,
+    harness_kind: Option<&str>,
 ) {
-    match db.record_harness_action(harness_id, room_id, timestamp_ms, kind, payload, None) {
+    match db.record_harness_action(
+        harness_id,
+        room_id,
+        timestamp_ms,
+        kind,
+        payload,
+        None,
+        harness_kind,
+    ) {
         Ok(id) => {
             if let Some(app) = app {
                 crate::harness_action_event::emit(
@@ -204,6 +221,7 @@ pub(super) fn record_and_emit(
                     kind,
                     payload,
                     None,
+                    harness_kind,
                 );
             }
         }

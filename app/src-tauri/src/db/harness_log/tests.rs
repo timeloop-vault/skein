@@ -109,6 +109,7 @@ fn action_record_then_query_by_harness_returns_row() {
         action_kind::TOOL_CALL,
         payload,
         Some("l2c1"),
+        None,
     )
     .unwrap();
     let actions = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
@@ -126,7 +127,7 @@ fn action_record_then_query_by_harness_returns_row() {
 fn action_query_excludes_rows_at_or_before_since_ms() {
     let (_dir, db) = fresh_db();
     for ts in [100, 200, 300, 400] {
-        db.record_harness_action("h1", "r1", ts, action_kind::PATCH, "{}", None)
+        db.record_harness_action("h1", "r1", ts, action_kind::PATCH, "{}", None, None)
             .unwrap();
     }
     let actions = db.recent_harness_actions_by_harness("h1", 200, 10).unwrap();
@@ -137,11 +138,11 @@ fn action_query_excludes_rows_at_or_before_since_ms() {
 #[test]
 fn action_query_is_scoped_by_harness_id() {
     let (_dir, db) = fresh_db();
-    db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, "{}", None)
+    db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, "{}", None, None)
         .unwrap();
-    db.record_harness_action("h2", "r1", 200, action_kind::TOOL_CALL, "{}", None)
+    db.record_harness_action("h2", "r1", 200, action_kind::TOOL_CALL, "{}", None, None)
         .unwrap();
-    db.record_harness_action("h1", "r1", 300, action_kind::PATCH, "{}", None)
+    db.record_harness_action("h1", "r1", 300, action_kind::PATCH, "{}", None, None)
         .unwrap();
     let h1 = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
     assert_eq!(h1.len(), 2);
@@ -151,11 +152,11 @@ fn action_query_is_scoped_by_harness_id() {
 #[test]
 fn action_query_by_room_returns_all_harnesses_in_that_room() {
     let (_dir, db) = fresh_db();
-    db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, "{}", None)
+    db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, "{}", None, None)
         .unwrap();
-    db.record_harness_action("h2", "r1", 200, action_kind::TOOL_CALL, "{}", None)
+    db.record_harness_action("h2", "r1", 200, action_kind::TOOL_CALL, "{}", None, None)
         .unwrap();
-    db.record_harness_action("h3", "r2", 300, action_kind::TOOL_CALL, "{}", None)
+    db.record_harness_action("h3", "r2", 300, action_kind::TOOL_CALL, "{}", None, None)
         .unwrap();
     let r1 = db.recent_harness_actions_by_room("r1", 0, 10).unwrap();
     assert_eq!(r1.len(), 2);
@@ -172,9 +173,10 @@ fn action_query_by_room_and_kind_filters_other_kinds_out() {
         action_kind::PLAN_CHANGE,
         r#"{"n":1}"#,
         None,
+        None,
     )
     .unwrap();
-    db.record_harness_action("h1", "r1", 200, action_kind::TOOL_CALL, "{}", None)
+    db.record_harness_action("h1", "r1", 200, action_kind::TOOL_CALL, "{}", None, None)
         .unwrap();
     db.record_harness_action(
         "h2",
@@ -182,6 +184,7 @@ fn action_query_by_room_and_kind_filters_other_kinds_out() {
         300,
         action_kind::PLAN_CHANGE,
         r#"{"n":2}"#,
+        None,
         None,
     )
     .unwrap();
@@ -199,7 +202,7 @@ fn action_query_by_room_and_kind_filters_other_kinds_out() {
 fn action_query_respects_limit() {
     let (_dir, db) = fresh_db();
     for ts in 0..50 {
-        db.record_harness_action("h1", "r1", ts, action_kind::TOOL_CALL, "{}", None)
+        db.record_harness_action("h1", "r1", ts, action_kind::TOOL_CALL, "{}", None, None)
             .unwrap();
     }
     let actions = db.recent_harness_actions_by_harness("h1", -1, 5).unwrap();
@@ -231,7 +234,7 @@ fn batch_record_lands_every_row_in_one_transaction() {
             source: None,
         },
     ];
-    let inserted = db.record_harness_actions("h1", "r1", &rows).unwrap();
+    let inserted = db.record_harness_actions("h1", "r1", None, &rows).unwrap();
     assert_eq!(inserted, 3);
     let actions = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
     assert_eq!(actions.len(), 3);
@@ -249,7 +252,7 @@ fn batch_record_lands_every_row_in_one_transaction() {
 #[test]
 fn batch_record_of_empty_rows_is_a_no_op() {
     let (_dir, db) = fresh_db();
-    let inserted = db.record_harness_actions("h1", "r1", &[]).unwrap();
+    let inserted = db.record_harness_actions("h1", "r1", None, &[]).unwrap();
     assert_eq!(inserted, 0);
     assert!(
         db.recent_harness_actions_by_harness("h1", -1, 10)
@@ -265,8 +268,16 @@ fn action_payload_is_stored_verbatim_including_unicode_and_quotes() {
     // read the same bytes back.
     let (_dir, db) = fresh_db();
     let payload = r#"{"text":"hello \"world\" — café 🌮","nested":{"k":[1,2,3]}}"#;
-    db.record_harness_action("h1", "r1", 100, action_kind::AWAY_SUMMARY, payload, None)
-        .unwrap();
+    db.record_harness_action(
+        "h1",
+        "r1",
+        100,
+        action_kind::AWAY_SUMMARY,
+        payload,
+        None,
+        None,
+    )
+    .unwrap();
     let actions = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
     assert_eq!(actions[0].payload, payload);
 }
@@ -277,12 +288,36 @@ fn action_query_orders_same_ms_rows_by_id_desc() {
     // in insertion order (newest first), so the timeline doesn't
     // flicker between Skein restarts.
     let (_dir, db) = fresh_db();
-    db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, r#"{"n":1}"#, None)
-        .unwrap();
-    db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, r#"{"n":2}"#, None)
-        .unwrap();
-    db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, r#"{"n":3}"#, None)
-        .unwrap();
+    db.record_harness_action(
+        "h1",
+        "r1",
+        100,
+        action_kind::TOOL_CALL,
+        r#"{"n":1}"#,
+        None,
+        None,
+    )
+    .unwrap();
+    db.record_harness_action(
+        "h1",
+        "r1",
+        100,
+        action_kind::TOOL_CALL,
+        r#"{"n":2}"#,
+        None,
+        None,
+    )
+    .unwrap();
+    db.record_harness_action(
+        "h1",
+        "r1",
+        100,
+        action_kind::TOOL_CALL,
+        r#"{"n":3}"#,
+        None,
+        None,
+    )
+    .unwrap();
     let actions = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
     assert_eq!(actions.len(), 3);
     assert_eq!(actions[0].payload, r#"{"n":3}"#);
@@ -292,7 +327,7 @@ fn action_query_orders_same_ms_rows_by_id_desc() {
 #[test]
 fn action_null_source_round_trips_as_none() {
     let (_dir, db) = fresh_db();
-    db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, "{}", None)
+    db.record_harness_action("h1", "r1", 100, action_kind::TOOL_CALL, "{}", None, None)
         .unwrap();
     let actions = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
     assert!(actions[0].source.is_none());
@@ -320,4 +355,45 @@ fn action_kind_constants_match_persisted_strings() {
     assert_eq!(action_kind::USER_PROMPT, "user_prompt");
     assert_eq!(action_kind::COMPACTION, "compaction");
     assert_eq!(action_kind::REASONING, "reasoning");
+}
+
+#[test]
+fn single_insert_round_trips_harness_kind() {
+    let (_dir, db) = fresh_db();
+    db.record_harness_action(
+        "h1",
+        "r1",
+        100,
+        action_kind::TOOL_CALL,
+        "{}",
+        None,
+        Some("claude"),
+    )
+    .unwrap();
+    db.record_harness_action("h1", "r1", 200, action_kind::TOOL_CALL, "{}", None, None)
+        .unwrap();
+    let actions = db.recent_harness_actions_by_room("r1", 0, 10).unwrap();
+    assert_eq!(actions[0].harness_kind, None);
+    assert_eq!(actions[1].harness_kind.as_deref(), Some("claude"));
+    let json = serde_json::to_value(&actions[1]).unwrap();
+    assert_eq!(json["harnessKind"], "claude");
+}
+
+#[test]
+fn batch_insert_round_trips_harness_kind() {
+    let (_dir, db) = fresh_db();
+    let rows = vec![NewHarnessAction {
+        timestamp_ms: 100,
+        kind: action_kind::TOOL_CALL,
+        payload: "{}".into(),
+        source: None,
+    }];
+    db.record_harness_actions("h1", "r1", Some("claude"), &rows)
+        .unwrap();
+    let by_kind = db
+        .recent_harness_actions_by_room_and_kind("r1", action_kind::TOOL_CALL, 0, 10)
+        .unwrap();
+    assert_eq!(by_kind[0].harness_kind.as_deref(), Some("claude"));
+    let by_harness = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
+    assert_eq!(by_harness[0].harness_kind.as_deref(), Some("claude"));
 }

@@ -89,7 +89,7 @@ export const BurstRow = ({
 	onToggle,
 }: {
 	item: Extract<FeedItem, { type: "burst" }>;
-	harness: HarnessKind;
+	harness: HarnessKind | null;
 	live: boolean;
 	onToggle: () => void;
 }) => {

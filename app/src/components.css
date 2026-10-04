@@ -51,6 +51,11 @@
 .h-byoh {
 	background: #8a7a4a;
 }
+/* #538: the writer is no longer in the room and no kind was recorded. */
+.h-unknown {
+	background: var(--bg-3);
+	color: var(--fg-2);
+}
 
 /* Status dots — #68: each state has a distinct hue AND a distinct
    shape (carried entirely by box-shadow / border-radius, so the markup

@@ -17,7 +17,7 @@ export const HChip = ({
 	mailFromRoomNames,
 	versionUpdate,
 }: {
-	kind: HarnessKind;
+	kind: HarnessKind | null;
 	harnessId?: string;
 	/** #248: the harness's agent label, for the popover. Omitted where the
 	 *  chip is a kind rather than one harness (pickers, room-tab row). */
@@ -34,6 +34,20 @@ export const HChip = ({
 	 *  reason as the mail attributes. Omitted when there is no notice. */
 	versionUpdate?: { text: string; refusal: string | null } | undefined;
 }) => {
+	// #538: null = a departed harness of unknown kind; neutral, not a kind.
+	if (kind === null) {
+		return (
+			<span
+				className="h-chip h-unknown"
+				data-harness-id={harnessId}
+				role="group"
+				aria-label="unknown harness"
+				title="unknown harness"
+			>
+				?
+			</span>
+		);
+	}
 	const k = HARNESS_KINDS[kind];
 	// #141: harnessId lets the popover read this harness's OWN live state
 	// (so a room-tab summary chip shows its real state, not the room

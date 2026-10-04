@@ -12,8 +12,8 @@
 // since comes back with `changedSinceViewed` and the row says so.
 
 import { HChip } from "../components.tsx";
+import type { HarnessKindOf } from "../harnessAttribution.ts";
 import { isImagePath } from "../imageFiles.ts";
-import type { HarnessKind } from "../types.ts";
 import type { ReviewFile } from "./api.ts";
 import "./fileList.css";
 
@@ -43,7 +43,7 @@ export const FileList = ({
 }: {
 	files: ReviewFile[];
 	activePath: string | undefined;
-	harnessKindOf: (harnessId: string) => HarnessKind;
+	harnessKindOf: HarnessKindOf;
 	onSelect: (path: string) => void;
 	onToggleViewed: (file: ReviewFile) => void;
 }) => (

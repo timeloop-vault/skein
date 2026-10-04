@@ -3,7 +3,7 @@
 // ReviewPane.tsx (#460); the open/filter state stays in the pane.
 
 import { HChip } from "../components.tsx";
-import type { HarnessKind } from "../types.ts";
+import type { HarnessKindOf } from "../harnessAttribution.ts";
 import type { ReviewFile } from "./api.ts";
 import { FileList } from "./FileList.tsx";
 import "./ReviewFileSection.css";
@@ -28,7 +28,7 @@ export const ReviewFileSection = ({
 	setShowFiles: (show: boolean) => void;
 	activePath: string | undefined;
 	setActivePath: (path: string | undefined) => void;
-	harnessKindOf: (harnessId: string) => HarnessKind;
+	harnessKindOf: HarnessKindOf;
 	toggleViewed: (f: ReviewFile) => void;
 }) => (
 	<div className="rv-section">
@@ -57,7 +57,7 @@ export const ReviewFileSection = ({
 							key={h}
 							className={`rv-chip${harnessFilter === h ? " on" : ""}`}
 							onClick={() => setHarnessFilter(harnessFilter === h ? undefined : h)}
-							title={`only files last written by ${harnessKindOf(h)}`}
+							title={`only files last written by ${harnessKindOf(h) ?? "an unknown harness"}`}
 						>
 							<HChip kind={harnessKindOf(h)} />
 						</button>

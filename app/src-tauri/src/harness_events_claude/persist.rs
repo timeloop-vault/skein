@@ -5,6 +5,7 @@ use super::adapter::ActionPersistence;
 use super::background_tasks::BackgroundState;
 use super::parse::apply_initial_state_row;
 use crate::db::Database;
+use crate::harness_kind::HarnessKind;
 use skein_harness::claude::local_command::LocalCommandTracker;
 
 /// One-shot historical scan of the JSONL — runs once on attach
@@ -82,6 +83,7 @@ pub(super) fn persist_extracted(
             action.kind,
             &action.payload,
             action.source.as_deref(),
+            Some(HarnessKind::Claude.as_str()),
         ) {
             Ok(id) => {
                 if emit {
@@ -107,6 +109,7 @@ pub(super) fn persist_extracted(
                             action.kind,
                             &action.payload,
                             action.source.as_deref(),
+                            Some(HarnessKind::Claude.as_str()),
                         );
                     }
                 }
@@ -146,10 +149,12 @@ pub(super) fn persist_extracted_batch(
             source: a.source,
         })
         .collect();
-    if let Err(e) = ap
-        .db
-        .record_harness_actions(&ap.harness_id, &ap.room_id, &rows)
-    {
+    if let Err(e) = ap.db.record_harness_actions(
+        &ap.harness_id,
+        &ap.room_id,
+        Some(HarnessKind::Claude.as_str()),
+        &rows,
+    ) {
         // max_ts didn't advance, so the next attach retries this same batch.
         tracing::warn!(harness_id = %ap.harness_id, rows = rows.len(), error = %e,
             "claude_events: batch backfill insert failed");

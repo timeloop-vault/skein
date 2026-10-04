@@ -5,7 +5,7 @@ import { obj, type Payload, str } from "./payload.ts";
 
 export interface ToolRowProps {
 	payload: Payload;
-	harness: HarnessKind | undefined;
+	harness: HarnessKind | null | undefined;
 	timestampMs: number;
 }
 

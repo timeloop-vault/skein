@@ -14,7 +14,7 @@ export const BackgroundEndRow = ({
 	timestampMs,
 }: {
 	payload: Payload;
-	harness: HarnessKind | undefined;
+	harness: HarnessKind | null | undefined;
 	timestampMs: number;
 }) => {
 	const view = backgroundEndView(payload);
