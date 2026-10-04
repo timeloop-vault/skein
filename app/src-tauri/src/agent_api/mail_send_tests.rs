@@ -470,3 +470,68 @@ fn same_millisecond_messages_read_back_in_insertion_order() {
     let ids: Vec<&str> = all.iter().map(|m| m.id.as_str()).collect();
     assert_eq!(ids, vec!["z-third", "a-first", "m-second"]);
 }
+
+// ── latest_status_by_room (#492) ─────────────────────────────────────
+
+fn seed_from(db: &Database, id: &str, from: &str, body: &str, created_ms: i64) {
+    db.insert_harness_message(&crate::db::HarnessMessageRow {
+        id: id.to_owned(),
+        room_id: "dir".to_owned(),
+        harness_id: "hd".to_owned(),
+        from_room_id: from.to_owned(),
+        from_harness_id: None,
+        body: body.to_owned(),
+        created_ms,
+        read_ms: None,
+    })
+    .unwrap();
+}
+
+#[test]
+fn latest_status_by_room_newest_wins_per_room() {
+    let f = fixture();
+    seed_from(&f.db, "a", "r1", "status: old", 10);
+    seed_from(&f.db, "b", "r1", "status: new", 20);
+    seed_from(&f.db, "c", "r2", "  status: indented", 5);
+    let got = f.db.latest_status_by_room().unwrap();
+    assert_eq!(
+        got,
+        vec![
+            ("r1".to_owned(), "status: new".to_owned(), 20),
+            ("r2".to_owned(), "  status: indented".to_owned(), 5),
+        ]
+    );
+}
+
+#[test]
+fn latest_status_by_room_ignores_non_status_bodies_even_when_newer() {
+    let f = fixture();
+    seed_from(&f.db, "a", "r1", "status: real", 10);
+    seed_from(&f.db, "b", "r1", "just chatting", 99);
+    seed_from(&f.db, "c", "r1", "Status: wrong case", 100);
+    let got = f.db.latest_status_by_room().unwrap();
+    assert_eq!(got, vec![("r1".to_owned(), "status: real".to_owned(), 10)]);
+}
+
+#[test]
+fn latest_status_by_room_omits_rooms_without_a_status_line() {
+    let f = fixture();
+    seed_from(&f.db, "a", "r1", "hello", 10);
+    seed_from(&f.db, "b", "r2", "status: ok", 11);
+    let got = f.db.latest_status_by_room().unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].0, "r2");
+}
+
+#[test]
+fn latest_status_by_room_breaks_created_ms_ties_by_rowid() {
+    let f = fixture();
+    // Ids out of alphabetical order: only rowid gives the right winner.
+    seed_from(&f.db, "z-first", "r1", "status: first", 42);
+    seed_from(&f.db, "a-second", "r1", "status: second", 42);
+    let got = f.db.latest_status_by_room().unwrap();
+    assert_eq!(
+        got,
+        vec![("r1".to_owned(), "status: second".to_owned(), 42)]
+    );
+}

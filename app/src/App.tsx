@@ -13,9 +13,12 @@ import { useEffect, useRef } from "react";
 import { EmptyState, Titlebar, type TitlebarProps } from "./AppChrome.tsx";
 import { AppOverlays } from "./AppOverlays.tsx";
 import { AppShell, BootBody } from "./AppShell.tsx";
+import { buildOverlayProps } from "./buildOverlayProps.ts";
 import { buildSettingsProps } from "./buildSettingsProps.ts";
 import type { PaletteItem } from "./CommandPalette.tsx";
 import { StatusDot } from "./components.tsx";
+import { ControlCenter } from "./controlCenter/ControlCenter.tsx";
+import { useControlCenter } from "./controlCenter/useControlCenter.ts";
 import { usePermissionHarnessIds } from "./harnessActivity.ts";
 import { buildPaletteItems } from "./paletteItems.ts";
 import { RoomTabStrip } from "./RoomTabStrip.tsx";
@@ -120,7 +123,6 @@ export default function App() {
 		activeSegment,
 		onSelectSegment,
 		setShowNewRoom,
-		newRoomMemory,
 		openNewRoom,
 		openNewRoomAt,
 		openGroupPlaceholder,
@@ -213,6 +215,15 @@ export default function App() {
 		if (room) void checkRoomFolder(room);
 	}, [activeRoomId, checkRoomFolder]);
 
+	// #492: Control Center overlay state — see controlCenter/useControlCenter.ts.
+	const cc = useControlCenter(
+		activeRooms,
+		stripSegments,
+		activeRoomId,
+		setActiveRoomId,
+		switchHarnessInRoom,
+	);
+
 	// #19: window-level keyboard shortcuts + the handler refs they (and
 	// the palette) read — see useAppShortcuts.ts.
 	const { toggleFilesRef, toggleReviewRef } = useAppShortcuts({
@@ -225,6 +236,7 @@ export default function App() {
 		lastUsedByGroupRef,
 		setShowPalette,
 		setShowSettings,
+		toggleControlCenterRef: cc.toggleRef,
 	});
 
 	useAppBackgroundWiring({ store, nav, actions, creation, settings, pushToast });
@@ -259,6 +271,7 @@ export default function App() {
 		openNewRoom,
 		toggleFilesRef,
 		toggleReviewRef,
+		toggleControlCenter: cc.toggle,
 		addHarness,
 		startRenameRoom,
 		closeRoom,
@@ -268,39 +281,21 @@ export default function App() {
 		onRestartHarness,
 	});
 
-	const overlayProps = {
-		showNewRoom: nav.showNewRoom,
+	const overlayProps = buildOverlayProps(nav, store, settings, {
 		defaultCwd,
-		newRoomSeed: nav.newRoomSeed,
-		defaultAgents: settings.defaultAgents,
-		newRoomMemory,
-		branchTemplate: settings.branchTemplate,
-		recentRoomFolders: nav.recentRoomFolders,
-		rememberRoomFolder: nav.rememberRoomFolder,
 		createRoom,
-		setShowNewRoom,
 		showPalette,
 		paletteItems,
 		setShowPalette,
 		showSettings,
 		settingsProps,
 		showReopen,
-		archivedRooms,
-		allRooms: roomsRef.current,
 		reopenRoom,
-		deleteRoomsForever: store.deleteRoomsForever,
-		restoreRooms: store.restoreRooms,
-		retireRooms: store.retireRooms,
-		unretireRooms: store.unretireRooms,
 		setShowReopen,
 		toasts,
 		jumpToToast,
 		dismissToast,
-		quarantinedCount: store.quarantinedCount,
-		setQuarantinedCount: store.setQuarantinedCount,
-		backupRoomCount: store.backupRoomCount,
-		setBackupRoomCount: store.setBackupRoomCount,
-	};
+	});
 	const dragWiring = { drag, dropTarget, startDrag, dragHandlers, suppressClick };
 
 	// Pre-hydration: rooms haven't loaded yet, so `activeRooms` is
@@ -361,20 +356,27 @@ export default function App() {
 				onStartRename={startRenameRoom}
 				onRename={commitRenameRoom}
 				onRenameEnd={endRenameRoom}
+				controlCenterOpen={cc.open}
+				onToggleControlCenter={cc.toggle}
 			/>
-			<RoomWorkspace
-				activeRooms={activeRooms}
-				activeRoomId={activeRoomId}
-				store={store}
-				actions={actions}
-				creation={creation}
-				settings={settings}
-				defaultShell={defaultShell}
-				showPicker={showPicker}
-				setShowPicker={setShowPicker}
-				drag={dragWiring}
-				onReattachTelemetry={onReattachTelemetry}
-			/>
+			<div className="cc-host" data-cc={cc.open ? "open" : "closed"}>
+				<div className="cc-workspace-slot">
+					<RoomWorkspace
+						activeRooms={activeRooms}
+						activeRoomId={activeRoomId}
+						store={store}
+						actions={actions}
+						creation={creation}
+						settings={settings}
+						defaultShell={defaultShell}
+						showPicker={showPicker}
+						setShowPicker={setShowPicker}
+						drag={dragWiring}
+						onReattachTelemetry={onReattachTelemetry}
+					/>
+				</div>
+				<ControlCenter {...cc.props} />
+			</div>
 			<StatusBar
 				activeHarness={activeHarness}
 				room={room}
