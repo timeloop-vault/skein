@@ -32,3 +32,12 @@ pub(crate) fn frontend_log(level: String, target: String, message: String) {
         tracing::info!(source = "frontend", target = %target, truncated, "{message}");
     }
 }
+
+/// Raise and focus the main window (#493). Called from the Control
+/// Center focus listener in the main window's JS: the pop-out only emits
+/// the focus event, and main raises itself through this command.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub(crate) fn window_raise_main(app: tauri::AppHandle) {
+    crate::setup::raise_main_window(&app);
+}

@@ -1,0 +1,17 @@
+.cc-popout-waiting {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 100vh;
+	background: var(--bg-0);
+	color: var(--fg-2);
+	font-size: var(--cfs, 12px);
+}
+.cc-toolbar.cc-popout-toolbar {
+	gap: 6px;
+}
+.cc-popout-btn[aria-pressed="true"] {
+	color: var(--fg-0);
+	background: var(--bg-2, var(--bg-0));
+	border-color: var(--fg-2);
+}
