@@ -36,6 +36,7 @@ const pane = (roomId: string, ready: boolean): DesignPaneApi => ({
 	}),
 	showElement: async () => ({ tier: "selector", highlighted: true, element: el }),
 	invokeElement: async () => ({ tier: "selector", invoked: true, action: "tap", element: el }),
+	showChanges: async () => ({ highlighted: 0, mapped: [], unmapped: [], limits: "" }),
 });
 
 describe("registry", () => {

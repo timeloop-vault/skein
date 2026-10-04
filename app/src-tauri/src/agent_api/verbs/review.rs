@@ -328,27 +328,33 @@ pub fn get_comment(
     })
 }
 
+/// The scope named by a verb's `scope` / `commit_sha` arguments, or the
+/// refusal text. Shared by `get_diff` and `show_changes`.
+pub(super) fn parse_scope(scope: Option<&str>, commit_sha: Option<&str>) -> Result<Scope, String> {
+    let scope = match scope {
+        None | Some("branch") => Scope::Branch,
+        Some("pending") => Scope::Pending,
+        Some("commit") => Scope::Commit,
+        Some(other) => {
+            return Err(format!(
+                "unknown scope {other:?} — use branch, pending or commit"
+            ));
+        }
+    };
+    if scope == Scope::Commit && commit_sha.is_none() {
+        return Err("the commit scope needs a commit_sha".into());
+    }
+    Ok(scope)
+}
+
 /// The review's diff, whole or per file.
 pub fn get_diff(db: &Database, caller: &Caller, args: &DiffArgs) -> VerbResult<DiffOut> {
     let cwd = caller
         .cwd
         .as_deref()
         .ok_or_else(|| VerbError::Unavailable("this room has no folder to diff".into()))?;
-    let scope = match args.scope.as_deref() {
-        None | Some("branch") => Scope::Branch,
-        Some("pending") => Scope::Pending,
-        Some("commit") => Scope::Commit,
-        Some(other) => {
-            return Err(VerbError::Refused(format!(
-                "unknown scope {other:?} — use branch, pending or commit"
-            )));
-        }
-    };
-    if scope == Scope::Commit && args.commit_sha.is_none() {
-        return Err(VerbError::Refused(
-            "the commit scope needs a commit_sha".into(),
-        ));
-    }
+    let scope = parse_scope(args.scope.as_deref(), args.commit_sha.as_deref())
+        .map_err(VerbError::Refused)?;
 
     let summary = scope_impl(db, &caller.room_id, cwd, scope, args.commit_sha.as_deref())
         .map_err(VerbError::Unavailable)?;

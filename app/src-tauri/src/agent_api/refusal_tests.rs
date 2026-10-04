@@ -51,6 +51,7 @@ fn the_tool_list_offers_twenty_two_verbs_and_nothing_that_resolves_approves_or_d
             "set_design_device",
             "show_element",
             "invoke_element",
+            "show_changes",
             // #535: which Skein build this is.
             "skein_info",
         ]

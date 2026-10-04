@@ -6,6 +6,7 @@
 // the window.
 
 import type { RequestResult } from "./agentRequestsShared.ts";
+import { parseShowChangesArgs } from "./designChanges.ts";
 import {
 	getDesignPane,
 	paneSummaries,
@@ -29,6 +30,7 @@ export const DESIGN_KINDS = [
 	"design.set_device",
 	"design.show_element",
 	"design.invoke_element",
+	"design.show_changes",
 ] as const;
 
 export const isDesignKind = (kind: string): boolean =>
@@ -115,6 +117,22 @@ export async function handleDesignRequest(
 		} catch (err) {
 			throw afterReveal(err, revealed);
 		}
+		return complete(id, revealed === undefined ? result : { ...result, revealed });
+	}
+
+	if (kind === "design.show_changes") {
+		const p = parseShowChangesArgs(raw);
+		if (bad(p)) return fail(p.error);
+		const { roomId, harnessId, reveal: wantReveal, ...req } = p.value;
+		const pane = getDesignPane(harnessId);
+		if (!pane || pane.roomId !== roomId) {
+			return fail(`not_mounted: no design pane is mounted for harness "${harnessId}"`);
+		}
+		if (!pane.ready()) {
+			return fail("not_ready: the design pane has not finished loading its preview yet");
+		}
+		const revealed = wantReveal ? await revealPane(pane, reveal, roomId, harnessId) : undefined;
+		const result = await pane.showChanges(req);
 		return complete(id, revealed === undefined ? result : { ...result, revealed });
 	}
 

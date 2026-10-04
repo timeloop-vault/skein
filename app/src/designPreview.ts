@@ -49,12 +49,23 @@ export type Beacon =
 			domChanged?: boolean;
 	  }
 	| { type: "shownCleared" }
+	/** show_changes (#547): the rendered source sites, one per (fileName, line). */
+	| {
+			type: "sources";
+			requestId: string;
+			sites: { fileName: string; line: number; endLine: number; count: number; onScreen: number }[];
+			/** The frame stopped listing at its own site cap. */
+			capped?: true;
+	  }
+	| { type: "shownChanges"; requestId: string; highlighted: number; capped?: true }
+	| { type: "changesCleared" }
 	| { type: "scroll"; x: number; y: number }
 	| EditBeacon;
 
 const MAX_ATTRS = 16;
 const MAX_ANCHORS = 100;
 const MAX_FILES = 200;
+const MAX_SITES = 5000;
 const MAX_BY_ID = 10;
 const MAX_BY_TEXT = 10;
 const MAX_SAME_TAG = 200;
@@ -212,6 +223,15 @@ export type HostMessage =
 			distance?: number;
 			pointerType: "mouse" | "touch";
 	  }
+	/** show_changes (#547): ask for the rendered source sites. */
+	| { type: "listSources"; requestId: string }
+	/** show_changes (#547): outline every element rendered from these sites. */
+	| {
+			type: "showChanges";
+			requestId: string;
+			sites: { fileName: string; line: number; endLine: number }[];
+			max: number;
+	  }
 	| { type: "edit-start" }
 	| { type: "edit-set"; property: string; value: string }
 	| { type: "edit-end"; revert: boolean }
@@ -291,6 +311,43 @@ export const parseBeacon = (data: unknown): Beacon | null => {
 		}
 		case "shownCleared":
 			return { type: "shownCleared" };
+		case "sources": {
+			const requestId = idOf(d.requestId);
+			if (requestId === null || !Array.isArray(d.sites)) return null;
+			const sites: Extract<Beacon, { type: "sources" }>["sites"] = [];
+			for (const s of d.sites.slice(0, MAX_SITES)) {
+				if (!isObj(s) || typeof s.fileName !== "string") continue;
+				const line = num(s.line);
+				const count = num(s.count);
+				if (line === null || count === null) continue;
+				sites.push({
+					fileName: clipTo(s.fileName, 1000),
+					line,
+					endLine: num(s.endLine) ?? line,
+					count,
+					onScreen: num(s.onScreen) ?? 0,
+				});
+			}
+			return {
+				type: "sources",
+				requestId,
+				sites,
+				...(d.capped === true || d.sites.length > MAX_SITES ? { capped: true as const } : {}),
+			};
+		}
+		case "shownChanges": {
+			const requestId = idOf(d.requestId);
+			const highlighted = num(d.highlighted);
+			if (requestId === null || highlighted === null) return null;
+			return {
+				type: "shownChanges",
+				requestId,
+				highlighted,
+				...(d.capped === true ? { capped: true as const } : {}),
+			};
+		}
+		case "changesCleared":
+			return { type: "changesCleared" };
 		case "scroll": {
 			const x = num(d.x);
 			const y = num(d.y);

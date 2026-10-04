@@ -7,6 +7,7 @@
 // pane to highlight an element in place.
 
 import { asRecord, isOmitted, type RequestResult } from "./agentRequestsShared.ts";
+import type { ShowChangesRequest, ShowChangesResult } from "./designChanges.ts";
 import type { DesignDevice } from "./designDevice.ts";
 import type { InvokeElementRequest, InvokeElementResult } from "./designInvoke.ts";
 import type { ElementAnchor, ElementDescriptor, Placement } from "./elementAnchor.ts";
@@ -49,6 +50,7 @@ export interface DesignPaneApi {
 	whenVisible(timeoutMs: number): Promise<boolean>;
 	showElement(req: ShowElementRequest): Promise<ShowElementResult>;
 	invokeElement(req: InvokeElementRequest): Promise<InvokeElementResult>;
+	showChanges(req: ShowChangesRequest): Promise<ShowChangesResult>;
 }
 
 const panes = new Map<string, DesignPaneApi>();

@@ -20,6 +20,7 @@
 //! | `design.open_entry` | `{roomId, harnessId, entry}` | `{entry, previous}` |
 //! | `design.set_device` | `{roomId, harnessId, device}` | `{device, previous}` |
 //! | `design.show_element` | `{roomId, harnessId, selector?, anchor?, reveal?}` | `{tier, highlighted, element, count?, score?, revealed?}` |
+//! | `design.show_changes` | see `design_changes.rs` | see `design_changes.rs` |
 //! | `design.invoke_element` | `{roomId, harnessId, selector?, anchor?, action, direction?, distance?, reveal?}` | `{tier, invoked, action, element, count?, invalidSelector?, domChanged?, visible, revealed?}` |
 //!
 //! A frontend error string is prefixed with a code (`not_mounted: …`,
@@ -48,7 +49,7 @@ const DESIGN_CONTROL_WINDOW: Duration = Duration::from_secs(60);
 const PANES_TIMEOUT: Duration = Duration::from_secs(3);
 const STATE_TIMEOUT: Duration = Duration::from_secs(5);
 const OPEN_ENTRY_TIMEOUT: Duration = Duration::from_secs(10);
-const SHOW_ELEMENT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const SHOW_ELEMENT_TIMEOUT: Duration = Duration::from_secs(10);
 const SET_DEVICE_TIMEOUT: Duration = Duration::from_secs(10);
 const INVOKE_ELEMENT_TIMEOUT: Duration = SHOW_ELEMENT_TIMEOUT;
 
@@ -169,7 +170,7 @@ fn log_outcome(verb: &str, caller_room: &str, harness: &str, outcome: &str) {
 }
 
 /// The caller's own room, refused when archived.
-fn caller_room(state: &AgentApiState, caller: &Caller) -> VerbResult<Room> {
+pub(super) fn caller_room(state: &AgentApiState, caller: &Caller) -> VerbResult<Room> {
     let room = state
         .db
         .room_by_id(&caller.room_id)
@@ -189,7 +190,7 @@ fn is_design(h: &Harness) -> bool {
 }
 
 /// Pick the harness a verb acts on, per the module doc's rules.
-fn pick_harness(room: &Room, requested: Option<&str>) -> VerbResult<Harness> {
+pub(super) fn pick_harness(room: &Room, requested: Option<&str>) -> VerbResult<Harness> {
     let designs: Vec<&Harness> = room.harnesses.iter().filter(|h| is_design(h)).collect();
     if let Some(id) = requested.map(str::trim).filter(|s| !s.is_empty()) {
         return designs
@@ -230,7 +231,7 @@ async fn entries_for(state: &AgentApiState, room_id: &str) -> VerbResult<Vec<Str
 }
 
 /// Kill switch then rate cap, shared by the two write verbs.
-fn guard_write(
+pub(super) fn guard_write(
     state: &AgentApiState,
     caller: &Caller,
     verb: &str,
@@ -251,14 +252,14 @@ fn guard_write(
         log_outcome(verb, &caller.room_id, "", "rate_limited");
         return Err(VerbError::Refused(format!(
             "rate_limited: this room has attempted {DESIGN_CONTROL_RATE_LIMIT} \
-             open_design_entry/set_design_device/show_element/invoke_element calls in the last minute"
+             open_design_entry/set_design_device/show_element/invoke_element/show_changes calls in the last minute"
         )));
     }
     Ok(())
 }
 
 /// Ask the frontend, mapping its error string the way `open_harness` does.
-async fn ask(
+pub(super) async fn ask(
     state: &AgentApiState,
     verb: &str,
     caller: &Caller,
@@ -282,7 +283,7 @@ async fn ask(
 
 /// The frontend's object with `harnessId` added, so a caller that relied
 /// on the single-harness default learns which one answered.
-fn with_harness_id(mut answer: Value, harness_id: &str) -> VerbResult<Value> {
+pub(super) fn with_harness_id(mut answer: Value, harness_id: &str) -> VerbResult<Value> {
     match answer.as_object_mut() {
         Some(obj) => {
             obj.entry("harnessId").or_insert_with(|| json!(harness_id));
@@ -418,7 +419,7 @@ pub async fn open_design_entry(
     with_harness_id(answer, &harness.id)
 }
 
-fn bad_arguments(msg: &str) -> VerbError {
+pub(super) fn bad_arguments(msg: &str) -> VerbError {
     VerbError::Refused(format!("bad_arguments: {msg}"))
 }
 
@@ -457,7 +458,7 @@ pub async fn set_design_device(
 }
 
 /// `reveal` must be a boolean when present; absent means false.
-fn check_reveal(reveal: Option<&Value>) -> VerbResult<bool> {
+pub(super) fn check_reveal(reveal: Option<&Value>) -> VerbResult<bool> {
     match reveal {
         None => Ok(false),
         Some(Value::Bool(b)) => Ok(*b),
