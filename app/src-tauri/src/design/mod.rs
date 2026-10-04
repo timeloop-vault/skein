@@ -15,6 +15,7 @@
 //! from the database, never cached, so a repointed room follows.
 
 pub mod commands;
+mod device;
 mod rewrite;
 mod serve;
 

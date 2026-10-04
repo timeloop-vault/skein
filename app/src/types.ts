@@ -1,3 +1,5 @@
+import type { DesignDevice } from "./designDevice.ts";
+
 // Domain types.
 //
 // A Room is a top-level tab — repo + branch + task + cwd. A Room owns
@@ -55,6 +57,11 @@ export interface Harness {
 	// relative, `/`-separated path to an .html/.htm file. Absent until
 	// one is picked (or the only one is auto-picked).
 	designEntry?: string;
+	// #528: a `design` harness's device setting (viewport preset/custom
+	// size, orientation, DPR override). Absent = None (fills the pane).
+	// Rust round-trips it opaquely (`design_device: Option<Value>`); the
+	// frontend validates on read via `normalizeDevice`.
+	designDevice?: DesignDevice;
 	// Bumped on every deliberate respawn (Enter-for-shell after a child
 	// exits). Folded into the LiveTerminal mountKey so the remount fires
 	// even when the new cmd equals the old one — the case the cmd-identity

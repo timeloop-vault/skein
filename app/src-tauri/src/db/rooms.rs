@@ -43,6 +43,13 @@ pub struct Harness {
     /// relative, `/`-separated path. Round-tripped, not interpreted.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub design_entry: Option<String>,
+    /// A `design` harness's device setting (#528): preset/custom size,
+    /// landscape, DPR override. Round-tripped, not interpreted, opaque
+    /// JSON on purpose, since the frontend owns the shape
+    /// (`app/src/designDevice.ts`) and #529/#530 can add flags without a
+    /// Rust change.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub design_device: Option<serde_json::Value>,
     /// Count of attention-worthy transitions accumulated for this
     /// harness while the user wasn't viewing it. Cleared when the
     /// harness becomes the active harness in the active room.

@@ -27,6 +27,7 @@ import { decideCloseHarness, type RequestResult } from "./agentRequests.ts";
 import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { confirmDialog } from "./confirmDialog.ts";
 import { HARNESS_KINDS } from "./data.tsx";
+import type { DesignDevice } from "./designDevice.ts";
 import { filesRegistry } from "./filesRegistry.ts";
 import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { withRespawnedCmd } from "./harnessCreation.ts";
@@ -344,6 +345,28 @@ export function useHarnessActions(
 		);
 	};
 
+	// #528: the design pane's device setting. undefined removes the key.
+	const setHarnessDesignDevice = (
+		roomId: string,
+		harnessId: string,
+		device: DesignDevice | undefined,
+	) => {
+		setRooms((prev) =>
+			prev.map((r) =>
+				r.id === roomId
+					? {
+							...r,
+							harnesses: r.harnesses.map((h) => {
+								if (h.id !== harnessId) return h;
+								const { designDevice: _old, ...rest } = h;
+								return device === undefined ? rest : { ...rest, designDevice: device };
+							}),
+						}
+					: r,
+			),
+		);
+	};
+
 	// #189: clicking + harness again toggles the picker closed.
 	const addHarness = (roomId: string) => setShowPicker((cur) => (cur === roomId ? null : roomId));
 
@@ -360,6 +383,7 @@ export function useHarnessActions(
 		updateHarnessCmd,
 		restartHarness,
 		setHarnessDesignEntry,
+		setHarnessDesignDevice,
 		addHarness,
 	};
 }

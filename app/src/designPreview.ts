@@ -241,9 +241,17 @@ export const pushBeacon = (list: readonly Beacon[], b: Beacon): Beacon[] =>
 	list.length >= MAX_BEACONS ? [...list] : [...list, b];
 
 /** `base` (ends with `/`) + the worktree-relative `entry`, each path
- *  segment percent-encoded, plus a `?v=` cache-buster. */
-export const previewUrl = (base: string, entry: string, version: number): string =>
-	`${base}${entry.split("/").map(encodeURIComponent).join("/")}?v=${version}`;
+ *  segment percent-encoded, plus a `?v=` cache-buster and any extra
+ *  query `params` (URI-encoded, appended after `v`). */
+export const previewUrl = (
+	base: string,
+	entry: string,
+	version: number,
+	params: [string, string][] = [],
+): string =>
+	`${base}${entry.split("/").map(encodeURIComponent).join("/")}?v=${version}${params
+		.map(([k, v]) => `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+		.join("")}`;
 
 export const RETRY_FIRST_MS = 150;
 export const RETRY_MAX_MS = 2000;

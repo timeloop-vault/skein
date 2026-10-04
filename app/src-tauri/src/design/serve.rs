@@ -6,12 +6,13 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Path as UrlPath, State};
+use axum::extract::{Path as UrlPath, RawQuery, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 
 use super::PreviewState;
+use super::device::device_shims;
 use super::rewrite::rewrite_html;
 
 const PICKER: &str = include_str!("picker.js");
@@ -182,6 +183,7 @@ fn plain(status: StatusCode) -> Response {
 async fn serve_file(
     State(state): State<Arc<PreviewState>>,
     UrlPath((token, path)): UrlPath<(String, String)>,
+    RawQuery(query): RawQuery,
 ) -> Response {
     let Some(root) = state.root_for(&token) else {
         return plain(StatusCode::NOT_FOUND);
@@ -214,16 +216,17 @@ async fn serve_file(
     let ctype = content_type(&full);
     let body = if ctype.starts_with("text/html") {
         match String::from_utf8(bytes) {
-            Ok(src) => rewrite_html(
-                &src,
-                PICKER,
-                &[
+            Ok(src) => {
+                let device = device_shims(query.as_deref().unwrap_or_default());
+                let mut extras: Vec<(&str, &str)> =
+                    device.iter().map(|(a, s)| (*a, s.as_str())).collect();
+                extras.extend([
                     ("data-skein-tokens", TOKENS),
                     ("data-skein-editor", EDITOR),
                     ("data-skein-proposals", PROPOSALS),
-                ],
-            )
-            .into_bytes(),
+                ]);
+                rewrite_html(&src, PICKER, &extras).into_bytes()
+            }
             Err(e) => e.into_bytes(),
         }
     } else {
@@ -474,5 +477,23 @@ mod tests {
         assert!(body.contains("data-skein-proposals"));
         assert!(body.contains("__skeinPickerApi"));
         assert!(body.contains("data-plugins=\"transform-react-jsx-source\""));
+        assert!(!body.contains("data-skein-device"));
+
+        // #528: `dpr` in the query injects the device shim, before the others.
+        let body = get(&format!("{base}/preview/{ta}/page.html?v=1&dpr=2"))
+            .await
+            .text()
+            .await
+            .unwrap();
+        assert!(body.contains("data-skein-device"));
+        assert!(body.contains("var d=2;"));
+        assert!(body.contains("devicePixelRatio"));
+        assert!(body.find("data-skein-device") < body.find("data-skein-tokens"));
+        let body = get(&format!("{base}/preview/{ta}/page.html?v=1&dpr=99"))
+            .await
+            .text()
+            .await
+            .unwrap();
+        assert!(!body.contains("data-skein-device"));
     }
 }

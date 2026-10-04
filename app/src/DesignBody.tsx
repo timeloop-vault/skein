@@ -6,7 +6,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DesignComments } from "./DesignComments.tsx";
+import { DesignDeviceControl } from "./DesignDeviceControl.tsx";
+import { DesignDeviceStage } from "./DesignDeviceStage.tsx";
 import { DesignEditPanel } from "./DesignEditPanel.tsx";
+import { type DesignDevice, deviceParams } from "./designDevice.ts";
 import {
 	type Beacon,
 	type HostMessage,
@@ -32,6 +35,8 @@ interface DesignBodyProps {
 	visible: boolean;
 	entry: string | undefined;
 	onEntryChange: (entry: string) => void;
+	device: DesignDevice | undefined;
+	onDeviceChange: (device: DesignDevice | undefined) => void;
 }
 
 export const DesignBody = ({
@@ -41,6 +46,8 @@ export const DesignBody = ({
 	visible,
 	entry,
 	onEntryChange,
+	device,
+	onDeviceChange,
 }: DesignBodyProps) => {
 	const { base, entries, error, version, retry, reload } = useDesignPreview(roomId);
 	const [beacons, setBeacons] = useState<Beacon[]>([]);
@@ -78,7 +85,12 @@ export const DesignBody = ({
 		}
 	}, [entry, entries, onEntryChange]);
 
-	const url = base !== null && entry !== undefined ? previewUrl(base, entry, version) : null;
+	// Only the device's URL params (DPR) reach the URL: a size change must
+	// not reload the page.
+	const url =
+		base !== null && entry !== undefined
+			? previewUrl(base, entry, version, deviceParams(device))
+			: null;
 
 	// A new load: forget the last one's beacons and readiness.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: url is the trigger
@@ -221,6 +233,7 @@ export const DesignBody = ({
 						</option>
 					))}
 				</select>
+				<DesignDeviceControl device={device} onChange={onDeviceChange} />
 				<button type="button" title="Reload" onClick={reload}>
 					↻
 				</button>
@@ -268,14 +281,16 @@ export const DesignBody = ({
 				</div>
 			) : url !== null ? (
 				<div className="dp-main">
-					<iframe
-						ref={frameRef}
-						className="dp-frame"
-						title="Design preview"
-						sandbox="allow-scripts"
-						src={url}
-						onLoad={onFrameLoad}
-					/>
+					<DesignDeviceStage device={device}>
+						<iframe
+							ref={frameRef}
+							className="dp-frame"
+							title="Design preview"
+							sandbox="allow-scripts"
+							src={url}
+							onLoad={onFrameLoad}
+						/>
+					</DesignDeviceStage>
 					{edit.target !== null && (
 						<DesignEditPanel
 							target={edit.target}

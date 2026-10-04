@@ -109,6 +109,7 @@ export const RoomWorkspace = (p: RoomWorkspaceProps) => {
 							onCloseHarness={p.actions.closeHarness}
 							onHarnessCmdChange={p.actions.updateHarnessCmd}
 							onDesignEntryChange={p.actions.setHarnessDesignEntry}
+							onDesignDeviceChange={p.actions.setHarnessDesignDevice}
 							opencodePorts={p.store.opencodePorts}
 							onOpencodeSessionCaptured={(harnessId, sid) =>
 								p.creation.setHarnessSessionId(r.id, harnessId, sid)
