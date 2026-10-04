@@ -17,6 +17,7 @@
 //! | `design.panes` | `{roomId}` | `{panes: [{harnessId, mounted, ready}]}` |
 //! | `design.state` | `{roomId, harnessId}` | `{entry, device, ready, loadFailed, errors[], selected, scroll}` |
 //! | `design.open_entry` | `{roomId, harnessId, entry}` | `{entry, previous}` |
+//! | `design.set_device` | `{roomId, harnessId, device}` | `{device, previous}` |
 //! | `design.show_element` | `{roomId, harnessId, selector?, anchor?}` | `{tier, highlighted, element, count?, score?}` |
 //!
 //! A frontend error string is prefixed with a code (`not_mounted: …`,
@@ -46,6 +47,7 @@ const PANES_TIMEOUT: Duration = Duration::from_secs(3);
 const STATE_TIMEOUT: Duration = Duration::from_secs(5);
 const OPEN_ENTRY_TIMEOUT: Duration = Duration::from_secs(10);
 const SHOW_ELEMENT_TIMEOUT: Duration = Duration::from_secs(10);
+const SET_DEVICE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How many entries an `unknown_entry` refusal lists.
 const UNKNOWN_ENTRY_LIST_CAP: usize = 20;
@@ -67,6 +69,23 @@ pub struct OpenDesignEntryArgs {
     #[serde(default)]
     pub harness: Option<String>,
     pub entry: String,
+}
+
+/// Present-but-null must stay distinguishable from absent, so a present
+/// value (null included) lands as `Some`.
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(d).map(Some)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetDesignDeviceArgs {
+    #[serde(default)]
+    pub harness: Option<String>,
+    /// Required. An object sets the device, `null` clears it; the fields
+    /// are validated by the frontend. `None` here means the key was absent.
+    #[serde(default, deserialize_with = "present")]
+    pub device: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -193,7 +212,7 @@ fn guard_write(
         log_outcome(verb, &caller.room_id, "", "rate_limited");
         return Err(VerbError::Refused(format!(
             "rate_limited: this room has attempted {DESIGN_CONTROL_RATE_LIMIT} \
-             open_design_entry/show_element calls in the last minute"
+             open_design_entry/set_design_device/show_element calls in the last minute"
         )));
     }
     Ok(())
@@ -362,6 +381,40 @@ pub async fn open_design_entry(
 
 fn bad_arguments(msg: &str) -> VerbError {
     VerbError::Refused(format!("bad_arguments: {msg}"))
+}
+
+/// Set (object) or clear (`null`) a design harness's device setting.
+/// Persisted state, so no mounted pane is needed; the frontend validates
+/// the fields and answers `bad_arguments: …` for a bad one.
+pub async fn set_design_device(
+    state: &AgentApiState,
+    caller: &Caller,
+    args: &SetDesignDeviceArgs,
+    harness_control_enabled: bool,
+) -> VerbResult<Value> {
+    let device = match &args.device {
+        None => {
+            return Err(bad_arguments(
+                "`device` is required (an object, or null to clear)",
+            ));
+        }
+        Some(v @ (Value::Object(_) | Value::Null)) => v.clone(),
+        Some(_) => return Err(bad_arguments("`device` must be an object or null")),
+    };
+    guard_write(state, caller, "set_design_device", harness_control_enabled)?;
+    let room = caller_room(state, caller)?;
+    let harness = pick_harness(&room, args.harness.as_deref())?;
+    let answer = ask(
+        state,
+        "set_design_device",
+        caller,
+        &harness.id,
+        "design.set_device",
+        json!({ "roomId": room.id, "harnessId": harness.id, "device": device }),
+        SET_DEVICE_TIMEOUT,
+    )
+    .await?;
+    with_harness_id(answer, &harness.id)
 }
 
 /// Validate the selector/anchor pair before anything else runs.

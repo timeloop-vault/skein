@@ -39,8 +39,8 @@ export const DPR_CHOICES: readonly number[] = [1, 2, 3];
 export const CUSTOM_MIN = 100;
 export const CUSTOM_MAX = 4000;
 
-const DPR_MIN = 0.5;
-const DPR_MAX = 4;
+export const DPR_MIN = 0.5;
+export const DPR_MAX = 4;
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const clampDim = (n: number): number => Math.min(CUSTOM_MAX, Math.max(CUSTOM_MIN, Math.round(n)));
@@ -70,6 +70,56 @@ export const normalizeDevice = (raw: unknown): DesignDevice | undefined => {
 	if (isNum(r.dpr) && r.dpr >= DPR_MIN && r.dpr <= DPR_MAX) out.dpr = r.dpr;
 	if (r.touch === true) out.touch = true;
 	return out;
+};
+
+const DEVICE_KEYS = ["preset", "width", "height", "landscape", "dpr", "touch"];
+
+/** Strict counterpart of `normalizeDevice` for agent input (#548): refuses
+ *  what the toolbar would silently clamp or drop. null clears the setting.
+ *  An accepted value is passed through `normalizeDevice`, so it is exactly
+ *  what the toolbar would store. */
+export const validateDevice = (
+	raw: unknown,
+): { ok: true; value: DesignDevice | undefined } | { ok: false; error: string } => {
+	const refuse = (m: string) => ({ ok: false as const, error: m });
+	if (raw === null) return { ok: true, value: undefined };
+	if (typeof raw !== "object" || Array.isArray(raw)) {
+		return refuse("device must be an object or null");
+	}
+	const r = raw as Record<string, unknown>;
+	const unknown = Object.keys(r).filter((k) => !DEVICE_KEYS.includes(k));
+	if (unknown.length > 0) {
+		return refuse(
+			`unknown device keys: ${unknown.join(", ")} (allowed: ${DEVICE_KEYS.join(", ")})`,
+		);
+	}
+	const preset = r.preset;
+	const ids = DEVICE_PRESETS.map((p) => p.id);
+	if (typeof preset !== "string" || !["none", "custom", ...ids].includes(preset)) {
+		return refuse(`preset must be one of: none, custom, ${ids.join(", ")}`);
+	}
+	if (preset === "custom") {
+		for (const k of ["width", "height"] as const) {
+			const v = r[k];
+			if (v === undefined) return refuse(`${k} is required with preset "custom"`);
+			if (!isNum(v) || !Number.isInteger(v) || v < CUSTOM_MIN || v > CUSTOM_MAX) {
+				return refuse(`${k} must be an integer from ${CUSTOM_MIN} to ${CUSTOM_MAX}`);
+			}
+		}
+	} else if (r.width !== undefined || r.height !== undefined) {
+		return refuse('width and height are only allowed with preset "custom"');
+	}
+	if (r.landscape !== undefined) {
+		if (typeof r.landscape !== "boolean") return refuse("landscape must be a boolean");
+		if (preset === "none") return refuse('landscape is not allowed with preset "none"');
+	}
+	if (r.dpr !== undefined && (!isNum(r.dpr) || r.dpr < DPR_MIN || r.dpr > DPR_MAX)) {
+		return refuse(`dpr must be a number from ${DPR_MIN} to ${DPR_MAX}`);
+	}
+	if (r.touch !== undefined && typeof r.touch !== "boolean") {
+		return refuse("touch must be a boolean");
+	}
+	return { ok: true, value: normalizeDevice(r) };
 };
 
 /** The device's size in portrait CSS px (orientation undone), as seeded into

@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::tests::{Fixture, agent_api_state, caller_for, fixture, harness, room, save};
-use super::verbs::{self, DesignTargetArgs, OpenDesignEntryArgs, ShowElementArgs, VerbError};
+use super::verbs::{
+    self, DesignTargetArgs, OpenDesignEntryArgs, SetDesignDeviceArgs, ShowElementArgs, VerbError,
+};
 use crate::agent_api::state::AgentApiState;
 use crate::db::Room;
 
@@ -52,6 +54,7 @@ fn ok_everywhere(kind: &str, args: &Value) -> Result<Value, String> {
         ] })),
         "design.state" => Ok(json!({ "entry": "a.html", "ready": true })),
         "design.open_entry" => Ok(json!({ "entry": args["entry"], "previous": "a.html" })),
+        "design.set_device" => Ok(json!({ "device": args["device"], "previous": null })),
         "design.show_element" => Ok(json!({ "tier": "exact", "highlighted": true })),
         other => Err(format!("unexpected kind {other:?}")),
     }
@@ -512,4 +515,164 @@ async fn show_element_passes_the_frontend_result_through() {
     assert_eq!(out["count"], json!(3));
     assert_eq!(out["score"], json!(0.8));
     assert_eq!(out["harnessId"], json!("d1"));
+}
+
+// ── set_design_device ───────────────────────────────────────────────────
+
+fn device_args(h: Option<&str>, device: Option<Value>) -> SetDesignDeviceArgs {
+    SetDesignDeviceArgs {
+        harness: h.map(str::to_owned),
+        device,
+    }
+}
+
+#[test]
+fn device_null_and_absent_deserialize_differently() {
+    let absent: SetDesignDeviceArgs = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(absent.device, None);
+    let null: SetDesignDeviceArgs = serde_json::from_value(json!({ "device": null })).unwrap();
+    assert_eq!(null.device, Some(Value::Null));
+}
+
+#[tokio::test]
+async fn set_device_needs_an_object_or_null_before_any_guard_or_frontend_call() {
+    let f = fixture();
+    let dir = folder();
+    save(&f.db, &[design_room("A", &dir, &["d1"])]);
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let (state, calls) = recording(&f, ok_everywhere);
+    for device in [
+        None,
+        Some(json!("iphone-14")),
+        Some(json!(3)),
+        Some(json!([1])),
+    ] {
+        let e = verbs::set_design_device(&state, &caller, &device_args(None, device.clone()), true)
+            .await
+            .unwrap_err();
+        assert!(is_refused(&e, "bad_arguments:"), "{device:?} -> {e:?}");
+    }
+    assert!(calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn set_device_forwards_an_object_and_null_unchanged() {
+    let f = fixture();
+    let dir = folder();
+    save(&f.db, &[design_room("A", &dir, &["d1"])]);
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let (state, calls) = recording(&f, ok_everywhere);
+    let dev = json!({ "preset": "iphone-14", "touch": true });
+    let out =
+        verbs::set_design_device(&state, &caller, &device_args(None, Some(dev.clone())), true)
+            .await
+            .unwrap();
+    assert_eq!(out["device"], dev);
+    assert_eq!(out["harnessId"], json!("d1"));
+    let out =
+        verbs::set_design_device(&state, &caller, &device_args(None, Some(Value::Null)), true)
+            .await
+            .unwrap();
+    assert_eq!(out["device"], Value::Null);
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].0, "design.set_device");
+    assert_eq!(
+        calls[0].1,
+        json!({ "roomId": "A", "harnessId": "d1", "device": dev })
+    );
+    assert_eq!(
+        calls[1].1,
+        json!({ "roomId": "A", "harnessId": "d1", "device": null })
+    );
+}
+
+#[tokio::test]
+async fn set_device_is_disabled_by_the_kill_switch() {
+    let f = fixture();
+    let dir = folder();
+    save(&f.db, &[design_room("A", &dir, &["d1"])]);
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let (state, calls) = recording(&f, ok_everywhere);
+    let e = verbs::set_design_device(
+        &state,
+        &caller,
+        &device_args(None, Some(Value::Null)),
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(is_refused(&e, "disabled:"), "{e:?}");
+    assert!(calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn set_device_shares_the_design_control_rate_cap() {
+    let f = fixture();
+    let dir = folder();
+    save(&f.db, &[design_room("A", &dir, &["d1"])]);
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let (state, _) = recording(&f, ok_everywhere);
+    for n in 0..5 {
+        verbs::set_design_device(&state, &caller, &device_args(None, Some(Value::Null)), true)
+            .await
+            .unwrap_or_else(|e| panic!("device {n}: {e:?}"));
+        verbs::open_design_entry(&state, &caller, &open_args(None, "a.html"), true)
+            .await
+            .unwrap_or_else(|e| panic!("open {n}: {e:?}"));
+    }
+    let e = verbs::set_design_device(&state, &caller, &device_args(None, Some(Value::Null)), true)
+        .await
+        .unwrap_err();
+    assert!(is_refused(&e, "rate_limited:"), "{e:?}");
+}
+
+#[tokio::test]
+async fn set_device_refuses_a_foreign_or_non_design_harness() {
+    let f = fixture();
+    let dir = folder();
+    save(
+        &f.db,
+        &[
+            design_room("A", &dir, &["d1"]),
+            design_room("B", &dir, &["dB"]),
+        ],
+    );
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let (state, calls) = recording(&f, ok_everywhere);
+    for id in ["dB", "A-claude"] {
+        let e = verbs::set_design_device(
+            &state,
+            &caller,
+            &device_args(Some(id), Some(Value::Null)),
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(e, VerbError::NotFound(_)), "{id}: {e:?}");
+    }
+    assert!(calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn set_device_surfaces_the_frontends_bad_arguments() {
+    let f = fixture();
+    let dir = folder();
+    save(&f.db, &[design_room("A", &dir, &["d1"])]);
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let (state, _) = recording(&f, |_, _| {
+        Err("bad_arguments: unknown device key \"zoom\"".into())
+    });
+    let e = verbs::set_design_device(
+        &state,
+        &caller,
+        &device_args(None, Some(json!({ "zoom": 2 }))),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&e, VerbError::Refused(m) if m.starts_with("bad_arguments:") && m.contains("zoom")),
+        "{e:?}"
+    );
 }

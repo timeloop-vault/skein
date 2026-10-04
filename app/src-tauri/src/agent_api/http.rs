@@ -50,7 +50,9 @@ use super::auth::{self, AuthError, Caller, HARNESS_HEADER};
 use super::mcp;
 use super::state::AgentApiState;
 use super::verbs::{MailContext, MailPolicy, VerbError};
-use design::{api_design_entry, api_design_harnesses, api_design_show, api_design_state};
+use design::{
+    api_design_device, api_design_entry, api_design_harnesses, api_design_show, api_design_state,
+};
 use harnesses::{api_close_harness, api_list_harnesses, api_open_harness};
 use hooks::{api_harness_permission, api_harness_session_end, api_harness_session_start};
 use info::api_info;
@@ -101,6 +103,7 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
         .route("/api/design/harnesses", get(api_design_harnesses))
         .route("/api/design/state", get(api_design_state))
         .route("/api/design/entry", post(api_design_entry))
+        .route("/api/design/device", post(api_design_device))
         .route("/api/design/show", post(api_design_show))
         .route("/api/harness/permission", post(api_harness_permission))
         .route(
