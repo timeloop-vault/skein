@@ -936,10 +936,18 @@ no-op.
 
 The body is Claude Code's own hook payload — it also carries
 `session_id`, `cwd`, `transcript_path`, `permission_mode` and sometimes
-`model` — and none of it is Skein's to police. Only `source` is read,
-purely for the log line, and a body that is not JSON at all still
-answers `204`: a future payload shape change must not start breaking a
-harness's launch.
+`model` — and none of it is Skein's to police. Only `session_id` and
+`source` are read (forwarded to the frontend, and `source` logged), and
+a body that is not JSON at all still answers `204`: a future payload
+shape change must not start breaking a harness's launch.
+
+The frontend uses them to follow a conversation: `clear`, `resume` and
+`fork` re-point the harness at the reported id at once (#116). A
+`startup` carrying a different id from the bound one is adopted only
+when its transcript exists on disk while the bound one's does not
+(#539 — Claude can start under a second id and write everything there);
+if the bound transcript exists, the ping is the #78455 phantom or a
+nested child and is dropped.
 
 Duplicate fires must stay harmless, and not only because of the
 matcher-less hook above: upstream anthropics/claude-code#78455 reports
@@ -950,7 +958,8 @@ may hang a consume-once side effect on this route — emitting the event
 twice is fine.
 
 A successful call emits `skein://harness-session-start` —
-`{ roomId, harnessId }` — and answers `204 No Content`.
+`{ roomId, harnessId, sessionId, source }` (the last two nullable) — and
+answers `204 No Content`.
 
 ### The session-end signal (#318)
 

@@ -216,12 +216,17 @@ export const lifecycleMethods = {
 	/// left alone: `permission` outranks it (#86), and `exited` /
 	/// `spawning` / `idle` / `waiting` aren't this event's business.
 	/// No-op for an unknown id.
-	sessionSwitched(id: string, source: "clear" | "resume" | "fork"): void {
+	///
+	/// `"startup"` (#539, a verified adoption of a second startup id) forgets
+	/// and disarms the same way but changes NO phase: Claude never returned
+	/// to a prompt, and the re-attached tail's replay owns the phase.
+	sessionSwitched(id: string, source: "clear" | "resume" | "fork" | "startup"): void {
 		const cur = store.get(id);
 		if (!cur) return;
 		subagents.forget(id);
 		backgroundTasks.forget(id);
 		disarmDelegation(id);
+		if (source === "startup") return;
 		if (cur.phase !== "running") return;
 		setPhase(
 			id,

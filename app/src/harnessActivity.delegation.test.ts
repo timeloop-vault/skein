@@ -405,6 +405,19 @@ describe("sessionSwitched (#116)", () => {
 		subagents.forget(id);
 	});
 
+	it("startup keeps the phase running (#539) but still forgets subagents", () => {
+		const id = runningHarness();
+		startLiveSubagent(id, "a1");
+		expect(subagents.workingCount(id)).toBe(1);
+
+		harnessActivity.sessionSwitched(id, "startup");
+
+		expect(harnessActivity.get(id)?.phase).toBe("running");
+		expect(subagents.workingCount(id)).toBe(0);
+		harnessActivity.forget(id);
+		subagents.forget(id);
+	});
+
 	it("permission stays permission", () => {
 		const id = runningHarness();
 		harnessActivity.setPermissionFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudePermission, "Bash");
