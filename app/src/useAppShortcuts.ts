@@ -33,6 +33,7 @@ export function useAppShortcuts(a: {
 	lastUsedByGroupRef: MutableRefObject<Map<string, string>>;
 	setShowPalette: Dispatch<SetStateAction<boolean>>;
 	setShowSettings: Dispatch<SetStateAction<boolean>>;
+	toggleControlCenterRef: MutableRefObject<() => void>;
 }) {
 	const { store, nav, actions, creation, settings } = a;
 	const { activeRoomId } = store;
@@ -81,6 +82,7 @@ export function useAppShortcuts(a: {
 		cycleAlertedHarnessRef,
 		toggleFilesRef,
 		toggleReviewRef,
+		a.toggleControlCenterRef,
 		a.lastUsedByGroupRef,
 		store.setActiveRoomId,
 		a.setShowPalette,

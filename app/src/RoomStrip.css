@@ -219,3 +219,11 @@
 	color: var(--fg-0);
 	background: var(--bg-1);
 }
+.sk-tab-ccbtn {
+	border-left: 1px solid var(--line);
+	margin-left: 0;
+}
+.sk-tab-ccbtn[aria-pressed="true"] {
+	color: var(--fg-0);
+	background: var(--bg-1);
+}

@@ -40,6 +40,38 @@ pub async fn mail_unread(
     .map_err(|e| e.to_string())?
 }
 
+/// A room's newest `status:` mail (#492): what the Control Center shows.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastStatusDto {
+    pub room_id: String,
+    pub body: String,
+    pub created_ms: i64,
+}
+
+/// The newest `status:` message each room has sent, one entry per room
+/// that has sent any. Read-only; the frontend refreshes it on
+/// `skein://mail-changed`.
+#[tauri::command]
+pub async fn mail_last_status_by_room(
+    db: tauri::State<'_, Arc<Database>>,
+) -> Result<Vec<LastStatusDto>, String> {
+    let db = Arc::clone(&db);
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(db
+            .latest_status_by_room()?
+            .into_iter()
+            .map(|(room_id, body, created_ms)| LastStatusDto {
+                room_id,
+                body,
+                created_ms,
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The frontend's answer to a `skein://agent-request` it received
 /// (#328). `error` wins over `ok` when both are somehow present — an
 /// error is the frontend actively saying something went wrong, and

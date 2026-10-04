@@ -32,6 +32,7 @@ export function useKeyboardShortcuts(
 	cycleAlertedHarnessRef: MutableRefObject<(delta: number) => void>,
 	toggleFilesRef: MutableRefObject<() => void>,
 	toggleReviewRef: MutableRefObject<() => void>,
+	toggleControlCenterRef: MutableRefObject<() => void>,
 	lastUsedByGroupRef: MutableRefObject<Map<string, string>>,
 	setActiveRoomId: Dispatch<SetStateAction<string>>,
 	setShowPalette: Dispatch<SetStateAction<boolean>>,
@@ -102,6 +103,9 @@ export function useKeyboardShortcuts(
 					// back again — the same there-and-back shape as Mod+E,
 					// so the chord is a toggle rather than a one-way door.
 					toggleReviewRef.current();
+					break;
+				case "controlCenter":
+					toggleControlCenterRef.current(); // #492
 					break;
 				case "settings":
 					setShowSettings(true);

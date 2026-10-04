@@ -75,6 +75,7 @@ export type ShortcutAction =
 	| "prevAlertedHarness"
 	| "fontInc"
 	| "fontDec"
+	| "controlCenter"
 	| "jumpRoom";
 
 export interface ShortcutMatch {
@@ -103,6 +104,8 @@ const BINDINGS: Binding[] = [
 	// free; agreed with Stefan before wiring, per the CLAUDE.md rule.
 	{ code: "KeyR", action: "review" },
 	{ code: "Comma", action: "settings" },
+	// 0 = all rooms, beside Mod+1-9 for the nth room (#492). Agreed with Stefan 2026-10-04.
+	{ code: "Digit0", action: "controlCenter" },
 	{ code: "KeyJ", action: "nextAlertedRoom" },
 	{ code: "KeyL", action: "nextAlertedHarness" },
 	{ code: "Equal", action: "fontInc" },
@@ -164,6 +167,7 @@ export const hints = {
 	newRoom: `${modLabel} N`,
 	files: `${modLabel} E`,
 	review: `${modLabel} R`,
+	controlCenter: `${modLabel} 0`,
 	addHarness: `${modLabel} ⇧ H`,
 	closeRoom: `${modLabel} W`,
 	reload: `${modLabel} ⇧ R`,

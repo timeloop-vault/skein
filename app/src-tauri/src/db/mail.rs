@@ -290,4 +290,30 @@ impl Database {
         .optional()
         .map_err(|e| e.to_string())
     }
+
+    /// For every room that has sent one, its newest message whose body
+    /// starts with `status:` (the match is case-sensitive lowercase — the
+    /// mail protocol is lowercase — with leading spaces allowed) as
+    /// `(from_room_id, body, created_ms)` — #492's Control Center. One
+    /// query; ties on `created_ms` go to the later insert (rowid).
+    pub fn latest_status_by_room(&self) -> Result<Vec<(String, String, i64)>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT from_room_id, body, created_ms FROM ( \
+                     SELECT from_room_id, body, created_ms, \
+                            ROW_NUMBER() OVER ( \
+                                PARTITION BY from_room_id \
+                                ORDER BY created_ms DESC, rowid DESC) AS rn \
+                     FROM harness_messages \
+                     WHERE substr(ltrim(body), 1, 7) = 'status:') \
+                 WHERE rn = 1 \
+                 ORDER BY from_room_id",
+            )
+            .map_err(|e| e.to_string())?;
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
 }

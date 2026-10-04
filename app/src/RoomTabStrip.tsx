@@ -1,6 +1,7 @@
 import type { ComponentProps } from "react";
 import { GroupRow, type RenameTarget, RoomStrip } from "./RoomStrip.tsx";
 import type { StripSegment } from "./roomGroups.ts";
+import { hints } from "./shortcuts.ts";
 import "./RoomStrip.css";
 
 type StripProps = ComponentProps<typeof RoomStrip>;
@@ -22,6 +23,8 @@ export const RoomTabStrip = ({
 	onStartRename,
 	onRename,
 	onRenameEnd,
+	controlCenterOpen,
+	onToggleControlCenter,
 }: {
 	stripSegments: StripSegment[];
 	activeSegment: StripSegment | undefined;
@@ -37,6 +40,8 @@ export const RoomTabStrip = ({
 	onStartRename: StripProps["onStartRename"];
 	onRename: StripProps["onRename"];
 	onRenameEnd: StripProps["onRenameEnd"];
+	controlCenterOpen: boolean;
+	onToggleControlCenter: () => void;
 }) => (
 	<>
 		{/* #271: data-drag-strip lets useTabDrag's hitTest resolve a drop
@@ -57,6 +62,15 @@ export const RoomTabStrip = ({
 			<div className="sk-tab-newbtn" onClick={() => void openNewRoom()} title="New room">
 				+
 			</div>
+			<button
+				type="button"
+				className="sk-tab-newbtn sk-tab-ccbtn"
+				aria-pressed={controlCenterOpen}
+				title={`Control Center (${hints.controlCenter})`}
+				onClick={onToggleControlCenter}
+			>
+				▦
+			</button>
 		</div>
 		{/* #76: the second row — the active group's own rooms, main
 		    pinned first — only when the active room is IN a group. A

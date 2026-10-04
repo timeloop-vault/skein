@@ -31,6 +31,7 @@ export interface BuildPaletteItemsParams {
 	openNewRoom: () => Promise<void>;
 	toggleFilesRef: MutableRefObject<() => void>;
 	toggleReviewRef: MutableRefObject<() => void>;
+	toggleControlCenter: () => void;
 	addHarness: (roomId: string) => void;
 	startRenameRoom: (roomId: string, host?: "group" | "tab") => void;
 	closeRoom: (id: string) => Promise<void>;
@@ -58,6 +59,7 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 		openNewRoom,
 		toggleFilesRef,
 		toggleReviewRef,
+		toggleControlCenter,
 		addHarness,
 		startRenameRoom,
 		closeRoom,
@@ -96,6 +98,12 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 		label: "New room",
 		hint: hints.newRoom,
 		invoke: () => void openNewRoom(),
+	});
+	paletteItems.push({
+		id: "cmd:control-center",
+		label: "Control Center",
+		hint: hints.controlCenter,
+		invoke: toggleControlCenter,
 	});
 	if (room?.cwd) {
 		paletteItems.push({
