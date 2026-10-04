@@ -92,7 +92,12 @@ describe("parseStatusLine", () => {
 describe("roomAttention", () => {
 	it("permission is blocked", () => {
 		const a = roomAttention(snap("r", { harnesses: [h("permission", { since: 5 })] }));
-		expect(a).toEqual({ rank: "blocked", reason: "permission", since: 5 });
+		expect(a).toEqual({
+			rank: "blocked",
+			reason: "permission",
+			since: 5,
+			harnessId: "h-permission",
+		});
 	});
 
 	it("permission beats approved-stale review and waiting", () => {
@@ -109,7 +114,7 @@ describe("roomAttention", () => {
 		const a = roomAttention(
 			snap("r", { harnesses: [h("idle")], lastStatus: status("status: blocked — need you", 42) }),
 		);
-		expect(a).toEqual({ rank: "blocked", reason: "blocked on you", since: 42 });
+		expect(a).toMatchObject({ rank: "blocked", reason: "blocked on you", since: 42 });
 	});
 
 	it("blocked status is ignored while a harness runs", () => {
@@ -131,7 +136,7 @@ describe("roomAttention", () => {
 				lastStatus: status("status: done — x", 7),
 			}),
 		);
-		expect(a).toEqual({ rank: "review", reason: "sign-off stale", since: 7 });
+		expect(a).toMatchObject({ rank: "review", reason: "sign-off stale", since: 7 });
 	});
 
 	it("stale approved sign-off does not rank while a harness is running", () => {
@@ -186,7 +191,11 @@ describe("roomAttention", () => {
 				lastStatus: status("status: review — pr", 9),
 			}),
 		);
-		expect(a).toEqual({ rank: "review", reason: "ready for review, 3 open threads", since: 9 });
+		expect(a).toMatchObject({
+			rank: "review",
+			reason: "ready for review, 3 open threads",
+			since: 9,
+		});
 		const b = roomAttention(snap("r", { lastStatus: status("status: review — pr", 9) }));
 		expect(b.reason).toBe("ready for review");
 	});
@@ -215,7 +224,7 @@ describe("roomAttention", () => {
 				harnesses: [h("waiting", { id: "a", since: 20 }), h("waiting", { id: "b", since: 10 })],
 			}),
 		);
-		expect(a).toEqual({ rank: "waiting", reason: "your turn", since: 10 });
+		expect(a).toEqual({ rank: "waiting", reason: "your turn", since: 10, harnessId: "b" });
 	});
 
 	it("waiting beats working", () => {
@@ -231,8 +240,33 @@ describe("roomAttention", () => {
 		expect(i).toMatchObject({ rank: "idle", since: 3 });
 	});
 
+	it("harnessId names the harness driving the rank", () => {
+		const shell = h("idle", { id: "shell" });
+		expect(
+			roomAttention(snap("r", { harnesses: [shell, h("waiting", { id: "cc2" })] })).harnessId,
+		).toBe("cc2");
+		expect(
+			roomAttention(snap("r", { harnesses: [shell, h("permission", { id: "p" })] })).harnessId,
+		).toBe("p");
+		expect(
+			roomAttention(snap("r", { harnesses: [shell, h("running", { id: "run" })] })).harnessId,
+		).toBe("run");
+		expect(
+			roomAttention(snap("r", { harnesses: [shell, h("exited", { id: "x" })] })).harnessId,
+		).toBe("shell");
+		const rev = roomAttention(
+			snap("r", { harnesses: [shell], lastStatus: status("status: review — x") }),
+		);
+		expect(rev).toMatchObject({ rank: "review", harnessId: "shell" });
+	});
+
 	it("no harnesses is idle", () => {
-		expect(roomAttention(snap("r"))).toEqual({ rank: "idle", reason: "idle", since: null });
+		expect(roomAttention(snap("r"))).toEqual({
+			rank: "idle",
+			reason: "idle",
+			since: null,
+			harnessId: null,
+		});
 	});
 });
 
@@ -329,7 +363,12 @@ describe("buildControlCenter", () => {
 
 	it("lists rooms missing snapshots as idle", () => {
 		const out = buildControlCenter(buildStrip([room("x")]), new Map());
-		expect(out[0]?.rows[0]?.attention).toEqual({ rank: "idle", reason: "idle", since: null });
+		expect(out[0]?.rows[0]?.attention).toEqual({
+			rank: "idle",
+			reason: "idle",
+			since: null,
+			harnessId: null,
+		});
 		expect(out[0]?.rows[0]?.snap.roomId).toBe("x");
 	});
 });

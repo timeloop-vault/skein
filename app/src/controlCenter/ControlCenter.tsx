@@ -39,27 +39,40 @@ export function ControlCenter({
 			{!visible ? null : sections.length === 0 || rooms.length === 0 ? (
 				<div className="cc-empty">No open rooms.</div>
 			) : (
-				sections.map((sec) => (
-					<section className="cc-section" key={sec.key} data-rank={sec.rank}>
-						{sec.isGroup ? (
-							<header className="cc-group">
-								<span className="cc-group-label">{sec.label}</span>
-								<span className="cc-group-count">
-									{sec.rows.length} {sec.rows.length === 1 ? "room" : "rooms"}
+				<div className="cc-list">
+					<div className="cc-cols" aria-hidden="true">
+						<span>Room</span>
+						<span>Attention</span>
+						<span>Driving</span>
+						<span>Last status</span>
+						<span>Review</span>
+						<span>Active</span>
+						<span className="cc-end">Harnesses</span>
+					</div>
+					{sections.map((sec) => (
+						<section className="cc-section" key={sec.key} data-rank={sec.rank}>
+							<header className="cc-group" data-group={sec.isGroup}>
+								<span className="cc-group-label">
+									{sec.isGroup ? sec.label : "Standalone room"}
 								</span>
+								{sec.isGroup ? (
+									<span className="cc-group-count">
+										{sec.rows.length} {sec.rows.length === 1 ? "room" : "rooms"}
+									</span>
+								) : null}
 							</header>
-						) : null}
-						{sec.rows.map((row) => (
-							<CCRowView
-								key={row.room.id}
-								row={row}
-								active={row.room.id === activeRoomId}
-								now={now}
-								onFocus={onFocus}
-							/>
-						))}
-					</section>
-				))
+							{sec.rows.map((row) => (
+								<CCRowView
+									key={row.room.id}
+									row={row}
+									active={row.room.id === activeRoomId}
+									now={now}
+									onFocus={onFocus}
+								/>
+							))}
+						</section>
+					))}
+				</div>
 			)}
 		</div>
 	);

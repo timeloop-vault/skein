@@ -219,9 +219,18 @@
 	color: var(--fg-0);
 	background: var(--bg-1);
 }
+/* A <button> carrying the .sk-tab-newbtn look: reset the UA chrome so it
+   matches the div "+" beside it. */
 .sk-tab-ccbtn {
+	box-sizing: content-box;
+	padding: 0;
+	background: transparent;
+	border: 0;
 	border-left: 1px solid var(--line);
 	margin-left: 0;
+	flex: 0 0 auto;
+	font-weight: inherit;
+	line-height: 1;
 }
 .sk-tab-ccbtn[aria-pressed="true"] {
 	color: var(--fg-0);

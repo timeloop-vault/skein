@@ -23,6 +23,11 @@ import {
 
 const REFRESH_MS = 10_000;
 export const CLOCK_MS = 30_000;
+const SYNC_MS = 1_500;
+
+function snapshotSignature(s: HarnessSnapshot): string {
+	return `${s.id}:${s.status}:${s.label}:${s.lastActivityAt ?? ""}:${s.since ?? ""}`;
+}
 
 interface LastStatusRow {
 	roomId: string;
@@ -119,8 +124,27 @@ export function useControlCenterData(
 				subagents.subscribe(id, bump),
 				backgroundTasks.subscribe(id, bump),
 			]);
+		// `harnessActivity.forget` (LiveTerminal unmount/respawn) deletes a
+		// harness's whole listener set, silently dropping the per-id
+		// subscriptions above while harnessKey stays the same. So also bump on
+		// the global transition feed (survives forget), and poll a cheap
+		// signature of what the rows show as the backstop for silent mutations
+		// (lastOutputAt) and for re-created records.
+		const offTransitions = harnessActivity.subscribeTransitions(() => bump());
+		let lastSig = "";
+		const poll = setInterval(() => {
+			const sig = roomsRef.current
+				.flatMap((r) => r.harnesses.map((h) => snapshotSignature(harnessSnapshot(h, null))))
+				.join("|");
+			if (sig !== lastSig) {
+				lastSig = sig;
+				bump();
+			}
+		}, SYNC_MS);
 		return () => {
 			for (const u of unsubs) u();
+			offTransitions();
+			clearInterval(poll);
 		};
 	}, [visible, harnessKey]);
 

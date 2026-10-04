@@ -46,6 +46,9 @@ export interface RoomAttention {
 	rank: Attention;
 	reason: string;
 	since: number | null;
+	/// The harness that drives the rank: the permission/waiting/running one;
+	/// for status-line and sign-off ranks and idle, the lead (first) harness.
+	harnessId: string | null;
 }
 
 export interface ParsedStatusLine {
@@ -117,6 +120,16 @@ function isBusy(h: HarnessSnapshot): boolean {
 	return h.status === "running" || h.status === "spawning";
 }
 
+function oldestOf(hs: readonly HarnessSnapshot[]): HarnessSnapshot | null {
+	let best: HarnessSnapshot | null = null;
+	for (const h of hs) {
+		if (h.since !== null && (best === null || (best.since ?? Infinity) > h.since)) {
+			best = h;
+		}
+	}
+	return best ?? hs[0] ?? null;
+}
+
 function oldest(hs: readonly HarnessSnapshot[]): number | null {
 	let best: number | null = null;
 	for (const h of hs) {
@@ -136,32 +149,49 @@ export function roomAttention(snap: RoomSnapshot): RoomAttention {
 	const superseded = statusMs !== null && lastTurnStart !== null && statusMs < lastTurnStart;
 	const status = lastStatus && !superseded ? parseStatusLine(lastStatus.body) : null;
 
+	const leadId = harnesses[0]?.id ?? null;
 	const permission = harnesses.filter((h) => h.status === "permission");
 	if (permission.length > 0) {
-		return { rank: "blocked", reason: "permission", since: oldest(permission) };
+		return {
+			rank: "blocked",
+			reason: "permission",
+			since: oldest(permission),
+			harnessId: oldestOf(permission)?.id ?? leadId,
+		};
 	}
 	if (status?.state === "blocked" && !busy) {
-		return { rank: "blocked", reason: "blocked on you", since: statusMs };
+		return { rank: "blocked", reason: "blocked on you", since: statusMs, harnessId: leadId };
 	}
 
 	const approvedCurrent = signoff?.approved === true && !signoff.stale;
 	if (signoff?.approved && signoff.stale && !busy) {
-		return { rank: "review", reason: "sign-off stale", since: statusMs };
+		return { rank: "review", reason: "sign-off stale", since: statusMs, harnessId: leadId };
 	}
 	if (status?.state === "review" && !busy && !approvedCurrent) {
 		const open = signoff?.unresolvedCount ?? 0;
 		const reason = open > 0 ? `ready for review, ${open} open threads` : "ready for review";
-		return { rank: "review", reason, since: statusMs };
+		return { rank: "review", reason, since: statusMs, harnessId: leadId };
 	}
 
 	const waiting = harnesses.filter((h) => h.status === "waiting");
 	if (waiting.length > 0) {
-		return { rank: "waiting", reason: "your turn", since: oldest(waiting) };
+		return {
+			rank: "waiting",
+			reason: "your turn",
+			since: oldest(waiting),
+			harnessId: oldestOf(waiting)?.id ?? leadId,
+		};
 	}
 	if (busy) {
-		return { rank: "working", reason: "working", since: roomLastActivity(snap) };
+		const running = harnesses.filter(isBusy);
+		return {
+			rank: "working",
+			reason: "working",
+			since: roomLastActivity(snap),
+			harnessId: running[0]?.id ?? leadId,
+		};
 	}
-	return { rank: "idle", reason: "idle", since: roomLastActivity(snap) };
+	return { rank: "idle", reason: "idle", since: roomLastActivity(snap), harnessId: leadId };
 }
 
 function emptySnap(roomId: string): RoomSnapshot {

@@ -360,19 +360,21 @@ export default function App() {
 				onToggleControlCenter={cc.toggle}
 			/>
 			<div className="cc-host" data-cc={cc.open ? "open" : "closed"}>
-				<RoomWorkspace
-					activeRooms={activeRooms}
-					activeRoomId={activeRoomId}
-					store={store}
-					actions={actions}
-					creation={creation}
-					settings={settings}
-					defaultShell={defaultShell}
-					showPicker={showPicker}
-					setShowPicker={setShowPicker}
-					drag={dragWiring}
-					onReattachTelemetry={onReattachTelemetry}
-				/>
+				<div className="cc-workspace-slot">
+					<RoomWorkspace
+						activeRooms={activeRooms}
+						activeRoomId={activeRoomId}
+						store={store}
+						actions={actions}
+						creation={creation}
+						settings={settings}
+						defaultShell={defaultShell}
+						showPicker={showPicker}
+						setShowPicker={setShowPicker}
+						drag={dragWiring}
+						onReattachTelemetry={onReattachTelemetry}
+					/>
+				</div>
 				<ControlCenter {...cc.props} />
 			</div>
 			<StatusBar
