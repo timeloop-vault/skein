@@ -386,3 +386,30 @@ describe("aggregateRoomStatus (#290)", () => {
 		expect(aggregateRoomStatus(refs, (hid) => harnessActivity.get(hid))).toBe("waiting");
 	});
 });
+
+// #555 — forget drops the store entry but leaves subscriptions to their owners.
+describe("forget and subscribers", () => {
+	it("keeps a subscriber across forget and respawn; unsubscribe still removes it", () => {
+		const id = nextId();
+		harnessActivity.spawned(id);
+		let calls = 0;
+		const off = harnessActivity.subscribe(id, () => {
+			calls++;
+		});
+
+		harnessActivity.forget(id);
+		expect(calls).toBe(1);
+		expect(harnessActivity.get(id)).toBeNull();
+
+		harnessActivity.spawned(id);
+		expect(calls).toBe(2);
+		harnessActivity.setPermissionFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudePermission, "Bash");
+		expect(calls).toBe(3);
+
+		off();
+		harnessActivity.forget(id);
+		harnessActivity.spawned(id);
+		expect(calls).toBe(3);
+		harnessActivity.forget(id);
+	});
+});

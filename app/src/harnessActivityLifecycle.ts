@@ -7,7 +7,6 @@ import {
 	disarmDelegation,
 	emit,
 	ensureTick,
-	listeners,
 	muteUntil,
 	recomputePermissionIds,
 	setPhase,
@@ -314,14 +313,17 @@ export const lifecycleMethods = {
 	},
 
 	/// Drop a harness from the store entirely. Call from LiveTerminal
-	/// on unmount so we don't accumulate dead entries.
+	/// on unmount so we don't accumulate dead entries. Subscriptions are
+	/// not touched: they belong to their owners and are removed by their own
+	/// unsubscribe, so a still-mounted reader keeps hearing this harness
+	/// across a respawn. Subscribers are emitted to so they re-read null.
 	forget(id: string): void {
-		if (!store.has(id) && !listeners.has(id) && !muteUntil.has(id)) return;
+		if (!store.has(id) && !muteUntil.has(id)) return;
 		const wasPermission = store.get(id)?.phase === "permission";
 		store.delete(id);
-		listeners.delete(id);
 		muteUntil.delete(id);
 		stopTickIfIdle();
 		if (wasPermission) recomputePermissionIds();
+		emit(id);
 	},
 };

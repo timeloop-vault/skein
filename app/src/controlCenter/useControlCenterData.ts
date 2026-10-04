@@ -142,13 +142,9 @@ export function useControlCenterData(
 				subagents.subscribe(id, bump),
 				backgroundTasks.subscribe(id, bump),
 			]);
-		// `harnessActivity.forget` (LiveTerminal unmount/respawn) deletes a
-		// harness's whole listener set, silently dropping the per-id
-		// subscriptions above while harnessKey stays the same. So also bump on
-		// the global transition feed (survives forget), and poll a cheap
-		// signature of what the rows show as the backstop for silent mutations
-		// (lastOutputAt) and for re-created records.
-		const offTransitions = harnessActivity.subscribeTransitions(() => bump());
+		// Poll a cheap signature of what the rows show: `lastActivityAt` reads
+		// `lastTurnSignal` and `lastSubmitAt`, which the activity store mutates
+		// in place without emit (harnessActivityDeferral.ts, harnessActivityIo.ts).
 		let lastSig = "";
 		const poll = setInterval(() => {
 			const sig = roomsRef.current
@@ -161,7 +157,6 @@ export function useControlCenterData(
 		}, SYNC_MS);
 		return () => {
 			for (const u of unsubs) u();
-			offTransitions();
 			clearInterval(poll);
 		};
 	}, [visible, harnessKey]);
