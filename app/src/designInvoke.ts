@@ -62,6 +62,18 @@ export const BUSY_ERROR =
 export const NOT_VISIBLE_ERROR =
 	"not_visible: the target has no layout, so a swipe has nothing to act on. Either the design pane is not on screen (pass reveal: true, which works when the user is in this room and has no harness picker open, or ask the user to show the design harness) or the element itself is not rendered";
 
+export const REVEAL_SKIPPED_ERROR =
+	"not_visible: reveal: true did not bring the design pane on screen, because the user is not in this room or has a harness picker open there, so a swipe has no layout to act on. Ask the user to show the design harness, then try again";
+
+/** When reveal was requested and did not take effect, `not_visible` must not
+ * tell the agent to pass the reveal it already passed. */
+export function afterReveal(err: unknown, revealed: boolean | undefined): unknown {
+	if (revealed === false && err instanceof Error && err.message === NOT_VISIBLE_ERROR) {
+		return new Error(REVEAL_SKIPPED_ERROR);
+	}
+	return err;
+}
+
 export function parseInvokeElementArgs(
 	raw: unknown,
 ): RequestResult<DesignTarget & InvokeElementRequest> {

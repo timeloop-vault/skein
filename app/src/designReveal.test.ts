@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { handleDesignRequest } from "./designAgentRequests.ts";
 import { type DesignPaneApi, parseShowElementArgs, registerDesignPane } from "./designControl.ts";
 import {
+	afterReveal,
 	type InvokedBeacon,
 	invokeAnchorResult,
 	invokeSelectorResult,
 	NOT_VISIBLE_ERROR,
 	parseInvokeElementArgs,
+	REVEAL_SKIPPED_ERROR,
 } from "./designInvoke.ts";
 import { pollUntil, revealDecision, revealPane } from "./designReveal.ts";
 import type { ElementDescriptor } from "./elementAnchor.ts";
@@ -45,6 +47,17 @@ describe("reveal parsing", () => {
 				expect(!r.ok && r.error).toMatch(/^bad_arguments: reveal/);
 			}
 		}
+	});
+});
+
+describe("afterReveal", () => {
+	it("rewrites not_visible only when reveal was requested and skipped", () => {
+		const nv = new Error(NOT_VISIBLE_ERROR);
+		expect((afterReveal(nv, false) as Error).message).toBe(REVEAL_SKIPPED_ERROR);
+		expect(afterReveal(nv, true)).toBe(nv);
+		expect(afterReveal(nv, undefined)).toBe(nv);
+		const other = new Error("busy: x");
+		expect(afterReveal(other, false)).toBe(other);
 	});
 });
 

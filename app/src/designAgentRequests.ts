@@ -16,7 +16,7 @@ import {
 	parseStateArgs,
 } from "./designControl.ts";
 import { type DesignDevice, normalizeDevice, validateDevice } from "./designDevice.ts";
-import { parseInvokeElementArgs } from "./designInvoke.ts";
+import { afterReveal, parseInvokeElementArgs } from "./designInvoke.ts";
 import { type DesignReveal, revealPane } from "./designReveal.ts";
 import type { Room } from "./types.ts";
 
@@ -109,7 +109,12 @@ export async function handleDesignRequest(
 			return fail("not_ready: the design pane has not finished loading its preview yet");
 		}
 		const revealed = wantReveal ? await revealPane(pane, reveal, roomId, harnessId) : undefined;
-		const result = await pane.invokeElement(req);
+		let result: Awaited<ReturnType<typeof pane.invokeElement>>;
+		try {
+			result = await pane.invokeElement(req);
+		} catch (err) {
+			throw afterReveal(err, revealed);
+		}
 		return complete(id, revealed === undefined ? result : { ...result, revealed });
 	}
 

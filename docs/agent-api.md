@@ -753,7 +753,7 @@ raises the window. None creates a thread, resolves one, or writes source.
   click for a tap; a swipe is pointerdown, eight pointermoves, pointerup).
   It drives the **prototype, not Skein**: nothing in Skein changes, it
   creates **no thread** and no highlight, and it never takes focus or
-  switches room or harness. The target is exactly one of `selector` /
+  switches room or harness, except with `reveal: true` (see above). The target is exactly one of `selector` /
   `anchor`, same rules as `show_element`. `action` is `tap` (default) or
   `swipe`; a swipe requires `direction` (`left`, `right`, `up`, `down`)
   and takes an optional integer `distance` in CSS px, 8-2000, default
@@ -796,7 +796,7 @@ Refusals (a code, then a reason):
 | `bad_arguments` | `set_design_device` | `device` missing or not an object/`null` (checked before the guards); an unknown key, bad preset or out-of-range value (reported by the webview) |
 | `not_mounted` | `get_design_state`, `show_element`, `invoke_element` | reported by the webview: the pane is not mounted |
 | `not_ready` | `show_element`, `invoke_element` | reported by the webview: the preview has not loaded (`get_design_state` answers `ready: false` instead) |
-| `not_visible` | `invoke_element` | reported by the webview, swipe only: the matched element has no layout. Usually the design pane is hidden: pass `reveal: true` (works when the user is in this room and no harness picker is open) or ask the user to show the design harness. It is also returned when the element itself is not rendered (zero size) on a visible pane |
+| `not_visible` | `invoke_element` | reported by the webview, swipe only: the matched element has no layout. Usually the design pane is hidden: pass `reveal: true` (works when the user is in this room and no harness picker is open) or ask the user to show the design harness. It is also returned when the element itself is not rendered (zero size) on a visible pane. When `reveal: true` was passed but could not take effect (the user is in another room or has a harness picker open), the message says so instead of suggesting `reveal` |
 | `busy` | `invoke_element` | reported by the webview: the user is picking an element in this design pane; try again once they finish |
 | `disabled` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element` | Settings → "Let agents open or close harnesses" (`allowAgentHarnessControl`) is off |
 | `rate_limited` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |
