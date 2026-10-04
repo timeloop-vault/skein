@@ -17,6 +17,7 @@ import type { DesignDevice } from "./designDevice.ts";
 import type { InvokedBeacon, InvokeElementRequest, InvokeElementResult } from "./designInvoke.ts";
 import { invokeAnchorResult, invokeSelectorResult, placementAccepted } from "./designInvoke.ts";
 import type { Beacon, HostMessage } from "./designPreview.ts";
+import { makeWhenVisible } from "./designReveal.ts";
 import { confirmHighlight, PendingRequests, selectorResult } from "./designShow.ts";
 import { type ElementAnchor, type LocateResult, matchElement } from "./elementAnchor.ts";
 
@@ -36,6 +37,7 @@ export const useDesignControl = ({
 	threads,
 	selectedId,
 	visible,
+	laidOut,
 	post,
 }: {
 	harnessId: string;
@@ -48,6 +50,8 @@ export const useDesignControl = ({
 	threads: readonly ElementThread[];
 	selectedId: string | undefined;
 	visible: boolean;
+	/** True once the preview frame has a non-zero size (#549 reveal). */
+	laidOut: () => boolean;
 	post: (msg: HostMessage) => void;
 }) => {
 	const scrollRef = useRef<DesignScroll | null>(null);
@@ -57,7 +61,18 @@ export const useDesignControl = ({
 	const invokes = useRef(new PendingRequests<InvokedBeacon>("agent-inv-")).current;
 
 	// Latest props, read by the registered api without re-registering.
-	const live = { entry, device, ready, loadFailed, errors, threads, selectedId, post };
+	const live = {
+		entry,
+		device,
+		ready,
+		loadFailed,
+		errors,
+		threads,
+		selectedId,
+		visible,
+		laidOut,
+		post,
+	};
 	const liveRef = useRef(live);
 	liveRef.current = live;
 
@@ -169,6 +184,7 @@ export const useDesignControl = ({
 					scroll: scrollRef.current,
 				};
 			},
+			whenVisible: makeWhenVisible(() => liveRef.current.visible && liveRef.current.laidOut()),
 			showElement: (req) => showElementRef.current(req),
 			invokeElement: (req) => invokeElementRef.current(req),
 		});

@@ -89,6 +89,7 @@ export const DesignBody = ({
 		threads: c.threads,
 		selectedId: c.selected?.id,
 		visible,
+		laidOut: () => (frameRef.current?.clientWidth ?? 0) > 0,
 		post,
 	});
 

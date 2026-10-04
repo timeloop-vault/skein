@@ -93,6 +93,7 @@ describe("invokeSelectorResult", () => {
 			action: "tap",
 			element: el,
 			count: 1,
+			visible: false,
 			domChanged: true,
 		});
 		expect(invokeSelectorResult(beacon({}), "swipe").domChanged).toBe(false);
@@ -130,6 +131,7 @@ describe("invokeAnchorResult", () => {
 				invoked: true,
 				action: "tap",
 				element: el,
+				visible: false,
 				domChanged: true,
 			});
 		}

@@ -689,7 +689,10 @@ The token is the scope and there is no room argument. `harness` (a
 harness id of kind `design`) is optional when the caller's room has
 exactly one design harness. No verb takes focus, raises the window, or
 switches the visible room or harness; a pane that is not visible still
-updates. None creates a thread, resolves one, or writes source.
+updates. The one exception is the opt-in `reveal: true` on `show_element` /
+`invoke_element`: it switches the room's active harness to the design pane,
+but only when the user is already in that room, and never switches rooms or
+raises the window. None creates a thread, resolves one, or writes source.
 
 | verb | route | kind |
 | :-- | :-- | :-- |
@@ -730,19 +733,22 @@ updates. None creates a thread, resolves one, or writes source.
   emulation). Unknown keys are refused. Answers `{device, previous,
   harnessId}` (the normalized device now stored, and the one before).
   Timeout 10 s.
-- **`show_element`** `{harness?, selector | anchor}` — exactly one of a
+- **`show_element`** `{harness?, selector | anchor, reveal?}` — exactly one of a
   CSS `selector` or an `anchor` object (the #434 shape: `selector`,
   `tag`, `text`, `attrs`, `odId`, `source`; at least a `selector` or
   `tag` string is required, everything else is optional). Answers `{tier, highlighted, element, count?, score?,
-  harnessId}`. `tier`: `anchored`, `reanchored`, `selector` (a unique
+  revealed?, harnessId}`. `tier`: `anchored`, `reanchored`, `selector` (a unique
   match) highlight the element. `stale` returns the best candidate in
   `element` but does **not** highlight it — never a guess. `ambiguous`
   means the selector matched `count` > 1 elements; nothing is
   highlighted. `not_found`: nothing highlighted; when the CSS selector does not parse
   the answer also carries `invalidSelector: true`. The pane must be
-  mounted. Timeout 10 s.
+  mounted. `reveal` (boolean, default false; a non-boolean is
+  `bad_arguments`) switches the room's active harness to this design pane,
+  only when the user is already in this room; `revealed` is then present
+  and says whether that happened. Timeout 10 s.
 - **`invoke_element`** `{harness?, selector | anchor, action?, direction?,
-  distance?}` — taps or swipes one element of the page the pane previews,
+  distance?, reveal?}` — taps or swipes one element of the page the pane previews,
   as the prototype's own page events (pointer and mouse events, then a
   click for a tap; a swipe is pointerdown, eight pointermoves, pointerup).
   It drives the **prototype, not Skein**: nothing in Skein changes, it
@@ -765,7 +771,11 @@ updates. None creates a thread, resolves one, or writes source.
   would highlight (`anchored`, `reanchored`) are acted on; `ambiguous`
   (`count` > 1), `stale` and `not_found` (with `invalidSelector: true`
   for an unparsable selector) invoke nothing. Answers `{tier, invoked,
-  action, element, count?, invalidSelector?, domChanged?, harnessId}`;
+  action, element, count?, invalidSelector?, domChanged?, visible, revealed?,
+  harnessId}`; `visible` says the matched element had a non-zero rect when
+  acted on (a tap still acts while hidden and reports `visible: false`; a
+  swipe on a hidden pane refuses `not_visible`). `reveal` is as for
+  `show_element`, and is what makes a swipe possible from a hidden pane;
   `domChanged` is present only when `invoked` and means something in the
   page changed within 300 ms (Skein's own overlay nodes excluded) —
   `false` suggests the prototype ignored the event. While the user is
@@ -781,11 +791,12 @@ Refusals (a code, then a reason):
 | `harness_required` | same | several design harnesses and no `harness` (ids listed) |
 | `not_found` (404) | same | `harness` is not a design harness of the caller's room — identical whether it exists in another room or not |
 | `unknown_entry` | `open_design_entry` | `entry` is not a listed entry (first 20 listed) |
-| `bad_arguments` | `show_element` | both or neither of `selector`/`anchor`, or an unusable one |
-| `bad_arguments` | `invoke_element` | the `show_element` target rules; `action` not `tap`/`swipe`; `swipe` without `direction`, or an unknown one; `direction`/`distance` with `tap`; `distance` not an integer in 8-2000 (all checked before the guards, so no rate budget is spent) |
+| `bad_arguments` | `show_element` | both or neither of `selector`/`anchor`, or an unusable one; `reveal` not a boolean |
+| `bad_arguments` | `invoke_element` | the `show_element` target rules; `action` not `tap`/`swipe`; `swipe` without `direction`, or an unknown one; `direction`/`distance` with `tap`; `distance` not an integer in 8-2000; `reveal` not a boolean (all checked before the guards, so no rate budget is spent) |
 | `bad_arguments` | `set_design_device` | `device` missing or not an object/`null` (checked before the guards); an unknown key, bad preset or out-of-range value (reported by the webview) |
 | `not_mounted` | `get_design_state`, `show_element`, `invoke_element` | reported by the webview: the pane is not mounted |
 | `not_ready` | `show_element`, `invoke_element` | reported by the webview: the preview has not loaded (`get_design_state` answers `ready: false` instead) |
+| `not_visible` | `invoke_element` | reported by the webview, swipe only: the matched element has no layout. Usually the design pane is hidden: pass `reveal: true` (works when the user is in this room and no harness picker is open) or ask the user to show the design harness. It is also returned when the element itself is not rendered (zero size) on a visible pane |
 | `busy` | `invoke_element` | reported by the webview: the user is picking an element in this design pane; try again once they finish |
 | `disabled` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element` | Settings → "Let agents open or close harnesses" (`allowAgentHarnessControl`) is off |
 | `rate_limited` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |

@@ -145,6 +145,13 @@
 			return;
 		}
 		const pt = m.pointerType === "touch" ? "touch" : "mouse";
+		const rect = el.getBoundingClientRect();
+		const visible = rect.width > 0 && rect.height > 0;
+		// A hidden pane has no layout: a swipe has nothing to act on.
+		if (m.action === "swipe" && !visible) {
+			reply({ count: 1, element: null, notVisible: true, visible: false });
+			return;
+		}
 		const settle = watch();
 		const finish = () =>
 			settle((domChanged) => {
@@ -154,7 +161,7 @@
 				} catch (_) {
 					// Detached by the action; the beacon still answers.
 				}
-				reply({ count: 1, element, domChanged });
+				reply({ count: 1, element, visible, domChanged });
 			});
 		if (m.action === "swipe") swipe(el, m, pt, finish);
 		else tap(el, pt, finish);

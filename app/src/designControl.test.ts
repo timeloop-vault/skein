@@ -24,6 +24,7 @@ const anchor: ElementAnchor = { ...el, entry: "index.html" };
 const pane = (roomId: string, ready: boolean): DesignPaneApi => ({
 	roomId,
 	ready: () => ready,
+	whenVisible: async () => true,
 	getState: () => ({
 		entry: "index.html",
 		device: null,

@@ -17,6 +17,7 @@ import {
 } from "./designControl.ts";
 import { type DesignDevice, normalizeDevice, validateDevice } from "./designDevice.ts";
 import { parseInvokeElementArgs } from "./designInvoke.ts";
+import { type DesignReveal, revealPane } from "./designReveal.ts";
 import type { Room } from "./types.ts";
 
 export type DesignComplete = (id: string, ok?: unknown, error?: string) => Promise<void>;
@@ -41,6 +42,7 @@ export async function handleDesignRequest(
 	setEntry: (roomId: string, harnessId: string, entry: string) => void,
 	setDevice: (roomId: string, harnessId: string, device: DesignDevice | undefined) => void,
 	complete: DesignComplete,
+	reveal: DesignReveal,
 ): Promise<void> {
 	const fail = (error: string) => complete(id, undefined, error);
 	const bad = <T>(r: RequestResult<T>): r is { ok: false; error: string } => !r.ok;
@@ -98,7 +100,7 @@ export async function handleDesignRequest(
 	if (kind === "design.invoke_element") {
 		const p = parseInvokeElementArgs(raw);
 		if (bad(p)) return fail(p.error);
-		const { roomId, harnessId, ...req } = p.value;
+		const { roomId, harnessId, reveal: wantReveal, ...req } = p.value;
 		const pane = getDesignPane(harnessId);
 		if (!pane || pane.roomId !== roomId) {
 			return fail(`not_mounted: no design pane is mounted for harness "${harnessId}"`);
@@ -106,13 +108,15 @@ export async function handleDesignRequest(
 		if (!pane.ready()) {
 			return fail("not_ready: the design pane has not finished loading its preview yet");
 		}
-		return complete(id, await pane.invokeElement(req));
+		const revealed = wantReveal ? await revealPane(pane, reveal, roomId, harnessId) : undefined;
+		const result = await pane.invokeElement(req);
+		return complete(id, revealed === undefined ? result : { ...result, revealed });
 	}
 
 	// design.show_element
 	const p = parseShowElementArgs(raw);
 	if (bad(p)) return fail(p.error);
-	const { roomId, harnessId, ...req } = p.value;
+	const { roomId, harnessId, reveal: wantReveal, ...req } = p.value;
 	const pane = getDesignPane(harnessId);
 	if (!pane || pane.roomId !== roomId) {
 		return fail(`not_mounted: no design pane is mounted for harness "${harnessId}"`);
@@ -120,5 +124,7 @@ export async function handleDesignRequest(
 	if (!pane.ready()) {
 		return fail("not_ready: the design pane has not finished loading its preview yet");
 	}
-	return complete(id, await pane.showElement(req));
+	const revealed = wantReveal ? await revealPane(pane, reveal, roomId, harnessId) : undefined;
+	const result = await pane.showElement(req);
+	return complete(id, revealed === undefined ? result : { ...result, revealed });
 }

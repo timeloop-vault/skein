@@ -40,6 +40,9 @@ async fn bad_arguments_are_refused_before_any_guard_or_frontend_call() {
         json!({ "selector": "p", "action": "swipe", "direction": "up", "distance": "50" }),
         json!({ "selector": "p", "action": "swipe", "direction": "up", "distance": -3 }),
         json!({ "selector": "p", "action": "drag" }),
+        json!({ "selector": "p", "reveal": "yes" }),
+        json!({ "selector": "p", "reveal": 1 }),
+        json!({ "selector": "p", "reveal": null }),
     ];
     // More refusals than the rate cap, with the kill switch off: neither
     // may be what answers, and none may have spent any budget.
@@ -152,6 +155,7 @@ async fn the_cap_is_shared_with_the_other_design_write_verbs() {
             harness: None,
             selector: Some("p".into()),
             anchor: None,
+            reveal: None,
         };
         verbs::show_element(&state, &caller, &a, true)
             .await
@@ -241,4 +245,66 @@ async fn a_non_invoking_answer_passes_through_untouched() {
     assert_eq!(out["count"], json!(4));
     assert!(out.get("domChanged").is_none());
     assert_eq!(out["harnessId"], json!("d1"));
+}
+
+#[tokio::test]
+async fn reveal_is_forwarded_only_when_true_and_refused_when_not_boolean() {
+    let f = fixture();
+    let dir = folder();
+    save(&f.db, &[design_room("A", &dir, &["d1"])]);
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let (state, calls) = recording(&f, answer);
+    for reveal in [Some(true), Some(false), None] {
+        let mut v = json!({ "selector": "p" });
+        if let Some(r) = reveal {
+            v["reveal"] = json!(r);
+        }
+        verbs::invoke_element(&state, &caller, &args(v.clone()), true)
+            .await
+            .unwrap();
+        let sv: ShowElementArgs = serde_json::from_value(v).unwrap();
+        verbs::show_element(&state, &caller, &sv, true)
+            .await
+            .unwrap();
+    }
+    {
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 6);
+        for (i, want) in [true, true, false, false, false, false].iter().enumerate() {
+            assert_eq!(calls[i].1.get("reveal").is_some(), *want, "call {i}");
+            if *want {
+                assert_eq!(calls[i].1["reveal"], json!(true));
+            }
+        }
+    }
+    let before = calls.lock().unwrap().len();
+    for bad in [json!("yes"), json!(1), Value::Null] {
+        let sv: ShowElementArgs =
+            serde_json::from_value(json!({ "selector": "p", "reveal": bad })).unwrap();
+        let e = verbs::show_element(&state, &caller, &sv, false)
+            .await
+            .unwrap_err();
+        assert!(is_refused(&e, "bad_arguments:"), "{e:?}");
+    }
+    assert_eq!(calls.lock().unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn not_visible_surfaces_with_its_code() {
+    let f = fixture();
+    let dir = folder();
+    save(&f.db, &[design_room("A", &dir, &["d1"])]);
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let (state, _) = recording(&f, |_, _| {
+        Err("not_visible: the design pane is not on screen".to_owned())
+    });
+    let e = verbs::invoke_element(
+        &state,
+        &caller,
+        &args(json!({ "selector": "p", "action": "swipe", "direction": "left" })),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(is_refused(&e, "not_visible:"), "{e:?}");
 }

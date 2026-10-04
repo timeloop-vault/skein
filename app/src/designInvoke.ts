@@ -7,6 +7,7 @@ import { isOmitted, type RequestResult } from "./agentRequestsShared.ts";
 import {
 	type DesignTarget,
 	parseAnchor,
+	parseReveal,
 	parseStateArgs,
 	type ShowElementRequest,
 	type ShowElementResult,
@@ -34,6 +35,8 @@ export interface InvokeElementResult {
 	element: ElementDescriptor | null;
 	count?: number;
 	invalidSelector?: true;
+	/** Present only when invoked: the element had a non-zero rect. */
+	visible?: boolean;
 	/** Present only when invoked. */
 	domChanged?: boolean;
 }
@@ -46,6 +49,8 @@ export type InvokedBeacon = {
 	element: ElementDescriptor | null;
 	invalid?: boolean;
 	busy?: boolean;
+	notVisible?: boolean;
+	visible?: boolean;
 	domChanged?: boolean;
 };
 
@@ -53,6 +58,9 @@ const DIRECTIONS: readonly string[] = ["left", "right", "up", "down"];
 
 export const BUSY_ERROR =
 	"busy: the user is picking an element in this design pane; try again once they finish";
+
+export const NOT_VISIBLE_ERROR =
+	"not_visible: the target has no layout, so a swipe has nothing to act on. Either the design pane is not on screen (pass reveal: true, which works when the user is in this room and has no harness picker open, or ask the user to show the design harness) or the element itself is not rendered";
 
 export function parseInvokeElementArgs(
 	raw: unknown,
@@ -70,6 +78,9 @@ export function parseInvokeElementArgs(
 		action = r.action;
 	}
 	const out: DesignTarget & InvokeElementRequest = { ...t.value, action };
+	const reveal = parseReveal(r);
+	if (!reveal.ok) return reveal;
+	if (reveal.value) out.reveal = true;
 	if (!isOmitted(r.selector)) {
 		if (typeof r.selector !== "string" || !r.selector) {
 			return bad("selector must be a non-empty string");
@@ -114,6 +125,7 @@ export function parseInvokeElementArgs(
 /** The answer for a CSS-selector request. A busy pane is an error, not an answer. */
 export function invokeSelectorResult(b: InvokedBeacon, action: InvokeAction): InvokeElementResult {
 	if (b.busy) throw new Error(BUSY_ERROR);
+	if (b.notVisible) throw new Error(NOT_VISIBLE_ERROR);
 	if (b.invalid) {
 		return { tier: "not_found", invoked: false, action, element: null, invalidSelector: true };
 	}
@@ -124,6 +136,7 @@ export function invokeSelectorResult(b: InvokedBeacon, action: InvokeAction): In
 			action,
 			element: b.element,
 			count: 1,
+			visible: b.visible === true,
 			domChanged: b.domChanged === true,
 		};
 	}
@@ -153,6 +166,12 @@ export function invokeAnchorResult(
 	};
 	if (!placementAccepted(placed) || !beacon) return base;
 	if (beacon.busy) throw new Error(BUSY_ERROR);
+	if (beacon.notVisible) throw new Error(NOT_VISIBLE_ERROR);
 	if (beacon.count !== 1) return base;
-	return { ...base, invoked: true, domChanged: beacon.domChanged === true };
+	return {
+		...base,
+		invoked: true,
+		visible: beacon.visible === true,
+		domChanged: beacon.domChanged === true,
+	};
 }

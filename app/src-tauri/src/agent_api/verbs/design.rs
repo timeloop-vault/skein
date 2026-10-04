@@ -7,7 +7,8 @@
 //! one design harness. A harness id that is not a design harness of the
 //! caller's room is `NotFound` whether or not it exists elsewhere, so a
 //! token cannot probe other rooms. No verb takes focus or switches the
-//! visible room or harness.
+//! visible room or harness — except the opt-in `reveal` of `show_element` /
+//! `invoke_element`, bounded to the room the user is already in.
 //!
 //! The pane's state is React-local, so the live facts come from the
 //! webview through `AgentApiState::request_frontend` with these kinds:
@@ -18,8 +19,8 @@
 //! | `design.state` | `{roomId, harnessId}` | `{entry, device, ready, loadFailed, errors[], selected, scroll}` |
 //! | `design.open_entry` | `{roomId, harnessId, entry}` | `{entry, previous}` |
 //! | `design.set_device` | `{roomId, harnessId, device}` | `{device, previous}` |
-//! | `design.show_element` | `{roomId, harnessId, selector?, anchor?}` | `{tier, highlighted, element, count?, score?}` |
-//! | `design.invoke_element` | `{roomId, harnessId, selector?, anchor?, action, direction?, distance?}` | `{tier, invoked, action, element, count?, invalidSelector?, domChanged?}` |
+//! | `design.show_element` | `{roomId, harnessId, selector?, anchor?, reveal?}` | `{tier, highlighted, element, count?, score?, revealed?}` |
+//! | `design.invoke_element` | `{roomId, harnessId, selector?, anchor?, action, direction?, distance?, reveal?}` | `{tier, invoked, action, element, count?, invalidSelector?, domChanged?, visible, revealed?}` |
 //!
 //! A frontend error string is prefixed with a code (`not_mounted: …`,
 //! `not_ready: …`, `busy: …`) and surfaces as a refusal carrying that text.
@@ -106,6 +107,10 @@ pub struct ShowElementArgs {
     /// The #434 element-anchor shape, passed through as JSON.
     #[serde(default)]
     pub anchor: Option<Value>,
+    /// Boolean; kept as JSON (null included) so a non-boolean is
+    /// `bad_arguments`.
+    #[serde(default, deserialize_with = "present")]
+    pub reveal: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -129,6 +134,10 @@ pub struct InvokeElementArgs {
     /// `bad_arguments` refusal rather than a parse error.
     #[serde(default)]
     pub distance: Option<Value>,
+    /// Boolean; kept as JSON (null included) so a non-boolean is
+    /// `bad_arguments`.
+    #[serde(default, deserialize_with = "present")]
+    pub reveal: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -447,6 +456,15 @@ pub async fn set_design_device(
     with_harness_id(answer, &harness.id)
 }
 
+/// `reveal` must be a boolean when present; absent means false.
+fn check_reveal(reveal: Option<&Value>) -> VerbResult<bool> {
+    match reveal {
+        None => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(bad_arguments("`reveal` must be a boolean")),
+    }
+}
+
 /// Validate the selector/anchor pair before anything else runs.
 fn check_target(selector: Option<&String>, anchor: Option<&Value>) -> VerbResult<()> {
     match (selector, anchor) {
@@ -495,6 +513,7 @@ pub async fn show_element(
     harness_control_enabled: bool,
 ) -> VerbResult<Value> {
     check_target(args.selector.as_ref(), args.anchor.as_ref())?;
+    let reveal = check_reveal(args.reveal.as_ref())?;
     guard_write(state, caller, "show_element", harness_control_enabled)?;
     let room = caller_room(state, caller)?;
     let harness = pick_harness(&room, args.harness.as_deref())?;
@@ -505,6 +524,9 @@ pub async fn show_element(
         }
         if let Some(a) = &args.anchor {
             obj.insert("anchor".into(), a.clone());
+        }
+        if reveal {
+            obj.insert("reveal".into(), json!(true));
         }
     }
     let answer = ask(
@@ -573,6 +595,7 @@ pub async fn invoke_element(
 ) -> VerbResult<Value> {
     check_target(args.selector.as_ref(), args.anchor.as_ref())?;
     let (action, swipe) = check_gesture(args)?;
+    let reveal = check_reveal(args.reveal.as_ref())?;
     guard_write(state, caller, "invoke_element", harness_control_enabled)?;
     let room = caller_room(state, caller)?;
     let harness = pick_harness(&room, args.harness.as_deref())?;
@@ -583,6 +606,9 @@ pub async fn invoke_element(
         }
         if let Some(a) = &args.anchor {
             obj.insert("anchor".into(), a.clone());
+        }
+        if reveal {
+            obj.insert("reveal".into(), json!(true));
         }
         if let Some((direction, distance)) = swipe {
             obj.insert("direction".into(), json!(direction));

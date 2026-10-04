@@ -78,6 +78,7 @@ fn show_args(h: Option<&str>, selector: Option<&str>, anchor: Option<Value>) -> 
         harness: h.map(str::to_owned),
         selector: selector.map(str::to_owned),
         anchor,
+        reveal: None,
     }
 }
 

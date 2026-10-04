@@ -25,7 +25,7 @@ export interface DesignPaneState {
 	scroll: DesignScroll | null;
 }
 
-export type ShowElementRequest = { selector?: string; anchor?: ElementAnchor };
+export type ShowElementRequest = { selector?: string; anchor?: ElementAnchor; reveal?: true };
 
 export type ShowTier = "anchored" | "reanchored" | "selector" | "stale" | "ambiguous" | "not_found";
 
@@ -45,6 +45,8 @@ export interface DesignPaneApi {
 	getState(): DesignPaneState;
 	/** True once the iframe has fired its ready beacon. */
 	ready(): boolean;
+	/** Resolves true once the pane is on screen and laid out, false on timeout (#549). */
+	whenVisible(timeoutMs: number): Promise<boolean>;
 	showElement(req: ShowElementRequest): Promise<ShowElementResult>;
 	invokeElement(req: InvokeElementRequest): Promise<InvokeElementResult>;
 }
@@ -180,6 +182,15 @@ export function parseAnchor(v: unknown): ElementAnchor | null {
 	return out;
 }
 
+/** `reveal` is opt-in and boolean; only `true` is carried forward. */
+export function parseReveal(r: Record<string, unknown>): RequestResult<true | undefined> {
+	if (isOmitted(r.reveal)) return { ok: true, value: undefined };
+	if (typeof r.reveal !== "boolean") {
+		return { ok: false, error: "bad_arguments: reveal must be a boolean" };
+	}
+	return { ok: true, value: r.reveal ? true : undefined };
+}
+
 export function parseShowElementArgs(
 	raw: unknown,
 ): RequestResult<DesignTarget & ShowElementRequest> {
@@ -187,6 +198,9 @@ export function parseShowElementArgs(
 	if (!t.ok) return t;
 	const r = raw as Record<string, unknown>;
 	const out: DesignTarget & ShowElementRequest = { ...t.value };
+	const reveal = parseReveal(r);
+	if (!reveal.ok) return reveal;
+	if (reveal.value) out.reveal = true;
 	if (!isOmitted(r.selector)) {
 		if (typeof r.selector !== "string" || !r.selector) {
 			return { ok: false, error: "bad_arguments: selector must be a non-empty string" };

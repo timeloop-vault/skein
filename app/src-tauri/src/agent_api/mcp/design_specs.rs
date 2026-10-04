@@ -142,7 +142,10 @@ pub(super) fn design_tool_specs() -> Vec<Value> {
                  The pane must be mounted (open in Skein, not necessarily \
                  visible), otherwise this refuses with not_mounted; not_ready means \
                  the preview has not loaded. \
-                 Never takes focus or switches the visible room or harness. Gated by \
+                 Never takes focus or switches the visible room or harness, except \
+                 with `reveal: true`, which switches the room's active harness to \
+                 this design pane, only when the user is already in this room \
+                 (never switches rooms or raises the window). Gated by \
                  the Settings switch that also governs open_harness/close_harness, \
                  and rate-capped with open_design_entry (10 combined per minute, \
                  checked before validation, so refused attempts count).",
@@ -169,6 +172,10 @@ pub(super) fn design_tool_specs() -> Vec<Value> {
                             "odId": { "type": "string" },
                             "source": {},
                         },
+                    },
+                    "reveal": {
+                        "type": "boolean",
+                        "description": "Switch the room's active harness to this design pane, only when the user is already in this room; never switches rooms or raises the window. Needed for swipes, since a hidden pane has no layout. Default false.",
                     },
                 },
                 "additionalProperties": false,
@@ -204,8 +211,12 @@ pub(super) fn design_tool_specs() -> Vec<Value> {
                  their own container. Refuses with \
                  busy while the user is picking an element in that pane, \
                  not_mounted when the pane is not open in Skein, and not_ready \
-                 while the preview has not loaded. Never takes focus or switches \
-                 the visible room or harness. Gated by the Settings switch that \
+                 while the preview has not loaded, and not_visible for a swipe \
+                 while the pane is hidden (no layout; a tap still works). Never \
+                 takes focus or switches the visible room or harness, except with \
+                 `reveal: true`, which switches the room's active harness to this \
+                 design pane, only when the user is already in this room (never \
+                 switches rooms or raises the window); needed for swipes. Gated by the Settings switch that \
                  also governs open_harness/close_harness, and rate-capped with \
                  open_design_entry, set_design_device and show_element (10 \
                  combined per minute, checked after argument validation).",
@@ -248,6 +259,10 @@ pub(super) fn design_tool_specs() -> Vec<Value> {
                         "minimum": 8,
                         "maximum": 2000,
                         "description": "Swipe length in CSS px. Default 120. Swipe only.",
+                    },
+                    "reveal": {
+                        "type": "boolean",
+                        "description": "Switch the room's active harness to this design pane, only when the user is already in this room; never switches rooms or raises the window. Needed for swipes, since a hidden pane has no layout. Default false.",
                     },
                 },
                 "additionalProperties": false,

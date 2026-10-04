@@ -44,6 +44,8 @@ export type Beacon =
 			element: ElementDescriptor | null;
 			invalid?: boolean;
 			busy?: boolean;
+			notVisible?: boolean;
+			visible?: boolean;
 			domChanged?: boolean;
 	  }
 	| { type: "shownCleared" }
@@ -282,6 +284,8 @@ export const parseBeacon = (data: unknown): Beacon | null => {
 				element: parseDescriptor(d.element),
 				...(d.invalid === true ? { invalid: true } : {}),
 				...(d.busy === true ? { busy: true } : {}),
+				...(d.notVisible === true ? { notVisible: true } : {}),
+				...(typeof d.visible === "boolean" ? { visible: d.visible } : {}),
 				...(typeof d.domChanged === "boolean" ? { domChanged: d.domChanged } : {}),
 			};
 		}
