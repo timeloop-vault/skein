@@ -102,6 +102,7 @@ pub(crate) async fn db_record_harness_action(
     kind: String,
     payload: String,
     source: Option<String>,
+    harness_kind: Option<String>,
     db: tauri::State<'_, Arc<Database>>,
 ) -> Result<(), String> {
     let db = Arc::clone(&db);
@@ -113,6 +114,7 @@ pub(crate) async fn db_record_harness_action(
             &kind,
             &payload,
             source.as_deref(),
+            harness_kind.as_deref(),
         )
         .map(drop)
     })

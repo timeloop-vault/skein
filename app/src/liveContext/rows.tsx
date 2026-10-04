@@ -7,6 +7,7 @@
 // in this file are the kinds with one clean shape and no divergence.
 
 import { useMemo } from "react";
+import type { HarnessKindOf } from "../harnessAttribution.ts";
 import type { HarnessKind } from "../types.ts";
 import { BackgroundEndRow } from "./backgroundRows.tsx";
 import {
@@ -24,7 +25,7 @@ import { ToolFamilyRow } from "./toolRows.tsx";
 
 interface SimpleRowProps {
 	payload: Payload;
-	harness: HarnessKind | undefined;
+	harness: HarnessKind | null | undefined;
 	timestampMs: number;
 }
 
@@ -41,7 +42,7 @@ export const ActivityRow = ({
 	onTogglePreview,
 }: {
 	row: HarnessAction;
-	harnessKindOf: (harnessId: string) => HarnessKind;
+	harnessKindOf: HarnessKindOf;
 	/** Set of expanded preview keys + toggle, owned by ActivityCard so a
 	 *  preview survives the row unmounting on scroll (D2g). Omitted →
 	 *  ResultPreview falls back to its own local state. */
@@ -49,7 +50,7 @@ export const ActivityRow = ({
 	onTogglePreview?: ((key: string) => void) | undefined;
 }) => {
 	const payload = parsePayload(row.payload);
-	const harness = harnessKindOf(row.harnessId);
+	const harness = harnessKindOf(row.harnessId, row.harnessKind);
 	const ts = row.timestampMs;
 
 	// One preview per row, keyed by the row's action id, so its expanded

@@ -5,7 +5,7 @@
 // (docs/design/skein/project/live-context-cards.jsx PlanGroup/PlanItem).
 
 import { HChip } from "../components.tsx";
-import type { HarnessKind } from "../types.ts";
+import type { HarnessKindOf } from "../harnessAttribution.ts";
 import type { PlanGroup, PlanItem } from "./plan.ts";
 
 const PlanRow = ({ item }: { item: PlanItem }) => (
@@ -22,7 +22,7 @@ export const PlanCardBody = ({
 	harnessNameOf,
 }: {
 	groups: PlanGroup[];
-	harnessKindOf: (harnessId: string) => HarnessKind;
+	harnessKindOf: HarnessKindOf;
 	/** Instance name for the group head; falls back to the kind label. */
 	harnessNameOf: (harnessId: string) => string;
 }) => {
@@ -43,7 +43,7 @@ export const PlanCardBody = ({
 				return (
 					<div className="lc-plan-group" key={g.harnessId}>
 						<div className="lc-plan-grouphead">
-							<HChip kind={harnessKindOf(g.harnessId)} />
+							<HChip kind={harnessKindOf(g.harnessId, g.harnessKind)} />
 							<span>{harnessNameOf(g.harnessId)}</span>
 							<span className="count">
 								{done}/{g.items.length}

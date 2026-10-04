@@ -18,6 +18,7 @@
 // its latest snapshot and ignores the older deltas, which is the right
 // answer — the snapshot is the whole list.
 
+import { firstStoredKind } from "./harnessKind.ts";
 import { obj, type Payload, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
 
@@ -40,6 +41,8 @@ export interface PlanItem {
 
 export interface PlanGroup {
 	harnessId: string;
+	/** #538: first non-null stored kind among the harness's rows. */
+	harnessKind: string | null;
 	items: PlanItem[];
 }
 
@@ -183,7 +186,7 @@ export function reducePlan(actions: HarnessAction[]): PlanGroup[] {
 			if (str(obj(p.plan_item)?.op) === "write") lastWrite = p;
 		}
 		const items = lastWrite ? snapshotItems(lastWrite, harnessId) : deltaItems(rows, harnessId);
-		if (items.length > 0) groups.push({ harnessId, items });
+		if (items.length > 0) groups.push({ harnessId, harnessKind: firstStoredKind(rows), items });
 	}
 	return groups;
 }

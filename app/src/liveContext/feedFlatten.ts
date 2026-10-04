@@ -28,6 +28,7 @@ import {
 	stepFromOpencode,
 } from "./feedItemsHelpers.ts";
 import type { FeedItem, FlattenOptions } from "./feedItemTypes.ts";
+import { firstStoredKind } from "./harnessKind.ts";
 import { num, type Payload, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
 
@@ -99,6 +100,7 @@ export function flattenFeed(actions: HarnessAction[], opts: FlattenOptions): Fee
 				type: "burst",
 				key: `burst-${first.action.id}`,
 				harnessId: first.action.harnessId,
+				harnessKind: firstStoredKind(cands.map((c) => c.action)),
 				tool: first.tool,
 				dir: ancestor,
 				scope: spans ? (ancestor ? `${shortScope(ancestor)}**` : "**") : shortScope(ancestor),

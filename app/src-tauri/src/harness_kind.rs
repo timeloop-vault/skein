@@ -41,6 +41,21 @@ pub(crate) const ALL: [HarnessKind; 6] = [
 ];
 
 impl HarnessKind {
+    /// The kind named by `name` (the `as_str` form), or `None` for
+    /// anything unknown — for strings that came over a boundary and
+    /// must not be stored unchecked.
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "claude" => Self::Claude,
+            "opencode" => Self::Opencode,
+            "copilot" => Self::Copilot,
+            "byoh" => Self::Byoh,
+            "files" => Self::Files,
+            "design" => Self::Design,
+            _ => return None,
+        })
+    }
+
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Claude => "claude",
@@ -95,6 +110,14 @@ mod tests {
             let back: HarnessKind = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(back, kind);
         }
+    }
+
+    #[test]
+    fn from_name_inverts_as_str_and_rejects_unknown() {
+        for kind in ALL {
+            assert_eq!(HarnessKind::from_name(kind.as_str()), Some(kind));
+        }
+        assert_eq!(HarnessKind::from_name("something-new"), None);
     }
 
     #[test]

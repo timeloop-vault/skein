@@ -38,6 +38,8 @@ export interface HarnessAction {
 	kind: string;
 	payload: string;
 	source: string | null;
+	/** #538: kind of the harness that wrote the row; null for legacy rows. */
+	harnessKind?: string | null;
 }
 
 /// The Tauri event name the backend broadcasts live rows on. Global;

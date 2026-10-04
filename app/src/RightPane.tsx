@@ -19,12 +19,13 @@
 
 import { useCallback } from "react";
 import { pickDesignHarness } from "./designFocus.ts";
+import { type HarnessKindOf, resolveHarnessKind } from "./harnessAttribution.ts";
 import { LiveContext } from "./liveContext/index.ts";
 import { useRoomActions } from "./liveContext/store.ts";
 import type { ReviewThread } from "./review/api.ts";
 import { ReviewPane } from "./review/ReviewPane.tsx";
 import type { DesignLink } from "./review/Thread.tsx";
-import type { Harness, HarnessKind } from "./types.ts";
+import type { Harness } from "./types.ts";
 import "./rightPane.css";
 import "./diffBody.css";
 
@@ -76,8 +77,8 @@ export const RightPane = ({
 	// store, so reading it here and in LiveContext costs one backfill.
 	const { actions } = useRoomActions(roomId);
 
-	const harnessKindOf = useCallback(
-		(harnessId: string): HarnessKind => harnesses.find((h) => h.id === harnessId)?.kind ?? "byoh",
+	const harnessKindOf = useCallback<HarnessKindOf>(
+		(harnessId, storedKind) => resolveHarnessKind(storedKind, harnessId, harnesses),
 		[harnesses],
 	);
 

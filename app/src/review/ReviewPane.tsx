@@ -28,10 +28,11 @@
 // alongside the worktree watcher.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { HarnessKindOf } from "../harnessAttribution.ts";
 import type { ReviewHunk } from "../liveContext/review.ts";
 import { acceptReview, attributeHunks, rejectReview } from "../liveContext/review.ts";
 import type { HarnessAction } from "../liveContext/store.ts";
-import type { Harness, HarnessKind } from "../types.ts";
+import type { Harness } from "../types.ts";
 import {
 	addThread,
 	contributingHarnesses,
@@ -80,7 +81,7 @@ export const ReviewPane = ({
 	cwd: string;
 	/** The room's action rows — per-hunk harness attribution only (D4). */
 	actions: HarnessAction[];
-	harnessKindOf: (harnessId: string) => HarnessKind;
+	harnessKindOf: HarnessKindOf;
 	/** The room's currently active/focused harness — the #238 nudge
 	 *  target. No picker: a nudge always goes to whichever harness the
 	 *  user would otherwise be typing into. */

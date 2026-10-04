@@ -29,6 +29,9 @@ pub struct HarnessActionEvent<'a> {
     pub kind: &'a str,
     pub payload: &'a str,
     pub source: Option<&'a str>,
+    /// Kind of the harness that wrote the row (#538); `None` when the
+    /// writer does not know it.
+    pub harness_kind: Option<&'a str>,
 }
 
 /// Emit one live action to the frontend. Best-effort: a failed emit
@@ -45,6 +48,7 @@ pub fn emit(
     kind: &str,
     payload: &str,
     source: Option<&str>,
+    harness_kind: Option<&str>,
 ) {
     let event = HarnessActionEvent {
         id,
@@ -54,6 +58,7 @@ pub fn emit(
         kind,
         payload,
         source,
+        harness_kind,
     };
     if let Err(e) = app.emit(EVENT_NAME, event) {
         tracing::trace!(error = %e, "harness_action_event: emit failed");

@@ -3,8 +3,8 @@
 // no-diff or the line diff). Split out of ReviewPane.tsx (#460) — pure
 // render of what the orchestrator hands it, no state of its own.
 
+import type { HarnessKindOf } from "../harnessAttribution.ts";
 import type { ReviewHunk } from "../liveContext/review.ts";
-import type { HarnessKind } from "../types.ts";
 import {
 	addThread,
 	type ReviewFileDetail,
@@ -58,7 +58,7 @@ export const ReviewBody = ({
 	svgMode: SvgViewMode;
 	setSvgMode: (mode: SvgViewMode) => void;
 	owners: Array<string | undefined>;
-	harnessKindOf: (harnessId: string) => HarnessKind;
+	harnessKindOf: HarnessKindOf;
 	verbs: { onAccept: (h: ReviewHunk) => void; onReject: (h: ReviewHunk) => void } | undefined;
 	commentOnLines: (selection: LineSelection, body: string) => void;
 }) => {

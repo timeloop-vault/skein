@@ -546,7 +546,12 @@ pub fn backfill_from_db(
         }
     }
 
-    match skein_db.record_harness_actions(harness_id, room_id, &rows_to_insert) {
+    match skein_db.record_harness_actions(
+        harness_id,
+        room_id,
+        Some(crate::harness_kind::HarnessKind::Opencode.as_str()),
+        &rows_to_insert,
+    ) {
         Ok(inserted) => inserted,
         Err(e) => {
             // max_ts didn't advance, so the next attach retries this same batch.

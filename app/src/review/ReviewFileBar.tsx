@@ -4,8 +4,8 @@
 // (#460); the composer's open state stays in the pane.
 
 import { HChip } from "../components.tsx";
+import type { HarnessKindOf } from "../harnessAttribution.ts";
 import { acceptReview, rejectReview } from "../liveContext/review.ts";
-import type { HarnessKind } from "../types.ts";
 import { addThread, type ReviewFile, type ReviewScope, type ReviewThread } from "./api.ts";
 import type { ThreadHandlers } from "./DiffBody.tsx";
 import { Composer, type DesignLink, ThreadView } from "./Thread.tsx";
@@ -35,7 +35,7 @@ export const ReviewFileBar = ({
 	handlers: ThreadHandlers;
 	fileComposerOpen: boolean;
 	setFileComposerOpen: (open: boolean) => void;
-	harnessKindOf: (harnessId: string) => HarnessKind;
+	harnessKindOf: HarnessKindOf;
 	designLinkFor: ((thread: ReviewThread) => DesignLink | undefined) | undefined;
 }) => (
 	<>

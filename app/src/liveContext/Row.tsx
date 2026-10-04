@@ -57,7 +57,7 @@ export function formatClock(ms: number): string {
 interface RowProps {
 	/** displayKind — drives the `k-<kind>` CSS class and the glyph. */
 	kind: string;
-	harness?: HarnessKind | undefined;
+	harness?: HarnessKind | null | undefined;
 	timestampMs: number;
 	children: ReactNode;
 	right?: ReactNode;
@@ -89,7 +89,7 @@ export const Row = ({
 		style={onClick ? { cursor: "pointer" } : undefined}
 	>
 		<span className="time">{formatClock(timestampMs)}</span>
-		<span className="by">{harness && <HChip kind={harness} />}</span>
+		<span className="by">{harness !== undefined && <HChip kind={harness} />}</span>
 		<span className="gist">
 			<span className="glyph" aria-hidden="true" style={GLYPH_STYLE}>
 				{glyph ?? GLYPH[kind] ?? "·"}

@@ -61,6 +61,11 @@ pub struct HarnessAction {
     pub payload: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source: Option<String>,
+    /// The `HarnessKind` string of the harness that wrote the row (#538),
+    /// so a feed row keeps its chip after the harness is closed. `None`
+    /// for rows written before the column existed.
+    #[serde(default)]
+    pub harness_kind: Option<String>,
 }
 
 /// One row to insert via the batch path, `record_harness_actions`
@@ -140,6 +145,7 @@ fn row_to_action(row: &rusqlite::Row<'_>) -> rusqlite::Result<HarnessAction> {
         kind: row.get(4)?,
         payload: row.get(5)?,
         source: row.get(6)?,
+        harness_kind: row.get(7)?,
     })
 }
 
@@ -237,6 +243,7 @@ impl Database {
     /// the Rust side per extracted action; the canonical payload
     /// shape per `kind` is documented in the design brief. We don't
     /// validate `payload` here — it's stored verbatim.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_harness_action(
         &self,
         harness_id: &str,
@@ -245,13 +252,22 @@ impl Database {
         kind: &str,
         payload: &str,
         source: Option<&str>,
+        harness_kind: Option<&str>,
     ) -> Result<i64, String> {
         let conn = self.conn.lock();
         conn.execute(
             "INSERT INTO harness_actions \
-             (harness_id, room_id, timestamp_ms, kind, payload, source) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![harness_id, room_id, timestamp_ms, kind, payload, source],
+             (harness_id, room_id, timestamp_ms, kind, payload, source, harness_kind) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                harness_id,
+                room_id,
+                timestamp_ms,
+                kind,
+                payload,
+                source,
+                harness_kind
+            ],
         )
         .map_err(|e| e.to_string())?;
         Ok(conn.last_insert_rowid())
@@ -264,12 +280,13 @@ impl Database {
     /// one implicit transaction per row. This takes the lock once,
     /// opens a single transaction, reuses one prepared statement for
     /// every row, and commits — `harness_id`/`room_id` are stamped on
-    /// every row exactly like the per-call path. Empty `rows` is a
-    /// no-op (no lock taken). Returns the number of rows inserted.
+    /// every row (as is `harness_kind`) exactly like the per-call path.
+    /// Empty `rows` is a no-op (no lock taken). Returns the number of rows inserted.
     pub fn record_harness_actions(
         &self,
         harness_id: &str,
         room_id: &str,
+        harness_kind: Option<&str>,
         rows: &[NewHarnessAction],
     ) -> Result<usize, String> {
         if rows.is_empty() {
@@ -281,8 +298,8 @@ impl Database {
             let mut stmt = tx
                 .prepare(
                     "INSERT INTO harness_actions \
-                     (harness_id, room_id, timestamp_ms, kind, payload, source) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                     (harness_id, room_id, timestamp_ms, kind, payload, source, harness_kind) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 )
                 .map_err(|e| e.to_string())?;
             for row in rows {
@@ -292,7 +309,8 @@ impl Database {
                     row.timestamp_ms,
                     row.kind,
                     row.payload,
-                    row.source
+                    row.source,
+                    harness_kind
                 ])
                 .map_err(|e| e.to_string())?;
             }
@@ -312,7 +330,7 @@ impl Database {
         let conn = self.conn.lock();
         let mut stmt = conn
             .prepare(
-                "SELECT id, harness_id, room_id, timestamp_ms, kind, payload, source \
+                "SELECT id, harness_id, room_id, timestamp_ms, kind, payload, source, harness_kind \
                  FROM harness_actions \
                  WHERE harness_id = ?1 AND timestamp_ms > ?2 \
                  ORDER BY timestamp_ms DESC, id DESC \
@@ -337,7 +355,7 @@ impl Database {
         let conn = self.conn.lock();
         let mut stmt = conn
             .prepare(
-                "SELECT id, harness_id, room_id, timestamp_ms, kind, payload, source \
+                "SELECT id, harness_id, room_id, timestamp_ms, kind, payload, source, harness_kind \
                  FROM harness_actions \
                  WHERE room_id = ?1 AND timestamp_ms > ?2 \
                  ORDER BY timestamp_ms DESC, id DESC \
@@ -364,7 +382,7 @@ impl Database {
         let conn = self.conn.lock();
         let mut stmt = conn
             .prepare(
-                "SELECT id, harness_id, room_id, timestamp_ms, kind, payload, source \
+                "SELECT id, harness_id, room_id, timestamp_ms, kind, payload, source, harness_kind \
                  FROM harness_actions \
                  WHERE room_id = ?1 AND kind = ?2 AND timestamp_ms > ?3 \
                  ORDER BY timestamp_ms DESC, id DESC \

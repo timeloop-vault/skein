@@ -303,6 +303,7 @@ pub async fn open_harness(
             &target.name,
             &opened.harness_id,
             &label,
+            &opened.kind,
             prompt,
         )
     });

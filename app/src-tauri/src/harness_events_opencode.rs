@@ -29,6 +29,7 @@ use tokio::task::JoinHandle;
 
 use crate::db::Database;
 use crate::harness_actions_opencode;
+use crate::harness_kind::HarnessKind;
 
 /// Reconnect backoff schedule (seconds), capped at the last value
 /// for any further attempts. 1 → 2 → 4 → 8 → 16 → 30 → 30 … gets us
@@ -610,6 +611,7 @@ fn record_and_emit(
         action.kind,
         &action.payload,
         action.source.as_deref(),
+        Some(HarnessKind::Opencode.as_str()),
     ) {
         Ok(id) => {
             if action.kind == crate::db::action_kind::PATCH {
@@ -625,6 +627,7 @@ fn record_and_emit(
                     action.kind,
                     &action.payload,
                     action.source.as_deref(),
+                    Some(HarnessKind::Opencode.as_str()),
                 );
             }
         }
