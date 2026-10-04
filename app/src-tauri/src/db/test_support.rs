@@ -45,6 +45,7 @@ pub(super) fn harness(id: &str) -> Harness {
         session_id: None,
         agent: None,
         design_entry: None,
+        design_device: None,
         pending_notifications: None,
         created_by: None,
         shell_claim: None,

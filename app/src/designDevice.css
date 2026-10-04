@@ -1,0 +1,70 @@
+/* Design pane device setting (#528). */
+.dd-select {
+	max-width: 180px;
+}
+.dd-custom {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+.dd-custom input {
+	width: 56px;
+	font: inherit;
+	color: var(--fg-1);
+	background: var(--bg-2, var(--bg-1));
+	border: 1px solid var(--line);
+}
+.dp-toolbar button.dd-rotate[aria-pressed="true"] {
+	background: var(--bg-2, var(--bg-1));
+}
+.dp-toolbar button.dd-rotate:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+/* The stage centres a fixed-size box; the iframe inside is true-size and
+   scaled by --dd-s from its top-left corner. */
+.dd-stage {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--bg-1);
+}
+.dd-box {
+	flex: none;
+	position: relative;
+	overflow: hidden;
+}
+.dd-stage:not(.dd-fill) .dd-box .dp-frame {
+	display: block;
+	flex: none;
+	width: var(--dd-w);
+	height: var(--dd-h);
+	min-width: 0;
+	transform: scale(var(--dd-s));
+	transform-origin: 0 0;
+}
+
+/* None: identical to the bare iframe — both wrappers just fill. */
+.dd-stage.dd-fill {
+	overflow: visible;
+	align-items: stretch;
+	justify-content: stretch;
+	background: none;
+}
+.dd-fill .dd-box {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	overflow: visible;
+}
+
+/* Hidden until the stage is measured, so a first sized render never flashes
+   at full size. */
+.dd-stage:not(.dd-fill) .dd-box[data-measured="false"] {
+	visibility: hidden;
+}

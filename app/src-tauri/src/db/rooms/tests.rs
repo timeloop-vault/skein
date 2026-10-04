@@ -24,6 +24,30 @@ fn a_harness_design_entry_survives_the_round_trip() {
     assert_eq!(old.harnesses[0].design_entry, None);
 }
 
+/// #528: a design harness's device setting round-trips verbatim, unknown keys included.
+#[test]
+fn a_harness_design_device_survives_the_round_trip() {
+    let (_dir, db) = fresh_db();
+    let mut r = room("r1");
+    let device = serde_json::json!({"preset":"custom","width":500,"height":700,
+        "landscape":true,"dpr":2,"futureFlag":true});
+    let mut with_device = harness("h1");
+    with_device.design_device = Some(device.clone());
+    r.harnesses = vec![with_device, harness("h2")];
+    r.active_harness_id = "h1".into();
+    db.save_all(&[r]).unwrap();
+    let outcome = db.load_all().unwrap();
+    let hs = &outcome.rooms[0].harnesses;
+    assert_eq!(hs[0].design_device, Some(device));
+    assert_eq!(hs[1].design_device, None);
+
+    let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+        "harnesses":[{"id":"h1","kind":"design","name":"h1","status":"idle",
+        "model":"","tokens":"0"}],"activeHarnessId":"h1"}"#;
+    let old: Room = serde_json::from_str(json).unwrap();
+    assert_eq!(old.harnesses[0].design_device, None);
+}
+
 // ── room persistence (#167) ──────────────────────────────────
 
 #[test]

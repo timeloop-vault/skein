@@ -256,6 +256,15 @@ describe("previewUrl", () => {
 			`${base}my%20mocks/%C3%A5%C3%A4%C3%B6%20%231.html?v=0`,
 		);
 	});
+	it("appends extra params after v, URI-encoded", () => {
+		expect(previewUrl(base, "a.html", 1, [["dpr", "2"]])).toBe(`${base}a.html?v=1&dpr=2`);
+		expect(
+			previewUrl(base, "a.html", 1, [
+				["a b", "x&y"],
+				["c", "1"],
+			]),
+		).toBe(`${base}a.html?v=1&a%20b=x%26y&c=1`);
+	});
 });
 
 describe("retryDelay", () => {
