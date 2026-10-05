@@ -14,6 +14,9 @@
 //                       snapshot. Target it with emitTo("main", ...).
 //   cc-popout:focus     pop-out -> main   CcFocusPayload. Main activates the
 //                       room (and harness), then raises the main window.
+//   cc-popout:dock      pop-out -> main   no payload. "Dock back": main opens
+//                       the in-app Control Center and raises the main window.
+//                       The pop-out then closes itself; main must not touch it.
 //
 // `sections` is the output of buildControlCenter() verbatim. It is plain
 // data (rooms are the persisted Room JSON, snapshots are numbers/strings),
@@ -28,6 +31,7 @@ export const POPOUT_LABEL = "control-center";
 export const EV_SNAPSHOT = "cc-popout:snapshot";
 export const EV_READY = "cc-popout:ready";
 export const EV_FOCUS = "cc-popout:focus";
+export const EV_DOCK = "cc-popout:dock";
 
 export interface CcSnapshotPayload {
 	sections: CCSection[];

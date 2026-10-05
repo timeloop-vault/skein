@@ -14,6 +14,7 @@ import { loadCcPopout, saveCcPopout } from "./popoutPrefs.ts";
 import {
 	type CcFocusPayload,
 	type CcSnapshotPayload,
+	EV_DOCK,
 	EV_FOCUS,
 	EV_READY,
 	EV_SNAPSHOT,
@@ -42,6 +43,8 @@ export function useControlCenterPopout(
 	activeRoomId: string,
 	/** Activate a room (and harness) the way an in-app row click does. */
 	focusRoom: (roomId: string, harnessId?: string) => void,
+	/** "Dock back" from the pop-out: show the in-app view again. */
+	onDock: () => void,
 ) {
 	const [poppedOut, setPoppedOut] = useState(false);
 	const poppedOutRef = useRef(false);
@@ -155,6 +158,8 @@ export function useControlCenterPopout(
 	// Pop-out -> main: a fresh snapshot on ready, and row clicks.
 	const focusRef = useRef(focusRoom);
 	focusRef.current = focusRoom;
+	const dockRef = useRef(onDock);
+	dockRef.current = onDock;
 	useEffect(() => {
 		const offs = [
 			listen(EV_READY, () => {
@@ -166,6 +171,12 @@ export function useControlCenterPopout(
 			}),
 			listen<CcFocusPayload>(EV_FOCUS, (e) => {
 				focusRef.current(e.payload.roomId, e.payload.harnessId);
+				void invoke("window_raise_main").catch((err: unknown) => {
+					console.warn("[skein] window_raise_main failed:", err);
+				});
+			}),
+			listen(EV_DOCK, () => {
+				dockRef.current();
 				void invoke("window_raise_main").catch((err: unknown) => {
 					console.warn("[skein] window_raise_main failed:", err);
 				});

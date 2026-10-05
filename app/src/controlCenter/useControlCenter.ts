@@ -34,7 +34,9 @@ export function useControlCenter(
 	);
 	// #493: the pop-out window, when there is one, is what every entry point
 	// (strip button, Mod+0, palette) brings forward instead of the in-app view.
-	const popout = useControlCenterPopout(rooms, segments, activeRoomId, onFocus);
+	// "Dock back" opens the in-app view; the pop-out closes itself.
+	const onDock = useCallback(() => setOpen(true), []);
+	const popout = useControlCenterPopout(rooms, segments, activeRoomId, onFocus, onDock);
 	const { poppedOut, poppedOutRef, raise, open: openPopout } = popout;
 	// Never run the in-app view under a live pop-out (both run the data hook).
 	useEffect(() => {

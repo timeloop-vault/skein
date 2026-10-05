@@ -4,12 +4,14 @@
 
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { ControlCenterView } from "./ControlCenter.tsx";
+import { appearanceClassName, isAppearanceKey, readAppearance } from "./popoutAppearance.ts";
 import { loadCcPopout, saveCcPopout } from "./popoutPrefs.ts";
 import {
 	type CcFocusPayload,
 	type CcSnapshotPayload,
+	EV_DOCK,
 	EV_FOCUS,
 	EV_READY,
 	EV_SNAPSHOT,
@@ -31,6 +33,19 @@ export function ControlCenterPopout() {
 	const [snap, setSnap] = useState<{ payload: CcSnapshotPayload; offset: number } | null>(null);
 	const [tick, setTick] = useState(0);
 	const [pinned, setPinned] = useState(() => loadCcPopout().alwaysOnTop);
+
+	// Theme / density / font size follow main live: main's usePersistedState
+	// writes localStorage, which fires `storage` here (same origin).
+	const [appearance, setAppearance] = useState(() =>
+		readAppearance((k) => localStorage.getItem(k)),
+	);
+	useEffect(() => {
+		const onStorage = (e: StorageEvent) => {
+			if (isAppearanceKey(e.key)) setAppearance(readAppearance((k) => localStorage.getItem(k)));
+		};
+		window.addEventListener("storage", onStorage);
+		return () => window.removeEventListener("storage", onStorage);
+	}, []);
 
 	// Listeners first, then announce readiness so main's reply is not missed.
 	useEffect(() => {
@@ -98,12 +113,24 @@ export function ControlCenterPopout() {
 			.catch(() => setPinned(!next));
 	}, [pinned]);
 
+	// Tell main first (it shows the in-app view and raises itself), then
+	// close like the X does. Main never touches this window.
 	const dockBack = useCallback(() => {
+		void emitTo("main", EV_DOCK).catch(() => {});
 		saveCcPopout({ open: false });
 		void getCurrentWindow().close();
 	}, []);
 
-	if (!snap) return <div className="cc-popout-waiting">Waiting for Skein…</div>;
+	const shell = (children: ReactNode) => (
+		<div
+			className={appearanceClassName(appearance)}
+			style={{ ["--cfs" as string]: `${appearance.chromeFontPt}px` }}
+		>
+			{children}
+		</div>
+	);
+
+	if (!snap) return shell(<div className="cc-popout-waiting">Waiting for Skein…</div>);
 
 	// `tick` only forces a re-render so effectiveNow re-reads the clock.
 	void tick;
@@ -128,13 +155,13 @@ export function ControlCenterPopout() {
 			</button>
 		</div>
 	);
-	return (
+	return shell(
 		<ControlCenterView
 			sections={snap.payload.sections}
 			activeRoomId={snap.payload.activeRoomId}
 			now={effectiveNow(snap.offset, Date.now())}
 			onFocus={onFocus}
 			header={header}
-		/>
+		/>,
 	);
 }
