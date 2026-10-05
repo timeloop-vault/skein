@@ -1,5 +1,7 @@
 import { type Dispatch, type MutableRefObject, type SetStateAction, useMemo, useRef } from "react";
 import { allRoomOrder } from "./roomGroups.ts";
+import { type AddTodoWithFeedback, activeTodoTarget } from "./todos/addFeedback.ts";
+import type { TodoScope } from "./todos/model.ts";
 import type { Room } from "./types.ts";
 import type { useAppSettings } from "./useAppSettings.ts";
 import type { useHarnessActions } from "./useHarnessActions.ts";
@@ -34,6 +36,8 @@ export function useAppShortcuts(a: {
 	setShowPalette: Dispatch<SetStateAction<boolean>>;
 	setShowSettings: Dispatch<SetStateAction<boolean>>;
 	toggleControlCenterRef: MutableRefObject<() => void>;
+	/** #335: add a todo (with confirmation) for a room + harness. */
+	addTodo: AddTodoWithFeedback;
 }) {
 	const { store, nav, actions, creation, settings } = a;
 	const { activeRoomId } = store;
@@ -68,6 +72,13 @@ export function useAppShortcuts(a: {
 		);
 	};
 
+	// Mod+T / Mod+Shift+T (#335): the active room + its active harness.
+	const addTodoForActiveRef = useRef<(scope: TodoScope) => void>(() => {});
+	addTodoForActiveRef.current = (scope) => {
+		const target = activeTodoTarget(a.activeRoomsRef.current, store.activeRoomIdRef.current);
+		if (target) a.addTodo(scope, target.roomId, target.harnessId);
+	};
+
 	// #19: the window-level keyboard shortcut listener (cycleRoom,
 	// cycleHarness, and the Mod+… switch) — see useKeyboardShortcuts.ts.
 	useKeyboardShortcuts(
@@ -89,6 +100,7 @@ export function useAppShortcuts(a: {
 		a.setShowSettings,
 		settings.setFontSize,
 		nav.openNewRoom,
+		addTodoForActiveRef,
 	);
 	return { toggleFilesRef, toggleReviewRef };
 }

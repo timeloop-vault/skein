@@ -17,6 +17,7 @@
 //! - `harness_log` — the `harness_events` and `harness_actions` tables:
 //!   record and recent-rows queries.
 //! - `rooms` — `db_load_rooms` / `db_save_rooms`.
+//! - `todos` — `db_load_global_todos` / `db_save_global_todos` (#335).
 //! - `spawn_env` — `SpawnEnvState`, the Settings environment commands,
 //!   agent discovery, and the default shell / home / cwd lookups.
 
@@ -26,3 +27,4 @@ pub(crate) mod harness_log;
 pub(crate) mod pty;
 pub(crate) mod rooms;
 pub(crate) mod spawn_env;
+pub(crate) mod todos;

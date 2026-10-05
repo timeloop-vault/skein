@@ -39,6 +39,7 @@ export function useKeyboardShortcuts(
 	setShowSettings: Dispatch<SetStateAction<boolean>>,
 	setFontSize: Dispatch<SetStateAction<number>>,
 	openNewRoom: () => Promise<void>,
+	addTodoForActiveRef: MutableRefObject<(scope: "room" | "global") => void>,
 ) {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: activeRoomIdRef/setActiveRoomId come from useRoomsStore (#19) — a ref/a setState setter, stable across renders, but biome can't prove that through a destructured custom-hook return.
 	useEffect(() => {
@@ -106,6 +107,12 @@ export function useKeyboardShortcuts(
 					break;
 				case "controlCenter":
 					toggleControlCenterRef.current(); // #492
+					break;
+				case "addRoomTodo":
+					addTodoForActiveRef.current("room"); // #335
+					break;
+				case "addGlobalTodo":
+					addTodoForActiveRef.current("global"); // #335
 					break;
 				case "settings":
 					setShowSettings(true);

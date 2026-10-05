@@ -49,6 +49,7 @@ mod snapshots;
 mod sweep;
 #[cfg(test)]
 mod test_support;
+mod todos;
 
 pub use agent_tokens::TokenLookup;
 pub use element_anchors::ReviewElementAnchorRow;
@@ -88,6 +89,8 @@ pub struct Database {
     /// serializes seq-aware saves against each other for their full
     /// duration, not just the compare.
     last_saved_seq: Mutex<u64>,
+    /// Same guard as `last_saved_seq`, for the global todo list (#335).
+    last_saved_todos_seq: Mutex<u64>,
 }
 
 impl Database {
@@ -116,6 +119,7 @@ impl Database {
             loaded_ok: AtomicBool::new(false),
             save_seq: AtomicU64::new(0),
             last_saved_seq: Mutex::new(0),
+            last_saved_todos_seq: Mutex::new(0),
         })
     }
 

@@ -26,6 +26,7 @@ pub(super) fn room(id: &str) -> Room {
         attention: None,
         created_by: None,
         closed_by: None,
+        todos: None,
         retired: None,
         repo_identity: None,
     }

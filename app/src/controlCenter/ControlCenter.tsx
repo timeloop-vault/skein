@@ -5,9 +5,12 @@
 
 import type { ReactNode } from "react";
 import type { StripSegment } from "../roomGroups.ts";
+import type { VisibleTodo } from "../todos/model.ts";
+import type { TodoActions } from "../todos/useTodos.ts";
 import type { Room } from "../types.ts";
 import { CCRowView } from "./CCRow.tsx";
 import type { CCSection } from "./model.ts";
+import { TodoSection } from "./TodoSection.tsx";
 import { useControlCenterSections } from "./useControlCenterSections.ts";
 import "./ControlCenter.css";
 
@@ -16,6 +19,9 @@ export interface ControlCenterViewProps {
 	activeRoomId: string | null;
 	now: number;
 	onFocus: (roomId: string, harnessId?: string) => void;
+	/** The manual todo list (#335), rendered after the room sections. */
+	todos: readonly VisibleTodo[];
+	todoActions: TodoActions;
 	/** Toolbar rendered above the list (the in-app "Pop out" button). */
 	header?: ReactNode;
 	hidden?: boolean;
@@ -26,6 +32,8 @@ export function ControlCenterView({
 	activeRoomId,
 	now,
 	onFocus,
+	todos,
+	todoActions,
 	header,
 	hidden = false,
 }: ControlCenterViewProps) {
@@ -72,6 +80,7 @@ export function ControlCenterView({
 							))}
 						</div>
 					)}
+					<TodoSection todos={todos} actions={todoActions} onFocus={onFocus} />
 				</>
 			)}
 		</div>
@@ -84,6 +93,8 @@ export interface ControlCenterProps {
 	activeRoomId: string | null;
 	visible: boolean;
 	onFocus: (roomId: string, harnessId?: string) => void;
+	todos: readonly VisibleTodo[];
+	todoActions: TodoActions;
 	/** Moves the view into its own window (#493). */
 	onPopOut?: () => void;
 }
@@ -94,6 +105,8 @@ export function ControlCenter({
 	activeRoomId,
 	visible,
 	onFocus,
+	todos,
+	todoActions,
 	onPopOut,
 }: ControlCenterProps) {
 	const { sections, now } = useControlCenterSections(rooms, segments, visible);
@@ -115,6 +128,8 @@ export function ControlCenter({
 			activeRoomId={activeRoomId}
 			now={now}
 			onFocus={onFocus}
+			todos={todos}
+			todoActions={todoActions}
 			header={header}
 			hidden={!visible}
 		/>

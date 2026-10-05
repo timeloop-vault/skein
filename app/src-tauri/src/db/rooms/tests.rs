@@ -50,6 +50,19 @@ fn a_harness_design_device_survives_the_round_trip() {
 
 // ── room persistence (#167) ──────────────────────────────────
 
+/// #335: a room's todos round-trip verbatim, unknown keys included; an old blob has none.
+#[test]
+fn room_todos_survive_the_round_trip() {
+    let (_dir, db) = fresh_db();
+    let mut r = room("r1");
+    let todos = vec![serde_json::json!({"id":"t1","createdMs":1,"title":"a","futureKey":[1]})];
+    r.todos = Some(todos.clone());
+    db.save_all(&[r, room("r2")]).unwrap();
+    let outcome = db.load_all().unwrap();
+    assert_eq!(outcome.rooms[0].todos, Some(todos));
+    assert_eq!(outcome.rooms[1].todos, None);
+}
+
 #[test]
 fn rooms_round_trip_through_save_and_load() {
     let (_dir, db) = fresh_db();

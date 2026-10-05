@@ -103,6 +103,8 @@ pub fn run() {
             commands::spawn_env::default_cwd,
             commands::rooms::db_load_rooms,
             commands::rooms::db_save_rooms,
+            commands::todos::db_load_global_todos,
+            commands::todos::db_save_global_todos,
             git::git_is_repo,
             git::git_inspect_folder,
             git::git_repo_identity,
