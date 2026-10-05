@@ -319,3 +319,23 @@
 		display: none;
 	}
 }
+
+/* Toolbar above the list (#493): the in-app "Pop out" button. */
+.cc-toolbar {
+	display: flex;
+	justify-content: flex-end;
+	padding: calc(var(--pad-x, 12px) * 0.5) 0;
+}
+.cc-popout-btn {
+	background: transparent;
+	color: var(--fg-2);
+	border: 1px solid var(--line-strong);
+	border-radius: 4px;
+	padding: 2px 10px;
+	font: inherit;
+	font-size: var(--cc-meta-size);
+	cursor: pointer;
+}
+.cc-popout-btn:hover {
+	color: var(--fg-0);
+}

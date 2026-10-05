@@ -78,9 +78,11 @@ pub fn run() {
     }
     builder
         .on_menu_event(setup::on_menu_event)
+        .on_window_event(setup::on_window_event)
         .setup(setup::setup)
         .invoke_handler(tauri::generate_handler![
             commands::app::ping,
+            commands::app::window_raise_main,
             fs::list_dir,
             fs::read_file_text,
             fs::write_file_text,

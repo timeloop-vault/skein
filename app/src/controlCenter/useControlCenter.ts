@@ -13,6 +13,8 @@ import {
 import type { StripSegment } from "../roomGroups.ts";
 import type { Room } from "../types.ts";
 import type { ControlCenterProps } from "./ControlCenter.tsx";
+import { toggleAction } from "./popoutSync.ts";
+import { useControlCenterPopout } from "./useControlCenterPopout.ts";
 
 export function useControlCenter(
 	rooms: Room[],
@@ -22,7 +24,32 @@ export function useControlCenter(
 	switchHarnessInRoom: (roomId: string, harnessId: string) => void,
 ) {
 	const [open, setOpen] = useState(false);
-	const toggle = useCallback(() => setOpen((o) => !o), []);
+	const onFocus = useCallback(
+		(roomId: string, harnessId?: string) => {
+			setActiveRoomId(roomId);
+			if (harnessId) switchHarnessInRoom(roomId, harnessId);
+			setOpen(false);
+		},
+		[setActiveRoomId, switchHarnessInRoom],
+	);
+	// #493: the pop-out window, when there is one, is what every entry point
+	// (strip button, Mod+0, palette) brings forward instead of the in-app view.
+	// "Dock back" opens the in-app view; the pop-out closes itself.
+	const onDock = useCallback(() => setOpen(true), []);
+	const popout = useControlCenterPopout(rooms, segments, activeRoomId, onFocus, onDock);
+	const { poppedOut, poppedOutRef, raise, open: openPopout } = popout;
+	// Never run the in-app view under a live pop-out (both run the data hook).
+	useEffect(() => {
+		if (poppedOut) setOpen(false);
+	}, [poppedOut]);
+	const toggle = useCallback(() => {
+		if (toggleAction(poppedOutRef.current) === "raise") void raise();
+		else setOpen((o) => !o);
+	}, [poppedOutRef, raise]);
+	const onPopOut = useCallback(() => {
+		void openPopout();
+		setOpen(false);
+	}, [openPopout]);
 	// Mirrors for the shortcut listener, which stays bound across renders.
 	const toggleRef = useRef(toggle);
 	toggleRef.current = toggle;
@@ -34,21 +61,13 @@ export function useControlCenter(
 	// biome-ignore lint/correctness/useExhaustiveDependencies: only a room change should close
 	useEffect(() => setOpen(false), [activeRoomId]);
 
-	const onFocus = useCallback(
-		(roomId: string, harnessId?: string) => {
-			setActiveRoomId(roomId);
-			if (harnessId) switchHarnessInRoom(roomId, harnessId);
-			setOpen(false);
-		},
-		[setActiveRoomId, switchHarnessInRoom],
-	);
-
 	const props: ControlCenterProps = {
 		rooms,
 		segments,
 		activeRoomId,
 		visible: open,
 		onFocus,
+		onPopOut,
 	};
 	return { open, toggle, toggleRef, props };
 }

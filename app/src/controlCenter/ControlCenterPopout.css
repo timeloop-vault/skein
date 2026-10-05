@@ -1,0 +1,28 @@
+/* The pop-out's stand-in for AppShell's `.sk-app` (AppChrome.css): the
+   theme/density classes and --cfs on this element supply every token the
+   Control Center reads. */
+.cc-popout-root {
+	width: 100%;
+	height: 100%;
+	background: var(--bg-0);
+	color: var(--fg-0);
+	font-family: var(--sk-sans);
+	font-size: var(--cfs, 12px);
+	letter-spacing: -0.005em;
+	overflow: hidden;
+}
+.cc-popout-waiting {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 100%;
+	color: var(--fg-2);
+}
+.cc-toolbar.cc-popout-toolbar {
+	gap: 6px;
+}
+.cc-popout-btn[aria-pressed="true"] {
+	color: var(--fg-0);
+	background: var(--bg-3);
+	border-color: var(--fg-2);
+}

@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, Url};
+use tauri::{AppHandle, Emitter, Url};
 use tauri_plugin_deep_link::DeepLinkExt;
 
 use crate::db::{Database, Room};
@@ -153,31 +153,9 @@ fn take_pending() -> Option<PathBuf> {
     PENDING.lock().take()
 }
 
-/// Bring the main window to the front — asked for whether or not a
-/// path came with the request, since plain `skein` means "go to Skein".
-fn raise_main_window(app: &AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
-        tracing::warn!("open request: main window missing");
-        return;
-    };
-    let _ = window.unminimize();
-    let _ = window.show();
-    let _ = window.set_focus();
-    // `set_focus` alone loses to the foreground lock: the running
-    // instance did not receive the input that launched the request.
-    // Same trick the toast activation uses (#155).
-    #[cfg(windows)]
-    match window.hwnd() {
-        Ok(hwnd) => {
-            skein_winnotify::bring_to_front(hwnd.0 as isize);
-        }
-        Err(e) => tracing::warn!(error = %e, "open request: hwnd lookup failed"),
-    }
-}
-
 /// Raise the window and, with a path, queue it and poke the frontend.
 fn deliver(app: &AppHandle, path: Option<PathBuf>) {
-    raise_main_window(app);
+    crate::setup::raise_main_window(app);
     if let Some(path) = path {
         set_pending(path);
         if let Err(e) = app.emit(OPEN_REQUEST_EVENT, ()) {

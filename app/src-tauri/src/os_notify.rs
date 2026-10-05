@@ -107,25 +107,6 @@ fn set_pending_and_notify(app: &AppHandle, target: skein_winnotify::LaunchTarget
 #[cfg(windows)]
 const ICON_BYTES: &[u8] = include_bytes!("../icons/128x128.png");
 
-/// Bring the main window to the front. Best-effort: a missing window
-/// or a failed `hwnd()` lookup is logged and otherwise ignored — the
-/// click still isn't lost if the target below can still be recorded.
-#[cfg(windows)]
-fn raise_main_window(app: &AppHandle) {
-    use tauri::Manager;
-
-    let Some(window) = app.get_webview_window("main") else {
-        tracing::warn!("os notify: main window missing during activation");
-        return;
-    };
-    match window.hwnd() {
-        Ok(hwnd) => {
-            skein_winnotify::bring_to_front(hwnd.0 as isize);
-        }
-        Err(e) => tracing::warn!(error = %e, "os notify: hwnd lookup failed"),
-    }
-}
-
 /// Poke the frontend that a pending activation is waiting in
 /// [`PENDING_ACTIVATION`]. No payload — see [`OS_NOTIFICATION_CLICKED_EVENT`].
 #[cfg(windows)]
@@ -204,7 +185,7 @@ pub(crate) fn init(app: &AppHandle) {
 
     let activation_app = app.clone();
     match skein_winnotify::start_activator(clsid, move |invoked_args| {
-        raise_main_window(&activation_app);
+        crate::setup::raise_main_window(&activation_app);
         if let Some(target) = skein_winnotify::parse_launch(&invoked_args) {
             set_pending_and_notify(&activation_app, target);
         }
@@ -256,7 +237,7 @@ pub async fn os_notify_show(
     tauri::async_runtime::spawn_blocking(move || {
         let click_app = app;
         skein_winnotify::show_toast(&identifier, &target, &title, &body, move |clicked_target| {
-            raise_main_window(&click_app);
+            crate::setup::raise_main_window(&click_app);
             set_pending_and_notify(&click_app, clicked_target);
         })
         .map_err(|e| e.to_string())
