@@ -76,5 +76,7 @@ export function useAppBackgroundWiring(a: {
 		actions.setHarnessDesignDevice,
 		activeRoomIdRef,
 		actions.switchHarnessInRoom,
+		(harnessId) => settings.dockedDesign[harnessId] === true,
+		settings.showDockedDesign,
 	);
 }

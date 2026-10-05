@@ -14,13 +14,23 @@ const POLL_MS = 25;
 export interface DesignReveal {
 	activeRoomId(): string | null;
 	switchHarness(roomId: string, harnessId: string): void;
+	/** #551: is the design harness docked in its room's right pane? */
+	isDocked(harnessId: string): boolean;
+	/** #551: show a docked harness in the room's right-pane design tab. */
+	showDocked(roomId: string, harnessId: string): void;
 }
 
-/** Only a room already in front may have its harness switched. */
+/** Only a room already in front may be revealed in. A docked harness is
+ *  shown in the right pane (the active harness is left alone); otherwise
+ *  the room's active harness is switched. Nothing is ever docked. */
 export const revealDecision = (
 	activeRoomId: string | null,
 	roomId: string,
-): "switch" | "other_room" => (activeRoomId === roomId ? "switch" : "other_room");
+	docked = false,
+): "switch" | "show_docked" | "other_room" => {
+	if (activeRoomId !== roomId) return "other_room";
+	return docked ? "show_docked" : "switch";
+};
 
 /** Poll `cond` until true or `timeoutMs` passes. */
 export async function pollUntil(
@@ -49,7 +59,9 @@ export async function revealPane(
 	roomId: string,
 	harnessId: string,
 ): Promise<boolean> {
-	if (revealDecision(reveal.activeRoomId(), roomId) !== "switch") return false;
-	reveal.switchHarness(roomId, harnessId);
+	const decision = revealDecision(reveal.activeRoomId(), roomId, reveal.isDocked(harnessId));
+	if (decision === "other_room") return false;
+	if (decision === "show_docked") reveal.showDocked(roomId, harnessId);
+	else reveal.switchHarness(roomId, harnessId);
 	return pane.whenVisible(REVEAL_TIMEOUT_MS);
 }

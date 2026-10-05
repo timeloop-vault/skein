@@ -18,10 +18,12 @@
 // thing that needs a stable identity per pane is this list.
 
 import { useCallback } from "react";
+import { effectiveRightPaneTab, shownDesignHarness } from "./designDock.ts";
 import { pickDesignHarness } from "./designFocus.ts";
 import { type HarnessKindOf, resolveHarnessKind } from "./harnessAttribution.ts";
 import { LiveContext } from "./liveContext/index.ts";
 import { useRoomActions } from "./liveContext/store.ts";
+import { RightPaneDesign, type RightPaneDesignProps } from "./RightPaneDesign.tsx";
 import type { ReviewThread } from "./review/api.ts";
 import { ReviewPane } from "./review/ReviewPane.tsx";
 import type { DesignLink } from "./review/Thread.tsx";
@@ -29,14 +31,16 @@ import type { Harness } from "./types.ts";
 import "./rightPane.css";
 import "./diffBody.css";
 
-export type RightPaneTab = "context" | "review";
+export type RightPaneTab = "context" | "review" | "design";
 
 const TABS: Array<{ id: RightPaneTab; label: string; title: string }> = [
 	{ id: "context", label: "Live Context", title: "what the agents are doing right now" },
 	{ id: "review", label: "Review", title: "review this branch — diff and comments" },
+	{ id: "design", label: "Design", title: "docked design preview" },
 ];
 
 export const RightPane = ({
+	design,
 	roomId,
 	cwd,
 	harnesses,
@@ -46,10 +50,12 @@ export const RightPane = ({
 	showTurnCosts,
 	onToggleTurnCosts,
 	onBranchChange,
-	tab,
+	tab: storedTab,
 	onTabChange,
 	onShowInDesign,
 }: {
+	/** #551: the room's docked design harnesses and their handlers. */
+	design: Omit<RightPaneDesignProps, "visible" | "shown"> & { pick: string | undefined };
 	/** #434: point a design harness at `entry` (when `setEntry`), switch
 	 *  to it and focus the element thread. */
 	onShowInDesign: (
@@ -97,10 +103,16 @@ export const RightPane = ({
 		[harnesses, onShowInDesign],
 	);
 
+	// #551: Design shows only while something is docked; derived, so the
+	// stored tab survives an undock and comes back on the next dock.
+	const hasDocked = design.docked.length > 0;
+	const tab = effectiveRightPaneTab(storedTab, hasDocked);
+	const shown = shownDesignHarness(design.docked, design.pick);
+
 	return (
 		<div className="sk-rp">
 			<div className="sk-rp-tabs">
-				{TABS.map((t) => (
+				{TABS.filter((t) => t.id !== "design" || hasDocked).map((t) => (
 					<button
 						type="button"
 						key={t.id}
@@ -140,6 +152,21 @@ export const RightPane = ({
 					designLinkFor={designLinkFor}
 				/>
 			</div>
+
+			{hasDocked && (
+				<div className="sk-rp-body" style={{ display: tab === "design" ? "flex" : "none" }}>
+					<RightPaneDesign
+						room={design.room}
+						docked={design.docked}
+						shown={shown}
+						visible={visible && tab === "design"}
+						onPick={design.onPick}
+						onEntryChange={design.onEntryChange}
+						onDeviceChange={design.onDeviceChange}
+						onUndock={design.onUndock}
+					/>
+				</div>
+			)}
 		</div>
 	);
 };

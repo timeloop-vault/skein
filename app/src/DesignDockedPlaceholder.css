@@ -1,0 +1,18 @@
+.dp-docked-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 6px;
+}
+.dp-docked-actions button {
+	font-family: var(--sk-mono);
+	font-size: 11px;
+	padding: 3px 10px;
+	color: var(--fg-1);
+	background: transparent;
+	border: 1px solid var(--line, currentColor);
+	border-radius: 4px;
+	cursor: pointer;
+}
+.dp-docked-actions button:hover {
+	background: var(--bg-hover, rgba(127, 127, 127, 0.15));
+}

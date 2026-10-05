@@ -16,6 +16,7 @@
 
 import { useCallback, useState } from "react";
 import { DEFAULT_BRANCH_TEMPLATE } from "./branchName.ts";
+import { type DesignPicks, type DockedDesign, withDocked } from "./designDock.ts";
 import { type DefaultAgents, usePersistedState, type VersionNoticeModes } from "./prefs.ts";
 import type { RightPaneTab } from "./RightPane.tsx";
 import type { Density, Theme } from "./types.ts";
@@ -80,6 +81,23 @@ export function useAppSettings() {
 		"rightPaneTabs",
 		{},
 	);
+	// #551: which design harnesses are docked into the right pane's
+	// Design tab (absent = in the main column), and which docked one each
+	// room's tab last showed.
+	const [dockedDesign, setDockedDesign] = usePersistedState<DockedDesign>("dockedDesign", {});
+	const [designPicks, setDesignPicks] = usePersistedState<DesignPicks>("designPicks", {});
+	const setDesignDocked = useCallback(
+		(harnessId: string, docked: boolean) =>
+			setDockedDesign((prev) => withDocked(prev, harnessId, docked)),
+		[setDockedDesign],
+	);
+	const setDesignPick = useCallback(
+		(roomId: string, harnessId: string) =>
+			setDesignPicks((prev) =>
+				prev[roomId] === harnessId ? prev : { ...prev, [roomId]: harnessId },
+			),
+		[setDesignPicks],
+	);
 	// Width of the harness column in px. Right pane absorbs the remainder
 	// via flex:1. Splitter clamps against window size at drag time.
 	const [harnessColWidth, setHarnessColWidth] = usePersistedState<number>("harnessColWidth", 640);
@@ -100,6 +118,14 @@ export function useAppSettings() {
 			setRightPaneTabs((prev) => (prev[roomId] === tab ? prev : { ...prev, [roomId]: tab }));
 		},
 		[setRightPaneTabs],
+	);
+	// #551: reveal a docked design harness in its room's right pane.
+	const showDockedDesign = useCallback(
+		(roomId: string, harnessId: string) => {
+			setRightPaneTab(roomId, "design");
+			setDesignPick(roomId, harnessId);
+		},
+		[setRightPaneTab, setDesignPick],
 	);
 	const handleBranchChange = useCallback((roomId: string, branch: string | null) => {
 		setLiveBranches((prev) => (prev[roomId] === branch ? prev : { ...prev, [roomId]: branch }));
@@ -134,6 +160,11 @@ export function useAppSettings() {
 		setBranchTemplate,
 		rightPaneTabs,
 		setRightPaneTab,
+		dockedDesign,
+		designPicks,
+		setDesignDocked,
+		setDesignPick,
+		showDockedDesign,
 		harnessColWidth,
 		setHarnessColWidth,
 		liveBranches,

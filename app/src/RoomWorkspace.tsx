@@ -1,3 +1,4 @@
+import { dockedDesignHarnesses } from "./designDock.ts";
 import { publishDesignFocus } from "./designFocus.ts";
 import { HarnessColumn } from "./HarnessColumn.tsx";
 import { MissingFolderCard } from "./MissingFolderCard.tsx";
@@ -38,6 +39,8 @@ export interface RoomWorkspaceProps {
 export const RoomWorkspace = (p: RoomWorkspaceProps) => {
 	const { drag, dropTarget, startDrag, dragHandlers, suppressClick } = p.drag;
 	const s = p.settings;
+	// #551: reveal a docked design harness in its room's right pane.
+	const showDocked = s.showDockedDesign;
 	return (
 		<Splitter
 			className="sk-workspace"
@@ -110,6 +113,13 @@ export const RoomWorkspace = (p: RoomWorkspaceProps) => {
 							onHarnessCmdChange={p.actions.updateHarnessCmd}
 							onDesignEntryChange={p.actions.setHarnessDesignEntry}
 							onDesignDeviceChange={p.actions.setHarnessDesignDevice}
+							dockedDesign={s.dockedDesign}
+							onDesignDock={(harnessId, docked) => {
+								s.setDesignDocked(harnessId, docked);
+								if (docked) showDocked(r.id, harnessId);
+								else p.actions.switchHarnessInRoom(r.id, harnessId);
+							}}
+							onDesignShow={(harnessId) => showDocked(r.id, harnessId)}
 							opencodePorts={p.store.opencodePorts}
 							onOpencodeSessionCaptured={(harnessId, sid) =>
 								p.creation.setHarnessSessionId(r.id, harnessId, sid)
@@ -154,11 +164,24 @@ export const RoomWorkspace = (p: RoomWorkspaceProps) => {
 							showTurnCosts={s.showTurnCosts}
 							onToggleTurnCosts={s.handleToggleTurnCosts}
 							onBranchChange={s.handleBranchChange}
+							design={{
+								room: r,
+								docked: dockedDesignHarnesses(r.harnesses, s.dockedDesign),
+								pick: s.designPicks[r.id],
+								onPick: (harnessId) => s.setDesignPick(r.id, harnessId),
+								onEntryChange: p.actions.setHarnessDesignEntry,
+								onDeviceChange: p.actions.setHarnessDesignDevice,
+								onUndock: (harnessId) => {
+									s.setDesignDocked(harnessId, false);
+									p.actions.switchHarnessInRoom(r.id, harnessId);
+								},
+							}}
 							tab={s.rightPaneTabs[r.id] ?? "context"}
 							onTabChange={(tab) => s.setRightPaneTab(r.id, tab)}
 							onShowInDesign={(pick, entry, threadId) => {
 								if (pick.setEntry) p.actions.setHarnessDesignEntry(r.id, pick.harnessId, entry);
-								p.actions.switchHarnessInRoom(r.id, pick.harnessId);
+								if (s.dockedDesign[pick.harnessId]) showDocked(r.id, pick.harnessId);
+								else p.actions.switchHarnessInRoom(r.id, pick.harnessId);
 								publishDesignFocus({ roomId: r.id, harnessId: pick.harnessId, entry, threadId });
 							}}
 						/>

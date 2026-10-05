@@ -1,7 +1,8 @@
 /* Right-pane tab strip (#212).
 
-   Two panes today — Live Context and Review — hidden with display:none
-   rather than unmounted, so switching costs nothing and neither pane
+   Live Context, Review and — while a design harness is docked (#551) —
+   Design, hidden with display:none rather than unmounted, so switching
+   costs nothing and no pane
    loses its scroll position or its subscriptions. */
 
 .sk-rp {
@@ -41,6 +42,28 @@
 .sk-rp-tab.active {
 	color: var(--fg-0);
 	border-bottom-color: var(--accent);
+}
+
+/* #551: docked design harnesses (one container each, one shown). */
+.sk-rp-design-picker {
+	flex: 0 0 auto;
+	padding: 4px 8px;
+	border-bottom: 1px solid var(--line);
+	background: var(--bg-1);
+}
+.sk-rp-design-picker select {
+	background: var(--bg-2, transparent);
+	color: var(--fg-1);
+	border: 1px solid var(--line);
+	border-radius: 3px;
+	font-family: var(--sk-sans);
+	font-size: calc(var(--cfs, 12px) * 0.85);
+	padding: 2px 6px;
+}
+.sk-rp-design-body {
+	flex: 1;
+	min-height: 0;
+	flex-direction: column;
 }
 
 .sk-rp-body {
