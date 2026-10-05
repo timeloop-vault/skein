@@ -47,6 +47,7 @@ describe("snapshotChanged", () => {
 		sections: [],
 		activeRoomId,
 		now,
+		todos: [],
 	});
 
 	it("always sends the first", () => {
@@ -63,6 +64,13 @@ describe("snapshotChanged", () => {
 	it("sends when the active room changes", () => {
 		const first = snapshotChanged(null, snap(0));
 		expect(snapshotChanged({ json: first.json, now: 0 }, snap(1, "b")).send).toBe(true);
+	});
+
+	it("sends when a todo changes", () => {
+		const first = snapshotChanged(null, snap(0));
+		const todo = { scope: "global" as const, todo: { id: "t", createdMs: 0, title: "x" } };
+		const next = { ...snap(1), todos: [{ ...todo, roomName: null, harnessGone: false }] };
+		expect(snapshotChanged({ json: first.json, now: 0 }, next).send).toBe(true);
 	});
 });
 

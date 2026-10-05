@@ -76,6 +76,8 @@ export type ShortcutAction =
 	| "fontInc"
 	| "fontDec"
 	| "controlCenter"
+	| "addRoomTodo"
+	| "addGlobalTodo"
 	| "jumpRoom";
 
 export interface ShortcutMatch {
@@ -103,6 +105,8 @@ const BINDINGS: Binding[] = [
 	// R = review (#212). Mod+⇧+R is reloadWindow, so the bare chord was
 	// free; agreed with Stefan before wiring, per the CLAUDE.md rule.
 	{ code: "KeyR", action: "review" },
+	// T = todo (#335): Mod+T adds a room todo, Mod+⇧+T a global one. Agreed with Stefan.
+	{ code: "KeyT", action: "addRoomTodo" },
 	{ code: "Comma", action: "settings" },
 	// 0 = all rooms, beside Mod+1-9 for the nth room (#492). Agreed with Stefan 2026-10-04.
 	{ code: "Digit0", action: "controlCenter" },
@@ -113,6 +117,7 @@ const BINDINGS: Binding[] = [
 	// Primary + Shift.
 	{ code: "KeyH", shift: true, action: "addHarness" },
 	{ code: "KeyR", shift: true, action: "reloadWindow" },
+	{ code: "KeyT", shift: true, action: "addGlobalTodo" },
 	{ code: "KeyJ", shift: true, action: "prevAlertedRoom" },
 	{ code: "KeyL", shift: true, action: "prevAlertedHarness" },
 	// Harness nav: primary + arrow.
@@ -168,6 +173,8 @@ export const hints = {
 	files: `${modLabel} E`,
 	review: `${modLabel} R`,
 	controlCenter: `${modLabel} 0`,
+	addRoomTodo: `${modLabel} T`,
+	addGlobalTodo: `${modLabel} ⇧ T`,
 	addHarness: `${modLabel} ⇧ H`,
 	closeRoom: `${modLabel} W`,
 	reload: `${modLabel} ⇧ R`,

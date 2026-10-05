@@ -1,0 +1,115 @@
+/* Control Center todo section (#335). Same tokens as ControlCenter.css. */
+.cc-todos {
+	margin-top: calc(var(--cfs, 12px) * 1.6);
+	padding: 0 8px;
+}
+.cc-todos .cc-group {
+	display: flex;
+}
+.cc-todo-empty {
+	padding: 10px 0;
+	color: var(--fg-2);
+	font-size: var(--cc-meta-size);
+}
+.cc-todo {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 5px 0;
+	border-bottom: 1px solid var(--line);
+}
+.cc-todo:hover {
+	background: var(--bg-2);
+}
+.cc-todo-check {
+	margin: 3px 0 0;
+	accent-color: var(--accent);
+}
+.cc-todo-body {
+	flex: 1;
+	min-width: 0;
+}
+.cc-todo-line {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+.cc-todo-title {
+	min-width: 0;
+	padding: 0;
+	overflow: hidden;
+	background: none;
+	border: 0;
+	color: var(--fg-0);
+	font: inherit;
+	font-weight: 600;
+	text-align: left;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.cc-todo-title:disabled {
+	color: var(--fg-2);
+	cursor: default;
+}
+.cc-todo[data-done="true"] .cc-todo-title {
+	color: var(--fg-3);
+	text-decoration: line-through;
+}
+.cc-todo-scope {
+	flex: none;
+	max-width: 14em;
+}
+.cc-todo-hint {
+	flex: none;
+	color: var(--fg-3);
+	font-size: var(--cc-meta-size);
+}
+.cc-todo-actions {
+	display: flex;
+	flex: none;
+	gap: 4px;
+	margin-left: auto;
+}
+.cc-todo-btn {
+	padding: 0 6px;
+	background: none;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	color: var(--fg-2);
+	font: inherit;
+	font-size: var(--cc-meta-size);
+	cursor: pointer;
+}
+.cc-todo-btn:hover {
+	color: var(--fg-0);
+	background: var(--bg-3);
+}
+.cc-todo-btn:focus-visible,
+.cc-todo-title:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+.cc-todo-note {
+	margin-top: 1px;
+	color: var(--fg-2);
+	font-size: var(--cc-meta-size);
+	overflow-wrap: anywhere;
+}
+.cc-todo-input {
+	box-sizing: border-box;
+	width: 100%;
+	margin-top: 2px;
+	padding: 2px 6px;
+	background: var(--bg-1);
+	border: 1px solid var(--line-strong);
+	border-radius: 4px;
+	color: var(--fg-0);
+	font: inherit;
+	font-size: var(--cc-meta-size);
+}
+.cc-todo-input:focus {
+	outline: 2px solid var(--accent);
+	outline-offset: -1px;
+}

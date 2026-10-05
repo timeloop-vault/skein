@@ -159,6 +159,11 @@ pub struct Room {
     /// repo" from "a different repo now sits at this path".
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub repo_identity: Option<RepoIdentity>,
+    /// #335: the room's manual todo list. Opaque JSON, like
+    /// `design_device`: the model lives in `app/src/todos/model.ts`, so
+    /// unknown keys survive a round trip and Rust never needs a schema.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub todos: Option<Vec<serde_json::Value>>,
 }
 
 /// What stays the same about a repository across clones and worktrees

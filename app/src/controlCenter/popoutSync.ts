@@ -55,7 +55,7 @@ export function snapshotChanged(
 	prev: { json: string; now: number } | null,
 	next: CcSnapshotPayload,
 ): { send: boolean; json: string } {
-	const json = JSON.stringify({ s: next.sections, a: next.activeRoomId });
+	const json = JSON.stringify({ s: next.sections, a: next.activeRoomId, t: next.todos });
 	if (!prev) return { send: true, json };
 	return { send: json !== prev.json || next.now - prev.now >= NOW_REFRESH_MS, json };
 }

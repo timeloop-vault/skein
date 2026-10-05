@@ -108,6 +108,7 @@ pub(super) fn room(id: &str, harnesses: Vec<Harness>) -> Room {
         attention: None,
         created_by: None,
         closed_by: None,
+        todos: None,
         retired: None,
         repo_identity: None,
     }

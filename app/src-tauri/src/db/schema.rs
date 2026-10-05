@@ -301,6 +301,7 @@ impl Database {
         )
         .map_err(|e| e.to_string())?;
 
+        super::todos::init_schema(conn)?;
         element_anchors::init_schema(conn)?;
         element_proposals::init_schema(conn)?;
 

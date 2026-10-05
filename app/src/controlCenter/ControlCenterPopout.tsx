@@ -4,17 +4,24 @@
 
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import type { TodoActions } from "../todos/useTodos.ts";
 import { ControlCenterView } from "./ControlCenter.tsx";
 import { appearanceClassName, isAppearanceKey, readAppearance } from "./popoutAppearance.ts";
 import { loadCcPopout, saveCcPopout } from "./popoutPrefs.ts";
 import {
 	type CcFocusPayload,
 	type CcSnapshotPayload,
+	type CcTodoDonePayload,
+	type CcTodoNotePayload,
+	type CcTodoRefPayload,
 	EV_DOCK,
 	EV_FOCUS,
 	EV_READY,
 	EV_SNAPSHOT,
+	EV_TODO_DONE,
+	EV_TODO_NOTE,
+	EV_TODO_REMOVE,
 } from "./popoutProtocol.ts";
 import {
 	clockOffset,
@@ -104,6 +111,19 @@ export function ControlCenterPopout() {
 		void emitTo("main", EV_FOCUS, payload).catch(() => {});
 	}, []);
 
+	// Todo edits go to main, which owns the stores; the next snapshot shows them.
+	const todoActions = useMemo<TodoActions>(() => {
+		const send = (ev: string, payload: CcTodoRefPayload | CcTodoDonePayload | CcTodoNotePayload) =>
+			void emitTo("main", ev, payload).catch(() => {});
+		const ref = (scope: CcTodoRefPayload["scope"], id: string, roomId?: string) =>
+			roomId === undefined ? { scope, id } : { scope, id, roomId };
+		return {
+			setDone: (scope, id, done, roomId) => send(EV_TODO_DONE, { ...ref(scope, id, roomId), done }),
+			setNote: (scope, id, note, roomId) => send(EV_TODO_NOTE, { ...ref(scope, id, roomId), note }),
+			remove: (scope, id, roomId) => send(EV_TODO_REMOVE, ref(scope, id, roomId)),
+		};
+	}, []);
+
 	const togglePin = useCallback(() => {
 		const next = !pinned;
 		setPinned(next);
@@ -161,6 +181,8 @@ export function ControlCenterPopout() {
 			activeRoomId={snap.payload.activeRoomId}
 			now={effectiveNow(snap.offset, Date.now())}
 			onFocus={onFocus}
+			todos={snap.payload.todos}
+			todoActions={todoActions}
 			header={header}
 		/>,
 	);

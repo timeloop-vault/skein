@@ -18,12 +18,13 @@ import { buildSettingsProps } from "./buildSettingsProps.ts";
 import type { PaletteItem } from "./CommandPalette.tsx";
 import { StatusDot } from "./components.tsx";
 import { ControlCenter } from "./controlCenter/ControlCenter.tsx";
-import { useControlCenter } from "./controlCenter/useControlCenter.ts";
 import { usePermissionHarnessIds } from "./harnessActivity.ts";
 import { buildPaletteItems } from "./paletteItems.ts";
 import { RoomTabStrip } from "./RoomTabStrip.tsx";
 import { RoomWorkspace } from "./RoomWorkspace.tsx";
 import { StatusBar } from "./StatusBar.tsx";
+import { TodoMenuProvider } from "./todos/TodoMenuProvider.tsx";
+import { useTodoWiring } from "./todos/useTodoWiring.ts";
 import { useAppBackgroundWiring } from "./useAppBackgroundWiring.ts";
 import { useAppSettings } from "./useAppSettings.ts";
 import { useAppShortcuts } from "./useAppShortcuts.ts";
@@ -215,14 +216,7 @@ export default function App() {
 		if (room) void checkRoomFolder(room);
 	}, [activeRoomId, checkRoomFolder]);
 
-	// #492: Control Center overlay state — see controlCenter/useControlCenter.ts.
-	const cc = useControlCenter(
-		activeRooms,
-		stripSegments,
-		activeRoomId,
-		setActiveRoomId,
-		switchHarnessInRoom,
-	);
+	const { addTodo, cc } = useTodoWiring(store, pushToast, stripSegments, switchHarnessInRoom);
 
 	// #19: window-level keyboard shortcuts + the handler refs they (and
 	// the palette) read — see useAppShortcuts.ts.
@@ -237,6 +231,7 @@ export default function App() {
 		setShowPalette,
 		setShowSettings,
 		toggleControlCenterRef: cc.toggleRef,
+		addTodo,
 	});
 
 	useAppBackgroundWiring({ store, nav, actions, creation, settings, pushToast });
@@ -340,55 +335,57 @@ export default function App() {
 
 	return (
 		<AppShell theme={theme} density={density} chromeFontPt={chromeFontPt}>
-			<Titlebar {...titlebarProps} />
-			<RoomTabStrip
-				stripSegments={stripSegments}
-				activeSegment={activeSegment}
-				activeRoomId={activeRoomId}
-				onSelectSegment={onSelectSegment}
-				closeRoom={closeRoom}
-				openNewRoom={openNewRoom}
-				openNewRoomAt={openNewRoomAt}
-				openGroupPlaceholder={openGroupPlaceholder}
-				switchRoom={switchRoom}
-				dragWiring={dragWiring}
-				renaming={renaming}
-				onStartRename={startRenameRoom}
-				onRename={commitRenameRoom}
-				onRenameEnd={endRenameRoom}
-				controlCenterOpen={cc.open}
-				onToggleControlCenter={cc.toggle}
-			/>
-			<div className="cc-host" data-cc={cc.open ? "open" : "closed"}>
-				<div className="cc-workspace-slot">
-					<RoomWorkspace
-						activeRooms={activeRooms}
-						activeRoomId={activeRoomId}
-						store={store}
-						actions={actions}
-						creation={creation}
-						settings={settings}
-						defaultShell={defaultShell}
-						showPicker={showPicker}
-						setShowPicker={setShowPicker}
-						drag={dragWiring}
-						onReattachTelemetry={onReattachTelemetry}
-					/>
+			<TodoMenuProvider addTodo={addTodo}>
+				<Titlebar {...titlebarProps} />
+				<RoomTabStrip
+					stripSegments={stripSegments}
+					activeSegment={activeSegment}
+					activeRoomId={activeRoomId}
+					onSelectSegment={onSelectSegment}
+					closeRoom={closeRoom}
+					openNewRoom={openNewRoom}
+					openNewRoomAt={openNewRoomAt}
+					openGroupPlaceholder={openGroupPlaceholder}
+					switchRoom={switchRoom}
+					dragWiring={dragWiring}
+					renaming={renaming}
+					onStartRename={startRenameRoom}
+					onRename={commitRenameRoom}
+					onRenameEnd={endRenameRoom}
+					controlCenterOpen={cc.open}
+					onToggleControlCenter={cc.toggle}
+				/>
+				<div className="cc-host" data-cc={cc.open ? "open" : "closed"}>
+					<div className="cc-workspace-slot">
+						<RoomWorkspace
+							activeRooms={activeRooms}
+							activeRoomId={activeRoomId}
+							store={store}
+							actions={actions}
+							creation={creation}
+							settings={settings}
+							defaultShell={defaultShell}
+							showPicker={showPicker}
+							setShowPicker={setShowPicker}
+							drag={dragWiring}
+							onReattachTelemetry={onReattachTelemetry}
+						/>
+					</div>
+					<ControlCenter {...cc.props} />
 				</div>
-				<ControlCenter {...cc.props} />
-			</div>
-			<StatusBar
-				activeHarness={activeHarness}
-				room={room}
-				liveBranches={settings.liveBranches}
-				notifyUrgent={settings.notifyUrgent}
-				activeRooms={activeRooms}
-				activeRoomId={activeRoomId}
-				permissionHarnessIds={permissionHarnessIds}
-				jumpToHarness={jumpToHarness}
-				switchRoom={switchRoom}
-			/>
-			<AppOverlays {...overlayProps} />
+				<StatusBar
+					activeHarness={activeHarness}
+					room={room}
+					liveBranches={settings.liveBranches}
+					notifyUrgent={settings.notifyUrgent}
+					activeRooms={activeRooms}
+					activeRoomId={activeRoomId}
+					permissionHarnessIds={permissionHarnessIds}
+					jumpToHarness={jumpToHarness}
+					switchRoom={switchRoom}
+				/>
+				<AppOverlays {...overlayProps} />
+			</TodoMenuProvider>
 		</AppShell>
 	);
 }

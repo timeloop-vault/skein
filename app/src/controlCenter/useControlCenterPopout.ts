@@ -9,15 +9,23 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { availableMonitors } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { StripSegment } from "../roomGroups.ts";
+import type { VisibleTodo } from "../todos/model.ts";
+import type { TodoActions } from "../todos/useTodos.ts";
 import type { Room } from "../types.ts";
 import { loadCcPopout, saveCcPopout } from "./popoutPrefs.ts";
 import {
 	type CcFocusPayload,
 	type CcSnapshotPayload,
+	type CcTodoDonePayload,
+	type CcTodoNotePayload,
+	type CcTodoRefPayload,
 	EV_DOCK,
 	EV_FOCUS,
 	EV_READY,
 	EV_SNAPSHOT,
+	EV_TODO_DONE,
+	EV_TODO_NOTE,
+	EV_TODO_REMOVE,
 	POPOUT_LABEL,
 } from "./popoutProtocol.ts";
 import {
@@ -45,14 +53,17 @@ export function useControlCenterPopout(
 	focusRoom: (roomId: string, harnessId?: string) => void,
 	/** "Dock back" from the pop-out: show the in-app view again. */
 	onDock: () => void,
+	/** The manual todo list (#335) and its mutations. */
+	todos: VisibleTodo[],
+	todoActions: TodoActions,
 ) {
 	const [poppedOut, setPoppedOut] = useState(false);
 	const poppedOutRef = useRef(false);
 	poppedOutRef.current = poppedOut;
 
 	const { sections, now } = useControlCenterSections(rooms, segments, poppedOut);
-	const latest = useRef<CcSnapshotPayload>({ sections, activeRoomId, now });
-	latest.current = { sections, activeRoomId, now };
+	const latest = useRef<CcSnapshotPayload>({ sections, activeRoomId, now, todos });
+	latest.current = { sections, activeRoomId, now, todos };
 	const throttle = useRef<Throttled<CcSnapshotPayload> | null>(null);
 	const lastSent = useRef<{ json: string; now: number } | null>(null);
 
@@ -153,13 +164,15 @@ export function useControlCenterPopout(
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the dependencies ARE the change triggers
 	useEffect(() => {
 		throttle.current?.push(latest.current);
-	}, [sections, now, activeRoomId]);
+	}, [sections, now, activeRoomId, todos]);
 
 	// Pop-out -> main: a fresh snapshot on ready, and row clicks.
 	const focusRef = useRef(focusRoom);
 	focusRef.current = focusRoom;
 	const dockRef = useRef(onDock);
 	dockRef.current = onDock;
+	const todoRef = useRef(todoActions);
+	todoRef.current = todoActions;
 	useEffect(() => {
 		const offs = [
 			listen(EV_READY, () => {
@@ -174,6 +187,18 @@ export function useControlCenterPopout(
 				void invoke("window_raise_main").catch((err: unknown) => {
 					console.warn("[skein] window_raise_main failed:", err);
 				});
+			}),
+			listen<CcTodoDonePayload>(EV_TODO_DONE, (e) => {
+				const p = e.payload;
+				todoRef.current.setDone(p.scope, p.id, p.done, p.roomId);
+			}),
+			listen<CcTodoNotePayload>(EV_TODO_NOTE, (e) => {
+				const p = e.payload;
+				todoRef.current.setNote(p.scope, p.id, p.note, p.roomId);
+			}),
+			listen<CcTodoRefPayload>(EV_TODO_REMOVE, (e) => {
+				const p = e.payload;
+				todoRef.current.remove(p.scope, p.id, p.roomId);
 			}),
 			listen(EV_DOCK, () => {
 				dockRef.current();

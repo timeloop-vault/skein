@@ -1,4 +1,5 @@
 import type { DesignDevice } from "./designDevice.ts";
+import type { Todo } from "./todos/model.ts";
 
 // Domain types.
 //
@@ -170,6 +171,10 @@ export interface Room {
 		harnessId?: string;
 		at: number;
 	};
+	// #335: the room's manual todo list. Rust round-trips each entry
+	// opaquely (`todos: Option<Vec<Value>>`); the shape lives in
+	// `todos/model.ts`.
+	todos?: Todo[];
 }
 
 export type Theme = "dark" | "light";

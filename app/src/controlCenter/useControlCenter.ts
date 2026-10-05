@@ -7,10 +7,12 @@ import {
 	type SetStateAction,
 	useCallback,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
 import type { StripSegment } from "../roomGroups.ts";
+import type { TodosApi } from "../todos/useTodos.ts";
 import type { Room } from "../types.ts";
 import type { ControlCenterProps } from "./ControlCenter.tsx";
 import { toggleAction } from "./popoutSync.ts";
@@ -22,6 +24,7 @@ export function useControlCenter(
 	activeRoomId: string,
 	setActiveRoomId: Dispatch<SetStateAction<string>>,
 	switchHarnessInRoom: (roomId: string, harnessId: string) => void,
+	todos: TodosApi,
 ) {
 	const [open, setOpen] = useState(false);
 	const onFocus = useCallback(
@@ -36,7 +39,17 @@ export function useControlCenter(
 	// (strip button, Mod+0, palette) brings forward instead of the in-app view.
 	// "Dock back" opens the in-app view; the pop-out closes itself.
 	const onDock = useCallback(() => setOpen(true), []);
-	const popout = useControlCenterPopout(rooms, segments, activeRoomId, onFocus, onDock);
+	const { visible: visibleTodos, setDone, setNote, remove } = todos;
+	const todoActions = useMemo(() => ({ setDone, setNote, remove }), [setDone, setNote, remove]);
+	const popout = useControlCenterPopout(
+		rooms,
+		segments,
+		activeRoomId,
+		onFocus,
+		onDock,
+		visibleTodos,
+		todoActions,
+	);
 	const { poppedOut, poppedOutRef, raise, open: openPopout } = popout;
 	// Never run the in-app view under a live pop-out (both run the data hook).
 	useEffect(() => {
@@ -67,6 +80,8 @@ export function useControlCenter(
 		activeRoomId,
 		visible: open,
 		onFocus,
+		todos: visibleTodos,
+		todoActions,
 		onPopOut,
 	};
 	return { open, toggle, toggleRef, props };

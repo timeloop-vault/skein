@@ -6,6 +6,7 @@ import type { AgentLabel } from "./harnessAgent.ts";
 import { requestDeliverNow } from "./mailDeliverNow.ts";
 import { useMailHold } from "./mailHold.ts";
 import { useUnreadMail } from "./mailStore.ts";
+import { useTodoMenu } from "./todos/TodoMenuProvider.tsx";
 import type { Harness } from "./types.ts";
 import "./RoomStrip.css";
 import "./HarnessColumn.css";
@@ -49,8 +50,14 @@ export const HarnessTab = ({
 	// anywhere else.
 	const mail = useUnreadMail(h.id);
 	const hold = useMailHold(h.id);
+	const openTodoMenu = useTodoMenu();
 	return (
 		<div
+			// #335: right-click → add this harness (and its room) as a todo.
+			// `dragRoomId` is the owning room's id, set by HarnessColumn.
+			onContextMenu={(e) => {
+				if (dragRoomId) openTodoMenu(e, dragRoomId, h.id);
+			}}
 			className={`sk-harness-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
 			data-htab={h.id}
 			onClick={() => {

@@ -339,6 +339,7 @@ mod tests {
             attention: None,
             created_by: None,
             closed_by: None,
+            todos: None,
             retired: None,
             repo_identity: None,
         };
