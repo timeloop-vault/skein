@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { DesignComments } from "./DesignComments.tsx";
 import { DesignDeviceControl } from "./DesignDeviceControl.tsx";
 import { DesignDeviceStage } from "./DesignDeviceStage.tsx";
+import { type DesignDock, DesignDockButton } from "./DesignDockButton.tsx";
 import { DesignEditPanel } from "./DesignEditPanel.tsx";
 import { type DesignDevice, deviceParams } from "./designDevice.ts";
 import {
@@ -38,6 +39,8 @@ interface DesignBodyProps {
 	onEntryChange: (entry: string) => void;
 	device: DesignDevice | undefined;
 	onDeviceChange: (device: DesignDevice | undefined) => void;
+	/** Dock / undock toggle (#551); absent where docking makes no sense. */
+	dock?: DesignDock;
 }
 
 export const DesignBody = ({
@@ -49,6 +52,7 @@ export const DesignBody = ({
 	onEntryChange,
 	device,
 	onDeviceChange,
+	dock,
 }: DesignBodyProps) => {
 	const { base, entries, error, version, retry, reload } = useDesignPreview(roomId);
 	const [beacons, setBeacons] = useState<Beacon[]>([]);
@@ -273,6 +277,7 @@ export const DesignBody = ({
 				>
 					Edit
 				</button>
+				{dock && <DesignDockButton dock={dock} />}
 				<span className="dp-status">{status}</span>
 			</div>
 			{error !== null && (

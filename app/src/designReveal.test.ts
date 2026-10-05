@@ -95,6 +95,22 @@ describe("reveal decision and wait", () => {
 		expect(revealDecision("x", "r")).toBe("other_room");
 		expect(revealDecision(null, "r")).toBe("other_room");
 	});
+	it.each([
+		["r", "r", true, "show_docked"],
+		["r", "r", false, "switch"],
+		["x", "r", true, "other_room"],
+		[null, "r", true, "other_room"],
+	] as const)("decision %s/%s docked=%s -> %s", (active, room, docked, want) => {
+		expect(revealDecision(active, room, docked)).toBe(want);
+	});
+	it("revealPane shows a docked harness without switching", async () => {
+		const switchHarness = vi.fn();
+		const showDocked = vi.fn();
+		const reveal = { activeRoomId: () => "r", switchHarness, showDocked, isDocked: () => true };
+		expect(await revealPane({ whenVisible: async () => true }, reveal, "r", "h")).toBe(true);
+		expect(showDocked).toHaveBeenCalledWith("r", "h");
+		expect(switchHarness).not.toHaveBeenCalled();
+	});
 	it("pollUntil resolves true when met, false on timeout", async () => {
 		let n = 0;
 		expect(await pollUntil(() => ++n > 2, 500, 1)).toBe(true);
@@ -103,18 +119,35 @@ describe("reveal decision and wait", () => {
 	it("revealPane switches in the front room and reports the wait", async () => {
 		const switchHarness = vi.fn();
 		const pane = { whenVisible: async () => true };
-		expect(await revealPane(pane, { activeRoomId: () => "r", switchHarness }, "r", "h")).toBe(true);
+		expect(
+			await revealPane(
+				pane,
+				{ activeRoomId: () => "r", switchHarness, showDocked: vi.fn(), isDocked: () => false },
+				"r",
+				"h",
+			),
+		).toBe(true);
 		expect(switchHarness).toHaveBeenCalledWith("r", "h");
 		const late = { whenVisible: async () => false };
-		expect(await revealPane(late, { activeRoomId: () => "r", switchHarness }, "r", "h")).toBe(
-			false,
-		);
+		expect(
+			await revealPane(
+				late,
+				{ activeRoomId: () => "r", switchHarness, showDocked: vi.fn(), isDocked: () => false },
+				"r",
+				"h",
+			),
+		).toBe(false);
 	});
 	it("revealPane switches nothing from another room", async () => {
 		const switchHarness = vi.fn();
 		const whenVisible = vi.fn(async () => true);
 		expect(
-			await revealPane({ whenVisible }, { activeRoomId: () => "x", switchHarness }, "r", "h"),
+			await revealPane(
+				{ whenVisible },
+				{ activeRoomId: () => "x", switchHarness, showDocked: vi.fn(), isDocked: () => false },
+				"r",
+				"h",
+			),
 		).toBe(false);
 		expect(switchHarness).not.toHaveBeenCalled();
 		expect(whenVisible).not.toHaveBeenCalled();
@@ -146,6 +179,8 @@ describe("handleDesignRequest reveal", () => {
 		await handleDesignRequest(kind, "id", args, [], vi.fn(), vi.fn(), complete, {
 			activeRoomId: () => active,
 			switchHarness,
+			showDocked: vi.fn(),
+			isDocked: () => false,
 		});
 		dispose();
 		return {

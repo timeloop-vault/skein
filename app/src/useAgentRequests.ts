@@ -95,6 +95,9 @@ export function useAgentRequests(
 	// `useHarnessActions.switchHarnessInRoom`; never switches rooms.
 	activeRoomIdRef: MutableRefObject<string | null>,
 	switchHarnessInRoom: (roomId: string, harnessId: string) => void,
+	// #551: a docked design harness is revealed in the right pane instead.
+	isDocked: (harnessId: string) => boolean,
+	showDocked: (roomId: string, harnessId: string) => void,
 ): void {
 	// Refs so the listener (mounted once, below) always reads the latest
 	// values without re-subscribing on every settings/memory change —
@@ -122,6 +125,10 @@ export function useAgentRequests(
 	setDesignDeviceRef.current = setDesignDevice;
 	const switchHarnessRef = useRef(switchHarnessInRoom);
 	switchHarnessRef.current = switchHarnessInRoom;
+	const isDockedRef = useRef(isDocked);
+	isDockedRef.current = isDocked;
+	const showDockedRef = useRef(showDocked);
+	showDockedRef.current = showDocked;
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: roomsRef comes from useRoomsStore (#19) — a ref, stable across renders, but biome can't prove that through a parameter.
 	useEffect(() => {
@@ -345,6 +352,8 @@ export function useAgentRequests(
 							{
 								activeRoomId: () => activeRoomIdRef.current,
 								switchHarness: (r, h) => switchHarnessRef.current(r, h),
+								isDocked: (h) => isDockedRef.current(h),
+								showDocked: (r, h) => showDockedRef.current(r, h),
 							},
 						);
 					} else {

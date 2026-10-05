@@ -1,15 +1,15 @@
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef } from "react";
 import { useWorkingBackgroundTaskCount } from "./backgroundTasks.ts";
 import { HarnessPicker } from "./components.tsx";
-import { DesignHarnessBody, type DeviceChangeHandler } from "./DesignHarnessBody.tsx";
+import type { DeviceChangeHandler } from "./DesignHarnessBody.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
-import { FilesBody } from "./FilesBody.tsx";
+import type { DockedDesign } from "./designDock.ts";
 import { HarnessActionsMenu } from "./HarnessActionsMenu.tsx";
+import { HarnessPaneBody } from "./HarnessPaneBody.tsx";
 import { harnessDisplayStatus, useHarnessActivity } from "./harnessActivity.ts";
 import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
 import type { GateResult } from "./harnessInputGate.ts";
 import { LiveHarnessTab } from "./LiveHarnessTab.tsx";
-import { LiveTerminal } from "./LiveTerminal.tsx";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { type DefaultAgents, type VersionNoticeModes, versionNoticeModeFor } from "./prefs.ts";
 import { useWorkingSubagentCount } from "./subagents.ts";
@@ -76,85 +76,6 @@ export const AgentStatusBarSeg = ({ harness }: { harness: Harness }) => {
 	);
 };
 
-// ── Harness body ───────────────────────────────────────────────────
-
-interface HarnessBodyProps {
-	harness: Harness;
-	fontSize: number;
-	// #158: copy-on-select setting — read live via a ref in LiveTerminal,
-	// so toggling it applies to an already-running terminal without a
-	// respawn. Threaded down exactly like fontSize.
-	copyOnSelect: boolean;
-	defaultShell: string[];
-	visible: boolean;
-	onCmdChange: (cmd: string[]) => void;
-	// Stamped on every `harness_actions` row this harness emits
-	// (issue #80). Threaded down to LiveTerminal → attachClaudeEvents.
-	roomId: string;
-	// Epic #50 L2c-2: opencode embedded-server port allocated by App.
-	// `undefined` for non-opencode harnesses and for opencode harnesses
-	// where pick_free_port failed — in the latter case the adapter
-	// can't attach and the harness falls back to L2a.
-	opencodePort: number | undefined;
-	// SSE-capture callback: L2c-2 captures opencode's auto-allocated
-	// sessionID from the `session.created` event. App.tsx wires it
-	// to setHarnessSessionId; `undefined` for non-opencode harnesses.
-	onSessionCaptured: ((sessionId: string) => void) | undefined;
-	// #116: L2c-2 decided the harness followed its TUI onto a different
-	// root session (`/new` or a `/sessions` pick). App.tsx wires it to
-	// replaceHarnessSessionId, same as Claude's clear/resume/fork
-	// follow; `undefined` for non-opencode harnesses.
-	onSessionFollowed: ((sessionId: string) => void) | undefined;
-	// #517: persists/releases an opencode followed from the post-exit shell.
-	opencodeClaim: ShellClaimSink | undefined;
-}
-
-const HarnessBody = ({
-	harness,
-	fontSize,
-	copyOnSelect,
-	defaultShell,
-	visible,
-	onCmdChange,
-	roomId,
-	opencodePort,
-	onSessionCaptured,
-	onSessionFollowed,
-	opencodeClaim,
-}: HarnessBodyProps) => {
-	if (harness.cmd && harness.cwd !== undefined) {
-		// mountKey changes on cmd content OR spawnGen — the trigger for a
-		// clean unmount + remount when the user picks Enter-for-shell
-		// after a child exits. spawnGen is the explicit respawn signal:
-		// the cmd-identity part alone misses a shell→shell respawn (new
-		// cmd == old cmd → no remount → #53). Joining the array gives a
-		// value-equal string across content-identical renders, so a
-		// re-render with the same cmd + spawnGen doesn't churn the PTY.
-		return (
-			<LiveTerminal
-				cmd={harness.cmd}
-				cwd={harness.cwd}
-				mountKey={`${harness.id}:${harness.spawnGen ?? 0}:${harness.cmd.join("\x00")}`}
-				harnessId={harness.id}
-				roomId={roomId}
-				harnessKind={harness.kind}
-				sessionId={harness.sessionId}
-				agent={harness.agent}
-				opencodePort={opencodePort}
-				onSessionCaptured={onSessionCaptured}
-				onSessionFollowed={onSessionFollowed}
-				opencodeClaim={opencodeClaim}
-				fontSize={fontSize}
-				copyOnSelect={copyOnSelect}
-				defaultShell={defaultShell}
-				visible={visible}
-				onCmdChange={onCmdChange}
-			/>
-		);
-	}
-	return null;
-};
-
 // ── Harness column (per room) ──────────────────────────────────────
 // Every room's column stays mounted at once; the App-level renderer
 // toggles visibility with display:none. PTYs survive tab switches
@@ -200,6 +121,11 @@ export interface HarnessColumnProps {
 	onHarnessCmdChange: (roomId: string, harnessId: string, cmd: string[]) => void;
 	onDesignEntryChange: (roomId: string, harnessId: string, entry: string) => void;
 	onDesignDeviceChange: DeviceChangeHandler;
+	dockedDesign: DockedDesign;
+	/** Dock or undock a design harness (#551); room scope bound by the caller. */
+	onDesignDock: (harnessId: string, docked: boolean) => void;
+	/** Reveal a docked design harness in the right pane. */
+	onDesignShow: (harnessId: string) => void;
 	// Epic #50 L2c-2: per-opencode-harness embedded-server port. The
 	// column pulls each harness's port out of this map (keyed by
 	// harnessId) and forwards it to the corresponding LiveTerminal.
@@ -238,6 +164,9 @@ export const HarnessColumn = ({
 	onHarnessCmdChange,
 	onDesignEntryChange,
 	onDesignDeviceChange,
+	dockedDesign,
+	onDesignDock,
+	onDesignShow,
 	opencodePorts,
 	onOpencodeSessionCaptured,
 	onOpencodeSessionFollowed,
@@ -365,31 +294,24 @@ export const HarnessColumn = ({
 							overflow: "hidden",
 						}}
 					>
-						{HARNESS_KINDS[h.kind].capabilities.pty ? (
-							<HarnessBody
-								harness={h}
-								fontSize={fontSize}
-								copyOnSelect={copyOnSelect}
-								defaultShell={defaultShell}
-								visible={visible}
-								onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
-								roomId={room.id}
-								opencodePort={opencodePorts.get(h.id)}
-								onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
-								onSessionFollowed={(sid) => onOpencodeSessionFollowed(h.id, sid)}
-								opencodeClaim={opencodeShellClaim(h.id)}
-							/>
-						) : h.kind === "design" ? (
-							<DesignHarnessBody
-								room={room}
-								harness={h}
-								visible={visible}
-								onEntryChange={onDesignEntryChange}
-								onDeviceChange={onDesignDeviceChange}
-							/>
-						) : (
-							<FilesBody harnessId={h.id} cwd={h.cwd ?? room.cwd ?? ""} visible={visible} />
-						)}
+						<HarnessPaneBody
+							room={room}
+							harness={h}
+							visible={visible}
+							fontSize={fontSize}
+							copyOnSelect={copyOnSelect}
+							defaultShell={defaultShell}
+							docked={dockedDesign[h.id] === true}
+							opencodePort={opencodePorts.get(h.id)}
+							onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
+							onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
+							onSessionFollowed={(sid) => onOpencodeSessionFollowed(h.id, sid)}
+							opencodeClaim={opencodeShellClaim(h.id)}
+							onEntryChange={onDesignEntryChange}
+							onDeviceChange={onDesignDeviceChange}
+							onDesignDock={onDesignDock}
+							onDesignShow={onDesignShow}
+						/>
 					</div>
 				);
 			})}

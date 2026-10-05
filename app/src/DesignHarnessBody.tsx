@@ -2,6 +2,7 @@
 // handlers to DesignBody's per-harness props (#433, #528).
 
 import { DesignBody } from "./DesignBody.tsx";
+import type { DesignDock } from "./DesignDockButton.tsx";
 import { type DesignDevice, normalizeDevice } from "./designDevice.ts";
 import type { Harness, Room } from "./types.ts";
 
@@ -17,6 +18,7 @@ interface Props {
 	visible: boolean;
 	onEntryChange: (roomId: string, harnessId: string, entry: string) => void;
 	onDeviceChange: DeviceChangeHandler;
+	dock?: DesignDock;
 }
 
 export const DesignHarnessBody = ({
@@ -25,6 +27,7 @@ export const DesignHarnessBody = ({
 	visible,
 	onEntryChange,
 	onDeviceChange,
+	dock,
 }: Props) => (
 	<DesignBody
 		harnessId={h.id}
@@ -35,5 +38,6 @@ export const DesignHarnessBody = ({
 		onEntryChange={(entry) => onEntryChange(room.id, h.id, entry)}
 		device={normalizeDevice(h.designDevice)}
 		onDeviceChange={(d) => onDeviceChange(room.id, h.id, d)}
+		{...(dock ? { dock } : {})}
 	/>
 );
