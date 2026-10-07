@@ -289,6 +289,8 @@ async fn run_adapter(
 ) {
     let url = format!("http://127.0.0.1:{port}/event");
     let client = match reqwest::Client::builder()
+        // reqwest honours HTTP(S)_PROXY / ALL_PROXY and has no implicit loopback bypass.
+        .no_proxy()
         .connect_timeout(CONNECT_TIMEOUT)
         .build()
     {

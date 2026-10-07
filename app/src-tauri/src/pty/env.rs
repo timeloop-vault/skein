@@ -9,6 +9,7 @@ use portable_pty::CommandBuilder;
 use crate::agent_api::state::HarnessIdentity;
 use crate::harness_config::Injection;
 use crate::spawn_env;
+use crate::spawn_env::login_env::{login_env_overlay, merge_no_proxy};
 use crate::spawn_settings::SpawnSettings;
 
 use super::probe::ProbeOutcome;
@@ -27,6 +28,9 @@ pub(crate) struct AppliedEnv {
     pub dropped: Vec<(String, spawn_env::DropReason)>,
     /// Extra-env keys Skein refused because it owns them itself.
     pub ignored_env_keys: Vec<String>,
+    /// Names (never values) of the login-shell variables that reached the
+    /// child: overlaid, not stripped afterwards, not Skein-reserved.
+    pub login_env_keys: Vec<String>,
 }
 
 /// Environment variables the user cannot set through "extra environment
@@ -87,6 +91,16 @@ pub(super) fn apply_env(
     // compensated. There is nothing to re-copy: let the base env stand
     // and override only what we own.
 
+    // The login shell's full environment (rc-file exports such as API
+    // keys, proxy settings, JAVA_HOME): a GUI-launched Skein inherits
+    // only launchd's. Overlaid before the strip below so a TERM_PROGRAM an
+    // rc file exports is stripped too, and before PATH/extra env so those
+    // keep winning. `PATH` itself is never in the overlay (merged below).
+    let overlay = login_env_overlay(probe.login_env().unwrap_or_default());
+    for (key, value) in &overlay {
+        builder.env(key, value);
+    }
+
     // #192: strip host-terminal identity. Skein inherits markers like
     // TERM_PROGRAM / TMUX / VSCODE_* when it is itself launched from a
     // terminal, and the agent CLIs sniff them — adopting the *host*
@@ -106,6 +120,24 @@ pub(super) fn apply_env(
     for key in &stripped {
         builder.env_remove(key);
     }
+    // Skein overwrites the reserved keys itself, so they are not "from the
+    // login shell" as far as the child is concerned; nor are names the
+    // user's additions or this spawn's injection override.
+    let mut login_env_keys: Vec<String> = overlay
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .filter(|k| !stripped.iter().any(|s| s == k))
+        .filter(|k| !RESERVED_ENV_KEYS.iter().any(|r| r.eq_ignore_ascii_case(k)))
+        .filter(|k| {
+            !settings
+                .extra_env
+                .iter()
+                .any(|v| v.key.trim().eq_ignore_ascii_case(k))
+        })
+        .filter(|k| !injection.env.iter().any(|(n, _)| n.eq_ignore_ascii_case(k)))
+        .map(str::to_owned)
+        .collect();
+    login_env_keys.sort_unstable();
 
     // PATH: the login-shell probe when we have one, otherwise the
     // inherited (on Windows, registry-merged) PATH — and the user's
@@ -224,6 +256,8 @@ pub(super) fn apply_env(
         }
     }
 
+    apply_no_proxy(builder);
+
     AppliedEnv {
         path: merged.path,
         stripped,
@@ -232,6 +266,30 @@ pub(super) fn apply_env(
         added: merged.added,
         dropped: merged.dropped,
         ignored_env_keys,
+        login_env_keys,
+    }
+}
+
+/// Make sure loopback is never proxied, whatever the user's proxy setup.
+///
+/// A harness talks to Skein's agent API on `127.0.0.1:<port>`, and an
+/// rc-exported `HTTP_PROXY` would send that through the proxy. The user's
+/// own `NO_PROXY` entries are merged, never refused, which is why neither
+/// name is in `RESERVED_ENV_KEYS`. Last of all, so it sees the final
+/// user/rc values. Applied on every platform: a proxied Windows machine
+/// has the same loopback problem.
+fn apply_no_proxy(builder: &mut CommandBuilder) {
+    let get = |b: &CommandBuilder, k: &str| b.get_env(k).map(|v| v.to_string_lossy().into_owned());
+    let merged = merge_no_proxy(
+        get(builder, "NO_PROXY").as_deref(),
+        get(builder, "no_proxy").as_deref(),
+    );
+    builder.env("NO_PROXY", &merged);
+    // Unix env keys are case-sensitive and tools disagree on which they
+    // read (curl wants lowercase). On Windows portable-pty lowercases keys,
+    // so the two names are one entry and setting both would be redundant.
+    if !cfg!(windows) {
+        builder.env("no_proxy", &merged);
     }
 }
 

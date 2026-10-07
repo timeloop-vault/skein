@@ -57,6 +57,9 @@ pub struct ProbeReport {
     pub argv: Vec<String>,
     /// Plain-language explanation when the state isn't `captured`.
     pub message: Option<String>,
+    /// `true` only when the shell's whole environment was captured, not
+    /// just its `PATH`.
+    pub env_captured: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,6 +85,9 @@ pub struct EnvPreview {
     pub path: Vec<PathEntryReport>,
     pub programs: Vec<ProgramReport>,
     pub stripped: Vec<String>,
+    /// Names (never values: they may be secrets) of the variables taken
+    /// from the user's login shell.
+    pub login_env_keys: Vec<String>,
     pub extra_env_keys: Vec<String>,
     /// Additions that were skipped, with the reason — otherwise "I added
     /// a directory and nothing happened" is unanswerable, which is the
@@ -121,16 +127,26 @@ pub(super) fn describe_probe(outcome: &ProbeOutcome, settings: &SpawnSettings) -
             shell: String::new(),
             elapsed_ms: 0,
             argv: Vec::new(),
-            message: Some("Still asking your shell for its PATH.".into()),
+            message: Some("Still asking your shell for its environment.".into()),
+            env_captured: false,
         },
         ProbeOutcome::Captured {
-            shell, elapsed_ms, ..
+            shell,
+            elapsed_ms,
+            env,
+            ..
         } => ProbeReport {
             state: "captured".into(),
             shell: shell.clone(),
             elapsed_ms: *elapsed_ms,
             argv: argv(shell),
-            message: None,
+            message: env.is_none().then(|| {
+                "Your shell's PATH was captured, but not the rest of its environment (neither \
+                 `env -0` nor perl worked). Harnesses get the environment Skein was launched \
+                 with, your shell's PATH and your additions."
+                    .to_owned()
+            }),
+            env_captured: env.is_some(),
         },
         ProbeOutcome::Failed {
             reason,
@@ -140,7 +156,7 @@ pub(super) fn describe_probe(outcome: &ProbeOutcome, settings: &SpawnSettings) -
             let (state, message) = match reason {
                 ProbeFailure::Disabled => (
                     "disabled",
-                    "PATH capture is turned off. Harnesses get the environment Skein was \
+                    "Shell environment capture is turned off. Harnesses get the environment Skein was \
                      launched with, plus your additions below."
                         .to_owned(),
                 ),
@@ -153,7 +169,7 @@ pub(super) fn describe_probe(outcome: &ProbeOutcome, settings: &SpawnSettings) -
                 ProbeFailure::UnsupportedShell => (
                     "unsupported_shell",
                     format!(
-                        "Skein has no verified way to ask {shell} for its PATH, so it uses the \
+                        "Skein has no verified way to ask {shell} for its environment, so it uses the \
                          environment it was launched with plus your additions. Set a shell below \
                          (zsh, bash, fish, sh, ksh, dash, csh and tcsh all work) if you want a \
                          capture."
@@ -173,8 +189,8 @@ pub(super) fn describe_probe(outcome: &ProbeOutcome, settings: &SpawnSettings) -
                 ProbeFailure::NoPayload => (
                     "no_payload",
                     format!(
-                        "{shell} ran but printed no PATH Skein could read. Check the log for its \
-                         raw output."
+                        "{shell} ran but printed no environment Skein could read. Check the log for \
+                         details."
                     ),
                 ),
             };
@@ -184,6 +200,7 @@ pub(super) fn describe_probe(outcome: &ProbeOutcome, settings: &SpawnSettings) -
                 elapsed_ms: *elapsed_ms,
                 argv: argv(shell),
                 message: Some(message),
+                env_captured: false,
             }
         }
     }
@@ -387,6 +404,7 @@ pub(crate) fn env_preview(settings: &SpawnSettings) -> EnvPreview {
         path,
         programs,
         stripped: applied.stripped,
+        login_env_keys: applied.login_env_keys,
         extra_env_keys: settings
             .extra_env
             .iter()

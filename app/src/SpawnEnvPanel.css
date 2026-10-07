@@ -170,3 +170,13 @@
 	color: var(--fg-3);
 	word-break: break-all;
 }
+
+.sk-env-keys {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 12px;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.875);
+	color: var(--fg-1);
+}

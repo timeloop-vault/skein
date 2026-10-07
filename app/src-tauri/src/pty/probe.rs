@@ -15,6 +15,8 @@ use crate::spawn_settings::SpawnSettings;
 #[cfg(not(target_os = "windows"))]
 use crate::spawn_env;
 #[cfg(not(target_os = "windows"))]
+use crate::spawn_env::login_env;
+#[cfg(not(target_os = "windows"))]
 use crate::spawn_settings::CaptureMode;
 
 /// How long the probe shell may run before we kill it.
@@ -35,7 +37,7 @@ const PROBE_DEADLINE: Duration = Duration::from_secs(5);
 const PROBE_WAIT: Duration = Duration::from_secs(6);
 
 /// What the login-shell probe found, if anything.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) enum ProbeOutcome {
     /// Still running (or never started).
     Pending,
@@ -44,6 +46,9 @@ pub(crate) enum ProbeOutcome {
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     Captured {
         path: String,
+        /// The login shell's whole environment. `None` = the full capture
+        /// failed but `PATH` worked (the PATH-only fallback).
+        env: Option<Vec<(String, String)>>,
         shell: String,
         elapsed_ms: u64,
     },
@@ -78,6 +83,46 @@ pub(crate) enum ProbeFailure {
     NoPayload,
 }
 
+// Manual `Debug`: `env` holds full values (API keys), so `{:?}` must only
+// ever show a count.
+struct VarCount(usize);
+
+impl std::fmt::Debug for VarCount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{} vars>", self.0)
+    }
+}
+
+impl std::fmt::Debug for ProbeOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending => f.write_str("Pending"),
+            Self::Captured {
+                path,
+                env,
+                shell,
+                elapsed_ms,
+            } => f
+                .debug_struct("Captured")
+                .field("path", path)
+                .field("env", &env.as_ref().map(|e| VarCount(e.len())))
+                .field("shell", shell)
+                .field("elapsed_ms", elapsed_ms)
+                .finish(),
+            Self::Failed {
+                reason,
+                shell,
+                elapsed_ms,
+            } => f
+                .debug_struct("Failed")
+                .field("reason", reason)
+                .field("shell", shell)
+                .field("elapsed_ms", elapsed_ms)
+                .finish(),
+        }
+    }
+}
+
 impl ProbeOutcome {
     /// One-line state for the spawn log, so a "command not found" in a
     /// harness can be traced to the probe without a rebuild.
@@ -85,8 +130,20 @@ impl ProbeOutcome {
         match self {
             Self::Pending => "pending".to_owned(),
             Self::Captured {
-                shell, elapsed_ms, ..
-            } => format!("captured from {shell} in {elapsed_ms} ms"),
+                env: Some(env),
+                shell,
+                elapsed_ms,
+                ..
+            } => format!(
+                "captured PATH + {} vars from {shell} in {elapsed_ms} ms",
+                env.len()
+            ),
+            Self::Captured {
+                env: None,
+                shell,
+                elapsed_ms,
+                ..
+            } => format!("captured PATH only (env capture failed) from {shell} in {elapsed_ms} ms"),
             Self::Failed {
                 reason,
                 shell,
@@ -98,6 +155,14 @@ impl ProbeOutcome {
     pub(crate) fn path(&self) -> Option<&str> {
         match self {
             Self::Captured { path, .. } => Some(path),
+            _ => None,
+        }
+    }
+
+    /// The login shell's full environment, when the probe got it.
+    pub(crate) fn login_env(&self) -> Option<&[(String, String)]> {
+        match self {
+            Self::Captured { env, .. } => env.as_deref(),
             _ => None,
         }
     }
@@ -376,14 +441,38 @@ pub(super) fn run_probe(
         }
     }
 
-    let stdout = std::fs::read_to_string(&out_path).unwrap_or_default();
+    // Bytes, not a String: one non-UTF-8 byte anywhere (an rc banner)
+    // must not cost the whole probe.
+    let bytes = std::fs::read(&out_path).unwrap_or_default();
     let _ = std::fs::remove_file(&out_path);
     let elapsed_ms = ms(started);
 
-    if let Some(path) = spawn_env::extract_probe_path(&stdout) {
+    if let Some(path) = spawn_env::extract_probe_path(&String::from_utf8_lossy(&bytes)) {
         tracing::info!(shell = %shell, elapsed_ms, path = %path, "probe: captured user PATH");
+        let env = login_env::extract_probe_env(&bytes);
+        match &env {
+            Some(env) => {
+                // Names only: values are secrets (tokens, API keys).
+                let overlay = login_env::login_env_overlay(env);
+                let mut names: Vec<&str> = overlay.iter().map(|(k, _)| k.as_str()).collect();
+                names.sort_unstable();
+                tracing::info!(
+                    shell = %shell,
+                    elapsed_ms,
+                    vars = names.len(),
+                    names = %names.join(","),
+                    "probe: captured login environment"
+                );
+            }
+            None => tracing::warn!(
+                shell = %shell,
+                elapsed_ms,
+                "probe: env capture failed; falling back to PATH only"
+            ),
+        }
         return ProbeOutcome::Captured {
             path,
+            env,
             shell: shell.to_owned(),
             elapsed_ms,
         };
@@ -398,7 +487,7 @@ pub(super) fn run_probe(
         shell = %shell,
         elapsed_ms,
         ?reason,
-        raw_stdout = %stdout,
+        stdout_bytes = bytes.len(),
         "probe: no usable PATH; falling back to the inherited PATH plus additions"
     );
     ProbeOutcome::Failed {
