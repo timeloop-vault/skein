@@ -23,17 +23,18 @@ export function useControlCenter(
 	segments: StripSegment[],
 	activeRoomId: string,
 	setActiveRoomId: Dispatch<SetStateAction<string>>,
-	switchHarnessInRoom: (roomId: string, harnessId: string) => void,
+	roomSelectSeq: number,
+	selectHarness: (roomId: string, harnessId: string) => void,
 	todos: TodosApi,
 ) {
 	const [open, setOpen] = useState(false);
 	const onFocus = useCallback(
 		(roomId: string, harnessId?: string) => {
 			setActiveRoomId(roomId);
-			if (harnessId) switchHarnessInRoom(roomId, harnessId);
+			if (harnessId) selectHarness(roomId, harnessId);
 			setOpen(false);
 		},
-		[setActiveRoomId, switchHarnessInRoom],
+		[setActiveRoomId, selectHarness],
 	);
 	// #493: the pop-out window, when there is one, is what every entry point
 	// (strip button, Mod+0, palette) brings forward instead of the in-app view.
@@ -70,9 +71,11 @@ export function useControlCenter(
 	// Any room change (tab click, Mod+1..9, nav, palette) leaves the
 	// overview; so the room active at open time is still active on a
 	// plain toggle close, and a closed-meanwhile room just keeps
-	// whatever is active now.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: only a room change should close
-	useEffect(() => setOpen(false), [activeRoomId]);
+	// whatever is active now. #560: `roomSelectSeq` bumps on every user
+	// selection, so re-selecting the already-active room (the one the strip
+	// no longer draws as active while this is open) closes it too.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only a room change or selection should close
+	useEffect(() => setOpen(false), [activeRoomId, roomSelectSeq]);
 
 	const props: ControlCenterProps = {
 		rooms,

@@ -24,8 +24,9 @@ export interface BuildPaletteItemsParams {
 	activeHarness: Harness | undefined;
 	activeRoomId: string;
 	theme: Theme;
-	setActiveRoomId: Dispatch<SetStateAction<string>>;
-	setRooms: Dispatch<SetStateAction<Room[]>>;
+	// #560/#561: user-intent selection, so it also dismisses the temp views.
+	switchRoom: (id: string) => void;
+	selectHarness: (roomId: string, harnessId: string) => void;
 	setTheme: Dispatch<SetStateAction<Theme>>;
 	setShowReopen: Dispatch<SetStateAction<boolean>>;
 	openNewRoom: () => Promise<void>;
@@ -52,8 +53,8 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 		activeHarness,
 		activeRoomId,
 		theme,
-		setActiveRoomId,
-		setRooms,
+		switchRoom,
+		selectHarness,
 		setTheme,
 		setShowReopen,
 		openNewRoom,
@@ -75,7 +76,7 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 			id: `room:${r.id}`,
 			label: `${r.name}`,
 			hint: `room · ${r.branch}`,
-			invoke: () => setActiveRoomId(r.id),
+			invoke: () => switchRoom(r.id),
 		});
 	}
 	for (const r of activeRooms) {
@@ -85,10 +86,8 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 				label: `${HARNESS_KINDS[h.kind].name} · ${h.name}`,
 				hint: `harness in ${r.name}`,
 				invoke: () => {
-					setActiveRoomId(r.id);
-					setRooms((prev) =>
-						prev.map((p) => (p.id === r.id ? { ...p, activeHarnessId: h.id } : p)),
-					);
+					switchRoom(r.id);
+					selectHarness(r.id, h.id);
 				},
 			});
 		}

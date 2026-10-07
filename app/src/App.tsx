@@ -133,7 +133,7 @@ export default function App() {
 	// before useHarnessCreation, which needs `switchHarnessInRoom`.
 	const actions = useHarnessActions(
 		setRooms,
-		setActiveRoomId,
+		switchRoom,
 		activeRoomId,
 		activeRooms,
 		setShowPicker,
@@ -146,6 +146,7 @@ export default function App() {
 		endRenameRoom,
 		commitRenameRoom,
 		switchHarnessInRoom,
+		selectHarness,
 		jumpToHarness,
 		cycleAlertedRoom,
 		cycleAlertedHarness,
@@ -216,7 +217,7 @@ export default function App() {
 		if (room) void checkRoomFolder(room);
 	}, [activeRoomId, checkRoomFolder]);
 
-	const { addTodo, cc } = useTodoWiring(store, pushToast, stripSegments, switchHarnessInRoom);
+	const { addTodo, cc } = useTodoWiring(store, pushToast, stripSegments, selectHarness);
 
 	// #19: window-level keyboard shortcuts + the handler refs they (and
 	// the palette) read — see useAppShortcuts.ts.
@@ -259,8 +260,8 @@ export default function App() {
 		activeHarness,
 		activeRoomId,
 		theme,
-		setActiveRoomId,
-		setRooms,
+		switchRoom,
+		selectHarness,
 		setTheme: settings.setTheme,
 		setShowReopen,
 		openNewRoom,

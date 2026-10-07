@@ -11,7 +11,7 @@ import { onNotificationClicked } from "@choochmeque/tauri-plugin-notifications-a
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import type { MutableRefObject } from "react";
 import { useCallback, useEffect } from "react";
 import { osNotifyTargets } from "./notifications.tsx";
 import { type ClickTarget, resolveClickTarget, shouldDrainOnClickEvent } from "./osNotifyClick.ts";
@@ -21,18 +21,19 @@ import type { Room } from "./types.ts";
 export function useOsNotificationClicks(
 	roomsRef: MutableRefObject<Room[]>,
 	unarchiveRoomRef: MutableRefObject<(id: string) => Promise<void>>,
-	setRooms: Dispatch<SetStateAction<Room[]>>,
+	switchRoomRef: MutableRefObject<(id: string) => void>,
+	selectHarnessRef: MutableRefObject<(roomId: string, harnessId: string) => void>,
 	loaded: boolean,
 	loadedRef: MutableRefObject<boolean>,
 ) {
 	// #294: the decision + side-effect shared by every OS-notification
 	// click path (macOS's id-keyed map lookup below, Windows's live
 	// event, and Windows's post-hydrate pending-click drain further
-	// down) — un-archive the room if needed and switch to the harness
-	// that fired the toast. Stable identity ([] deps): only reads refs
-	// and calls stable setState setters, so sharing it across effects
+	// down) — un-archive the room if needed and select it and the harness
+	// that fired the toast, as a user selection (#560/#561). Stable identity ([] deps): only reads refs
+	// and calls stable callbacks, so sharing it across effects
 	// never forces a re-registration.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: roomsRef/setRooms/unarchiveRoomRef come from useRoomsStore (#19) — refs/a setState setter, stable across renders, but biome can't prove that through a destructured custom-hook return.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: roomsRef/unarchiveRoomRef/switchRoomRef/selectHarnessRef are refs, stable across renders, but biome can't prove that through a destructured custom-hook return.
 	const jumpToTarget = useCallback((target: ClickTarget) => {
 		const decision = resolveClickTarget(roomsRef.current, target);
 		if (!decision.found) return; // closed-and-deleted since the banner fired
@@ -43,12 +44,14 @@ export function useOsNotificationClicks(
 		// remount respawned the stored fresh-form cmd and Claude died
 		// with "Session ID is already in use". unarchiveRoom does both
 		// halves (and focuses the room, archived or not).
-		void unarchiveRoomRef.current(roomId);
-		if (decision.hasHarness) {
-			setRooms((prev) =>
-				prev.map((r) => (r.id === roomId ? { ...r, activeHarnessId: harnessId } : r)),
-			);
-		}
+		// Then switchRoom, so the room-select seq bumps (closes the Control
+		// Center even on a same-id select), and selectHarness — after the
+		// unarchive, whose setRooms would otherwise overwrite the harness
+		// with its pre-await snapshot.
+		void unarchiveRoomRef.current(roomId).then(() => {
+			switchRoomRef.current(roomId);
+			if (decision.hasHarness) selectHarnessRef.current(roomId, harnessId);
+		});
 	}, []);
 
 	// #294: Windows only — the click target for a toast clicked while

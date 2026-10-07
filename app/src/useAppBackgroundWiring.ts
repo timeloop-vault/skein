@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { versionNoticeModeFor } from "./prefs.ts";
 import { startSupervisor } from "./supervisor/runtime.ts";
 import { useAgentRequests } from "./useAgentRequests.ts";
@@ -26,9 +26,20 @@ export function useAppBackgroundWiring(a: {
 	pushToast: Parameters<typeof useAgentRequests>[4];
 }) {
 	const { store, nav, actions, creation, settings } = a;
-	const { roomsRef, activeRoomIdRef, unarchiveRoomRef, setRooms, loaded, loadedRef } = store;
+	const { roomsRef, activeRoomIdRef, unarchiveRoomRef, loaded, loadedRef } = store;
 	// #19: OS-notification click handling — see useOsNotificationClicks.ts.
-	useOsNotificationClicks(roomsRef, unarchiveRoomRef, setRooms, loaded, loadedRef);
+	const switchRoomRef = useRef(store.switchRoom);
+	switchRoomRef.current = store.switchRoom;
+	const selectHarnessRef = useRef(actions.selectHarness);
+	selectHarnessRef.current = actions.selectHarness;
+	useOsNotificationClicks(
+		roomsRef,
+		unarchiveRoomRef,
+		switchRoomRef,
+		selectHarnessRef,
+		loaded,
+		loadedRef,
+	);
 
 	// Epic #255: a folder opened from outside Skein (`skein .`, a
 	// `skein://open` link, a second launch with a path); see useOpenRequests.ts.

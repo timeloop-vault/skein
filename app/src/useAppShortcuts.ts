@@ -50,8 +50,12 @@ export function useAppShortcuts(a: {
 	addHarnessRef.current = actions.addHarness;
 	const closeRoomRef = useRef(store.closeRoom);
 	closeRoomRef.current = store.closeRoom;
-	const switchHarnessInRoomRef = useRef(actions.switchHarnessInRoom);
-	switchHarnessInRoomRef.current = actions.switchHarnessInRoom;
+	// User-intent selection (#561): also dismisses the "+ harness" picker.
+	const selectHarnessRef = useRef(actions.selectHarness);
+	selectHarnessRef.current = actions.selectHarness;
+	// User-intent room selection (#560): also dismisses the Control Center.
+	const switchRoomRef = useRef(store.switchRoom);
+	switchRoomRef.current = store.switchRoom;
 	const cycleAlertedRoomRef = useRef(actions.cycleAlertedRoom);
 	cycleAlertedRoomRef.current = actions.cycleAlertedRoom;
 	const cycleAlertedHarnessRef = useRef(actions.cycleAlertedHarness);
@@ -86,7 +90,7 @@ export function useAppShortcuts(a: {
 		nav.stripSegmentsRef,
 		store.activeRoomIdRef,
 		a.activeRoomsRef,
-		switchHarnessInRoomRef,
+		selectHarnessRef,
 		addHarnessRef,
 		closeRoomRef,
 		cycleAlertedRoomRef,
@@ -95,7 +99,7 @@ export function useAppShortcuts(a: {
 		toggleReviewRef,
 		a.toggleControlCenterRef,
 		a.lastUsedByGroupRef,
-		store.setActiveRoomId,
+		switchRoomRef,
 		a.setShowPalette,
 		a.setShowSettings,
 		settings.setFontSize,
