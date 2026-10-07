@@ -25,7 +25,7 @@ export function useKeyboardShortcuts(
 	stripSegmentsRef: MutableRefObject<StripSegment[]>,
 	activeRoomIdRef: MutableRefObject<string>,
 	activeRoomsRef: MutableRefObject<Room[]>,
-	switchHarnessInRoomRef: MutableRefObject<(roomId: string, harnessId: string) => void>,
+	selectHarnessRef: MutableRefObject<(roomId: string, harnessId: string) => void>,
 	addHarnessRef: MutableRefObject<(roomId: string) => void>,
 	closeRoomRef: MutableRefObject<(id: string) => Promise<void>>,
 	cycleAlertedRoomRef: MutableRefObject<(delta: number) => void>,
@@ -34,7 +34,7 @@ export function useKeyboardShortcuts(
 	toggleReviewRef: MutableRefObject<() => void>,
 	toggleControlCenterRef: MutableRefObject<() => void>,
 	lastUsedByGroupRef: MutableRefObject<Map<string, string>>,
-	setActiveRoomId: Dispatch<SetStateAction<string>>,
+	switchRoomRef: MutableRefObject<(id: string) => void>,
 	setShowPalette: Dispatch<SetStateAction<boolean>>,
 	setShowSettings: Dispatch<SetStateAction<boolean>>,
 	setFontSize: Dispatch<SetStateAction<number>>,
@@ -52,12 +52,12 @@ export function useKeyboardShortcuts(
 			const idx = list.findIndex((r) => r.id === active);
 			if (idx === -1) {
 				const first = list[0];
-				if (first) setActiveRoomId(first.id);
+				if (first) switchRoomRef.current(first.id);
 				return;
 			}
 			const nextIdx = (idx + delta + list.length) % list.length;
 			const next = list[nextIdx];
-			if (next) setActiveRoomId(next.id);
+			if (next) switchRoomRef.current(next.id);
 		};
 
 		const cycleHarness = (delta: number) => {
@@ -69,7 +69,7 @@ export function useKeyboardShortcuts(
 			const baseIdx = idx === -1 ? 0 : idx;
 			const nextIdx = (baseIdx + delta + room.harnesses.length) % room.harnesses.length;
 			const next = room.harnesses[nextIdx];
-			if (next) switchHarnessInRoomRef.current(room.id, next.id);
+			if (next) selectHarnessRef.current(room.id, next.id);
 		};
 
 		const onKey = (e: KeyboardEvent) => {
@@ -163,7 +163,7 @@ export function useKeyboardShortcuts(
 					const seg = stripSegmentsRef.current[match.roomIndex ?? 0];
 					if (seg) {
 						const target = topLevelTarget(seg, lastUsedByGroupRef.current, activeRoomsRef.current);
-						if (target) setActiveRoomId(target.id);
+						if (target) switchRoomRef.current(target.id);
 					}
 					break;
 				}

@@ -108,7 +108,7 @@ export const RoomWorkspace = (p: RoomWorkspaceProps) => {
 							onPick={p.creation.pickHarness}
 							onAddHarness={p.actions.addHarness}
 							onCancelPick={() => p.setShowPicker(null)}
-							onSwitchHarness={p.actions.switchHarnessInRoom}
+							onSwitchHarness={p.actions.selectHarness}
 							onCloseHarness={p.actions.closeHarness}
 							onHarnessCmdChange={p.actions.updateHarnessCmd}
 							onDesignEntryChange={p.actions.setHarnessDesignEntry}

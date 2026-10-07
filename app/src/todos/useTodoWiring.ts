@@ -12,11 +12,17 @@ import { useTodos } from "./useTodos.ts";
 export function useTodoWiring(
 	store: Pick<
 		ReturnType<typeof useRoomsStore>,
-		"rooms" | "setRooms" | "roomsRef" | "activeRooms" | "activeRoomId" | "setActiveRoomId"
+		| "rooms"
+		| "setRooms"
+		| "roomsRef"
+		| "activeRooms"
+		| "activeRoomId"
+		| "setActiveRoomId"
+		| "roomSelectSeq"
 	>,
 	pushToast: (entry: NewToast) => void,
 	segments: StripSegment[],
-	switchHarnessInRoom: (roomId: string, harnessId: string) => void,
+	selectHarness: (roomId: string, harnessId: string) => void,
 ) {
 	const todos = useTodos(store.rooms, store.setRooms);
 	const addTodo = makeAddTodoWithFeedback(store.roomsRef, todos.add, pushToast);
@@ -25,7 +31,8 @@ export function useTodoWiring(
 		segments,
 		store.activeRoomId,
 		store.setActiveRoomId,
-		switchHarnessInRoom,
+		store.roomSelectSeq,
+		selectHarness,
 		todos,
 	);
 	return { addTodo, cc };

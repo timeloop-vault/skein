@@ -37,6 +37,7 @@ import { canRestart, restartedHarness } from "./harnessRestart.ts";
 import { mailHold } from "./mailHold.ts";
 import type { RenameTarget } from "./RoomStrip.tsx";
 import { stillExists } from "./roomsStoreProbe.ts";
+import { pickerAfterHarnessSelect } from "./tempView.ts";
 import type { Room } from "./types.ts";
 
 /// #490: harness ids with a restart currently awaiting.
@@ -44,7 +45,7 @@ const restartsInFlight = new Set<string>();
 
 export function useHarnessActions(
 	setRooms: Dispatch<SetStateAction<Room[]>>,
-	setActiveRoomId: Dispatch<SetStateAction<string>>,
+	switchRoom: (id: string) => void,
 	activeRoomId: string,
 	activeRooms: Room[],
 	setShowPicker: Dispatch<SetStateAction<string | null>>,
@@ -70,13 +71,20 @@ export function useHarnessActions(
 		);
 	};
 
+	// #561: a USER picking a harness tab; also dismisses that room's open
+	// "+ harness" picker. Programmatic callers use `switchHarnessInRoom`.
+	const selectHarness = (roomId: string, harnessId: string) => {
+		switchHarnessInRoom(roomId, harnessId);
+		setShowPicker((cur) => pickerAfterHarnessSelect(cur, roomId));
+	};
+
 	// Jump to a specific harness: activate its room AND focus it within
 	// that room. Every click-to-jump surface (toast, status-bar urgent
 	// indicator, future inbox) should land on the harness that wanted
 	// attention, not just its room (#65).
 	const jumpToHarness = (roomId: string, harnessId: string) => {
-		setActiveRoomId(roomId);
-		switchHarnessInRoom(roomId, harnessId);
+		switchRoom(roomId);
+		selectHarness(roomId, harnessId);
 	};
 
 	// #67: the same "highest-pending harness, ties broken by harness
@@ -107,7 +115,7 @@ export function useHarnessActions(
 		if (!next) return;
 		const winner = topPendingHarness(next);
 		if (winner) jumpToHarness(next.id, winner.id);
-		else setActiveRoomId(next.id);
+		else switchRoom(next.id);
 	};
 
 	// #67: step across every alerted harness (room order × harness order),
@@ -375,6 +383,7 @@ export function useHarnessActions(
 		endRenameRoom,
 		commitRenameRoom,
 		switchHarnessInRoom,
+		selectHarness,
 		jumpToHarness,
 		cycleAlertedRoom,
 		cycleAlertedHarness,

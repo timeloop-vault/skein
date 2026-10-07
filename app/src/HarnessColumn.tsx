@@ -13,6 +13,7 @@ import { LiveHarnessTab } from "./LiveHarnessTab.tsx";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { type DefaultAgents, type VersionNoticeModes, versionNoticeModeFor } from "./prefs.ts";
 import { useWorkingSubagentCount } from "./subagents.ts";
+import { shownActiveId } from "./tempView.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
 import "./StatusBar.css";
 import "./HarnessColumn.css";
@@ -217,7 +218,7 @@ export const HarnessColumn = ({
 							h={h}
 							versionMode={versionNoticeModeFor(versionNoticeModes, h.kind)}
 							onVersionRestart={onRestartHarness}
-							active={h.id === room.activeHarnessId}
+							active={shownActiveId(room.activeHarnessId, showPicker) === h.id}
 							closable={room.harnesses.length > 1}
 							onClick={() => onSwitchHarness(room.id, h.id)}
 							onClose={() => onCloseHarness(room.id, h.id)}
@@ -235,7 +236,20 @@ export const HarnessColumn = ({
 						/>
 					))}
 				</div>
-				<div className="sk-harness-add" onClick={() => onAddHarness(room.id)}>
+				{/* #561: reads as the active tab while the picker owns the area. */}
+				<div
+					className={showPicker ? "sk-harness-add picking" : "sk-harness-add"}
+					role="button"
+					tabIndex={0}
+					onKeyDown={(e) => {
+						if (e.key === "Enter" || e.key === " ") {
+							e.preventDefault();
+							onAddHarness(room.id);
+						}
+					}}
+					aria-pressed={showPicker}
+					onClick={() => onAddHarness(room.id)}
+				>
 					+ harness
 				</div>
 				<HarnessActionsMenu

@@ -178,8 +178,13 @@ export function useRoomsStore(
 	const room = useMemo(() => rooms.find((r) => r.id === activeRoomId), [rooms, activeRoomId]);
 	const activeHarness = room?.harnesses.find((h) => h.id === room.activeHarnessId);
 
+	// #560: bumps on every user room selection, even of the already-active
+	// room, so the Control Center can close on a re-select (an id-change effect
+	// can't see that).
+	const [roomSelectSeq, setRoomSelectSeq] = useState(0);
 	const switchRoom = (id: string) => {
 		setActiveRoomId(id);
+		setRoomSelectSeq((n) => n + 1);
 		// Pending-notification clearing for the now-displayed harness
 		// is handled by a useEffect elsewhere — it covers every path
 		// that changes the (active room, active harness) tuple, not
@@ -275,5 +280,6 @@ export function useRoomsStore(
 		closeRoom,
 		closeRoomForAgent,
 		switchRoom,
+		roomSelectSeq,
 	};
 }
