@@ -450,25 +450,24 @@ pub(super) fn run_probe(
     if let Some(path) = spawn_env::extract_probe_path(&String::from_utf8_lossy(&bytes)) {
         tracing::info!(shell = %shell, elapsed_ms, path = %path, "probe: captured user PATH");
         let env = login_env::extract_probe_env(&bytes);
-        match &env {
-            Some(env) => {
-                // Names only: values are secrets (tokens, API keys).
-                let overlay = login_env::login_env_overlay(env);
-                let mut names: Vec<&str> = overlay.iter().map(|(k, _)| k.as_str()).collect();
-                names.sort_unstable();
-                tracing::info!(
-                    shell = %shell,
-                    elapsed_ms,
-                    vars = names.len(),
-                    names = %names.join(","),
-                    "probe: captured login environment"
-                );
-            }
-            None => tracing::warn!(
+        if let Some(env) = &env {
+            // Names only: values are secrets (tokens, API keys).
+            let overlay = login_env::login_env_overlay(env);
+            let mut names: Vec<&str> = overlay.iter().map(|(k, _)| k.as_str()).collect();
+            names.sort_unstable();
+            tracing::info!(
+                shell = %shell,
+                elapsed_ms,
+                vars = names.len(),
+                names = %names.join(","),
+                "probe: captured login environment"
+            );
+        } else {
+            tracing::warn!(
                 shell = %shell,
                 elapsed_ms,
                 "probe: env capture failed; falling back to PATH only"
-            ),
+            );
         }
         return ProbeOutcome::Captured {
             path,
