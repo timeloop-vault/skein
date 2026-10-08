@@ -49,6 +49,21 @@ const BACKOFF_SCHEDULE_SECS: &[u64] = &[1, 2, 4, 8, 16, 30];
 /// fired after 5 s every reconnect cycle).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Budget for `/event` to answer with its response headers once the TCP
+/// connect has succeeded. opencode writes them immediately, followed by a
+/// `server.connected` frame, so 10 s is generous. Without it, a request
+/// opencode accepted but never answered waited forever: no retry, no log,
+/// and the harness sat on `running` with an empty Live Context.
+/// `CONNECT_TIMEOUT` doesn't cover this, and `timeout` can't (see above).
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long cold-connect attempts may keep failing before the adapter
+/// logs a warning. Those failures are normal for the first second or two
+/// while opencode binds its port, so each one logs at `debug`. That level
+/// is off by default, so an adapter that never connects would otherwise
+/// leave nothing in the log.
+const COLD_CONNECT_WARN_AFTER: Duration = Duration::from_secs(30);
+
 /// Budget for the `GET /session/<id>` root/child lookup (#116),
 /// used only when a user message arrives in a session the adapter has
 /// no cached answer for. Short: it blocks the SSE read loop from the
@@ -323,6 +338,8 @@ async fn run_adapter(
     // part can straddle one.
     let prompts = Mutex::new(harness_actions_opencode::UserPromptTracker::default());
     let mut attempt: usize = 0;
+    let started = tokio::time::Instant::now();
+    let mut warned_cold = false;
     loop {
         // Race the SSE attempt against cancellation. If `cancel` ever
         // fires (Drop of Adapter), exit immediately.
@@ -331,6 +348,7 @@ async fn run_adapter(
             &client,
             &url,
             port,
+            RESPONSE_TIMEOUT,
             &cancel,
             on_event.as_ref(),
             &connected_for_call,
@@ -362,6 +380,16 @@ async fn run_adapter(
                             // Surface as SessionEnd so the frontend
                             // falls back to L2a until we reconnect.
                             on_event(OpencodeEvent::SessionEnd);
+                        } else if !warned_cold && started.elapsed() >= COLD_CONNECT_WARN_AFTER {
+                            warned_cold = true;
+                            tracing::warn!(
+                                port,
+                                attempt,
+                                harness_id,
+                                error = %e,
+                                "opencode_events: still not connected after {}s; retrying",
+                                COLD_CONNECT_WARN_AFTER.as_secs()
+                            );
                         } else {
                             tracing::debug!(port, attempt, error = %e, "opencode_events: cold connect refused");
                         }
@@ -390,9 +418,34 @@ async fn run_adapter(
     }
 }
 
+/// Why one `stream_events` attempt failed.
+#[derive(Debug)]
+enum StreamError {
+    /// Connect refused, HTTP non-2xx, or a transport error mid-stream.
+    Http(reqwest::Error),
+    /// Connected, but `/event` sent no response within the budget.
+    NoResponse(Duration),
+}
+
+impl From<reqwest::Error> for StreamError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e)
+    }
+}
+
+impl std::fmt::Display for StreamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Http(e) => write!(f, "{e}"),
+            Self::NoResponse(d) => write!(f, "no response from /event within {}s", d.as_secs_f32()),
+        }
+    }
+}
+
 /// Open the SSE stream and dispatch events until it closes or errors.
 /// Returns `Ok(())` on clean stream end (server closed), `Err` on
-/// any failure (connect refused, HTTP non-200, transport error).
+/// any failure (connect refused, HTTP non-200, no response within
+/// `response_timeout`, transport error).
 /// Mutates the `connected_once` signal indirectly by emitting
 /// `Connected` on first message.
 #[allow(clippy::too_many_arguments)]
@@ -400,6 +453,7 @@ async fn stream_events(
     client: &reqwest::Client,
     url: &str,
     port: u16,
+    response_timeout: Duration,
     cancel: &Notify,
     on_event: &(dyn Fn(OpencodeEvent) + Send + Sync),
     connected_once: &AtomicBool,
@@ -410,18 +464,21 @@ async fn stream_events(
     cwd: &str,
     root_cache: &Mutex<HashMap<String, bool>>,
     prompts: &Mutex<harness_actions_opencode::UserPromptTracker>,
-) -> Result<(), reqwest::Error> {
+) -> Result<(), StreamError> {
     use futures_util::StreamExt;
 
-    let response = client.get(url).send().await?;
+    let response = tokio::time::timeout(response_timeout, client.get(url).send())
+        .await
+        .map_err(|_| StreamError::NoResponse(response_timeout))??;
     if !response.status().is_success() {
         // Coerce non-2xx into an error so the caller bumps backoff.
-        return Err(response.error_for_status().unwrap_err());
+        return Err(response.error_for_status().unwrap_err().into());
     }
     // Flip the shared flag so the caller knows we made it past the
     // HTTP handshake. Any error from this point on is a real
     // disconnect, not a cold-connect race.
     connected_once.store(true, Ordering::Release);
+    tracing::info!(port, harness_id, "opencode_events: connected");
     on_event(OpencodeEvent::Connected);
     // Synthetic "assume idle" emit. opencode only broadcasts
     // `session.status` on *transitions*; subscribers don't get a

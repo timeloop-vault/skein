@@ -506,3 +506,47 @@ fn data_field_with_no_space_after_colon_still_parsed() {
         "should handle no-space `data:` form, got {out:?}"
     );
 }
+
+/// A server that accepts the connection but never answers `/event` must
+/// fail the attempt (so the reconnect loop retries) rather than hang it.
+#[tokio::test]
+async fn unanswered_event_request_times_out() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // Accept and hold the socket open, never writing a byte.
+    let holder = std::thread::spawn(move || listener.accept().map(|(s, _)| s));
+    let (_dir, db) = test_db();
+    crate::setup::install_rustls_provider();
+    let client = reqwest::Client::new();
+    let cancel = Notify::new();
+    let connected = AtomicBool::new(false);
+    let emitted = Mutex::new(Vec::new());
+    let on_event = |e: OpencodeEvent| emitted.lock().push(e);
+    let root_cache = Mutex::new(HashMap::new());
+    let prompts = Mutex::new(harness_actions_opencode::UserPromptTracker::default());
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        stream_events(
+            &client,
+            &format!("http://127.0.0.1:{port}/event"),
+            port,
+            Duration::from_millis(200),
+            &cancel,
+            &on_event,
+            &connected,
+            &db,
+            None,
+            "h1",
+            "r1",
+            "/tmp",
+            &root_cache,
+            &prompts,
+        ),
+    )
+    .await
+    .expect("stream_events hung past its response timeout");
+    assert!(matches!(result, Err(StreamError::NoResponse(_))));
+    assert!(!connected.load(Ordering::Acquire));
+    assert!(emitted.lock().is_empty());
+    drop(holder.join());
+}
