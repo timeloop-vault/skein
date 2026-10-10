@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 510" role="img" aria-labelledby="t d">
+<title id="t">Today: one Skein process</title>
+<desc id="d">One machine holds a single Skein process with the webview UI and the Rust backend. Harnesses run as child processes and call the agent API back on loopback. Quitting the app kills every harness.</desc>
+<style>
+:root{--bg:#faf8f3;--fg:#1a1814;--fg2:#4a4740;--line:#9a968a;--mach:#ece9e1;--client:#5a6aa0;--skeind:#547f5b;--harness:#a87a2c;--bad:#a64f3f}
+@media (prefers-color-scheme: dark){:root{--bg:#131418;--fg:#e8e6df;--fg2:#b6b3aa;--line:#6a685f;--mach:#1b1d22;--client:#8a96c9;--skeind:#7aa37f;--harness:#d4a657;--bad:#c97163}}
+text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:13px;fill:var(--fg)}
+.bg{fill:var(--bg)}
+.mach{fill:var(--mach);stroke:var(--line);stroke-width:1.5}
+.k-client{fill:var(--client);fill-opacity:.15;stroke:var(--client);stroke-width:1.6}
+.k-skeind{fill:var(--skeind);fill-opacity:.15;stroke:var(--skeind);stroke-width:1.6}
+.k-harness{fill:var(--harness);fill-opacity:.18;stroke:var(--harness);stroke-width:1.6}
+.k-bad{fill:var(--bad);fill-opacity:.14;stroke:var(--bad);stroke-width:1.8}
+.k-n{fill:none;stroke:var(--line);stroke-width:1.4}
+.dash{stroke-dasharray:6 4}
+.ghost{opacity:.5}
+.h{font-weight:600}
+.s{fill:var(--fg2);font-size:12px}
+.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+.halo{stroke:var(--bg);stroke-width:5;paint-order:stroke;stroke-linejoin:round}
+.bad{fill:var(--bad)}
+.big{font-size:15px;font-weight:600}
+.ln{fill:none;stroke:var(--fg2);stroke-width:1.7}
+.ln-s{fill:none;stroke:var(--skeind);stroke-width:1.9}
+.ln-b{fill:none;stroke:var(--bad);stroke-width:1.9}
+.ah{fill:var(--fg2)}.ah-s{fill:var(--skeind)}.ah-b{fill:var(--bad)}
+.dot-client{fill:var(--client)}.dot-skeind{fill:var(--skeind)}.dot-harness{fill:var(--harness)}.dot-bad{fill:var(--bad)}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 0L10 5L0 10z"/></marker>
+<marker id="as" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-s" d="M0 0L10 5L0 10z"/></marker>
+<marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-b" d="M0 0L10 5L0 10z"/></marker>
+</defs>
+<rect class="bg" x="0" y="0" width="900" height="510"/>
+<g><rect class="mach" x="20" y="20" width="860" height="470" rx="14"/><text x="36" y="44" class="h">One machine</text>
+</g>
+<rect class="mach" x="40" y="56" width="580" height="300" rx="12" style="fill:none"/><text x="56" y="80" class="h">Skein app: one process</text>
+<g><rect class="k-client" x="60" y="98" width="220" height="240" rx="8"/><text x="72" y="120" class="h">UI (webview)</text>
+<text x="72" y="139" class="s">xterm.js terminals</text>
+<text x="72" y="156" class="s">review pane</text>
+<text x="72" y="173" class="s">phase state machine</text>
+<text x="72" y="190" class="s">settings, notifications</text>
+</g>
+<g><rect class="k-skeind" x="380" y="98" width="220" height="240" rx="8"/><text x="392" y="120" class="h">Backend (Rust)</text>
+<text x="392" y="139" class="s">PTYs, transcript tails</text>
+<text x="392" y="156" class="s">agent API + MCP</text>
+<text x="392" y="173" class="s">on 127.0.0.1</text>
+<text x="392" y="190" class="s">watcher, sqlite, git</text>
+</g>
+<path class="ln" d="M280 218 L380 218" marker-end="url(#a)" marker-start="url(#a)"/>
+<text x="330" y="200" class="s halo" text-anchor="middle">Tauri</text><text x="330" y="200" class="s" text-anchor="middle">Tauri</text>
+<text x="330" y="215" class="s halo" text-anchor="middle">IPC</text><text x="330" y="215" class="s" text-anchor="middle">IPC</text>
+<g><rect class="k-n" x="680" y="98" width="180" height="240" rx="8"/><text x="692" y="120" class="h">Child processes</text>
+</g>
+<g><rect class="k-harness" x="696" y="150" width="148" height="26" rx="13"/><text x="770.0" y="167.5" text-anchor="middle">Claude Code</text>
+</g>
+<g><rect class="k-harness" x="696" y="190" width="148" height="26" rx="13"/><text x="770.0" y="207.5" text-anchor="middle">opencode</text>
+</g>
+<g><rect class="k-harness" x="696" y="230" width="148" height="26" rx="13"/><text x="770.0" y="247.5" text-anchor="middle">shell, files</text>
+</g>
+<path class="ln" d="M600 150 L680 150" marker-end="url(#a)"/>
+<text x="640" y="135" class="s halo" text-anchor="middle">PTY</text><text x="640" y="135" class="s" text-anchor="middle">PTY</text>
+<text x="640" y="150" class="s halo" text-anchor="middle">bytes</text><text x="640" y="150" class="s" text-anchor="middle">bytes</text>
+<path class="ln" d="M680 290 L600 290" marker-end="url(#a)"/>
+<text x="640" y="275" class="s halo" text-anchor="middle">MCP, hooks</text><text x="640" y="275" class="s" text-anchor="middle">MCP, hooks</text>
+<text x="640" y="290" class="s halo" text-anchor="middle">loopback</text><text x="640" y="290" class="s" text-anchor="middle">loopback</text>
+<g><rect class="k-bad" x="40" y="376" width="580" height="92" rx="8"/><text x="52" y="398" class="h">The problem</text>
+<text x="52" y="417" class="s">Quit the app and the process tree goes with it:</text>
+<text x="52" y="434" class="s">every harness dies, mid-turn or not. Nothing can run remotely.</text>
+</g>
+<text x="650" y="392" class="h">Legend</text>
+<rect class="k-client" x="650" y="398" width="22" height="13" rx="3"/><text x="682" y="409" class="s">client (UI)</text>
+<rect class="k-skeind" x="650" y="418" width="22" height="13" rx="3"/><text x="682" y="429" class="s">skeind (backend)</text>
+<rect class="k-harness" x="650" y="438" width="22" height="13" rx="3"/><text x="682" y="449" class="s">harness (agent CLI)</text>
+<rect class="k-bad" x="650" y="458" width="22" height="13" rx="3"/><text x="682" y="469" class="s">problem / blocked</text>
+
+</svg>

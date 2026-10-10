@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 540" role="img" aria-labelledby="t d">
+<title id="t">Unattended approval (Phase 4)</title>
+<desc id="d">A harness on the remote skeind hits a permission dialog. The hook blocks, skeind writes an approval record into the event stream, a notifier pushes to a phone through a self-hosted push service, and any client may answer. The first answer wins.</desc>
+<style>
+:root{--bg:#faf8f3;--fg:#1a1814;--fg2:#4a4740;--line:#9a968a;--mach:#ece9e1;--client:#5a6aa0;--skeind:#547f5b;--harness:#a87a2c;--bad:#a64f3f}
+@media (prefers-color-scheme: dark){:root{--bg:#131418;--fg:#e8e6df;--fg2:#b6b3aa;--line:#6a685f;--mach:#1b1d22;--client:#8a96c9;--skeind:#7aa37f;--harness:#d4a657;--bad:#c97163}}
+text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:13px;fill:var(--fg)}
+.bg{fill:var(--bg)}
+.mach{fill:var(--mach);stroke:var(--line);stroke-width:1.5}
+.k-client{fill:var(--client);fill-opacity:.15;stroke:var(--client);stroke-width:1.6}
+.k-skeind{fill:var(--skeind);fill-opacity:.15;stroke:var(--skeind);stroke-width:1.6}
+.k-harness{fill:var(--harness);fill-opacity:.18;stroke:var(--harness);stroke-width:1.6}
+.k-bad{fill:var(--bad);fill-opacity:.14;stroke:var(--bad);stroke-width:1.8}
+.k-n{fill:none;stroke:var(--line);stroke-width:1.4}
+.dash{stroke-dasharray:6 4}
+.ghost{opacity:.5}
+.h{font-weight:600}
+.s{fill:var(--fg2);font-size:12px}
+.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+.halo{stroke:var(--bg);stroke-width:5;paint-order:stroke;stroke-linejoin:round}
+.bad{fill:var(--bad)}
+.big{font-size:15px;font-weight:600}
+.ln{fill:none;stroke:var(--fg2);stroke-width:1.7}
+.ln-s{fill:none;stroke:var(--skeind);stroke-width:1.9}
+.ln-b{fill:none;stroke:var(--bad);stroke-width:1.9}
+.ah{fill:var(--fg2)}.ah-s{fill:var(--skeind)}.ah-b{fill:var(--bad)}
+.dot-client{fill:var(--client)}.dot-skeind{fill:var(--skeind)}.dot-harness{fill:var(--harness)}.dot-bad{fill:var(--bad)}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 0L10 5L0 10z"/></marker>
+<marker id="as" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-s" d="M0 0L10 5L0 10z"/></marker>
+<marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-b" d="M0 0L10 5L0 10z"/></marker>
+</defs>
+<rect class="bg" x="0" y="0" width="900" height="540"/>
+<g><rect class="mach" x="20" y="20" width="450" height="500" rx="14"/><text x="36" y="44" class="h">Home server / VM</text>
+</g>
+<g><rect class="k-harness" x="60" y="56" width="220" height="26" rx="13"/><text x="170.0" y="73.5" text-anchor="middle">Claude Code, permission dialog</text>
+</g>
+<g><rect class="k-skeind" x="40" y="190" width="410" height="230" rx="8"/><text x="52" y="212" class="h">Remote skeind</text>
+<text x="52" y="231" class="s">2. approval record in the event stream</text>
+<text x="52" y="248" class="s">3. notifier pushes to the phone</text>
+<text x="52" y="265" class="s">4. first answer wins, hook returns</text>
+<text x="52" y="282" class="s">optional per-room timeout policy</text>
+</g>
+<path class="ln-b" d="M130 82 L130 190" marker-end="url(#ab)"/>
+<text x="138" y="140" class="s halo">1. hook blocks</text><text x="138" y="140" class="s">1. hook blocks</text>
+<text x="138" y="155" class="s halo">/api/harness/permission</text><text x="138" y="155" class="s">/api/harness/permission</text>
+<path class="ln-s" d="M340 190 L340 82" marker-end="url(#as)"/>
+<text x="348" y="140" class="s halo">allow / deny</text><text x="348" y="140" class="s">allow / deny</text>
+<g><rect class="k-n dash" x="60" y="450" width="380" height="26" rx="13"/><text x="250.0" y="467.5" text-anchor="middle">Agent stays parked until someone answers</text>
+</g>
+<g><rect class="k-n" x="580" y="40" width="300" height="90" rx="8"/><text x="592" y="62" class="h">Push service</text>
+<text x="592" y="81" class="s">self-hosted, e.g. ntfy</text>
+</g>
+<g><rect class="k-client" x="580" y="190" width="300" height="90" rx="8"/><text x="592" y="212" class="h">Phone</text>
+<text x="592" y="231" class="s">notification, tap to answer</text>
+</g>
+<g><rect class="k-client" x="580" y="350" width="300" height="90" rx="8"/><text x="592" y="372" class="h">Laptop client</text>
+<text x="592" y="391" class="s">sees the approval in its feed</text>
+</g>
+<path class="ln-s" d="M450 220 L497 220 L497 85 L580 85" marker-end="url(#as)"/>
+<text x="540" y="70" class="s halo" text-anchor="middle">push</text><text x="540" y="70" class="s" text-anchor="middle">push</text>
+<path class="ln" d="M730 130 L730 190" marker-end="url(#a)"/>
+<path class="ln-s" d="M580 245 L450 245" marker-end="url(#as)"/>
+<text x="540" y="262" class="s halo" text-anchor="middle">answer</text><text x="540" y="262" class="s" text-anchor="middle">answer</text>
+<path class="ln-s" d="M450 385 L580 385" marker-end="url(#as)"/>
+<text x="515" y="370" class="s halo" text-anchor="middle">event</text><text x="515" y="370" class="s" text-anchor="middle">event</text>
+<text x="515" y="385" class="s halo" text-anchor="middle">stream</text><text x="515" y="385" class="s" text-anchor="middle">stream</text>
+<path class="ln-s" d="M580 415 L450 415" marker-end="url(#as)"/>
+<text x="515" y="440" class="s halo" text-anchor="middle">answer</text><text x="515" y="440" class="s" text-anchor="middle">answer</text>
+<text x="730" y="480" class="s" text-anchor="middle">Any client can answer;</text>
+<text x="730" y="497" class="s" text-anchor="middle">the first answer wins.</text>
+
+</svg>

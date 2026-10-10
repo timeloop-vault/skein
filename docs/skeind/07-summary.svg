@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 570" role="img" aria-labelledby="t d">
+<title id="t">Summary: what moves to skeind and the phase plan</title>
+<desc id="d">Left: today's Tauri app modules. Right: the backend modules move into skein-daemon, while window, rendering, updater, clipboard, OS notifications and settings stay in the client. Below: phases 0 to 6, with 3b.</desc>
+<style>
+:root{--bg:#faf8f3;--fg:#1a1814;--fg2:#4a4740;--line:#9a968a;--mach:#ece9e1;--client:#5a6aa0;--skeind:#547f5b;--harness:#a87a2c;--bad:#a64f3f}
+@media (prefers-color-scheme: dark){:root{--bg:#131418;--fg:#e8e6df;--fg2:#b6b3aa;--line:#6a685f;--mach:#1b1d22;--client:#8a96c9;--skeind:#7aa37f;--harness:#d4a657;--bad:#c97163}}
+text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:13px;fill:var(--fg)}
+.bg{fill:var(--bg)}
+.mach{fill:var(--mach);stroke:var(--line);stroke-width:1.5}
+.k-client{fill:var(--client);fill-opacity:.15;stroke:var(--client);stroke-width:1.6}
+.k-skeind{fill:var(--skeind);fill-opacity:.15;stroke:var(--skeind);stroke-width:1.6}
+.k-harness{fill:var(--harness);fill-opacity:.18;stroke:var(--harness);stroke-width:1.6}
+.k-bad{fill:var(--bad);fill-opacity:.14;stroke:var(--bad);stroke-width:1.8}
+.k-n{fill:none;stroke:var(--line);stroke-width:1.4}
+.dash{stroke-dasharray:6 4}
+.ghost{opacity:.5}
+.h{font-weight:600}
+.s{fill:var(--fg2);font-size:12px}
+.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+.halo{stroke:var(--bg);stroke-width:5;paint-order:stroke;stroke-linejoin:round}
+.bad{fill:var(--bad)}
+.big{font-size:15px;font-weight:600}
+.ln{fill:none;stroke:var(--fg2);stroke-width:1.7}
+.ln-s{fill:none;stroke:var(--skeind);stroke-width:1.9}
+.ln-b{fill:none;stroke:var(--bad);stroke-width:1.9}
+.ah{fill:var(--fg2)}.ah-s{fill:var(--skeind)}.ah-b{fill:var(--bad)}
+.dot-client{fill:var(--client)}.dot-skeind{fill:var(--skeind)}.dot-harness{fill:var(--harness)}.dot-bad{fill:var(--bad)}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 0L10 5L0 10z"/></marker>
+<marker id="as" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-s" d="M0 0L10 5L0 10z"/></marker>
+<marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-b" d="M0 0L10 5L0 10z"/></marker>
+</defs>
+<rect class="bg" x="0" y="0" width="900" height="570"/>
+<text x="20" y="28" class="big">What moves, and what stays</text>
+<g><rect class="k-n" x="20" y="44" width="270" height="350" rx="8"/><text x="32" y="66" class="h">Tauri app today</text>
+</g>
+<g><rect class="k-skeind" x="32" y="82" width="246" height="214" rx="8"/><text x="44" y="104" class="h">Backend modules</text>
+</g>
+<text x="46" y="126" class="s">rooms + sqlite</text>
+<text x="46" y="143" class="s">PTY manager, transcript tails</text>
+<text x="46" y="160" class="s">watcher, git reads</text>
+<text x="46" y="177" class="s">files backend, review</text>
+<text x="46" y="194" class="s">agent API / MCP</text>
+<text x="46" y="211" class="s">design preview server</text>
+<text x="46" y="228" class="s">spawn env probe</text>
+<g><rect class="k-client" x="32" y="306" width="246" height="78" rx="8"/><text x="44" y="328" class="h">UI and shell</text>
+</g>
+<text x="46" y="346" class="s">window, xterm.js / CodeMirror</text>
+<text x="46" y="361" class="s">updater, clipboard, OS notices</text>
+<text x="46" y="376" class="s">settings UI</text>
+<g><rect class="k-skeind" x="340" y="44" width="540" height="215" rx="8"/><text x="352" y="66" class="h">skein-daemon (headless)</text>
+</g>
+<text x="356" y="86" class="s">Everything in the backend column moves here, plus:</text>
+<text x="356" y="103" class="s">headless terminal emulator per PTY, event log with seq,</text>
+<text x="356" y="120" class="s">auth and device tokens, approval queue + notifier,</text>
+<text x="356" y="137" class="s">daemon-to-daemon link, Runtime trait (Host, sandbox)</text>
+<g><rect class="k-client" x="340" y="280" width="540" height="114" rx="8"/><text x="352" y="302" class="h">Skein client (stays)</text>
+</g>
+<text x="356" y="322" class="s">window, xterm.js / CodeMirror rendering, updater,</text>
+<text x="356" y="339" class="s">clipboard, OS notifications, settings UI;</text>
+<text x="356" y="356" class="s">speaks the daemon protocol to one or many daemons</text>
+<path class="ln-s" d="M290 170 L340 150" marker-end="url(#as)"/>
+<text x="315" y="138" class="s halo" text-anchor="middle">moves</text><text x="315" y="138" class="s" text-anchor="middle">moves</text>
+<path class="ln" d="M290 345 L340 345" marker-end="url(#a)"/>
+<text x="315" y="330" class="s halo" text-anchor="middle">stays</text><text x="315" y="330" class="s" text-anchor="middle">stays</text>
+<text x="20" y="438" class="h">Phases (each usable on its own)</text>
+<rect class="k-n" x="20" y="452" width="102" height="96" rx="8"/><circle class="k-skeind" cx="40" cy="474" r="12"/><text x="40" y="479" class="h" text-anchor="middle">0</text>
+<text x="28" y="506" class="s">ssh + tmux spike</text>
+<text x="28" y="520" class="s">→ `remote` kind</text>
+<text x="28" y="534" class="s">(#568)</text>
+<rect class="k-n" x="128" y="452" width="102" height="96" rx="8"/><circle class="k-skeind" cx="148" cy="474" r="12"/><text x="148" y="479" class="h" text-anchor="middle">1</text>
+<text x="136" y="506" class="s">extract daemon</text>
+<text x="136" y="520" class="s">in-process</text>
+<rect class="k-n" x="236" y="452" width="102" height="96" rx="8"/><circle class="k-skeind" cx="256" cy="474" r="12"/><text x="256" y="479" class="h" text-anchor="middle">2</text>
+<text x="244" y="506" class="s">detached local</text>
+<rect class="k-n" x="344" y="452" width="102" height="96" rx="8"/><circle class="k-skeind" cx="364" cy="474" r="12"/><text x="364" y="479" class="h" text-anchor="middle">3</text>
+<text x="352" y="506" class="s">remote:</text>
+<text x="352" y="520" class="s">WebSocket,</text>
+<text x="352" y="534" class="s">device tokens</text>
+<rect class="k-n" x="452" y="452" width="102" height="96" rx="8"/><circle class="k-skeind" cx="472" cy="474" r="12"/><text x="472" y="479" class="h" text-anchor="middle">3b</text>
+<text x="460" y="506" class="s">daemon-to-</text>
+<text x="460" y="520" class="s">daemon link</text>
+<rect class="k-n" x="560" y="452" width="102" height="96" rx="8"/><circle class="k-skeind" cx="580" cy="474" r="12"/><text x="580" y="479" class="h" text-anchor="middle">4</text>
+<text x="568" y="506" class="s">approvals +</text>
+<text x="568" y="520" class="s">push</text>
+<rect class="k-n" x="668" y="452" width="102" height="96" rx="8"/><circle class="k-skeind" cx="688" cy="474" r="12"/><text x="688" y="479" class="h" text-anchor="middle">5</text>
+<text x="676" y="506" class="s">sandbox</text>
+<text x="676" y="520" class="s">runtime</text>
+<rect class="k-n" x="776" y="452" width="102" height="96" rx="8"/><circle class="k-skeind" cx="796" cy="474" r="12"/><text x="796" y="479" class="h" text-anchor="middle">6</text>
+<text x="784" y="506" class="s">mobile client</text>
+
+</svg>
