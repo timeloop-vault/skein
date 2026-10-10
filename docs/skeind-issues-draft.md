@@ -68,7 +68,7 @@ daemon.
 
 Each phase is usable on its own.
 
-- [x] #P0 ssh + tmux spike (concluded: not pursued)
+- [x] #P0 ssh + tmux spike (shipped standalone as the `remote` kind, #568)
 - [ ] #P1a Event-sink trait replaces AppHandle/Emitter in the modules that move
 - [ ] #P1b Stream sinks and command/impl split for Channel commands and binary fs reads
 - [ ] #P1c Path and resource provider replaces app.path()
@@ -136,7 +136,7 @@ Anything the design lists as a non-goal, plus a `create_workspace` verb
 
 ## Phase 0
 
-**Title:** skeind P0: ssh + tmux spike (concluded: not pursued)
+**Title:** skeind P0: ssh + tmux spike (shipped standalone as the `remote` harness kind, #568)
 
 **Labels:** (none)
 
@@ -150,7 +150,9 @@ ssh, and be driven from the UI machine as a `Runtime` implementation?
 
 ## Conclusion
 
-Skein does not use ssh or tmux.
+skeind does not use ssh or tmux. The spike shipped as a standalone
+`remote` harness kind (#568) for plain remote ssh use; skeind neither
+replaces nor depends on it.
 
 - skeind on the harness host already gives remote harnesses: it spawns
   ordinary local PTYs (HostRuntime).
@@ -164,8 +166,9 @@ needed regardless, since it is what makes snapshots possible.
 
 ## Outcome
 
-The spike ran as #568 (concluded: not pursued; spike code not merged).
-Its findings:
+The spike ran as #568 and shipped standalone as the `remote` harness
+kind; its findings fed this design (write-up: docs/ssh-tmux-spike.md
+once it lands). Its findings:
 
 1. Keeping a process alive is easy (tmux does it). The value is
    telemetry: transcripts and SSE live on the remote host, so the daemon

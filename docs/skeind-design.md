@@ -82,13 +82,18 @@ and parsers, the watcher, skein-git reads, the files backend, the agent
 API and MCP (still localhost from the harness's point of view), the
 approval queue and notifier, and a Runtime trait (Host | sandbox).
 
-**Why not ssh + tmux.** skeind on the host already gives remote
+**Why skeind does not use ssh + tmux.** skeind on the host already gives remote
 harnesses: it spawns ordinary local PTYs (HostRuntime). PTY survival
 across a daemon restart is a non-goal; durability is resume plus terminal
 snapshots. And a harness in tmux reached over ssh from the UI machine
 cannot reach the agent API and MCP on its 127.0.0.1 without a reverse
-tunnel, which this design avoids. The spike's findings (#568) are listed
-under "Evidence from the ssh + tmux spike (#568)" below.
+tunnel, which this design avoids. The spike itself shipped separately
+as the `remote` harness kind (#568), and its findings fed this design;
+they are listed under "Evidence from the ssh + tmux spike (#568)"
+below. The `remote` kind stays a separate, simpler path for plain
+remote ssh use: skeind neither replaces nor depends on it, and the two
+can coexist. A `remote`-kind harness keeps its own limits, e.g. no
+agent-API reachability unless the remote host can reach it.
 
 **Transport.** One multiplexed connection per daemon: an in-process
 channel, a local socket, or a WebSocket over a private overlay network
@@ -278,8 +283,9 @@ out. Skein stays free of clone and credential logic.
 
 Each phase is usable on its own.
 
-0. **ssh + tmux spike.** Ran as #568; concluded Skein does not use ssh
-   or tmux; code not merged.
+0. **ssh + tmux spike.** Ran as #568 and shipped standalone as the
+   `remote` harness kind; its findings fed this design. skeind itself
+   uses neither ssh nor tmux.
 1. **Extract skein-daemon** with the in-process transport and zero
    behaviour change. This is the bulk of the work.
 2. **Detached local.** Socket, a daemon that outlives the app, seq
