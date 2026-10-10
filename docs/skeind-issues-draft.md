@@ -706,6 +706,9 @@ the network.
 - **Host picker** at room creation, and a client that holds N daemon
   connections with reconnect and the last-seen seq per daemon. A room
   belongs to exactly one daemon.
+- **Client keys rooms by `(daemon id, room id)`**, never by bare room id:
+  two daemons can hand out the same id, and #P3b's daemon-qualified ids
+  then migrate only daemon-side state, not the client.
 - **`list_workspaces`** returning main checkouts under
   `SKEIND_WORKSPACE_ROOT`. A remote room is created against a checkout
   that already exists on the host; provisioning is out of scope.
@@ -735,6 +738,8 @@ the network.
 
 - A client on one machine creates a room against a workspace on another
   host and works in it: terminal, feed, review, files, design preview.
+- A client connected to two daemons that hold rooms with the same id
+  shows, opens and routes both correctly.
 - A remote harness's Claude JSONL and opencode SSE are tailed on the
   daemon's host, and the client receives events, not only PTY bytes.
 - Harnesses spawned by a remote skeind find `claude` and `opencode` via
