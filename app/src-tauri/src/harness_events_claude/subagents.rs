@@ -88,11 +88,13 @@ pub(super) fn tick_subagents(
         };
         seen.insert(agent_id.clone());
 
-        if !s.subagents.contains_key(&agent_id) {
+        let first_sighting = !s.subagents.contains_key(&agent_id);
+        if first_sighting {
             // A transcript we haven't seen before — a fresh
             // delegation since attach (or since the last tick).
             new_count += 1;
             let meta = skein_harness::claude::read_subagent_meta(&sub_path);
+            let meta_settled = meta.is_some();
             let (agent_type, description) =
                 meta.map_or((None, None), |m| (m.agent_type, m.description));
             // #362: one line per subagent id the moment it joins the
@@ -119,6 +121,7 @@ pub(super) fn tick_subagents(
                     partial: String::new(),
                     lifecycle: skein_harness::claude::SubagentLifecycle::default(),
                     agent_type,
+                    meta_settled,
                     description,
                     started_ms: None,
                     started_ms_resolved: false,
@@ -131,6 +134,15 @@ pub(super) fn tick_subagents(
         let Some(tail) = s.subagents.get_mut(&agent_id) else {
             continue;
         };
+
+        // #497: the sidecar can land (or finish being written) after
+        // the transcript is first seen. Re-read it while either label
+        // field is still unknown — before the stat-skip below, since
+        // the sidecar can arrive while the transcript is quiet. Once
+        // a read parses, or the subagent finishes, it is not read again.
+        if !first_sighting && let Some(label) = refresh_label(tail, &agent_id) {
+            events.push(label);
+        }
 
         // `tick` fires on ANY watched-path change — including ordinary
         // main-transcript writes that have nothing to do with
@@ -312,10 +324,11 @@ pub(super) fn tick_subagents(
                 Some(skein_harness::claude::SubagentTransition::Reopened) => {
                     // A new prompt arrived after the exit — a
                     // follow-up delegation to the same id. Live again.
-                    // Reuses the cached `agent_type`/`description` from
-                    // this id's first appearance rather than re-reading
-                    // the `.meta.json` sidecar — on the assumption Claude
-                    // never changes an id's meta after the fact.
+                    // Reuses the cached `agent_type`/`description` (kept
+                    // current by `refresh_label` until both are known)
+                    // rather than re-reading the `.meta.json` sidecar —
+                    // on the assumption Claude never changes a known
+                    // field after the fact.
                     events.push(ClaudeEvent::SubagentStart {
                         agent_id: agent_id.clone(),
                         agent_type: tail.agent_type.clone(),
@@ -412,4 +425,34 @@ pub(super) fn is_subagent_tool_result_row(value: &serde_json::Value) -> bool {
                 .iter()
                 .any(|b| b.get("type").and_then(serde_json::Value::as_str) == Some("tool_result"))
         })
+}
+
+/// #497: fill in whichever of `agent_type`/`description` is still
+/// `None` from the sidecar, until one read parses (`meta_settled`): a
+/// valid sidecar may legitimately lack a field, so a parse is final.
+/// Never overwrites a known value, and returns the full current label
+/// as a `SubagentLabel` only when something changed. A missing or
+/// half-written sidecar reads as `None` and is retried on the next
+/// tick, but only while the subagent is live: a finished one stops
+/// being read (a reopen makes it live, and retried, again).
+fn refresh_label(tail: &mut SubagentTail, agent_id: &str) -> Option<ClaudeEvent> {
+    if tail.meta_settled || tail.lifecycle.is_finished() {
+        return None;
+    }
+    let meta = skein_harness::claude::read_subagent_meta(&tail.path)?;
+    tail.meta_settled = true;
+    let mut changed = false;
+    if tail.agent_type.is_none() && meta.agent_type.is_some() {
+        tail.agent_type = meta.agent_type;
+        changed = true;
+    }
+    if tail.description.is_none() && meta.description.is_some() {
+        tail.description = meta.description;
+        changed = true;
+    }
+    changed.then(|| ClaudeEvent::SubagentLabel {
+        agent_id: agent_id.to_owned(),
+        agent_type: tail.agent_type.clone(),
+        description: tail.description.clone(),
+    })
 }

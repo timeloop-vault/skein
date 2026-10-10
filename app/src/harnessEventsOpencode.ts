@@ -26,6 +26,9 @@ export type OpencodeEvent =
 	| { kind: "root_session_prompted"; session_id: string }
 	| { kind: "session_busy" }
 	| { kind: "session_idle" }
+	// #175: assumed-idle baseline after every (re)connect — not an observed
+	// transition, so it never notifies. See `translateOpencode`.
+	| { kind: "session_baseline_idle" }
 	| { kind: "message_delta" }
 	| { kind: "tool_use_start"; name: string }
 	| { kind: "user_message_agent"; session_id: string; agent: string }
@@ -171,15 +174,15 @@ const translateOpencode = (
 			// outage — now that we're back on the wire, we want
 			// adapter phases to win again.
 			//
-			// Phase change isn't done here; the synthetic
-			// SessionIdle the Rust adapter emits right after
-			// Connected handles the baseline state (see
-			// `stream_events` for the rationale).
+			// Phase change isn't done here; the SessionBaselineIdle
+			// the Rust adapter emits right after Connected handles
+			// the baseline state (see `emit_connect_events`). This
+			// arm must stay ungated: it re-fires on every reconnect.
 			//
 			// #86: a reconnect replays nothing, so any permission/
 			// question ids we were tracking are gone for good — the
-			// synthetic SessionIdle that follows will put the harness
-			// in `waiting`, not leave it stuck in `permission` forever.
+			// SessionBaselineIdle that follows puts the harness in
+			// `waiting`, not stuck in `permission` forever.
 			pendingPrompts.forget(harnessId);
 			harnessActivity.attachAuthoritativeSource(harnessId);
 			return;
@@ -289,6 +292,18 @@ const translateOpencode = (
 			// whatever was pending is moot once the turn itself ends.
 			pendingPrompts.forget(harnessId);
 			harnessActivity.setWaitingFromAdapter(harnessId, TRANSITION_SOURCE.L2c2OpencodeIdle);
+			return;
+		case "session_baseline_idle":
+			// #175: opencode sends no baseline, so each (re)connect
+			// assumes idle (a turn that ended during an outage must
+			// not stick on running). A guess, not a transition: applied
+			// quietly (never notifies). Also clears `permission`, whose
+			// pending ids the reconnect already forgot.
+			pendingPrompts.forget(harnessId);
+			harnessActivity.setBaselineWaitingFromAdapter(
+				harnessId,
+				TRANSITION_SOURCE.L2c2OpencodeBaseline,
+			);
 			return;
 		case "session_end":
 			// Server disconnected after a successful connect. Drop

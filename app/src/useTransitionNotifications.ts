@@ -57,7 +57,7 @@ export function useTransitionNotifications(
 	useEffect(() => {
 		const unsub = harnessActivity.subscribeTransitions((harnessId, from, to, source) => {
 			const cls = classifyTransition(from, to);
-			if (!isNotifiable(cls)) return;
+			if (!isNotifiable(cls, source)) return;
 			const a = harnessActivity.get(harnessId);
 			if (!a) return;
 			// #277: the end-of-turn notification explains itself when it

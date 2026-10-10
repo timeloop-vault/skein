@@ -303,6 +303,9 @@ pub(super) struct SubagentTail {
     /// re-reading the sidecar every tick.
     pub(super) agent_type: Option<String>,
     pub(super) description: Option<String>,
+    /// A sidecar read has returned `Some` (it exists and parsed), so
+    /// whatever fields it lacked stay unknown and it is never re-read.
+    pub(super) meta_settled: bool,
     /// Epoch ms parsed from the *first* row read off this transcript
     /// after this `SubagentTail` was created, used to compute
     /// `SubagentEnd`'s `duration_ms`. Set once (see

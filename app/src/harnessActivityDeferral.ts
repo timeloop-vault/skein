@@ -61,6 +61,21 @@ export const deferralMethods = {
 		setPhase(id, "waiting", source);
 	},
 
+	/// #175: opencode's assumed-idle baseline after an SSE (re)connect.
+	/// Same store effect as `setWaitingFromAdapter` — a turn that ended
+	/// during an outage must still land in `waiting` — except that it is
+	/// a guess, not an observed end of turn: its source is excluded from
+	/// notifications (`isNotifiable`). It does leave `permission`: the
+	/// reconnect already forgot the pending ids (a reconnect replays
+	/// nothing), so nothing could ever clear the dialog otherwise.
+	setBaselineWaitingFromAdapter(id: string, source: TransitionSource): void {
+		disarmDelegation(id);
+		const cur = store.get(id);
+		if (cur) cur.lastTurnSignal = { kind: "end", at: Date.now() };
+		if (!cur || cur.phase === "exited") return;
+		setPhase(id, "waiting", source);
+	},
+
 	/// #277 (epic #298): the Claude translator's `awaiting_prompt` arm
 	/// calls this instead of `setWaitingFromAdapter` directly. The main
 	/// transcript ended its turn, but that is a lie about the harness

@@ -245,6 +245,9 @@ export const TRANSITION_SOURCE = {
 	// L2c-2 — opencode SSE adapter.
 	L2c2OpencodeBusy: "l2c2-opencode-busy",
 	L2c2OpencodeIdle: "l2c2-opencode-idle",
+	// #175: assumed-idle baseline after an SSE (re)connect — a guess,
+	// never notify-worthy (see `isNotifiable`).
+	L2c2OpencodeBaseline: "l2c2-opencode-baseline",
 	L2c2OpencodeMessageDelta: "l2c2-opencode-message-delta",
 	L2c2OpencodeToolUse: "l2c2-opencode-tool-use",
 	// #86 — permission promoted to its own phase.

@@ -68,10 +68,15 @@ const SESSION_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OpencodeEvent {
-    /// SSE connected. Emitted exactly once per attach (subsequent
-    /// reconnects do not re-fire this — they're transparent to the
-    /// policy layer).
+    /// SSE connected. Fires on every successful (re)connect, not just
+    /// the first; the frontend relies on that to re-arm the
+    /// authoritative source that `SessionEnd` detached.
     Connected,
+    /// Assumed-idle baseline emitted after each (re)connect. Not an
+    /// observed transition: opencode sends no baseline, so this is a
+    /// guess the frontend applies quietly (no notification), unlike a
+    /// real `session.status idle`, which stays `SessionIdle`.
+    SessionBaselineIdle,
     /// opencode created a session in-process. Frontend uses
     /// `session_id` to capture the auto-allocated id for resume
     /// (replaces the chapter 5 sqlite snapshot-poll path).
@@ -392,6 +397,25 @@ async fn run_adapter(
     }
 }
 
+/// What every successful (re)connect announces: `Connected`, then the
+/// assumed-idle baseline. opencode only broadcasts `session.status` on
+/// *transitions*; subscribers don't get a baseline. A session sitting
+/// at its prompt (fresh spawn or restart-of-idle-session) never emits
+/// `session.status idle` until the user types something — so without
+/// the baseline the dot stays in `spawning|running` forever for rooms
+/// that started Skein already idle, and a turn that ended during an
+/// SSE outage would stick on running.
+///
+/// It is its own variant, not `SessionIdle` (#175): on a mid-turn
+/// reconnect the baseline is a guess, and the frontend must not treat
+/// it as an observed "your turn". If opencode is actually mid-turn,
+/// the next `session.status busy` arrives within ~100 ms and
+/// overrides it.
+fn emit_connect_events(on_event: &(dyn Fn(OpencodeEvent) + Send + Sync)) {
+    on_event(OpencodeEvent::Connected);
+    on_event(OpencodeEvent::SessionBaselineIdle);
+}
+
 /// Open the SSE stream and dispatch events until it closes or errors.
 /// Returns `Ok(())` on clean stream end (server closed), `Err` on
 /// any failure (connect refused, HTTP non-200, transport error).
@@ -424,20 +448,7 @@ async fn stream_events(
     // HTTP handshake. Any error from this point on is a real
     // disconnect, not a cold-connect race.
     connected_once.store(true, Ordering::Release);
-    on_event(OpencodeEvent::Connected);
-    // Synthetic "assume idle" emit. opencode only broadcasts
-    // `session.status` on *transitions*; subscribers don't get a
-    // baseline. A session that's been sitting at its prompt
-    // (fresh spawn or restart-of-idle-session) never emits
-    // `session.status idle` until the user types something — so
-    // without this, the dot stays in `spawning|running` forever
-    // for opencode rooms that started Skein already idle.
-    //
-    // If opencode is actually mid-turn (rare on attach), the next
-    // `session.status busy` arrives within ~100 ms and overrides
-    // this. The user sees a brief blue-then-green flash, which is
-    // fine. False idle is cheaper UX-wise than false running.
-    on_event(OpencodeEvent::SessionIdle);
+    emit_connect_events(on_event);
 
     let mut byte_stream = response.bytes_stream();
     // Carries incomplete bytes across chunk boundaries. SSE framing

@@ -109,6 +109,24 @@ export const subagents = {
 		emit(harnessId);
 	},
 
+	/// The sidecar supplied a label after the start (#497). Updates the
+	/// labels of an already-tracked entry only: no-op for an unknown id
+	/// (finished, or never tracked), and `startedAt`/`fromAttach` stay
+	/// as they were, since a label says nothing about the work itself.
+	relabel(
+		harnessId: string,
+		agentId: string,
+		agentType: string | null,
+		description: string | null,
+	): void {
+		const forHarness = live.get(harnessId);
+		const existing = forHarness?.get(agentId);
+		if (!forHarness || !existing) return;
+		forHarness.set(agentId, { ...existing, agentType, description });
+		refreshSnapshot(harnessId);
+		emit(harnessId);
+	},
+
 	/// The subagent reached a terminal stop reason. No-op for an
 	/// unknown `agentId` (already finished, or never tracked).
 	finish(harnessId: string, agentId: string): void {

@@ -54,6 +54,14 @@ export type ClaudeEvent =
 			initial: boolean;
 	  }
 	| { kind: "subagent_tool_result"; agent_id: string }
+	// #497: the sidecar was unreadable at `subagent_start` and has since
+	// supplied a label. Not a start — carries no work signal.
+	| {
+			kind: "subagent_label";
+			agent_id: string;
+			agent_type: string | null;
+			description: string | null;
+	  }
 	| {
 			kind: "subagent_end";
 			agent_id: string;
@@ -320,6 +328,9 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			// `SubagentEntry.fromAttach`) and must not look like fresh
 			// activity.
 			if (event.initial !== true) harnessActivity.noteSubagentStarted(harnessId);
+			return;
+		case "subagent_label":
+			subagents.relabel(harnessId, event.agent_id, event.agent_type, event.description);
 			return;
 		case "subagent_end":
 			subagents.finish(harnessId, event.agent_id);

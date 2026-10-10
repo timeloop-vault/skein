@@ -113,6 +113,15 @@ pub enum ClaudeEvent {
         description: Option<String>,
         initial: bool,
     },
+    /// The `agent-<id>.meta.json` sidecar was missing or half-written
+    /// when the subagent was first seen and has since supplied a label
+    /// field that was unknown (#497). Carries the full current label;
+    /// never a start, so it is not a work signal.
+    SubagentLabel {
+        agent_id: String,
+        agent_type: Option<String>,
+        description: Option<String>,
+    },
     /// A tool call inside a subagent's own turn just returned a
     /// result. This exists so a permission dialog a *subagent* opened
     /// can be cleared (epic #298 — today the badge stays stuck until
@@ -210,6 +219,8 @@ mod reattach_tests;
 mod resume_tests;
 #[cfg(test)]
 mod resync_tests;
+#[cfg(test)]
+mod subagent_label_tests;
 #[cfg(test)]
 mod subagent_tail_tests;
 #[cfg(test)]
