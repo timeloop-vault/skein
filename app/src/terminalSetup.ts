@@ -110,13 +110,14 @@ export function createXterm(
 	// because WebLinksAddon only matched the hard-wrapped visible text
 	// while the CLI had the full URL. `shouldHostOpenLink` is read at
 	// click time, not at setup, because mouse tracking flips on/off as
-	// the TUI runs.
+	// the TUI runs. On macOS Skein never stands aside: xterm can't
+	// forward Cmd to the PTY, so the CLI only ever sees a plain click.
 	const uriRegex = /\b[a-zA-Z][a-zA-Z0-9+.-]+:\/\/[^\s()[\]{}"'<>\\^`|]+/;
 	const handleUriClick = (event: MouseEvent, uri: string) => {
 		const isModifierClick = isMac ? event.metaKey : event.ctrlKey;
 		if (!isModifierClick) return;
 		event.preventDefault();
-		if (!shouldHostOpenLink(term.modes.mouseTrackingMode !== "none", opensClickedLinks)) {
+		if (!shouldHostOpenLink(term.modes.mouseTrackingMode !== "none", opensClickedLinks, !isMac)) {
 			console.debug("[skein] deferring link open to CLI:", uri);
 			return;
 		}
