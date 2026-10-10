@@ -203,11 +203,13 @@ Each phase is usable on its own.
 - The updater for a remote daemon, and the client/daemon version-skew
   policy.
 - Claude Code auth on a remote host (subscription vs API key). This
-  affects `spawn_env`.
+  affects `spawn_env`: since #565 a harness inherits the daemon host's
+  full login-shell env, so an API key exported there reaches it.
 
 ## Corrections from recon
 
-Verified against commit `4d785fe`. Where this design and the recon
+Verified against commit `4d785fe` (spawn-env citations re-verified at
+`30cd4b8`). Where this design and the recon
 differ, the recon wins. Detail is in `docs/skeind-recon.md` (§7
 corrections, §8 new open questions).
 
@@ -232,3 +234,8 @@ corrections, §8 new open questions).
 8. The headless emulator recommendation is `vt100` (or a fork) behind a
    trait, gated on a replay test against xterm.js.
 9. `docs/agent-api.md` counts 22 verbs; there are 25.
+10. The login-shell probe now captures the full env (#565), not only
+    `PATH`. It runs on the daemon host, so the daemon host's rc-file
+    exports (API keys, proxy settings) become every harness's env, and
+    loopback is merged into `NO_PROXY` so the local agent API stays
+    reachable.

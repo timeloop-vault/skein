@@ -120,7 +120,8 @@ Tracked in the phase issue that needs the answer, and in `docs/skeind-recon.md`
 - The updater for a remote daemon, and the client/daemon version-skew
   policy. (#P3)
 - Claude Code auth on a remote host (subscription vs API key); affects
-  `spawn_env`. (#P3)
+  `spawn_env`. Since #565 harnesses get the daemon host's full
+  login-shell env, so an API key exported there reaches them. (#P3)
 - Binary framing on the wire for `read_image_bytes` and similar. (#P1b)
 - Which of the phase machine, deferral timers, mail nudges and
   notifications move to the daemon, and in what order. (#P2a)
@@ -570,7 +571,9 @@ Move from the frontend into the daemon what unattended operation needs.
 - **Token lifetime**: revocation on boot must not break harnesses that
   outlive the client. The policy itself is an open question below.
 - Daemon-host probes stay on the daemon: login-shell probe, program
-  resolution, agent enumeration, CLI version probe.
+  resolution, agent enumeration, CLI version probe. The login-shell
+  probe captures the full env (#565), so the daemon host's login env is
+  what every harness inherits; loopback stays in `NO_PROXY`.
 
 ## Out of scope
 
@@ -742,7 +745,8 @@ the network.
 - The updater for a remote daemon, and the version-skew policy (the
   backlog's remote release policy entry is related).
 - Claude Code auth on a remote host (subscription vs API key); affects
-  `spawn_env`.
+  `spawn_env`. Since #565 harnesses get the daemon host's full
+  login-shell env, so an API key exported there reaches them.
 - Token transport and storage on the client.
 ```
 

@@ -3,7 +3,9 @@
 Status: verified recon, read-only. It checks `docs/skeind-design.md`
 against the code. Nothing here is production code.
 Date: 2026-10-09.
-Verified against commit `4d785fe` (branch `issue/skeind-recon-epic`).
+Verified against commit `4d785fe` (branch `issue/skeind-recon-epic`);
+spawn-env and probe citations re-verified at `30cd4b8` (#565, the full
+login-shell env), the commit this docs commit sits on.
 
 **How to read.** Paths are repo-relative. Line numbers are as of that
 commit and drift; where a line could not be pinned the row says so. For
@@ -58,16 +60,16 @@ Paths below are full. `src/...` under `app/src-tauri/` is Rust;
 
 | # | Coupling | Mechanism | Evidence | Covered by handover | Lives on |
 |---|---|---|---|---|---|
-| 1 | PTYs in-process | `PtyManager` owns the master and children via portable-pty; output goes over a `tauri::ipc::Channel`; children die with the process | `app/src-tauri/src/pty/mod.rs:111,243,295`; `app/src-tauri/src/commands/pty.rs:50-110` | yes (1) | daemon (spawn, output); client (xterm) |
+| 1 | PTYs in-process | `PtyManager` owns the master and children via portable-pty; output goes over a `tauri::ipc::Channel`; children die with the process | `app/src-tauri/src/pty/mod.rs:110,243,296`; `app/src-tauri/src/commands/pty.rs:50-110` | yes (1) | daemon (spawn, output); client (xterm) |
 | 2 | Claude JSONL tail | notify debouncer on `~/.claude/projects/<enc-cwd>/<sid>.jsonl`, with a home-wide `find_session_jsonl` fallback | `app/src-tauri/src/harness_events_claude/paths.rs:18-34`; `crates/skein-harness/src/claude.rs:132`; `app/src-tauri/src/harness_events_claude/adapter.rs:117` | yes (2) | daemon |
 | 3 | Subagent sidecar tailing | `<sid>/subagents/agent-*.jsonl` and `.meta.json` on the same debouncer | `app/src-tauri/src/harness_events_claude/subagents.rs:37`; `app/src-tauri/src/harness_events_claude/attach.rs:337-343` | partly | daemon |
 | 4 | Background-task `.output` trailers | reads `.output` paths the harness printed (arbitrary harness-host paths) | `crates/skein-harness/src/claude/background.rs:22,112,663` | no | daemon |
-| 5 | opencode SSE | reqwest to `http://127.0.0.1:<port>/event` and `GET /session/<id>` | `app/src-tauri/src/harness_events_opencode.rs:290,912` | yes (2) | daemon |
+| 5 | opencode SSE | reqwest to `http://127.0.0.1:<port>/event` and `GET /session/<id>` | `app/src-tauri/src/harness_events_opencode.rs:290,914` | yes (2) | daemon |
 | 6 | opencode port pinning | `pick_free_port` binds `127.0.0.1:0` and drops it; the frontend bakes the port into argv | `app/src-tauri/src/commands/pty.rs:198`; `app/src-tauri/src/lib.rs:132`; `app/src/harnessCmd.ts:62-68`; `app/src/useHarnessActions.ts:295` | no | daemon allocates; client must not build argv |
 | 7 | opencode.db reads | read-only open of opencode's db for session list, existence and action backfill | `app/src-tauri/src/resume.rs:16-31,43,60`; `app/src-tauri/src/harness_actions_opencode.rs:440` | no | daemon |
 | 8 | Claude session probes | `claude_session_exists` and `claude_transcript_stat` stat `~/.claude/...` | `app/src-tauri/src/resume.rs:78,124` | no | daemon |
 | 9 | Agent API listener | axum bound to `127.0.0.1:0` in `setup()` | `app/src-tauri/src/setup/servers.rs:20,42`; routes `app/src-tauri/src/agent_api/http.rs:79-114` | yes (3) | daemon |
-| 10 | Env injection at spawn | `SKEIN_REVIEW_URL/TOKEN`, `SKEIN_ROOM_ID`, `SKEIN_HARNESS_ID` on the child; loopback URL; token minted from sqlite | `app/src-tauri/src/pty/env.rs:200-203`; `app/src-tauri/src/commands/pty.rs:70-84` | yes (3) | daemon |
+| 10 | Env injection at spawn | `SKEIN_REVIEW_URL/TOKEN`, `SKEIN_ROOM_ID`, `SKEIN_HARNESS_ID` on the child; loopback URL; token minted from sqlite | `app/src-tauri/src/pty/env.rs:232-235`; `app/src-tauri/src/commands/pty.rs:70-84` | yes (3) | daemon |
 | 11 | Hook callbacks | three hook events (four commands) in a plugin `hooks.json`; the SessionStart, SessionEnd and PermissionRequest entries `curl` `${SKEIN_REVIEW_URL%/mcp}/api/harness/{session-start,session-end,permission}`; `sh` syntax; `cli_shim.rs` is not involved | `app/src-tauri/harness-config/claude-plugin/hooks/hooks.json:9,28,39`; handlers `app/src-tauri/src/agent_api/http/hooks.rs:28,108,202` | yes (3) | harness host; target must be reachable from it |
 | 12 | opencode MCP config | `opencode.json` uses `{env:SKEIN_REVIEW_URL}` and `{env:SKEIN_REVIEW_TOKEN}` | `app/src-tauri/harness-config/opencode/opencode.json` | partly | harness host |
 | 13 | Injected resource paths | `--plugin-dir <resource_dir>/harness-config/claude-plugin` and `OPENCODE_CONFIG=<file>` are paths on the app's machine; post-exit shells get `CLAUDE_CODE_PLUGIN_DIRS` | `app/src-tauri/src/harness_config.rs:174-177,335,343`; `app/src-tauri/src/setup/state.rs:58` | no | daemon must carry its own bundle |
@@ -88,9 +90,9 @@ Paths below are full. `src/...` under `app/src-tauri/` is Rust;
 | 28 | sqlite `skein.db` | `<app_data_dir>/skein.db` shared in-process by commands, agent API, adapters and `PtyManager`; rooms store absolute cwd, repoRoot and argv (host-bound) | `app/src-tauri/src/setup/state.rs:24,67-88`; `app/src-tauri/src/lib.rs:104-107` | yes (5) | daemon; commands become requests |
 | 29 | Token lifecycle | tokens are revoked wholesale on every boot, assuming PTYs died; breaks harnesses that outlive a restart | `app/src-tauri/src/setup/state.rs:87` | no | daemon; policy must change |
 | 30 | `settings.json` and spawn settings | `spawn_settings::load(data_dir)`; the kill switches (`allowAgentMessaging` etc.) are read by the agent API | `app/src-tauri/src/setup/state.rs:30`; `app/src-tauri/src/spawn_settings.rs:101`; `app/src-tauri/src/agent_api/http.rs:189` | no | daemon policy; edited remotely by a client |
-| 31 | Login-shell probe | `$SHELL -l -c` (or `-l -i -c`) on the app host; macOS/Linux only. On this commit it captures only `PATH`, spooled to `<data_dir>/probe-<uuid>.out`. #565, in flight elsewhere, extends it to the full env | `app/src-tauri/src/pty/probe.rs:179,286,313,326`; `app/src-tauri/src/spawn_env.rs:54-72` | no | daemon |
-| 32 | Spawn env policy | inherits the Skein process env, strips host-terminal vars, reads the Windows registry PATH, sets `SHELL` | `app/src-tauri/src/pty/env.rs:85-190` | no | daemon |
-| 33 | Program resolution | `harness_program_lookup` resolves `claude` and `opencode` against the probed PATH | `app/src-tauri/src/pty/preview.rs` (re-exported `pty/mod.rs:52`); `app/src-tauri/src/agents.rs:121`; `app/src-tauri/src/commands/spawn_env.rs:160` | no | daemon |
+| 31 | Login-shell probe | `$SHELL -l -c` (or `-l -i -c`) on the app host; macOS/Linux only. Since #565 (`30cd4b8`) one probe run captures `PATH` and the whole env (`env -0`, `perl` fallback) between sentinels, spooled to `<data_dir>/probe-<uuid>.out`; an unparseable env payload falls back to `PATH` only | `app/src-tauri/src/pty/probe.rs:244,285,345,378,391,452`; `app/src-tauri/src/spawn_env.rs:50`; `app/src-tauri/src/spawn_env/login_env.rs:37` | no | daemon |
+| 32 | Spawn env policy | inherits the Skein process env, overlays the login-shell env (#565: all captured vars except `PATH` and probe noise such as `SHLVL`, `PWD`, `_`), strips host-terminal vars, reads the Windows registry PATH, forces `TERM`/`COLORTERM`/`SHELL`, then merges loopback into `NO_PROXY`/`no_proxy` last so an rc-exported proxy cannot capture the `127.0.0.1` agent API and opencode SSE traffic | `app/src-tauri/src/pty/env.rs:76-270,281-293`; `app/src-tauri/src/spawn_env/login_env.rs:68-110` | no | daemon |
+| 33 | Program resolution | `harness_program_lookup` resolves `claude` and `opencode` against the probed PATH | `app/src-tauri/src/pty/preview.rs:318` (re-exported `pty/mod.rs:52`); `app/src-tauri/src/agents.rs:121`; `app/src-tauri/src/commands/spawn_env.rs:160` | no | daemon |
 | 34 | Agent enumeration | runs the CLI (`claude`, `opencode agent list`) plus a disk allowlist; `agent_sees_mcp` reads agent definitions | `app/src-tauri/src/agents.rs:114-140,165-180`; `crates/skein-harness/src/agents/claude.rs:109` | no | daemon |
 | 35 | CLI version probe | `claude --version` on the app host | `app/src-tauri/src/commands/spawn_env.rs:152-165` | no | daemon |
 | 36 | procscan | `sysinfo` process table of PTY descendants, argv parse, `pid_listens_on(port)` | `app/src-tauri/src/pty/procscan.rs:225-246`; `app/src-tauri/src/commands/pty.rs:169-181` | no | daemon |
@@ -443,7 +445,7 @@ Module table (all under `app/src-tauri/src/` unless stated):
 | `agent_api/` (55 files) | ~16k incl. ~7k tests | moves, with a caveat | `state.rs` 16; `commands.rs` 10; `verbs/mail.rs` 3 (`Option<AppHandle>` `:82,264`); `http/*` axum `State` only | `state.rs:120,232` `AppHandle`; emits `:277,303,324,362,385,480`; `:466` `request_frontend` | highest |
 | `design/` (serve, commands, rewrite, device) | ~1.4k | serve, rewrite, device move; commands split | `commands.rs` 16 (`Channel<()>` `:13,:89`) | `:89` | the axum server is already Tauri-free |
 | `harness_config.rs` | 747 | moves | 0; resource dir comes from `setup/state.rs:58` | `:174` `resolve(resource_dir)` | needs a resource-dir provider |
-| `spawn_env.rs`, `spawn_settings.rs`, `agents.rs`, `harness_kind.rs`, `room_paths.rs` | 496 / 457 / 385 / 216 / 141 | move | 0 | none | clean |
+| `spawn_env.rs`, `spawn_settings.rs`, `agents.rs`, `harness_kind.rs`, `room_paths.rs` | 508 / 457 / 385 / 216 / 141 | move | 0 | none | clean |
 | `lib.rs` | 187 | stays (registry) | 12 | none | none |
 | `setup/` (logging, menu, servers, state, window) | ~400 | stays; `state.rs` + `servers.rs` become daemon boot | `state` 14, `servers` 5, `menu` 8, `window` 4 | `state.rs:24` `app_data_dir()`, `:58` `resource_dir()`, `:92-100` `app.manage(...)` | daemon construction lives here |
 | `open_request.rs`, `os_notify.rs`, `cli_shim.rs` | 786 / 334 / 410 | stay | 11 / 20 / 10 | `open_request.rs:161`, `os_notify.rs:116` | pure client |
@@ -502,7 +504,7 @@ Module table (all under `app/src-tauri/src/` unless stated):
   `app.manage` order in `setup/state.rs:92-100` and `servers.rs` implies
   construction dependencies the provider must reproduce.
 - **`pty_spawn` blocks up to `PROBE_WAIT` (6 s)** on the login-shell
-  probe (`commands/pty.rs:44`, `pty/preview.rs:300`); the managed state
+  probe (`commands/pty.rs:44`, `pty/preview.rs:318`); the managed state
   is not `Arc`-wrapped. The Windows ConPTY waiter thread in
   `pty/mod.rs` was not read.
 - **Phase logic is TypeScript** (coupling 17). Phase 1 can leave it in
@@ -646,10 +648,20 @@ Other docs that touch the area:
 8. **CLAUDE.md is stale about `fs.rs` scoping (#174).** It says paths
    are not yet scoped to the room. The code scopes all four commands
    through `ensure_room_scope` (`app/src-tauri/src/fs.rs:68`).
-9. **The login-shell probe captures only `PATH` on this commit.** #565,
-   in flight elsewhere, extends it to the full login-shell env. Either
-   way it runs wherever the daemon runs, so it probes the daemon host,
-   not the client.
+9. **The login-shell probe captures the full env since #565, and it runs
+   wherever the daemon runs.** One probe run (`pty/probe.rs:345`) prints
+   `PATH` and the whole env between sentinels (`spawn_env.rs:50`);
+   `login_env::extract_probe_env` (`spawn_env/login_env.rs:37`) parses it.
+   `pty/env.rs:94-102` overlays every captured var except `PATH` (merged
+   separately) and probe-session noise (`login_env.rs:68`), before the
+   host-terminal strip, the user's extra env and Skein's own keys, which
+   therefore win. `apply_no_proxy` (`pty/env.rs:281`) runs last and
+   unions loopback (`login_env.rs:16`) into `NO_PROXY` and `no_proxy`, so
+   a proxy exported by the user's rc files never captures the harness's
+   `127.0.0.1` traffic; that matters for a daemon, whose host login env
+   is what remote harnesses get, API keys and proxy settings included.
+   A failed env parse degrades to `PATH` only (`probe.rs:452`). Windows
+   never probes. The probe is the daemon host's, not the client's.
 10. **Design preview and folder pickers are client-machine concepts.**
     The preview URL is the webview's loopback, and `plugin-dialog`
     returns a client path. Neither survives a remote daemon unchanged.
