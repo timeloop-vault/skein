@@ -62,3 +62,20 @@
 	white-space: nowrap;
 	color: var(--fg-3);
 }
+
+/* #438: the harness kind cards sat in one flex row and overflowed the
+   dialog sideways. A grid with auto-fill columns wraps onto rows as kinds
+   are added, rather than narrowing cards until they are unreadable or
+   scrolling sideways. 160px gives three columns in the 520px content area
+   (3 x 160 + 2 x 6 gap = 492); a long description grows the card down. */
+.sk-radio-row.sk-harness-kinds {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+	gap: 6px;
+}
+.sk-harness-kinds .sk-radio-card {
+	min-width: 0;
+}
+.sk-harness-kinds .sk-radio-card .desc {
+	overflow-wrap: anywhere;
+}
