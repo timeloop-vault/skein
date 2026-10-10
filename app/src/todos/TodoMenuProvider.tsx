@@ -7,7 +7,10 @@ import {
 	createContext,
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
+	useCallback,
 	useContext,
+	useLayoutEffect,
+	useRef,
 } from "react";
 import { ContextMenu, useContextMenu } from "../ContextMenu.tsx";
 import type { AddTodoWithFeedback } from "./addFeedback.ts";
@@ -26,19 +29,29 @@ export const TodoMenuProvider = ({
 	children: ReactNode;
 }) => {
 	const { menu, open, close } = useContextMenu();
-	const openTodoMenu: OpenTodoMenu = (e, roomId, harnessId) =>
-		open(e, [
-			{
-				id: "room",
-				label: "Add to room todos",
-				onSelect: () => addTodo("room", roomId, harnessId),
-			},
-			{
-				id: "global",
-				label: "Add to global todos",
-				onSelect: () => addTodo("global", roomId, harnessId),
-			},
-		]);
+	// #594: the context value must stay referentially stable, or every tab
+	// consumer in every room re-renders on each App render. `addTodo` is read
+	// through a latest-ref instead of being a dependency.
+	const addTodoRef = useRef(addTodo);
+	useLayoutEffect(() => {
+		addTodoRef.current = addTodo;
+	});
+	const openTodoMenu = useCallback<OpenTodoMenu>(
+		(e, roomId, harnessId) =>
+			open(e, [
+				{
+					id: "room",
+					label: "Add to room todos",
+					onSelect: () => addTodoRef.current("room", roomId, harnessId),
+				},
+				{
+					id: "global",
+					label: "Add to global todos",
+					onSelect: () => addTodoRef.current("global", roomId, harnessId),
+				},
+			]),
+		[open],
+	);
 	return (
 		<TodoMenuContext.Provider value={openTodoMenu}>
 			{children}
