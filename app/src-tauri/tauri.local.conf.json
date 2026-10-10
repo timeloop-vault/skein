@@ -3,6 +3,9 @@
 	"productName": "Skein (local)",
 	"identifier": "com.timeloop-vault.skein.local",
 	"mainBinaryName": "skein-app-local",
+	"bundle": {
+		"createUpdaterArtifacts": false
+	},
 	"plugins": {
 		"deep-link": {
 			"desktop": { "schemes": ["skein-local"] }
