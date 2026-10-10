@@ -29,7 +29,7 @@ export const HarnessSection = ({
 	<>
 		<div className="sk-field">
 			<label>Starting harness</label>
-			<div className="sk-radio-row">
+			<div className="sk-radio-row sk-harness-kinds">
 				{HARNESS_ORDER.filter((id) => id !== "remote").map((id) => {
 					const k = HARNESS_KINDS[id];
 					return (
