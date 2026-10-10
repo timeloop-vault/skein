@@ -211,6 +211,7 @@ where
                     subagent_lifecycle_from_content(&content, &mut background, &agent_id);
                 let finished = lifecycle.is_finished();
                 let meta = skein_harness::claude::read_subagent_meta(&sub_path);
+                let meta_settled = meta.is_some();
                 let (agent_type, description) =
                     meta.map_or((None, None), |m| (m.agent_type, m.description));
                 if !finished {
@@ -240,6 +241,7 @@ where
                         partial: String::new(),
                         lifecycle,
                         agent_type,
+                        meta_settled,
                         description,
                         // Seeded at attach, jumped straight to EOF —
                         // see the field doc on `started_ms`.

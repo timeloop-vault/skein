@@ -25,6 +25,28 @@ describe("subagents", () => {
 		expect(second[0]?.startedAt).toBe(startedAt);
 	});
 
+	it("relabel updates an existing entry and preserves startedAt and fromAttach", () => {
+		const h = nextId();
+		subagents.record(h, { agentId: "a1", agentType: null, description: null }, true);
+		const before = subagents.live(h)[0];
+		subagents.relabel(h, "a1", "explore", "look around");
+		const after = subagents.live(h);
+		expect(after).toHaveLength(1);
+		expect(after[0]).toEqual({
+			agentId: "a1",
+			agentType: "explore",
+			description: "look around",
+			startedAt: before?.startedAt,
+			fromAttach: true,
+		});
+	});
+
+	it("relabel for an unknown agentId is a no-op", () => {
+		const h = nextId();
+		subagents.relabel(h, "nope", "explore", null);
+		expect(subagents.live(h)).toHaveLength(0);
+	});
+
 	it("finish removes the entry", () => {
 		const h = nextId();
 		subagents.record(h, { agentId: "a1", agentType: "explore", description: null }, false);

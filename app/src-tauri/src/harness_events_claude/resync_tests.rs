@@ -511,6 +511,7 @@ fn subagent_shrink_reseeds_without_replay() {
                 lifecycle: skein_harness::claude::SubagentLifecycle::default(),
                 agent_type: None,
                 description: None,
+                meta_settled: true,
                 started_ms: None,
                 started_ms_resolved: true,
                 last_ts_ms: 0,
