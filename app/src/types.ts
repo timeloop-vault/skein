@@ -224,6 +224,10 @@ export interface SpawnSettings {
 	 *  `allowAgentRoomCreation` — absent on old persisted data, treat as
 	 *  true. */
 	allowAgentHarnessControl: boolean;
+	/** Pass Claude Code `--settings` turning its wheel acceleration off
+	 *  (#569). Default false — it outranks the user's own Claude
+	 *  settings, so Skein only does it when asked. */
+	disableClaudeWheelAcceleration: boolean;
 }
 
 export interface SpawnSettingsPayload {

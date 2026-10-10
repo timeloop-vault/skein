@@ -117,6 +117,11 @@ pub struct SpawnSettings {
     /// `open_harness`/`close_harness` verbs (#411). Off refuses both,
     /// with the reason. Default on, like the two room flags above.
     pub allow_agent_harness_control: bool,
+    /// Pass Claude Code `--settings` turning its wheel acceleration off
+    /// (#569). Default off, unlike every flag above: `--settings`
+    /// outranks the user's own Claude Code settings, so Skein only does
+    /// it when asked.
+    pub disable_claude_wheel_acceleration: bool,
 }
 
 impl Default for SpawnSettings {
@@ -134,6 +139,7 @@ impl Default for SpawnSettings {
             allow_agent_room_creation: true,
             allow_agent_room_closing: true,
             allow_agent_harness_control: true,
+            disable_claude_wheel_acceleration: false,
         }
     }
 }
@@ -399,6 +405,22 @@ mod tests {
         // is genuinely the old-file case and not just an empty object.
         assert!(loaded.inject_claude_plugin);
         assert!(!loaded.inject_opencode_config);
+    }
+
+    #[test]
+    fn an_old_settings_file_leaves_claude_wheel_acceleration_alone() {
+        // #569 added the field after settings.json was already shipping.
+        // Unlike the flags above it defaults OFF: Skein only overrides a
+        // Claude Code setting when asked.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            file_path(dir.path()),
+            r#"{"schema":1,"injectClaudePlugin":true}"#,
+        )
+        .expect("write");
+        let (loaded, degraded) = load(dir.path());
+        assert!(degraded.is_none());
+        assert!(!loaded.disable_claude_wheel_acceleration);
     }
 
     #[test]

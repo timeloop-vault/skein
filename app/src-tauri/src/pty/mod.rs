@@ -211,10 +211,14 @@ impl PtyManager {
         let injection =
             crate::harness_config::injection_for(kind, program, harness_config, settings, agent);
         let injected = !injection.is_empty();
+        // #569: Claude Code preferences from Skein's own Settings. Not
+        // part of `injection`, so they never count toward `injected`.
+        let claude_settings = crate::harness_config::claude_settings_args(kind, program, settings);
         let args: Vec<String> = stored_args
             .iter()
             .cloned()
             .chain(injection.args.iter().cloned())
+            .chain(claude_settings.iter().cloned())
             .collect();
 
         tracing::info!(
@@ -237,6 +241,13 @@ impl PtyManager {
                 args = ?injection.args,
                 env = ?injection.env,
                 "pty_spawn harness config injected"
+            );
+        }
+        if !claude_settings.is_empty() {
+            tracing::info!(
+                id = %id,
+                args = ?claude_settings,
+                "pty_spawn claude settings passed"
             );
         }
 
