@@ -235,7 +235,8 @@ export default function App() {
 		addTodo,
 	});
 
-	useAppBackgroundWiring({ store, nav, actions, creation, settings, pushToast });
+	// Also registers the #559 OS-wide Control Center shortcut; `failed` = it could not.
+	const failed = useAppBackgroundWiring({ store, nav, actions, creation, settings, pushToast, cc });
 
 	const titlebarProps: TitlebarProps = {
 		activeRoomLabel: room ? room.name : null,
@@ -248,6 +249,7 @@ export default function App() {
 		saveSpawnSettings,
 		room?.cwd ?? defaultCwd,
 		() => setShowSettings(false),
+		failed,
 	);
 
 	// Phase 4 / #19: items the command palette offers (paletteItems.ts).
@@ -271,6 +273,7 @@ export default function App() {
 		addHarness,
 		startRenameRoom,
 		closeRoom,
+		closeHarness: actions.closeHarness,
 		cycleAlertedRoom,
 		cycleAlertedHarness,
 		onReattachTelemetry,

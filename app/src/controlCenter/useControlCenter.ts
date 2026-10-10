@@ -87,5 +87,5 @@ export function useControlCenter(
 		todoActions,
 		onPopOut,
 	};
-	return { open, toggle, toggleRef, props };
+	return { open, toggle, toggleRef, openPopout, props };
 }

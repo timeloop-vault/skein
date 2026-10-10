@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchShortcut } from "./shortcuts.ts";
+import { hints, isAppShortcut, matchShortcut } from "./shortcuts.ts";
 
 // Node env: `isMac` is false, so the primary modifier is Alt.
 const key = (code: string, init: Partial<KeyboardEvent> = {}) =>
@@ -19,5 +19,18 @@ describe("todo shortcuts (#335)", () => {
 	});
 	it("a bare T is not an app shortcut", () => {
 		expect(matchShortcut(key("KeyT", { altKey: false }))).toBeNull();
+	});
+});
+
+describe("close shortcuts (#307)", () => {
+	it("Mod+W closes the room, Mod+Shift+W the active harness", () => {
+		expect(matchShortcut(key("KeyW"))?.action).toBe("closeRoom");
+		expect(matchShortcut(key("KeyW", { shiftKey: true }))?.action).toBe("closeHarness");
+	});
+	it("Mod+Shift+W is swallowed from the terminal as an app shortcut", () => {
+		expect(isAppShortcut(key("KeyW", { shiftKey: true }))).toBe(true);
+	});
+	it("has a hint", () => {
+		expect(hints.closeHarness).toContain("⇧ W");
 	});
 });

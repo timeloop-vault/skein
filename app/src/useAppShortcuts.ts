@@ -50,6 +50,8 @@ export function useAppShortcuts(a: {
 	addHarnessRef.current = actions.addHarness;
 	const closeRoomRef = useRef(store.closeRoom);
 	closeRoomRef.current = store.closeRoom;
+	const closeHarnessRef = useRef(actions.closeHarness);
+	closeHarnessRef.current = actions.closeHarness;
 	// User-intent selection (#561): also dismisses the "+ harness" picker.
 	const selectHarnessRef = useRef(actions.selectHarness);
 	selectHarnessRef.current = actions.selectHarness;
@@ -105,6 +107,7 @@ export function useAppShortcuts(a: {
 		settings.setFontSize,
 		nav.openNewRoom,
 		addTodoForActiveRef,
+		closeHarnessRef,
 	);
 	return { toggleFilesRef, toggleReviewRef };
 }

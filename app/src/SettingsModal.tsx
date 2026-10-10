@@ -16,6 +16,7 @@ import type { DefaultAgents } from "./prefs.ts";
 import { AboutSettings } from "./SettingsAbout.tsx";
 import { AgentSettings } from "./SettingsAgents.tsx";
 import { AppearanceSettings } from "./SettingsAppearance.tsx";
+import { GlobalShortcutSettings } from "./SettingsGlobalShortcut.tsx";
 import { NotificationSettings } from "./SettingsNotifications.tsx";
 import { VersionNoticeSettings } from "./SettingsVersionNotice.tsx";
 import { SpawnEnvPanel } from "./SpawnEnvPanel.tsx";
@@ -75,6 +76,10 @@ interface SettingsModalProps {
 	// (`FolderDefaults.branchTemplate`) still wins.
 	branchTemplate: string;
 	onBranchTemplate: (v: string) => void;
+	// #559: OS-wide shortcut that raises the Control Center.
+	globalCcShortcut: boolean;
+	onGlobalCcShortcut: (v: boolean) => void;
+	globalCcShortcutFailed: boolean;
 	onClose: () => void;
 }
 
@@ -112,6 +117,9 @@ export const SettingsModal = ({
 	agentCwd,
 	branchTemplate,
 	onBranchTemplate,
+	globalCcShortcut,
+	onGlobalCcShortcut,
+	globalCcShortcutFailed,
 	onClose,
 }: SettingsModalProps) => {
 	useFocusRestore();
@@ -181,6 +189,12 @@ export const SettingsModal = ({
 						onNotifyToast={onNotifyToast}
 						onNotifyUrgent={onNotifyUrgent}
 						onNotifyOs={onNotifyOs}
+					/>
+
+					<GlobalShortcutSettings
+						enabled={globalCcShortcut}
+						failed={globalCcShortcutFailed}
+						onChange={onGlobalCcShortcut}
 					/>
 
 					<AgentSettings

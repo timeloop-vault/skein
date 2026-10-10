@@ -48,6 +48,10 @@ export const EmptyState = ({ onNew, archivedCount, onReopen }: EmptyStateProps) 
 				<span className="kbd">{hints.closeRoom}</span>
 				<span>Close active room</span>
 			</div>
+			<div className="row">
+				<span className="kbd">{hints.closeHarness}</span>
+				<span>Close active harness</span>
+			</div>
 		</div>
 	</div>
 );
