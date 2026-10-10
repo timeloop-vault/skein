@@ -17,6 +17,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { useEffect, useRef } from "react";
 import { confirmDialog } from "./confirmDialog.ts";
 import { filesRegistry } from "./filesRegistry.ts";
+import { flushRoomsBounded } from "./roomsFlush.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
 import type { Room } from "./types.ts";
 
@@ -73,18 +74,28 @@ export function useAppWindowEffects(
 			// destroy was capability-denied (#196). Losing unsaved text
 			// beats an app you cannot exit.
 			try {
-				if (filesRegistry.anyDirty().length === 0) return;
+				// #594: always hold the close until the debounced rooms save
+				// has landed (bounded, so it cannot hang). destroy() bypasses
+				// this handler, so it runs exactly once.
 				event.preventDefault();
-				if (await confirmQuit()) void getCurrentWindow().destroy();
+				await flushRoomsBounded();
+				if (await confirmQuit()) {
+					// Edits made while the confirm was open.
+					await flushRoomsBounded();
+					void getCurrentWindow().destroy();
+				}
 			} catch (err) {
 				console.error("[skein] close-requested handler failed; closing anyway:", err);
 				void getCurrentWindow().destroy();
 			}
 		});
 		const unQuit = listen("skein://quit-requested", () => {
-			void confirmQuit()
-				.then((ok) => {
-					if (ok) void getCurrentWindow().destroy();
+			void flushRoomsBounded()
+				.then(confirmQuit)
+				.then(async (ok) => {
+					if (!ok) return;
+					await flushRoomsBounded();
+					void getCurrentWindow().destroy();
 				})
 				.catch((err: unknown) => {
 					console.error("[skein] quit handler failed; closing anyway:", err);

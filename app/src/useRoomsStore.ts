@@ -156,7 +156,7 @@ export function useRoomsStore(
 			return next;
 		});
 	}, []);
-	const { syncRepoMeta, hydrateRooms } = useRoomsHydrate({
+	const { syncRepoMeta, hydrateRooms, flushRoomsSave } = useRoomsHydrate({
 		rooms,
 		loaded,
 		loadFailed,
@@ -265,6 +265,7 @@ export function useRoomsStore(
 		retireMismatchedRoom,
 		checkRoomFolder,
 		hydrateRooms,
+		flushRoomsSave,
 		activeRooms,
 		archivedRooms,
 		archivedRoomsRef,

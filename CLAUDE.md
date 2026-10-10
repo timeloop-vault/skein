@@ -401,7 +401,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   room, the whole Room as a camelCase JSON blob. `useRoomsStore.ts`
   hydrates once on mount (`db_load_rooms`); every `rooms` state change
   after a successful load mirrors back wholesale (`db_save_rooms`,
-  wipe + re-insert in one transaction). **#167 hardening:** unparseable rows
+  wipe + re-insert in one transaction). **Coalesced (#594,
+  `roomsSaveScheduler.ts`):** a change to which rooms/harnesses exist or their
+  scope (the structural key: ids, names, order, archived/retired, cwd, repo/branch, harness agent/session/remote, attribution)
+  saves at once, because Rust reads the persisted rows; anything else is
+  debounced 500 ms / max 2 s and flushed on window close, Cmd+Q, updater
+  install and page hide (`roomsFlush.ts`). **#167 hardening:** unparseable rows
   are quarantined to `sessions_quarantine` (never silently dropped);
   a wholesale load failure parks the autosave and shows a retry card;
   `save_all` refuses an empty commit before a successful load; WAL +

@@ -1,4 +1,4 @@
-import { type PointerEvent as ReactPointerEvent, useEffect, useRef } from "react";
+import { memo, type PointerEvent as ReactPointerEvent, useEffect, useRef } from "react";
 import { useWorkingBackgroundTaskCount } from "./backgroundTasks.ts";
 import { HarnessPicker } from "./components.tsx";
 import type { DeviceChangeHandler } from "./DesignHarnessBody.tsx";
@@ -149,7 +149,7 @@ export interface HarnessColumnProps {
 	versionNoticeModes: VersionNoticeModes;
 }
 
-export const HarnessColumn = ({
+const HarnessColumnImpl = ({
 	room,
 	fontSize,
 	copyOnSelect,
@@ -333,3 +333,6 @@ export const HarnessColumn = ({
 		</div>
 	);
 };
+
+// #594: memo'd so a state change in another room skips this one.
+export const HarnessColumn = memo(HarnessColumnImpl);

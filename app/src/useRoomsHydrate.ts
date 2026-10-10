@@ -11,9 +11,12 @@ import {
 	type SetStateAction,
 	useCallback,
 	useEffect,
+	useRef,
 } from "react";
 import { withResumeCmds } from "./harnessCmd.ts";
 import { isStorable, nextRepoRoot } from "./repoIdentity.ts";
+import { registerRoomsFlusher } from "./roomsFlush.ts";
+import { createRoomsSaveScheduler, type RoomsSaveScheduler } from "./roomsSaveScheduler.ts";
 import {
 	checkProbe,
 	type DbLoadOutcome,
@@ -236,15 +239,46 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 		hydrateRooms();
 	}, [hydrateRooms]);
 
-	// Phase 3: any time `rooms` changes after the initial load, mirror
-	// the new state to sqlite. Wipe-and-insert is fine at prototype scale.
+	// Phase 3: mirror `rooms` to sqlite, coalesced (#594) — structural
+	// changes save at once, the rest trail a debounce; see
+	// roomsSaveScheduler.ts. Parked while !loaded / loadFailed (#167), and
+	// a flush while parked is a no-op because nothing was ever scheduled
+	// from unloaded state.
+	const guardRef = useRef(false);
+	guardRef.current = loaded && loadFailed === null;
+	const schedulerRef = useRef<RoomsSaveScheduler | null>(null);
+	if (schedulerRef.current === null) {
+		schedulerRef.current = createRoomsSaveScheduler({
+			save: (r) => invoke("db_save_rooms", { rooms: r }),
+			// Belt and braces for the debounced fire (#167): never save
+			// from an unloaded / failed state.
+			canSave: () => guardRef.current,
+		});
+	}
 	useEffect(() => {
 		if (!loaded || loadFailed !== null) return;
-		void invoke("db_save_rooms", { rooms }).catch((err: unknown) => {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.error("[skein] db_save_rooms failed:", msg);
-		});
+		schedulerRef.current?.update(rooms);
 	}, [rooms, loaded, loadFailed]);
+	const flushRoomsSave = useCallback(async () => {
+		await schedulerRef.current?.flush();
+	}, []);
+
+	// Exit paths (close / quit / updater) reach the flush through roomsFlush.
+	// Best-effort too: the page is going away (reload, webview teardown).
+	useEffect(() => {
+		registerRoomsFlusher(flushRoomsSave);
+		const onHide = () => {
+			if (document.visibilityState === "hidden") void flushRoomsSave();
+		};
+		const onPageHide = () => void flushRoomsSave();
+		document.addEventListener("visibilitychange", onHide);
+		window.addEventListener("pagehide", onPageHide);
+		return () => {
+			registerRoomsFlusher(null);
+			document.removeEventListener("visibilitychange", onHide);
+			window.removeEventListener("pagehide", onPageHide);
+		};
+	}, [flushRoomsSave]);
 
 	// #418: a room created this session (New room, worktree room,
 	// agent create_room) reaches `rooms` through setRooms with no
@@ -259,5 +293,5 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 		if (fresh.length > 0) syncRepoMeta(fresh);
 	}, [rooms, loaded, syncRepoMeta, identityTriedRef]);
 
-	return { syncRepoMeta, hydrateRooms };
+	return { syncRepoMeta, hydrateRooms, flushRoomsSave };
 }

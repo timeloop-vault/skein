@@ -17,7 +17,7 @@
 // (the eventual answer, since no one arrangement suits everyone), the
 // thing that needs a stable identity per pane is this list.
 
-import { useCallback } from "react";
+import { memo, useCallback } from "react";
 import { effectiveRightPaneTab, shownDesignHarness } from "./designDock.ts";
 import { pickDesignHarness } from "./designFocus.ts";
 import { type HarnessKindOf, resolveHarnessKind } from "./harnessAttribution.ts";
@@ -39,7 +39,7 @@ const TABS: Array<{ id: RightPaneTab; label: string; title: string }> = [
 	{ id: "design", label: "Design", title: "docked design preview" },
 ];
 
-export const RightPane = ({
+const RightPaneImpl = ({
 	design,
 	roomId,
 	cwd,
@@ -170,3 +170,6 @@ export const RightPane = ({
 		</div>
 	);
 };
+
+// #594: memo'd so a state change in another room skips this one.
+export const RightPane = memo(RightPaneImpl);
