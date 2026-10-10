@@ -3,8 +3,9 @@
 Status: draft, not filed. Nothing here exists on GitHub yet.
 
 Issue numbers are placeholders (`#E` for the epic, `#P0`, `#P1a` and so on
-for the phases). Replace them once the issues are filed, and fix the
-checklist in the epic body in the same pass.
+for the phases, including `#P3b`, the daemon-to-daemon link). Replace them
+once the issues are filed, and fix the checklist in the epic body in the
+same pass.
 
 Design: `docs/skeind-design.md`. Recon: `docs/skeind-recon.md`, with the
 sections "Coupling points", "Protocol surface", "Phase 1 sizing",
@@ -67,7 +68,7 @@ daemon.
 
 Each phase is usable on its own.
 
-- [ ] #P0 ssh + tmux spike (owned by another room)
+- [x] #P0 ssh + tmux spike (concluded: not pursued)
 - [ ] #P1a Event-sink trait replaces AppHandle/Emitter in the modules that move
 - [ ] #P1b Stream sinks and command/impl split for Channel commands and binary fs reads
 - [ ] #P1c Path and resource provider replaces app.path()
@@ -77,6 +78,7 @@ Each phase is usable on its own.
 - [ ] #P2a Daemon-owned harness lifecycle
 - [ ] #P2b Detached local mode
 - [ ] #P3 Remote: network transport, device tokens, host picker
+- [ ] #P3b Daemon-to-daemon link: routed mail, qualified room ids, forwarded room verbs
 - [ ] #P4 Approval queue and push notifier
 - [ ] #P5 Sandbox runtime behind the Runtime trait
 - [ ] #P6 Mobile client
@@ -125,7 +127,6 @@ Tracked in the phase issue that needs the answer, and in `docs/skeind-recon.md`
 - Binary framing on the wire for `read_image_bytes` and similar. (#P1b)
 - Which of the phase machine, deferral timers, mail nudges and
   notifications move to the daemon, and in what order. (#P2a)
-- Whether tmux-backed PTYs are a `Runtime` implementation. (#P0)
 
 ## Out of scope for this epic
 
@@ -135,48 +136,52 @@ Anything the design lists as a non-goal, plus a `create_workspace` verb
 
 ## Phase 0
 
-**Title:** skeind P0: ssh + tmux spike (record of the question)
+**Title:** skeind P0: ssh + tmux spike (concluded: not pursued)
 
 **Labels:** (none)
 
 ```markdown
 Part of #E.
 
-## Why
-
-Before committing to a `Runtime` trait shape, find out whether a harness
-PTY can live in a tmux session on a remote host, reached over ssh, and
-still give Skein what it needs: byte output, input, resize, and
-reattach.
-
-This spike is owned by a separate room that is already in progress. This
-issue only records the question it answers and what the later phases need
-from the answer. It is not a work order.
-
 ## Question
 
-Can a tmux-backed PTY be driven from the daemon as a `Runtime`
-implementation, rather than something beside it?
+Can a harness PTY live in a tmux session on a remote host, reached over
+ssh, and be driven from the UI machine as a `Runtime` implementation?
 
-## What later phases need from the answer
+## Conclusion
 
-- #P1f and #P2b: the `Runtime` trait methods (`ensure_room_env`,
-  `spawn_pty`, `watch_paths`, `teardown`) must not assume an in-process
-  `portable-pty` master. If tmux-backed PTYs fit as a `Runtime`, the trait
-  stays as designed; if not, say which method breaks.
-- #P2b: whether the headless emulator is still needed when tmux already
-  holds screen state, or whether tmux's own capture replaces it for that
-  runtime.
-- #P3: whether the remote mode is "daemon on the host" only, or also
-  "daemon here, PTYs over ssh". The design assumes the first.
-- Transcript tailing and the watcher: the design runs them next to the
-  harness (see "Coupling points" in the recon). Record whether the spike
-  changes that.
+Skein does not use ssh or tmux.
 
-## Acceptance
+- skeind on the harness host already gives remote harnesses: it spawns
+  ordinary local PTYs (HostRuntime).
+- PTY survival is a non-goal; durability is resume plus terminal
+  snapshots.
+- A harness in tmux reached over ssh from the UI machine cannot reach the
+  agent API and MCP on its 127.0.0.1 without a reverse tunnel.
 
-The spike's findings are written down where #P1f and #P2b can cite them,
-and the question and needs above are answered or explicitly left open.
+The `Runtime` trait is `Host | sandbox`. The headless emulator (#P2b) is
+needed regardless, since it is what makes snapshots possible.
+
+## Outcome
+
+The spike ran as #568 (concluded: not pursued; spike code not merged).
+Its findings:
+
+1. Keeping a process alive is easy (tmux does it). The value is
+   telemetry: transcripts and SSE live on the remote host, so the daemon
+   tails them there and ships events, not just bytes.
+2. The remote env breaks first: a non-login ssh command found no tmux or
+   opencode on PATH, and claude was on no PATH at all. The daemon must
+   own the spawn env remotely (the #565 login-shell capture, run on the
+   daemon's host).
+3. tmux adds a resize hop (xterm, ssh, tmux, TUI) and visible jank. A
+   daemon-owned PTY removes it, which supports the headless emulator
+   plus last-active-client sizing.
+4. Review needs the worktree where the agent edits: a remote room's
+   worktree, watcher and git reads must be on the daemon's host.
+5. Review tools, mail and nudges need the agent API reachable from the
+   remote harness, which confirms "a harness talks to the daemon next to
+   it".
 ```
 
 ## Phase 1a
@@ -670,7 +675,6 @@ harnesses keep working.
 - Should detached become the default?
 - Is the snapshot visible-screen-only, or does it page scrollback out
   separately?
-- Does a tmux-backed runtime (from #P0) change the emulator's role?
 ```
 
 ## Phase 3
@@ -728,6 +732,17 @@ the network.
 
 - A client on one machine creates a room against a workspace on another
   host and works in it: terminal, feed, review, files, design preview.
+- A remote harness's Claude JSONL and opencode SSE are tailed on the
+  daemon's host, and the client receives events, not only PTY bytes.
+- Harnesses spawned by a remote skeind find `claude` and `opencode` via
+  the daemon host's login-shell env (#565 capture), even when the daemon
+  was started non-interactively.
+- Resizing in the client reaches the remote TUI in one hop (client to
+  daemon PTY), with last-active-client sizing.
+- The review pane for a remote room reads the worktree, watcher and git
+  on the daemon's host.
+- A remote harness calls review tools and mail and receives nudges via
+  the agent API on its own host's 127.0.0.1.
 - A revoked device token is refused on the next request and its open
   connection is closed.
 - A client with an incompatible `proto_version` gets the documented
@@ -748,6 +763,87 @@ the network.
   `spawn_env`. Since #565 harnesses get the daemon host's full
   login-shell env, so an API key exported there reaches them.
 - Token transport and storage on the client.
+```
+
+## Phase 3b
+
+**Title:** skeind P3b: daemon-to-daemon link: routed mail (store-and-forward), daemon-qualified room ids, forwarded room verbs
+
+**Labels:** `area:agent-api`, `area:rooms`, `security`
+
+```markdown
+Part of #E. Phase 3. Depends on: #P3.
+
+## Why
+
+The agent API's cross-room verbs assume one install and one sqlite:
+`send_message`, `read_messages` and `message_history` share one
+`harness_messages` table and resolve a room id to its lead harness at
+send time; `create_room` stamps `createdBy`; `close_room` is creator-only
+and needs the target's sign-off for its HEAD; `open_harness` and
+`close_harness` act on your own room or rooms you created; `list_rooms`,
+`get_room`, `list_harnesses` and `find_rooms_for_path` are install-wide.
+With rooms on several daemons (a director room local, worker rooms
+remote) these must route between daemons. See "Cross-daemon routing" in
+`docs/skeind-design.md`.
+
+## Scope
+
+- **Daemon-to-daemon link.** The local daemon dials out to each remote
+  daemon, as the client does, and the link carries traffic both ways. A
+  remote daemon never dials in to a laptop. A harness still only talks to
+  its own daemon, which routes.
+- **Transport and auth** reuse #P3's transport and per-device token
+  model, the local daemon being one more device. The peer credential is
+  scoped to the routed agent-API verbs and never to sign-off.
+- **Store-and-forward mail.** Mail to a room whose daemon is unreachable
+  queues on the sender's daemon and is delivered on reconnect, once.
+- **Fail-fast verbs.** `create_room`, `close_room`, `open_harness` and
+  `close_harness` fail with an explicit "daemon offline" error rather
+  than queue.
+- **Daemon-qualified ids.** Room and harness ids carry the daemon id;
+  `createdBy` names a room on a specific daemon. Existing ids migrate.
+- **Authority on the owner.** The owning daemon checks its rooms'
+  mailbox, sign-off and creator rules; a forwarded `close_room` is
+  checked there against the qualified `createdBy`.
+- **Aggregated listings.** `list_rooms`, `find_rooms_for_path`,
+  `get_room` and `list_harnesses` merge results from reachable peers and
+  flag each peer's results as live or stale/offline.
+
+## Out of scope
+
+- Terminal bytes, review and the event stream: the client connects to
+  every daemon directly for those.
+- Sign-off over the link: the peer credential never grants, reads or
+  changes sign-off. A forwarded `close_room` is checked by the owning
+  daemon against its own local sign-off record.
+- Relaying through the client (rejected: it fails when the director's
+  machine is closed).
+- Discovery UX, which stays with #P3.
+
+## Acceptance
+
+- Mail sent from a room on daemon A to a room on daemon B while B is
+  offline is delivered exactly once after B reconnects.
+- `close_room` forwarded to B is refused unless `createdBy` names the
+  caller's qualified room and B's sign-off is approved for its HEAD.
+- `create_room`, `close_room`, `open_harness` and `close_harness` against
+  an offline peer return a "daemon offline" error and queue nothing.
+- `list_rooms` marks B's rooms stale while B is offline, and
+  `find_rooms_for_path` never reports `safe_to_remove: true` for them.
+- A peer credential is refused for any verb outside the routed set and
+  for sign-off.
+- `cargo test --workspace` and `cargo test --manifest-path
+  app/src-tauri/Cargo.toml` pass.
+
+## Open questions
+
+- How existing unqualified room ids and stored `createdBy` values are
+  migrated.
+- Store-and-forward semantics: ordering, dedupe, expiry of queued mail,
+  and what `read_messages` reports for undelivered mail.
+- Peer discovery and trust bootstrap between daemons.
+- Whether `safe_to_remove` can be answered at all for an offline peer.
 ```
 
 ## Phase 4
@@ -834,7 +930,9 @@ Constraints from the design:
   transcript tails (`~/.claude/projects/...`, subagent sidecars,
   background-task `.output` files) and the opencode store must be reachable.
 - **Egress must reach the agent API**: the harness hook and MCP URLs
-  point at the daemon's listener.
+  point at the daemon's listener. A sandbox that does not share the
+  daemon's loopback needs an explicit egress rule or forwarded port for
+  that URL, provided by the runtime itself.
 - The candidate sandbox is at 0.1.0, so everything specific to it sits
   strictly behind the trait; no sandbox type leaks into the engines.
 

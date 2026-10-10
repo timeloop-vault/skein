@@ -402,6 +402,30 @@ Facts the protocol inherits:
   round-trip through the webview today (coupling 14). They are the
   ones that cannot be a simple 1:1 mapping in a headless daemon.
 
+**Cross-room verbs.** The design's cross-daemon routing exists because
+these verbs assume one install and one sqlite:
+
+- Mailbox: `send_message` reads every room with `db.all_rooms()`
+  (`app/src-tauri/src/agent_api/verbs/mail.rs:285`) and resolves the
+  target through `resolve_mail_target`
+  (`app/src-tauri/src/agent_api/verbs/mail_routing.rs:14`), which
+  searches a harness id across every room and falls back to a room id's
+  lead harness (`mail_routing.rs:21`, `:38`).
+- `createdBy` is stamped with the calling room's id at
+  `app/src-tauri/src/agent_api/verbs/room_create.rs:368`.
+- `close_room` checks the creator by plain room id
+  (`app/src-tauri/src/agent_api/verbs/room_close.rs:144-147`) and then
+  the target's sign-off for its HEAD (`room_close.rs:164-169`).
+- `open_harness` and `close_harness` share an own-or-created check
+  (`app/src-tauri/src/agent_api/verbs/harness_control.rs:176-180` and
+  `:440-444`).
+- Listings read the whole install: `list_rooms`
+  (`app/src-tauri/src/agent_api/verbs/room_listing.rs:236`, `all_rooms`
+  at `:251`), `get_room` (`room_listing.rs:379`), `list_harnesses`
+  (`room_listing.rs:475`) and `find_rooms_for_path`
+  (`app/src-tauri/src/agent_api/verbs/find_rooms.rs:92`, `safe_to_remove`
+  computed at `:124`).
+
 ## 4. Phase 1 sizing by module
 
 Phase 1 is "extract skein-daemon with the in-process transport and zero
@@ -712,5 +736,23 @@ Other docs that touch the area:
     exists on the host. `git_add_worktree` and `git_restore_worktree`
     are the only writes; are they inside that contract?
 13. **Hook and MCP URL reachability under non-host runtimes.** Hooks run
-    on the harness host and need the agent API URL. Under an ssh/tmux or
-    sandbox runtime the harness may not share the daemon's loopback.
+    on the harness host and need the agent API URL. Under a sandbox
+    runtime the harness may not share the daemon's loopback.
+    The design's "Harness ↔ skeind communication" section assigns this to
+    the runtime: it must provide reachability of the agent API URL (a
+    forwarded port or an explicit egress rule), never a reverse tunnel
+    to a client.
+14. **Cross-daemon id qualification.** Room and harness ids become
+    qualified by daemon id and `createdBy` names a room on a specific
+    daemon. How are existing unqualified room ids and stored `createdBy`
+    values migrated?
+15. **Store-and-forward delivery semantics.** Ordering per sender and
+    receiver, dedupe on reconnect (exactly-once delivery), expiry of
+    queued mail, and what `read_messages` reports for mail that has not
+    yet been delivered.
+16. **Peer discovery and trust bootstrap between daemons.** How does
+    the local daemon learn of a remote peer and obtain its scoped peer
+    credential, and how is that credential revoked?
+17. **Offline peers and `find_rooms_for_path`.** Can `safe_to_remove` be
+    answered for an offline peer's rooms at all? A stale answer must
+    never read as `safe_to_remove: true`.

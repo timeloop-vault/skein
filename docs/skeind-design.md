@@ -66,8 +66,8 @@ recon refines this list; where it differs, the recon wins (see
     │                          │<-------->│ files backend               │
     └──────────────────────────┘ conn per │ agent API + MCP (localhost) │
                                  daemon   │ approval queue + notifier   │
-                                          │ Runtime: Host | Ssh/tmux |  │
-                                          │          sandbox            │
+                                          │ Runtime: Host | sandbox     │
+                                          │                             │
                                           └──────────────┬──────────────┘
                                                          │ localhost
                                                     harnesses (PTYs)
@@ -80,8 +80,15 @@ per daemon.
 the PTY host with a headless terminal emulator per PTY, transcript tails
 and parsers, the watcher, skein-git reads, the files backend, the agent
 API and MCP (still localhost from the harness's point of view), the
-approval queue and notifier, and a Runtime trait (Host | Ssh/tmux |
-sandbox).
+approval queue and notifier, and a Runtime trait (Host | sandbox).
+
+**Why not ssh + tmux.** skeind on the host already gives remote
+harnesses: it spawns ordinary local PTYs (HostRuntime). PTY survival
+across a daemon restart is a non-goal; durability is resume plus terminal
+snapshots. And a harness in tmux reached over ssh from the UI machine
+cannot reach the agent API and MCP on its 127.0.0.1 without a reverse
+tunnel, which this design avoids. The spike's findings (#568) are listed
+under "Evidence from the ssh + tmux spike (#568)" below.
 
 **Transport.** One multiplexed connection per daemon: an in-process
 channel, a local socket, or a WebSocket over a private overlay network
@@ -89,6 +96,96 @@ channel, a local socket, or a WebSocket over a private overlay network
 
 **Key property.** Harnesses always talk to a daemon next to them, so no
 reverse tunnels are needed.
+
+### Evidence from the ssh + tmux spike (#568)
+
+- Keeping a process alive is easy; the value is telemetry. Transcripts
+  and SSE live on the remote host, so skeind tails them there and ships
+  events, not just bytes (transcript tails in skeind).
+- The remote env breaks first: a non-login ssh command found no tmux or
+  opencode, and claude was on no PATH. The spawn env probe runs on the
+  daemon's host (#565 login-shell capture).
+- tmux adds a resize hop and visible jank. A daemon-owned PTY removes it
+  (Terminal reattach, headless emulator, last-active-client sizing).
+- Review needs the worktree where the agent edits, so a remote room's
+  worktree, watcher and git reads live on the daemon's host (the
+  Room/workspace contract).
+- Review tools, mail and nudges need the agent API reachable from the
+  harness: a harness talks to the daemon next to it (Harness to skeind
+  communication).
+
+## Harness ↔ skeind communication
+
+All harness traffic to Skein goes to the agent API, which lives in
+skeind: MCP at `/mcp`, the plain-JSON `/api/*` mirror, and the three
+Claude hooks (`curl` entries in the #215 plugin bundle's `hooks.json`,
+posting to `/api/harness/{permission,session-start,session-end}`).
+opencode reaches the same server through its MCP config. The harness
+sees it on 127.0.0.1 because skeind runs on the harness's host.
+
+skeind mints and injects `SKEIN_REVIEW_URL`, `SKEIN_REVIEW_TOKEN`,
+`SKEIN_ROOM_ID` and `SKEIN_HARNESS_ID`, and ships its own harness-config
+bundle (`--plugin-dir` / `OPENCODE_CONFIG`), because today's paths point
+into the app's resource dir.
+
+Remote mode therefore means "skeind on the harness host". A runtime
+where the PTY is not on skeind's host (a sandbox that does not share
+skeind's loopback) must itself provide reachability of the agent API URL: a forwarded port or an
+explicit egress rule. That is the runtime's job, behind the `Runtime`
+trait, and never a reverse tunnel to a client.
+
+## Cross-daemon routing
+
+**Problem.** The agent API's cross-room verbs assume one install and one
+sqlite:
+
+- `send_message`, `read_messages` and `message_history` use one
+  `harness_messages` table, and a room id resolves to its lead harness
+  at send time.
+- `create_room` stamps `createdBy`.
+- `close_room` is creator-only and needs the target's sign-off for its
+  HEAD.
+- `open_harness` and `close_harness` act on your own room or rooms you
+  created.
+- `list_rooms`, `get_room`, `list_harnesses` and `find_rooms_for_path`
+  are install-wide.
+
+With rooms on several daemons (say a director room local and worker rooms
+remote), these must route between daemons.
+
+**Design.** A daemon-to-daemon link. The harness side is unchanged: a
+harness only ever talks to its own daemon, and the daemon routes. The
+local daemon dials out to each remote daemon, as the client does, and the
+link carries traffic both ways. A remote daemon never dials in to a
+laptop, which keeps "no reverse tunnels". The link reuses the Phase 3
+transport and the per-device token model, the local daemon being one more
+device. Its peer credential is scoped to the routed agent-API verbs and
+never to sign-off.
+
+**Availability.** The local daemon is available only while its machine
+is up (in attached mode it dies with the app, and laptops sleep); the
+remote daemon is the always-on one. Routing is therefore store-and-forward:
+mail to a room whose daemon is unreachable queues on the sender's daemon
+and is delivered on reconnect (the mailbox is already a queue). Verbs
+that cannot wait (`create_room`, `close_room`, `open_harness`,
+`close_harness`) fail with an explicit "daemon offline" error rather
+than queue.
+
+**Identity and authority.** Room and harness ids are qualified by daemon
+id, and `createdBy` names a room on a specific daemon. The owning daemon
+is authoritative for its rooms' mailbox, sign-off and creator checks; a
+forwarded `close_room` is checked there against the qualified
+`createdBy`. The listing verbs (`list_rooms`, `find_rooms_for_path`,
+`get_room`, `list_harnesses`) aggregate across reachable peers and flag
+each peer's results as live or stale/offline.
+
+**Scope line.** The client still connects to every daemon directly for
+PTYs, review and the event stream. Daemon-to-daemon carries routed
+agent-API traffic only, never terminal bytes.
+
+**Rejected alternative.** The client relays between daemons. It is
+cheaper, but it fails exactly when it matters: the director's machine is
+closed and a remote worker sends mail.
 
 ## Crates
 
@@ -181,14 +278,16 @@ out. Skein stays free of clone and credential logic.
 
 Each phase is usable on its own.
 
-0. **ssh + tmux spike.** Built separately, in another room.
+0. **ssh + tmux spike.** Ran as #568; concluded Skein does not use ssh
+   or tmux; code not merged.
 1. **Extract skein-daemon** with the in-process transport and zero
    behaviour change. This is the bulk of the work.
 2. **Detached local.** Socket, a daemon that outlives the app, seq
    resume plus terminal snapshots, and a Settings choice of attached vs
    detached.
 3. **Remote.** WebSocket over the overlay network, device tokens, a host
-   picker at room creation, `list_workspaces`.
+   picker at room creation, `list_workspaces`, and the daemon-to-daemon
+   link for cross-daemon routing (see "Cross-daemon routing").
 4. **Approval queue and push notifier.**
 5. **Sandbox runtime.**
 6. **Mobile client.** Feed, approvals, `send_message`, and a read-only
@@ -197,6 +296,9 @@ Each phase is usable on its own.
 ## Open questions
 
 - Daemon discovery and config UX: a manual list, MagicDNS, or mDNS?
+- Cross-daemon routing: id qualification and migration of existing room
+  ids, store-and-forward semantics (ordering, dedupe, expiry), and peer
+  trust bootstrap. Detail in `docs/skeind-recon.md` §8.
 - Review state for a room whose daemon is offline: a read-only cache, or
   hide it?
 - Should detached become the default?
@@ -239,3 +341,7 @@ corrections, §8 new open questions).
     exports (API keys, proxy settings) become every harness's env, and
     loopback is merged into `NO_PROXY` so the local agent API stays
     reachable.
+11. The cross-room verbs (mail, `createdBy`, `close_room`, harness
+    control, listings) assume one install and one sqlite, so rooms on
+    several daemons need routing (see "Cross-daemon routing"; recon §3
+    "Cross-room verbs").
