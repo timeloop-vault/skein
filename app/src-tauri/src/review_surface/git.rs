@@ -96,6 +96,7 @@ pub(super) fn norm(path: &str) -> String {
 
 /// What a scope actually covers, once the room's base ref and the
 /// merge base with HEAD have both been resolved.
+#[derive(Clone)]
 pub(super) struct Range {
     pub base_ref: Option<String>,
     pub base_resolved: bool,
