@@ -34,6 +34,7 @@ import {
 } from "./harnessCreation.ts";
 import type { CreateRoomArgs } from "./NewRoomDialog.tsx";
 import { captureOpencodeSessionId } from "./opencodeCapture.ts";
+import { buildRemoteSpec, type RemoteInput } from "./remoteCmd.ts";
 import { defaultRoomName } from "./roomName.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
 
@@ -119,7 +120,7 @@ export function useHarnessCreation(
 		targetRoomId: string,
 		kind: HarnessKind,
 		agent?: string,
-		opts?: { activate?: boolean; createdBy?: Harness["createdBy"] },
+		opts?: { activate?: boolean; createdBy?: Harness["createdBy"]; remote?: RemoteInput },
 	): Promise<CreateHarnessResult | undefined> => {
 		const activate = opts?.activate ?? true;
 		const targetRoom = roomsRef.current.find((r) => r.id === targetRoomId);
@@ -127,6 +128,11 @@ export function useHarnessCreation(
 		const caps = HARNESS_KINDS[kind].capabilities;
 		const agentName = resolveAgentName(kind, agent);
 		const id = newId("h");
+		// #568 spike: the session name is minted from this same id, so the
+		// record and its argv agree. A remote harness without a host is
+		// refused rather than spawned with an empty argv.
+		if (kind === "remote" && !opts?.remote) return undefined;
+		const remote = opts?.remote ? buildRemoteSpec(targetRoomId, id, opts.remote) : undefined;
 		const cwd = targetRoom.cwd ?? defaultCwd;
 		// Computed here (off the pre-await snapshot above) rather than
 		// inside the `setRooms` updater below, so the same value can be
@@ -153,8 +159,9 @@ export function useHarnessCreation(
 			}
 		}
 		const cmd = caps.pty
-			? cmdForKind(kind, defaultShell, sessionId, opencodePort, agentName)
+			? cmdForKind(kind, defaultShell, sessionId, opencodePort, agentName, remote)
 			: undefined;
+		if (kind === "remote" && cmd?.length === 0) return undefined;
 		setRooms((prev) =>
 			prev.map((r) => {
 				if (r.id !== targetRoomId) return r;
@@ -166,6 +173,7 @@ export function useHarnessCreation(
 					cmd,
 					sessionId,
 					agentName,
+					remote,
 					createdBy: opts?.createdBy,
 				});
 				return {
@@ -195,11 +203,11 @@ export function useHarnessCreation(
 		return { harnessId: id, kind, agent: agentName ?? null, name };
 	};
 
-	const pickHarness = (kind: HarnessKind, agent?: string) => {
+	const pickHarness = (kind: HarnessKind, agent?: string, remote?: RemoteInput) => {
 		const targetRoomId = showPicker;
 		setShowPicker(null);
 		if (!targetRoomId) return;
-		void createHarnessInRoom(targetRoomId, kind, agent);
+		void createHarnessInRoom(targetRoomId, kind, agent, remote ? { remote } : undefined);
 	};
 
 	// #49 phase A: Mod+E = jump to the room's Files harness (creating

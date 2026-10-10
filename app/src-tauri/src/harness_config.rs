@@ -443,7 +443,12 @@ mod tests {
         // rejected at the Tauri boundary (#116) before it ever reaches
         // this function.
         let (_tmp, config) = bundle();
-        for kind in [HarnessKind::Copilot, HarnessKind::Byoh, HarnessKind::Files] {
+        for kind in [
+            HarnessKind::Copilot,
+            HarnessKind::Byoh,
+            HarnessKind::Files,
+            HarnessKind::Remote,
+        ] {
             // Real program where the kind has one (`gh` for copilot),
             // so this exercises the `match kind` fallthrough and not
             // just the program-mismatch gate above it.

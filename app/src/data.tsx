@@ -168,6 +168,31 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			opensClickedLinks: false,
 		},
 	},
+	// #568 SPIKE: a tool run inside tmux on a remote host over ssh. Meant to
+	// be easy to remove: this entry, HARNESS_ORDER, remoteCmd.ts and the
+	// `remote` cases in harnessCmd.ts are the whole footprint.
+	remote: {
+		id: "remote",
+		label: "ssh",
+		name: "Remote (ssh+tmux)",
+		chip: "h-remote",
+		desc: "Spike: tmux on a remote host.",
+		program: "ssh",
+		skillInvocation: null,
+		capabilities: {
+			pty: true,
+			// Resume = tmux reattach; the argv is rebuilt identically.
+			resume: true,
+			// Heuristic only: no transcript, so no L2c adapter. The phase
+			// comes from L2a idle / L2b patterns.
+			notify: true,
+			agents: false,
+			agentSwitchable: false,
+			submitRetry: false,
+			imagePaste: false,
+			opensClickedLinks: false,
+		},
+	},
 	// #49 phase A: the file surface as a harness. Deliberately not a
 	// coloured process chip — the ◇ renders in --accent via .h-files.
 	files: {
@@ -216,6 +241,7 @@ export const HARNESS_ORDER: HarnessKind[] = [
 	"opencode",
 	"copilot",
 	"byoh",
+	"remote",
 	"files",
 	"design",
 ];

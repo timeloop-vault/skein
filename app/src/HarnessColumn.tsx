@@ -12,6 +12,7 @@ import type { GateResult } from "./harnessInputGate.ts";
 import { LiveHarnessTab } from "./LiveHarnessTab.tsx";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { type DefaultAgents, type VersionNoticeModes, versionNoticeModeFor } from "./prefs.ts";
+import type { RemoteInput } from "./remoteCmd.ts";
 import { useWorkingSubagentCount } from "./subagents.ts";
 import { shownActiveId } from "./tempView.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
@@ -114,7 +115,7 @@ export interface HarnessColumnProps {
 	harnessDrag: HarnessDrag;
 	/** Settings' per-kind default agents (#248), for the picker. */
 	defaultAgents: DefaultAgents;
-	onPick: (kind: HarnessKind, agent?: string) => void;
+	onPick: (kind: HarnessKind, agent?: string, remote?: RemoteInput) => void;
 	onAddHarness: (roomId: string) => void;
 	onCancelPick: () => void;
 	onSwitchHarness: (roomId: string, harnessId: string) => void;

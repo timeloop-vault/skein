@@ -12,6 +12,8 @@ import {
 import { HChip } from "./components.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
 import { type DefaultAgents, defaultAgentFor } from "./prefs.ts";
+import { RemoteHostStep } from "./RemoteHostStep.tsx";
+import type { RemoteInput } from "./remoteCmd.ts";
 import type { HarnessKind } from "./types.ts";
 import "./HarnessPicker.css";
 import "./empty.css";
@@ -246,7 +248,7 @@ export const HarnessPicker = ({
 	defaultAgents: DefaultAgents;
 	/** The picker's room is the active one — gates the agent step's Enter. */
 	active: boolean;
-	onPick: (kind: HarnessKind, agent?: string) => void;
+	onPick: (kind: HarnessKind, agent?: string, remote?: RemoteInput) => void;
 	onCancel: () => void;
 }) => {
 	const [step, setStep] = useState<HarnessKind | null>(null);
@@ -262,7 +264,12 @@ export const HarnessPicker = ({
 			<span className="sk-empty-harness-x" title="Cancel (Esc)" onClick={onCancel}>
 				×
 			</span>
-			{step ? (
+			{step === "remote" ? (
+				<RemoteHostStep
+					onSubmit={(input) => onPick("remote", undefined, input)}
+					onBack={() => setStep(null)}
+				/>
+			) : step ? (
 				<AgentStep
 					kind={step}
 					listing={listing}
@@ -282,7 +289,9 @@ export const HarnessPicker = ({
 							<div
 								key={k.id}
 								className="sk-harness-card"
-								onClick={() => (kindHasAgents(k.id) ? setStep(k.id) : onPick(k.id))}
+								onClick={() =>
+									kindHasAgents(k.id) || k.id === "remote" ? setStep(k.id) : onPick(k.id)
+								}
 							>
 								<div className="head">
 									<HChip kind={k.id} /> <span className="h-name">{k.name}</span>

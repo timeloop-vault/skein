@@ -98,7 +98,14 @@ export function repointRoom(
 			return { ...h, cwd: newCwd, spawnGen: (h.spawnGen ?? 0) + 1 };
 		}
 		const { sessionId, ...rest } = h;
-		const cmd = cmdForKind(h.kind, fallbackShell, undefined, opencodePorts.get(h.id), h.agent);
+		const cmd = cmdForKind(
+			h.kind,
+			fallbackShell,
+			undefined,
+			opencodePorts.get(h.id),
+			h.agent,
+			h.remote,
+		);
 		return { ...rest, cwd: newCwd, cmd, spawnGen: (h.spawnGen ?? 0) + 1 };
 	});
 	return { ...room, cwd: newCwd, harnesses };

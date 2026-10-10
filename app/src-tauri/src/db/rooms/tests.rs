@@ -231,6 +231,40 @@ fn a_pre_520_blob_loads_without_a_shell_claim() {
     assert_eq!(room.harnesses[0].shell_claim, None);
 }
 
+/// #568 spike: `remote` survives load then save; a blob without it parses.
+#[test]
+fn remote_spec_round_trips_and_is_optional() {
+    let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+        "harnesses":[{"id":"h1","kind":"remote","name":"h1","status":"running",
+        "model":"","tokens":"0","remote":{"host":"user@example-host","tool":"claude","session":"skein-r1-h1"}},
+        {"id":"h2","kind":"claude","name":"h2","status":"running","model":"","tokens":"0"}],
+        "activeHarnessId":"h1"}"#;
+    let room: Room = serde_json::from_str(json).unwrap();
+    assert_eq!(room.harnesses[1].remote, None);
+    let (_dir, db) = fresh_db();
+    db.save_all(&[room]).unwrap();
+    let loaded = db.load_all().unwrap().rooms.remove(0);
+    assert_eq!(
+        loaded.harnesses[0].remote,
+        Some(RemoteSpec {
+            host: "user@example-host".into(),
+            tool: "claude".into(),
+            session: "skein-r1-h1".into(),
+            dir: None,
+        })
+    );
+    let json = serde_json::to_string(&loaded.harnesses[0]).unwrap();
+    assert!(
+        json.contains(r#""remote":{"host":"user@example-host""#),
+        "{json}"
+    );
+    assert!(
+        !serde_json::to_string(&loaded.harnesses[1])
+            .unwrap()
+            .contains("remote")
+    );
+}
+
 /// #417: `retired` round-trips through save and load.
 #[test]
 fn retired_round_trips_through_save_and_load() {

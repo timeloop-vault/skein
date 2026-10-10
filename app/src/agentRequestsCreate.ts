@@ -14,7 +14,13 @@
 // (`useNewRoomForm.tsx`'s `initialDefaults?.harness ?? "claude"`); agent
 // falls back through `startingAgent` (prefs.ts) the same way.
 
-import { asRecord, isHarnessKind, isOmitted, type RequestResult } from "./agentRequestsShared.ts";
+import {
+	asRecord,
+	isHarnessKind,
+	isOmitted,
+	type RequestResult,
+	remoteRefusal,
+} from "./agentRequestsShared.ts";
 import { type AgentListing, unknownAgentMessage, validateAgent } from "./agents.ts";
 import { type DefaultAgents, type FolderDefaults, startingAgent } from "./prefs.ts";
 import type { HarnessKind } from "./types.ts";
@@ -61,6 +67,8 @@ export function resolveKind(
 ): RequestResult<HarnessKind> {
 	if (requested === undefined) return { ok: true, value: folderDefaults?.harness ?? "claude" };
 	if (!isHarnessKind(requested)) return { ok: false, error: `unknown harness kind "${requested}"` };
+	const refused = remoteRefusal(requested);
+	if (refused) return { ok: false, error: refused };
 	return { ok: true, value: requested };
 }
 
@@ -156,6 +164,8 @@ export function parseCreateArgs(raw: unknown): RequestResult<CreateRequestArgs> 
 	if (typeof r.task !== "string" || !r.task.trim()) return { ok: false, error: "task is required" };
 	if (!isHarnessKind(r.kind))
 		return { ok: false, error: `unknown harness kind "${String(r.kind)}"` };
+	const refused = remoteRefusal(r.kind);
+	if (refused) return { ok: false, error: refused };
 	if (r.agent !== null && typeof r.agent !== "string") {
 		return { ok: false, error: "agent must be a string or null" };
 	}
