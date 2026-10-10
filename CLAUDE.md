@@ -48,10 +48,11 @@ not a roadmap. Two standing decisions that no issue body will tell you:
 - **React 18 + strict TypeScript** UI (Vite); xterm.js for terminals,
   react-virtuoso for the activity feed, CodeMirror 6 for the file
   editor (#185)
-- **Four Rust workspace crates** — `skein-git`, `skein-harness`,
-  `skein-review`, `skein-winnotify` — plus `app/src-tauri`, which is
-  deliberately **excluded** from the workspace. Every cargo command
-  therefore needs running twice; see Conventions
+- **Five Rust workspace crates** — `skein-git`, `skein-harness`,
+  `skein-review`, `skein-webshot`, `skein-winnotify` — plus
+  `app/src-tauri`, which is deliberately **excluded** from the
+  workspace. Every cargo command therefore needs running twice; see
+  Conventions
 - **axum** on the tokio runtime Tauri already runs, for the localhost
   agent API + MCP endpoint (#213) — the hyper/http/tower stack under it
   was already locked via reqwest
@@ -107,14 +108,29 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   the line number; three tiers (exact/exact-elsewhere/
     │                                #   max-overlap) then outdated. Never silently moves or
     │                                #   drops a comment; 22 table tests, no repo needed
+    ├── crates/skein-webshot/        # Native PNG of a rectangle of a Tauri webview (#552):
+    │                                #   WebView2 DevTools `Page.captureScreenshot` with a `clip`
+    │                                #   on Windows, `WKWebView takeSnapshotWithConfiguration:` on
+    │                                #   macOS; a stub `capture` that errors elsewhere. It exists
+    │                                #   because the design pane's preview is a cross-origin
+    │                                #   iframe whose pixels script can't read. Renders even when
+    │                                #   the window is covered or minimized, but a CSS-hidden
+    │                                #   element yields a blank image. Called only by the agent
+    │                                #   API's `get_design_screenshot` (agent_api/verbs/
+    │                                #   design_screenshot.rs). Allowed `unsafe` on the same
+    │                                #   terms as skein-winnotify, below
     ├── crates/skein-winnotify/      # Windows-only OS toasts + COM click activation (#155):
     │                                #   unpackaged-app AUMID registration, a
     │                                #   INotificationActivationCallback so Action Center/cold-start
-    │                                #   clicks work, foreground-window recovery. The workspace's
-    │                                #   ONE crate allowed `unsafe` (its own `[lints]` table, not
-    │                                #   `workspace = true`) — raw WinRT/Win32 calls can't be made
+    │                                #   clicks work, foreground-window recovery. With
+    │                                #   skein-webshot, one of the workspace's TWO crates allowed
+    │                                #   `unsafe`: each has its own `[lints]` table (not
+    │                                #   `workspace = true`) setting `unsafe_code = "allow"` and
+    │                                #   clippy `undocumented_unsafe_blocks = "deny"`, so every
+    │                                #   unsafe block carries a `// SAFETY:` comment — raw
+    │                                #   WinRT/Win32/COM (webshot: Objective-C) calls can't be made
     │                                #   safe otherwise. app/src-tauri keeps `forbid` and only
-    │                                #   calls its safe functions
+    │                                #   calls their safe functions
     ├── app/
     │   ├── src/                     # React + TS UI
     │   │   ├── App.tsx              # The root component (~750 LOC) — hook wiring
@@ -330,7 +346,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   send_message/read_messages mailbox, and #330's
     │       │                        #   create_room), plus #411's close_room (archive,
     │       │                        #   creator-only, once signed off) and open_harness/
-    │       │                        #   close_harness — and NO resolve, NO approve, and NO
+    │       │                        #   close_harness, and the design-pane verbs
+    │       │                        #   (list_design_harnesses, get_design_state,
+    │       │                        #   open_design_entry, set_design_device, show_element,
+    │       │                        #   invoke_element, show_changes, and #552's
+    │       │                        #   get_design_screenshot / show_design_pane), which drive
+    │       │                        #   the room's own design harnesses and never switch
+    │       │                        #   rooms — and NO resolve, NO approve, and NO
     │       │                        #   way to actually destroy a room (archive_room,
     │       │                        #   remove_worktree, delete_room), all refused BY
     │       │                        #   NAME; auth = the per-room bearer token, which IS
@@ -728,7 +750,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   is still refused **by name**, now pointing at `close_room` instead of
   at "no"; `remove_worktree` and `delete_room` stay refused by name
   outright, because destroying — unlike archiving — stays the user's
-  decision (D9, as corrected). Full contract: `docs/agent-api.md`.
+  decision (D9, as corrected). The design-pane verbs (#512, #552) ride
+  the same server and drive only the caller's own room's design
+  harnesses. Full contract: `docs/agent-api.md`.
 - **Harness config injection** (#215, epic #52 E): the variables above
   are useless until the CLI knows there is a server at that address, so
   `pty_spawn` also appends `--plugin-dir <resources>/harness-config/`
@@ -879,9 +903,24 @@ and corrupt it.
 Rust logs: daily-rotating `skein.log.*` in the profile's log dir +
 stderr; `RUST_LOG` overrides the default `info` filter.
 
+**Driving a dev Skein from an agent (Windows).** Full recipe in
+`docs/e2e-dev-driving.md` (isolated e2e profile, CDP on port 9223,
+the agent API from a shell harness); macOS isn't covered yet.
+
+- Isolate: never launch a second app on an identifier that is already
+  running — single-instance forwards the launch and exits, and two
+  Skeins on one `skein.db` erase each other's rooms. Dev's vite port
+  1420 is `strictPort` and may belong to another worktree. Use the e2e
+  config override (own identifier, port and deep-link scheme).
+- Stop only by PID: the dev exe is `skein-app.exe`, like the release.
+  Stop processes and pick windows only by a PID you captured (or its
+  child chain under this worktree's `target\debug`), never by name or
+  title.
+
 ## Conventions
 
-- **Rust:** edition 2024. `unsafe_code = "forbid"`. Clippy pedantic
+- **Rust:** edition 2024. `unsafe_code = "forbid"` (except
+  skein-winnotify and skein-webshot, see Layout). Clippy pedantic
   warn, `-D warnings`. Tauri commands collapse `GitError` / `PtyError`
   to `String` at the boundary — they round-trip via JSON anyway.
   The toolchain is pinned in `rust-toolchain.toml` (currently 1.99, also
