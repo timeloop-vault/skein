@@ -167,8 +167,8 @@ needed regardless, since it is what makes snapshots possible.
 ## Outcome
 
 The spike ran as #568 and shipped standalone as the `remote` harness
-kind; its findings fed this design (write-up: docs/ssh-tmux-spike.md
-once it lands). Its findings:
+kind; its findings fed this design (write-up: docs/remote-harness.md,
+last section). Its findings:
 
 1. Keeping a process alive is easy (tmux does it). The value is
    telemetry: transcripts and SSE live on the remote host, so the daemon
