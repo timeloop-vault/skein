@@ -115,6 +115,15 @@ struct Pty {
     pid: Option<u32>,
 }
 
+/// What `spawn` reports back about the environment it built.
+pub struct SpawnOutcome {
+    /// Whether #215's config injection was non-empty.
+    pub injected: bool,
+    /// Whether `CLAUDE_CODE_DISABLE_MOUSE_CLICKS` is truthy in the final
+    /// spawn environment (#401).
+    pub mouse_clicks_disabled: bool,
+}
+
 /// One spawn's inputs. A struct rather than six positional parameters
 /// because `cmd`/`cwd` and `rows`/`cols` are trivially swappable at a
 /// call site and the compiler would not notice.
@@ -184,7 +193,7 @@ impl PtyManager {
     /// spawn — the frontend's #238 nudge gate needs to know, and
     /// computing it a second time on the caller's side would risk
     /// drifting from what this function actually injected.
-    pub fn spawn<F>(&self, req: SpawnRequest<'_>, on_event: F) -> Result<bool, PtyError>
+    pub fn spawn<F>(&self, req: SpawnRequest<'_>, on_event: F) -> Result<SpawnOutcome, PtyError>
     where
         F: Fn(PtyEvent) + Send + Sync + 'static,
     {
@@ -447,7 +456,10 @@ impl PtyManager {
             pid,
         };
         self.inner.lock().insert(id, pty);
-        Ok(injected)
+        Ok(SpawnOutcome {
+            injected,
+            mouse_clicks_disabled: applied.mouse_clicks_disabled,
+        })
     }
 
     /// Enqueue `data` for the PTY's dedicated writer thread (#171d).

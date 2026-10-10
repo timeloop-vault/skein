@@ -18,11 +18,17 @@ use crate::pty::{PtyEvent, PtyManager};
 /// frontend cannot compute itself, since `injection_for` lives entirely
 /// on the Rust side. #238's nudge gate refuses to send a prompt to a
 /// harness whose CLI might not even have the review tools wired up.
+///
+/// `mouse_clicks_disabled` is whether `CLAUDE_CODE_DISABLE_MOUSE_CLICKS`
+/// is truthy in the final spawn environment. Only Rust sees that env
+/// (login shell, inherited, user extras): the frontend's link-click
+/// deferral (#269) must not stand aside when Claude ignores clicks (#401).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PtySpawnResult {
     id: String,
     injected: bool,
+    mouse_clicks_disabled: bool,
 }
 
 /// Spawn a child process attached to a fresh PTY and stream its output
@@ -86,7 +92,7 @@ pub(crate) async fn pty_spawn(
                 }
             }
         });
-        let injected = manager
+        let outcome = manager
             .spawn(
                 crate::pty::SpawnRequest {
                     id: id.clone(),
@@ -107,7 +113,11 @@ pub(crate) async fn pty_spawn(
                 },
             )
             .map_err(|e| e.to_string())?;
-        Ok(PtySpawnResult { id, injected })
+        Ok(PtySpawnResult {
+            id,
+            injected: outcome.injected,
+            mouse_clicks_disabled: outcome.mouse_clicks_disabled,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -214,8 +224,12 @@ mod tests {
         let json = serde_json::to_value(PtySpawnResult {
             id: "abc".to_owned(),
             injected: true,
+            mouse_clicks_disabled: true,
         })
         .expect("serialize");
-        assert_eq!(json, serde_json::json!({ "id": "abc", "injected": true }));
+        assert_eq!(
+            json,
+            serde_json::json!({ "id": "abc", "injected": true, "mouseClicksDisabled": true })
+        );
     }
 }

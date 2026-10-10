@@ -217,3 +217,65 @@ fn plugin_dirs_does_not_duplicate_our_dir() {
         Some(already.as_str())
     );
 }
+
+#[test]
+fn env_truthy_follows_claude_codes_rule() {
+    use super::env::env_truthy;
+    use std::ffi::OsStr;
+    let cases: &[(Option<&str>, bool)] = &[
+        (None, false),
+        (Some(""), false),
+        (Some("0"), false),
+        (Some("false"), false),
+        (Some("no"), false),
+        (Some("off"), false),
+        (Some("2"), false),
+        (Some("1"), true),
+        (Some("true"), true),
+        (Some("TRUE"), true),
+        (Some(" Yes "), true),
+        (Some("on"), true),
+    ];
+    for (value, want) in cases {
+        assert_eq!(env_truthy(value.map(OsStr::new)), *want, "{value:?}");
+    }
+}
+
+#[test]
+fn mouse_clicks_disabled_reads_the_final_env_including_user_extras() {
+    // #401: the user's extra env is applied inside apply_env, so only
+    // the finished builder can say whether the child ignores clicks.
+    let on = SpawnSettings {
+        extra_env: vec![crate::spawn_settings::EnvVar {
+            key: "CLAUDE_CODE_DISABLE_MOUSE_CLICKS".to_owned(),
+            value: "1".to_owned(),
+        }],
+        ..SpawnSettings::default()
+    };
+    let mut builder = CommandBuilder::new("skein-preview");
+    let applied = apply_env(
+        &mut builder,
+        &on,
+        probe_snapshot(),
+        None,
+        &Injection::default(),
+    );
+    assert!(applied.mouse_clicks_disabled);
+
+    let off = SpawnSettings {
+        extra_env: vec![crate::spawn_settings::EnvVar {
+            key: "CLAUDE_CODE_DISABLE_MOUSE_CLICKS".to_owned(),
+            value: "0".to_owned(),
+        }],
+        ..SpawnSettings::default()
+    };
+    let mut builder = CommandBuilder::new("skein-preview");
+    let applied = apply_env(
+        &mut builder,
+        &off,
+        probe_snapshot(),
+        None,
+        &Injection::default(),
+    );
+    assert!(!applied.mouse_clicks_disabled);
+}
