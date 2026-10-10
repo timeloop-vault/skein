@@ -6,6 +6,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { check } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useState } from "react";
+import { flushRoomsBounded } from "./roomsFlush.ts";
 import "./Settings.css";
 
 type UpdateState =
@@ -77,6 +78,8 @@ export const AboutSettings = () => {
 				setUpdate({ status: "current" });
 				return;
 			}
+			// #594: the installer can terminate the app; land the rooms first.
+			await flushRoomsBounded();
 			let downloaded = 0;
 			let total: number | undefined;
 			await found.downloadAndInstall((event) => {
