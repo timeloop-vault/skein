@@ -71,7 +71,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        // #559: registered from the main webview; no shortcuts of its own.
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build());
     #[cfg(any(not(target_os = "macos"), not(debug_assertions)))]
     {
         builder = builder.plugin(tauri_plugin_notifications::init());

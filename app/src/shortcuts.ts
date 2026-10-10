@@ -56,9 +56,18 @@ const SCHEME: Scheme = isMac
 /** Glyph for hint copy: "⌘" on macOS, "Alt" on Windows/Linux. */
 export const modLabel = isMac ? "⌘" : "Alt";
 
+// The OS-wide "raise the Control Center" accelerator (#559). Deliberately NOT
+// a BINDINGS row: BINDINGS are in-window keydown chords matched against a
+// KeyboardEvent, while this is registered with the OS through the
+// global-shortcut plugin and fires while Skein is not focused. Tauri
+// resolves CommandOrControl to Cmd on macOS and Ctrl elsewhere.
+export const GLOBAL_CONTROL_CENTER_ACCELERATOR = "CommandOrControl+Shift+0";
+export const GLOBAL_CONTROL_CENTER_LABEL = isMac ? "⌘ ⇧ 0" : "Ctrl ⇧ 0";
+
 export type ShortcutAction =
 	| "newRoom"
 	| "closeRoom"
+	| "closeHarness"
 	| "palette"
 	| "files"
 	| "review"
@@ -116,6 +125,8 @@ const BINDINGS: Binding[] = [
 	{ code: "Minus", action: "fontDec" },
 	// Primary + Shift.
 	{ code: "KeyH", shift: true, action: "addHarness" },
+	// W = close; ⇧ narrows it from the room to the active harness (#307).
+	{ code: "KeyW", shift: true, action: "closeHarness" },
 	{ code: "KeyR", shift: true, action: "reloadWindow" },
 	{ code: "KeyT", shift: true, action: "addGlobalTodo" },
 	{ code: "KeyJ", shift: true, action: "prevAlertedRoom" },
@@ -177,6 +188,7 @@ export const hints = {
 	addGlobalTodo: `${modLabel} ⇧ T`,
 	addHarness: `${modLabel} ⇧ H`,
 	closeRoom: `${modLabel} W`,
+	closeHarness: `${modLabel} ⇧ W`,
 	reload: `${modLabel} ⇧ R`,
 	nextAlertedRoom: `${modLabel} J`,
 	prevAlertedRoom: `${modLabel} ⇧ J`,

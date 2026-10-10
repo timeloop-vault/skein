@@ -33,6 +33,13 @@ export const usePersistedState = <T>(key: string, initial: T): [T, Dispatch<SetS
 	return [value, setValue];
 };
 
+// ── System-wide Control Center shortcut (#559) ─────────────────────
+//
+// On by default: an absent key means enabled (`usePersistedState` falls
+// back to this), so only an explicit opt-out is ever stored.
+export const GLOBAL_CC_SHORTCUT_KEY = "globalCcShortcut";
+export const GLOBAL_CC_SHORTCUT_DEFAULT = true;
+
 // ── New Room memory (#226, #231) ───────────────────────────────────
 //
 // The New Room dialog used to start blank every time, so the third room

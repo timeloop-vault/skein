@@ -36,6 +36,8 @@ export interface BuildPaletteItemsParams {
 	addHarness: (roomId: string) => void;
 	startRenameRoom: (roomId: string, host?: "group" | "tab") => void;
 	closeRoom: (id: string) => Promise<void>;
+	// #307: the same path as the harness tab ×.
+	closeHarness: (roomId: string, harnessId: string) => void;
 	cycleAlertedRoom: (delta: number) => void;
 	cycleAlertedHarness: (delta: number) => void;
 	// #410: "Reattach telemetry" — only offered when `activeHarness`
@@ -64,6 +66,7 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 		addHarness,
 		startRenameRoom,
 		closeRoom,
+		closeHarness,
 		cycleAlertedRoom,
 		cycleAlertedHarness,
 		onReattachTelemetry,
@@ -149,6 +152,14 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 			hint: hints.closeRoom,
 			invoke: () => closeRoom(activeRoomId),
 		});
+		if (activeHarness) {
+			paletteItems.push({
+				id: "cmd:close-harness",
+				label: `Close active harness — ${HARNESS_KINDS[activeHarness.kind].name} · ${activeHarness.name}`,
+				hint: hints.closeHarness,
+				invoke: () => closeHarness(activeRoomId, activeHarness.id),
+			});
+		}
 		// #410: only for the active room's active harness, and only when
 		// it's a harness `attachClaudeEvents` would ever attach to.
 		// #490: the active harness only, like reattach below. The gate is

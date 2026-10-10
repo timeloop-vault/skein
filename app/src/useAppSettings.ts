@@ -17,7 +17,13 @@
 import { useCallback, useState } from "react";
 import { DEFAULT_BRANCH_TEMPLATE } from "./branchName.ts";
 import { type DesignPicks, type DockedDesign, withDocked } from "./designDock.ts";
-import { type DefaultAgents, usePersistedState, type VersionNoticeModes } from "./prefs.ts";
+import {
+	type DefaultAgents,
+	GLOBAL_CC_SHORTCUT_DEFAULT,
+	GLOBAL_CC_SHORTCUT_KEY,
+	usePersistedState,
+	type VersionNoticeModes,
+} from "./prefs.ts";
 import type { RightPaneTab } from "./RightPane.tsx";
 import type { Density, Theme } from "./types.ts";
 
@@ -58,6 +64,11 @@ export function useAppSettings() {
 	// Off by default; toggled from the Activity card head. App-owned so
 	// every room's mounted LiveContext sees the same value.
 	const [showTurnCosts, setShowTurnCosts] = usePersistedState<boolean>("showTurnCosts", false);
+	// #559: OS-wide shortcut that raises the Control Center; on by default.
+	const [globalCcShortcut, setGlobalCcShortcut] = usePersistedState<boolean>(
+		GLOBAL_CC_SHORTCUT_KEY,
+		GLOBAL_CC_SHORTCUT_DEFAULT,
+	);
 	// #248: default agent per harness kind, set in Settings. Read by the
 	// `+ harness` picker (preselected) and New room (prefilled).
 	const [defaultAgents, setDefaultAgents] = usePersistedState<DefaultAgents>("defaultAgents", {});
@@ -151,6 +162,8 @@ export function useAppSettings() {
 		notifyOs,
 		setNotifyOs,
 		showTurnCosts,
+		globalCcShortcut,
+		setGlobalCcShortcut,
 		handleToggleTurnCosts,
 		defaultAgents,
 		setDefaultAgents,

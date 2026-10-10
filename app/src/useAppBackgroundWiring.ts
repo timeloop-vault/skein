@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useGlobalControlCenterShortcut } from "./controlCenter/useGlobalShortcut.ts";
 import { versionNoticeModeFor } from "./prefs.ts";
 import { startSupervisor } from "./supervisor/runtime.ts";
 import { useAgentRequests } from "./useAgentRequests.ts";
@@ -24,6 +25,7 @@ export function useAppBackgroundWiring(a: {
 	creation: ReturnType<typeof useHarnessCreation>;
 	settings: ReturnType<typeof useAppSettings>;
 	pushToast: Parameters<typeof useAgentRequests>[4];
+	cc: { openPopout: () => void };
 }) {
 	const { store, nav, actions, creation, settings } = a;
 	const { roomsRef, activeRoomIdRef, unarchiveRoomRef, loaded, loadedRef } = store;
@@ -90,4 +92,9 @@ export function useAppBackgroundWiring(a: {
 		(harnessId) => settings.dockedDesign[harnessId] === true,
 		settings.showDockedDesign,
 	);
+
+	// #559: OS-wide raise of the Control Center pop-out. App renders only in
+	// the main window (main.tsx swaps in ControlCenterPopout for the pop-out),
+	// so this can never register from the second webview.
+	return useGlobalControlCenterShortcut(settings.globalCcShortcut, a.cc.openPopout);
 }

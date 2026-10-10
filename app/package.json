@@ -35,6 +35,7 @@
 		"@tauri-apps/api": "^2.12.1",
 		"@tauri-apps/plugin-clipboard-manager": "^2.4.1",
 		"@tauri-apps/plugin-dialog": "^2.8.1",
+		"@tauri-apps/plugin-global-shortcut": "^2.4.1",
 		"@tauri-apps/plugin-opener": "^2.7.0",
 		"@tauri-apps/plugin-updater": "^2.13.1",
 		"@xterm/addon-fit": "^0.11.0",

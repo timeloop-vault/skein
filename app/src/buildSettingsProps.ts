@@ -20,6 +20,7 @@ export function buildSettingsProps(
 	saveSpawnSettings: ComponentProps<typeof SettingsModal>["onSpawnSettings"],
 	agentCwd: string,
 	onClose: () => void,
+	globalCcShortcutFailed = false,
 ): ComponentProps<typeof SettingsModal> {
 	return {
 		theme: s.theme,
@@ -56,6 +57,9 @@ export function buildSettingsProps(
 			s.setVersionNoticeModes((prev) => withVersionNoticeMode(prev, "claude", mode)),
 		branchTemplate: s.branchTemplate,
 		onBranchTemplate: s.setBranchTemplate,
+		globalCcShortcut: s.globalCcShortcut,
+		onGlobalCcShortcut: s.setGlobalCcShortcut,
+		globalCcShortcutFailed,
 		agentCwd,
 		onClose,
 	};
