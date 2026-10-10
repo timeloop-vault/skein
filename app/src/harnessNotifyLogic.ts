@@ -3,7 +3,11 @@
 // rooms/toasts reductions the badge and clear-on-view effects apply.
 // No React, no Tauri — table-testable.
 
-import type { ActivityPhase } from "./harnessActivityTypes.ts";
+import {
+	type ActivityPhase,
+	TRANSITION_SOURCE,
+	type TransitionSource,
+} from "./harnessActivityTypes.ts";
 import type { ToastEntry } from "./toastStack.ts";
 import type { Room } from "./types.ts";
 
@@ -46,7 +50,9 @@ export function classifyTransition(from: ActivityPhase, to: ActivityPhase): Tran
 	};
 }
 
-export function isNotifiable(c: TransitionClass): boolean {
+// #175: an opencode reconnect baseline is a guess at idle, never news.
+export function isNotifiable(c: TransitionClass, source?: TransitionSource): boolean {
+	if (source === TRANSITION_SOURCE.L2c2OpencodeBaseline) return false;
 	return c.becameWaiting || c.becamePermission || (c.wasWorking && c.becamePassive);
 }
 

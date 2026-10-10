@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
 import {
 	classifyTransition,
 	clearHarnessPending,
@@ -29,6 +30,14 @@ describe("isNotifiable", () => {
 		expect(isNotifiable(classifyTransition("spawning", "permission"))).toBe(true);
 		expect(isNotifiable(classifyTransition("running", "idle"))).toBe(true);
 		expect(isNotifiable(classifyTransition("idle", "running"))).toBe(false);
+	});
+});
+
+describe("isNotifiable source (#175)", () => {
+	it("never notifies for the opencode reconnect baseline, still does for a real idle", () => {
+		const c = classifyTransition("running", "waiting");
+		expect(isNotifiable(c, TRANSITION_SOURCE.L2c2OpencodeBaseline)).toBe(false);
+		expect(isNotifiable(c, TRANSITION_SOURCE.L2c2OpencodeIdle)).toBe(true);
 	});
 });
 

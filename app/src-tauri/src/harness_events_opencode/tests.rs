@@ -72,6 +72,28 @@ fn session_status_busy_and_idle_map_correctly() {
 }
 
 #[test]
+fn every_connect_emits_connected_then_baseline_idle() {
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    let cb = move |e: OpencodeEvent| {
+        tx.lock().send(e).unwrap();
+    };
+    // A reconnect runs the same path as the first connect.
+    emit_connect_events(&cb);
+    emit_connect_events(&cb);
+    let events: Vec<_> = rx.try_iter().collect();
+    assert_eq!(events.len(), 4);
+    for pair in events.chunks(2) {
+        assert!(matches!(pair[0], OpencodeEvent::Connected));
+        assert!(matches!(pair[1], OpencodeEvent::SessionBaselineIdle));
+    }
+    assert_eq!(
+        serde_json::to_string(&OpencodeEvent::SessionBaselineIdle).unwrap(),
+        r#"{"kind":"session_baseline_idle"}"#
+    );
+}
+
+#[test]
 fn session_created_captures_session_id() {
     let payload = r#"{"type":"session.created","properties":{"sessionID":"ses_abc123","info":{"id":"ses_abc123"}}}"#;
     let events = drain_events(&[payload], |_, p| frame(p));
