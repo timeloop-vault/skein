@@ -1,7 +1,8 @@
 # skeind — running harnesses away from the UI
 
 Status: design draft (not yet implemented). Recon: docs/skeind-recon.md.
-Issue drafts: docs/skeind-issues-draft.md.
+Epic: #575 (phases #576–#589); the issue bodies as filed are in
+docs/skeind-issues-draft.md.
 
 CLAUDE.md's standing decisions still hold. In particular, Skein performs
 no git mutations in any mode: a daemon, a remote host or a sandbox does

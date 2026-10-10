@@ -1,11 +1,8 @@
 # skeind: draft issues
 
-Status: draft, not filed. Nothing here exists on GitHub yet.
-
-Issue numbers are placeholders (`#E` for the epic, `#P0`, `#P1a` and so on
-for the phases, including `#P3b`, the daemon-to-daemon link). Replace them
-once the issues are filed, and fix the checklist in the epic body in the
-same pass.
+Status: filed on 2026-10-10 as epic #575 and phases #576–#589 (#576,
+the ssh + tmux spike, closed as shipped in #568). This file records the
+bodies as filed; GitHub is the source of truth from here on.
 
 Design: `docs/skeind-design.md`. Recon: `docs/skeind-recon.md`, with the
 sections "Coupling points", "Protocol surface", "Phase 1 sizing",
@@ -15,7 +12,7 @@ entry (the release-policy min-version floor) is relevant only to the
 version-skew open question below.
 
 Each section holds the title, the labels (all exist in the repo) and the
-body in a fenced block, ready for `gh issue create --body-file`.
+body in a fenced block, as passed to `gh issue create --body-file`.
 
 Sizing is stated in modules, commands and touch points. The counts come
 from the recon: 85 Tauri commands in 17 files, 5 streaming Channel sites,
@@ -68,20 +65,20 @@ daemon.
 
 Each phase is usable on its own.
 
-- [x] #P0 ssh + tmux spike (shipped standalone as the `remote` kind, #568)
-- [ ] #P1a Event-sink trait replaces AppHandle/Emitter in the modules that move
-- [ ] #P1b Stream sinks and command/impl split for Channel commands and binary fs reads
-- [ ] #P1c Path and resource provider replaces app.path()
-- [ ] #P1d skein-proto and skein-daemon crates; move the leaf modules
-- [ ] #P1e Move the engines into skein-daemon
-- [ ] #P1f Agent API and in-process transport; the app embeds the daemon
-- [ ] #P2a Daemon-owned harness lifecycle
-- [ ] #P2b Detached local mode
-- [ ] #P3 Remote: network transport, device tokens, host picker
-- [ ] #P3b Daemon-to-daemon link: routed mail, qualified room ids, forwarded room verbs
-- [ ] #P4 Approval queue and push notifier
-- [ ] #P5 Sandbox runtime behind the Runtime trait
-- [ ] #P6 Mobile client
+- [x] #576 ssh + tmux spike (shipped standalone as the `remote` kind, #568)
+- [ ] #577 Event-sink trait replaces AppHandle/Emitter in the modules that move
+- [ ] #578 Stream sinks and command/impl split for Channel commands and binary fs reads
+- [ ] #579 Path and resource provider replaces app.path()
+- [ ] #580 skein-proto and skein-daemon crates; move the leaf modules
+- [ ] #581 Move the engines into skein-daemon
+- [ ] #582 Agent API and in-process transport; the app embeds the daemon
+- [ ] #583 Daemon-owned harness lifecycle
+- [ ] #584 Detached local mode
+- [ ] #585 Remote: network transport, device tokens, host picker
+- [ ] #586 Daemon-to-daemon link: routed mail, qualified room ids, forwarded room verbs
+- [ ] #587 Approval queue and push notifier
+- [ ] #588 Sandbox runtime behind the Runtime trait
+- [ ] #589 Mobile client
 
 Phase 1 is the bulk of the code motion and changes no behaviour. Extract
 behind the transport trait with the in-process transport first, prove no
@@ -115,18 +112,18 @@ regression, then add real transports.
 Tracked in the phase issue that needs the answer, and in `docs/skeind-recon.md`
 ("Open questions").
 
-- Daemon discovery and config UX: manual list, MagicDNS, or mDNS? (#P3)
+- Daemon discovery and config UX: manual list, MagicDNS, or mDNS? (#585)
 - Review state for a room whose daemon is offline: read-only cache, or
-  hide it? (#P3)
-- Should detached become the default? (#P2b)
+  hide it? (#585)
+- Should detached become the default? (#584)
 - The updater for a remote daemon, and the client/daemon version-skew
-  policy. (#P3)
+  policy. (#585)
 - Claude Code auth on a remote host (subscription vs API key); affects
   `spawn_env`. Since #565 harnesses get the daemon host's full
-  login-shell env, so an API key exported there reaches them. (#P3)
-- Binary framing on the wire for `read_image_bytes` and similar. (#P1b)
+  login-shell env, so an API key exported there reaches them. (#585)
+- Binary framing on the wire for `read_image_bytes` and similar. (#578)
 - Which of the phase machine, deferral timers, mail nudges and
-  notifications move to the daemon, and in what order. (#P2a)
+  notifications move to the daemon, and in what order. (#583)
 
 ## Out of scope for this epic
 
@@ -141,7 +138,7 @@ Anything the design lists as a non-goal, plus a `create_workspace` verb
 **Labels:** (none)
 
 ```markdown
-Part of #E.
+Part of #575.
 
 ## Question
 
@@ -161,7 +158,7 @@ replaces nor depends on it.
 - A harness in tmux reached over ssh from the UI machine cannot reach the
   agent API and MCP on its 127.0.0.1 without a reverse tunnel.
 
-The `Runtime` trait is `Host | sandbox`. The headless emulator (#P2b) is
+The `Runtime` trait is `Host | sandbox`. The headless emulator (#584) is
 needed regardless, since it is what makes snapshots possible.
 
 ## Outcome
@@ -194,7 +191,7 @@ last section). Its findings:
 **Labels:** `refactor`, `area:agent-api`
 
 ```markdown
-Part of #E. Phase 1 (zero behaviour change). Depends on: nothing.
+Part of #575. Phase 1 (zero behaviour change). Depends on: nothing.
 
 ## Why
 
@@ -218,7 +215,7 @@ yet.
   - `review_surface/commands.rs` (`:152`, emits `skein://review-changed`)
   - `agent_api/state.rs` (6 emit sites: review-changed, harness-permission,
     session-start, session-end, mail-changed, and the `agent-request`
-    emit used by `request_frontend`, which stays as is until #P1f)
+    emit used by `request_frontend`, which stays as is until #582)
   - `harness_events_claude/` (`ClaudeEventsManager`, field
     `app: Option<tauri::AppHandle>`) and `harness_events_opencode.rs`
     (`Option<AppHandle>` at 5 sites)
@@ -232,7 +229,7 @@ yet.
 - Client-only emitters: `open_request.rs`, `os_notify.rs`,
   `setup/menu.rs` (they stay in the app).
 - Sequence numbers or replay. Nothing here adds a seq.
-- `request_frontend` behaviour (#P1f).
+- `request_frontend` behaviour (#582).
 
 ## Acceptance
 
@@ -253,7 +250,7 @@ yet.
 **Labels:** `refactor`
 
 ```markdown
-Part of #E. Phase 1 (zero behaviour change). Depends on: #P1a.
+Part of #575. Phase 1 (zero behaviour change). Depends on: #577.
 
 ## Why
 
@@ -313,8 +310,8 @@ if the sink design needs the state shared.
 **Labels:** `refactor`
 
 ```markdown
-Part of #E. Phase 1 (zero behaviour change). Depends on: nothing; can run
-alongside #P1a and #P1b.
+Part of #575. Phase 1 (zero behaviour change). Depends on: nothing; can run
+alongside #577 and #578.
 
 ## Why
 
@@ -341,7 +338,7 @@ daemon be constructed with no `tauri::App`.
 ## Out of scope
 
 - Logging setup (`setup/logging.rs`). Both sides keep their own log dir.
-- Where the daemon's bundle is installed. That is #P3.
+- Where the daemon's bundle is installed. That is #585.
 
 ## Acceptance
 
@@ -360,8 +357,8 @@ daemon be constructed with no `tauri::App`.
 **Labels:** `refactor`
 
 ```markdown
-Part of #E. Phase 1 (zero behaviour change). Depends on: none strictly;
-can start alongside #P1a. Do after #P1c if db paths are touched.
+Part of #575. Phase 1 (zero behaviour change). Depends on: none strictly;
+can start alongside #577. Do after #579 if db paths are touched.
 
 ## Why
 
@@ -372,9 +369,9 @@ event or stream seams.
 ## Scope
 
 - New workspace crate `skein-proto`: the DTOs the moved modules expose.
-  Versioned types from the start; no `hello` handshake yet (that is #P2b).
+  Versioned types from the start; no `hello` handshake yet (that is #584).
 - New workspace crate `skein-daemon`, no Tauri dependency.
-- `skein-proto` encodes the binary framing that #P1b chose.
+- `skein-proto` encodes the binary framing that #578 chose.
 - Move, from `app/src-tauri/src/`, modules whose logic has no Tauri touch
   points:
   - `db/` (about 4.7k lines, 22 `.rs` files, 13 non-test)
@@ -395,7 +392,7 @@ event or stream seams.
 ## Out of scope
 
 - Engines (`pty`, event adapters, review) and anything with Tauri touch
-  points: #P1e.
+  points: #581.
 - Changing any DTO shape.
 
 ## Acceptance
@@ -416,8 +413,8 @@ event or stream seams.
 **Labels:** `refactor`, `area:harness-telemetry`
 
 ```markdown
-Part of #E. Phase 1 (zero behaviour change). Depends on: #P1a, #P1b,
-#P1c, #P1d.
+Part of #575. Phase 1 (zero behaviour change). Depends on: #577, #578,
+#579, #580.
 
 ## Why
 
@@ -434,7 +431,7 @@ Move from `app/src-tauri/src/` into `skein-daemon`:
   `harness_events_opencode.rs`
 - `harness_actions_claude/` and `harness_actions_opencode.rs`
   (0 touch points)
-- `harness_action_event.rs` (behind the sink from #P1a)
+- `harness_action_event.rs` (behind the sink from #577)
 - `review.rs` and `review_surface/` (`commands.rs` holds 15 commands; the
   other 13 files have 0 touch points)
 - `design/` serve, rewrite and device (the axum server is already
@@ -452,8 +449,8 @@ handler registry).
 
 ## Out of scope
 
-- `agent_api/` and the embed (#P1f).
-- Moving phase logic from TypeScript (#P2a).
+- `agent_api/` and the embed (#582).
+- Moving phase logic from TypeScript (#583).
 - Re-scoping `fs.rs` paths. Paths are scoped to room cwds already
   (`ensure_room_scope`); CLAUDE.md still calls this unscoped (#174),
   which is stale. Fix that text as part of this move if touched.
@@ -483,7 +480,7 @@ Review it before moving it and test the move on Windows.
 **Labels:** `refactor`, `area:agent-api`
 
 ```markdown
-Part of #E. Phase 1 (zero behaviour change). Depends on: #P1e.
+Part of #575. Phase 1 (zero behaviour change). Depends on: #581.
 
 ## Why
 
@@ -499,7 +496,7 @@ of an embedded daemon. This is the end of Phase 1.
   only).
 - Rewrite `setup/state.rs` and `setup/servers.rs` into daemon
   construction plus an embed: the app builds the daemon with `Paths`
-  (#P1c) and an in-process transport, keeps its command wrappers, and
+  (#579) and an in-process transport, keeps its command wrappers, and
   forwards events from the daemon to the webview.
 - **`request_frontend`** (`agent_api/state.rs`): the agent API emits
   `skein://agent-request` and waits for the webview to answer. Used by
@@ -509,13 +506,13 @@ of an embedded daemon. This is the end of Phase 1.
   - the Tauri implementation does what it does today, including the
     error "no webview is listening for agent requests";
   - behaviour is unchanged.
-  Making these verbs work with no client is #P2a.
-- Keep `AgentApiEndpoint` and `PreviewEndpoint` ordering from #P1c.
+  Making these verbs work with no client is #583.
+- Keep `AgentApiEndpoint` and `PreviewEndpoint` ordering from #579.
 
 ## Out of scope
 
 - Any transport other than in-process.
-- Changing token lifetime (revoked wholesale on every boot today): #P2a.
+- Changing token lifetime (revoked wholesale on every boot today): #583.
 - Changing `docs/agent-api.md` verbs or contracts.
 
 ## Acceptance
@@ -542,7 +539,7 @@ from the verb table. Do not decide it here; keep wrappers thin.
 **Labels:** `refactor`, `area:harness-telemetry`
 
 ```markdown
-Part of #E. Phase 2 prerequisite. Depends on: #P1f.
+Part of #575. Phase 2 prerequisite. Depends on: #582.
 
 ## Why
 
@@ -585,8 +582,8 @@ Move from the frontend into the daemon what unattended operation needs.
 
 ## Out of scope
 
-- The socket, reattach and snapshots (#P2b).
-- Approval queue and push (#P4), which depends on this phase logic
+- The socket, reattach and snapshots (#584).
+- Approval queue and push (#587), which depends on this phase logic
   living in the daemon.
 - Anything about Skein and git writes.
 
@@ -622,7 +619,7 @@ Move from the frontend into the daemon what unattended operation needs.
 **Labels:** `area:rooms`, `area:ui`
 
 ```markdown
-Part of #E. Phase 2. Depends on: #P2a. Informed by: #P0.
+Part of #575. Phase 2. Depends on: #583. Informed by: #576.
 
 ## Why
 
@@ -654,7 +651,7 @@ harnesses keep working.
 
 ## Out of scope
 
-- Network transports and device tokens (#P3).
+- Network transports and device tokens (#585).
 - Scrollback history beyond what the snapshot carries: `vt100`'s
   `state_formatted` has no history. Decide visible-screen-only attach or
   a separate scrollback pass here.
@@ -687,7 +684,7 @@ harnesses keep working.
 **Labels:** `area:rooms`, `security`
 
 ```markdown
-Part of #E. Phase 3. Depends on: #P2b.
+Part of #575. Phase 3. Depends on: #584.
 
 ## Why
 
@@ -707,7 +704,7 @@ the network.
   connections with reconnect and the last-seen seq per daemon. A room
   belongs to exactly one daemon.
 - **Client keys rooms by `(daemon id, room id)`**, never by bare room id:
-  two daemons can hand out the same id, and #P3b's daemon-qualified ids
+  two daemons can hand out the same id, and #586's daemon-qualified ids
   then migrate only daemon-side state, not the client.
 - **`list_workspaces`** returning main checkouts under
   `SKEIND_WORKSPACE_ROOT`. A remote room is created against a checkout
@@ -732,7 +729,7 @@ the network.
 
 - Provisioning checkouts or credentials on the host.
 - A `create_workspace` verb (optional, later).
-- Mobile (#P6) and push (#P4).
+- Mobile (#589) and push (#587).
 
 ## Acceptance
 
@@ -780,7 +777,7 @@ the network.
 **Labels:** `area:agent-api`, `area:rooms`, `security`
 
 ```markdown
-Part of #E. Phase 3. Depends on: #P3.
+Part of #575. Phase 3. Depends on: #585.
 
 ## Why
 
@@ -801,7 +798,7 @@ remote) these must route between daemons. See "Cross-daemon routing" in
   daemon, as the client does, and the link carries traffic both ways. A
   remote daemon never dials in to a laptop. A harness still only talks to
   its own daemon, which routes.
-- **Transport and auth** reuse #P3's transport and per-device token
+- **Transport and auth** reuse #585's transport and per-device token
   model, the local daemon being one more device. The peer credential is
   scoped to the routed agent-API verbs and never to sign-off.
 - **Store-and-forward mail.** Mail to a room whose daemon is unreachable
@@ -827,7 +824,7 @@ remote) these must route between daemons. See "Cross-daemon routing" in
   daemon against its own local sign-off record.
 - Relaying through the client (rejected: it fails when the director's
   machine is closed).
-- Discovery UX, which stays with #P3.
+- Discovery UX, which stays with #585.
 
 ## Acceptance
 
@@ -861,8 +858,8 @@ remote) these must route between daemons. See "Cross-daemon routing" in
 **Labels:** `area:notifications`, `area:agent-api`
 
 ```markdown
-Part of #E. Phase 4. Depends on: #P2a (phase logic in the daemon), #P2b.
-Useful before #P3 but not required by it.
+Part of #575. Phase 4. Depends on: #583 (phase logic in the daemon), #584.
+Useful before #585 but not required by it.
 
 ## Why
 
@@ -888,7 +885,7 @@ state.
 
 ## Out of scope
 
-- The mobile client UI (#P6).
+- The mobile client UI (#589).
 - APNs and FCM.
 - Subagent dialog correlation changes. Keep the `agentId` behaviour from
   epic #298.
@@ -917,7 +914,7 @@ state.
 **Labels:** `area:harness-telemetry`, `security`
 
 ```markdown
-Part of #E. Phase 5. Depends on: #P1f, #P2a. Informed by: #P0.
+Part of #575. Phase 5. Depends on: #582, #583. Informed by: #576.
 
 ## Why
 
@@ -976,7 +973,7 @@ Constraints from the design:
 **Labels:** `area:ui`
 
 ```markdown
-Part of #E. Phase 6. Depends on: #P3, #P4.
+Part of #575. Phase 6. Depends on: #585, #587.
 
 ## Why
 
@@ -990,7 +987,7 @@ A client that speaks the same protocol (`client_kind` identifies it in
 - the activity feed per room
 - the approval queue: see and answer pending approvals
 - `send_message` to a harness or room
-- a read-only terminal peek, using the emulator snapshot from #P2b and
+- a read-only terminal peek, using the emulator snapshot from #584 and
   no input
 
 ## Out of scope
@@ -1003,7 +1000,7 @@ A client that speaks the same protocol (`client_kind` identifies it in
 
 - Connects to a remote daemon with a device token and survives a network
   change by resuming from `since=<seq>`.
-- A push from #P4 opens the pending approval and answering unblocks the
+- A push from #587 opens the pending approval and answering unblocks the
   harness.
 - Terminal peek cannot send input.
 
