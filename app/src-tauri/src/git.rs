@@ -477,6 +477,30 @@ pub fn git_watch_start(
     Ok(id)
 }
 
+/// Watch only the git dir that holds `path`'s `HEAD` (non-recursive) and
+/// fire `on_change` when `HEAD` itself is touched — a branch switch,
+/// detached commit or rebase. A build in the worktree never ticks.
+/// `None` when `path` is not a repo (nothing watched). Stop it with
+/// `git_watch_stop`.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub fn git_head_watch_start(
+    path: String,
+    on_change: Channel<()>,
+    manager: tauri::State<'_, WatcherManager>,
+) -> Result<Option<String>, String> {
+    let Some(dir) = Repo::head_dir(Path::new(&path)) else {
+        return Ok(None);
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    manager
+        .start_head_watch(id.clone(), &dir, move || {
+            let _ = on_change.send(());
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(Some(id))
+}
+
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub fn git_watch_stop(id: String, manager: tauri::State<'_, WatcherManager>) {

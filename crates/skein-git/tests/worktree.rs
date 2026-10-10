@@ -325,3 +325,33 @@ fn main_repo_root_falls_back_to_workdir_for_a_bare_repo() {
         path.canonicalize().unwrap()
     );
 }
+
+#[test]
+fn head_dir_main_checkout_is_dot_git() {
+    let (_tmp, path) = init_repo();
+    let dir = Repo::head_dir(&path).expect("repo");
+    assert_eq!(
+        dir.canonicalize().unwrap(),
+        path.join(".git").canonicalize().unwrap()
+    );
+    assert!(dir.join("HEAD").is_file());
+}
+
+#[test]
+fn head_dir_linked_worktree_is_its_admin_dir() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    let wt_path = propose_worktree_path(&path, "feat-head");
+    repo.add_worktree("feat/head", "main", &wt_path).unwrap();
+    let dir = Repo::head_dir(&wt_path).expect("worktree");
+    let dir = dir.canonicalize().unwrap();
+    let admin_root = path.join(".git").join("worktrees").canonicalize().unwrap();
+    assert!(dir.starts_with(admin_root));
+    assert!(dir.join("HEAD").is_file());
+}
+
+#[test]
+fn head_dir_non_repo_is_none() {
+    let tmp = TempDir::new().unwrap();
+    assert!(Repo::head_dir(tmp.path()).is_none());
+}

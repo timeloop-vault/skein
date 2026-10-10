@@ -86,6 +86,15 @@ impl Repo {
         (!inside).then(|| git_dir.to_path_buf())
     }
 
+    /// The git dir holding this checkout's `HEAD`: `<repo>/.git/` for a
+    /// main checkout, `<main>/.git/worktrees/<name>/` for a linked
+    /// worktree. `None` for a non-repo or a bare repo.
+    pub fn head_dir(path: &Path) -> Option<PathBuf> {
+        let repo = Repository::open(path).ok()?;
+        repo.workdir()?;
+        Some(repo.path().to_path_buf())
+    }
+
     /// Local branches, sorted alphabetically. Each entry knows whether
     /// it's HEAD so the UI can default to it.
     pub fn branches(&self) -> Result<Vec<BranchInfo>> {

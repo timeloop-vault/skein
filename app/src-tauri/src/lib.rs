@@ -117,6 +117,7 @@ pub fn run() {
             git::git_status,
             git::git_watch_start,
             git::git_watch_stop,
+            git::git_head_watch_start,
             design::commands::design_preview_base,
             design::commands::design_list_entries,
             design::commands::design_watch_start,

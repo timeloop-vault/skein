@@ -133,7 +133,7 @@ export const LiveContext = memo(function LiveContext({
 		(branch: string | null) => onBranchChange?.(roomId, branch),
 		[onBranchChange, roomId],
 	);
-	useGitBranchWatcher(cwd, onBranch);
+	useGitBranchWatcher(cwd, visible, onBranch);
 
 	// Watcher-driven review discovery (#221): baselines a shell write, a
 	// hand edit, or a files-harness save the moment it lands on disk, not

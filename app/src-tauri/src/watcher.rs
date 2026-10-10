@@ -13,6 +13,11 @@
 //! per-worktree admin dir (never the shared common dir, which would tick
 //! every sibling room) so a commit whose files were already on disk still
 //! produces a tick (#563).
+//!
+//! `start_head_watch` is the cheap variant for the status-bar branch (#595):
+//! one non-recursive watch of the git dir that holds HEAD, firing only when
+//! a batch touches `HEAD` or `HEAD.lock` (git rewrites HEAD by renaming
+//! the lock over it). A build in the worktree never reaches it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -135,10 +140,78 @@ impl WatcherManager {
         Ok(())
     }
 
+    /// Watch `dir` non-recursively; call `on_change` only when a batch
+    /// touched `HEAD` (see [`touches_head`]). A notify error fires too.
+    pub fn start_head_watch<F>(
+        &self,
+        id: String,
+        dir: &Path,
+        on_change: F,
+    ) -> Result<(), WatcherError>
+    where
+        F: Fn() + Send + 'static,
+    {
+        let mut debouncer = new_debouncer(
+            Duration::from_millis(DEBOUNCE_MS),
+            move |result: DebounceEventResult| {
+                let fire = match result {
+                    Ok(events) => touches_head(events.iter().map(|e| e.path.as_path())),
+                    Err(_) => true,
+                };
+                if fire {
+                    on_change();
+                }
+            },
+        )
+        .map_err(WatcherError::from_err)?;
+        debouncer
+            .watcher()
+            .watch(dir, RecursiveMode::NonRecursive)
+            .map_err(WatcherError::from_err)?;
+        self.inner.lock().insert(id, debouncer);
+        Ok(())
+    }
+
     /// Stop the watcher with `id`. No-op if `id` is unknown — callers
     /// retrying on an already-stopped watcher shouldn't see an error.
     pub fn stop(&self, id: &str) {
         // Dropping the debouncer ends the watch.
         self.inner.lock().remove(id);
+    }
+}
+
+/// True when any path's file name is `HEAD` or `HEAD.lock` (not
+/// `ORIG_HEAD`, `FETCH_HEAD`, ...). `HEAD.lock` counts because git writes
+/// HEAD by renaming the lock over it, and a platform that reports a rename
+/// by its source path alone (`FSEvents` can) would otherwise miss it. The
+/// rename lands inside the same debounce window, so the refresh sees the
+/// new HEAD; a lock that is never renamed costs one spare refresh.
+fn touches_head<'a>(paths: impl IntoIterator<Item = &'a Path>) -> bool {
+    paths.into_iter().any(|p| {
+        p.file_name()
+            .is_some_and(|n| n == "HEAD" || n == "HEAD.lock")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hit(paths: &[&str]) -> bool {
+        touches_head(paths.iter().map(Path::new))
+    }
+
+    #[test]
+    fn head_matches_exactly() {
+        assert!(hit(&["/r/.git/HEAD"]));
+        assert!(hit(&["/r/.git/index.lock", "/r/.git/HEAD"]));
+        assert!(hit(&["/r/.git/HEAD.lock"]));
+    }
+
+    #[test]
+    fn near_misses_do_not_match() {
+        assert!(!hit(&[]));
+        assert!(!hit(&["/r/.git/ORIG_HEAD", "/r/.git/FETCH_HEAD"]));
+        assert!(!hit(&["/r/.git/index", "/r/.git/HEAD/x"]));
     }
 }

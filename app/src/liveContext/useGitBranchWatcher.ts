@@ -1,16 +1,25 @@
 // Lightweight git-branch watcher for the Live Context pane.
 //
-// LiveStatus used to run a full git status/diff watcher; the card
-// stack only needs the live HEAD branch for the status bar (issue
-// #18) until the Diff card's status/diff fetch lands in D3. One
-// debounced filesystem watcher → git_head_branch on each tick.
+// The status bar only needs the live HEAD branch (issue #18). The watch
+// is on the one file that decides it: `git_head_watch_start` watches the
+// git dir holding HEAD, non-recursively, and ticks only when HEAD itself
+// changes (branch switch, detached commit, rebase) — a build in the
+// worktree ticks nothing (#595). We refresh once on mount and again each
+// time the room becomes visible, which also covers a folder that became
+// a repo after the watch started (nothing was watched then) and any
+// missed tick, without restarting the watch.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
 
-export function useGitBranchWatcher(cwd: string, onBranchChange?: (branch: string | null) => void) {
+export function useGitBranchWatcher(
+	cwd: string,
+	visible: boolean,
+	onBranchChange?: (branch: string | null) => void,
+) {
 	const cbRef = useRef(onBranchChange);
 	cbRef.current = onBranchChange;
+	const refreshRef = useRef<(() => void) | null>(null);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -30,6 +39,7 @@ export function useGitBranchWatcher(cwd: string, onBranchChange?: (branch: strin
 				console.warn(`[skein] branch watch failed for ${cwd}:`, msg);
 			}
 		};
+		refreshRef.current = () => void refreshBranch();
 
 		void refreshBranch();
 
@@ -38,8 +48,9 @@ export function useGitBranchWatcher(cwd: string, onBranchChange?: (branch: strin
 			void refreshBranch();
 		};
 		let watchId: string | null = null;
-		invoke<string>("git_watch_start", { path: cwd, onChange: channel })
+		invoke<string | null>("git_head_watch_start", { path: cwd, onChange: channel })
 			.then((id) => {
+				if (id === null) return;
 				if (cancelled) {
 					void invoke("git_watch_stop", { id });
 					return;
@@ -48,12 +59,24 @@ export function useGitBranchWatcher(cwd: string, onBranchChange?: (branch: strin
 			})
 			.catch((err: unknown) => {
 				const msg = err instanceof Error ? err.message : String(err);
-				console.error("[skein] git_watch_start failed:", msg);
+				console.error("[skein] git_head_watch_start failed:", msg);
 			});
 
 		return () => {
 			cancelled = true;
+			refreshRef.current = null;
 			if (watchId) void invoke("git_watch_stop", { id: watchId });
 		};
 	}, [cwd]);
+
+	// Re-sync whenever the room becomes visible. The mount refresh is the
+	// effect above; skip the first run here so it is not doubled.
+	const first = useRef(true);
+	useEffect(() => {
+		if (first.current) {
+			first.current = false;
+			return;
+		}
+		if (visible) refreshRef.current?.();
+	}, [visible]);
 }
