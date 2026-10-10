@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 460" role="img" aria-labelledby="t d">
+<title id="t">Detached local (Phase 2)</title>
+<desc id="d">The app is closed but skeind keeps running with rooms, harnesses and a headless terminal emulator per PTY. Reattach uses a local socket, event replay from a sequence number, then a screen snapshot and live bytes.</desc>
+<style>
+:root{--bg:#faf8f3;--fg:#1a1814;--fg2:#4a4740;--line:#9a968a;--mach:#ece9e1;--client:#5a6aa0;--skeind:#547f5b;--harness:#a87a2c;--bad:#a64f3f}
+@media (prefers-color-scheme: dark){:root{--bg:#131418;--fg:#e8e6df;--fg2:#b6b3aa;--line:#6a685f;--mach:#1b1d22;--client:#8a96c9;--skeind:#7aa37f;--harness:#d4a657;--bad:#c97163}}
+text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:13px;fill:var(--fg)}
+.bg{fill:var(--bg)}
+.mach{fill:var(--mach);stroke:var(--line);stroke-width:1.5}
+.k-client{fill:var(--client);fill-opacity:.15;stroke:var(--client);stroke-width:1.6}
+.k-skeind{fill:var(--skeind);fill-opacity:.15;stroke:var(--skeind);stroke-width:1.6}
+.k-harness{fill:var(--harness);fill-opacity:.18;stroke:var(--harness);stroke-width:1.6}
+.k-bad{fill:var(--bad);fill-opacity:.14;stroke:var(--bad);stroke-width:1.8}
+.k-n{fill:none;stroke:var(--line);stroke-width:1.4}
+.dash{stroke-dasharray:6 4}
+.ghost{opacity:.5}
+.h{font-weight:600}
+.s{fill:var(--fg2);font-size:12px}
+.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+.halo{stroke:var(--bg);stroke-width:5;paint-order:stroke;stroke-linejoin:round}
+.bad{fill:var(--bad)}
+.big{font-size:15px;font-weight:600}
+.ln{fill:none;stroke:var(--fg2);stroke-width:1.7}
+.ln-s{fill:none;stroke:var(--skeind);stroke-width:1.9}
+.ln-b{fill:none;stroke:var(--bad);stroke-width:1.9}
+.ah{fill:var(--fg2)}.ah-s{fill:var(--skeind)}.ah-b{fill:var(--bad)}
+.dot-client{fill:var(--client)}.dot-skeind{fill:var(--skeind)}.dot-harness{fill:var(--harness)}.dot-bad{fill:var(--bad)}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 0L10 5L0 10z"/></marker>
+<marker id="as" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-s" d="M0 0L10 5L0 10z"/></marker>
+<marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-b" d="M0 0L10 5L0 10z"/></marker>
+</defs>
+<rect class="bg" x="0" y="0" width="900" height="460"/>
+<g><rect class="mach" x="20" y="20" width="860" height="420" rx="14"/><text x="36" y="44" class="h">One machine</text>
+</g>
+<g class="ghost"><rect class="k-client dash" x="40" y="56" width="230" height="200" rx="8"/><text x="52" y="78" class="h">Skein app (closed)</text>
+<text x="52" y="97" class="s">window gone, UI state gone</text>
+<text x="52" y="114" class="s">reattach any time</text>
+</g>
+<g><rect class="k-skeind" x="340" y="56" width="300" height="360" rx="8"/><text x="352" y="78" class="h">skeind (keeps running)</text>
+<text x="352" y="97" class="s">rooms + sqlite event log</text>
+<text x="352" y="114" class="s">agent API + MCP, 127.0.0.1</text>
+<text x="352" y="131" class="s">transcript tails, watcher</text>
+</g>
+<g><rect class="k-skeind" x="356" y="150" width="268" height="74" rx="8"/><text x="368" y="172" class="h">Headless terminal emulator</text>
+<text x="368" y="191" class="s">one per PTY: keeps the screen</text>
+</g>
+<g><rect class="k-skeind" x="356" y="240" width="120" height="26" rx="13"/><text x="416.0" y="257.5" text-anchor="middle">room A</text>
+</g>
+<g><rect class="k-skeind" x="496" y="240" width="120" height="26" rx="13"/><text x="556.0" y="257.5" text-anchor="middle">room B</text>
+</g>
+<g><rect class="k-n" x="710" y="56" width="150" height="360" rx="8"/><text x="722" y="78" class="h">Child processes</text>
+</g>
+<g><rect class="k-harness" x="720" y="150" width="130" height="26" rx="13"/><text x="785.0" y="167.5" text-anchor="middle">Claude Code</text>
+</g>
+<g><rect class="k-harness" x="720" y="200" width="130" height="26" rx="13"/><text x="785.0" y="217.5" text-anchor="middle">opencode</text>
+</g>
+<path class="ln" d="M640 163 L710 163" marker-end="url(#a)"/>
+<path class="ln" d="M710 330 L640 330" marker-end="url(#a)"/>
+<text x="675" y="312" class="s halo" text-anchor="middle">MCP,</text><text x="675" y="312" class="s" text-anchor="middle">MCP,</text>
+<text x="675" y="327" class="s halo" text-anchor="middle">hooks</text><text x="675" y="327" class="s" text-anchor="middle">hooks</text>
+<path class="ln-s dash" d="M270 150 L340 150" marker-end="url(#as)" marker-start="url(#as)"/>
+<text x="40" y="292" class="h">Reattach (client opens, skeind never stopped):</text>
+<text x="40" y="312" class="s">1. connect on a local socket</text>
+<text x="40" y="329" class="s">2. send since=&lt;seq&gt;: replay missed events</text>
+<text x="40" y="346" class="s">3. per terminal: screen snapshot,</text>
+<text x="40" y="363" class="s">    then live bytes</text>
+<g><rect class="k-n dash" x="40" y="380" width="270" height="40" rx="8"/><text x="52" y="402" class="h">Detached: close the UI, work continues</text>
+</g>
+
+</svg>

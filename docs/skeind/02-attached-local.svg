@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 440" role="img" aria-labelledby="t d">
+<title id="t">Attached local (Phase 1)</title>
+<desc id="d">The Skein app is split into a thin client and an embedded skeind talking over an in-process transport. Behaviour is unchanged.</desc>
+<style>
+:root{--bg:#faf8f3;--fg:#1a1814;--fg2:#4a4740;--line:#9a968a;--mach:#ece9e1;--client:#5a6aa0;--skeind:#547f5b;--harness:#a87a2c;--bad:#a64f3f}
+@media (prefers-color-scheme: dark){:root{--bg:#131418;--fg:#e8e6df;--fg2:#b6b3aa;--line:#6a685f;--mach:#1b1d22;--client:#8a96c9;--skeind:#7aa37f;--harness:#d4a657;--bad:#c97163}}
+text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:13px;fill:var(--fg)}
+.bg{fill:var(--bg)}
+.mach{fill:var(--mach);stroke:var(--line);stroke-width:1.5}
+.k-client{fill:var(--client);fill-opacity:.15;stroke:var(--client);stroke-width:1.6}
+.k-skeind{fill:var(--skeind);fill-opacity:.15;stroke:var(--skeind);stroke-width:1.6}
+.k-harness{fill:var(--harness);fill-opacity:.18;stroke:var(--harness);stroke-width:1.6}
+.k-bad{fill:var(--bad);fill-opacity:.14;stroke:var(--bad);stroke-width:1.8}
+.k-n{fill:none;stroke:var(--line);stroke-width:1.4}
+.dash{stroke-dasharray:6 4}
+.ghost{opacity:.5}
+.h{font-weight:600}
+.s{fill:var(--fg2);font-size:12px}
+.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+.halo{stroke:var(--bg);stroke-width:5;paint-order:stroke;stroke-linejoin:round}
+.bad{fill:var(--bad)}
+.big{font-size:15px;font-weight:600}
+.ln{fill:none;stroke:var(--fg2);stroke-width:1.7}
+.ln-s{fill:none;stroke:var(--skeind);stroke-width:1.9}
+.ln-b{fill:none;stroke:var(--bad);stroke-width:1.9}
+.ah{fill:var(--fg2)}.ah-s{fill:var(--skeind)}.ah-b{fill:var(--bad)}
+.dot-client{fill:var(--client)}.dot-skeind{fill:var(--skeind)}.dot-harness{fill:var(--harness)}.dot-bad{fill:var(--bad)}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 0L10 5L0 10z"/></marker>
+<marker id="as" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-s" d="M0 0L10 5L0 10z"/></marker>
+<marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah-b" d="M0 0L10 5L0 10z"/></marker>
+</defs>
+<rect class="bg" x="0" y="0" width="900" height="440"/>
+<g><rect class="mach" x="20" y="20" width="860" height="400" rx="14"/><text x="36" y="44" class="h">One machine</text>
+</g>
+<rect class="mach" x="40" y="56" width="580" height="260" rx="12" style="fill:none"/><text x="56" y="80" class="h">Skein app: still one process</text>
+<g><rect class="k-client" x="60" y="98" width="220" height="200" rx="8"/><text x="72" y="120" class="h">Thin client</text>
+<text x="72" y="139" class="s">UI, xterm.js, review</text>
+<text x="72" y="156" class="s">talks the daemon protocol</text>
+<text x="72" y="173" class="s">owns no rooms or PTYs</text>
+</g>
+<g><rect class="k-skeind" x="380" y="98" width="220" height="200" rx="8"/><text x="392" y="120" class="h">Embedded skeind</text>
+<text x="392" y="139" class="s">rooms, PTY host, tails</text>
+<text x="392" y="156" class="s">agent API + MCP</text>
+<text x="392" y="173" class="s">watcher, sqlite, git</text>
+</g>
+<path class="ln-s" d="M280 198 L380 198" marker-end="url(#as)" marker-start="url(#as)"/>
+<text x="330" y="172" class="s halo" text-anchor="middle">in-process</text><text x="330" y="172" class="s" text-anchor="middle">in-process</text>
+<text x="330" y="187" class="s halo" text-anchor="middle">transport</text><text x="330" y="187" class="s" text-anchor="middle">transport</text>
+<g><rect class="k-n" x="680" y="98" width="180" height="200" rx="8"/><text x="692" y="120" class="h">Child processes</text>
+</g>
+<g><rect class="k-harness" x="696" y="150" width="148" height="26" rx="13"/><text x="770.0" y="167.5" text-anchor="middle">Claude Code</text>
+</g>
+<g><rect class="k-harness" x="696" y="190" width="148" height="26" rx="13"/><text x="770.0" y="207.5" text-anchor="middle">opencode</text>
+</g>
+<path class="ln" d="M600 150 L680 150" marker-end="url(#a)"/>
+<text x="640" y="135" class="s halo" text-anchor="middle">PTY</text><text x="640" y="135" class="s" text-anchor="middle">PTY</text>
+<text x="640" y="150" class="s halo" text-anchor="middle">bytes</text><text x="640" y="150" class="s" text-anchor="middle">bytes</text>
+<path class="ln" d="M680 265 L600 265" marker-end="url(#a)"/>
+<text x="640" y="250" class="s halo" text-anchor="middle">MCP, hooks</text><text x="640" y="250" class="s" text-anchor="middle">MCP, hooks</text>
+<text x="640" y="265" class="s halo" text-anchor="middle">loopback</text><text x="640" y="265" class="s" text-anchor="middle">loopback</text>
+<g><rect class="k-skeind" x="40" y="336" width="800" height="66" rx="8"/><text x="52" y="358" class="h">Phase 1: zero behaviour change; the seam is in place</text>
+<text x="52" y="377" class="s">Same app, same lifetime: quit still kills harnesses. The client/daemon boundary now exists and is tested.</text>
+</g>
+
+</svg>

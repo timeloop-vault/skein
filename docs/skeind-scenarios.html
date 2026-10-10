@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>skeind: scenarios</title>
+<style>
+:root{color-scheme:light dark;--bg:#f5f3ee;--card:#faf8f3;--fg:#1a1814;--fg2:#4a4740;--line:#d8d4c8;--client:#5a6aa0;--skeind:#547f5b;--harness:#a87a2c;--bad:#a64f3f}
+@media (prefers-color-scheme: dark){:root{--bg:#0d0e10;--card:#131418;--fg:#e8e6df;--fg2:#b6b3aa;--line:#2a2c33;--client:#8a96c9;--skeind:#7aa37f;--harness:#d4a657;--bad:#c97163}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:32px 20px 64px}
+h1{margin:0 0 8px;font-size:30px}
+h2{margin:0 0 12px;font-size:21px}
+p{margin:0 0 12px}
+figure{margin:0 0 12px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}
+figure img{display:block;width:100%;height:auto}
+section{margin:44px 0 0}
+li{margin:4px 0}
+.legend{display:flex;flex-wrap:wrap;gap:8px 20px;padding:0;list-style:none;margin:12px 0 0}
+.legend span{display:inline-block;width:18px;height:12px;border-radius:3px;border:2px solid;margin-right:8px;vertical-align:-1px}
+.c{border-color:var(--client);background:color-mix(in srgb,var(--client) 18%,transparent)}
+.s{border-color:var(--skeind);background:color-mix(in srgb,var(--skeind) 18%,transparent)}
+.h{border-color:var(--harness);background:color-mix(in srgb,var(--harness) 18%,transparent)}
+.b{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 18%,transparent)}
+.n{border-color:var(--fg2)}
+a{color:var(--client)}
+footer{margin-top:56px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<main>
+<h1>skeind: scenarios</h1>
+<p>The goal is for harnesses to run somewhere other than the machine showing the UI, and to keep running with no client attached. skeind is the daemon that makes that possible: it owns rooms, PTYs, transcript tails and the agent API, and one or many clients attach to it. These diagrams walk from today's single process to remote rooms, cross-daemon routing and unattended approvals.</p>
+<ul class="legend">
+<li><span class="c"></span>client (UI)</li>
+<li><span class="s"></span>skeind (daemon)</li>
+<li><span class="h"></span>harness (agent CLI)</li>
+<li><span class="n"></span>machine or neutral</li>
+<li><span class="b"></span>problem or blocked</li>
+</ul>
+<section>
+<h2>1. Today</h2>
+<figure><img src="skeind/01-today.svg" alt="Today: one Skein process holds the UI and the backend; quitting kills every harness."></figure>
+<p>One Skein process holds the webview UI and the Rust backend: PTYs, transcript tails, the agent API on loopback, the watcher and sqlite. Harnesses are its child processes and call MCP and hooks back on 127.0.0.1.</p>
+<p><strong>What changes</strong></p>
+<ul>
+<li>Nothing yet; this is the baseline.</li>
+<li>Problem: quit the app and every harness dies, and nothing can run on another host.</li>
+</ul>
+</section>
+<section>
+<h2>2. Attached local (Phase 1)</h2>
+<figure><img src="skeind/02-attached-local.svg" alt="Phase 1: thin client plus embedded skeind in one process, over an in-process transport."></figure>
+<p>The backend is extracted as skein-daemon and embedded in the app. The UI talks to it through the same protocol it will later use over a socket, but over an in-process transport.</p>
+<p><strong>What changes</strong></p>
+<ul>
+<li>Zero behaviour change; the seam is in place.</li>
+<li>The UI no longer owns rooms, PTYs or the database.</li>
+<li>Still one process: quit still ends the harnesses.</li>
+</ul>
+</section>
+<section>
+<h2>3. Detached local (Phase 2)</h2>
+<figure><img src="skeind/03-detached-local.svg" alt="Phase 2: the app is closed, skeind keeps running; reattach replays events then a screen snapshot."></figure>
+<p>skeind runs as its own process over a local socket and outlives the app. It keeps a headless terminal emulator per PTY so a returning client can be shown the screen as it is now.</p>
+<p><strong>What changes</strong></p>
+<ul>
+<li>Closing the UI no longer stops harnesses.</li>
+<li>Reattach: connect, send since=&lt;seq&gt; for missed events, then per terminal a snapshot and live bytes.</li>
+<li>Settings chooses attached or detached.</li>
+</ul>
+</section>
+<section>
+<h2>4. Local and remote rooms (Phase 3)</h2>
+<figure><img src="skeind/04-local-and-remote.svg" alt="Phase 3: laptop with a local skeind, home server with a remote skeind, client connected to both."></figure>
+<p>A second skeind runs on an always-on host with a workspace root of main checkouts. The client connects to every daemon directly over WebSocket on a private overlay network, authenticated by a device token.</p>
+<p><strong>What changes</strong></p>
+<ul>
+<li>Rooms can live on either host; a host picker appears at room creation.</li>
+<li>Each harness talks MCP and hooks to the skeind next to it on 127.0.0.1; no reverse tunnels.</li>
+<li>Terminal bytes flow only between client and the daemon that owns the PTY.</li>
+</ul>
+</section>
+<section>
+<h2>5. Cross-daemon routing (Phase 3b)</h2>
+<figure><img src="skeind/05-cross-daemon.svg" alt="Phase 3b: a director room on the local skeind reaches a worker room on the remote skeind; replies queue while the laptop sleeps."></figure>
+<p>The local skeind dials out to each remote skeind. That link carries routed agent-API traffic both ways but never terminal bytes. A harness only ever talks to its own daemon, which forwards.</p>
+<p><strong>What changes</strong></p>
+<ul>
+<li>send_message, create_room, close_room, open/close_harness and list_rooms aggregation route across daemons.</li>
+<li>Room ids are daemon-qualified; the owning daemon is authoritative for mailbox, sign-off and createdBy.</li>
+<li>Mail to an unreachable daemon queues on the sender's daemon and is delivered on reconnect; create and close fail with "daemon offline".</li>
+</ul>
+</section>
+<section>
+<h2>6. Unattended approval (Phase 4)</h2>
+<figure><img src="skeind/06-unattended-approval.svg" alt="Phase 4: a permission dialog on the remote host blocks the hook, is announced to a phone, and the first answer wins."></figure>
+<p>When a harness on the remote skeind hits a permission dialog, the hook blocks and an approval record enters the event stream. A notifier pushes it through a self-hosted push service; any client may answer.</p>
+<p><strong>What changes</strong></p>
+<ul>
+<li>Approvals survive with no client attached.</li>
+<li>First answer wins; an optional per-room timeout policy can decide when nobody answers.</li>
+<li>The same event stream feeds every attached client.</li>
+</ul>
+</section>
+<section>
+<h2>7. Summary: what moves</h2>
+<figure><img src="skeind/07-summary.svg" alt="Summary: backend modules move into skein-daemon, rendering and shell stay in the client; phases 0 to 6."></figure>
+<p>Everything that owns state or runs agents moves into skein-daemon. Everything that draws, or belongs to the desktop window, stays in the client.</p>
+<p><strong>What changes</strong></p>
+<ul>
+<li>Moves: rooms and sqlite, PTY host, transcript tails, watcher, git reads, files backend, review, agent API and MCP, design preview server, spawn env probe.</li>
+<li>Stays: window, xterm.js and CodeMirror rendering, updater, clipboard, OS notifications, settings UI.</li>
+<li>Each phase is usable on its own.</li>
+</ul>
+</section>
+<footer>
+<p>Read next: <a href="skeind-design.md">skeind-design.md</a> (modes, architecture, protocol), <a href="skeind-recon.md">skeind-recon.md</a> (codebase recon), <a href="skeind-issues-draft.md">skeind-issues-draft.md</a> (epic and issue drafts).</p>
+</footer>
+</main>
+</body>
+</html>
