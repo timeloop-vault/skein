@@ -288,6 +288,7 @@ impl PtyManager {
             id = %id,
             probe = %applied.probe.describe(),
             stripped = applied.stripped.len(),
+            login_env = applied.login_env_keys.len(),
             path = %applied.path.to_string_lossy(),
             "pty_spawn resolved environment"
         );
@@ -519,3 +520,6 @@ mod agent_env_tests;
 
 #[cfg(test)]
 mod launch_tests;
+
+#[cfg(test)]
+mod login_env_tests;

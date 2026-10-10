@@ -35,9 +35,19 @@ pub(crate) const PATH_PROBE_END: &str = "___SKEIN_PATH_END___";
 /// The one-liner the probe shell runs. `printf` rather than `echo`
 /// because `echo`'s escape handling differs across shells.
 /// (The sentinels are spelled out because `concat!` only takes
-/// literals; a test pins them against the constants above.)
-pub(crate) const PROBE_SCRIPT: &str =
-    "printf '%s%s%s' '___SKEIN_PATH_BEGIN___' \"$PATH\" '___SKEIN_PATH_END___'";
+/// literals; tests pin them against the constants.)
+///
+/// After the `PATH` payload it prints the whole environment between the
+/// `ENV_PROBE_*` sentinels, NUL-separated (`env -0`), so values holding
+/// newlines survive. Older macOS `env` lacks `-0`, hence the `perl`
+/// fallback (perl ships with macOS). If both fail the payload is empty
+/// and the caller falls back to `PATH` only.
+///
+/// This string runs unchanged under sh/bash/zsh/ksh/dash, fish 3.x and
+/// csh/tcsh, so it uses only `;` and `||`: no redirections (csh has no
+/// `2>`; the caller already sends stderr to /dev/null), no `{ }`
+/// grouping and no `$(...)`.
+pub(crate) const PROBE_SCRIPT: &str = "printf '%s%s%s' '___SKEIN_PATH_BEGIN___' \"$PATH\" '___SKEIN_PATH_END___'; printf '%s' '___SKEIN_ENV_BEGIN___'; env -0 || perl -e 'print \"$_=$ENV{$_}\\0\" for keys %ENV'; printf '%s' '___SKEIN_ENV_END___'";
 
 /// Flags that make a given shell source its rc chain and then run one
 /// command. `None` means "we can't drive this shell" — the caller must
@@ -491,6 +501,8 @@ pub(crate) fn is_host_terminal_var(key: &str) -> bool {
         .iter()
         .any(|p| upper.starts_with(p))
 }
+
+pub(crate) mod login_env;
 
 #[cfg(test)]
 mod tests;

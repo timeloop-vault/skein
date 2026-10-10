@@ -255,6 +255,8 @@ export interface ProbeReport {
 	elapsedMs: number;
 	argv: string[];
 	message: string | null;
+	/** True only when the shell's whole environment was captured, not just PATH. */
+	envCaptured: boolean;
 }
 
 export interface ProgramReport {
@@ -277,6 +279,8 @@ export interface EnvPreview {
 	path: PathEntryReport[];
 	programs: ProgramReport[];
 	stripped: string[];
+	/** Names only, never values: variables inherited from the login shell. */
+	loginEnvKeys: string[];
 	extraEnvKeys: string[];
 	/** Additions that were skipped, with the reason. */
 	droppedAdditions: DroppedAddition[];

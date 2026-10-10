@@ -1,6 +1,7 @@
 import type { EnvPreview } from "../types.ts";
 import { DROP_REASON, PROBE_TONE, SOURCE_LABEL } from "./constants.ts";
 import "../SpawnEnvPanel.css";
+import { LoginEnvKeys } from "./LoginEnvKeys.tsx";
 
 /** The read-only half of the panel: probe status, the resolved PATH and
  *  the warnings the backend raised about the current settings. */
@@ -83,6 +84,10 @@ export const EnvPreviewSection = ({
 					))}
 				</div>
 			</div>
+
+			{preview?.probe.state === "captured" && preview.probe.envCaptured && (
+				<LoginEnvKeys keys={preview.loginEnvKeys} />
+			)}
 
 			{preview && preview.droppedAdditions.length > 0 && (
 				<div className="sk-env-banner sk-env-warn">
