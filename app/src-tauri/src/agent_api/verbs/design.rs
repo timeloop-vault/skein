@@ -252,7 +252,7 @@ pub(super) fn guard_write(
         log_outcome(verb, &caller.room_id, "", "rate_limited");
         return Err(VerbError::Refused(format!(
             "rate_limited: this room has attempted {DESIGN_CONTROL_RATE_LIMIT} \
-             open_design_entry/set_design_device/show_element/invoke_element/show_changes calls in the last minute"
+             open_design_entry/set_design_device/show_element/invoke_element/show_changes/get_design_screenshot/show_design_pane calls in the last minute"
         )));
     }
     Ok(())

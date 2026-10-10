@@ -117,6 +117,35 @@ pub(super) async fn api_design_invoke(
     respond(verbs::invoke_element(&state, &caller, &args, enabled).await)
 }
 
+/// `POST /api/design/screenshot` — `get_design_screenshot`; the PNG is
+/// base64 in `png`, next to the same metadata the MCP text block carries.
+pub(super) async fn api_design_screenshot(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    axum::Json(args): axum::Json<verbs::ScreenshotArgs>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let enabled = state.spawn_settings().allow_agent_harness_control;
+    respond(verbs::get_design_screenshot(&state, &caller, &args, enabled).await)
+}
+
+/// `POST /api/design/pane` — `show_design_pane`.
+pub(super) async fn api_design_pane(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+    axum::Json(args): axum::Json<DesignTargetArgs>,
+) -> Response {
+    let caller = match authenticate(&state, &headers) {
+        Ok(c) => c,
+        Err(e) => return refuse(&e),
+    };
+    let enabled = state.spawn_settings().allow_agent_harness_control;
+    respond(verbs::show_design_pane(&state, &caller, &args, enabled).await)
+}
+
 /// `POST /api/design/changes` — `show_changes`.
 pub(super) async fn api_design_changes(
     State(state): State<Arc<AgentApiState>>,

@@ -91,6 +91,7 @@ export function useAppBackgroundWiring(a: {
 		actions.switchHarnessInRoom,
 		(harnessId) => settings.dockedDesign[harnessId] === true,
 		settings.showDockedDesign,
+		store.switchRoom,
 	);
 
 	// #559: OS-wide raise of the Control Center pop-out. App renders only in

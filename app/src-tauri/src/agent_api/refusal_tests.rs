@@ -9,7 +9,7 @@ use super::verbs::{self, MailContext, VerbError};
 // ── the two prohibitions ──────────────────────────────────────────
 
 #[test]
-fn the_tool_list_offers_twenty_two_verbs_and_nothing_that_resolves_approves_or_deletes() {
+fn the_tool_list_offers_twenty_four_verbs_and_nothing_that_resolves_approves_or_deletes() {
     let names: Vec<String> = mcp::tool_specs()
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_owned())
@@ -52,6 +52,9 @@ fn the_tool_list_offers_twenty_two_verbs_and_nothing_that_resolves_approves_or_d
             "show_element",
             "invoke_element",
             "show_changes",
+            // #552: see the preview, and make it visible.
+            "get_design_screenshot",
+            "show_design_pane",
             // #535: which Skein build this is.
             "skein_info",
         ]
