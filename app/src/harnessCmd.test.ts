@@ -6,7 +6,8 @@ import {
 	unarchiveRoomTransform,
 	withResumeCmds,
 } from "./harnessCmd.ts";
-import type { Harness, HarnessKind, Room } from "./types.ts";
+import { remoteArgv } from "./remoteCmd.ts";
+import type { Harness, HarnessKind, RemoteSpec, Room } from "./types.ts";
 
 const SID = "3c8c4693-3838-46ab-8680-3e60df6fdefe";
 const SHELL = ["/bin/zsh", "-l"];
@@ -554,5 +555,32 @@ describe("shellClaim (#520)", () => {
 		expect(viaUnarchive.harnesses[0]?.cmd).toEqual(["claude", "--resume", SID]);
 		expect(viaUnarchive.harnesses[0]).not.toHaveProperty("shellClaim");
 		expect(withResumeCmds(viaUnarchive, ports())).toEqual(viaUnarchive);
+	});
+});
+
+describe("remote kind (#568)", () => {
+	const spec: RemoteSpec = { host: "user@example-host", tool: "opencode", session: "skein-r1-h1" };
+	const expected = remoteArgv(spec) as string[];
+
+	it("cmdForKind builds the argv from the spec", () => {
+		expect(cmdForKind("remote", SHELL, undefined, undefined, undefined, spec)).toEqual(expected);
+		expect(cmdForKind("remote", SHELL)).toEqual([]);
+	});
+
+	it("resumeHarness rebuilds from the record, ignoring a stale ssh argv", () => {
+		const h = harness("remote", { remote: spec, cmd: ["ssh", "-t", "--", "old-host", "x"] });
+		const once = resumeHarness(h);
+		expect(once.cmd).toEqual(expected);
+		expect(resumeHarness(once).cmd).toEqual(expected);
+	});
+
+	it("keeps a shell-swapped cmd", () => {
+		const h = harness("remote", { remote: spec, cmd: ["pwsh.exe"] });
+		expect(resumeHarness(h).cmd).toEqual(["pwsh.exe"]);
+	});
+
+	it("leaves cmd unchanged when remote is missing", () => {
+		const cmd = ["ssh", "-t", "--", "devbox", "x"];
+		expect(resumeHarness(harness("remote", { cmd })).cmd).toEqual(cmd);
 	});
 });

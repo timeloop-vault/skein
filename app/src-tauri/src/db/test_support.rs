@@ -50,5 +50,6 @@ pub(super) fn harness(id: &str) -> Harness {
         pending_notifications: None,
         created_by: None,
         shell_claim: None,
+        remote: None,
     }
 }

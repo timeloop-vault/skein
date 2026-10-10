@@ -198,7 +198,12 @@ mod tests {
         // past this gate — see `harness_kind`'s agreement test for the
         // per-kind truth table.
         let settings = SpawnSettings::default();
-        for kind in [HarnessKind::Copilot, HarnessKind::Byoh, HarnessKind::Files] {
+        for kind in [
+            HarnessKind::Copilot,
+            HarnessKind::Byoh,
+            HarnessKind::Files,
+            HarnessKind::Remote,
+        ] {
             let dto = list(kind, ".", &settings, None);
             assert!(dto.unsupported, "{kind} must have no agent picker");
         }
@@ -376,7 +381,12 @@ mod smoke {
     #[test]
     #[ignore = "shells out to the installed CLIs; run by hand"]
     fn a_kind_without_agents_needs_no_cli_at_all() {
-        for kind in [HarnessKind::Copilot, HarnessKind::Byoh, HarnessKind::Files] {
+        for kind in [
+            HarnessKind::Copilot,
+            HarnessKind::Byoh,
+            HarnessKind::Files,
+            HarnessKind::Remote,
+        ] {
             let dto = probe(kind);
             assert!(dto.unsupported, "{kind} must report unsupported");
             assert!(dto.agents.is_empty());

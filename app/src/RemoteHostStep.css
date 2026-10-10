@@ -1,0 +1,18 @@
+.sk-remote-form {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	width: min(420px, 100%);
+}
+.sk-remote-hint {
+	font-size: 0.85em;
+	color: var(--fg-3);
+}
+.sk-remote-error {
+	color: var(--fg-0);
+	font-size: 0.9em;
+}
+.sk-remote-actions {
+	display: flex;
+	gap: 8px;
+}

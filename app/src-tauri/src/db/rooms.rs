@@ -66,6 +66,22 @@ pub struct Harness {
     /// at resume whether the claim still holds.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub shell_claim: Option<ShellClaim>,
+    /// #568: where a `remote` harness runs.
+    /// Round-tripped only; the frontend builds the ssh argv from it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub remote: Option<RemoteSpec>,
+}
+
+/// A `remote` harness's target (#568): ssh host, the tool run
+/// there, and the tmux session name.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSpec {
+    pub host: String,
+    pub tool: String,
+    pub session: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub dir: Option<String>,
 }
 
 /// A CLI the user re-launched from a harness's post-exit shell and

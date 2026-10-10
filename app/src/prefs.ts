@@ -288,3 +288,26 @@ export const loadNudgeOverrides = (): NudgeOverrides => {
 export const saveNudgeOverrides = (overrides: NudgeOverrides): void => {
 	localStorage.setItem(NUDGE_OVERRIDES_KEY, JSON.stringify(overrides));
 };
+
+// #568: the host and tool last used in the picker's remote step.
+const REMOTE_LAST_KEY = `${KEY_PREFIX}remoteLast`;
+
+export const loadRemoteLast = (): { host: string; tool: string } => {
+	try {
+		const parsed: unknown = JSON.parse(localStorage.getItem(REMOTE_LAST_KEY) ?? "null");
+		const p = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Record<
+			string,
+			unknown
+		>;
+		return {
+			host: typeof p.host === "string" ? p.host : "",
+			tool: typeof p.tool === "string" && p.tool ? p.tool : "claude",
+		};
+	} catch {
+		return { host: "", tool: "claude" };
+	}
+};
+
+export const saveRemoteLast = (last: { host: string; tool: string }): void => {
+	localStorage.setItem(REMOTE_LAST_KEY, JSON.stringify(last));
+};

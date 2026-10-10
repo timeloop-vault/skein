@@ -25,19 +25,22 @@ pub(crate) enum HarnessKind {
     Files,
     /// #433: a non-PTY live preview of the worktree's HTML.
     Design,
+    /// #568: `ssh -t -- <host> …tmux…` in a local PTY.
+    Remote,
 }
 
 // Only this module's own tests iterate every kind today — production
 // code always has one already in hand (from the harness record or a
 // Tauri arg).
 #[cfg(test)]
-pub(crate) const ALL: [HarnessKind; 6] = [
+pub(crate) const ALL: [HarnessKind; 7] = [
     HarnessKind::Claude,
     HarnessKind::Opencode,
     HarnessKind::Copilot,
     HarnessKind::Byoh,
     HarnessKind::Files,
     HarnessKind::Design,
+    HarnessKind::Remote,
 ];
 
 impl HarnessKind {
@@ -52,6 +55,7 @@ impl HarnessKind {
             "byoh" => Self::Byoh,
             "files" => Self::Files,
             "design" => Self::Design,
+            "remote" => Self::Remote,
             _ => return None,
         })
     }
@@ -64,6 +68,7 @@ impl HarnessKind {
             Self::Byoh => "byoh",
             Self::Files => "files",
             Self::Design => "design",
+            Self::Remote => "remote",
         }
     }
 
@@ -76,6 +81,7 @@ impl HarnessKind {
             Self::Claude => Some("claude"),
             Self::Opencode => Some("opencode"),
             Self::Copilot => Some("gh"),
+            Self::Remote => Some("ssh"),
             Self::Byoh | Self::Files | Self::Design => None,
         }
     }
@@ -175,6 +181,9 @@ mod tests {
         src[start..end]
             .split('|')
             .map(|part| part.trim().trim_matches('"'))
+            // Biome breaks a long union onto lines with a leading `|`,
+            // which leaves an empty first part.
+            .filter(|part| !part.is_empty())
             .collect()
     }
 

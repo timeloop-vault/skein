@@ -168,6 +168,30 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			opensClickedLinks: false,
 		},
 	},
+	// #568: the remote harness, a tool run inside tmux on a remote host over
+	// ssh. See remoteCmd.ts and docs/remote-harness.md.
+	remote: {
+		id: "remote",
+		label: "ssh",
+		name: "Remote (ssh+tmux)",
+		chip: "h-remote",
+		desc: "tmux on a remote host, over ssh.",
+		program: "ssh",
+		skillInvocation: null,
+		capabilities: {
+			pty: true,
+			// Resume = tmux reattach; the argv is rebuilt identically.
+			resume: true,
+			// Heuristic only: no transcript, so no L2c adapter. The phase
+			// comes from L2a idle / L2b patterns.
+			notify: true,
+			agents: false,
+			agentSwitchable: false,
+			submitRetry: false,
+			imagePaste: false,
+			opensClickedLinks: false,
+		},
+	},
 	// #49 phase A: the file surface as a harness. Deliberately not a
 	// coloured process chip — the ◇ renders in --accent via .h-files.
 	files: {
@@ -216,6 +240,7 @@ export const HARNESS_ORDER: HarnessKind[] = [
 	"opencode",
 	"copilot",
 	"byoh",
+	"remote",
 	"files",
 	"design",
 ];

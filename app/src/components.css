@@ -51,6 +51,9 @@
 .h-byoh {
 	background: #8a7a4a;
 }
+.h-remote {
+	background: #7a6a9a;
+}
 /* #538: the writer is no longer in the room and no kind was recorded. */
 .h-unknown {
 	background: var(--bg-3);

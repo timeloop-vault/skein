@@ -13,7 +13,14 @@ import type { Todo } from "./todos/model.ts";
 // surface living in the harness body slot. Kind-specific behaviour
 // should branch on `HARNESS_KINDS[kind].capabilities`, not on kind
 // string comparisons.
-export type HarnessKind = "claude" | "opencode" | "copilot" | "byoh" | "files" | "design";
+export type HarnessKind =
+	| "claude"
+	| "opencode"
+	| "copilot"
+	| "byoh"
+	| "files"
+	| "design"
+	| "remote";
 
 // "permission" (#86) is a harder stop than "waiting": the harness is
 // blocked on an approval dialog, not merely at end-of-turn awaiting a
@@ -21,6 +28,17 @@ export type HarnessKind = "claude" | "opencode" | "copilot" | "byoh" | "files" |
 // every notification surface can tell the two apart without reaching
 // into harnessActivity's ActivityPhase.
 export type Status = "running" | "waiting" | "permission" | "idle" | "error" | "exited";
+
+/** #568: where a `remote` harness runs. `session` is the stable
+ *  tmux session name minted at creation; `tool` is a remote shell
+ *  command line (default "claude"), e.g. "opencode" or
+ *  "~/.local/bin/claude". */
+export interface RemoteSpec {
+	host: string;
+	tool: string;
+	session: string;
+	dir?: string;
+}
 
 export interface Harness {
 	id: string;
@@ -32,6 +50,8 @@ export interface Harness {
 	live?: boolean;
 	cmd?: string[];
 	cwd?: string;
+	// #568: set only on kind "remote". See RemoteSpec.
+	remote?: RemoteSpec;
 	// Conversation id assigned by the underlying tool. For Claude this
 	// is pre-allocated by Skein at spawn time via `--session-id <uuid>`
 	// (chapter 5 phase 2a). For opencode it's captured after spawn from

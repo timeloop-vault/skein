@@ -5,6 +5,7 @@ import {
 	isOmitted,
 	parseAttribution,
 	type RequestResult,
+	remoteRefusal,
 } from "./agentRequestsShared.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
 
@@ -76,6 +77,8 @@ export function parseOpenHarnessArgs(raw: unknown): RequestResult<OpenHarnessArg
 	if (!isHarnessKind(r.kind)) {
 		return { ok: false, error: `unknown harness kind "${String(r.kind)}"` };
 	}
+	const refused = remoteRefusal(r.kind);
+	if (refused) return { ok: false, error: refused };
 	if (r.agent !== null && typeof r.agent !== "string") {
 		return { ok: false, error: "agent must be a string or null" };
 	}

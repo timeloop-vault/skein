@@ -21,7 +21,8 @@
 // with nothing to keep in sync.
 
 import { HARNESS_KINDS } from "./data.tsx";
-import type { Harness, HarnessKind, Room } from "./types.ts";
+import { remoteArgv } from "./remoteCmd.ts";
+import type { Harness, HarnessKind, RemoteSpec, Room } from "./types.ts";
 
 /** Append `--agent <name>` when the harness names one.
  *
@@ -52,6 +53,7 @@ export const cmdForKind = (
 	sessionId?: string,
 	opencodePort?: number,
 	agent?: string,
+	remote?: RemoteSpec,
 ): string[] => {
 	switch (kind) {
 		case "claude": {
@@ -73,6 +75,8 @@ export const cmdForKind = (
 			return ["gh", "copilot", "suggest"];
 		case "byoh":
 			return fallbackShell.length > 0 ? fallbackShell : ["pwsh.exe"];
+		case "remote":
+			return (remote && remoteArgv(remote)) ?? [];
 		case "files":
 		case "design":
 			// Unreachable: `files`/`design` have no process (capabilities.pty is
@@ -195,6 +199,11 @@ export const resumeHarness = (
 			// released it when the harness exited — so a fresh one is
 			// baked in on every rebuild.
 			return { ...h, cmd: withAgent(opencodeResumeArgv(h.sessionId, opencodePort), h.agent) };
+		}
+		case "remote": {
+			// #568: tmux `-A` reattaches, so the same argv is right every time.
+			const argv = h.remote ? remoteArgv(h.remote) : null;
+			return { ...h, cmd: argv ?? cmd };
 		}
 		default:
 			return { ...h, cmd };
