@@ -4,6 +4,7 @@
 // only asks the frame to scroll to and outline an element.
 
 import { useCallback, useEffect, useRef } from "react";
+import { type CaptureRect, intersectClips } from "./designCapture.ts";
 import type { ElementThread } from "./designComments.ts";
 import {
 	type DesignScroll,
@@ -39,6 +40,7 @@ export const useDesignControl = ({
 	selectedId,
 	visible,
 	laidOut,
+	frame,
 	post,
 }: {
 	harnessId: string;
@@ -53,6 +55,8 @@ export const useDesignControl = ({
 	visible: boolean;
 	/** True once the preview frame has a non-zero size (#549 reveal). */
 	laidOut: () => boolean;
+	/** The preview iframe, for `design_capture_target` (#552). */
+	frame: () => HTMLIFrameElement | null;
 	post: (msg: HostMessage) => void;
 }) => {
 	const scrollRef = useRef<DesignScroll | null>(null);
@@ -72,6 +76,7 @@ export const useDesignControl = ({
 		selectedId,
 		visible,
 		laidOut,
+		frame,
 		post,
 	};
 	const liveRef = useRef(live);
@@ -191,6 +196,34 @@ export const useDesignControl = ({
 				};
 			},
 			whenVisible: makeWhenVisible(() => liveRef.current.visible && liveRef.current.laidOut()),
+			captureTarget: () => {
+				const l = liveRef.current;
+				const frame = l.frame();
+				const b = frame?.getBoundingClientRect();
+				const clips: CaptureRect[] = [
+					{ x: 0, y: 0, width: window.innerWidth, height: window.innerHeight },
+				];
+				let cssHidden = false;
+				for (let el: Element | null = frame; el; el = el.parentElement) {
+					const cs = getComputedStyle(el);
+					if (["hidden", "collapse"].includes(cs.visibility) || cs.opacity === "0") {
+						cssHidden = true;
+					}
+					if (el !== frame && (cs.overflowX !== "visible" || cs.overflowY !== "visible")) {
+						const r = el.getBoundingClientRect();
+						clips.push({ x: r.x, y: r.y, width: r.width, height: r.height });
+					}
+				}
+				return {
+					visible: l.visible,
+					laidOut: l.laidOut(),
+					rect: b
+						? intersectClips({ x: b.x, y: b.y, width: b.width, height: b.height }, clips)
+						: null,
+					cssHidden,
+					devicePixelRatio: window.devicePixelRatio,
+				};
+			},
 			showElement: (req) => showElementRef.current(req),
 			invokeElement: (req) => invokeElementRef.current(req),
 			showChanges: (req) => showChangesRef.current(req),

@@ -7,6 +7,7 @@
 // pane to highlight an element in place.
 
 import { asRecord, isOmitted, type RequestResult } from "./agentRequestsShared.ts";
+import type { PaneCaptureRaw } from "./designCapture.ts";
 import type { ShowChangesRequest, ShowChangesResult } from "./designChanges.ts";
 import type { DesignDevice } from "./designDevice.ts";
 import type { InvokeElementRequest, InvokeElementResult } from "./designInvoke.ts";
@@ -48,6 +49,8 @@ export interface DesignPaneApi {
 	ready(): boolean;
 	/** Resolves true once the pane is on screen and laid out, false on timeout (#549). */
 	whenVisible(timeoutMs: number): Promise<boolean>;
+	/** #552: where the preview frame is painted right now; reads only. */
+	captureTarget(): PaneCaptureRaw;
 	showElement(req: ShowElementRequest): Promise<ShowElementResult>;
 	invokeElement(req: InvokeElementRequest): Promise<InvokeElementResult>;
 	showChanges(req: ShowChangesRequest): Promise<ShowChangesResult>;

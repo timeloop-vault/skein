@@ -29,7 +29,7 @@ pub(crate) fn install_rustls_provider() {
 }
 
 pub(crate) use menu::on_menu_event;
-pub(crate) use window::{on_window_event, raise_main_window};
+pub(crate) use window::{MAIN_LABEL, on_window_event, raise_main_window};
 
 use tauri::Manager;
 

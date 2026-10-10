@@ -67,6 +67,8 @@ mod design_changes_tests;
 #[cfg(test)]
 mod design_invoke_tests;
 #[cfg(test)]
+mod design_screenshot_tests;
+#[cfg(test)]
 mod design_tests;
 #[cfg(test)]
 mod element_tests;

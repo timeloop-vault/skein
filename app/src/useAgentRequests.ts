@@ -98,6 +98,9 @@ export function useAgentRequests(
 	// #551: a docked design harness is revealed in the right pane instead.
 	isDocked: (harnessId: string) => boolean,
 	showDocked: (roomId: string, harnessId: string) => void,
+	// #552: `show_design_pane` may switch rooms (the agent's MCP permission is
+	// the gate): `useRoomsStore.switchRoom`, the same call a notification click makes.
+	switchRoom: (roomId: string) => void,
 ): void {
 	// Refs so the listener (mounted once, below) always reads the latest
 	// values without re-subscribing on every settings/memory change —
@@ -129,6 +132,8 @@ export function useAgentRequests(
 	isDockedRef.current = isDocked;
 	const showDockedRef = useRef(showDocked);
 	showDockedRef.current = showDocked;
+	const switchRoomRef = useRef(switchRoom);
+	switchRoomRef.current = switchRoom;
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: roomsRef comes from useRoomsStore (#19) — a ref, stable across renders, but biome can't prove that through a parameter.
 	useEffect(() => {
@@ -351,6 +356,7 @@ export function useAgentRequests(
 							complete,
 							{
 								activeRoomId: () => activeRoomIdRef.current,
+								switchRoom: (r) => switchRoomRef.current(r),
 								switchHarness: (r, h) => switchHarnessRef.current(r, h),
 								isDocked: (h) => isDockedRef.current(h),
 								showDocked: (r, h) => showDockedRef.current(r, h),

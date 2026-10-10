@@ -13,6 +13,8 @@ const POLL_MS = 25;
 /** What the request handler needs from the app to reveal a pane. */
 export interface DesignReveal {
 	activeRoomId(): string | null;
+	/** #552: switch the active room; used only by `show_design_pane`. */
+	switchRoom(roomId: string): void;
 	switchHarness(roomId: string, harnessId: string): void;
 	/** #551: is the design harness docked in its room's right pane? */
 	isDocked(harnessId: string): boolean;

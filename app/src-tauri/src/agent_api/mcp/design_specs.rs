@@ -322,5 +322,70 @@ pub(super) fn design_tool_specs() -> Vec<Value> {
                 "additionalProperties": false,
             },
         }),
+        json!({
+            "name": "get_design_screenshot",
+            "title": "Screenshot the design pane's preview",
+            "description":
+                "Returns a PNG image of what the design pane's preview shows right \
+                 now, captured from the app window itself (so the prototype's own \
+                 rendering, including its device frame, and not a re-render), plus \
+                 JSON text with harnessId, entry, width, height (image px), scale \
+                 and cssRect. The pane must be on screen: when it is in another \
+                 room, on a hidden tab or not laid out yet this refuses with \
+                 not_visible and the reason, and never changes the UI itself; call \
+                 show_design_pane first, then retry. `maxEdge` bounds the longest \
+                 image edge in px (default 1568, clamped to 256-2576). Refuses \
+                 with too_large if the PNG exceeds 4 MiB (lower maxEdge) and \
+                 capture_failed if the native capture times out or errors. \
+                 not_visible with reason no_pane means the pane is not open in \
+                 Skein. Gated by the \
+                 Settings switch that also governs open_harness/close_harness, and \
+                 rate-capped with the other design verbs (10 combined per minute).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "harness": {
+                        "type": "string",
+                        "description": "A design harness id. Optional when the room has exactly one.",
+                    },
+                    "maxEdge": {
+                        "type": "integer",
+                        "minimum": 256,
+                        "maximum": 2576,
+                        "description": "Longest edge of the image in px. Default 1568.",
+                    },
+                },
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": true },
+        }),
+        json!({
+            "name": "show_design_pane",
+            "title": "Make the design pane visible",
+            "description":
+                "Makes a design harness's pane visible to the user so \
+                 get_design_screenshot can see it. This MAY SWITCH THE ACTIVE ROOM \
+                 and the visible tab or dock in Skein's window, away from where the \
+                 user is looking. That is a deliberate exception to the rule that \
+                 design verbs take no focus, and the user's permission for this \
+                 tool is the gate: only call it when you need the pane on screen. \
+                 It does not raise the window. Answers with shown, switchedRoom \
+                 and revealed (already, show_docked, switch or room: what it had \
+                 to do), or a reason when it could not. Refuses with not_mounted \
+                 when the pane is not open in Skein. Gated by the Settings switch \
+                 that also governs open_harness/close_harness, and rate-capped with \
+                 the other design verbs (10 combined per minute).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "harness": {
+                        "type": "string",
+                        "description": "A design harness id. Optional when the room has exactly one.",
+                    },
+                },
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": false },
+        }),
     ]
 }

@@ -6,6 +6,12 @@
 // the window.
 
 import type { RequestResult } from "./agentRequestsShared.ts";
+import {
+	captureTargetResult,
+	NO_PANE_RESULT,
+	parseHarnessIdArgs,
+	showDesignPane,
+} from "./designCapture.ts";
 import { parseShowChangesArgs } from "./designChanges.ts";
 import {
 	getDesignPane,
@@ -31,6 +37,8 @@ export const DESIGN_KINDS = [
 	"design.show_element",
 	"design.invoke_element",
 	"design.show_changes",
+	"design.capture_target",
+	"design.show_pane",
 ] as const;
 
 export const isDesignKind = (kind: string): boolean =>
@@ -48,6 +56,30 @@ export async function handleDesignRequest(
 ): Promise<void> {
 	const fail = (error: string) => complete(id, undefined, error);
 	const bad = <T>(r: RequestResult<T>): r is { ok: false; error: string } => !r.ok;
+
+	// #552: where the preview is painted. Reads only; never changes any UI.
+	if (kind === "design.capture_target") {
+		const p = parseHarnessIdArgs(raw);
+		if (bad(p)) return fail(p.error);
+		const pane = getDesignPane(p.value.harnessId);
+		if (!pane) return complete(id, NO_PANE_RESULT(globalThis.devicePixelRatio ?? 1));
+		const entry = pane.getState().entry;
+		return complete(
+			id,
+			captureTargetResult(reveal.activeRoomId(), pane.roomId, pane.captureTarget(), entry),
+		);
+	}
+
+	// #552: make the pane visible, switching room when needed.
+	if (kind === "design.show_pane") {
+		const p = parseHarnessIdArgs(raw);
+		if (bad(p)) return fail(p.error);
+		const pane = getDesignPane(p.value.harnessId);
+		if (!pane) {
+			return fail(`not_mounted: no design pane is mounted for harness "${p.value.harnessId}"`);
+		}
+		return complete(id, await showDesignPane(pane, reveal, p.value.harnessId));
+	}
 
 	if (kind === "design.panes") {
 		const p = parsePanesArgs(raw);

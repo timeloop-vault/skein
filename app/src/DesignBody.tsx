@@ -94,6 +94,7 @@ export const DesignBody = ({
 		selectedId: c.selected?.id,
 		visible,
 		laidOut: () => (frameRef.current?.clientWidth ?? 0) > 0,
+		frame: () => frameRef.current,
 		post,
 	});
 

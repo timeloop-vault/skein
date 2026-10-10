@@ -44,6 +44,8 @@ Skein process
      ├─ POST   /api/design/show        show_element
      ├─ POST   /api/design/invoke      invoke_element
      ├─ POST   /api/design/changes     show_changes
+     ├─ POST   /api/design/screenshot  get_design_screenshot
+     ├─ POST   /api/design/pane        show_design_pane
      ├─ POST   /api/harness/permission     see below — not an agent verb
      ├─ POST   /api/harness/session-start  see below — not an agent verb
      └─ POST   /api/harness/session-end    see below — not an agent verb
@@ -684,16 +686,18 @@ of trust.
 
 ## Driving the design pane (#512, epic #513)
 
-Four verbs let an agent read and drive the design pane of its **own**
+These verbs let an agent read and drive the design pane of its **own**
 room, so "what did you change?" can end with the element highlighted.
 The token is the scope and there is no room argument. `harness` (a
 harness id of kind `design`) is optional when the caller's room has
 exactly one design harness. No verb takes focus, raises the window, or
 switches the visible room or harness; a pane that is not visible still
-updates. The one exception is the opt-in `reveal: true` on `show_element` /
-`invoke_element`: it switches the room's active harness to the design pane,
-but only when the user is already in that room, and never switches rooms or
-raises the window. None creates a thread, resolves one, or writes source.
+updates. There are two exceptions. The opt-in `reveal: true` on
+`show_element` / `invoke_element` / `show_changes` switches the room's
+active harness to the design pane, but only when the user is already in that
+room, and never switches rooms or raises the window. And `show_design_pane`
+(#552) does switch the active room, by design (decided on #552). None creates
+a thread, resolves one, or writes source.
 
 | verb | route | kind |
 | :-- | :-- | :-- |
@@ -704,6 +708,8 @@ raises the window. None creates a thread, resolves one, or writes source.
 | `show_element` | `POST /api/design/show` | write (transient) |
 | `invoke_element` | `POST /api/design/invoke` | write (drives the prototype) |
 | `show_changes` | `POST /api/design/changes` | write (transient) |
+| `get_design_screenshot` | `POST /api/design/screenshot` | read (native capture) |
+| `show_design_pane` | `POST /api/design/pane` | write (moves the user's view) |
 
 - **`list_design_harnesses`** — `{harnesses: [{harnessId, name, entry,
   device, entries, mounted, ready}]}`. `entry` is `Harness.designEntry`,
@@ -825,12 +831,51 @@ raises the window. None creates a thread, resolves one, or writes source.
   scope"}`. `reveal` is as for `show_element`. The pane must be mounted
   and loaded. Timeout 10 s.
 
+- **`get_design_screenshot`** `{harness?, maxEdge?}` (#552) — a PNG of what
+  the design pane's preview iframe currently paints. The preview is
+  cross-origin, so only the webview can read it: the frontend says where the
+  preview sits (CSS px) and Rust captures that rectangle natively — WebView2
+  DevTools `Page.captureScreenshot` with a clip on Windows, `WKWebView
+  takeSnapshot` with a rect on macOS; Linux is unsupported. `maxEdge`
+  (integer, default 1568 px, Claude's no-downscale long edge) is clamped to
+  256-2576; the render scale is `min(devicePixelRatio, maxEdge / long edge)`.
+  The MCP result is a text block (`harnessId`, `entry`, `width`, `height`,
+  `scale`, `cssRect`) plus an `image/png` block; the HTTP mirror returns the
+  same JSON with the image as base64 `png`. **It never shows the pane.** A
+  pane that is not painted captures blank (verified on both platforms in the
+  #552 spike: `display:none`, `visibility:hidden`, `opacity:0` and
+  off-screen all come out blank, while a minimized, covered or
+  off-screen *window* still captures), so it refuses `not_visible` with the
+  reason: `other_room` (the user is in another room), `hidden_tab` (the
+  design harness is not the one shown, or the frame or an ancestor is
+  `visibility:hidden` / `opacity:0`), `not_laid_out` (no usable rect yet, or
+  clipped by an ancestor, the splitter or the viewport to under 1px; the
+  captured rect is the clipped one)
+  or `no_pane` (not mounted). A PNG over 4 MiB is refused `too_large`; pass
+  a smaller `maxEdge`. A missing window or a capture that takes over 5 s is
+  `capture_failed`. Read-only towards the UI, but behind the same kill
+  switch and `design_control` rate bucket as the other design verbs. Timeout
+  5 s for the target lookup, 5 s for the capture.
+- **`show_design_pane`** `{harness?}` (#552) — makes the pane visible by
+  selecting its right-pane tab (or switching the docked/active harness), and
+  switching the active room when the user is in another one. Answers
+  `{shown, switchedRoom, revealed, reason?, harnessId}`; `revealed` is how:
+  `already` (nothing moved), `show_docked`, `switch` or `room`; `shown:
+  false` carries a `reason` when the pane did not become visible within the
+  wait. Timeout 10 s. This is a **deliberate exception** to "never take
+  focus", decided on #552, and the gate is the user's MCP client permission
+  for this one tool (allow it, or set it to ask). That is why it is its own
+  verb and not a flag on the screenshot. The intended loop: screenshot,
+  `not_visible`, `show_design_pane`, screenshot again. The iframe may not
+  have painted yet when `shown: true` returns: if the first screenshot after
+  `show_design_pane` looks blank or unloaded, take it again.
+
 Refusals (a code, then a reason):
 
 | code | verbs | when |
 | :-- | :-- | :-- |
 | `archived` | all | the caller's room is archived |
-| `no_design_harness` | `get_design_state`, `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes` | the room has no design harness |
+| `no_design_harness` | `get_design_state`, `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes`, `get_design_screenshot`, `show_design_pane` | the room has no design harness |
 | `harness_required` | same | several design harnesses and no `harness` (ids listed) |
 | `not_found` (404) | same | `harness` is not a design harness of the caller's room — identical whether it exists in another room or not |
 | `unknown_entry` | `open_design_entry` | `entry` is not a listed entry (first 20 listed) |
@@ -838,19 +883,24 @@ Refusals (a code, then a reason):
 | `bad_arguments` | `show_changes` | unknown `scope`; `commit` without `commit_sha`; `commit_sha` without `commit`; `reveal` not a boolean (before the guards, so no rate budget is spent) |
 | `bad_arguments` | `invoke_element` | the `show_element` target rules; `action` not `tap`/`swipe`; `swipe` without `direction`, or an unknown one; `direction`/`distance` with `tap`; `distance` not an integer in 8-2000; `reveal` not a boolean (all checked before the guards, so no rate budget is spent) |
 | `bad_arguments` | `set_design_device` | `device` missing or not an object/`null` (checked before the guards); an unknown key, bad preset or out-of-range value (reported by the webview) |
-| `not_mounted` | `get_design_state`, `show_element`, `invoke_element`, `show_changes` | reported by the webview: the pane is not mounted |
+| `not_mounted` | `get_design_state`, `show_element`, `invoke_element`, `show_changes`, `show_design_pane` | reported by the webview: the pane is not mounted |
 | `not_ready` | `show_element`, `invoke_element`, `show_changes` | reported by the webview: the preview has not loaded (`get_design_state` answers `ready: false` instead) |
 | `not_visible` | `invoke_element` | reported by the webview, swipe only: the matched element has no layout. Usually the design pane is hidden: pass `reveal: true` (works when the user is in this room and no harness picker is open) or ask the user to show the design harness. It is also returned when the element itself is not rendered (zero size) on a visible pane. When `reveal: true` was passed but could not take effect (the user is in another room or has a harness picker open), the message says so instead of suggesting `reveal` |
+| `not_visible` | `get_design_screenshot` | the pane is not painted (`other_room`, `hidden_tab`, `not_laid_out`, `no_pane`); call `show_design_pane`, then retry |
+| `too_large` | `get_design_screenshot` | the PNG is over 4 MiB; pass a smaller `maxEdge` |
+| `capture_failed` | `get_design_screenshot` | the capture timed out (5 s), or the window is missing (409) |
 | `busy` | `invoke_element` | reported by the webview: the user is picking an element in this design pane; try again once they finish |
-| `disabled` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes` | Settings → "Let agents open or close harnesses" (`allowAgentHarnessControl`) is off |
-| `rate_limited` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |
+| `disabled` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes`, `get_design_screenshot`, `show_design_pane` | Settings → "Let agents open or close harnesses" (`allowAgentHarnessControl`) is off |
+| `rate_limited` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes`, `get_design_screenshot`, `show_design_pane` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |
 
 A webview that is absent, times out or drops the request is a 409
 (unavailable), like the other frontend-backed verbs. The frontend
 request kinds are `design.panes`, `design.state`, `design.open_entry`,
 `design.set_device`, `design.show_element`, `design.invoke_element` (see `agent_api/verbs/design.rs`) and
 `design.show_changes` (`{roomId, harnessId, scope, files: [{path, lines, deleted}],
-truncated?, reveal?}`, see `agent_api/verbs/design_changes.rs`).
+truncated?, reveal?}`, see `agent_api/verbs/design_changes.rs`),
+`design.capture_target` and `design.show_pane` (`{roomId, harnessId}`, see
+`agent_api/verbs/design_screenshot.rs`).
 
 ## Finding rooms by path (#354, epic #266 slice A)
 

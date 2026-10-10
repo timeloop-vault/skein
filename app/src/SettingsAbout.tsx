@@ -31,7 +31,13 @@ export const AboutSettings = () => {
 	// tauri.conf.json) and writes the new bundle in place.
 	const [version, setVersion] = useState<string>("");
 	useEffect(() => {
-		void getVersion().then(setVersion);
+		void getVersion()
+			.then(setVersion)
+			.catch((err: unknown) => {
+				// #505: a failed lookup must not be an unhandled rejection.
+				console.warn("[skein] getVersion failed:", err);
+				setVersion("unknown");
+			});
 	}, []);
 
 	// #213: whether the agent-facing review API came up. Shown because

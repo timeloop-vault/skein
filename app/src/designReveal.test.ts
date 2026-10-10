@@ -106,7 +106,13 @@ describe("reveal decision and wait", () => {
 	it("revealPane shows a docked harness without switching", async () => {
 		const switchHarness = vi.fn();
 		const showDocked = vi.fn();
-		const reveal = { activeRoomId: () => "r", switchHarness, showDocked, isDocked: () => true };
+		const reveal = {
+			activeRoomId: () => "r",
+			switchRoom: vi.fn(),
+			switchHarness,
+			showDocked,
+			isDocked: () => true,
+		};
 		expect(await revealPane({ whenVisible: async () => true }, reveal, "r", "h")).toBe(true);
 		expect(showDocked).toHaveBeenCalledWith("r", "h");
 		expect(switchHarness).not.toHaveBeenCalled();
@@ -122,7 +128,13 @@ describe("reveal decision and wait", () => {
 		expect(
 			await revealPane(
 				pane,
-				{ activeRoomId: () => "r", switchHarness, showDocked: vi.fn(), isDocked: () => false },
+				{
+					activeRoomId: () => "r",
+					switchRoom: vi.fn(),
+					switchHarness,
+					showDocked: vi.fn(),
+					isDocked: () => false,
+				},
 				"r",
 				"h",
 			),
@@ -132,7 +144,13 @@ describe("reveal decision and wait", () => {
 		expect(
 			await revealPane(
 				late,
-				{ activeRoomId: () => "r", switchHarness, showDocked: vi.fn(), isDocked: () => false },
+				{
+					activeRoomId: () => "r",
+					switchRoom: vi.fn(),
+					switchHarness,
+					showDocked: vi.fn(),
+					isDocked: () => false,
+				},
 				"r",
 				"h",
 			),
@@ -144,7 +162,13 @@ describe("reveal decision and wait", () => {
 		expect(
 			await revealPane(
 				{ whenVisible },
-				{ activeRoomId: () => "x", switchHarness, showDocked: vi.fn(), isDocked: () => false },
+				{
+					activeRoomId: () => "x",
+					switchRoom: vi.fn(),
+					switchHarness,
+					showDocked: vi.fn(),
+					isDocked: () => false,
+				},
 				"r",
 				"h",
 			),
@@ -159,6 +183,13 @@ describe("handleDesignRequest reveal", () => {
 		roomId: "r",
 		ready: () => true,
 		whenVisible: async () => true,
+		captureTarget: () => ({
+			visible: true,
+			laidOut: true,
+			rect: null,
+			cssHidden: false,
+			devicePixelRatio: 1,
+		}),
 		getState: () => {
 			throw new Error("unused");
 		},
@@ -178,6 +209,7 @@ describe("handleDesignRequest reveal", () => {
 		const switchHarness = vi.fn();
 		await handleDesignRequest(kind, "id", args, [], vi.fn(), vi.fn(), complete, {
 			activeRoomId: () => active,
+			switchRoom: vi.fn(),
 			switchHarness,
 			showDocked: vi.fn(),
 			isDocked: () => false,

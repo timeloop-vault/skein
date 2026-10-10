@@ -1,0 +1,63 @@
+[package]
+name = "skein-webshot"
+version = "0.1.0"
+description = "Native screenshot of a rectangle of a Tauri webview as PNG: WebView2 CDP on Windows, WKWebView snapshot on macOS (#552)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Like skein-winnotify, a deliberate exception to the workspace's
+# `unsafe_code = "forbid"`: COM calls on Windows and Objective-C calls
+# on macOS cannot be made safe. Every unsafe block must carry a
+# `// SAFETY:` comment (`undocumented_unsafe_blocks = "deny"`).
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+too_many_lines = "allow"
+undocumented_unsafe_blocks = "deny"
+
+# Same versions as app/src-tauri/Cargo.lock so one copy of each resolves.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows-core = "0.62"
+serde_json = "1"
+base64 = "0.22"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-core-foundation = "0.3"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSGeometry",
+    "NSObject",
+    "NSString",
+    "NSValue",
+    "objc2-core-foundation",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "NSBitmapImageRep",
+    "NSImage",
+    "NSImageRep",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+    "objc2-core-foundation",
+] }
+objc2-web-kit = { version = "0.3", default-features = false, features = [
+    "block2",
+    "objc2-app-kit",
+    "objc2-core-foundation",
+    "WKSnapshotConfiguration",
+    "WKWebView",
+] }
+
+[dev-dependencies]
+serde_json = "1"
+base64 = "0.22"

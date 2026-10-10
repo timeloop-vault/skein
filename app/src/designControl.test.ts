@@ -25,6 +25,13 @@ const pane = (roomId: string, ready: boolean): DesignPaneApi => ({
 	roomId,
 	ready: () => ready,
 	whenVisible: async () => true,
+	captureTarget: () => ({
+		visible: true,
+		laidOut: true,
+		rect: null,
+		cssHidden: false,
+		devicePixelRatio: 1,
+	}),
 	getState: () => ({
 		entry: "index.html",
 		device: null,
