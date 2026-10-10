@@ -79,9 +79,10 @@ const RightPaneImpl = ({
 	onTabChange: (tab: RightPaneTab) => void;
 }) => {
 	// The review pane needs the room's action rows for per-hunk harness
-	// attribution (D4). `useRoomActions` is a subscription to a shared
-	// store, so reading it here and in LiveContext costs one backfill.
-	const { actions } = useRoomActions(roomId);
+	// attribution (D4). This is a second, independent subscription (its own
+	// listener and backfill query, not shared with LiveContext's); `derive:
+	// false` keeps it fold-less, so it only merges rows.
+	const { actions } = useRoomActions(roomId, visible, { derive: false });
 
 	const harnessKindOf = useCallback<HarnessKindOf>(
 		(harnessId, storedKind) => resolveHarnessKind(storedKind, harnessId, harnesses),

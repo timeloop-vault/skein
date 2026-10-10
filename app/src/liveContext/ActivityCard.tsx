@@ -39,9 +39,10 @@ import {
 } from "./feedItems.tsx";
 import { ActivityRow } from "./rows.tsx";
 import type { HarnessAction } from "./store.ts";
-import { IDLE_AFTER_MS, useIdleBasis } from "./useIdleBasis.ts";
+import { IDLE_AFTER_MS } from "./useIdleBasis.ts";
+import { useSnapOnReveal } from "./useSnapOnReveal.ts";
 
-export { IDLE_AFTER_MS, orderForDisplay, useIdleBasis };
+export { IDLE_AFTER_MS, orderForDisplay };
 
 /// Pixels from the bottom within which the feed counts as "at the
 /// bottom" and keeps auto-tailing.
@@ -58,6 +59,7 @@ export const ActivityCardBody = ({
 	harnessKindOf,
 	visible,
 	showTurnCosts,
+	idleBasis,
 }: {
 	actions: HarnessAction[];
 	/** Ids that arrived over the live event channel (store.ts). Stable
@@ -68,6 +70,8 @@ export const ActivityCardBody = ({
 	visible: boolean;
 	/** Render per-turn cost hair-lines (user-level pref, off by default). */
 	showTurnCosts: boolean;
+	/** Last-activity instant (ms): max(newest row ts, newest live receipt). */
+	idleBasis: number;
 }) => {
 	const ordered = useMemo(() => orderForDisplay(actions), [actions]);
 	// Flatten to rendered items (rows + derived turn separators / cost
@@ -88,6 +92,8 @@ export const ActivityCardBody = ({
 	// that arrive while hidden (they snap on reveal) and animations cut
 	// short by a room switch.
 	const animatedKeys = useRef<Set<string>>(new Set());
+	// Rows flushed in on reveal arrived while hidden: snap, don't slide.
+	useSnapOnReveal(items, visible, animatedKeys);
 	useEffect(() => {
 		if (!visible) {
 			for (const it of items) {
@@ -149,7 +155,6 @@ export const ActivityCardBody = ({
 	// Tail sentinel idle state: the room's been silent past the
 	// threshold. Computed at render time from the idle basis; the
 	// timeout re-renders once when the threshold passes.
-	const idleBasis = useIdleBasis(actions, liveIds);
 	const [idleTick, setIdleTick] = useState(0);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: idleTick is the re-arm trigger — it re-runs the effect after the flip so a future-stamped row can re-schedule, though the body never reads it.
 	useEffect(() => {

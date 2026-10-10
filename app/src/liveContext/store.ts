@@ -24,7 +24,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { RoomDerived } from "./roomFold.ts";
+import { applyRows, emptyRows, type RowsState } from "./roomRows.ts";
 
 /// One row from `harness_actions`. Mirrors the Rust `HarnessAction`
 /// (db.rs) and the live `HarnessActionEvent` (harness_action_event.rs);
@@ -54,91 +56,107 @@ export const ACTION_EVENT = "harness-action";
 /// transform, and a Virtuoso re-measure when a heavy room is switched
 /// to. 500 recent rows is plenty for "what's happening"; lazy-loading
 /// older history on scroll-up is the proper long-term fix (follow-up).
-const BACKFILL_LIMIT = 500;
-
-/// Insert `incoming` into `sorted` (ascending by id), skipping ids
-/// already present. Returns a new array; never mutates the input.
-function mergeById(sorted: HarnessAction[], incoming: HarnessAction[]): HarnessAction[] {
-	if (incoming.length === 0) return sorted;
-	const seen = new Set(sorted.map((a) => a.id));
-	const fresh = incoming.filter((a) => !seen.has(a.id));
-	if (fresh.length === 0) return sorted;
-	fresh.sort((a, b) => a.id - b.id);
-	// Fast path (#165): live rows arrive newest-last with monotonic ids,
-	// so when every fresh row sorts after the current tail we can append
-	// without re-sorting the whole array — the dominant cost for a long,
-	// actively-streaming feed.
-	const tail = sorted[sorted.length - 1];
-	const head = fresh[0];
-	if (head && (!tail || head.id > tail.id)) return [...sorted, ...fresh];
-	const merged = [...sorted, ...fresh];
-	merged.sort((a, b) => a.id - b.id);
-	return merged;
-}
+export const BACKFILL_LIMIT = 500;
 
 /// Subscribe a component to the live action stream for `roomId`.
-/// Returns the room's rows (ascending by id), the set of ids that
-/// arrived over the live event channel (everything else came from the
-/// backfill query), and a `loading` flag that is true until the initial
-/// backfill query resolves.
+/// Returns the room's rows (ascending by id; trim policy in roomRows.ts), the set
+/// of ids that arrived over the live event channel (everything else came
+/// from the backfill query), the incremental `derived` state (plan, totals,
+/// away summary, event count, newest timestamp — covering every row seen
+/// since mount, not just the capped array), the receipt time of the newest
+/// live arrival, and a `loading` flag true until the backfill resolves.
+///
+/// While `visible` is false a live event does no derived work (#593): it
+/// records its id (dedupe), liveness and receipt time, and parks the row in
+/// a pending buffer. Becoming visible merges + folds the buffer and sets
+/// state once. Hidden consumers therefore see stale `actions`/`derived`.
 ///
 /// `liveIds` keeps a stable identity and is mutated in lockstep with
-/// `actions` updates — consumers re-read it on the re-render the same
-/// event causes, so it must not be used as a memo dependency on its own.
+/// `actions` updates (ids of trimmed rows are pruned) — consumers re-read
+/// it on the re-render the same event causes, so it must not be used as a
+/// memo dependency on its own.
 ///
 /// Re-runs cleanly when `roomId` changes: tears down the previous
 /// listener + clears rows so a room switch never shows another room's
 /// activity.
-export function useRoomActions(roomId: string | undefined): {
+export function useRoomActions(
+	roomId: string | undefined,
+	visible: boolean,
+	opts: {
+		/** false = rows only: no fold, so `derived` stays empty. For consumers
+		 *  (the review pane's hunk attribution) that read `actions` alone. */
+		derive?: boolean;
+	} = {},
+): {
 	actions: HarnessAction[];
 	liveIds: ReadonlySet<number>;
 	loading: boolean;
+	derived: RoomDerived;
+	lastLiveArrivalMs: number;
 } {
-	const [actions, setActions] = useState<HarnessAction[]>([]);
+	const [view, setView] = useState<RowsState>(emptyRows);
 	const [loading, setLoading] = useState(true);
-	// Hold the latest rows in a ref so the live-event closure can merge
-	// against current state without being re-created on every append.
-	const actionsRef = useRef<HarnessAction[]>([]);
-	actionsRef.current = actions;
+	const stateRef = useRef<RowsState>(view);
+	const pendingRef = useRef<HarnessAction[]>([]);
+	const visibleRef = useRef(visible);
+	visibleRef.current = visible;
+	const deriveRef = useRef(opts.derive !== false);
+	deriveRef.current = opts.derive !== false;
+	const flushRef = useRef<(reveal?: boolean) => void>(() => {});
 	// Ids ever seen this room (superset of `actions` ids), so the listener
 	// can tell a genuinely new live row from a late duplicate event for a
 	// queried one. Grown incrementally — rebuilding per event is O(n).
 	const idsRef = useRef<Set<number>>(new Set());
 	const liveIdsRef = useRef<Set<number>>(new Set());
+	const lastLiveRef = useRef(0);
 
 	useEffect(() => {
 		if (!roomId) {
-			setActions([]);
+			stateRef.current = emptyRows();
+			pendingRef.current = [];
+			setView(stateRef.current);
 			setLoading(false);
 			return;
 		}
 
 		let cancelled = false;
-		setActions([]);
+		stateRef.current = emptyRows();
+		pendingRef.current = [];
+		setView(stateRef.current);
 		idsRef.current = new Set();
 		liveIdsRef.current = new Set();
+		lastLiveRef.current = 0;
 		setLoading(true);
 
-		const apply = (incoming: HarnessAction[]) => {
+		const flush = (reveal = false) => {
 			if (cancelled) return;
-			for (const a of incoming) idsRef.current.add(a.id);
-			const next = mergeById(actionsRef.current, incoming);
-			if (next !== actionsRef.current) {
-				actionsRef.current = next;
-				setActions(next);
-			}
+			if (pendingRef.current.length === 0 && !reveal) return;
+			const batch = pendingRef.current;
+			pendingRef.current = [];
+			const res = applyRows(stateRef.current, batch, { reveal, derive: deriveRef.current });
+			if (res.state === stateRef.current) return;
+			for (const t of res.trimmed) liveIdsRef.current.delete(t.id);
+			stateRef.current = res.state;
+			setView(res.state);
+		};
+		flushRef.current = flush;
+
+		const enqueue = (rows: HarnessAction[]) => {
+			if (cancelled) return;
+			pendingRef.current.push(...rows);
+			if (visibleRef.current) flush();
 		};
 
 		// Attach the listener BEFORE the backfill query so a row
-		// inserted in the gap still lands (merge de-dupes if the query
+		// inserted in the gap still lands (de-duped by id if the query
 		// also returned it).
 		const unlistenPromise = listen<HarnessAction>(ACTION_EVENT, (event) => {
-			if (event.payload.roomId === roomId) {
-				if (!idsRef.current.has(event.payload.id)) {
-					liveIdsRef.current.add(event.payload.id);
-				}
-				apply([event.payload]);
-			}
+			const a = event.payload;
+			if (a.roomId !== roomId || idsRef.current.has(a.id)) return;
+			idsRef.current.add(a.id);
+			liveIdsRef.current.add(a.id);
+			lastLiveRef.current = Date.now();
+			enqueue([a]);
 		});
 
 		void invoke<HarnessAction[]>("db_recent_harness_actions_by_room", {
@@ -149,7 +167,9 @@ export function useRoomActions(roomId: string | undefined): {
 			limit: BACKFILL_LIMIT,
 		})
 			.then((rows) => {
-				apply(rows);
+				const fresh = rows.filter((a) => !idsRef.current.has(a.id));
+				for (const a of fresh) idsRef.current.add(a.id);
+				enqueue(fresh);
 			})
 			.catch((err: unknown) => {
 				const msg = err instanceof Error ? err.message : String(err);
@@ -165,5 +185,19 @@ export function useRoomActions(roomId: string | undefined): {
 		};
 	}, [roomId]);
 
-	return { actions, liveIds: liveIdsRef.current, loading };
+	// Reveal: fold whatever piled up while hidden before the first painted
+	// frame, so the room never flashes stale content.
+	useLayoutEffect(() => {
+		// The card re-pins its auto-tail on reveal, so this is the moment a
+		// trim past FEED_CAP is safe (see roomRows.ts).
+		if (visible) flushRef.current(true);
+	}, [visible]);
+
+	return {
+		actions: view.rows,
+		liveIds: liveIdsRef.current,
+		loading,
+		derived: view.derived,
+		lastLiveArrivalMs: lastLiveRef.current,
+	};
 }

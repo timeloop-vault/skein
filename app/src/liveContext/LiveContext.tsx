@@ -22,13 +22,13 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { type HarnessKindOf, resolveHarnessKind } from "../harnessAttribution.ts";
 import { usePersistedState } from "../prefs.ts";
 import type { Harness, HarnessKind } from "../types.ts";
-import { ActivityCardBody, IDLE_AFTER_MS, useIdleBasis } from "./ActivityCard.tsx";
+import { ActivityCardBody, IDLE_AFTER_MS } from "./ActivityCard.tsx";
 import { type CardLayout, CardStack, defaultLayout, normalizeLayout } from "./CardStack.tsx";
-import { SessionTotals, sessionTotals } from "./feedItems.tsx";
+import { SessionTotals } from "./feedItems.tsx";
 import "./chrome.css";
 import { useReviewDiscovery } from "../review/useReviewData.ts";
 import { PlanCardBody } from "./PlanCard.tsx";
-import { type PlanGroup, planTotals, reducePlan } from "./plan.ts";
+import { planTotals } from "./plan.ts";
 import { RoomSubtitle } from "./RoomSubtitle.tsx";
 import { useRoomActions } from "./store.ts";
 import { useGitBranchWatcher } from "./useGitBranchWatcher.ts";
@@ -93,7 +93,7 @@ export const LiveContext = memo(function LiveContext({
 	onToggleTurnCosts,
 	onBranchChange,
 }: LiveContextProps) {
-	const { actions, liveIds } = useRoomActions(roomId);
+	const { actions, liveIds, derived, lastLiveArrivalMs } = useRoomActions(roomId, visible);
 	// Two cards since #212 took the Diff card into the review pane.
 	// Layouts persisted when there were three are reconciled rather than
 	// discarded — losing a user's pane sizes over a refactor is a small
@@ -118,14 +118,12 @@ export const LiveContext = memo(function LiveContext({
 		return (harnessId: string): string => byId.get(harnessId) ?? harnessId;
 	}, [harnesses]);
 
-	// Current plan state, reduced from the room's plan_change rows
-	// (opencode latest-snapshot vs Claude create/update deltas — see
-	// plan.ts). Drives both the Plan card body and its header tally.
-	const planGroups: PlanGroup[] = useMemo(() => reducePlan(actions), [actions]);
+	// Plan, head totals and event count come from the room's incremental
+	// fold (roomFold.ts), not a rescan. Head totals are independent of the
+	// per-turn hair-line toggle — the session's cost is a fact about the
+	// room, not a display preference.
+	const { planGroups, totals, eventCount } = derived;
 	const planTally = useMemo(() => planTotals(planGroups), [planGroups]);
-	// Head totals are independent of the per-turn hair-line toggle — the
-	// session's cost is a fact about the room, not a display preference.
-	const totals = useMemo(() => sessionTotals(actions), [actions]);
 
 	// Keep the status-bar branch live (issue #18). Bind this room's id to
 	// App's shared callback; the watcher holds it in a ref (deps [cwd]) so
@@ -149,7 +147,7 @@ export const LiveContext = memo(function LiveContext({
 	// past the tail threshold (§10 long-quiet). A per-minute ticker
 	// (visible rooms only) keeps the figure fresh; minute granularity is
 	// all the format shows.
-	const idleBasis = useIdleBasis(actions, liveIds);
+	const idleBasis = Math.max(derived.lastActionTs, lastLiveArrivalMs);
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		if (!visible) return;
@@ -174,7 +172,7 @@ export const LiveContext = memo(function LiveContext({
 
 	return (
 		<div className="lc-pane">
-			<RoomSubtitle actions={actions} />
+			<RoomSubtitle awaySummary={derived.awaySummary} />
 			<CardStack
 				layout={layout}
 				onLayoutChange={setLayout}
@@ -202,7 +200,7 @@ export const LiveContext = memo(function LiveContext({
 						label: "Activity",
 						meta: (
 							<>
-								<span>{actions.length} events</span>
+								<span>{eventCount} events</span>
 								<SessionTotals usd={totals.usd} tokens={totals.tokens} />
 								{idleFor && <span className="idle-for">· idle {idleFor}</span>}
 								{/* The whole card head is the collapse click target, so
@@ -233,6 +231,7 @@ export const LiveContext = memo(function LiveContext({
 								// the auto-tail never re-pins.
 								visible={visible && !layout.collapsed[1]}
 								showTurnCosts={showTurnCosts}
+								idleBasis={idleBasis}
 							/>
 						),
 					},
