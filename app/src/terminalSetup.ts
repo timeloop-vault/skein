@@ -14,6 +14,11 @@ import { isMac } from "./shortcuts.ts";
 import { fitTerminal } from "./terminalFit.ts";
 import { shouldHostOpenLink } from "./terminalLinks.ts";
 
+/** Click-time link policy, mutated by the caller once `pty_spawn` resolves (#401). */
+export interface LinkPolicy {
+	mouseClicksDisabled: boolean;
+}
+
 /** Creates and opens a `Terminal` into `host`, wired with the fit addon,
  *  the Unicode 11 width table (#23), and Cmd/Ctrl-click URI opening
  *  (#24). Mirrors exactly what `LiveTerminal`'s mount effect used to do
@@ -22,11 +27,15 @@ import { shouldHostOpenLink } from "./terminalLinks.ts";
  *  `opensClickedLinks` is the harness kind's
  *  `HarnessCapabilities.opensClickedLinks` (#269) — true only for
  *  `claude`, whose fullscreen renderer opens a Cmd/Ctrl-clicked URL
- *  itself once mouse tracking is on. */
+ *  itself once mouse tracking is on.
+ *
+ *  `linkPolicy` is mutated by the caller once `pty_spawn` resolves
+ *  (#401: `mouseClicksDisabled`) and read at click time. */
 export function createXterm(
 	host: HTMLDivElement,
 	fontSize: number,
 	opensClickedLinks: boolean,
+	linkPolicy: LinkPolicy,
 ): { term: Terminal; fit: FitAddon } {
 	const term = new Terminal({
 		fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -110,13 +119,23 @@ export function createXterm(
 	// because WebLinksAddon only matched the hard-wrapped visible text
 	// while the CLI had the full URL. `shouldHostOpenLink` is read at
 	// click time, not at setup, because mouse tracking flips on/off as
-	// the TUI runs.
+	// the TUI runs. We only defer on Win/Linux with clicks enabled:
+	// macOS's Cmd is never forwarded (#571) and
+	// CLAUDE_CODE_DISABLE_MOUSE_CLICKS makes the CLI ignore clicks
+	// (#401, learned from the spawn result via `linkPolicy`).
 	const uriRegex = /\b[a-zA-Z][a-zA-Z0-9+.-]+:\/\/[^\s()[\]{}"'<>\\^`|]+/;
 	const handleUriClick = (event: MouseEvent, uri: string) => {
 		const isModifierClick = isMac ? event.metaKey : event.ctrlKey;
 		if (!isModifierClick) return;
 		event.preventDefault();
-		if (!shouldHostOpenLink(term.modes.mouseTrackingMode !== "none", opensClickedLinks)) {
+		if (
+			!shouldHostOpenLink({
+				isMac,
+				mouseClicksDisabled: linkPolicy.mouseClicksDisabled,
+				mouseTrackingOn: term.modes.mouseTrackingMode !== "none",
+				cliOpensClickedLinks: opensClickedLinks,
+			})
+		) {
 			console.debug("[skein] deferring link open to CLI:", uri);
 			return;
 		}

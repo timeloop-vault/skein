@@ -1,7 +1,7 @@
 //! The environment a harness PTY is spawned with: `PATH` merging,
 //! host-terminal identity stripping and the reserved keys.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 use portable_pty::CommandBuilder;
@@ -31,6 +31,25 @@ pub(crate) struct AppliedEnv {
     /// Names (never values) of the login-shell variables that reached the
     /// child: overlaid, not stripped afterwards, not Skein-reserved.
     pub login_env_keys: Vec<String>,
+    /// Whether `CLAUDE_CODE_DISABLE_MOUSE_CLICKS` is truthy in the final
+    /// environment (inherited, login shell or the user's extra env). The
+    /// frontend's link-click deferral (#269) must not stand aside when
+    /// Claude ignores clicks (#401), and only the builder knows.
+    pub mouse_clicks_disabled: bool,
+}
+
+/// The variable Claude Code reads to ignore mouse clicks (#401).
+const DISABLE_MOUSE_CLICKS_VAR: &str = "CLAUDE_CODE_DISABLE_MOUSE_CLICKS";
+
+/// Claude Code's own truthiness rule: trimmed, lowercased, one of
+/// `1`/`true`/`yes`/`on`. Unset or anything else is false.
+pub(super) fn env_truthy(value: Option<&OsStr>) -> bool {
+    value.is_some_and(|v| {
+        matches!(
+            v.to_string_lossy().trim().to_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 /// Environment variables the user cannot set through "extra environment
@@ -258,7 +277,10 @@ pub(super) fn apply_env(
 
     apply_no_proxy(builder);
 
+    let mouse_clicks_disabled = env_truthy(builder.get_env(DISABLE_MOUSE_CLICKS_VAR));
+
     AppliedEnv {
+        mouse_clicks_disabled,
         path: merged.path,
         stripped,
         probe,

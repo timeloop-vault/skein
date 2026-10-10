@@ -52,9 +52,12 @@ export interface HarnessCapabilities {
 	/// recognises (VS Code), which Skein isn't (TERM_PROGRAM is
 	/// stripped). Skein therefore stands aside only while mouse tracking
 	/// is live (the classic renderer has none, so Skein still opens
-	/// there). Known gap: with `CLAUDE_CODE_DISABLE_MOUSE_CLICKS` set,
-	/// tracking stays on for scrolling but Claude no longer opens links,
-	/// so a click opens nothing. True only for `claude`; every other kind
+	/// there). Two narrowings, both in `shouldHostOpenLink`: on macOS Skein
+	/// never stands aside, since xterm's mouse protocol has no Cmd bit so
+	/// Claude sees a plain click and opens nothing (#571); and with
+	/// `CLAUDE_CODE_DISABLE_MOUSE_CLICKS` truthy in the harness env Claude
+	/// ignores clicks, so Skein opens them (#401, reported by `pty_spawn`
+	/// as `mouseClicksDisabled`). True only for `claude`; every other kind
 	/// leaves link-opening to Skein.
 	opensClickedLinks: boolean;
 }

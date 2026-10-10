@@ -21,11 +21,12 @@ import { harnessInput } from "./harnessInput.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
+import type { PtySpawnResult } from "./ptySpawnResult.ts";
 import { shellClaim } from "./shellClaim.ts";
 import { startupAdoption } from "./startupAdoption.ts";
 import { subagents } from "./subagents.ts";
 import { attachTerminalInteractions } from "./terminalInteractions.ts";
-import { createXterm } from "./terminalSetup.ts";
+import { createXterm, type LinkPolicy } from "./terminalSetup.ts";
 import { attachAdapters } from "./terminalSpawnAdapters.ts";
 import { agentResolves } from "./terminalSpawnAgent.ts";
 import { attachPtyInput, observeResize, registerInputTarget } from "./terminalSpawnInput.ts";
@@ -33,15 +34,6 @@ import type { HarnessKind } from "./types.ts";
 import { useClaudeRepoint } from "./useClaudeRepoint.ts";
 
 type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
-
-/// `pty_spawn`'s resolved value. `injected` mirrors whether #215's
-/// config injection was non-empty for this spawn — see
-/// `harnessActivity.injected` and the #238 nudge gate in
-/// `harnessInput.ts`, the only consumers.
-interface PtySpawnResult {
-	id: string;
-	injected: boolean;
-}
 
 export interface UseTerminalSpawnParams {
 	cmd: string[];
@@ -127,7 +119,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		spawnedRef.current = mountKey;
 
 		const caps = HARNESS_KINDS[harnessKind].capabilities;
-		const { term, fit } = createXterm(host, fontSize, caps.opensClickedLinks);
+		const linkPolicy: LinkPolicy = { mouseClicksDisabled: false };
+		const { term, fit } = createXterm(host, fontSize, caps.opensClickedLinks, linkPolicy);
 		termRef.current = term;
 		fitRef.current = fit;
 		// #383 follow-up: xterm's IME composition (CJK, an emoji picker,
@@ -273,8 +266,11 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// 0.9 waits for it), which can arrive before pty_spawn resolves. If
 			// unmounted meanwhile, the settle paths below dispose it.
 			const early = bufferPtyInput(term);
+			// #401: re-learned from each spawn. A var the user exports inside the
+			// post-exit shell is invisible to Rust and not covered.
+			linkPolicy.mouseClicksDisabled = false;
 			try {
-				const { id, injected } = await invoke<PtySpawnResult>("pty_spawn", {
+				const { id, injected, mouseClicksDisabled } = await invoke<PtySpawnResult>("pty_spawn", {
 					cmd: cmdToSpawn,
 					cwd,
 					rows: term.rows,
@@ -303,6 +299,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					return;
 				}
 				ptyIdRef.current = id;
+				linkPolicy.mouseClicksDisabled = mouseClicksDisabled;
 				harnessActivity.setInjected(harnessId, injected);
 				// #238: publish this harness to the `harnessInput` seam now
 				// that its PTY is live.
