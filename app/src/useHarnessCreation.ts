@@ -128,7 +128,7 @@ export function useHarnessCreation(
 		const caps = HARNESS_KINDS[kind].capabilities;
 		const agentName = resolveAgentName(kind, agent);
 		const id = newId("h");
-		// #568 spike: the session name is minted from this same id, so the
+		// #568: the session name is minted from this same id, so the
 		// record and its argv agree. A remote harness without a host is
 		// refused rather than spawned with an empty argv.
 		if (kind === "remote" && !opts?.remote) return undefined;

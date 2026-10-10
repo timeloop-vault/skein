@@ -25,7 +25,7 @@ pub(crate) enum HarnessKind {
     Files,
     /// #433: a non-PTY live preview of the worktree's HTML.
     Design,
-    /// #568 spike (easy to remove): `ssh -t -- <host> …tmux…` in a local PTY.
+    /// #568: `ssh -t -- <host> …tmux…` in a local PTY.
     Remote,
 }
 

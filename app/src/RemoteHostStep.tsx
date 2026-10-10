@@ -1,4 +1,4 @@
-// #568 spike: the picker's step for a `remote` harness — host, tool and
+// #568: the picker's step for a `remote` harness — host, tool and
 // an optional directory, instead of an agent list.
 
 import { useState } from "react";

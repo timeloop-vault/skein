@@ -168,15 +168,14 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			opensClickedLinks: false,
 		},
 	},
-	// #568 SPIKE: a tool run inside tmux on a remote host over ssh. Meant to
-	// be easy to remove: this entry, HARNESS_ORDER, remoteCmd.ts and the
-	// `remote` cases in harnessCmd.ts are the whole footprint.
+	// #568: the remote harness, a tool run inside tmux on a remote host over
+	// ssh. See remoteCmd.ts and docs/remote-harness.md.
 	remote: {
 		id: "remote",
 		label: "ssh",
 		name: "Remote (ssh+tmux)",
 		chip: "h-remote",
-		desc: "Spike: tmux on a remote host.",
+		desc: "tmux on a remote host, over ssh.",
 		program: "ssh",
 		skillInvocation: null,
 		capabilities: {

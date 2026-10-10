@@ -355,6 +355,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   ├── agent-api.md             # The #213 agent API: verbs, headers, error codes, and
     │   │                            #   how #215 gets it in front of each harness
     │   ├── backlog.md               # Parked ideas (read before adding to any plan)
+    │   ├── remote-harness.md        # The `remote` harness kind (#568): ssh + tmux, no daemon;
+    │   │                            #   what works, what is lost. Argv builder: app/src/remoteCmd.ts
     │   ├── grok-build-recon-*.md    # Recon of grok-build: reference designs for the review
     │   │                            #   surface (§3 xai-hunk-tracker) + git writes (§6)
     │   ├── files-pillar-design-brief.md  # Design brief behind #49 / #184 / #185

@@ -1,8 +1,8 @@
-# ssh + tmux spike (#568)
+# Remote harness (ssh + tmux)
 
-Phase 0 of the planned skeind epic (epic to follow). Question: how far does a
-dumb remote — `ssh` plus `tmux`, no daemon — get us before a daemon is worth
-building? This is a spike, written to be removable.
+A harness kind that runs a tool inside tmux on a remote host, over plain `ssh`
+with no daemon. Added in #568 as phase 0 of the planned skeind epic, and kept
+as a feature in its own right.
 
 ## What it is
 
@@ -39,9 +39,9 @@ Requirements on the host: `tmux`, the tool, and reachable by `ssh` from the
 Skein machine. To end a session for good, exit the tool inside tmux, or run
 `tmux kill-session -t skein-...` on the host.
 
-Removing the spike: the `remote` entry in `data.tsx` / `types.ts` /
-`harness_kind.rs`, `remoteCmd.ts`, `RemoteHostStep.tsx` / `.css`, and the
-`remote` field in `db/rooms.rs` (an `Option`, so old blobs keep parsing).
+Where it lives: the `remote` entry in `data.tsx` / `types.ts` /
+`harness_kind.rs`, `remoteCmd.ts`, `RemoteHostStep.tsx`, and the `remote`
+field in `db/rooms.rs`.
 
 ## Design choices and why
 
@@ -92,7 +92,7 @@ Removing the spike: the `remote` entry in `data.tsx` / `types.ts` /
 - **Shell syntax error in the tool** makes the pane exit at once and the tmux
   session vanish (seen with an unbalanced quote in a probe).
 
-## Observations for the skeind design
+## Notes for the skeind design
 
 1. Reattach is cheap and already good with dumb tmux. The daemon's value is
    not keeping the process alive but the telemetry: the transcript / SSE

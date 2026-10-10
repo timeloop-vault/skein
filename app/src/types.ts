@@ -29,7 +29,7 @@ export type HarnessKind =
 // into harnessActivity's ActivityPhase.
 export type Status = "running" | "waiting" | "permission" | "idle" | "error" | "exited";
 
-/** Spike #568: where a `remote` harness runs. `session` is the stable
+/** #568: where a `remote` harness runs. `session` is the stable
  *  tmux session name minted at creation; `tool` is a remote shell
  *  command line (default "claude"), e.g. "opencode" or
  *  "~/.local/bin/claude". */
@@ -50,7 +50,7 @@ export interface Harness {
 	live?: boolean;
 	cmd?: string[];
 	cwd?: string;
-	// Spike #568: set only on kind "remote". See RemoteSpec.
+	// #568: set only on kind "remote". See RemoteSpec.
 	remote?: RemoteSpec;
 	// Conversation id assigned by the underlying tool. For Claude this
 	// is pre-allocated by Skein at spawn time via `--session-id <uuid>`

@@ -10,10 +10,12 @@ export type RequestResult<T> = { ok: true; value: T } | { ok: false; error: stri
 export const isHarnessKind = (value: unknown): value is HarnessKind =>
 	typeof value === "string" && (HARNESS_ORDER as readonly string[]).includes(value);
 
-/** #568 spike: an agent has no way to supply a host, so it cannot ask
+/** #568: an agent has no way to supply a host, so it cannot ask
  *  for a remote harness. null when `kind` is fine. */
 export const remoteRefusal = (kind: unknown): string | null =>
-	kind === "remote" ? "remote harnesses are a UI-only spike (#568); add one from + harness" : null;
+	kind === "remote"
+		? "remote harnesses need a host only the user can enter; add one from + harness (#568)"
+		: null;
 
 export const asRecord = (raw: unknown): Record<string, unknown> | null =>
 	typeof raw === "object" && raw !== null && !Array.isArray(raw)

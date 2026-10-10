@@ -4,8 +4,8 @@ import { parseOpenHarnessArgs } from "./agentRequestsHarness.ts";
 import { remoteRefusal } from "./agentRequestsShared.ts";
 
 describe("remote kind is refused for agents (#568)", () => {
-	it("remoteRefusal names the spike only for remote", () => {
-		expect(remoteRefusal("remote")).toMatch(/UI-only spike/);
+	it("remoteRefusal is set only for remote", () => {
+		expect(remoteRefusal("remote")).toMatch(/need a host only the user can enter/);
 		expect(remoteRefusal("claude")).toBeNull();
 	});
 

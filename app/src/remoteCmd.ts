@@ -1,4 +1,4 @@
-// #568 SPIKE: argv for a `remote` harness — a tool run inside tmux on a
+// #568: argv for a `remote` harness — a tool run inside tmux on a
 // remote host over ssh. Pure; built from the harness record only.
 
 import type { RemoteSpec } from "./types.ts";

@@ -289,7 +289,7 @@ export const saveNudgeOverrides = (overrides: NudgeOverrides): void => {
 	localStorage.setItem(NUDGE_OVERRIDES_KEY, JSON.stringify(overrides));
 };
 
-// #568 spike: the host and tool last used in the picker's remote step.
+// #568: the host and tool last used in the picker's remote step.
 const REMOTE_LAST_KEY = `${KEY_PREFIX}remoteLast`;
 
 export const loadRemoteLast = (): { host: string; tool: string } => {

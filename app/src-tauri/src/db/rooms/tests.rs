@@ -231,7 +231,7 @@ fn a_pre_520_blob_loads_without_a_shell_claim() {
     assert_eq!(room.harnesses[0].shell_claim, None);
 }
 
-/// #568 spike: `remote` survives load then save; a blob without it parses.
+/// #568: `remote` survives load then save; a blob without it parses.
 #[test]
 fn remote_spec_round_trips_and_is_optional() {
     let json = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
