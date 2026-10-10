@@ -263,11 +263,16 @@ export function useReviewFile(
 /// is what makes a sign-off lapse, and the pane already bumps the
 /// nonce on every refresh, so the control cannot go on claiming
 /// clearance after the agent has moved HEAD.
+///
+/// `headSha` is the scope's HEAD. A commit in a linked worktree changes
+/// no watched file, so the nonce may not move (#563); a changed HEAD
+/// refetches on its own.
 export function useSignoff(
 	roomId: string,
 	cwd: string,
 	enabled: boolean,
 	nonce: number,
+	headSha: string | undefined,
 ): {
 	status: SignoffStatus | undefined;
 	error: string | undefined;
@@ -278,7 +283,7 @@ export function useSignoff(
 	const [error, setError] = useState<string | undefined>(undefined);
 	const [busy, setBusy] = useState(false);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: nonce is the trigger — a commit is what makes a sign-off lapse, and nothing else in this dependency list moves when HEAD does
+	// biome-ignore lint/correctness/useExhaustiveDependencies: nonce and headSha are triggers only — a commit is what makes a sign-off lapse, and neither is read in the body
 	useEffect(() => {
 		if (!enabled || !roomId || !cwd) return;
 		let cancelled = false;
@@ -294,7 +299,7 @@ export function useSignoff(
 		return () => {
 			cancelled = true;
 		};
-	}, [roomId, cwd, enabled, nonce]);
+	}, [roomId, cwd, enabled, nonce, headSha]);
 
 	const set = useCallback(
 		(approved: boolean, note?: string) => {

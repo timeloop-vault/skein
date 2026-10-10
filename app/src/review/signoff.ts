@@ -65,9 +65,18 @@ export const short = (sha: string | undefined): string => sha?.slice(0, 8) ?? ""
 /// prevent.
 export type SignoffState = "none" | "approved" | "stale";
 
-export const signoffState = (s: SignoffStatus | undefined): SignoffState => {
+/// `headSha` is the HEAD the scope data reports now. The status was
+/// fetched earlier, so an approval it calls current can already be
+/// stale: a commit in a linked worktree touches no watched file and so
+/// triggers no refetch (#563). A known, different HEAD wins over the
+/// fetched `approved`; an unknown one trusts the status.
+export const signoffState = (s: SignoffStatus | undefined, headSha?: string): SignoffState => {
 	if (!s) return "none";
-	if (s.approved) return "approved";
+	if (s.approved) {
+		return headSha !== undefined && s.approvedSha !== undefined && headSha !== s.approvedSha
+			? "stale"
+			: "approved";
+	}
 	return s.stale ? "stale" : "none";
 };
 
@@ -108,9 +117,14 @@ export const withdrawPrompt = (): Confirmation => ({
 
 /// What the pane says under a stale sign-off. The reviewer needs to
 /// know their approval stopped applying and why.
+///
+/// A sign-off that `signoffState` derived as stale from a newer HEAD is
+/// still `approved` in the fetched status, and its `commitsSince` is
+/// absent or from before the move, so it says only that HEAD moved.
 export function staleExplanation(s: SignoffStatus): string {
-	const since =
-		s.commitsSince === undefined
+	const since = s.approved
+		? "HEAD has moved since"
+		: s.commitsSince === undefined
 			? "the branch has been rewritten since"
 			: `${s.commitsSince} commit${s.commitsSince === 1 ? "" : "s"} landed since`;
 	return `approved ${short(s.approvedSha)}, but ${since} — review the new work and sign off again`;

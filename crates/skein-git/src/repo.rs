@@ -67,6 +67,25 @@ impl Repo {
             .map(Path::to_path_buf)
     }
 
+    /// The per-worktree git admin dir of the checkout at `path` (HEAD,
+    /// index and `logs/HEAD` live there), but only when it sits OUTSIDE
+    /// the working tree — which is every linked worktree
+    /// (`<main>/.git/worktrees/<name>/`, since its `.git` is a file).
+    /// `None` for a main checkout (its `.git/` is inside the folder, so a
+    /// recursive watch of the folder already covers it), a bare repo or a
+    /// non-repo. Deliberately not the shared common dir: that would let a
+    /// sibling worktree's commit tick this one (#563).
+    pub fn worktree_admin_dir(path: &Path) -> Option<PathBuf> {
+        let repo = Repository::open(path).ok()?;
+        let workdir = repo.workdir()?;
+        let git_dir = repo.path();
+        let inside = match (git_dir.canonicalize(), workdir.canonicalize()) {
+            (Ok(g), Ok(w)) => g.starts_with(w),
+            _ => git_dir.starts_with(workdir),
+        };
+        (!inside).then(|| git_dir.to_path_buf())
+    }
+
     /// Local branches, sorted alphabetically. Each entry knows whether
     /// it's HEAD so the UI can default to it.
     pub fn branches(&self) -> Result<Vec<BranchInfo>> {

@@ -169,6 +169,7 @@ export const ReviewHeader = ({
 				    checks before landing the branch its own way. */}
 				<SignoffControl
 					status={signoff}
+					headSha={data?.headSha}
 					busy={signoffBusy}
 					pending={signoffIntent}
 					onRequest={setSignoffIntent}

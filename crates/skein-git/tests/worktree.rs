@@ -217,6 +217,27 @@ fn enclosing_workdir_names_the_linked_worktree_not_the_main_checkout() {
 }
 
 #[test]
+fn worktree_admin_dir_is_some_for_a_linked_worktree_and_none_for_main() {
+    let (_tmp, path) = init_repo();
+    let repo = Repo::open(&path).unwrap();
+    let wt_path = propose_worktree_path(&path, "admin");
+    repo.add_worktree("feat/admin", "main", &wt_path).unwrap();
+
+    let admin = Repo::worktree_admin_dir(&wt_path).expect("linked worktree has an admin dir");
+    let admin = admin.canonicalize().unwrap();
+    assert!(admin.join("HEAD").is_file());
+    assert!(!admin.starts_with(wt_path.canonicalize().unwrap()));
+    assert_eq!(
+        admin.parent().unwrap().parent().unwrap(),
+        path.join(".git").canonicalize().unwrap()
+    );
+
+    assert_eq!(Repo::worktree_admin_dir(&path), None);
+    let tmp = TempDir::new().unwrap();
+    assert_eq!(Repo::worktree_admin_dir(tmp.path()), None);
+}
+
+#[test]
 fn enclosing_workdir_is_none_outside_any_repo() {
     let tmp = TempDir::new().unwrap();
     assert_eq!(Repo::enclosing_workdir(tmp.path()), None);
