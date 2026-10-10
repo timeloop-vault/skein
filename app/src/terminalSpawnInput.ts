@@ -10,6 +10,8 @@ import { harnessActivity } from "./harnessActivity.ts";
 import { harnessInput } from "./harnessInput.ts";
 import type { ScreenCell } from "./promptScreen.ts";
 import { fitTerminal } from "./terminalFit.ts";
+import type { OutputGate } from "./terminalOutputGate.ts";
+import { isHostHidden } from "./terminalOutputVisibility.ts";
 import type { HarnessKind } from "./types.ts";
 
 /** The slice of xterm's `Terminal` the screen read touches. */
@@ -53,15 +55,41 @@ export function registerInputTarget(
 	harnessId: string,
 	harnessKind: HarnessKind,
 	id: string,
+	gate: OutputGate,
 ): () => void {
+	// One pending re-read per gate: once the flushed output has parsed, a null
+	// screen must not leave held mail waiting for some unrelated trigger.
+	// checkScreen → noteDraftEvent(screenEmpty) → subscribeDraftCleared →
+	// useMailDelivery's runSerialized (harnessInputRegistry.ts:225).
+	let recheckPending = false;
+	const recheckWhenSettled = () => {
+		gate.flush();
+		if (recheckPending) return;
+		recheckPending = true;
+		gate.whenDrained(() => {
+			recheckPending = false;
+			harnessInput.checkScreen(harnessId);
+		});
+	};
 	return harnessInput.register(harnessId, {
+		// #592: `waiting` comes from the transcript, not PTY quiet, so output may
+		// still sit in the gate. Until it settles, report "can't tell" (null /
+		// false both refuse) and flush so a retry reads fresh state.
 		paste: (text) => term.paste(text),
-		bracketedPaste: () => term.modes.bracketedPasteMode,
+		bracketedPaste: () => {
+			if (gate.isSettled()) return term.modes.bracketedPasteMode;
+			gate.flush();
+			return false;
+		},
 		submit: () => {
 			void invoke("pty_write", { id, data: "\r" });
 		},
 		kind: harnessKind,
-		screen: () => readVisibleScreen(term),
+		screen: () => {
+			if (gate.isSettled()) return readVisibleScreen(term);
+			recheckWhenSettled();
+			return null;
+		},
 	});
 }
 
@@ -136,6 +164,7 @@ export function observeResize(
 	fit: FitAddon,
 	host: HTMLDivElement,
 	ptyIdRef: { current: string | null },
+	gate: OutputGate,
 ): ResizeObserver {
 	// Track the dims we last sent so we can skip the
 	// pty_resize round-trip when nothing actually
@@ -157,20 +186,27 @@ export function observeResize(
 		// that the terminal is 1×1, permanently squishing
 		// whatever's already in the scrollback. Skip while
 		// hidden — the next tick (visible again) refits.
-		if (host.clientWidth === 0 || host.clientHeight === 0) return;
-		try {
-			fitTerminal(term, fit);
-		} catch {
-			// fit can throw during teardown when the host
-			// element has been detached; ignore.
-			return;
-		}
-		const cur = ptyIdRef.current;
-		if (!cur) return;
-		if (term.rows === lastSentRows && term.cols === lastSentCols) return;
-		lastSentRows = term.rows;
-		lastSentCols = term.cols;
-		void invoke("pty_resize", { id: cur, rows: term.rows, cols: term.cols });
+		if (isHostHidden(host)) return;
+		// #592: xterm's resize() is synchronous and ignores queued writes,
+		// so fit only once everything buffered while hidden has parsed at
+		// the old size.
+		gate.whenDrained(() => {
+			// A disposed gate never calls back, so teardown needs no check.
+			if (isHostHidden(host)) return;
+			try {
+				fitTerminal(term, fit);
+			} catch {
+				// fit can throw during teardown when the host
+				// element has been detached; ignore.
+				return;
+			}
+			const cur = ptyIdRef.current;
+			if (!cur) return;
+			if (term.rows === lastSentRows && term.cols === lastSentCols) return;
+			lastSentRows = term.rows;
+			lastSentCols = term.cols;
+			void invoke("pty_resize", { id: cur, rows: term.rows, cols: term.cols });
+		});
 	});
 	resizeObserver.observe(host);
 	return resizeObserver;

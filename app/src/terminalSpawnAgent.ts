@@ -1,6 +1,5 @@
 // The #247 pre-spawn agent check, split out of useTerminalSpawn.ts (#459).
 
-import type { Terminal } from "@xterm/xterm";
 import { listHarnessAgents, unknownAgentMessage, validateAgent } from "./agents.ts";
 import { harnessActivity } from "./harnessActivity.ts";
 import type { HarnessKind } from "./types.ts";
@@ -11,7 +10,8 @@ export interface AgentCheck {
 	harnessKind: HarnessKind;
 	harnessId: string;
 	cwd: string;
-	term: Terminal;
+	/** The terminal's output gate (#592), so order with buffered output holds. */
+	out: { write(data: string): void };
 	isCancelled: () => boolean;
 	/** Called when the spawn is refused, before the activity store is
 	 *  told the harness exited — flips the effect's own `phase`. */
@@ -41,7 +41,7 @@ export interface AgentCheck {
  *  question about *this* argv, not an attempt to recover a
  *  decision from it — the name still comes from the record. */
 export async function agentResolves(c: AgentCheck): Promise<boolean> {
-	const { agent, cmdToSpawn, harnessKind, harnessId, cwd, term } = c;
+	const { agent, cmdToSpawn, harnessKind, harnessId, cwd, out } = c;
 	if (!agent || !cmdToSpawn.includes("--agent")) return true;
 	const verdict = validateAgent(agent, await listHarnessAgents(harnessKind, cwd));
 	if (c.isCancelled()) return false;
@@ -49,11 +49,11 @@ export async function agentResolves(c: AgentCheck): Promise<boolean> {
 		console.warn(`[skein] could not verify agent "${agent}": ${verdict.why}`);
 	}
 	if (verdict.kind !== "unknown") return true;
-	term.write(`\r\n\x1b[31m[skein] ${unknownAgentMessage(agent, harnessKind)}\x1b[0m\r\n`);
+	out.write(`\r\n\x1b[31m[skein] ${unknownAgentMessage(agent, harnessKind)}\x1b[0m\r\n`);
 	// Same footer every other dead-harness path writes, and for the
 	// same reason: without it the pane is a wall of red with no
 	// visible way forward.
-	term.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
+	out.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
 	c.onRefused();
 	harnessActivity.exited(harnessId, null);
 	return false;

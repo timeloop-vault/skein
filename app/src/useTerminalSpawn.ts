@@ -26,6 +26,7 @@ import { shellClaim } from "./shellClaim.ts";
 import { startupAdoption } from "./startupAdoption.ts";
 import { subagents } from "./subagents.ts";
 import { attachTerminalInteractions } from "./terminalInteractions.ts";
+import { attachOutputGate } from "./terminalOutputVisibility.ts";
 import { createXterm, type LinkPolicy } from "./terminalSetup.ts";
 import { attachAdapters } from "./terminalSpawnAdapters.ts";
 import { agentResolves } from "./terminalSpawnAgent.ts";
@@ -123,13 +124,15 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		const { term, fit } = createXterm(host, fontSize, caps.opensClickedLinks, linkPolicy);
 		termRef.current = term;
 		fitRef.current = fit;
+		// #592: every xterm write goes through this gate (hidden = buffered).
+		// Created before any other host observer so the reveal flush runs
+		// before the refit.
+		const { gate, detach: detachGate } = attachOutputGate(term, host);
 		// #383 follow-up: xterm's IME composition (CJK, an emoji picker,
 		// possibly a dead-key accent) calls `_finalizeComposition`
-		// straight into `onData`, never `onKey` — this listener is the
-		// only place this store ever sees it. Both start and end fold to
-		// `userPaste` (→ `unknown`), not a guess at what was actually
-		// composed: fails safe, same principle as `composerDraft.ts`'s
-		// own header.
+		// straight into `onData`, never `onKey` — the only place this
+		// store sees it. Start and end fold to `userPaste` (→ `unknown`),
+		// not a guess at what was composed: fails safe.
 		const noteComposition = () => harnessInput.noteDraftEvent(harnessId, { type: "userPaste" });
 		term.textarea?.addEventListener("compositionstart", noteComposition);
 		term.textarea?.addEventListener("compositionend", noteComposition);
@@ -170,14 +173,10 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// `spawning` → `running` before SessionStart can claim it.
 			if (cancelled) return;
 			if (ev.kind === "data") {
-				term.write(ev.chunk);
-				// Feed the activity model. Every PTY chunk is an
-				// "output" signal — the store throttles internally
-				// so we don't fire a React render per chunk. Epic
-				// #50. The chunk is also fed into the per-harness
-				// tail buffer the L2b pattern matcher (sudo / [y/n]
-				// / Press Enter prompts on non-adapter harness
-				// kinds) reads from.
+				gate.write(ev.chunk);
+				// Feed the activity model (epic #50) with every chunk, gated
+				// or not: the store throttles internally, and the chunk also
+				// feeds the L2b pattern matcher's per-harness tail buffer.
 				harnessActivity.recordOutput(harnessId, ev.chunk);
 				shellFollow?.onOutput(); // #517
 			} else {
@@ -229,8 +228,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 
 			const codeStr = code === null ? "?" : String(code);
 			// \x1b[2m = dim, \x1b[1m = bold, \x1b[0m = reset.
-			term.write(`\r\n\x1b[2m[skein] ${programName} exited (${codeStr})\x1b[0m\r\n`);
-			term.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
+			gate.write(`\r\n\x1b[2m[skein] ${programName} exited (${codeStr})\x1b[0m\r\n`);
+			gate.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
 		};
 
 		const agentResolvesFor = (cmdToSpawn: string[]) =>
@@ -240,7 +239,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				harnessKind,
 				harnessId,
 				cwd,
-				term,
+				out: gate,
 				isCancelled: () => cancelled,
 				onRefused: () => {
 					phase = "exited";
@@ -303,7 +302,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				harnessActivity.setInjected(harnessId, injected);
 				// #238: publish this harness to the `harnessInput` seam now
 				// that its PTY is live.
-				detachInputTarget = registerInputTarget(term, harnessId, harnessKind, id);
+				detachInputTarget = registerInputTarget(term, harnessId, harnessKind, id, gate);
 				// L2c attach point — see terminalSpawnAdapters.ts.
 				const detach = attachAdapters({
 					harnessId,
@@ -339,14 +338,13 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				const buffered = early.takeAndDispose();
 				dataDisposable = attachPtyInput(term, harnessId, id);
 				if (buffered.length > 0) void invoke("pty_write", { id, data: buffered.join("") });
-				if (!resizeObserver) resizeObserver = observeResize(term, fit, host, ptyIdRef);
+				if (!resizeObserver) resizeObserver = observeResize(term, fit, host, ptyIdRef, gate);
 			} catch (err: unknown) {
 				early.dispose();
 				const msg = err instanceof Error ? err.message : String(err);
-				term.write(`\r\n\x1b[31m[skein] pty_spawn failed: ${msg}\x1b[0m\r\n`);
-				// Reprompt — without this the user sees the error and has
-				// no idea Enter still drops them into a shell.
-				term.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
+				gate.write(`\r\n\x1b[31m[skein] pty_spawn failed: ${msg}\x1b[0m\r\n`);
+				// Reprompt — else the user can't tell Enter opens a shell.
+				gate.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
 				phase = "exited";
 				// pty_spawn never produced a child; treat as exited
 				// so the status bar / tab dot don't sit on spawning.
@@ -375,6 +373,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			detachInteractions();
 			const id = ptyIdRef.current;
 			if (id) void invoke("pty_kill", { id });
+			detachGate();
 			term.dispose();
 			termRef.current = null;
 			fitRef.current = null;
