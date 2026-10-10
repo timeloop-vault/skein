@@ -68,7 +68,30 @@ export function useAppWindowEffects(
 				quitPromptOpenRef.current = false;
 			}
 		};
+		// One close/quit sequence at a time, shared by both paths: a second
+		// request during the bounded flush must not reach destroy() again.
+		// Reset when the user cancels the confirm.
+		let closing = false;
+		// If destroy() is rejected (#196: capability-denied), fall back to a
+		// native close that the handler lets through.
+		let bypassClose = false;
+		const destroyWindow = () => {
+			getCurrentWindow()
+				.destroy()
+				.catch((err: unknown) => {
+					console.error("[skein] destroy failed:", err);
+					closing = false;
+					bypassClose = true;
+					getCurrentWindow()
+						.close()
+						.catch((e: unknown) => console.error("[skein] native close failed:", e));
+				});
+		};
 		const unClose = getCurrentWindow().onCloseRequested(async (event) => {
+			if (bypassClose) return;
+			event.preventDefault();
+			if (closing) return;
+			closing = true;
 			// Fail OPEN: any throw in here must still end in the window
 			// closing — 0.2.6 shipped unclosable when the wrapper's
 			// destroy was capability-denied (#196). Losing unsaved text
@@ -77,29 +100,35 @@ export function useAppWindowEffects(
 				// #594: always hold the close until the debounced rooms save
 				// has landed (bounded, so it cannot hang). destroy() bypasses
 				// this handler, so it runs exactly once.
-				event.preventDefault();
 				await flushRoomsBounded();
 				if (await confirmQuit()) {
 					// Edits made while the confirm was open.
 					await flushRoomsBounded();
-					void getCurrentWindow().destroy();
+					destroyWindow();
+				} else {
+					closing = false;
 				}
 			} catch (err) {
 				console.error("[skein] close-requested handler failed; closing anyway:", err);
-				void getCurrentWindow().destroy();
+				destroyWindow();
 			}
 		});
 		const unQuit = listen("skein://quit-requested", () => {
+			if (closing) return;
+			closing = true;
 			void flushRoomsBounded()
 				.then(confirmQuit)
 				.then(async (ok) => {
-					if (!ok) return;
+					if (!ok) {
+						closing = false;
+						return;
+					}
 					await flushRoomsBounded();
-					void getCurrentWindow().destroy();
+					destroyWindow();
 				})
 				.catch((err: unknown) => {
 					console.error("[skein] quit handler failed; closing anyway:", err);
-					void getCurrentWindow().destroy();
+					destroyWindow();
 				});
 		});
 		return () => {
