@@ -163,6 +163,25 @@ export const EnvToggles = ({
 						</span>
 					</span>
 				</label>
+				<label className="sk-toggle">
+					<input
+						type="checkbox"
+						checked={draft.disableClaudeWheelAcceleration}
+						onChange={(e) =>
+							setDraft({ ...draft, disableClaudeWheelAcceleration: e.target.checked })
+						}
+					/>
+					<span className="sk-toggle-label">
+						<span className="sk-toggle-title">Turn off Claude Code's scroll acceleration</span>
+						<span className="sk-toggle-sub">
+							Claude Code speeds up wheel scrolling while scroll events arrive close together, and a
+							trackpad sits right on its threshold, so the speed keeps jumping. On, Skein passes{" "}
+							<code>--settings {'{"wheelScrollAccelerationEnabled":false}'}</code> to each Claude
+							harness: one line per line of travel. This overrides that setting in your own Claude
+							Code config, inside Skein only.
+						</span>
+					</span>
+				</label>
 			</div>
 		</div>
 	</>

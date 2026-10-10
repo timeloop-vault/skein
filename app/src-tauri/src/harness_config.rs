@@ -350,6 +350,40 @@ pub(crate) fn injection_for(
     }
 }
 
+/// Claude Code's own wheel acceleration, switched off (#569). It adds
+/// 0.3 line per wheel report while reports arrive under 40 ms apart and
+/// resets after any longer gap — and a trackpad's report stream sits
+/// right on that threshold, so the scroll speed keeps ramping and
+/// resetting under a steady finger.
+const CLAUDE_NO_WHEEL_ACCELERATION: &str = r#"{"wheelScrollAccelerationEnabled":false}"#;
+
+/// Claude Code arguments that come from Skein's own Settings rather
+/// than from [`injection_for`]'s review-API plumbing.
+///
+/// Kept out of [`Injection`] on purpose: the spawn reports a non-empty
+/// injection as "review tools injected" to the #238 nudge gate, and a
+/// scroll preference proves nothing about that. `--settings` outranks
+/// the user's own Claude Code settings, which is why the switch is off
+/// by default. Same kind-and-program gate as `injection_for`; a
+/// `claude` typed in the post-exit shell goes without, since
+/// `--settings` has no environment form to hand the shell instead.
+pub(crate) fn claude_settings_args(
+    kind: HarnessKind,
+    program: &str,
+    settings: &SpawnSettings,
+) -> Vec<String> {
+    let is_claude =
+        kind == HarnessKind::Claude && kind.program().is_some_and(|p| program_is(program, p));
+    if is_claude && settings.disable_claude_wheel_acceleration {
+        vec![
+            "--settings".to_owned(),
+            CLAUDE_NO_WHEEL_ACCELERATION.to_owned(),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,5 +777,46 @@ mod tests {
             );
             assert!(injection.is_empty(), "{kind} without an endpoint");
         }
+    }
+
+    #[test]
+    fn claude_wheel_acceleration_is_left_alone_by_default() {
+        assert_eq!(
+            claude_settings_args(HarnessKind::Claude, "claude", &SpawnSettings::default()),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn turning_claude_wheel_acceleration_off_passes_its_setting() {
+        let settings = SpawnSettings {
+            disable_claude_wheel_acceleration: true,
+            ..SpawnSettings::default()
+        };
+        assert_eq!(
+            claude_settings_args(HarnessKind::Claude, "/opt/homebrew/bin/claude", &settings),
+            vec![
+                "--settings".to_owned(),
+                r#"{"wheelScrollAccelerationEnabled":false}"#.to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn the_wheel_setting_reaches_only_a_real_claude() {
+        let settings = SpawnSettings {
+            disable_claude_wheel_acceleration: true,
+            ..SpawnSettings::default()
+        };
+        // The post-exit shell keeps the `claude` kind but runs bash, which
+        // would choke on `--settings`.
+        assert_eq!(
+            claude_settings_args(HarnessKind::Claude, "/bin/bash", &settings),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            claude_settings_args(HarnessKind::Opencode, "opencode", &settings),
+            Vec::<String>::new()
+        );
     }
 }
