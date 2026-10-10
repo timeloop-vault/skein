@@ -450,6 +450,12 @@ pub async fn git_status(path: String) -> Result<Vec<StatusDto>, String> {
 /// passes after a real change — the frontend re-runs `git_status` in
 /// response. Returns an opaque id; pass it to `git_watch_stop` to end
 /// the watch.
+///
+/// For a linked worktree (every Skein room) HEAD, the index and
+/// `logs/HEAD` live in the worktree's admin dir under the main repo's
+/// `.git/worktrees/`, outside `path`, so that dir is watched too or a
+/// commit of already-on-disk files would never tick (#563). The shared
+/// common dir is not watched: sibling rooms' commits would tick us.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub fn git_watch_start(
@@ -458,8 +464,11 @@ pub fn git_watch_start(
     manager: tauri::State<'_, WatcherManager>,
 ) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
+    let extra: Vec<std::path::PathBuf> = Repo::worktree_admin_dir(Path::new(&path))
+        .into_iter()
+        .collect();
     manager
-        .start(id.clone(), Path::new(&path), move || {
+        .start_with_extra(id.clone(), Path::new(&path), &extra, move || {
             // The channel send only fails if the frontend dropped its
             // half — nothing useful we can do at that point.
             let _ = on_change.send(());

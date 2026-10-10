@@ -337,6 +337,28 @@ fn a_room_with_no_worktree_says_so_instead_of_returning_an_empty_diff() {
 }
 
 #[test]
+fn a_file_in_a_non_git_room_is_not_in_the_diff_rather_than_unavailable() {
+    let f = fixture();
+    let dir = tempfile::TempDir::new().unwrap();
+    let mut r = room("r1", vec![]);
+    r.cwd = Some(dir.path().to_str().unwrap().to_owned());
+    save(&f.db, &[r]);
+    let caller = caller_for(&f.db, "r1", None);
+    let err = verbs::get_diff(
+        &f.db,
+        &caller,
+        &DiffArgs {
+            file: Some("a.txt".to_owned()),
+            scope: None,
+            commit_sha: None,
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, VerbError::NotFound(_)), "{err:?}");
+    assert!(err.message().contains("a.txt is not in this review's diff"));
+}
+
+#[test]
 fn the_commit_scope_refuses_to_guess_which_commit() {
     let f = fixture();
     let mut r = room("r1", vec![]);

@@ -12,7 +12,7 @@ use crate::agent_api::render::{covering_hunk, read_around, render_file, render_h
 use crate::db::{Database, ReviewAddressedRow, ReviewCommentRow, ReviewThreadRow};
 use crate::review::now_ms;
 use crate::review_surface::Scope;
-use crate::review_surface::query::{ScopeFiles, file_impl, scope_impl};
+use crate::review_surface::query::{file_impl, scope_snapshot, scope_summary};
 
 /// Rendered diff text is capped so a whole-branch `get_diff` on a large
 /// change cannot swallow the agent's context. Truncation is reported,
@@ -356,13 +356,27 @@ pub fn get_diff(db: &Database, caller: &Caller, args: &DiffArgs) -> VerbResult<D
     let scope = parse_scope(args.scope.as_deref(), args.commit_sha.as_deref())
         .map_err(VerbError::Refused)?;
 
-    let summary = scope_impl(db, &caller.room_id, cwd, scope, args.commit_sha.as_deref())
-        .map_err(VerbError::Unavailable)?;
+    let wanted = args.file.as_deref().map(normalize);
+    // One diff for the whole call (#287, on top of #171 slice (f)): the
+    // summary's file list and the snapshot's hunks come from the same
+    // `scope_diffs`, so they cannot disagree. A single requested file gets
+    // a literal pathspec; asking for nothing in particular leaves the diff
+    // unfiltered, since naming every changed file would cost more than no
+    // filter at all for the identical result.
+    let paths: Vec<String> = wanted.iter().cloned().collect();
+    let (summary, pre) = scope_summary(
+        db,
+        &caller.room_id,
+        cwd,
+        scope,
+        args.commit_sha.as_deref(),
+        &paths,
+    )
+    .map_err(VerbError::Unavailable)?;
     if let Some(err) = summary.error {
         return Err(VerbError::Unavailable(err));
     }
 
-    let wanted = args.file.as_deref().map(normalize);
     let files: Vec<DiffFile> = summary
         .files
         .iter()
@@ -382,25 +396,16 @@ pub fn get_diff(db: &Database, caller: &Caller, args: &DiffArgs) -> VerbResult<D
         )));
     }
 
-    // One diff for every file this call needs, not one per file (#171
-    // slice (f)) — `files` is already the exact set `render_file` below
-    // will draw from, truncation aside. A single requested file gets a
-    // literal pathspec; asking for nothing in particular means `files`
-    // is the whole change set already, and naming every one of them as
-    // a pathspec would cost strictly more than no filter at all for
-    // the identical result.
-    let paths: Vec<String> = if wanted.is_some() {
-        files.iter().map(|f| f.path.clone()).collect()
-    } else {
-        Vec::new()
-    };
-    let snapshot = ScopeFiles::load(
+    // Only now, with the base resolved and the file known to be in the diff,
+    // build the snapshot — from the summary's own diff, not a second one.
+    let snapshot = scope_snapshot(
         db,
         &caller.room_id,
         cwd,
         scope,
         args.commit_sha.as_deref(),
         &paths,
+        pre.as_ref(),
     )
     .map_err(VerbError::Unavailable)?;
 

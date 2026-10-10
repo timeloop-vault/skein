@@ -27,6 +27,23 @@ describe("signoffState", () => {
 		expect(signoffState(status({ stale: true }))).toBe("stale");
 	});
 
+	it.each([
+		["undefined status", undefined, "abc", "none"],
+		["approved, head matches", status({ approved: true, approvedSha: "abc" }), "abc", "approved"],
+		["approved, head differs", status({ approved: true, approvedSha: "abc" }), "def", "stale"],
+		[
+			"approved, head unknown",
+			status({ approved: true, approvedSha: "abc" }),
+			undefined,
+			"approved",
+		],
+		["approved, no approved sha", status({ approved: true }), "def", "approved"],
+		["stale from backend", status({ stale: true, approvedSha: "abc" }), "abc", "stale"],
+		["not approved, not stale", status(), "abc", "none"],
+	] as const)("derives from the scope head: %s", (_name, s, head, expected) => {
+		expect(signoffState(s, head)).toBe(expected);
+	});
+
 	it("reads a missing status as unapproved rather than throwing", () => {
 		// The control renders before the first fetch returns.
 		expect(signoffState(undefined)).toBe("none");
@@ -90,6 +107,17 @@ describe("staleExplanation", () => {
 		expect(staleExplanation(status({ stale: true, commitsSince: 1 }))).toContain(
 			"1 commit landed since",
 		);
+	});
+
+	it("says only that HEAD moved when staleness was derived locally", () => {
+		// `approved` is still true in the old fetch; any commitsSince is
+		// from before the move and must not be quoted.
+		const text = staleExplanation(
+			status({ approved: true, approvedSha: "abcdef1234567890", commitsSince: 0 }),
+		);
+		expect(text).toContain("abcdef12");
+		expect(text).toContain("HEAD has moved since");
+		expect(text).not.toContain("0 commits");
 	});
 
 	it("says the branch was rewritten when the distance is unknowable", () => {

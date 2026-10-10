@@ -134,12 +134,13 @@ export const ReviewPane = ({
 		error: signoffError,
 		busy: signoffBusy,
 		set: setSignoffState,
-	} = useSignoff(roomId, cwd, visible, nonce);
+	} = useSignoff(roomId, cwd, visible, nonce, data?.headSha);
 
 	// #238: the Nudge button — see `useReviewNudge`.
 	const { activeCapabilities, nudge, nudgeGate, nudgeDisabledReason, onNudge } = useReviewNudge(
 		activeHarness,
 		signoff,
+		data?.headSha,
 		data?.unresolvedCount ?? 0,
 		setActionError,
 	);
@@ -289,7 +290,7 @@ export const ReviewPane = ({
 			{/* A lapsed sign-off is the one state the reviewer has to see
 			    rather than hover over: their approval stopped covering the
 			    branch the moment the agent committed again. */}
-			<SignoffNotice status={signoff} />
+			<SignoffNotice status={signoff} headSha={data?.headSha} />
 
 			<SignoffConfirm
 				status={signoff}

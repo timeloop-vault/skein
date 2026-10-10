@@ -49,11 +49,14 @@ const ago = (ms: number): string => {
 
 export const SignoffControl = ({
 	status,
+	headSha,
 	busy,
 	pending,
 	onRequest,
 }: {
 	status: SignoffStatus | undefined;
+	/** The scope's current HEAD, so a stale fetch still reads as lapsed. */
+	headSha: string | undefined;
 	busy: boolean;
 	pending: SignoffIntent | undefined;
 	onRequest: (intent: SignoffIntent | undefined) => void;
@@ -67,7 +70,7 @@ export const SignoffControl = ({
 	const toggle = (intent: SignoffIntent) => onRequest(pending === intent ? undefined : intent);
 	const armed = pending ? " armed" : "";
 
-	switch (signoffState(status)) {
+	switch (signoffState(status, headSha)) {
 		case "approved":
 			return (
 				<button
@@ -162,7 +165,13 @@ export const SignoffConfirm = ({
 /// The lapsed banner. Separate from the confirmation because a sign-off
 /// that stopped applying is a standing fact, not a question — the
 /// reviewer has to see it whether or not they are mid-decision.
-export const SignoffNotice = ({ status }: { status: SignoffStatus | undefined }) => {
-	if (!status?.stale) return null;
+export const SignoffNotice = ({
+	status,
+	headSha,
+}: {
+	status: SignoffStatus | undefined;
+	headSha: string | undefined;
+}) => {
+	if (!status || signoffState(status, headSha) !== "stale") return null;
 	return <div className="rv-signoff-notice">sign-off lapsed — {staleExplanation(status)}</div>;
 };

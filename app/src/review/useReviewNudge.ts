@@ -16,13 +16,14 @@ import { type SignoffStatus, signoffState } from "./signoff.ts";
 export const useReviewNudge = (
 	activeHarness: Harness | undefined,
 	signoff: SignoffStatus | undefined,
+	headSha: string | undefined,
 	unresolvedCount: number,
 	setActionError: (message: string | undefined) => void,
 ) => {
 	const activeCapabilities = activeHarness ? HARNESS_KINDS[activeHarness.kind].capabilities : null;
 	const activeActivity = useHarnessActivity(activeHarness?.id ?? null);
 	const nudgeOverrides = useNudgeOverrides();
-	const nudge = selectNudge(signoffState(signoff), unresolvedCount, nudgeOverrides);
+	const nudge = selectNudge(signoffState(signoff, headSha), unresolvedCount, nudgeOverrides);
 	const nudgeGate =
 		activeHarness && nudge
 			? canSendPrompt({

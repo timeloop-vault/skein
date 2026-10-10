@@ -6,6 +6,13 @@
 //! all of them are interesting signals for a "refresh status" trigger.
 //! Debouncing absorbs the burst of events a single git operation
 //! produces, so the noise never reaches the frontend.
+//!
+//! A linked worktree's `.git` is a file, so its HEAD, index and
+//! `logs/HEAD` live in `<main>/.git/worktrees/<name>/`, outside the
+//! watched folder. `start_with_extra` lets `git_watch_start` add that
+//! per-worktree admin dir (never the shared common dir, which would tick
+//! every sibling room) so a commit whose files were already on disk still
+//! produces a tick (#563).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -49,35 +56,53 @@ impl WatcherManager {
         Self::default()
     }
 
-    /// Start watching `path` recursively. `on_change` is invoked from a
-    /// background thread (the debouncer's flush thread) every time a
-    /// quiet window passes after a real filesystem change.
-    ///
-    /// A thin wrapper over [`WatcherManager::start_with_paths`] for
-    /// callers (`git_watch_start`) that only care *that* something
-    /// changed, not *what*.
-    pub fn start<F>(&self, id: String, path: &Path, on_change: F) -> Result<(), WatcherError>
-    where
-        F: Fn() + Send + 'static,
-    {
-        self.start_with_paths(id, path, move |_paths| on_change())
-    }
-
-    /// Start watching `path` recursively, like [`WatcherManager::start`],
-    /// but hand `on_change` the paths the debounced batch actually
-    /// touched — review discovery (#221) needs to know *which* files
-    /// changed, not just that something did, so it can skip everything
-    /// else without re-walking the whole worktree on every tick.
+    /// Start watching `path` recursively and hand `on_change` the paths the
+    /// debounced batch actually touched — review discovery (#221) needs to
+    /// know *which* files changed, not just that something did, so it can
+    /// skip everything else without re-walking the whole worktree on every
+    /// tick.
     ///
     /// `Some(paths)` for a normal batch (one entry per path notify
     /// coalesced events for); `None` when notify itself reports an
     /// error (a dropped-events overflow, say) — the caller falls back to
     /// a full re-scan in that case, the same "stale but honest" choice
-    /// `start` makes by refreshing on an error too.
+    /// [`WatcherManager::start_with_extra`] makes by refreshing on an
+    /// error too.
     pub fn start_with_paths<F>(
         &self,
         id: String,
         path: &Path,
+        on_change: F,
+    ) -> Result<(), WatcherError>
+    where
+        F: Fn(Option<Vec<PathBuf>>) + Send + 'static,
+    {
+        self.start_inner(id, path, &[], on_change)
+    }
+
+    /// Start watching `path` recursively; the same debouncer also watches
+    /// `extra` (recursively). `on_change` is invoked from the debouncer's
+    /// flush thread after each quiet window that follows a real change.
+    /// Failing to watch an extra path is logged and skipped — it never
+    /// fails the main watch (#563).
+    pub fn start_with_extra<F>(
+        &self,
+        id: String,
+        path: &Path,
+        extra: &[PathBuf],
+        on_change: F,
+    ) -> Result<(), WatcherError>
+    where
+        F: Fn() + Send + 'static,
+    {
+        self.start_inner(id, path, extra, move |_paths| on_change())
+    }
+
+    fn start_inner<F>(
+        &self,
+        id: String,
+        path: &Path,
+        extra: &[PathBuf],
         on_change: F,
     ) -> Result<(), WatcherError>
     where
@@ -96,6 +121,15 @@ impl WatcherManager {
             .watcher()
             .watch(path, RecursiveMode::Recursive)
             .map_err(WatcherError::from_err)?;
+
+        for extra_path in extra {
+            if let Err(e) = debouncer
+                .watcher()
+                .watch(extra_path, RecursiveMode::Recursive)
+            {
+                tracing::warn!(path = %extra_path.display(), error = %e, "extra watch failed");
+            }
+        }
 
         self.inner.lock().insert(id, debouncer);
         Ok(())
