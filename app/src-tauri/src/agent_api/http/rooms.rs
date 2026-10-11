@@ -103,10 +103,21 @@ pub(super) async fn api_find_rooms_for_path(
 #[derive(Debug, Deserialize)]
 pub(super) struct ListRoomsQuery {
     created_by: Option<String>,
+    #[serde(default)]
+    include_archived: bool,
+    #[serde(default)]
+    include_retired: bool,
+    /// Comma-separated, e.g. `running,waiting`.
+    lifecycle: Option<String>,
+    limit: Option<u32>,
+    since: Option<String>,
+    fields: Option<String>,
 }
 
-/// `GET /api/rooms?created_by=me` — the plain-JSON mirror of the MCP
-/// `list_rooms` tool (#356). Async, unlike every synchronous route
+/// `GET /api/rooms?created_by=me&include_archived=true&limit=..&since=..&lifecycle=running,waiting&fields=summary`
+/// — the plain-JSON mirror of the MCP `list_rooms` tool (#356, #612).
+/// Archived rooms are hidden unless `include_archived` (or
+/// `include_retired`) is true. Async, unlike every synchronous route
 /// above that goes through `with_caller`: the verb underneath makes its
 /// own `"harness_phases"` round trip to the webview.
 pub(super) async fn api_list_rooms(
@@ -124,6 +135,18 @@ pub(super) async fn api_list_rooms(
         &caller,
         &ListRoomsArgs {
             created_by: q.created_by,
+            include_archived: q.include_archived,
+            include_retired: q.include_retired,
+            lifecycle: q.lifecycle.map(|l| {
+                l.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            }),
+            limit: q.limit,
+            since: q.since,
+            fields: q.fields,
         },
         &mail,
     )

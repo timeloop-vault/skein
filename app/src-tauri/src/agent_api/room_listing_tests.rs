@@ -23,6 +23,10 @@ async fn call_list_rooms(
         caller,
         &verbs::ListRoomsArgs {
             created_by: created_by.map(str::to_owned),
+            // These #356 tests are about attribution; the archived
+            // child must still show (the #612 default hides it).
+            include_archived: true,
+            ..Default::default()
         },
         &MailContext::permissive(),
     )

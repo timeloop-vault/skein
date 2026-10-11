@@ -1009,17 +1009,55 @@ would be a lie Skein never told itself.
 
 ### `list_rooms`
 
-`{ created_by?: "me" }` — every room Skein holds, across every
-project, archived rooms included and never dropped: "that room landed
-and was archived" is exactly what a director needs to see after its
-own context is compacted. Any `created_by` value other than `"me"` is
-refused rather than silently ignored, since a typo here would
-otherwise read as "show me everything" and a director would never
-notice its filter never applied.
+`{ created_by?, include_archived?, include_retired?, lifecycle?, limit?,
+since?, fields? }` — Skein rooms across every project, newest first,
+paged. **Archived rooms are hidden by default**: pass
+`include_archived: true` to see them (to check that a room landed and
+was archived after your own context is compacted), and
+`include_retired: true` for retired rooms (archived rooms marked as
+history) too. The default is not the full set. Any `created_by` value
+other than `"me"` is refused rather than silently ignored, since a typo
+here would otherwise read as "show me everything" and a director would
+never notice its filter never applied.
+
+All arguments are optional:
+
+- `created_by` — `"me"` only: rooms this room opened with `create_room`.
+- `include_archived` (boolean, default `false`) — archived rooms are
+  hidden by default; `true` includes them, but not retired ones.
+- `include_retired` (boolean, default `false`) — retired rooms appear
+  only with this; `true` also includes the other archived rooms.
+- `lifecycle` (array; `spawning`, `running`, `idle`, `waiting`,
+  `permission`, `exited`, `archived`, `unknown`) — keep only rooms with
+  these lifecycles; unknown values are refused. Applied after the
+  archived/retired visibility, so `"archived"` matches nothing unless
+  `include_archived` or `include_retired` is set.
+- `limit` (integer, default 50, max 500; `0` means the default).
+- `since` (string) — a `room_id` from a previous page; returns the
+  rooms after it (exclusive). Refused if it names no room in the
+  visible list (after archived/retired visibility, before `lifecycle`,
+  so a cursor room whose lifecycle changed still works).
+- `fields` (`"full"` | `"summary"`, default `"full"`) — `"summary"`
+  omits `cwd`, `repo_root`, `created_by`, `lead_harness_id`, `base_sha`
+  and `prompt_first_line`.
+
+Order is stable, newest first: open rooms first (most recently created
+first), then archived rooms by most recently archived; ties by room id.
+The order is by lifecycle block, so a room archived (or reopened)
+mid-paging moves blocks and may be skipped or seen twice, and a cursor
+naming a room that has since become hidden (e.g. archived without
+`include_archived`) is refused: start again without `since`.
+Over HTTP, `GET /api/rooms` takes the same names as query parameters,
+with `lifecycle` comma-separated (`lifecycle=running,waiting`).
+
+**Changed in #612.** Archived rooms used to be always included and
+unpaged. Callers that relied on seeing archived rooms must now pass
+`include_archived: true` (and `include_retired: true` for retired ones),
+and page with `since` when `has_more` is true.
 
 Each room reports `room_id`, `name`, `cwd`, `repo_root`, `branch`,
-`archived`, `harness_count`, `created_by` (`{ room_id, harness_id }`,
-present only for a room `create_room` opened), `base_sha` and
+`archived`, `retired`, `harness_count`, `created_by`
+(`{ room_id, harness_id }`, present only for a room `create_room` opened), `base_sha` and
 `prompt_first_line` (both recorded at create time by `create_room`,
 so absent on a room from before #330 or one the user opened by hand),
 `lead_harness_id` (the harness `send_message` would actually reach if
@@ -1033,7 +1071,8 @@ any mail.
 `unreadable_rooms` counts persisted rooms Skein holds but could not
 parse (the same count `find_rooms_for_path` reports) — non-zero only
 when Skein's own room table has damage, and a sign that `rooms` may be
-short.
+short. `has_more` is true when another page exists; page again with
+`since` = the last returned `room_id`.
 
 ### `get_room`
 

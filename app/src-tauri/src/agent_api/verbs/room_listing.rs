@@ -1,17 +1,14 @@
-//! The cross-room read verbs (#356): `list_rooms`, `get_room` and
-//! `list_harnesses`, and the phase round trip they share.
+//! The cross-room read verbs (#356): `get_room` and `list_harnesses`
+//! (`list_rooms` lives in `list_rooms.rs`), and the phase round trip
+//! they share.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::mail::MailContext;
-use super::mail_routing::mail_lead_harness;
 use super::review::{StatusOut, signoff_block};
-use super::shared::first_non_empty_line;
 use super::{VerbError, VerbResult, internal};
-use crate::agent_api::auth::Caller;
 use crate::agent_api::state::AgentApiState;
 use crate::db::Room;
 
@@ -27,7 +24,7 @@ use crate::db::Room;
 /// report (`app/src/harnessActivity.ts`). Anything else a webview
 /// answer names is untrusted and becomes `"unknown"` rather than passed
 /// through — this backend has no independent way to check it.
-const KNOWN_PHASES: &[&str] = &[
+pub(super) const KNOWN_PHASES: &[&str] = &[
     "spawning",
     "running",
     "idle",
@@ -61,7 +58,7 @@ const HARNESS_PHASE_TIMEOUT: Duration = Duration::from_secs(3);
 /// optional `work` map; they ride the one round trip and are `None`
 /// whenever the phase is unknown for the same reasons, or `work` (or
 /// this id in it) is absent or not a non-negative integer.
-async fn harness_snapshots(
+pub(super) async fn harness_snapshots(
     state: &AgentApiState,
     harness_ids: &[String],
 ) -> BTreeMap<String, HarnessSnapshot> {
@@ -108,10 +105,10 @@ async fn harness_snapshots(
 /// One harness as the webview reported it: its phase (`"unknown"` when
 /// it could not vouch for one) and the outstanding work (#448) the
 /// end-of-turn deferral counts, `None` when unknown.
-struct HarnessSnapshot {
-    phase: String,
-    subagents: Option<u32>,
-    background_tasks: Option<u32>,
+pub(super) struct HarnessSnapshot {
+    pub(super) phase: String,
+    pub(super) subagents: Option<u32>,
+    pub(super) background_tasks: Option<u32>,
 }
 
 impl Default for HarnessSnapshot {
@@ -172,153 +169,6 @@ impl From<&crate::db::CreatedBy> for AgentCreatedBy {
 pub struct LastStatus {
     pub first_line: String,
     pub created_ms: i64,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct ListRoomsArgs {
-    /// The only accepted value is `"me"` — every other non-`None` value
-    /// is refused rather than silently ignored, since a typo here
-    /// (`"mine"`, `"self"`) would otherwise read as "show me
-    /// everything" and a director would never notice its filter never
-    /// applied.
-    #[serde(default)]
-    pub created_by: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub struct RoomSummary {
-    pub room_id: String,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repo_root: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    pub archived: bool,
-    pub harness_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_by: Option<AgentCreatedBy>,
-    /// The harness `send_message` would actually reach if addressed to
-    /// this room id — `None` when nothing in the room could read mail
-    /// at all (see `mail_lead_harness`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lead_harness_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_sha: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt_first_line: Option<String>,
-    /// `"archived"`, one of [`KNOWN_PHASES`] (the lead harness's own),
-    /// or `"unknown"` — never a guess.
-    pub lifecycle: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_status: Option<LastStatus>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub struct ListRoomsOut {
-    pub rooms: Vec<RoomSummary>,
-    /// See [`FindRoomsForPathOut::unreadable_rooms`] — the same
-    /// "rooms Skein holds but could not parse" count, so a director
-    /// reading a short list here knows whether it might be short for
-    /// that reason rather than because it truly created no more.
-    pub unreadable_rooms: u32,
-}
-
-/// Every room Skein holds, across every project — archived rooms
-/// included, and never dropped: "that room landed and was archived" is
-/// exactly what a director needs to see after its own context is
-/// compacted (issue #356's addendum). `created_by: "me"` narrows that
-/// to only the rooms the *caller's* room created.
-pub async fn list_rooms(
-    state: &AgentApiState,
-    caller: &Caller,
-    args: &ListRoomsArgs,
-    mail: &MailContext,
-) -> VerbResult<ListRoomsOut> {
-    let db = &state.db;
-    if let Some(cb) = args.created_by.as_deref()
-        && cb != "me"
-    {
-        return Err(VerbError::Refused(format!(
-            "unknown created_by {cb:?} — the only supported value is \"me\""
-        )));
-    }
-
-    let rooms = db.all_rooms().map_err(internal)?;
-    let unreadable_rooms = db.unreadable_room_count().map_err(internal)?;
-
-    let filtered: Vec<&Room> = if args.created_by.is_some() {
-        rooms
-            .iter()
-            .filter(|r| {
-                r.created_by
-                    .as_ref()
-                    .is_some_and(|c| c.room_id == caller.room_id)
-            })
-            .collect()
-    } else {
-        rooms.iter().collect()
-    };
-
-    let needed: Vec<String> = filtered
-        .iter()
-        .filter(|r| r.archived.is_none())
-        .filter_map(|r| {
-            mail_lead_harness(r, mail.policy, mail.agent_sees_mcp).map(|h| h.id.clone())
-        })
-        .collect();
-    let phases = harness_snapshots(state, &needed).await;
-
-    let mut out = Vec::with_capacity(filtered.len());
-    for r in filtered {
-        let lead = mail_lead_harness(r, mail.policy, mail.agent_sees_mcp);
-        let lifecycle = if r.archived.is_some() {
-            "archived".to_owned()
-        } else {
-            lead.map_or_else(
-                || "unknown".to_owned(),
-                |h| {
-                    phases
-                        .get(&h.id)
-                        .map_or_else(|| "unknown".to_owned(), |s| s.phase.clone())
-                },
-            )
-        };
-        let last_status = db
-            .latest_message_from_room(&r.id, &caller.room_id)
-            .map_err(internal)?
-            .map(|m| LastStatus {
-                first_line: first_non_empty_line(&m.body),
-                created_ms: m.created_ms,
-            });
-        out.push(RoomSummary {
-            room_id: r.id.clone(),
-            name: r.name.clone(),
-            cwd: r.cwd.clone(),
-            repo_root: r.repo_root.clone(),
-            branch: r.branch.clone(),
-            archived: r.archived.is_some(),
-            harness_count: r.harnesses.len(),
-            created_by: r.created_by.as_ref().map(AgentCreatedBy::from),
-            lead_harness_id: lead.map(|h| h.id.clone()),
-            base_sha: r.created_by.as_ref().and_then(|c| c.base_sha.clone()),
-            prompt_first_line: r
-                .created_by
-                .as_ref()
-                .and_then(|c| c.prompt_first_line.clone()),
-            lifecycle,
-            last_status,
-        });
-    }
-
-    Ok(ListRoomsOut {
-        rooms: out,
-        unreadable_rooms,
-    })
 }
 
 #[derive(Debug, Clone, Deserialize)]

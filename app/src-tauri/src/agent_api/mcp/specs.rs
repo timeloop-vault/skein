@@ -412,10 +412,16 @@ pub fn tool_specs() -> Vec<Value> {
             "name": "list_rooms",
             "title": "List Skein rooms",
             "description":
-                "Every Skein room Skein holds, across every project — archived rooms \
-                 included, never dropped. Pass created_by: \"me\" to see only the \
-                 rooms this room opened with create_room, so you can rebuild your own \
-                 table of what you started without replaying any mail. Each room \
+                "Skein rooms across every project, newest first, paged. ARCHIVED \
+                 ROOMS ARE HIDDEN BY DEFAULT: pass include_archived: true to see \
+                 them, and include_retired: true as well for retired ones (archived \
+                 rooms marked as history) — the default is not the full set. Pass \
+                 created_by: \"me\" to see only the rooms this room opened with \
+                 create_room, so you can rebuild your own \
+                 table of what you started without replaying any mail. Filter by \
+                 lifecycle, trim with fields: \"summary\", and page with limit \
+                 (default 50, max 500) and since; has_more says another page \
+                 exists. Each room \
                  reports its lifecycle (\"archived\", a live phase, or \"unknown\" \
                  when Skein cannot currently vouch for it), the harness send_message \
                  would actually reach, and — when it sent you one — the first line \
@@ -429,7 +435,61 @@ pub fn tool_specs() -> Vec<Value> {
                         "enum": ["me"],
                         "description": "Optional — default: every room. \"me\" \
                             restricts to rooms whose create_room call came from this \
-                            room.",
+                            room. Archived rooms are hidden by default either way \
+                            (include_archived: true shows them, include_retired: true \
+                            shows retired ones too).",
+                    },
+                    "include_archived": {
+                        "type": "boolean",
+                        "description": "Optional — default: false. Archived rooms are \
+                            hidden by default; true includes them (but not retired \
+                            ones — see include_retired).",
+                    },
+                    "include_retired": {
+                        "type": "boolean",
+                        "description": "Optional — default: false. Retired rooms \
+                            (archived rooms marked as history) are hidden by default, \
+                            as are all archived rooms; true includes retired rooms \
+                            and the other archived rooms.",
+                    },
+                    "lifecycle": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["spawning", "running", "idle", "waiting",
+                                "permission", "exited", "archived", "unknown"],
+                        },
+                        "description": "Optional — default: every lifecycle. Keep only \
+                            rooms with these lifecycles; an unknown value is refused. \
+                            Applied after the archived/retired visibility: archived \
+                            rooms are hidden by default, so \"archived\" matches \
+                            nothing unless include_archived (or include_retired) is \
+                            true.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Optional — default: 50, max 500 (0 means the \
+                            default). Page size. Archived rooms are hidden by default \
+                            (include_archived: true shows them, include_retired: true \
+                            shows retired ones too); check has_more.",
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": "Optional — default: first page. A room_id from \
+                            a previous page; returns the rooms after it (exclusive), \
+                            in the same filtered list — archived rooms stay hidden \
+                            unless include_archived/include_retired is true again. \
+                            Refused if it names no room in that list.",
+                    },
+                    "fields": {
+                        "type": "string",
+                        "enum": ["full", "summary"],
+                        "description": "Optional — default: \"full\". \"summary\" omits \
+                            cwd, repo_root, created_by, lead_harness_id, base_sha and \
+                            prompt_first_line. Does not change visibility: archived \
+                            rooms are still hidden unless include_archived: true \
+                            (include_retired: true for retired ones).",
                     },
                 },
                 "additionalProperties": false,

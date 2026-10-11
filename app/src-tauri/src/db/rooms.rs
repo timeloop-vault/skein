@@ -460,7 +460,7 @@ impl Database {
     pub fn all_rooms(&self) -> Result<Vec<Room>, String> {
         let conn = self.conn.lock();
         let mut stmt = conn
-            .prepare("SELECT data FROM sessions")
+            .prepare("SELECT data FROM sessions ORDER BY created_at, id")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))

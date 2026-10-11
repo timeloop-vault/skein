@@ -83,6 +83,8 @@ mod http_route_tests;
 #[cfg(test)]
 mod info_tests;
 #[cfg(test)]
+mod list_rooms_paging_tests;
+#[cfg(test)]
 mod mail_history_tests;
 #[cfg(test)]
 mod mail_notice_tests;
