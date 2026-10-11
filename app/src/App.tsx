@@ -18,7 +18,6 @@ import { buildSettingsProps } from "./buildSettingsProps.ts";
 import type { PaletteItem } from "./CommandPalette.tsx";
 import { StatusDot } from "./components.tsx";
 import { ControlCenter } from "./controlCenter/ControlCenter.tsx";
-import { useEnvProfiles } from "./envProfileStore.ts";
 import { usePermissionHarnessIds } from "./harnessActivity.ts";
 import { buildPaletteItems } from "./paletteItems.ts";
 import { RoomTabStrip } from "./RoomTabStrip.tsx";
@@ -27,16 +26,13 @@ import { StatusBar } from "./StatusBar.tsx";
 import { TodoMenuProvider } from "./todos/TodoMenuProvider.tsx";
 import { useTodoWiring } from "./todos/useTodoWiring.ts";
 import { useAppBackgroundWiring } from "./useAppBackgroundWiring.ts";
+import { useAppHarnessMenu } from "./useAppHarnessMenu.ts";
 import { useAppSettings } from "./useAppSettings.ts";
 import { useAppShortcuts } from "./useAppShortcuts.ts";
 import { useAppUiState } from "./useAppUiState.ts";
-import { useEnvProfileSwitch } from "./useEnvProfileSwitch.ts";
 import { useHarnessActions } from "./useHarnessActions.ts";
 import { useHarnessCreation } from "./useHarnessCreation.ts";
-import { useHarnessEnvProfile } from "./useHarnessEnvProfile.ts";
 import { useHarnessNotifications } from "./useHarnessNotifications.ts";
-import { useReattachTelemetry } from "./useReattachTelemetry.ts";
-import { useRestartHarness } from "./useRestartHarness.ts";
 import { useRoomStripNav } from "./useRoomStripNav.ts";
 import { useRoomsStore } from "./useRoomsStore.ts";
 import { useTabDrag } from "./useTabDrag.ts";
@@ -154,6 +150,7 @@ export default function App() {
 		cycleAlertedRoom,
 		cycleAlertedHarness,
 		addHarness,
+		restartHarness,
 	} = actions;
 
 	const reopenRoom = async (id: string) => {
@@ -198,15 +195,8 @@ export default function App() {
 		jumpToHarness,
 	);
 
-	// #410: manual "Reattach telemetry" action — see useReattachTelemetry.ts.
-	const onReattachTelemetry = useReattachTelemetry(roomsRef, pushToast);
-	// #490: palette restart — see useRestartHarness.ts.
-	const onRestartHarness = useRestartHarness(roomsRef, actions.restartHarness, pushToast);
-
-	// #615: status-bar chip + palette switch the global env profile.
-	const envProfiles = useEnvProfiles();
-	const onSwitchEnvProfile = useEnvProfileSwitch(roomsRef, activeRoomId, pushToast);
-	const onEnvProfileChange = useHarnessEnvProfile(roomsRef, setRooms, pushToast);
+	// #410 reattach, #490 restart, #615 env profiles — see useAppHarnessMenu.ts.
+	const menu = useAppHarnessMenu(roomsRef, setRooms, activeRoomId, restartHarness, pushToast);
 
 	// Pointer-based drag-to-reorder (#271) — see tabDrag.ts's header.
 	const { drag, dropTarget, startDrag, dragHandlers, suppressClick } = useTabDrag(
@@ -284,10 +274,7 @@ export default function App() {
 		closeHarness: actions.closeHarness,
 		cycleAlertedRoom,
 		cycleAlertedHarness,
-		onReattachTelemetry,
-		onRestartHarness,
-		envProfiles,
-		onSwitchEnvProfile,
+		...menu,
 	});
 
 	const overlayProps = buildOverlayProps(nav, store, settings, {
@@ -382,8 +369,8 @@ export default function App() {
 							showPicker={showPicker}
 							setShowPicker={setShowPicker}
 							drag={dragWiring}
-							onReattachTelemetry={onReattachTelemetry}
-							onEnvProfileChange={onEnvProfileChange}
+							onReattachTelemetry={menu.onReattachTelemetry}
+							onEnvProfileChange={menu.onEnvProfileChange}
 						/>
 					</div>
 					<ControlCenter {...cc.props} />
@@ -398,7 +385,7 @@ export default function App() {
 					permissionHarnessIds={permissionHarnessIds}
 					jumpToHarness={jumpToHarness}
 					switchRoom={switchRoom}
-					onSwitchEnvProfile={onSwitchEnvProfile}
+					onSwitchEnvProfile={menu.onSwitchEnvProfile}
 				/>
 				<AppOverlays {...overlayProps} />
 			</TodoMenuProvider>
