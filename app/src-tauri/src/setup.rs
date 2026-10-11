@@ -52,6 +52,8 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
     crate::os_notify::init(app.handle());
 
     let data_dir = state::spawn_env(app)?;
+    // #614: the updater plugin's client hook reads this global.
+    crate::updater_proxy::init(&data_dir);
     state::harness_config(app);
     let db = state::open_database(app, &data_dir)?;
     servers::agent_api(app, &db);

@@ -31,6 +31,7 @@ mod room_paths;
 mod setup;
 mod spawn_env;
 mod spawn_settings;
+mod updater_proxy;
 mod watcher;
 
 pub(crate) use commands::spawn_env::{SpawnEnvState, home_dir};
@@ -169,6 +170,10 @@ pub fn run() {
             cli_shim::cli_shim_status,
             cli_shim::cli_shim_install,
             cli_shim::cli_shim_uninstall,
+            updater_proxy::commands::updater_proxy_get,
+            updater_proxy::commands::updater_proxy_set,
+            updater_proxy::commands::updater_diagnose,
+            updater_proxy::commands::updater_check_proxy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

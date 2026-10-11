@@ -54,6 +54,8 @@ notify-debouncer-mini = "0.7"
 # minimal (no TLS, no cookies, no gzip — none of which we need for
 # 127.0.0.1 plain HTTP).
 reqwest = { version = "0.13", default-features = false, features = ["stream"] }
+# Already transitive; direct for parsing/redacting the updater proxy (#614).
+url = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 # Already transitive via reqwest+tauri. Direct dep so we can name
 # StreamExt for the opencode SSE byte stream.

@@ -4,9 +4,12 @@
 
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useState } from "react";
 import { flushRoomsBounded } from "./roomsFlush.ts";
+import { UpdaterProxyField } from "./UpdaterProxyField.tsx";
+import { formatFailure, RELEASES_URL, updaterCheckProxy, updaterDiagnose } from "./updaterProxy.ts";
 import "./Settings.css";
 
 type UpdateState =
@@ -16,7 +19,7 @@ type UpdateState =
 	| { status: "available"; version: string; notes: string | undefined }
 	| { status: "downloading"; downloaded: number; total: number | undefined }
 	| { status: "ready" }
-	| { status: "error"; message: string };
+	| { status: "error"; message: string; lines: string[] };
 
 /// Mirror of `agent_api::state::AgentApiStatus` (#213).
 interface AgentApiStatus {
@@ -24,6 +27,16 @@ interface AgentApiStatus {
 	port: number | null;
 	error: string | null;
 }
+
+// #614: the plugin can't be hooked globally, so resolve the proxy per check.
+// The URL may hold credentials: it is never rendered or logged.
+const checkWithProxy = async () => {
+	const proxy = await updaterCheckProxy().catch(() => {
+		console.warn("[skein] updater_check_proxy failed; checking without it");
+		return null;
+	});
+	return check(proxy ? { proxy } : undefined);
+};
 
 export const AboutSettings = () => {
 	// Updater UI: pulled into the modal so the user can check + install
@@ -55,25 +68,35 @@ export const AboutSettings = () => {
 	}, []);
 
 	const [update, setUpdate] = useState<UpdateState>({ status: "idle" });
+	// #614: keep the plugin's message, then ask Rust why (cause chain +
+	// effective proxy). The diagnosis failing must not hide the real error.
+	const failWith = useCallback(async (err: unknown) => {
+		const message = err instanceof Error ? err.message : String(err);
+		const diagnosis = await updaterDiagnose().catch((e: unknown) => {
+			console.warn("[skein] updater_diagnose failed:", e);
+			return null;
+		});
+		setUpdate({ status: "error", message, lines: formatFailure(message, diagnosis) });
+	}, []);
+
 	const checkForUpdate = useCallback(async () => {
 		setUpdate({ status: "checking" });
 		try {
-			const found = await check();
+			const found = await checkWithProxy();
 			if (!found) {
 				setUpdate({ status: "current" });
 				return;
 			}
 			setUpdate({ status: "available", version: found.version, notes: found.body });
 		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : String(err);
-			setUpdate({ status: "error", message });
+			await failWith(err);
 		}
-	}, []);
+	}, [failWith]);
 
 	const downloadAndInstall = useCallback(async () => {
 		setUpdate({ status: "downloading", downloaded: 0, total: undefined });
 		try {
-			const found = await check();
+			const found = await checkWithProxy();
 			if (!found) {
 				setUpdate({ status: "current" });
 				return;
@@ -94,10 +117,9 @@ export const AboutSettings = () => {
 				}
 			});
 		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : String(err);
-			setUpdate({ status: "error", message });
+			await failWith(err);
 		}
-	}, []);
+	}, [failWith]);
 
 	return (
 		<div className="sk-field">
@@ -147,8 +169,21 @@ export const AboutSettings = () => {
 					</div>
 				)}
 				{update.status === "error" && (
-					<div className="sk-update-msg err">Update failed: {update.message}</div>
+					<div className="sk-update-msg err">
+						{update.lines.map((line) => (
+							<div key={line}>{line}</div>
+						))}
+						<button
+							type="button"
+							className="sk-btn"
+							style={{ marginTop: 6 }}
+							onClick={() => void openUrl(RELEASES_URL)}
+						>
+							Download manually
+						</button>
+					</div>
 				)}
+				<UpdaterProxyField />
 				{agentApi &&
 					(agentApi.port != null ? (
 						<div className="sk-update-msg">
