@@ -231,6 +231,28 @@ fn a_pre_520_blob_loads_without_a_shell_claim() {
     assert_eq!(room.harnesses[0].shell_claim, None);
 }
 
+/// #615: `envProfile` survives load/save; an old blob parses as None.
+#[test]
+fn env_profile_round_trips_and_is_optional() {
+    let (_dir, db) = fresh_db();
+    let mut r = room("r1");
+    let mut a = harness("h1");
+    a.env_profile = Some("proxy".into());
+    r.harnesses = vec![a, harness("h2")];
+    r.active_harness_id = "h1".into();
+    db.save_all(&[r]).unwrap();
+    let loaded = db.load_all().unwrap().rooms.remove(0);
+    assert_eq!(loaded.harnesses[0].env_profile.as_deref(), Some("proxy"));
+    assert_eq!(loaded.harnesses[1].env_profile, None);
+    let json = serde_json::to_string(&loaded.harnesses[0]).unwrap();
+    assert!(json.contains(r#""envProfile":"proxy""#), "{json}");
+    let old = r#"{"id":"r1","name":"r","task":"","status":"idle","badge":0,
+        "harnesses":[{"id":"h1","kind":"claude","name":"h1","status":"running",
+        "model":"","tokens":"0"}],"activeHarnessId":"h1"}"#;
+    let room: Room = serde_json::from_str(old).unwrap();
+    assert_eq!(room.harnesses[0].env_profile, None);
+}
+
 /// #568: `remote` survives load then save; a blob without it parses.
 #[test]
 fn remote_spec_round_trips_and_is_optional() {

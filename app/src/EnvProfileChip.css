@@ -1,0 +1,18 @@
+.sk-envchip {
+	background: none;
+	border: 0;
+	padding: 0 6px;
+	font: inherit;
+	letter-spacing: inherit;
+	color: inherit;
+	cursor: pointer;
+}
+.sk-envchip:hover {
+	color: var(--accent);
+}
+.sk-envchip.stale {
+	color: var(--warn);
+}
+.sk-envchip-stale {
+	margin-left: 2px;
+}

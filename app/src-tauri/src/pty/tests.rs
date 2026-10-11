@@ -191,6 +191,7 @@ fn capture_pty(cmd: &[String], settings: &SpawnSettings) -> String {
                 // `HarnessKind::program`) has no injection mechanism
                 // of its own, so `None` config is honest rather than
                 // a stand-in.
+                env_profile: None,
                 agent: None,
                 kind: HarnessKind::Byoh,
                 harness_config: None,
@@ -426,6 +427,7 @@ fn stripping_can_be_turned_off() {
         probe_snapshot(),
         None,
         &Injection::default(),
+        None,
     );
     assert_eq!(applied.stripped, Vec::<String>::new());
 }

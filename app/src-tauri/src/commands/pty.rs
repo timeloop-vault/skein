@@ -29,6 +29,9 @@ pub(crate) struct PtySpawnResult {
     id: String,
     injected: bool,
     mouse_clicks_disabled: bool,
+    /// The env profile applied to this spawn (#615), so the frontend can
+    /// record which profile a running harness started with.
+    env_profile: Option<String>,
 }
 
 /// Spawn a child process attached to a fresh PTY and stream its output
@@ -61,6 +64,7 @@ pub(crate) async fn pty_spawn(
     room_id: String,
     harness_id: String,
     kind: crate::harness_kind::HarnessKind,
+    env_profile: Option<String>,
     on_event: Channel<PtyEvent>,
     app: tauri::AppHandle,
 ) -> Result<PtySpawnResult, String> {
@@ -104,6 +108,7 @@ pub(crate) async fn pty_spawn(
                     agent: agent.as_ref(),
                     kind,
                     harness_config: Some(&harness_config),
+                    env_profile: env_profile.as_deref(),
                 },
                 move |event| {
                     // Channel send only fails if the frontend dropped
@@ -117,6 +122,7 @@ pub(crate) async fn pty_spawn(
             id,
             injected: outcome.injected,
             mouse_clicks_disabled: outcome.mouse_clicks_disabled,
+            env_profile: outcome.env_profile,
         })
     })
     .await
@@ -225,11 +231,17 @@ mod tests {
             id: "abc".to_owned(),
             injected: true,
             mouse_clicks_disabled: true,
+            env_profile: Some("proxy".to_owned()),
         })
         .expect("serialize");
         assert_eq!(
             json,
-            serde_json::json!({ "id": "abc", "injected": true, "mouseClicksDisabled": true })
+            serde_json::json!({
+                "id": "abc",
+                "injected": true,
+                "mouseClicksDisabled": true,
+                "envProfile": "proxy"
+            })
         );
     }
 }

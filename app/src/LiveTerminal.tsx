@@ -69,6 +69,10 @@ interface LiveTerminalProps {
 	//
 	// `undefined` = no `--agent` flag, which needs no check.
 	agent: string | undefined;
+	// #615: the harness's env profile override. Read only when a spawn
+	// starts (the mount effect depends on mountKey alone), so changing it
+	// never respawns a live terminal; it applies at the next restart.
+	envProfile: string | undefined;
 	// Epic #50 L2c-2: opencode embedded-server port. Required for
 	// kind === "opencode" to attach the SSE adapter; `undefined`
 	// means the adapter is disabled for this harness and L2a takes
@@ -120,6 +124,7 @@ export const LiveTerminal = ({
 	harnessKind,
 	sessionId,
 	agent,
+	envProfile,
 	opencodePort,
 	onSessionCaptured,
 	onSessionFollowed,
@@ -208,6 +213,7 @@ export const LiveTerminal = ({
 		harnessKind,
 		sessionId,
 		agent,
+		envProfile,
 		opencodePort,
 		onSessionCaptured,
 		onSessionFollowed,

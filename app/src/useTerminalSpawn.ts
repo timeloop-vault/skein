@@ -23,6 +23,7 @@ import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
 import type { PtySpawnResult } from "./ptySpawnResult.ts";
 import { shellClaim } from "./shellClaim.ts";
+import { forgetSpawnedProfile, recordSpawnedProfile } from "./spawnedEnvProfile.ts";
 import { startupAdoption } from "./startupAdoption.ts";
 import { subagents } from "./subagents.ts";
 import { attachTerminalInteractions } from "./terminalInteractions.ts";
@@ -47,6 +48,8 @@ export interface UseTerminalSpawnParams {
 	harnessKind: HarnessKind;
 	sessionId: string | undefined;
 	agent: string | undefined;
+	/** #615: read at spawn time only (effect deps are [mountKey]). */
+	envProfile: string | undefined;
 	opencodePort: number | undefined;
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
 	onSessionFollowed: ((sessionId: string) => void) | undefined;
@@ -82,6 +85,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		harnessKind,
 		sessionId,
 		agent,
+		envProfile,
 		opencodePort,
 		onSessionCaptured,
 		onSessionFollowed,
@@ -269,7 +273,12 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// post-exit shell is invisible to Rust and not covered.
 			linkPolicy.mouseClicksDisabled = false;
 			try {
-				const { id, injected, mouseClicksDisabled } = await invoke<PtySpawnResult>("pty_spawn", {
+				const {
+					id,
+					injected,
+					mouseClicksDisabled,
+					envProfile: appliedProfile,
+				} = await invoke<PtySpawnResult>("pty_spawn", {
 					cmd: cmdToSpawn,
 					cwd,
 					rows: term.rows,
@@ -290,6 +299,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					// legitimately disagree once the user has swapped a
 					// command (the post-exit "Enter for shell" path).
 					kind: harnessKind,
+					// #615: the harness's override; null = follow the global one.
+					envProfile: envProfile ?? null,
 					onEvent: channel,
 				});
 				if (cancelled) {
@@ -299,6 +310,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				}
 				ptyIdRef.current = id;
 				linkPolicy.mouseClicksDisabled = mouseClicksDisabled;
+				recordSpawnedProfile(harnessId, appliedProfile ?? null);
 				harnessActivity.setInjected(harnessId, injected);
 				// #238: publish this harness to the `harnessInput` seam now
 				// that its PTY is live.
@@ -389,6 +401,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			backgroundTasks.forget(harnessId);
 			shellClaim.forget(harnessId);
 			startupAdoption.forget(harnessId); // #539
+			forgetSpawnedProfile(harnessId); // #615
 		};
 	}, [mountKey]);
 	// #116 re-point effect: see useClaudeRepoint.ts.

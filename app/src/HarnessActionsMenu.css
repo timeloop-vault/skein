@@ -71,6 +71,15 @@
 	letter-spacing: 0.04em;
 	border-top: 1px solid var(--line);
 }
+/* #615: "Started with X — restart to apply Y" above Restart. */
+.sk-harness-actions-note {
+	padding: 2px 8px 4px;
+	max-width: 240px;
+	color: var(--fg-3);
+	font-family: var(--sk-mono);
+	font-size: 0.8em;
+	white-space: normal;
+}
 .sk-harness-actions-error {
 	position: absolute;
 	top: 100%;

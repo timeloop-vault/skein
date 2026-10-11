@@ -8,4 +8,6 @@ export interface PtySpawnResult {
 	/// `CLAUDE_CODE_DISABLE_MOUSE_CLICKS` is truthy in the child's env
 	/// (#401): Skein must open clicked links itself.
 	mouseClicksDisabled: boolean;
+	/// #615: the env profile actually applied at this spawn (`null` = none).
+	envProfile: string | null;
 }

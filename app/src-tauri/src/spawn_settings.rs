@@ -20,6 +20,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) mod env_profile;
+pub use env_profile::EnvProfile;
+
 /// Lives beside `skein.db` in `app_data_dir()`, so the three build
 /// profiles stay isolated from each other exactly like the database.
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
@@ -84,6 +87,10 @@ pub struct SpawnSettings {
     /// cannot recover from inside the app.
     pub path_prepend: Vec<String>,
     pub extra_env: Vec<EnvVar>,
+    /// Named sets of variables to set/unset, layered on `extra_env` (#615).
+    pub env_profiles: Vec<EnvProfile>,
+    /// The globally active profile's name; a harness may override it.
+    pub active_env_profile: Option<String>,
     /// Strip host-terminal identity variables (#192).
     pub strip_host_env: bool,
     /// Hand Claude Code the shipped Skein plugin, which registers the
@@ -132,6 +139,8 @@ impl Default for SpawnSettings {
             capture: CaptureMode::default(),
             path_prepend: default_path_prepend(),
             extra_env: Vec::new(),
+            env_profiles: Vec::new(),
+            active_env_profile: None,
             strip_host_env: true,
             inject_claude_plugin: true,
             inject_opencode_config: true,

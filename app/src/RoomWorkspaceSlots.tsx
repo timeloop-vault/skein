@@ -37,6 +37,7 @@ export interface RoomHandlers {
 	shellClaimSet: (roomId: string, harnessId: string, sessionId: string, port?: number) => void;
 	shellClaimRelease: (roomId: string, harnessId: string) => void;
 	reattach: (roomId: string, harnessId: string) => void;
+	envProfile: (roomId: string, harnessId: string, name: string | undefined) => void;
 	restart: (roomId: string, harnessId: string) => Promise<GateResult>;
 	recreateWorktree: Store["recreateMissingWorktree"];
 	pickFolder: Store["pickMissingFolder"];
@@ -122,6 +123,10 @@ export const LeftSlot = memo((p: LeftSlotProps) => {
 		[h, id],
 	);
 	const onRestartHarness = useCallback((harnessId: string) => h.restart(id, harnessId), [h, id]);
+	const onEnvProfileChange = useCallback(
+		(harnessId: string, name: string | undefined) => h.envProfile(id, harnessId, name),
+		[h, id],
+	);
 
 	if (p.missing) {
 		// #164: no HarnessColumn mounts here, so no LiveTerminal
@@ -176,6 +181,7 @@ export const LeftSlot = memo((p: LeftSlotProps) => {
 			onReattachTelemetry={onReattachTelemetry}
 			versionNoticeModes={p.versionNoticeModes}
 			onRestartHarness={onRestartHarness}
+			onEnvProfileChange={onEnvProfileChange}
 		/>
 	);
 });

@@ -70,6 +70,9 @@ pub struct Harness {
     /// Round-tripped only; the frontend builds the ssh argv from it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub remote: Option<RemoteSpec>,
+    /// #615: per-harness env profile override; `None` = follow the global active profile.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub env_profile: Option<String>,
 }
 
 /// A `remote` harness's target (#568): ssh host, the tool run

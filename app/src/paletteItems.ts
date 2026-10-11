@@ -45,6 +45,9 @@ export interface BuildPaletteItemsParams {
 	onReattachTelemetry: (roomId: string, harnessId: string) => void;
 	// #490: fire-and-forget; the handler owns surfacing a refusal.
 	onRestartHarness: (roomId: string, harnessId: string) => void;
+	// #615: global env profile quick switch; no items when no profiles.
+	envProfiles: { names: string[]; active: string | null };
+	onSwitchEnvProfile: (name: string | null) => void;
 }
 
 export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[] {
@@ -71,6 +74,8 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 		cycleAlertedHarness,
 		onReattachTelemetry,
 		onRestartHarness,
+		envProfiles,
+		onSwitchEnvProfile,
 	} = params;
 
 	const paletteItems: PaletteItem[] = [];
@@ -203,6 +208,21 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 		hint: hints.reload,
 		invoke: () => window.location.reload(),
 	});
+	// #615: one entry per profile (+ none); the current one says so in its hint.
+	if (envProfiles.names.length > 0) {
+		const choices: (string | null)[] = [null, ...envProfiles.names];
+		for (const choice of choices) {
+			paletteItems.push({
+				id: `cmd:env-profile:${choice ?? "none"}`,
+				label: choice === null ? "Env profile: none" : `Env profile: use "${choice}"`,
+				hint:
+					envProfiles.active === choice
+						? "active · applies on next harness start"
+						: "applies on next harness start",
+				invoke: () => onSwitchEnvProfile(choice),
+			});
+		}
+	}
 	// #67: inbox navigation — only surfaced when something is actually
 	// pending, so Cmd+K stays uncluttered otherwise.
 	const otherAlertedRooms = activeRooms.filter(

@@ -122,6 +122,8 @@ pub struct SpawnOutcome {
     /// Whether `CLAUDE_CODE_DISABLE_MOUSE_CLICKS` is truthy in the final
     /// spawn environment (#401).
     pub mouse_clicks_disabled: bool,
+    /// The env profile actually applied (#615); `None` when none was.
+    pub env_profile: Option<String>,
 }
 
 /// One spawn's inputs. A struct rather than six positional parameters
@@ -147,6 +149,9 @@ pub struct SpawnRequest<'a> {
     /// The shipped config bundle that teaches the agent CLIs about the
     /// review API (#215). `None` outside the app (tests, preview).
     pub harness_config: Option<&'a HarnessConfig>,
+    /// The harness's own env-profile override (#615); `None` follows the
+    /// global active profile.
+    pub env_profile: Option<&'a str>,
 }
 
 /// #164: refuse a spawn whose cwd doesn't exist (or isn't a directory)
@@ -207,6 +212,7 @@ impl PtyManager {
             agent,
             kind,
             harness_config,
+            env_profile,
         } = req;
         check_cwd(cwd)?;
         let Some((program, stored_args)) = cmd.split_first() else {
@@ -276,7 +282,14 @@ impl PtyManager {
         }
         builder.cwd(cwd);
 
-        let mut applied = apply_env(&mut builder, settings, probe_result(), agent, &injection);
+        let mut applied = apply_env(
+            &mut builder,
+            settings,
+            probe_result(),
+            agent,
+            &injection,
+            env_profile,
+        );
 
         // #207: `portable-pty` resolves the program itself, and on
         // Windows it prefers an extensionless `dir\name` over every
@@ -300,6 +313,7 @@ impl PtyManager {
                 applied.probe.clone(),
                 agent,
                 &injection,
+                env_profile,
             );
             builder = rebuilt;
         }
@@ -309,6 +323,7 @@ impl PtyManager {
             probe = %applied.probe.describe(),
             stripped = applied.stripped.len(),
             login_env = applied.login_env_keys.len(),
+            env_profile = ?applied.env_profile,
             path = %applied.path.to_string_lossy(),
             "pty_spawn resolved environment"
         );
@@ -470,6 +485,7 @@ impl PtyManager {
         Ok(SpawnOutcome {
             injected,
             mouse_clicks_disabled: applied.mouse_clicks_disabled,
+            env_profile: applied.env_profile,
         })
     }
 
@@ -546,3 +562,6 @@ mod launch_tests;
 
 #[cfg(test)]
 mod login_env_tests;
+
+#[cfg(test)]
+mod env_profile_tests;

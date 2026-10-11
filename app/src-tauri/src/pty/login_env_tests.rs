@@ -23,7 +23,7 @@ fn captured(env: Option<Vec<(&str, &str)>>) -> ProbeOutcome {
 }
 
 fn run(builder: &mut CommandBuilder, settings: &SpawnSettings, probe: ProbeOutcome) -> AppliedEnv {
-    apply_env(builder, settings, probe, None, &Injection::default())
+    apply_env(builder, settings, probe, None, &Injection::default(), None)
 }
 
 fn get(builder: &CommandBuilder, key: &str) -> Option<String> {

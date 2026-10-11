@@ -74,6 +74,9 @@ export interface Harness {
 	// given (measured on #219), so omitting it here would silently
 	// resurrect whatever the conversation started as.
 	agent?: string;
+	// #615: per-harness env profile override. Absent = follow the global
+	// active profile. Applies at the next spawn, never to a live PTY.
+	envProfile?: string;
 	// #433: a `design` harness's chosen preview entry — a worktree-
 	// relative, `/`-separated path to an .html/.htm file. Absent until
 	// one is picked (or the only one is auto-picked).
@@ -215,8 +218,26 @@ export interface EnvVar {
 	value: string;
 }
 
+/** One line of an env profile: set `key=value`, or (`unset`) remove the
+ *  variable even if the login shell exported it. */
+export interface EnvProfileVar {
+	key: string;
+	value: string;
+	unset: boolean;
+}
+
+/** A named set of env edits, layered over the global extra variables. */
+export interface EnvProfile {
+	name: string;
+	vars: EnvProfileVar[];
+}
+
 export interface SpawnSettings {
 	schema: number;
+	/** Named env profiles. Absent in old persisted payloads. */
+	envProfiles?: EnvProfile[];
+	/** The one profile applied at spawn; `null`/absent = none. */
+	activeEnvProfile?: string | null;
 	/** Absolute path to a shell binary. `null` = resolve from `$SHELL`. */
 	shell: string | null;
 	capture: CaptureMode;
@@ -313,6 +334,10 @@ export interface EnvPreview {
 	/** Set when a shell is configured but isn't a runnable file. */
 	shellRejected: string | null;
 	launchContext: "bundled" | "terminal";
+	/** Active env profile (#615); names only, never values. Absent on older backends. */
+	envProfile?: string | null;
+	profileSetKeys?: string[];
+	profileUnsetKeys?: string[];
 }
 
 /** What Skein injects so an agent CLI can reach the review API, and

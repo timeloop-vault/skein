@@ -18,6 +18,7 @@ import { buildSettingsProps } from "./buildSettingsProps.ts";
 import type { PaletteItem } from "./CommandPalette.tsx";
 import { StatusDot } from "./components.tsx";
 import { ControlCenter } from "./controlCenter/ControlCenter.tsx";
+import { useEnvProfiles } from "./envProfileStore.ts";
 import { usePermissionHarnessIds } from "./harnessActivity.ts";
 import { buildPaletteItems } from "./paletteItems.ts";
 import { RoomTabStrip } from "./RoomTabStrip.tsx";
@@ -29,8 +30,10 @@ import { useAppBackgroundWiring } from "./useAppBackgroundWiring.ts";
 import { useAppSettings } from "./useAppSettings.ts";
 import { useAppShortcuts } from "./useAppShortcuts.ts";
 import { useAppUiState } from "./useAppUiState.ts";
+import { useEnvProfileSwitch } from "./useEnvProfileSwitch.ts";
 import { useHarnessActions } from "./useHarnessActions.ts";
 import { useHarnessCreation } from "./useHarnessCreation.ts";
+import { useHarnessEnvProfile } from "./useHarnessEnvProfile.ts";
 import { useHarnessNotifications } from "./useHarnessNotifications.ts";
 import { useReattachTelemetry } from "./useReattachTelemetry.ts";
 import { useRestartHarness } from "./useRestartHarness.ts";
@@ -200,6 +203,11 @@ export default function App() {
 	// #490: palette restart — see useRestartHarness.ts.
 	const onRestartHarness = useRestartHarness(roomsRef, actions.restartHarness, pushToast);
 
+	// #615: status-bar chip + palette switch the global env profile.
+	const envProfiles = useEnvProfiles();
+	const onSwitchEnvProfile = useEnvProfileSwitch(roomsRef, activeRoomId, pushToast);
+	const onEnvProfileChange = useHarnessEnvProfile(roomsRef, setRooms, pushToast);
+
 	// Pointer-based drag-to-reorder (#271) — see tabDrag.ts's header.
 	const { drag, dropTarget, startDrag, dragHandlers, suppressClick } = useTabDrag(
 		reorderRoom,
@@ -278,6 +286,8 @@ export default function App() {
 		cycleAlertedHarness,
 		onReattachTelemetry,
 		onRestartHarness,
+		envProfiles,
+		onSwitchEnvProfile,
 	});
 
 	const overlayProps = buildOverlayProps(nav, store, settings, {
@@ -373,6 +383,7 @@ export default function App() {
 							setShowPicker={setShowPicker}
 							drag={dragWiring}
 							onReattachTelemetry={onReattachTelemetry}
+							onEnvProfileChange={onEnvProfileChange}
 						/>
 					</div>
 					<ControlCenter {...cc.props} />
@@ -387,6 +398,7 @@ export default function App() {
 					permissionHarnessIds={permissionHarnessIds}
 					jumpToHarness={jumpToHarness}
 					switchRoom={switchRoom}
+					onSwitchEnvProfile={onSwitchEnvProfile}
 				/>
 				<AppOverlays {...overlayProps} />
 			</TodoMenuProvider>

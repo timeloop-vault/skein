@@ -4,6 +4,7 @@
 
 import { HChip } from "./components.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
+import { EnvProfileChip } from "./EnvProfileChip.tsx";
 import { AgentStatusBarSeg, LiveStatusBarChip } from "./HarnessColumn.tsx";
 import { harnessActivity, statusLabel } from "./harnessActivity.ts";
 import type { Harness, Room } from "./types.ts";
@@ -19,6 +20,7 @@ export const StatusBar = ({
 	permissionHarnessIds,
 	jumpToHarness,
 	switchRoom,
+	onSwitchEnvProfile,
 }: {
 	activeHarness: Harness;
 	room: Room;
@@ -29,6 +31,7 @@ export const StatusBar = ({
 	permissionHarnessIds: ReadonlySet<string>;
 	jumpToHarness: (roomId: string, harnessId: string) => void;
 	switchRoom: (id: string) => void;
+	onSwitchEnvProfile: (name: string | null) => void;
 }) => {
 	return (
 		<div className="sk-statusbar">
@@ -65,6 +68,7 @@ export const StatusBar = ({
 				</span>
 			)}
 			<span className="spacer" />
+			<EnvProfileChip activeHarness={activeHarness} onSwitch={onSwitchEnvProfile} />
 			{notifyUrgent &&
 				(() => {
 					// #86: a harness blocked on permission ranks above a

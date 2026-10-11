@@ -12,7 +12,10 @@
 // Rust that builds a real child's environment, then the knobs.
 
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { EnvProfilesPanel } from "./EnvProfilesPanel.tsx";
+import { envProfileState, useEnvProfiles } from "./envProfileStore.ts";
+import { activeOnSave, normalizeProfiles, profileNames, validateProfiles } from "./envProfiles.ts";
 import { CAPTURE_OPTIONS } from "./spawnEnv/constants.ts";
 import { EnvPreviewSection } from "./spawnEnv/EnvPreviewSection.tsx";
 import { EnvToggles } from "./spawnEnv/EnvToggles.tsx";
@@ -41,7 +44,28 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 	// Adopt whatever the backend last confirmed. Keyed on the object
 	// identity, which only changes on a successful load or save — so
 	// this never clobbers half-typed edits.
-	useEffect(() => setDraft(settings), [settings]);
+	// The active profile can also change from the status-bar chip or the
+	// palette, so the store — not `settings` — is its source of truth here.
+	const { active: storeActive, loaded } = useEnvProfiles();
+	const baseActive = useRef<string | null>(storeActive);
+	const withStoreActive = useCallback(
+		(s: SpawnSettings | null): SpawnSettings | null =>
+			s && loaded ? { ...s, activeEnvProfile: storeActive } : s,
+		[loaded, storeActive],
+	);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: adopt on a new `settings` only
+	useEffect(() => {
+		baseActive.current = storeActive;
+		setDraft(withStoreActive(settings));
+	}, [settings]);
+	useEffect(() => {
+		if (!loaded) return;
+		const prev = baseActive.current;
+		baseActive.current = storeActive;
+		setDraft((d) =>
+			d && (d.activeEnvProfile ?? null) === prev ? { ...d, activeEnvProfile: storeActive } : d,
+		);
+	}, [loaded, storeActive]);
 
 	const refreshPreview = useCallback(async () => {
 		try {
@@ -79,8 +103,9 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 		}
 	}, [refreshPreview]);
 
+	const baseline = withStoreActive(settings);
 	const dirty =
-		draft !== null && settings !== null && JSON.stringify(draft) !== JSON.stringify(settings);
+		draft !== null && baseline !== null && JSON.stringify(draft) !== JSON.stringify(baseline);
 
 	const save = async () => {
 		if (!draft) return;
@@ -89,8 +114,16 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 		try {
 			// Drop blank rows the user added and never filled in, so an
 			// empty box can't become a permanent no-op entry in the file.
+			const normalized = normalizeProfiles(draft);
+			const wanted = activeOnSave(
+				draft.activeEnvProfile,
+				baseActive.current,
+				envProfileState().active,
+			);
 			await onSave({
-				...draft,
+				...normalized,
+				activeEnvProfile:
+					wanted !== null && profileNames(normalized).includes(wanted) ? wanted : null,
 				shell: draft.shell?.trim() ? draft.shell.trim() : null,
 				pathPrepend: draft.pathPrepend.map((p) => p.trim()).filter(Boolean),
 				extraEnv: draft.extraEnv.filter((v) => v.key.trim()),
@@ -197,6 +230,8 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 				/>
 			</div>
 
+			<EnvProfilesPanel draft={draft} setDraft={setDraft} />
+
 			<EnvToggles
 				draft={draft}
 				setDraft={setDraft}
@@ -209,14 +244,14 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 					type="button"
 					className="sk-btn primary"
 					onClick={() => void save()}
-					disabled={!dirty || busy}
+					disabled={!dirty || busy || validateProfiles(draft.envProfiles ?? []) !== null}
 				>
 					{busy ? "Saving…" : "Save environment"}
 				</button>
 				<button
 					type="button"
 					className="sk-btn"
-					onClick={() => setDraft(settings)}
+					onClick={() => setDraft(withStoreActive(settings))}
 					disabled={!dirty || busy}
 				>
 					Revert

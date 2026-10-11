@@ -71,6 +71,7 @@ fn fixture() -> Fx {
         created_by: None,
         shell_claim: None,
         remote: None,
+        env_profile: None,
     };
     let r1 = Room {
         id: "r1".into(),

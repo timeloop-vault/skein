@@ -95,6 +95,12 @@ pub struct EnvPreview {
     pub dropped_additions: Vec<DroppedAddition>,
     /// Extra-env keys Skein owns and therefore refused.
     pub ignored_env_keys: Vec<String>,
+    /// The env profile (#615) the preview applied, if any.
+    pub env_profile: Option<String>,
+    /// Keys that profile set (names only, never values).
+    pub profile_set_keys: Vec<String>,
+    /// Keys that profile unset (names only).
+    pub profile_unset_keys: Vec<String>,
     /// Set when a shell is configured but isn't a runnable file, so the
     /// panel can say the value is being ignored instead of leaving the
     /// user staring at a field that looks accepted.
@@ -326,6 +332,7 @@ pub(crate) fn harness_program_lookup(
         probe_snapshot(),
         None,
         &Injection::default(),
+        None,
     );
     (resolve_program(program, &applied.path), applied.path)
 }
@@ -361,6 +368,7 @@ pub(crate) fn env_preview(settings: &SpawnSettings) -> EnvPreview {
         probe_snapshot(),
         None,
         &Injection::default(),
+        None,
     );
 
     let added: Vec<String> = applied.added;
@@ -417,6 +425,9 @@ pub(crate) fn env_preview(settings: &SpawnSettings) -> EnvPreview {
             .map(|(entry, reason)| DroppedAddition { entry, reason })
             .collect(),
         ignored_env_keys: applied.ignored_env_keys,
+        env_profile: applied.env_profile,
+        profile_set_keys: applied.profile_set_keys,
+        profile_unset_keys: applied.profile_unset_keys,
         shell_rejected,
         launch_context: launch_context(),
     }

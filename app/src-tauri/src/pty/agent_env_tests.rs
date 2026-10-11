@@ -26,6 +26,7 @@ fn a_harness_is_told_where_its_rooms_review_lives() {
         probe_snapshot(),
         Some(&identity),
         &Injection::default(),
+        None,
     );
     let env: HashMap<String, String> = builder
         .iter_full_env_as_str()
@@ -66,6 +67,7 @@ fn a_harness_is_told_where_its_rooms_review_lives() {
         probe_snapshot(),
         None,
         &Injection::default(),
+        None,
     );
     let leaked: Vec<String> = bare
         .iter_full_env_as_str()
@@ -99,6 +101,7 @@ fn the_review_variables_cannot_be_pinned_by_hand() {
         probe_snapshot(),
         None,
         &Injection::default(),
+        None,
     );
     assert_eq!(applied.ignored_env_keys, vec!["SKEIN_REVIEW_TOKEN"]);
 }
@@ -128,7 +131,14 @@ fn an_injected_variable_is_reserved_only_while_it_is_being_injected() {
     };
 
     let mut builder = CommandBuilder::new("skein-preview");
-    let applied = apply_env(&mut builder, &settings, probe_snapshot(), None, &injecting);
+    let applied = apply_env(
+        &mut builder,
+        &settings,
+        probe_snapshot(),
+        None,
+        &injecting,
+        None,
+    );
     assert_eq!(applied.ignored_env_keys, vec!["OPENCODE_CONFIG"]);
     let value = builder
         .iter_full_env_as_str()
@@ -143,6 +153,7 @@ fn an_injected_variable_is_reserved_only_while_it_is_being_injected() {
         probe_snapshot(),
         None,
         &Injection::default(),
+        None,
     );
     assert!(
         applied.ignored_env_keys.is_empty(),
@@ -174,7 +185,14 @@ fn plugin_dirs_after(inherited: Option<&str>, user: Option<&str>, ours: &str) ->
     if let Some(v) = inherited {
         builder.env(VAR, v);
     }
-    apply_env(&mut builder, &settings, probe_snapshot(), None, &injection);
+    apply_env(
+        &mut builder,
+        &settings,
+        probe_snapshot(),
+        None,
+        &injection,
+        None,
+    );
     builder
         .iter_full_env_as_str()
         .find(|(k, _)| k.eq_ignore_ascii_case(VAR))
@@ -259,6 +277,7 @@ fn mouse_clicks_disabled_reads_the_final_env_including_user_extras() {
         probe_snapshot(),
         None,
         &Injection::default(),
+        None,
     );
     assert!(applied.mouse_clicks_disabled);
 
@@ -276,6 +295,7 @@ fn mouse_clicks_disabled_reads_the_final_env_including_user_extras() {
         probe_snapshot(),
         None,
         &Injection::default(),
+        None,
     );
     assert!(!applied.mouse_clicks_disabled);
 }

@@ -16,6 +16,9 @@ import type { VersionNoticeMode } from "./claudeVersion.ts";
 import { useVersionNotice } from "./claudeVersionStore.ts";
 import { restartMenuLabel } from "./claudeVersionText.ts";
 import { HARNESS_KINDS } from "./data.tsx";
+import { EnvProfileMenuSection } from "./EnvProfileMenuSection.tsx";
+import { staleLine } from "./envProfileMenu.ts";
+import { useEnvProfiles } from "./envProfileStore.ts";
 import { type ActionsMenuItem, actionsButtonState } from "./harnessActionsMenu.ts";
 import { useHarnessActivity } from "./harnessActivity.ts";
 import { hasClaudeTranscriptTail } from "./harnessEvents.ts";
@@ -25,6 +28,7 @@ import { useMailHold } from "./mailHold.ts";
 import { actionNudges } from "./nudgeRegistry.ts";
 import { useNudgeOverrides } from "./nudgeStore.ts";
 import { loadRepoSkills, type RepoSkill } from "./repoSkills.ts";
+import { effectiveProfile, useSpawnedProfile } from "./spawnedEnvProfile.ts";
 import type { Harness } from "./types.ts";
 import "./HarnessActionsMenu.css";
 
@@ -35,10 +39,15 @@ interface TextDto {
 export const HarnessActionsMenu = ({
 	activeHarness,
 	cwd,
+	onEnvProfileChange,
 	onReattachTelemetry,
 	onRestart,
 	versionMode,
 }: {
+	// #615: set (name) or clear (undefined) this harness's env profile
+	// override. Takes effect at the next spawn; the menu stays open so
+	// Restart is right below.
+	onEnvProfileChange: (harnessId: string, name: string | undefined) => void;
 	activeHarness: Harness | undefined;
 	cwd: string | undefined;
 	// #490: re-checks its own gate against live state and refuses with a
@@ -71,6 +80,8 @@ export const HarnessActionsMenu = ({
 		return () => clearInterval(t);
 	}, [open]);
 	const overrides = useNudgeOverrides();
+	const envProfiles = useEnvProfiles();
+	const spawnedEnv = useSpawnedProfile(activeHarness?.id ?? "");
 	const capabilities = activeHarness ? HARNESS_KINDS[activeHarness.kind].capabilities : null;
 	const skillInvocation = activeHarness ? HARNESS_KINDS[activeHarness.kind].skillInvocation : null;
 
@@ -165,6 +176,14 @@ export const HarnessActionsMenu = ({
 	const canReattach = Boolean(
 		activeHarness && hasClaudeTranscriptTail(activeHarness.kind, activeHarness.sessionId),
 	);
+	const hasProfiles = envProfiles.names.length > 0 || activeHarness?.envProfile !== undefined;
+	const staleNote =
+		activeHarness && envProfiles.loaded
+			? staleLine(
+					spawnedEnv,
+					effectiveProfile(activeHarness.envProfile, envProfiles.active, envProfiles.names),
+				)
+			: null;
 	const onReattach = () => {
 		if (!activeHarness) return;
 		onReattachTelemetry(activeHarness.id);
@@ -176,13 +195,13 @@ export const HarnessActionsMenu = ({
 			<button
 				type="button"
 				className="sk-harness-actions-btn"
-				disabled={state.kind === "disabled" && !canReattach}
-				title={state.kind === "disabled" && !canReattach ? state.reason : undefined}
+				disabled={state.kind === "disabled" && !canReattach && !hasProfiles}
+				title={state.kind === "disabled" && !canReattach && !hasProfiles ? state.reason : undefined}
 				onClick={() => setOpen((o) => !o)}
 			>
 				Actions ▾
 			</button>
-			{open && (state.kind === "menu" || canReattach) && (
+			{open && (state.kind === "menu" || canReattach || hasProfiles) && (
 				<div className="sk-harness-actions-menu">
 					{state.kind === "menu" &&
 						state.items.map((item, i) => (
@@ -201,11 +220,20 @@ export const HarnessActionsMenu = ({
 								</button>
 							</Fragment>
 						))}
+					{hasProfiles && activeHarness && (
+						<EnvProfileMenuSection
+							harness={activeHarness}
+							active={envProfiles.active}
+							names={envProfiles.names}
+							onChoose={(name) => onEnvProfileChange(activeHarness.id, name)}
+						/>
+					)}
 					{state.kind === "menu" && state.restart && (
 						<>
-							{(state.items.length > 0 || canReattach) && (
+							{(state.items.length > 0 || canReattach || hasProfiles) && (
 								<div className="sk-harness-actions-divider" />
 							)}
+							{staleNote && <div className="sk-harness-actions-note">{staleNote}</div>}
 							<button
 								type="button"
 								className="sk-harness-actions-item"

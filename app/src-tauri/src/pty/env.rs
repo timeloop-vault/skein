@@ -10,7 +10,7 @@ use crate::agent_api::state::HarnessIdentity;
 use crate::harness_config::Injection;
 use crate::spawn_env;
 use crate::spawn_env::login_env::{login_env_overlay, merge_no_proxy};
-use crate::spawn_settings::SpawnSettings;
+use crate::spawn_settings::{EnvProfile, SpawnSettings};
 
 use super::probe::ProbeOutcome;
 #[cfg(not(target_os = "windows"))]
@@ -28,6 +28,12 @@ pub(crate) struct AppliedEnv {
     pub dropped: Vec<(String, spawn_env::DropReason)>,
     /// Extra-env keys Skein refused because it owns them itself.
     pub ignored_env_keys: Vec<String>,
+    /// Name of the env profile (#615) that was applied, if any.
+    pub env_profile: Option<String>,
+    /// Keys the profile set that took effect (names only, never values).
+    pub profile_set_keys: Vec<String>,
+    /// Keys the profile unset that took effect (names only).
+    pub profile_unset_keys: Vec<String>,
     /// Names (never values) of the login-shell variables that reached the
     /// child: overlaid, not stripped afterwards, not Skein-reserved.
     pub login_env_keys: Vec<String>,
@@ -98,6 +104,7 @@ pub(super) fn apply_env(
     probe: ProbeOutcome,
     agent: Option<&HarnessIdentity>,
     injection: &Injection,
+    env_profile: Option<&str>,
 ) -> AppliedEnv {
     // `CommandBuilder::new` already seeds the child env from this
     // process's environment — and on Windows it additionally merges the
@@ -115,6 +122,7 @@ pub(super) fn apply_env(
     // only launchd's. Overlaid before the strip below so a TERM_PROGRAM an
     // rc file exports is stripped too, and before PATH/extra env so those
     // keep winning. `PATH` itself is never in the overlay (merged below).
+    let profile = settings.resolve_env_profile(env_profile);
     let overlay = login_env_overlay(probe.login_env().unwrap_or_default());
     for (key, value) in &overlay {
         builder.env(key, value);
@@ -154,6 +162,9 @@ pub(super) fn apply_env(
                 .any(|v| v.key.trim().eq_ignore_ascii_case(k))
         })
         .filter(|k| !injection.env.iter().any(|(n, _)| n.eq_ignore_ascii_case(k)))
+        .filter(|k| {
+            !profile.is_some_and(|p| p.vars.iter().any(|v| v.key.trim().eq_ignore_ascii_case(k)))
+        })
         .map(str::to_owned)
         .collect();
     login_env_keys.sort_unstable();
@@ -209,6 +220,17 @@ pub(super) fn apply_env(
         }
         builder.env(key, &var.value);
     }
+
+    // #615: the resolved env profile, over extra_env.
+    let mut profile_set_keys = Vec::new();
+    let mut profile_unset_keys = Vec::new();
+    let applied_profile = profile.map(|p| {
+        let outcome = apply_profile(builder, p, injection);
+        ignored_env_keys.extend(outcome.ignored);
+        profile_set_keys = outcome.set;
+        profile_unset_keys = outcome.unset;
+        p.name.trim().to_owned()
+    });
 
     // Unix only: portable-pty otherwise fills SHELL from the passwd
     // database, which can disagree with the shell we actually probed and
@@ -288,8 +310,52 @@ pub(super) fn apply_env(
         added: merged.added,
         dropped: merged.dropped,
         ignored_env_keys,
+        env_profile: applied_profile,
+        profile_set_keys,
+        profile_unset_keys,
         login_env_keys,
     }
+}
+
+/// What `apply_profile` did, by key name only.
+#[derive(Default)]
+struct ProfileOutcome {
+    ignored: Vec<String>,
+    set: Vec<String>,
+    unset: Vec<String>,
+}
+
+/// Apply a profile's set/unset vars; reports the reserved keys refused and
+/// the keys that took effect. Same reserved rule as `extra_env`, including
+/// the plugin-dirs exception.
+fn apply_profile(
+    builder: &mut CommandBuilder,
+    profile: &EnvProfile,
+    injection: &Injection,
+) -> ProfileOutcome {
+    let mut out = ProfileOutcome::default();
+    for var in &profile.vars {
+        let key = var.key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let reserved = RESERVED_ENV_KEYS
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case(key))
+            || injection.env.iter().any(|(k, _)| {
+                k.eq_ignore_ascii_case(key) && k != crate::harness_config::CLAUDE_PLUGIN_DIRS_VAR
+            });
+        if reserved {
+            out.ignored.push(key.to_owned());
+        } else if var.unset {
+            builder.env_remove(key);
+            out.unset.push(key.to_owned());
+        } else {
+            builder.env(key, &var.value);
+            out.set.push(key.to_owned());
+        }
+    }
+    out
 }
 
 /// Make sure loopback is never proxied, whatever the user's proxy setup.

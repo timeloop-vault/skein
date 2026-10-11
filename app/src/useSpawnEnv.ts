@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
+import { publishSpawnSettings } from "./envProfileStore.ts";
 import type { SpawnSettings, SpawnSettingsPayload } from "./types.ts";
 
 // Shell / PATH environment (#72, #3, #1). Owned by Rust — the spawn
@@ -9,7 +10,10 @@ import type { SpawnSettings, SpawnSettingsPayload } from "./types.ts";
 export function useSpawnEnv(setDefaultShell: (shell: string[]) => void) {
 	const [spawnEnv, setSpawnEnv] = useState<SpawnSettingsPayload | null>(null);
 	useEffect(() => {
-		void invoke<SpawnSettingsPayload>("spawn_settings_load").then(setSpawnEnv);
+		void invoke<SpawnSettingsPayload>("spawn_settings_load").then((payload) => {
+			setSpawnEnv(payload);
+			publishSpawnSettings(payload.settings);
+		});
 	}, []);
 	const saveSpawnSettings = useCallback(
 		async (next: SpawnSettings) => {
@@ -17,6 +21,7 @@ export function useSpawnEnv(setDefaultShell: (shell: string[]) => void) {
 				settings: next,
 			});
 			setSpawnEnv(payload);
+			publishSpawnSettings(payload.settings);
 			// The shell may have changed, and `defaultShell` is what new
 			// Shell harnesses and the Enter-for-shell prompt spawn.
 			setDefaultShell(await invoke<string[]>("default_shell"));

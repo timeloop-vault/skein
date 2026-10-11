@@ -28,6 +28,7 @@ export interface RoomWorkspaceProps {
 	setShowPicker: (id: string | null) => void;
 	drag: TabDrag;
 	onReattachTelemetry: (roomId: string, harnessId: string) => void;
+	onEnvProfileChange: (roomId: string, harnessId: string, name: string | undefined) => void;
 }
 
 // #594: one handler bag, stable for the component's life. Hooks upstream
@@ -76,6 +77,8 @@ const useRoomHandlers = (p: RoomWorkspaceProps): RoomHandlers => {
 			shellClaimRelease: (roomId, harnessId) =>
 				latest.current.creation.clearHarnessShellClaim(roomId, harnessId),
 			reattach: (roomId, harnessId) => latest.current.onReattachTelemetry(roomId, harnessId),
+			envProfile: (roomId, harnessId, name) =>
+				latest.current.onEnvProfileChange(roomId, harnessId, name),
 			restart: (roomId, harnessId) => latest.current.actions.restartHarness(roomId, harnessId),
 			recreateWorktree: (room) => latest.current.store.recreateMissingWorktree(room),
 			pickFolder: (room, newCwd) => latest.current.store.pickMissingFolder(room, newCwd),

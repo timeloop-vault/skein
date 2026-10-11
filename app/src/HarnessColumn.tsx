@@ -145,6 +145,8 @@ export interface HarnessColumnProps {
 	onReattachTelemetry: (harnessId: string) => void;
 	// #490: room scope already bound by RoomWorkspace.
 	onRestartHarness: (harnessId: string) => Promise<GateResult>;
+	/** #615: per-harness env profile override (undefined = follow global). */
+	onEnvProfileChange: (harnessId: string, name: string | undefined) => void;
 	/** #491: per-kind update-notice mode (Settings). */
 	versionNoticeModes: VersionNoticeModes;
 }
@@ -175,6 +177,7 @@ const HarnessColumnImpl = ({
 	opencodeShellClaim,
 	onReattachTelemetry,
 	onRestartHarness,
+	onEnvProfileChange,
 	versionNoticeModes,
 }: HarnessColumnProps) => {
 	const activeHarness = room.harnesses.find((h) => h.id === room.activeHarnessId);
@@ -260,6 +263,7 @@ const HarnessColumnImpl = ({
 					}
 					cwd={room.cwd}
 					onReattachTelemetry={onReattachTelemetry}
+					onEnvProfileChange={onEnvProfileChange}
 					onRestart={onRestartHarness}
 				/>
 				<div className="sk-harness-meta">

@@ -3,6 +3,16 @@ import { DROP_REASON, PROBE_TONE, SOURCE_LABEL } from "./constants.ts";
 import "../SpawnEnvPanel.css";
 import { LoginEnvKeys } from "./LoginEnvKeys.tsx";
 
+export function profilePreviewLine(preview: EnvPreview): string {
+	if (!preview.envProfile) return "No env profile active";
+	const parts: string[] = [];
+	const set = preview.profileSetKeys ?? [];
+	const unset = preview.profileUnsetKeys ?? [];
+	if (set.length > 0) parts.push(`sets ${set.join(", ")}`);
+	if (unset.length > 0) parts.push(`unsets ${unset.join(", ")}`);
+	return `Profile "${preview.envProfile}": ${parts.length > 0 ? parts.join(" · ") : "no variables"}`;
+}
+
 /** The read-only half of the panel: probe status, the resolved PATH and
  *  the warnings the backend raised about the current settings. */
 export const EnvPreviewSection = ({
@@ -47,6 +57,8 @@ export const EnvPreviewSection = ({
 					Re-probe
 				</button>
 			</div>
+
+			{preview && <div className="sk-help">{profilePreviewLine(preview)}</div>}
 
 			{preview?.probe.message && <div className="sk-help">{preview.probe.message}</div>}
 
