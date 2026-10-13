@@ -14,8 +14,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EnvProfilesPanel } from "./EnvProfilesPanel.tsx";
-import { envProfileState, useEnvProfiles } from "./envProfileStore.ts";
-import { activeOnSave, normalizeProfiles, profileNames, validateProfiles } from "./envProfiles.ts";
+import {
+	envProfileState,
+	queueSettingsWrite,
+	recordSavedRenames,
+	useEnvProfiles,
+} from "./envProfileStore.ts";
+import {
+	activeOnSave,
+	dropRename,
+	finalRenames,
+	normalizeProfiles,
+	profileNames,
+	type Renames,
+	recordRename,
+	resolveRenamed,
+	validateProfiles,
+} from "./envProfiles.ts";
 import { CAPTURE_OPTIONS } from "./spawnEnv/constants.ts";
 import { EnvPreviewSection } from "./spawnEnv/EnvPreviewSection.tsx";
 import { EnvToggles } from "./spawnEnv/EnvToggles.tsx";
@@ -48,6 +63,9 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 	// palette, so the store — not `settings` — is its source of truth here.
 	const { active: storeActive, loaded } = useEnvProfiles();
 	const baseActive = useRef<string | null>(storeActive);
+	// Profiles renamed in this draft (original -> current), for the active
+	// selection and per-harness overrides (#619). Reset when the draft re-adopts.
+	const renames = useRef<Renames>({});
 	const withStoreActive = useCallback(
 		(s: SpawnSettings | null): SpawnSettings | null =>
 			s && loaded ? { ...s, activeEnvProfile: storeActive } : s,
@@ -56,14 +74,18 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 	// biome-ignore lint/correctness/useExhaustiveDependencies: adopt on a new `settings` only
 	useEffect(() => {
 		baseActive.current = storeActive;
+		renames.current = {};
 		setDraft(withStoreActive(settings));
 	}, [settings]);
 	useEffect(() => {
 		if (!loaded) return;
 		const prev = baseActive.current;
 		baseActive.current = storeActive;
+		const incoming = resolveRenamed(renames.current, storeActive);
 		setDraft((d) =>
-			d && (d.activeEnvProfile ?? null) === prev ? { ...d, activeEnvProfile: storeActive } : d,
+			d && (d.activeEnvProfile ?? null) === resolveRenamed(renames.current, prev)
+				? { ...d, activeEnvProfile: incoming }
+				: d,
 		);
 	}, [loaded, storeActive]);
 
@@ -115,18 +137,26 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 			// Drop blank rows the user added and never filled in, so an
 			// empty box can't become a permanent no-op entry in the file.
 			const normalized = normalizeProfiles(draft);
-			const wanted = activeOnSave(
-				draft.activeEnvProfile,
-				baseActive.current,
-				envProfileState().active,
-			);
-			await onSave({
-				...normalized,
-				activeEnvProfile:
-					wanted !== null && profileNames(normalized).includes(wanted) ? wanted : null,
-				shell: draft.shell?.trim() ? draft.shell.trim() : null,
-				pathPrepend: draft.pathPrepend.map((p) => p.trim()).filter(Boolean),
-				extraEnv: draft.extraEnv.filter((v) => v.key.trim()),
+			const names = profileNames(normalized);
+			const applied = finalRenames(renames.current, names);
+			// Inside the shared write chain, so a chip switch that landed
+			// first is read here and one queued after sees the new names.
+			await queueSettingsWrite(async () => {
+				const wanted =
+					activeOnSave(
+						draft.activeEnvProfile,
+						baseActive.current,
+						envProfileState().active,
+						renames.current,
+					)?.trim() ?? null;
+				await onSave({
+					...normalized,
+					activeEnvProfile: wanted !== null && names.includes(wanted) ? wanted : null,
+					shell: draft.shell?.trim() ? draft.shell.trim() : null,
+					pathPrepend: draft.pathPrepend.map((p) => p.trim()).filter(Boolean),
+					extraEnv: draft.extraEnv.filter((v) => v.key.trim()),
+				});
+				recordSavedRenames(applied);
 			});
 			await followProbe();
 		} catch (err) {
@@ -230,7 +260,16 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 				/>
 			</div>
 
-			<EnvProfilesPanel draft={draft} setDraft={setDraft} />
+			<EnvProfilesPanel
+				draft={draft}
+				setDraft={setDraft}
+				onRename={(from, to) => {
+					renames.current = recordRename(renames.current, from, to);
+				}}
+				onDelete={(name) => {
+					renames.current = dropRename(renames.current, name);
+				}}
+			/>
 
 			<EnvToggles
 				draft={draft}

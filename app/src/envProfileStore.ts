@@ -5,7 +5,13 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useSyncExternalStore } from "react";
-import { profileNames, withActiveProfile } from "./envProfiles.ts";
+import {
+	profileNames,
+	type Renames,
+	recordRename,
+	resolveRenamed,
+	withActiveProfile,
+} from "./envProfiles.ts";
 import type { SpawnSettings, SpawnSettingsPayload } from "./types.ts";
 
 export interface EnvProfileState {
@@ -61,18 +67,46 @@ export function envProfileState(): EnvProfileState {
 /** Switch the global active profile. Loads the current settings fresh so no
  *  other setting is clobbered by a stale copy. */
 export function setActiveEnvProfile(name: string | null): Promise<void> {
-	// Serialized so two quick switches apply in order, each on a fresh load.
-	const run = switchChain.then(() => applyActive(name));
-	switchChain = run.catch(() => undefined);
+	return queueSettingsWrite(() => applyActive(name));
+}
+
+// One chain for every settings write (chip switches and the Settings save),
+// so a load-then-save pair can't interleave with another writer and write a
+// stale profile list back. `fn` must not itself queue another write.
+let writeChain: Promise<unknown> = Promise.resolve();
+
+export function queueSettingsWrite<T>(fn: () => Promise<T>): Promise<T> {
+	const run = writeChain.then(fn);
+	writeChain = run.catch(() => undefined);
 	return run;
 }
 
-let switchChain: Promise<void> = Promise.resolve();
+// Renames applied by saves this session (old -> current), so a switch
+// captured before a rename was saved still lands on the renamed profile.
+let savedRenames: Renames = {};
+const renameListeners = new Set<(renames: Renames) => void>();
+
+/** Remember renames a successful save applied and tell the listeners (App
+ *  maps per-harness overrides). Call it from inside the write chain. */
+export function recordSavedRenames(renames: Renames): void {
+	const entries = Object.entries(renames);
+	if (entries.length === 0) return;
+	for (const [from, to] of entries) savedRenames = recordRename(savedRenames, from, to);
+	for (const l of renameListeners) l(renames);
+}
+
+export function onProfilesRenamed(cb: (renames: Renames) => void): () => void {
+	renameListeners.add(cb);
+	return () => {
+		renameListeners.delete(cb);
+	};
+}
 
 async function applyActive(name: string | null): Promise<void> {
 	const current = await invoke<SpawnSettingsPayload>("spawn_settings_load");
+	const target = resolveRenamed(savedRenames, name, profileNames(current.settings));
 	const saved = await invoke<SpawnSettingsPayload>("spawn_settings_save", {
-		settings: withActiveProfile(current.settings, name),
+		settings: withActiveProfile(current.settings, target),
 	});
 	publishSpawnSettings(saved.settings);
 }

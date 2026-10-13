@@ -33,6 +33,7 @@ import { useAppUiState } from "./useAppUiState.ts";
 import { useHarnessActions } from "./useHarnessActions.ts";
 import { useHarnessCreation } from "./useHarnessCreation.ts";
 import { useHarnessNotifications } from "./useHarnessNotifications.ts";
+import { useRenameHarnessProfiles } from "./useRenameHarnessProfiles.ts";
 import { useRoomStripNav } from "./useRoomStripNav.ts";
 import { useRoomsStore } from "./useRoomsStore.ts";
 import { useTabDrag } from "./useTabDrag.ts";
@@ -91,6 +92,7 @@ export default function App() {
 		closeRoom,
 		switchRoom,
 	} = store;
+	useRenameHarnessProfiles(setRooms);
 
 	// Keyboard nav (Mod+Tab, Mod+1..9) keys off active rooms only —
 	// archived ones aren't rendered as tabs.

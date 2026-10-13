@@ -15,6 +15,10 @@ import "./EnvProfilesPanel.css";
 interface Props {
 	draft: SpawnSettings;
 	setDraft: (next: SpawnSettings) => void;
+	/** Profile `from` was renamed to `to` in the draft. */
+	onRename: (from: string, to: string) => void;
+	/** The profile named `name` was deleted from the draft. */
+	onDelete: (name: string) => void;
 }
 
 const VarRow = ({
@@ -56,7 +60,7 @@ const VarRow = ({
 	</div>
 );
 
-export const EnvProfilesPanel = ({ draft, setDraft }: Props) => {
+export const EnvProfilesPanel = ({ draft, setDraft, onRename, onDelete }: Props) => {
 	const profiles = draft.envProfiles ?? [];
 	const problem = validateProfiles(profiles);
 
@@ -99,12 +103,18 @@ export const EnvProfilesPanel = ({ draft, setDraft }: Props) => {
 							value={p.name}
 							placeholder="Profile name"
 							spellCheck={false}
-							onChange={(e) => setDraft(renameProfile(draft, i, e.target.value))}
+							onChange={(e) => {
+								onRename(p.name, e.target.value);
+								setDraft(renameProfile(draft, i, e.target.value));
+							}}
 						/>
 						<button
 							type="button"
 							className="sk-btn"
-							onClick={() => setDraft(deleteProfile(draft, i))}
+							onClick={() => {
+								onDelete(p.name);
+								setDraft(deleteProfile(draft, i));
+							}}
 						>
 							Delete profile
 						</button>

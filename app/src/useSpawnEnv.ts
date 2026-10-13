@@ -24,7 +24,13 @@ export function useSpawnEnv(setDefaultShell: (shell: string[]) => void) {
 			publishSpawnSettings(payload.settings);
 			// The shell may have changed, and `defaultShell` is what new
 			// Shell harnesses and the Enter-for-shell prompt spawn.
-			setDefaultShell(await invoke<string[]>("default_shell"));
+			// Best effort: the settings are already saved, so a failed
+			// refresh must not fail the save (and skip rename bookkeeping).
+			try {
+				setDefaultShell(await invoke<string[]>("default_shell"));
+			} catch {
+				// keep the previous default shell
+			}
 		},
 		[setDefaultShell],
 	);

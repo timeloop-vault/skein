@@ -346,16 +346,34 @@ fn apply_profile(
                 k.eq_ignore_ascii_case(key) && k != crate::harness_config::CLAUDE_PLUGIN_DIRS_VAR
             });
         if reserved {
-            out.ignored.push(key.to_owned());
-        } else if var.unset {
-            builder.env_remove(key);
-            out.unset.push(key.to_owned());
+            if !out.ignored.iter().any(|k| same_env_key(k, key)) {
+                out.ignored.push(key.to_owned());
+            }
         } else {
-            builder.env(key, &var.value);
-            out.set.push(key.to_owned());
+            // The builder is last-write-wins, so the report is too: the last
+            // occurrence of a key decides which list it is in.
+            out.set.retain(|k| !same_env_key(k, key));
+            out.unset.retain(|k| !same_env_key(k, key));
+            if var.unset {
+                builder.env_remove(key);
+                out.unset.push(key.to_owned());
+            } else {
+                builder.env(key, &var.value);
+                out.set.push(key.to_owned());
+            }
         }
     }
     out
+}
+
+/// Whether two names are one entry in the child's environment: keys are
+/// case-sensitive on Unix, and portable-pty lowercases them on Windows.
+fn same_env_key(a: &str, b: &str) -> bool {
+    if cfg!(windows) {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        a == b
+    }
 }
 
 /// Make sure loopback is never proxied, whatever the user's proxy setup.

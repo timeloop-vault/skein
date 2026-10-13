@@ -3,9 +3,14 @@ import {
 	activeOnSave,
 	addProfile,
 	deleteProfile,
+	dropRename,
+	finalRenames,
 	normalizeProfiles,
 	profileNames,
+	recordRename,
+	renameHarnessProfiles,
 	renameProfile,
+	resolveRenamed,
 	validateProfiles,
 	withActiveProfile,
 } from "./envProfiles.ts";
@@ -83,5 +88,54 @@ describe("activeOnSave", () => {
 	it("keeps the draft when the user changed it", () => {
 		expect(activeOnSave("C", "A", "B")).toBe("C");
 		expect(activeOnSave(null, "A", "B")).toBeNull();
+	});
+});
+
+describe("profile renames (#619)", () => {
+	it("composes repeated renames and drops a rename back to the origin", () => {
+		const ab = recordRename({}, "A", "B");
+		expect(recordRename(ab, "B", "C")).toEqual({ A: "C" });
+		expect(recordRename(ab, "B", "A")).toEqual({});
+		expect(recordRename(ab, "X", "X")).toEqual(ab);
+	});
+
+	it("deleting a profile drops its entry", () => {
+		expect(dropRename({ A: "C", D: "E" }, "C")).toEqual({ D: "E" });
+	});
+
+	it("final renames trim and ignore no-ops and vanished targets", () => {
+		expect(finalRenames({ A: " B ", C: "C ", D: "gone" }, ["B", "C"])).toEqual({ A: "B" });
+	});
+
+	it("maps an old name to the renamed one, unless it still exists", () => {
+		expect(resolveRenamed({ A: "B" }, "A")).toBe("B");
+		expect(resolveRenamed({ A: "B" }, "A", ["A", "B"])).toBe("A");
+		expect(resolveRenamed({ A: "B" }, "A", ["B"])).toBe("B");
+		expect(resolveRenamed({ A: "B" }, null)).toBeNull();
+		expect(resolveRenamed({}, "toString")).toBe("toString");
+	});
+
+	it("a chip switch to the old name during a rename lands on the new name", () => {
+		// Draft renamed A -> A2 (draft active followed it); chip switched to A.
+		expect(activeOnSave("A2", "A", "A", { A: "A2" })).toBe("A2");
+		// Untouched draft active: the latest switch wins, mapped through renames.
+		expect(activeOnSave("A2", "A", "A", { A: "A2" })).toBe("A2");
+		// Active A renamed to A2 in the draft, then the chip switched to B:
+		// the draft's A2 is the rename, not an edit, so B wins.
+		expect(activeOnSave("A2", "A", "B", { A: "A2" })).toBe("B");
+	});
+
+	it("updates only harness overrides naming a renamed profile", () => {
+		const rooms = [
+			{
+				id: "r1",
+				harnesses: [{ id: "h1", envProfile: "A" }, { id: "h2", envProfile: "B" }, { id: "h3" }],
+			},
+			{ id: "r2", harnesses: [{ id: "h4" }] },
+		];
+		const out = renameHarnessProfiles(rooms, { A: "A2" });
+		expect(out[0]?.harnesses.map((h) => h.envProfile)).toEqual(["A2", "B", undefined]);
+		expect(out[1]).toBe(rooms[1]);
+		expect(renameHarnessProfiles(rooms, {})).toBe(rooms);
 	});
 });

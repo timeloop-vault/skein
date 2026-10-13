@@ -178,10 +178,7 @@ fn reserved_keys_are_refused_for_set_and_unset() {
     assert_eq!(get(&builder, "SKEIN_ROOM_ID").as_deref(), Some("room-1"));
     let path = get(&builder, "PATH").expect("PATH survives");
     assert_ne!(path, "/evil");
-    assert_eq!(
-        applied.ignored_env_keys,
-        vec!["PATH", "PATH", "SKEIN_ROOM_ID", "SKEIN_ROOM_ID"]
-    );
+    assert_eq!(applied.ignored_env_keys, vec!["PATH", "SKEIN_ROOM_ID"]);
 }
 
 #[test]
@@ -250,4 +247,84 @@ fn unset_matches_env_keys_case_insensitively_on_windows() {
     run(&mut builder, &s, probe, None);
     assert_eq!(get(&builder, "HTTP_PROXY"), None);
     assert_eq!(get(&builder, "http_proxy"), None);
+}
+
+#[test]
+fn a_key_set_twice_is_reported_once_with_the_last_value() {
+    let s = settings(
+        vec![profile(
+            "p",
+            vec![
+                set("SKEIN_T_DUP_A", "first"),
+                set("SKEIN_T_DUP_B", "b"),
+                set("SKEIN_T_DUP_A", "second"),
+            ],
+        )],
+        Some("p"),
+    );
+    let mut builder = CommandBuilder::new("skein-preview");
+    let applied = run(&mut builder, &s, captured(vec![]), None);
+    assert_eq!(
+        applied.profile_set_keys,
+        vec!["SKEIN_T_DUP_B", "SKEIN_T_DUP_A"]
+    );
+    assert_eq!(get(&builder, "SKEIN_T_DUP_A").as_deref(), Some("second"));
+}
+
+#[test]
+fn the_last_of_set_and_unset_decides_which_list_a_key_is_in() {
+    let s = settings(
+        vec![profile(
+            "p",
+            vec![
+                set("SKEIN_T_DUP_SU", "x"),
+                unset("SKEIN_T_DUP_SU"),
+                unset("SKEIN_T_DUP_US"),
+                set("SKEIN_T_DUP_US", "y"),
+            ],
+        )],
+        Some("p"),
+    );
+    let mut builder = CommandBuilder::new("skein-preview");
+    let applied = run(&mut builder, &s, captured(vec![]), None);
+    assert_eq!(applied.profile_set_keys, vec!["SKEIN_T_DUP_US"]);
+    assert_eq!(applied.profile_unset_keys, vec!["SKEIN_T_DUP_SU"]);
+    assert_eq!(get(&builder, "SKEIN_T_DUP_SU"), None);
+    assert_eq!(get(&builder, "SKEIN_T_DUP_US").as_deref(), Some("y"));
+}
+
+#[cfg(windows)]
+#[test]
+fn case_variants_are_one_key_on_windows_and_the_winner_keeps_its_spelling() {
+    let s = settings(
+        vec![profile(
+            "p",
+            vec![set("Skein_T_Case", "first"), set("SKEIN_T_CASE", "second")],
+        )],
+        Some("p"),
+    );
+    let mut builder = CommandBuilder::new("skein-preview");
+    let applied = run(&mut builder, &s, captured(vec![]), None);
+    assert_eq!(applied.profile_set_keys, vec!["SKEIN_T_CASE"]);
+    assert_eq!(get(&builder, "Skein_T_Case").as_deref(), Some("second"));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn case_variants_stay_distinct_on_unix() {
+    let s = settings(
+        vec![profile(
+            "p",
+            vec![set("Skein_T_Case", "first"), set("SKEIN_T_CASE", "second")],
+        )],
+        Some("p"),
+    );
+    let mut builder = CommandBuilder::new("skein-preview");
+    let applied = run(&mut builder, &s, captured(vec![]), None);
+    assert_eq!(
+        applied.profile_set_keys,
+        vec!["Skein_T_Case", "SKEIN_T_CASE"]
+    );
+    assert_eq!(get(&builder, "Skein_T_Case").as_deref(), Some("first"));
+    assert_eq!(get(&builder, "SKEIN_T_CASE").as_deref(), Some("second"));
 }
