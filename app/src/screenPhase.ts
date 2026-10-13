@@ -13,12 +13,10 @@ const rowText = (cells: readonly ScreenCell[]): string => cells.map((c) => c.ch)
 // last row on every captured frame; a little slack covers a taller footer.
 const STATUS_SEARCH_ROWS = 4;
 
-// The context-usage field of Hermes's status line, e.g. `13.9k/200k`.
-const USAGE = /\d+(?:\.\d+)?[kKM]?\/\d+(?:\.\d+)?[kKM]\b/;
-
-/// Hermes's status line is `─ <state> │ <model> │ <used>/<window> │ … ─ <title>`.
-/// Identified by all of: a leading `─`, at least two ` │ ` separators and the
-/// usage field. A shell that merely prints "ready │" fails the leading rule.
+/// Hermes's status line is `─ <state> │ <model> │ <field> │ … ─ <title>`. The
+/// fields vary (no provider connected: no usage token), so it is identified by
+/// a leading `─` and at least two ` │ ` separators. A shell that merely prints
+/// "ready │" fails the leading rule.
 /// Returns the text after the leading `─ `, or undefined.
 function findStatusLine(snap: ScreenSnapshot): string | undefined {
 	for (let y = snap.rows.length - 1; y >= Math.max(0, snap.rows.length - STATUS_SEARCH_ROWS); y--) {
@@ -26,7 +24,7 @@ function findStatusLine(snap: ScreenSnapshot): string | undefined {
 		if (row === undefined) continue;
 		const text = rowText(row).trim();
 		if (!text.startsWith("─ ")) continue;
-		if (text.split(" │ ").length < 3 || !USAGE.test(text)) continue;
+		if (text.split(" │ ").length < 3) continue;
 		return text.slice(2);
 	}
 	return undefined;

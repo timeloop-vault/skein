@@ -77,8 +77,24 @@ describe("readScreenPhase / hermes", () => {
 		expect(read("hermes", snap)).toBe("unknown");
 	});
 
-	it("a status line without the usage field is not recognised", () => {
-		const snap = screen({ [STATUS_ROW]: " ─ ready │ haiku 4.5 │ nothing │ more" });
+	it("the no-provider idle row (no usage token, right-aligned path) is waiting", () => {
+		const snap = screen({
+			[STATUS_ROW]:
+				" ─ ready │ glm 5.2 │ 16s │ voice off │ 1 session                       ─ …\\project (main)",
+		});
+		expect(read("hermes", snap)).toBe("waiting");
+	});
+
+	it("a busy row without the usage token is running", () => {
+		const snap = screen({
+			[STATUS_ROW]:
+				" ─ (◔_◔) deliberating… · 9s │ glm 5.2 │ voice off │ 1 session      ─ …\\project (main)",
+		});
+		expect(read("hermes", snap)).toBe("running");
+	});
+
+	it("a status line with fewer than two separators is not recognised", () => {
+		const snap = screen({ [STATUS_ROW]: " ─ ready │ glm 5.2" });
 		expect(read("hermes", snap)).toBe("unknown");
 	});
 
