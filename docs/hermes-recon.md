@@ -48,6 +48,10 @@ recommended strategy and the tier slices. Nothing here is production code.
   visible in hooks and on disk. `async_delegations` holds a `running` row
   while a background child outlives its parent's turn. Background shell
   processes appear in `processes.json`.
+- **Hermes also runs agents outside any session (Q8).** The gateway, cron,
+  Kanban workers and Bot Mode have no PTY. The TUI shares their stores on one
+  profile and can `/resume` gateway sessions, but cannot see or steer them.
+  Skein hosts only the TUI and never touches the gateway.
 - **Upstream moves fast.** There were 14 releases in 60 days, and the version
   scheme moved from CalVer to semver. Couple to the hooks' documented
   payloads first, and to `state.db` columns second.
@@ -319,6 +323,16 @@ tier D issue. The two realistic options are:
 - **Opt-in user-config entries:** one identity, at the cost of Skein editing a
   file the user owns once, with consent.
 
+Weighing the Skein profile (Q8), not deciding it:
+- **Against.** It cuts Hermes-in-Skein off from the user's memory, skills and
+  session history, including gateway sessions it could otherwise `/resume`.
+  The default Kanban board stays shared, because it lives at the root. That
+  weighs against it for users with an established Hermes setup.
+- **For.** The upstream caution against two agents on one home makes a
+  separate home the sanctioned way to run another agent.
+
+It stays #626's decision.
+
 ## Q4. Profiles and personalities
 
 - **Profiles.** `-p <name>` selects `<root>/profiles/<name>` as the whole
@@ -344,7 +358,9 @@ tier D issue. The two realistic options are:
 
 Ship tier E as at most a per-harness "profile" field (argv `-p <name>`) once
 tier D has decided whether Skein owns a profile itself. Do not reuse the
-agents picker.
+agents picker. Q8 raises tier E's weight: a user running several independent
+agents picks which profile a harness joins, and should be able to keep it off
+a profile whose gateway is busy.
 
 ## Q5. Subagents and background work
 
@@ -459,7 +475,130 @@ Nothing was run on macOS. Check before shipping beyond Windows:
 - `state.db` path `~/.hermes`;
 - the known macOS TUI keyboard issues upstream (modified Enter, Cmd+K) [docs].
 
+## Q8. Agents that run outside a session
+
+Hermes also runs agents with no terminal: a messaging gateway, scheduled
+jobs, Kanban workers and Bot Mode. This is read from source and docs only.
+
+**Gateway**
+- **One background process.** The messaging gateway is "a single background
+  process" [docs: user-guide/messaging/index.md].
+- **Installable as a service.** A systemd user or system service, a launchd
+  agent, or a Windows Scheduled Task (`Hermes_Gateway`, at logon, with a
+  Startup-folder fallback) [src: hermes_cli/gateway.py, gateway_launchd.py,
+  gateway_windows.py]. The official Docker image supervises it with s6
+  [docs: user-guide/docker.md].
+- **Platforms.** Telegram, Discord, Slack, WhatsApp, Signal, SMS, Email,
+  Matrix, Microsoft Teams, webhooks and an OpenAI-compatible API server, among
+  others (Home Assistant, Mattermost, DingTalk, Feishu, …) [docs + src:
+  plugins/platforms/*, gateway/platforms/*].
+- **Cron needs a gateway.** "Cron execution is handled by the gateway
+  daemon", which ticks the scheduler every 60 s [docs: features/cron.md; src:
+  gateway/run.py `interval: int = 60`]. `hermes cron tick` and `hermes cron
+  run <id>` exist for manual runs, and `cron status` reports the scheduler
+  stopped when no gateway runs [docs].
+- **Kanban dispatch runs in the gateway by default.** `dispatch_in_gateway`
+  defaults to true [src: gateway/kanban_watchers.py; docs: features/kanban.md].
+- **One gateway can serve every profile.** `gateway.multiplex_profiles` is on
+  by default: stored unset and resolved once per boot by a preflight (the same
+  as `hermes gateway migrate --multiplex`). It multiplexes only with two or
+  more profiles, no standalone secondary gateway, and no blocker (duplicate
+  bot credentials across profiles; secondary profiles binding ports without a
+  `/p/<profile>/` ingress) [src: hermes_cli/gateway_multiplex_mode.py,
+  gateway_migrate.py, gateway/config.py].
+- **Locks.** `gateway.pid` and `gateway.lock` per HERMES_HOME, plus
+  token-scoped locks in a per-host, per-OS-user directory (overridable by
+  `HERMES_GATEWAY_LOCK_DIR`) [src: gateway/status.py].
+- **Replace and force.** `gateway run --replace` kills an existing gateway
+  first (some generated service commands use it). `--force` on `run` starts a
+  foreground gateway even when a service already supervises that profile; on
+  `start`, `restart` and `install` it overrides the served-profile refusal
+  [src: hermes_cli/subcommands/gateway.py, hermes_cli/gateway.py].
+- **The TUI does not take the gateway lock.** Only the gateway acquires the
+  runtime lock; the TUI and classic CLI have no callers [src: gateway/run.py
+  `acquire_gateway_runtime_lock`].
+
+**Kanban**
+- **The default board is shared across profiles.** It is `<root>/kanban.db`,
+  where root is the root of the home family, not the active profile.
+  `kanban_home()` returns `HERMES_KANBAN_HOME` if set, else the default root;
+  its docstring says "Shared across profiles BY DESIGN". With `-p <name>`
+  (home `<root>/profiles/<name>`) the board is still `<root>/kanban.db`. An
+  unrelated `HERMES_HOME` is its own root and gets its own board. Named boards
+  live at `<root>/kanban/boards/<slug>/kanban.db`; `HERMES_KANBAN_DB` pins a
+  path and is injected into workers [src: hermes_cli/kanban_db.py,
+  hermes_constants.py].
+- **Workers are separate processes.** Each is its own `hermes` OS process in a
+  new session, with its own `HERMES_HOME`, `HERMES_KANBAN_TASK` and
+  `HERMES_KANBAN_DB` [src: hermes_cli/kanban_db_dispatch.py].
+- **Worker sessions are hidden from the TUI.** They get
+  `HERMES_SESSION_SOURCE=kanban`. `kanban`, `tool` and `oneshot` are internal
+  listing sources, excluded from the TUI's session list and the CLI pickers
+  [src: kanban_db_dispatch.py, hermes_state_sessions.py
+  `INTERNAL_LISTING_SOURCES`, tui_gateway/methods_session.py]. The gateway's
+  own list excludes only `tool` [src].
+
+**Bot Mode**
+- **A bot is a profile.** "a Bot is a Hermes profile … no background daemons"
+  [docs: user-guide/bot-mode.md]. In the Desktop app each local bot runs in
+  its own backend process; a headless setup uses the gateway [docs].
+- **`message_agent` is narrow.** It exists only in canonical "Bot Chat"
+  sessions on Bot-Mode-managed installs. Regular chats and CLI sessions never
+  see it, except a CLI that resumes that canonical Bot Chat by title [docs:
+  bot-mode.md; src: tools/bot_mode_dm.py].
+
+**What the TUI sees of all this**
+- **Same profile, same stores.** `state.db`, memories and skills resolve from
+  the active HERMES_HOME [src: hermes_state.py, tools/memory_tool.py,
+  tools/skills_tool.py]. A TUI on the gateway's profile reads the same
+  sessions, memory and skills. The default Kanban board is shared at root
+  level anyway. Gateway platform sessions are ordinary sessions in the same
+  store [docs: user-guide/sessions.md].
+- **`/resume` reaches gateway sessions.** `/resume` (aliases `/sessions`,
+  `/switch`) lists stored sessions excluding only internal sources, so
+  Telegram and other gateway sessions appear and can be resumed [src:
+  tui_gateway/methods_session.py, ui-tui/src/app/slash/commands/session.ts].
+- **`/handoff` is not in the TUI.** `/handoff <platform>` is CLI-only
+  (`cli_only=True`) and needs the gateway running and a home channel [docs:
+  reference/slash-commands.md, sessions.md; src: hermes_cli/commands.py]. Only
+  the Desktop app calls the `handoff.request` RPC [src].
+- **`/kanban` and `/cron`.** Both are in the command registry, `/cron`
+  CLI-only [src: hermes_cli/commands.py]. The TUI has no native entries.
+  Whether its fallback to the classic command worker runs them was not
+  traced.
+- **`/agents` is local.** `/agents` (Ctrl+T, alias `/tasks`) shows this
+  process's own subagents and background processes [docs: tui.md; src]. No
+  TUI command lists or steers gateway-owned live sessions. `/steer` is
+  gateway-only, and the TUI cannot attach to a standalone gateway [src:
+  commands.py; docs: tui.md].
+
+**Concurrency**
+- **One writer, one owner per session.** `state.db` is WAL: "concurrent
+  readers + one writer" [src: hermes_state.py]. Every front-end takes a
+  per-session lease, "at most one live owner per stored session"; a second
+  owner is refused (`SESSION_NOT_OWNED`), not deferred [src:
+  hermes_cli/active_sessions.py; callers in tui_gateway/session_lifecycle.py,
+  gateway/run_busy.py, cli.py]. `sessions optimize` and `prune` refuse while a
+  gateway, Desktop, dashboard or cron holds `state.db` [docs: sessions.md].
+- **But upstream cautions against sharing a home.** "Never point two agent
+  processes at the same profile (the same Hermes home). Both write memory
+  automatically, and each loads the other's writes into its system prompt at
+  session start" [docs: user-guide/profiles.md]. Upstream does not say whether
+  an interactive TUI beside its own profile's gateway counts as a second
+  agent. The lease protects one session, not memory.
+- **This applies to Skein too.** Several Hermes harnesses in Skein rooms on
+  one profile are several agent processes on one home.
+
+**Verdict.** These agents live outside any PTY Skein could host. Skein can
+coexist with them, but it cannot see or steer them through the TUI.
+
 ## Recommendation
+
+**Standing rule: Skein hosts only the interactive TUI.** It never starts,
+stops, restarts or replaces the gateway, and never passes `gateway run
+--replace` or `--force`. It never installs a gateway service. When a profile
+is chosen it passes `-p <profile>` explicitly, rather than inheriting
+whatever profile is active (Q8).
 
 1. **Fix Skein's MCP version gate first.** Accept and negotiate `2025-11-25`
    on `/mcp`. This is small, independent, and needed by every injection
@@ -482,7 +621,9 @@ Nothing was run on macOS. Check before shipping beyond Windows:
 
    No compression following is needed.
 4. **Decide the injection route** (Q3: Skein profile vs opt-in user-config
-   entries) as the first step of tier C/D. Both tiers use it.
+   entries) as the first step of tier C/D. Both tiers use it. Q8 adds to the
+   trade-off: a Skein profile cuts Hermes-in-Skein off from the user's memory,
+   skills and sessions, while the upstream caution favours a separate home.
 5. **Tier C (authoritative telemetry)** — a Skein-shipped hook script that
    POSTs the payloads to Skein, keyed by `SKEIN_HARNESS_ID`.
    - **Reuse the existing routes first.** Three of the four signals map onto
@@ -505,7 +646,11 @@ Nothing was run on macOS. Check before shipping beyond Windows:
    `async_delegations` and `processes.json` feed the outstanding-work count.
    It depends on C.
 8. **Tier E (profile)** — a per-harness profile name, not
-   `capabilities.agents`. Low priority, and shaped by the tier D decision.
+   `capabilities.agents`. Q8 raises its priority; it is still shaped by the
+   tier D decision.
+9. **Possible later read-only slice** — show gateway status (`gateway.pid`),
+   cron jobs and the Kanban board in Skein, read from Hermes' own stores and
+   never controlling them. No issue filed.
 
 ## Follow-up issues
 
@@ -531,3 +676,8 @@ Nothing was run on macOS. Check before shipping beyond Windows:
   run.
 - The exact on-screen bytes of the approval prompts in a ConPTY, so the L2b
   regex is pinned to a fixture rather than to the locale file.
+- Does an interactive TUI beside its own profile's gateway count as the
+  "second agent process" the profiles caution forbids (Q8)? Upstream does not
+  say.
+- Does the TUI's fallback to the classic command worker run `/kanban` and
+  `/cron` (Q8)? It was not traced.
