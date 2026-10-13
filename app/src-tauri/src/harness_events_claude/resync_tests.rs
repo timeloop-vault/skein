@@ -3,7 +3,7 @@
 use super::adapter::{ActionPersistence, SubagentTail, TailState};
 use super::background_tasks::BackgroundState;
 use super::resync::{FINGERPRINT_LEN, extend_fingerprint, fingerprint_of};
-use super::tests::{drain, drain_brief, retry_fs_op, test_manager};
+use super::tests::{drain, drain_brief, drain_until, retry_fs_op, test_manager};
 use super::tick::tick;
 use super::*;
 use crate::harness_actions_claude::ActionExtractor;
@@ -65,7 +65,9 @@ fn attach_does_not_create_claude_owned_dirs() {
     f.sync_all().unwrap();
 
     manager.supervise_once();
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         events
             .iter()
@@ -117,7 +119,9 @@ fn tail_survives_watched_dir_deleted_and_recreated() {
     f.sync_all().unwrap();
 
     manager.supervise_once();
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         events
             .iter()
@@ -148,7 +152,10 @@ fn tail_survives_watched_dir_deleted_and_recreated() {
     sf.sync_all().unwrap();
 
     manager.supervise_once();
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "x"))
+    });
     assert!(
         events
             .iter()

@@ -1,7 +1,7 @@
 //! The supervisor: dead-tail detection, backoff and manual and automatic reattach.
 
 use super::subagent_tests::make_adapter_with_existing_main;
-use super::tests::{drain, drain_brief, make_adapter};
+use super::tests::{await_bootstrap, drain, drain_brief, drain_until, make_adapter};
 use super::*;
 use std::fs;
 use std::io::Write;
@@ -39,7 +39,7 @@ fn supervise_once_does_not_rearm_a_healthy_unchanged_adapter() {
 fn dead_tail_is_reattached_and_settles_from_transcript() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     mgr.simulate_dead_watch_for_test("harness-1");
 
@@ -67,7 +67,9 @@ fn dead_tail_is_reattached_and_settles_from_transcript() {
     // Pass 2: same last_pos, now old enough — dead, reattach.
     mgr.supervise_once();
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     let awaiting_count = events
         .iter()
         .filter(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
@@ -85,7 +87,7 @@ fn dead_tail_is_reattached_and_settles_from_transcript() {
 fn healthy_tail_is_never_reattached() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     for i in 0..3 {
         let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
@@ -99,19 +101,27 @@ fn healthy_tail_is_never_reattached() {
         // on close, not per write (#437; see
         // `main_events_keep_flowing_after_sidecars_appear_post_attach`).
         drop(f);
-        // Let the (still perfectly healthy) live watch catch up
-        // normally before checking — `drain` waits for it.
-        let events = drain(&rx);
-        assert!(
-            !events.is_empty(),
-            "iteration {i}: the live watch should still be delivering normally"
-        );
+        // Let the (still perfectly healthy) live watch deliver THIS
+        // row's event before checking. The first row opens the turn
+        // (`AssistantTurn`); later ones are mid-turn and surface as
+        // `ToolUseStart` with their own tool name.
+        let tool = format!("Tool{i}");
+        drain_until(&rx, |evs| {
+            evs.iter().any(|e| match e {
+                ClaudeEvent::AssistantTurn => i == 0,
+                ClaudeEvent::ToolUseStart { name } => *name == tool,
+                _ => false,
+            })
+        });
         let rearmed = mgr.supervise_once();
         assert_eq!(rearmed, 0, "iteration {i}: nothing about the watch changed");
     }
 
+    // Ask the supervisor directly rather than listening for the
+    // absence of a reattach's events (a debounced watcher delivers on
+    // its own schedule, so no window can prove silence).
     assert!(
-        drain_brief(&rx).is_empty(),
+        mgr.collect_dead_tail_jobs_for_test().is_empty(),
         "a healthy tail must never trigger a spurious reattach"
     );
 }
@@ -124,7 +134,7 @@ fn healthy_tail_is_never_reattached() {
 fn auto_reattach_respects_backoff() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     mgr.simulate_dead_watch_for_test("harness-1");
     let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
@@ -137,7 +147,7 @@ fn auto_reattach_respects_backoff() {
     mgr.supervise_once();
     mgr.backdate_stall_for_test("harness-1");
     mgr.supervise_once();
-    let first = drain(&rx);
+    let first = drain_until(&rx, |evs| !evs.is_empty());
     assert!(
         !first.is_empty(),
         "expected the first automatic reattach to produce events"
@@ -156,10 +166,13 @@ fn auto_reattach_respects_backoff() {
     f.sync_all().unwrap();
     mgr.supervise_once();
     mgr.backdate_stall_for_test("harness-1");
-    mgr.supervise_once();
 
+    // Ask the supervisor's decision directly instead of listening
+    // for the absence of a reattach's events: those arrive from a
+    // debounced watcher on its own schedule, so no fixed window can
+    // tell "backed off" from "not delivered yet".
     assert!(
-        drain_brief(&rx).is_empty(),
+        mgr.collect_dead_tail_jobs_for_test().is_empty(),
         "a second automatic reattach within REATTACH_BACKOFF must not happen"
     );
 }
@@ -174,7 +187,7 @@ fn auto_reattach_respects_backoff() {
 fn manual_reattach_outcomes() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     assert_eq!(
         mgr.reattach("no-such-harness").unwrap(),
@@ -202,7 +215,9 @@ fn manual_reattach_outcomes() {
         ReattachOutcome::Reattached,
         "manual reattach must recover a dead tail immediately, no backoff or wait"
     );
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         events
             .iter()
@@ -221,7 +236,7 @@ fn manual_reattach_outcomes() {
 fn reattach_abandoned_when_detached_between_collect_and_perform() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     mgr.simulate_dead_watch_for_test("harness-1");
     let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
@@ -283,7 +298,7 @@ fn reattach_abandoned_when_detached_between_collect_and_perform() {
 fn reattach_abandoned_when_fresh_attach_lands_between_collect_and_perform() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     mgr.simulate_dead_watch_for_test("harness-1");
     let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
@@ -331,7 +346,9 @@ fn reattach_abandoned_when_fresh_attach_lands_between_collect_and_perform() {
     // Close before draining: macOS FSEvents reports the change on
     // close, not per write (#437).
     drop(f2);
-    let events = drain(&rx2);
+    let events = drain_until(&rx2, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         events
             .iter()

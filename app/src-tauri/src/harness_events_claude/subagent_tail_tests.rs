@@ -2,12 +2,14 @@
 
 use super::adapter::TailState;
 use super::background_tasks::BackgroundState;
-use super::persist_tests::make_persisting_adapter;
+use super::persist_tests::make_persisting_adapter_with_events;
 use super::subagent_tests::{
     BASH_RESULT, BASH_USE, HB_RESULT, HB_RESULT_NO_FLAG, HB_TOOL_USE, count_ends,
     make_adapter_with_existing_main,
 };
-use super::tests::{append_lines, drain, drain_brief, make_adapter, test_manager};
+use super::tests::{
+    append_block, append_lines, await_bootstrap, drain_until, make_adapter, test_manager, wait_for,
+};
 use super::tick::tick;
 use super::*;
 use parking_lot::Mutex;
@@ -45,7 +47,10 @@ fn attach_seeds_start_only_for_subagent_not_handed_back() {
     manager
         .attach_at("h1", path, move |e| tx.send(e).unwrap(), None)
         .unwrap();
-    let events = drain_brief(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "busy"))
+    });
     assert!(
         events.iter().any(|e| matches!(
             e,
@@ -84,7 +89,10 @@ fn attach_handback_id_carries_into_live_tail() {
     manager
         .attach_at("h1", path, move |e| tx.send(e).unwrap(), None)
         .unwrap();
-    let events = drain_brief(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "a1"))
+    });
     assert!(
         events.iter().any(|e| matches!(
             e,
@@ -94,7 +102,7 @@ fn attach_handback_id_carries_into_live_tail() {
         "got {events:?}"
     );
     append_lines(&sub_path, &[HB_RESULT_NO_FLAG]);
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| count_ends(evs) >= 1);
     assert_eq!(count_ends(&events), 1, "got {events:?}");
 }
 
@@ -107,7 +115,7 @@ fn attach_handback_id_carries_into_live_tail() {
 fn subagent_tail_skip_on_no_growth_does_not_wedge_later_reads() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
@@ -124,7 +132,10 @@ fn subagent_tail_skip_on_no_growth_does_not_wedge_later_reads() {
         f.sync_all().unwrap();
     }
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "a6"))
+    });
     assert!(
         events
             .iter()
@@ -144,7 +155,11 @@ fn subagent_tail_skip_on_no_growth_does_not_wedge_later_reads() {
         .unwrap();
         mf.sync_all().unwrap();
     }
-    let quiet = drain(&rx);
+    // The main row's AwaitingPrompt arrives in the same tick that
+    // would have re-read the subagent file; wait for it, not a window.
+    let quiet = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         !quiet
             .iter()
@@ -164,7 +179,10 @@ fn subagent_tail_skip_on_no_growth_does_not_wedge_later_reads() {
         .unwrap();
         f.sync_all().unwrap();
     }
-    let after_growth = drain(&rx);
+    let after_growth = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "a6"))
+    });
     let end_count = after_growth
         .iter()
         .filter(|e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "a6"))
@@ -191,7 +209,7 @@ fn subagent_end_persists_one_action_with_duration() {
     // yet never ticks at all, subagents included. Give it one row
     // so the watcher has something to attach to, mirroring
     // `main_transcript_events_unaffected_by_a_subagents_dir`.
-    let _manager = make_persisting_adapter(jsonl.clone(), &db_path, "h1", "r1");
+    let (manager, rx) = make_persisting_adapter_with_events(jsonl.clone(), &db_path, "h1", "r1");
     {
         let mut f = fs::File::create(&jsonl).unwrap();
         writeln!(
@@ -204,6 +222,7 @@ fn subagent_end_persists_one_action_with_duration() {
 
     let sub_dir = skein_harness::claude::subagents_dir(&jsonl).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
+    manager.supervise_once();
     fs::write(
         sub_dir.join("agent-a1.meta.json"),
         r#"{"agentType":"explore","description":"Map the tailer"}"#,
@@ -222,10 +241,20 @@ fn subagent_end_persists_one_action_with_duration() {
     .unwrap();
     f.sync_all().unwrap();
 
-    // Give the debouncer a moment to tick and persist.
-    thread::sleep(Duration::from_secs(2));
-
+    // Wait for the end to be seen (and for any duplicate to show
+    // up in the settle window), then for its row to be persisted.
+    let events = drain_until(&rx, |evs| count_ends(evs) >= 1);
+    assert_eq!(count_ends(&events), 1, "got {events:?}");
     let db = crate::db::Database::open(&db_path).unwrap();
+    wait_for(
+        || {
+            db.recent_harness_actions_by_room("r1", -1, 100)
+                .unwrap()
+                .iter()
+                .any(|a| a.kind == crate::db::action_kind::SUBAGENT_END)
+        },
+        "the subagent_end row",
+    );
     let actions = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
     let ends: Vec<_> = actions
         .iter()
@@ -270,8 +299,27 @@ fn attach_does_not_persist_subagent_end_for_already_finished_subagent() {
     )
     .unwrap();
 
-    let _manager = make_persisting_adapter(jsonl, &db_path, "h1", "r1");
-    thread::sleep(Duration::from_secs(2));
+    let (_manager, rx) = make_persisting_adapter_with_events(jsonl.clone(), &db_path, "h1", "r1");
+    // The attach probe's event is emitted synchronously, so it proves
+    // nothing about later ticks. Poke the main file with a fresh row
+    // and wait for its own event: a live tick (which also scans the
+    // subagent files) has then run, so a spurious row would be in the DB.
+    drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AssistantTurn))
+    });
+    append_block(
+        &jsonl,
+        &[
+            // Two rows: the first may open the turn (`AssistantTurn`),
+            // so only the second is guaranteed a `ToolUseStart`.
+            r#"{"type":"assistant","sessionId":"x","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","name":"PokeOpen"}]}}"#,
+            r#"{"type":"assistant","sessionId":"x","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","name":"PokeAfterAttach"}]}}"#,
+        ],
+    );
+    drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::ToolUseStart { name } if name == "PokeAfterAttach"))
+    });
 
     let db = crate::db::Database::open(&db_path).unwrap();
     let actions = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
@@ -287,7 +335,7 @@ fn attach_does_not_persist_subagent_end_for_already_finished_subagent() {
 fn subagent_tool_result_emitted_for_tool_result_row() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
@@ -301,7 +349,10 @@ fn subagent_tool_result_emitted_for_tool_result_row() {
     .unwrap();
     f.sync_all().unwrap();
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentToolResult { agent_id } if agent_id == "a4"))
+    });
     assert!(
         events
             .iter()
@@ -344,7 +395,10 @@ fn attach_emits_start_only_for_the_unfinished_subagent() {
         .attach_at("h1", path, move |e| tx.send(e).unwrap(), None)
         .unwrap();
 
-    let events = drain_brief(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "live"))
+    });
     assert!(
         events.iter().any(|e| matches!(
             e,
@@ -371,7 +425,7 @@ fn attach_emits_start_only_for_the_unfinished_subagent() {
 fn subagent_line_split_across_two_ticks_is_reassembled() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
@@ -393,7 +447,10 @@ fn subagent_line_split_across_two_ticks_is_reassembled() {
         f.sync_all().unwrap();
     }
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "a5"))
+    });
     let end_count = events
         .iter()
         .filter(|e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "a5"))
@@ -428,7 +485,9 @@ fn main_transcript_events_unaffected_by_a_subagents_dir() {
     .unwrap();
     f.sync_all().unwrap();
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         events
             .iter()

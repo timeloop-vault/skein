@@ -7,7 +7,7 @@ use super::background_tests::{
     t445_use,
 };
 use super::resync_tests::t425_tick;
-use super::tests::{drain, drain_brief};
+use super::tests::{drain_brief, drain_until};
 use super::*;
 use std::fs;
 use tempfile::TempDir;
@@ -114,7 +114,7 @@ fn t445_attach_live_subagent_task_is_seeded_with_owner() {
     );
 
     let (_mgr, rx, _db) = t445_attach(&path, &dir);
-    let events = drain_brief(&rx);
+    let events = drain_until(&rx, |evs| !t445_starts(evs).is_empty());
     assert!(
         matches!(
             t445_starts(&events).as_slice(),
@@ -183,7 +183,7 @@ fn t445_attach_history_is_not_replayed_as_live() {
     );
 
     let (_mgr, rx, db) = t445_attach(&path, &dir);
-    let events = drain_brief(&rx);
+    let events = drain_until(&rx, |evs| !t445_starts(evs).is_empty());
     let starts = t445_starts(&events);
     let [
         ClaudeEvent::BackgroundStart {
@@ -202,12 +202,9 @@ fn t445_attach_history_is_not_replayed_as_live() {
         &path,
         &[r#"{"type":"assistant","message":{"stop_reason":"end_turn","content":[]}}"#.to_owned()],
     );
-    let more = drain(&rx);
-    assert!(
-        more.iter()
-            .any(|e| matches!(e, ClaudeEvent::AwaitingPrompt)),
-        "the tick never ran: {more:?}"
-    );
+    let more = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(t445_starts(&more).is_empty(), "{more:?}");
     assert!(t445_ends(&more).is_empty(), "{more:?}");
     assert_eq!(t445_end_rows(&db), Vec::<serde_json::Value>::new());
@@ -302,7 +299,7 @@ fn t445_attach_past_deadline_monitor_then_tick_is_silent() {
         &path,
         &[r#"{"type":"user","message":{"content":"x"}}"#.to_owned()],
     );
-    let more = drain(&rx);
+    let more = drain_until(&rx, |evs| !evs.is_empty());
     assert!(!more.is_empty(), "the tick never ran");
     assert!(t445_starts(&more).is_empty(), "{more:?}");
     assert!(t445_ends(&more).is_empty(), "{more:?}");

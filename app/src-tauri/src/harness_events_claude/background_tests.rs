@@ -5,7 +5,7 @@ use super::background_tasks::{
     BACKGROUND_END, BackgroundOut, BackgroundState, MONITOR_EXPIRY_GRACE_MS,
 };
 use super::resync_tests::{t425_persistence, t425_state, t425_tick};
-use super::tests::{append_lines, drain_brief, test_manager};
+use super::tests::{append_lines, drain_brief, drain_until, test_manager};
 use super::*;
 use parking_lot::Mutex;
 use std::fs;
@@ -309,7 +309,7 @@ fn t445_attach_over_outstanding_task_seeds_initial_start() {
     );
 
     let (_mgr, rx, db) = t445_attach(&path, &dir);
-    let events = drain_brief(&rx);
+    let events = drain_until(&rx, |evs| !t445_starts(evs).is_empty());
     let starts = t445_starts(&events);
     let [
         ClaudeEvent::BackgroundStart {

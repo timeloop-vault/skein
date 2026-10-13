@@ -1,7 +1,7 @@
 //! #491: the Claude Code version seed and live change detector.
 
 use super::cli_version::{latest_cli_version_event, live_cli_version_event};
-use super::tests::{append_lines, drain, drain_brief, test_manager};
+use super::tests::{append_block, append_lines, drain_brief, drain_until, test_manager};
 use super::*;
 use std::sync::mpsc;
 use tempfile::TempDir;
@@ -20,6 +20,11 @@ fn versions(events: &[ClaudeEvent]) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// Collect events until at least one `CliVersion` has arrived.
+fn drain_versions(rx: &mpsc::Receiver<ClaudeEvent>) -> Vec<ClaudeEvent> {
+    drain_until(rx, |evs| !versions(evs).is_empty())
 }
 
 fn attach_over(path: &std::path::Path) -> mpsc::Receiver<ClaudeEvent> {
@@ -54,7 +59,7 @@ fn attach_seeds_the_latest_version_once() {
         ],
     );
     let rx = attach_over(&path);
-    let events = drain(&rx);
+    let events = drain_versions(&rx);
     assert_eq!(versions(&events), vec!["2.1.288".to_owned()], "{events:?}");
     let seeded = events
         .iter()
@@ -75,10 +80,10 @@ fn first_live_row_after_attach_emits_even_when_the_version_matches_the_seed() {
     let path = dir.path().join("session.jsonl");
     append_lines(&path, &[&row("2.1.288", "2026-05-15T22:00:00.000Z")]);
     let rx = attach_over(&path);
-    assert_eq!(versions(&drain(&rx)), vec!["2.1.288".to_owned()]);
+    assert_eq!(versions(&drain_versions(&rx)), vec!["2.1.288".to_owned()]);
 
     append_lines(&path, &[&row("2.1.288", "2026-05-15T22:05:00.000Z")]);
-    assert_eq!(versions(&drain(&rx)), vec!["2.1.288".to_owned()]);
+    assert_eq!(versions(&drain_versions(&rx)), vec!["2.1.288".to_owned()]);
 }
 
 #[test]
@@ -89,17 +94,23 @@ fn live_change_emits_and_live_repeat_is_suppressed() {
     assert_eq!(versions(&drain_brief(&rx)), Vec::<String>::new());
 
     append_lines(&path, &[&row("2.1.288", "2026-05-15T22:00:00.000Z")]);
-    assert_eq!(versions(&drain(&rx)), vec!["2.1.288".to_owned()]);
+    assert_eq!(versions(&drain_versions(&rx)), vec!["2.1.288".to_owned()]);
 
-    append_lines(&path, &[&row("2.1.288", "2026-05-15T22:01:00.000Z")]);
+    // The repeat and the change land in one write, so they are read in
+    // one tick, in order: seeing the change proves the repeat was
+    // already judged, and only the change may have emitted.
+    append_block(
+        &path,
+        &[
+            &row("2.1.288", "2026-05-15T22:01:00.000Z"),
+            &row("2.1.290", "2026-05-15T22:02:00.000Z"),
+        ],
+    );
     assert_eq!(
-        versions(&drain_brief(&rx)),
-        Vec::<String>::new(),
+        versions(&drain_versions(&rx)),
+        vec!["2.1.290".to_owned()],
         "repeat must not emit"
     );
-
-    append_lines(&path, &[&row("2.1.290", "2026-05-15T22:02:00.000Z")]);
-    assert_eq!(versions(&drain(&rx)), vec!["2.1.290".to_owned()]);
 }
 
 #[test]

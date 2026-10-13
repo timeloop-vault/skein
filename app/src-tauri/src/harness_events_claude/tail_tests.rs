@@ -3,7 +3,7 @@
 use super::adapter::TailState;
 use super::background_tasks::BackgroundState;
 use super::paths::DirId;
-use super::tests::{drain, drain_brief, make_adapter, test_manager};
+use super::tests::{drain_until, make_adapter, test_manager};
 use super::tick::{
     HEARTBEAT_INTERVAL, UTF8_STALL_WARN_THRESHOLD, should_heartbeat, should_warn_utf8_stall, tick,
 };
@@ -84,7 +84,9 @@ fn pre_existing_file_seeks_to_eof_and_only_emits_new_lines() {
         f.sync_all().unwrap();
     }
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     let prompt_count = events
         .iter()
         .filter(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
@@ -119,7 +121,9 @@ fn partial_line_carries_across_ticks() {
         f.sync_all().unwrap();
     }
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         events
             .iter()
@@ -150,7 +154,9 @@ fn malformed_json_line_skipped_others_still_emit() {
     .unwrap();
     f.sync_all().unwrap();
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         events
             .iter()
@@ -178,8 +184,8 @@ fn attach_before_file_exists_then_create() {
         .unwrap();
 
     // File doesn't exist yet — adapter should be waiting on the
-    // parent-dir watcher. Create it now.
-    thread::sleep(Duration::from_millis(50));
+    // parent-dir watcher (armed synchronously by `attach_at`). Create
+    // it now.
     let mut f = fs::File::create(&path).unwrap();
     writeln!(
         f,
@@ -188,7 +194,9 @@ fn attach_before_file_exists_then_create() {
     .unwrap();
     f.sync_all().unwrap();
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         events
             .iter()
@@ -238,7 +246,9 @@ fn attach_to_pre_existing_session_ending_in_end_turn_starts_in_waiting() {
         .attach_at("h1", path, move |e| tx.send(e).unwrap(), None)
         .unwrap();
 
-    let events = drain_brief(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         events
             .iter()
@@ -271,7 +281,9 @@ fn attach_to_pre_existing_session_mid_turn_starts_in_running() {
         .attach_at("h1", path, move |e| tx.send(e).unwrap(), None)
         .unwrap();
 
-    let events = drain_brief(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AssistantTurn))
+    });
     assert!(
         !events
             .iter()

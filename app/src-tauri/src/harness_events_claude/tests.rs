@@ -83,6 +83,78 @@ pub(super) fn drain_brief(rx: &mpsc::Receiver<ClaudeEvent>) -> Vec<ClaudeEvent> 
     out
 }
 
+/// Collect events until `pred` holds over everything seen so far,
+/// however long the debounced watcher takes (30 s ceiling, then
+/// panic with what did arrive). Then drain for one more brief
+/// window, so a duplicate of the awaited event still lands in the
+/// result for an "exactly once" assertion. Unlike `drain`, a slow
+/// machine delays the test instead of failing it, and the awaited
+/// events can't leak into the next step's drain.
+///
+/// Absence checks made after this rely on sentinel ordering: `pred`
+/// must wait for a row written AFTER (or in the same block as) the
+/// rows under test, so their effects are already delivered. The 300 ms
+/// settle only catches duplicates from the same burst, not a second
+/// debounced batch arriving later.
+pub(super) fn drain_until(
+    rx: &mpsc::Receiver<ClaudeEvent>,
+    pred: impl Fn(&[ClaudeEvent]) -> bool,
+) -> Vec<ClaudeEvent> {
+    let mut out = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !pred(&out) {
+        let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+            panic!("timed out after 30s waiting for events, got {out:?}");
+        };
+        let ev = rx
+            .recv_timeout(remaining)
+            .unwrap_or_else(|e| panic!("{e} waiting for events, got {out:?}"));
+        out.push(ev);
+    }
+    out.extend(drain_brief(rx));
+    out
+}
+
+/// Wait for the bootstrap event that `make_adapter_with_existing_main`
+/// produces on attach (its user row yields `UserPrompt`), so it cannot
+/// leak into the step after it.
+pub(super) fn await_bootstrap(rx: &mpsc::Receiver<ClaudeEvent>) {
+    drain_until(rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::UserPrompt { .. }))
+    });
+}
+
+/// Poll `cond` every 20 ms until it holds (30 s ceiling, then panic
+/// naming `what`). For conditions observable only in the database.
+pub(super) fn wait_for(mut cond: impl FnMut() -> bool, what: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !cond() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out after 30s waiting for {what}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Append `lines` to `path` in one write, so a watcher tick can
+/// never observe only some of them.
+pub(super) fn append_block(path: &Path, lines: &[&str]) {
+    let mut block = String::new();
+    for l in lines {
+        block.push_str(l);
+        block.push('\n');
+    }
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap();
+    f.write_all(block.as_bytes()).unwrap();
+    f.sync_all().unwrap();
+}
+
 pub(super) fn append_lines(path: &Path, lines: &[&str]) {
     let mut f = fs::OpenOptions::new()
         .create(true)

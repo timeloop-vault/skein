@@ -2,7 +2,7 @@
 
 use super::adapter::{ActionPersistence, AttachInfo};
 use super::subagent_tests::make_adapter_with_existing_main;
-use super::tests::drain;
+use super::tests::{await_bootstrap, drain_until};
 use super::*;
 use crate::harness_actions_claude::ActionExtractor;
 use std::collections::HashSet;
@@ -61,9 +61,9 @@ struct ConcurrentHarness {
 ///     runs — Claude won the race and wrote first
 ///
 /// Returns one `bool` per harness: whether it observed its
-/// `AwaitingPrompt` end-of-turn within a single 5 s budget shared
-/// across all `N` (not 5 s each serially, which would let a
-/// handful of stuck harnesses blow the test out to `N * 5` s).
+/// `AwaitingPrompt` end-of-turn within a single 30 s budget shared
+/// across all `N` (not 30 s each serially, which would let a
+/// handful of stuck harnesses blow the test out to `N * 30` s).
 fn run_concurrent_attach_variant(precreate_parent: bool, precreate_file: bool) -> Vec<bool> {
     const N: usize = 6;
     let root = TempDir::new().unwrap();
@@ -214,9 +214,9 @@ fn run_concurrent_attach_variant(precreate_parent: bool, precreate_file: bool) -
     // `Adapter::rearm`); `new_for_test` spawns no such thread, so
     // this loop stands in for it, at a much tighter interval than
     // `SUPERVISE_INTERVAL` so the fixture doesn't need anywhere
-    // near this test's 5 s budget to converge.
+    // near this test's 30 s budget to converge.
     let mut satisfied = vec![false; N];
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while std::time::Instant::now() < deadline && satisfied.iter().any(|s| !s) {
         manager.supervise_once();
         for (i, h) in harnesses.iter().enumerate() {
@@ -290,7 +290,7 @@ fn concurrent_attach_preexisting_file_all_succeed() {
 fn main_events_keep_flowing_after_sidecars_appear_post_attach() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
@@ -320,7 +320,10 @@ fn main_events_keep_flowing_after_sidecars_appear_post_attach() {
     // mirrors production.
     drop(sf);
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == "s1"))
+    });
     assert!(
         events.iter().any(|e| matches!(
             e,
@@ -341,7 +344,9 @@ fn main_events_keep_flowing_after_sidecars_appear_post_attach() {
     mf.sync_all().unwrap();
     drop(mf);
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AssistantTurn))
+    });
     assert!(
         events
             .iter()
@@ -358,7 +363,9 @@ fn main_events_keep_flowing_after_sidecars_appear_post_attach() {
     mf.sync_all().unwrap();
     drop(mf);
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         events
             .iter()
@@ -378,7 +385,10 @@ fn main_events_keep_flowing_after_sidecars_appear_post_attach() {
     sf.sync_all().unwrap();
     drop(sf);
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "s1"))
+    });
     assert!(
         events
             .iter()
@@ -400,7 +410,7 @@ fn main_and_subagent_events_survive_concurrent_sidecar_churn() {
 
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
@@ -468,7 +478,7 @@ fn main_and_subagent_events_survive_concurrent_sidecar_churn() {
     let mut awaiting_prompts = 0usize;
     let mut started: HashSet<String> = HashSet::new();
     let mut ended: HashSet<String> = HashSet::new();
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
         let Ok(ev) = rx.recv_timeout(remaining.min(Duration::from_millis(200))) else {
             continue;

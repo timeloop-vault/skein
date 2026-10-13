@@ -1,13 +1,12 @@
 //! Action persistence and backfill on attach and on the live tail (#80).
 
 use super::adapter::ActionPersistence;
+use super::tests::wait_for;
 use super::*;
 use crate::harness_actions_claude::ActionExtractor;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 use tempfile::TempDir;
 
 // ── action persistence + backfill (issue #80) ────────────────
@@ -22,6 +21,18 @@ pub(super) fn make_persisting_adapter(
     harness_id: &str,
     room_id: &str,
 ) -> ClaudeEventsManager {
+    make_persisting_adapter_with_events(jsonl, db_path, harness_id, room_id).0
+}
+
+/// Like `make_persisting_adapter`, also handing back the event
+/// stream so a test can wait on events instead of sleeping.
+pub(super) fn make_persisting_adapter_with_events(
+    jsonl: PathBuf,
+    db_path: &Path,
+    harness_id: &str,
+    room_id: &str,
+) -> (ClaudeEventsManager, std::sync::mpsc::Receiver<ClaudeEvent>) {
+    let (tx, rx) = std::sync::mpsc::channel();
     let db = Arc::new(crate::db::Database::open(db_path).unwrap());
     let manager = ClaudeEventsManager::new_for_test(Arc::clone(&db));
     let persistence = Some(ActionPersistence {
@@ -34,9 +45,16 @@ pub(super) fn make_persisting_adapter(
         app: None,
     });
     manager
-        .attach_at(harness_id, jsonl, |_event| {}, persistence)
+        .attach_at(
+            harness_id,
+            jsonl,
+            move |event| {
+                let _ = tx.send(event);
+            },
+            persistence,
+        )
         .unwrap();
-    manager
+    (manager, rx)
 }
 
 /// `Tool_use` + `tool_result` rows already in the file at attach
@@ -190,20 +208,17 @@ fn live_tail_persists_rows_appended_after_attach() {
         f.sync_all().unwrap();
     }
 
-    // FSEvents can take up to ~1-2 s on macOS to deliver. Poll
-    // the DB until the row lands or the deadline trips.
+    // FSEvents can take up to ~1-2 s on macOS to deliver, and longer
+    // under CPU load: wait on the row, not on a clock.
     let db = crate::db::Database::open(&db_path).unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    loop {
-        let actions = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
-        if !actions.is_empty() {
-            assert_eq!(actions[0].kind, crate::db::action_kind::TOOL_CALL);
-            break;
-        }
-        assert!(
-            std::time::Instant::now() <= deadline,
-            "live tail never persisted the action"
-        );
-        thread::sleep(Duration::from_millis(50));
-    }
+    wait_for(
+        || {
+            !db.recent_harness_actions_by_room("r1", -1, 100)
+                .unwrap()
+                .is_empty()
+        },
+        "the live tail to persist the action",
+    );
+    let actions = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
+    assert_eq!(actions[0].kind, crate::db::action_kind::TOOL_CALL);
 }

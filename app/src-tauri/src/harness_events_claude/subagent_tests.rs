@@ -1,13 +1,14 @@
 //! Subagent start, end and handback on the sidecar tail.
 
-use super::persist_tests::make_persisting_adapter;
-use super::tests::{append_lines, drain, test_manager};
+use super::persist_tests::make_persisting_adapter_with_events;
+use super::tests::{
+    append_block, append_lines, await_bootstrap, drain_until, test_manager, wait_for,
+};
 use super::*;
+use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::time::Duration;
-use std::{fs, thread};
 use tempfile::TempDir;
 
 // ── subagent tailing (#276) ────────────────────────────────────
@@ -48,13 +49,28 @@ pub(super) fn make_adapter_with_existing_main(
     (manager, path, rx)
 }
 
+fn started(id: &'static str) -> impl Fn(&[ClaudeEvent]) -> bool {
+    move |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentStart { agent_id, .. } if agent_id == id))
+    }
+}
+
+fn assistant_turn_seen(evs: &[ClaudeEvent]) -> bool {
+    evs.iter().any(|e| matches!(e, ClaudeEvent::AssistantTurn))
+}
+
+/// A main-transcript tool-use row: its `AssistantTurn` shows a tick
+/// ran after this append, and a tick scans the subagent files too.
+const MAIN_TOOL_USE: &str = r#"{"type":"assistant","sessionId":"x","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","name":"Read"}]}}"#;
+
 #[test]
 fn subagent_start_emitted_with_meta_from_sidecar() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
     // Drain the main-transcript bootstrap event before we care
     // about subagent ones.
-    drain(&rx);
+    await_bootstrap(&rx);
 
     let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
@@ -77,7 +93,7 @@ fn subagent_start_emitted_with_meta_from_sidecar() {
     .unwrap();
     f.sync_all().unwrap();
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, started("a1"));
     assert!(
         events.iter().any(|e| matches!(
             e,
@@ -95,7 +111,7 @@ fn subagent_start_emitted_with_meta_from_sidecar() {
 fn subagent_start_emitted_without_sidecar() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
@@ -111,7 +127,7 @@ fn subagent_start_emitted_without_sidecar() {
     .unwrap();
     f.sync_all().unwrap();
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, started("a2"));
     assert!(
         events.iter().any(|e| matches!(
             e,
@@ -126,7 +142,7 @@ fn subagent_start_emitted_without_sidecar() {
 fn subagent_end_emitted_once_not_per_tick() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
 
     let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
@@ -140,11 +156,13 @@ fn subagent_end_emitted_once_not_per_tick() {
     .unwrap();
     f.sync_all().unwrap();
 
-    let events = drain(&rx);
-    let end_count = events
-        .iter()
-        .filter(|e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "a3"))
-        .count();
+    let ends_a3 = |evs: &[ClaudeEvent]| {
+        evs.iter()
+            .filter(|e| matches!(e, ClaudeEvent::SubagentEnd { agent_id, .. } if agent_id == "a3"))
+            .count()
+    };
+    let events = drain_until(&rx, |evs| ends_a3(evs) >= 1);
+    let end_count = ends_a3(&events);
     assert_eq!(
         end_count, 1,
         "expected exactly one SubagentEnd, got {events:?}"
@@ -153,17 +171,9 @@ fn subagent_end_emitted_once_not_per_tick() {
     // Force another tick that has nothing new to say about the
     // subagent — append to the main transcript, which shares the
     // same debouncer/callback as the subagents dir.
-    {
-        let mut mf = fs::OpenOptions::new().append(true).open(&path).unwrap();
-        writeln!(
-            mf,
-            r#"{{"type":"assistant","sessionId":"x","message":{{"stop_reason":"end_turn","content":[]}}}}"#
-        )
-        .unwrap();
-        mf.sync_all().unwrap();
-    }
+    append_lines(&path, &[MAIN_TOOL_USE]);
 
-    let more = drain(&rx);
+    let more = drain_until(&rx, assistant_turn_seen);
     assert!(
         !more
             .iter()
@@ -196,7 +206,7 @@ fn subagent_handback_result_ends_subagent_once_with_action_row() {
     let dir = TempDir::new().unwrap();
     let jsonl = dir.path().join("session.jsonl");
     let db_path = dir.path().join("test.db");
-    let _manager = make_persisting_adapter(jsonl.clone(), &db_path, "h1", "r1");
+    let (manager, rx) = make_persisting_adapter_with_events(jsonl.clone(), &db_path, "h1", "r1");
     append_lines(
         &jsonl,
         &[
@@ -205,11 +215,15 @@ fn subagent_handback_result_ends_subagent_once_with_action_row() {
     );
     let sub_dir = skein_harness::claude::subagents_dir(&jsonl).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
+    manager.supervise_once();
     let sub_path = sub_dir.join("agent-a1.jsonl");
-    append_lines(&sub_path, &[BASH_USE, BASH_RESULT]);
-    thread::sleep(Duration::from_secs(1));
-    append_lines(&sub_path, &[HB_TOOL_USE]);
-    thread::sleep(Duration::from_secs(1));
+    // One write, so a tick that sees BASH_RESULT's effect has also
+    // read the (event-less) handback tool_use behind it.
+    append_block(&sub_path, &[BASH_USE, BASH_RESULT, HB_TOOL_USE]);
+    drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentToolResult { agent_id } if agent_id == "a1"))
+    });
 
     let db = crate::db::Database::open(&db_path).unwrap();
     let ends = |db: &crate::db::Database| {
@@ -222,7 +236,9 @@ fn subagent_handback_result_ends_subagent_once_with_action_row() {
     assert_eq!(ends(&db), 0, "tool_use alone must not end the subagent");
 
     append_lines(&sub_path, &[HB_RESULT]);
-    thread::sleep(Duration::from_secs(2));
+    let events = drain_until(&rx, |evs| count_ends(evs) >= 1);
+    assert_eq!(count_ends(&events), 1, "got {events:?}");
+    wait_for(|| ends(&db) >= 1, "the subagent_end row");
     assert_eq!(ends(&db), 1, "the handback result ends the subagent once");
 }
 
@@ -230,16 +246,19 @@ fn subagent_handback_result_ends_subagent_once_with_action_row() {
 fn subagent_handback_tool_use_then_result_emits_one_end_event() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
     let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
     mgr.supervise_once();
     let sub_path = sub_dir.join("agent-a1.jsonl");
-    append_lines(&sub_path, &[BASH_USE, BASH_RESULT, HB_TOOL_USE]);
-    let events = drain(&rx);
+    append_block(&sub_path, &[BASH_USE, BASH_RESULT, HB_TOOL_USE]);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::SubagentToolResult { agent_id } if agent_id == "a1"))
+    });
     assert_eq!(count_ends(&events), 0, "tool_use alone, got {events:?}");
     append_lines(&sub_path, &[HB_RESULT]);
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| count_ends(evs) >= 1);
     assert_eq!(count_ends(&events), 1, "got {events:?}");
 }
 
@@ -248,18 +267,18 @@ fn subagent_handback_tool_use_then_result_emits_one_end_event() {
 fn subagent_end_turn_still_ends_subagent() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
     let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
     mgr.supervise_once();
-    append_lines(
+    append_block(
         &sub_dir.join("agent-a1.jsonl"),
         &[
             BASH_USE,
             r#"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"stop_reason":"end_turn","content":[]}}"#,
         ],
     );
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| count_ends(evs) >= 1);
     assert_eq!(count_ends(&events), 1, "got {events:?}");
 }
 
@@ -269,23 +288,26 @@ fn subagent_end_turn_still_ends_subagent() {
 fn subagent_trailing_rows_after_handback_do_not_reopen_but_prompt_does() {
     let dir = TempDir::new().unwrap();
     let (mgr, path, rx) = make_adapter_with_existing_main(&dir);
-    drain(&rx);
+    await_bootstrap(&rx);
     let sub_dir = skein_harness::claude::subagents_dir(&path).unwrap();
     fs::create_dir_all(&sub_dir).unwrap();
     mgr.supervise_once();
     let sub_path = sub_dir.join("agent-a1.jsonl");
-    append_lines(&sub_path, &[BASH_USE, BASH_RESULT, HB_TOOL_USE, HB_RESULT]);
-    let events = drain(&rx);
+    append_block(&sub_path, &[BASH_USE, BASH_RESULT, HB_TOOL_USE, HB_RESULT]);
+    let events = drain_until(&rx, |evs| count_ends(evs) >= 1);
     assert_eq!(count_ends(&events), 1, "got {events:?}");
 
-    append_lines(
+    append_block(
         &sub_path,
         &[
             r#"{"type":"assistant","isSidechain":true,"agentId":"a1","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#,
             r#"{"type":"attachment","isSidechain":true,"agentId":"a1","attachment":{"type":"x"}}"#,
         ],
     );
-    let events = drain(&rx);
+    // Absence: the main row's AssistantTurn, written after the block
+    // above, shows a tick that also scanned the subagent file.
+    append_lines(&path, &[MAIN_TOOL_USE]);
+    let events = drain_until(&rx, assistant_turn_seen);
     assert_eq!(count_ends(&events), 0, "no second end, got {events:?}");
     assert!(
         !events
@@ -300,7 +322,7 @@ fn subagent_trailing_rows_after_handback_do_not_reopen_but_prompt_does() {
             r#"{"type":"user","isSidechain":true,"agentId":"a1","message":{"role":"user","content":"carry on"}}"#,
         ],
     );
-    let events = drain(&rx);
+    let events = drain_until(&rx, started("a1"));
     assert!(
         events.iter().any(|e| matches!(
             e,

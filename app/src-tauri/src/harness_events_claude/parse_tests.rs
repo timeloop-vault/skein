@@ -6,7 +6,7 @@ use super::persist::scan_history;
 use super::resync_tests::{
     T425_END, T425_PROMPT, T425_RESULT, T425_TOOL, t425_jsonl, t425_tick, t425_vanished,
 };
-use super::tests::{drain, drain_brief, make_adapter};
+use super::tests::{append_block, drain_until, make_adapter};
 use super::*;
 use skein_harness::claude::local_command::LocalCommandTracker;
 use std::fs;
@@ -26,7 +26,9 @@ fn awaiting_prompt_emitted_for_assistant_end_turn() {
     .unwrap();
     f.sync_all().unwrap();
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         events
             .iter()
@@ -48,7 +50,9 @@ fn awaiting_prompt_emitted_for_assistant_stop_sequence() {
     .unwrap();
     f.sync_all().unwrap();
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(
         events
             .iter()
@@ -66,15 +70,21 @@ fn last_prompt_row_does_not_emit_awaiting_prompt() {
     let dir = TempDir::new().unwrap();
     let (_mgr, path, rx) = make_adapter(&dir);
 
-    let mut f = fs::File::create(&path).unwrap();
-    writeln!(
-        f,
-        r#"{{"type":"last-prompt","sessionId":"x","lastPrompt":"hi","leafUuid":"u"}}"#
-    )
-    .unwrap();
-    f.sync_all().unwrap();
+    // The user-prompt row after it is the sentinel: rows are handled
+    // in order within a tick, so once its event arrives the
+    // `last-prompt` row has been seen too.
+    append_block(
+        &path,
+        &[
+            r#"{"type":"last-prompt","sessionId":"x","lastPrompt":"hi","leafUuid":"u"}"#,
+            r#"{"type":"user","sessionId":"x","message":{"content":"hi"}}"#,
+        ],
+    );
 
-    let events = drain_brief(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::UserPrompt { .. }))
+    });
     assert!(
         !events
             .iter()
@@ -107,7 +117,9 @@ fn streamed_assistant_rows_coalesce_to_one_turn_event() {
     .unwrap();
     f.sync_all().unwrap();
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter().any(|e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     let turn_count = events
         .iter()
         .filter(|e| matches!(e, ClaudeEvent::AssistantTurn))
@@ -148,7 +160,11 @@ fn tool_use_block_emits_tool_use_start() {
     .unwrap();
     f.sync_all().unwrap();
 
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::ToolUseStart { name } if name == "Edit"))
+            && evs.iter().any(|e| matches!(e, ClaudeEvent::ToolUseResult))
+    });
     assert!(
         events
             .iter()
@@ -168,22 +184,23 @@ fn sidechain_rows_are_ignored() {
     let dir = TempDir::new().unwrap();
     let (_mgr, path, rx) = make_adapter(&dir);
 
-    let mut f = fs::File::create(&path).unwrap();
-    writeln!(
-        f,
-        r#"{{"type":"assistant","isSidechain":true,"sessionId":"x","message":{{"content":[]}}}}"#
-    )
-    .unwrap();
-    writeln!(
-        f,
-        r#"{{"type":"last-prompt","isSidechain":true,"sessionId":"x"}}"#
-    )
-    .unwrap();
-    f.sync_all().unwrap();
+    // The trailing main-session prompt is the sentinel (see
+    // `last_prompt_row_does_not_emit_awaiting_prompt`).
+    append_block(
+        &path,
+        &[
+            r#"{"type":"assistant","isSidechain":true,"sessionId":"x","message":{"content":[]}}"#,
+            r#"{"type":"last-prompt","isSidechain":true,"sessionId":"x"}"#,
+            r#"{"type":"user","sessionId":"x","message":{"content":"hi"}}"#,
+        ],
+    );
 
-    let events = drain_brief(&rx);
+    let events = drain_until(&rx, |evs| {
+        evs.iter()
+            .any(|e| matches!(e, ClaudeEvent::UserPrompt { .. }))
+    });
     assert!(
-        events.is_empty(),
+        matches!(events.as_slice(), [ClaudeEvent::UserPrompt { .. }]),
         "sidechain rows should be ignored, got {events:?}"
     );
 }

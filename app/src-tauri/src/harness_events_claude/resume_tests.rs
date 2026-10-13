@@ -3,7 +3,7 @@
 //! must read `AwaitingPrompt`; any other attach keeps the transcript's
 //! own verdict, since a live process may be mid long tool call.
 
-use super::tests::{drain, drain_brief, test_manager};
+use super::tests::{drain_brief, drain_until, test_manager};
 use super::*;
 use std::fs;
 use std::io::Write;
@@ -68,7 +68,9 @@ fn has(events: &[ClaudeEvent], f: impl Fn(&ClaudeEvent) -> bool) -> bool {
 #[test]
 fn fresh_attach_on_tool_use_tail_is_awaiting_prompt() {
     let (_d, _p, _m, rx) = attach(&[USER_PROMPT, TOOL_USE], true);
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        has(evs, |e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(has(&events, |e| matches!(e, ClaudeEvent::AwaitingPrompt)));
     assert!(!has(&events, |e| matches!(e, ClaudeEvent::AssistantTurn)));
 }
@@ -76,7 +78,9 @@ fn fresh_attach_on_tool_use_tail_is_awaiting_prompt() {
 #[test]
 fn fresh_attach_on_tool_result_tail_is_awaiting_prompt() {
     let (_d, _p, _m, rx) = attach(&[USER_PROMPT, TOOL_USE, TOOL_RESULT], true);
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        has(evs, |e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(has(&events, |e| matches!(e, ClaudeEvent::AwaitingPrompt)));
     assert!(!has(&events, |e| matches!(
         e,
@@ -87,7 +91,9 @@ fn fresh_attach_on_tool_result_tail_is_awaiting_prompt() {
 #[test]
 fn fresh_attach_on_user_prompt_tail_is_awaiting_prompt() {
     let (_d, _p, _m, rx) = attach(&[USER_PROMPT], true);
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        has(evs, |e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(has(&events, |e| matches!(e, ClaudeEvent::AwaitingPrompt)));
     assert!(!has(&events, |e| matches!(
         e,
@@ -100,7 +106,9 @@ fn fresh_attach_on_user_prompt_tail_is_awaiting_prompt() {
 #[test]
 fn non_fresh_attach_on_tool_use_tail_stays_assistant_turn() {
     let (_d, _p, _m, rx) = attach(&[USER_PROMPT, TOOL_USE], false);
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        has(evs, |e| matches!(e, ClaudeEvent::AssistantTurn))
+    });
     assert!(has(&events, |e| matches!(e, ClaudeEvent::AssistantTurn)));
     assert!(!has(&events, |e| matches!(e, ClaudeEvent::AwaitingPrompt)));
 }
@@ -108,11 +116,15 @@ fn non_fresh_attach_on_tool_use_tail_stays_assistant_turn() {
 #[test]
 fn live_rows_after_a_fresh_attach_are_not_rewritten() {
     let (_d, path, _m, rx) = attach(&[USER_PROMPT, TOOL_USE], true);
-    let first = drain(&rx);
+    let first = drain_until(&rx, |evs| {
+        has(evs, |e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(has(&first, |e| matches!(e, ClaudeEvent::AwaitingPrompt)));
 
     append_row(&path, TOOL_USE);
-    let live = drain(&rx);
+    let live = drain_until(&rx, |evs| {
+        has(evs, |e| matches!(e, ClaudeEvent::AssistantTurn))
+    });
     assert!(
         has(&live, |e| matches!(e, ClaudeEvent::AssistantTurn)),
         "a live tool_use row must still read as a turn, got {live:?}"
@@ -124,14 +136,25 @@ fn live_rows_after_a_fresh_attach_are_not_rewritten() {
 #[test]
 fn reattach_of_a_fresh_attached_adapter_keeps_the_transcript_verdict() {
     let (_d, path, mgr, rx) = attach(&[USER_PROMPT, TOOL_USE], true);
-    drain(&rx);
+    drain_until(&rx, |evs| {
+        has(evs, |e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
 
     mgr.simulate_dead_watch_for_test("harness-1");
     append_row(&path, TOOL_RESULT);
 
     let outcome = mgr.reattach("harness-1").unwrap();
     assert_eq!(outcome, ReattachOutcome::Reattached);
-    let events = drain_brief(&rx);
+    let events = drain_until(&rx, |evs| {
+        has(evs, |e| {
+            matches!(
+                e,
+                ClaudeEvent::UserPrompt { .. }
+                    | ClaudeEvent::ToolUseResult
+                    | ClaudeEvent::AssistantTurn
+            )
+        })
+    });
     assert!(
         !has(&events, |e| matches!(e, ClaudeEvent::AwaitingPrompt)),
         "reattach must not apply the #336 rule, got {events:?}"
@@ -150,7 +173,9 @@ fn reattach_of_a_fresh_attached_adapter_keeps_the_transcript_verdict() {
 #[test]
 fn fresh_attach_on_clean_end_turn_tail_is_awaiting_prompt() {
     let (_d, _p, _m, rx) = attach(&[USER_PROMPT, END_TURN], true);
-    let events = drain(&rx);
+    let events = drain_until(&rx, |evs| {
+        has(evs, |e| matches!(e, ClaudeEvent::AwaitingPrompt))
+    });
     assert!(has(&events, |e| matches!(e, ClaudeEvent::AwaitingPrompt)));
 }
 
