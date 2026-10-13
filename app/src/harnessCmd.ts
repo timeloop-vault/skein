@@ -73,6 +73,10 @@ export const cmdForKind = (
 		}
 		case "copilot":
 			return ["gh", "copilot", "suggest"];
+		case "hermes":
+			// `--tui` explicit: otherwise the front-end depends on the user's
+			// display.interface setting and TTY detection.
+			return ["hermes", "--tui"];
 		case "byoh":
 			return fallbackShell.length > 0 ? fallbackShell : ["pwsh.exe"];
 		case "remote":

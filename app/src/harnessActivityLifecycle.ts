@@ -14,6 +14,7 @@ import {
 	store,
 } from "./harnessActivityCore.ts";
 import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
+import { forgetScreenPhase } from "./screenPhaseTick.ts";
 import { subagents } from "./subagents.ts";
 
 export const lifecycleMethods = {
@@ -322,6 +323,7 @@ export const lifecycleMethods = {
 		const wasPermission = store.get(id)?.phase === "permission";
 		store.delete(id);
 		muteUntil.delete(id);
+		forgetScreenPhase(id);
 		stopTickIfIdle();
 		if (wasPermission) recomputePermissionIds();
 		emit(id);

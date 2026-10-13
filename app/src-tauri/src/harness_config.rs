@@ -482,6 +482,7 @@ mod tests {
             HarnessKind::Byoh,
             HarnessKind::Files,
             HarnessKind::Remote,
+            HarnessKind::Hermes,
         ] {
             // Real program where the kind has one (`gh` for copilot),
             // so this exercises the `match kind` fallthrough and not

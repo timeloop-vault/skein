@@ -17,6 +17,7 @@ export type HarnessKind =
 	| "claude"
 	| "opencode"
 	| "copilot"
+	| "hermes"
 	| "byoh"
 	| "files"
 	| "design"

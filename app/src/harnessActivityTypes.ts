@@ -236,6 +236,9 @@ export const TRANSITION_SOURCE = {
 	// L2b — generic prompt-pattern fallback.
 	L2bPattern: "l2b-pattern",
 	L2bDrained: "l2b-drained",
+	// #623 — the rendered screen says so (Hermes never goes byte-quiet).
+	L2bScreen: "l2b-screen",
+	L2bScreenCleared: "l2b-screen-cleared",
 	// L2c-1 — Claude JSONL adapter.
 	L2c1ClaudeAssistant: "l2c1-claude-assistant",
 	L2c1ClaudeEndTurn: "l2c1-claude-end-turn",

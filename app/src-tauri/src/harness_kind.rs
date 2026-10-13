@@ -27,13 +27,15 @@ pub(crate) enum HarnessKind {
     Design,
     /// #568: `ssh -t -- <host> …tmux…` in a local PTY.
     Remote,
+    /// #623: Hermes Agent's TUI (`hermes --tui`) in a plain PTY.
+    Hermes,
 }
 
 // Only this module's own tests iterate every kind today — production
 // code always has one already in hand (from the harness record or a
 // Tauri arg).
 #[cfg(test)]
-pub(crate) const ALL: [HarnessKind; 7] = [
+pub(crate) const ALL: [HarnessKind; 8] = [
     HarnessKind::Claude,
     HarnessKind::Opencode,
     HarnessKind::Copilot,
@@ -41,6 +43,7 @@ pub(crate) const ALL: [HarnessKind; 7] = [
     HarnessKind::Files,
     HarnessKind::Design,
     HarnessKind::Remote,
+    HarnessKind::Hermes,
 ];
 
 impl HarnessKind {
@@ -56,6 +59,7 @@ impl HarnessKind {
             "files" => Self::Files,
             "design" => Self::Design,
             "remote" => Self::Remote,
+            "hermes" => Self::Hermes,
             _ => return None,
         })
     }
@@ -69,6 +73,7 @@ impl HarnessKind {
             Self::Files => "files",
             Self::Design => "design",
             Self::Remote => "remote",
+            Self::Hermes => "hermes",
         }
     }
 
@@ -82,6 +87,7 @@ impl HarnessKind {
             Self::Opencode => Some("opencode"),
             Self::Copilot => Some("gh"),
             Self::Remote => Some("ssh"),
+            Self::Hermes => Some("hermes"),
             Self::Byoh | Self::Files | Self::Design => None,
         }
     }

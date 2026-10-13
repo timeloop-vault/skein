@@ -31,9 +31,13 @@
 
 import type { ComposerDraft, DraftEvent } from "./composerDraft.ts";
 import { CLEAN_DRAFT, describeDraftEvent, draftClearedBy, reduceDraft } from "./composerDraft.ts";
+import { HARNESS_KINDS } from "./data.tsx";
 import { logBoth } from "./frontendLog.ts";
 import type { ComposerReading, ScreenSnapshot } from "./promptScreen.ts";
 import { readComposer } from "./promptScreen.ts";
+import type { ScreenPhase } from "./screenPhase.ts";
+import { readScreenPhase } from "./screenPhase.ts";
+import { setScreenPhaseReader } from "./screenPhaseTick.ts";
 import type { HarnessKind } from "./types.ts";
 
 /// What a live harness's terminal offers this seam. `LiveTerminal` is
@@ -56,6 +60,10 @@ export interface HarnessInputTarget {
 	/// #413: a snapshot of the visible screen (independent of user scroll),
 	/// or null when it can't be read. Absent = never screen-checked.
 	screen?(): ScreenSnapshot | null;
+	/// #623: the same snapshot WITHOUT the settle gate — for the activity
+	/// tick's phase read, which must work on a TUI that never goes byte-quiet.
+	/// Never use it to decide whether a draft is empty.
+	rawScreen?(): ScreenSnapshot | null;
 }
 
 /// #413: how long after the user's last draft event a screen read may be
@@ -275,6 +283,21 @@ export const harnessInput = {
 			return null;
 		}
 	},
+	/// #623: what the rendered screen says about the harness's turn, read
+	/// now with no settle window. "unknown" when unregistered, kind-less, the
+	/// snapshot is null or the read throws.
+	readScreenPhaseNow(id: string): ScreenPhase {
+		const target = targets.get(id);
+		if (target?.rawScreen === undefined || target.kind === undefined) return "unknown";
+		// Checked before the snapshot: it costs a full-screen read per call.
+		if (!HARNESS_KINDS[target.kind].capabilities.screenPhase) return "unknown";
+		try {
+			const snap = target.rawScreen();
+			return snap === null ? "unknown" : readScreenPhase(target.kind, snap);
+		} catch {
+			return "unknown";
+		}
+	},
 	/// `id`'s current inferred composer draft — `CLEAN_DRAFT` for a
 	/// harness this store has never seen an event for.
 	draft(id: string): ComposerDraft {
@@ -302,3 +325,7 @@ export const harnessInput = {
 		};
 	},
 };
+
+// #623: the activity tick reads screens through here; injected so the
+// activity store never imports the registry.
+setScreenPhaseReader((id) => harnessInput.readScreenPhaseNow(id));

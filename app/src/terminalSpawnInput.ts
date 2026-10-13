@@ -90,6 +90,8 @@ export function registerInputTarget(
 			recheckWhenSettled();
 			return null;
 		},
+		// #623: ungated, for the activity tick's phase read.
+		rawScreen: () => readVisibleScreen(term),
 	});
 }
 

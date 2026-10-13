@@ -203,6 +203,7 @@ mod tests {
             HarnessKind::Byoh,
             HarnessKind::Files,
             HarnessKind::Remote,
+            HarnessKind::Hermes,
         ] {
             let dto = list(kind, ".", &settings, None);
             assert!(dto.unsupported, "{kind} must have no agent picker");
@@ -386,6 +387,7 @@ mod smoke {
             HarnessKind::Byoh,
             HarnessKind::Files,
             HarnessKind::Remote,
+            HarnessKind::Hermes,
         ] {
             let dto = probe(kind);
             assert!(dto.unsupported, "{kind} must report unsupported");

@@ -60,6 +60,10 @@ export interface HarnessCapabilities {
 	/// as `mouseClicksDisabled`). True only for `claude`; every other kind
 	/// leaves link-opening to Skein.
 	opensClickedLinks: boolean;
+	/// Is the harness's phase read from its rendered screen (#623)? For a TUI
+	/// that never goes byte-quiet, so L2a idle and L2b tail patterns can't fire.
+	/// True only for `hermes`; gates the per-tick screen snapshot.
+	screenPhase: boolean;
 }
 
 export interface HarnessKindMeta {
@@ -107,6 +111,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			submitRetry: true,
 			imagePaste: true,
 			opensClickedLinks: true,
+			screenPhase: false,
 		},
 	},
 	opencode: {
@@ -126,6 +131,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			submitRetry: false,
 			imagePaste: false,
 			opensClickedLinks: false,
+			screenPhase: false,
 		},
 	},
 	copilot: {
@@ -145,6 +151,29 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			submitRetry: false,
 			imagePaste: false,
 			opensClickedLinks: false,
+			screenPhase: false,
+		},
+	},
+	// #623 tier A: phase from the rendered screen (screenPhase.ts) — no L2c adapter
+	// (#625), no resume (#624), no agent API injection (#626).
+	hermes: {
+		id: "hermes",
+		label: "hm",
+		name: "Hermes Agent",
+		chip: "h-hermes",
+		desc: "Nous Research. Interactive TUI.",
+		program: "hermes",
+		skillInvocation: null,
+		capabilities: {
+			pty: true,
+			resume: false,
+			notify: true,
+			agents: false,
+			agentSwitchable: false,
+			submitRetry: false,
+			imagePaste: false,
+			opensClickedLinks: false,
+			screenPhase: true,
 		},
 	},
 	// `byoh` is the kind id we kept from the design's "bring your own
@@ -169,6 +198,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			submitRetry: false,
 			imagePaste: false,
 			opensClickedLinks: false,
+			screenPhase: false,
 		},
 	},
 	// #568: the remote harness, a tool run inside tmux on a remote host over
@@ -193,6 +223,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			submitRetry: false,
 			imagePaste: false,
 			opensClickedLinks: false,
+			screenPhase: false,
 		},
 	},
 	// #49 phase A: the file surface as a harness. Deliberately not a
@@ -214,6 +245,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			submitRetry: false,
 			imagePaste: false,
 			opensClickedLinks: false,
+			screenPhase: false,
 		},
 	},
 	// #433: a live preview of the worktree's HTML in a sandboxed iframe.
@@ -234,6 +266,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			submitRetry: false,
 			imagePaste: false,
 			opensClickedLinks: false,
+			screenPhase: false,
 		},
 	},
 };
@@ -242,6 +275,7 @@ export const HARNESS_ORDER: HarnessKind[] = [
 	"claude",
 	"opencode",
 	"copilot",
+	"hermes",
 	"byoh",
 	"remote",
 	"files",

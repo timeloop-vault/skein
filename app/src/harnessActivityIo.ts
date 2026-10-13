@@ -11,6 +11,7 @@ import {
 } from "./harnessActivityCore.ts";
 import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
 import { matchesWaitingPrompt, stripAnsi } from "./harnessPatterns.ts";
+import { clearScreenOwnership, isScreenWaiting } from "./screenPhaseTick.ts";
 
 export const ioMethods = {
 	/// Record user input (keystroke / paste) on a harness. `data` is
@@ -44,6 +45,12 @@ export const ioMethods = {
 				hasUserInput: true,
 				...(armWatchdog ? { promptSubmittedAt: Date.now() } : null),
 			});
+		}
+		// #623: the user answered a screen-set waiting; do not wait for the
+		// screen to catch up (two ticks).
+		if (submitted && isScreenWaiting(id, cur)) {
+			clearScreenOwnership(id);
+			setPhase(id, "running", TRANSITION_SOURCE.L2bScreenCleared);
 		}
 		if (cur.phase === "permission" && isDecisiveInput(data)) {
 			setPhase(id, "running", TRANSITION_SOURCE.UserInputPermission);
@@ -144,7 +151,8 @@ export const ioMethods = {
 		// → we'd stay stuck in waiting because the pattern matched
 		// at the moment of transition but not anymore.
 		if (cur.phase === "waiting") {
-			if (matchesWaitingPrompt(cur.tail)) {
+			// #623: a screen-set waiting is the tick's to clear.
+			if (isScreenWaiting(id, cur) || matchesWaitingPrompt(cur.tail)) {
 				cur.lastOutputAt = now;
 				return;
 			}

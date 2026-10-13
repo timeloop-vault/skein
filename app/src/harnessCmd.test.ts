@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import {
 	cmdForKind,
 	resumeCmd,
@@ -60,6 +61,33 @@ describe("cmdForKind", () => {
 		expect(cmdForKind("byoh", SHELL)).toEqual(SHELL);
 		expect(cmdForKind("byoh", [])).toEqual(["pwsh.exe"]);
 		expect(cmdForKind("files", SHELL)).toEqual([]);
+	});
+});
+
+describe("hermes (#623)", () => {
+	it("spawns the TUI explicitly", () => {
+		expect(cmdForKind("hermes", SHELL)).toEqual(["hermes", "--tui"]);
+	});
+
+	it("has no resume: the stored cmd, session id and agent pass through", () => {
+		const h = harness("hermes", { cmd: ["hermes", "--tui"], sessionId: SID, agent: "x" });
+		expect(resumeCmd(h)).toEqual(["hermes", "--tui"]);
+		expect(resumeHarness(h)).toEqual(h);
+	});
+
+	it("is a plain notifying PTY with no resume, agents or extras", () => {
+		expect(HARNESS_KINDS.hermes.capabilities).toEqual({
+			pty: true,
+			resume: false,
+			notify: true,
+			agents: false,
+			agentSwitchable: false,
+			submitRetry: false,
+			imagePaste: false,
+			opensClickedLinks: false,
+			screenPhase: true,
+		});
+		expect(HARNESS_ORDER.indexOf("hermes")).toBe(HARNESS_ORDER.indexOf("copilot") + 1);
 	});
 });
 

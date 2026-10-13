@@ -22,6 +22,7 @@ import type {
 } from "./harnessActivityTypes.ts";
 import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
 import { matchesWaitingPrompt } from "./harnessPatterns.ts";
+import { tickScreenPhase } from "./screenPhaseTick.ts";
 
 export const store = new Map<string, HarnessActivity>();
 export const listeners = new Map<string, Set<() => void>>();
@@ -293,6 +294,9 @@ export const ensureTick = (): void => {
 				}
 				continue;
 			}
+			// #623: a screen-read phase (Hermes) outranks the byte-stream
+			// heuristics whenever the screen is recognised.
+			if (tickScreenPhase(id, a, setPhase, (k) => store.get(k))) continue;
 			if (a.phase !== "running" || a.lastOutputAt === null) continue;
 			const quiet = now - a.lastOutputAt;
 			// L2b: pattern-match → waiting on a shorter threshold
