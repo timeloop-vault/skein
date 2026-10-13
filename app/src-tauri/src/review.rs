@@ -326,6 +326,9 @@ fn insert_or_attribute(
 
 // ── discovery (#221) ─────────────────────────────────────────────
 
+mod discovery;
+use discovery::Discovery;
+
 /// Feed a batch of watcher-reported paths (absolute or relative)
 /// through the same capture as a live `patch` row, but with no
 /// attribution: the filesystem doesn't say who wrote a file, so a row
@@ -334,164 +337,26 @@ fn insert_or_attribute(
 ///
 /// Returns how many baselines were newly captured. Best-effort like
 /// [`note_patch`]: logs and moves on rather than propagating, and never
-/// touches a path that already has a baseline — recapturing would
-/// silently move the baseline behind the user's back and absorb
-/// whatever they haven't reviewed yet (the same #211 invariant
-/// [`note_patch`] protects).
+/// touches a path that already has a baseline (the #211 invariant).
+///
+/// Test entry point over a throwaway [`Discovery`]. The watcher does not
+/// call this: it keeps one long-lived `Discovery` per room so the repo and
+/// ignore cache persist (#636).
+#[cfg(test)]
 pub(crate) fn discover(
     db: &Database,
     room_id: &str,
     cwd: &str,
     reported: impl IntoIterator<Item = String>,
 ) -> usize {
-    if cwd.is_empty() {
-        return 0;
-    }
-    let repo = skein_git::Repo::open(Path::new(cwd)).ok();
-    let (mut inserted, needs_catch_up) =
-        discover_batch(db, room_id, cwd, repo.as_ref(), reported, true);
-    if needs_catch_up && let Some(repo) = &repo {
-        inserted += catch_up_with(db, room_id, cwd, repo);
-    }
-    // A non-git room has nothing to catch up against — nothing
-    // else to do.
-    inserted
+    Discovery::new(room_id, cwd).discover(db, reported)
 }
 
 /// One-shot `git status` sweep, run when a room's watcher (re)starts so
 /// changes made while Skein itself was closed still surface. A non-git
 /// room has no status to walk and returns 0 — see the module docs.
 pub(crate) fn catch_up(db: &Database, room_id: &str, cwd: &str) -> usize {
-    if cwd.is_empty() {
-        return 0;
-    }
-    let Ok(repo) = skein_git::Repo::open(Path::new(cwd)) else {
-        return 0;
-    };
-    catch_up_with(db, room_id, cwd, &repo)
-}
-
-fn catch_up_with(db: &Database, room_id: &str, cwd: &str, repo: &skein_git::Repo) -> usize {
-    let entries = match repo.status() {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!(cwd, error = %e, "review: discovery catch-up status failed");
-            return 0;
-        }
-    };
-    // `discover_batch`'s own needs-catch-up detection is moot here —
-    // every path status() reports already exists or is a real tracked
-    // deletion, never a directory collapsed into one OS event — so the
-    // flag it returns is ignored. `status()` also already excludes
-    // ignored files, so skip the redundant `is_path_ignored` re-check.
-    let (inserted, _) = discover_batch(
-        db,
-        room_id,
-        cwd,
-        Some(repo),
-        entries.into_iter().map(|e| e.path),
-        false,
-    );
-    inserted
-}
-
-/// The shared walk behind [`discover`] and [`catch_up`]. Returns
-/// `(inserted, needs_catch_up)` — the latter set when a reported path
-/// no longer exists on disk, has no HEAD blob either, AND was a
-/// **directory** at HEAD ([`skein_git::Repo::head_is_dir`]): the OS
-/// folds a deleted directory into a single watcher event, so the caller
-/// re-derives the individual deleted files via `git status`. An
-/// ordinary file that is merely gone by the time discovery runs — a
-/// lockfile, an editor swap file, anything create-then-delete — is
-/// *not* a directory at HEAD and must not trigger that sweep.
-///
-/// `check_ignores` skips the `is_path_ignored` call for callers (the
-/// `catch_up` path) whose `reported` already came from `git status`,
-/// which excludes ignored files itself.
-fn discover_batch(
-    db: &Database,
-    room_id: &str,
-    cwd: &str,
-    repo: Option<&skein_git::Repo>,
-    reported: impl IntoIterator<Item = String>,
-    check_ignores: bool,
-) -> (usize, bool) {
-    let mut inserted = 0;
-    let mut needs_catch_up = false;
-    for reported_path in reported {
-        let Some(key) = relative_key(cwd, &reported_path) else {
-            continue;
-        };
-        if key.split('/').any(|seg| seg == ".git") {
-            continue;
-        }
-        match db.review_baseline(room_id, &key) {
-            Ok(Some(_)) => continue, // never recapture — see module docs
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(path = %key, error = %e, "review: discovery baseline lookup failed");
-                continue;
-            }
-        }
-        if check_ignores && let Some(repo) = repo {
-            match repo.is_path_ignored(&key) {
-                Ok(true) => continue,
-                Ok(false) => {}
-                // Can't prove it's ignored — the safe direction is
-                // to keep going rather than silently drop a real
-                // change.
-                Err(e) => {
-                    tracing::warn!(path = %key, error = %e, "review: discovery ignore check failed");
-                }
-            }
-        }
-        let abs = abs_path(cwd, &key);
-        // `symlink_metadata` so a symlink-to-directory doesn't get
-        // followed into "yes, it's a directory".
-        let meta = std::fs::symlink_metadata(&abs);
-        if meta.as_ref().is_ok_and(std::fs::Metadata::is_dir) {
-            continue; // not a file to baseline
-        }
-        let exists = meta.is_ok();
-        let (base, image) = capture_state_with_repo(repo, &key);
-        if !exists && base == FileState::Missing {
-            let was_dir_at_head = repo.is_some_and(|r| match r.head_is_dir(&key) {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(path = %key, error = %e, "review: discovery head_is_dir check failed");
-                    false
-                }
-            });
-            if was_dir_at_head {
-                needs_catch_up = true;
-            }
-        }
-        let disk = skein_review::read_state(&abs);
-        if base == disk {
-            continue; // nothing pending — a later write fires another event
-        }
-        let (kind, content) = skein_review::encode(&base);
-        match db.insert_review_baseline_if_absent(
-            room_id,
-            &key,
-            kind,
-            content.as_deref(),
-            "",
-            now_ms(),
-        ) {
-            Ok(true) => {
-                if let Err(e) = db.set_review_baseline_image(room_id, &key, image.as_deref()) {
-                    tracing::warn!(path = %key, error = %e, "review: discovery image mirror failed");
-                }
-                inserted += 1;
-            }
-            Ok(false) => {} // lost a race with another capture — fine
-            Err(e) => {
-                tracing::warn!(path = %key, error = %e, "review: discovery baseline capture failed");
-            }
-        }
-    }
-    (inserted, needs_catch_up)
+    Discovery::new(room_id, cwd).catch_up(db)
 }
 
 // ── DTOs ──────────────────────────────────────────────────────────
@@ -809,18 +674,15 @@ pub fn review_discovery_start(
     let db_for_watch = Arc::clone(&db);
     let app_for_watch = app.clone();
     let room_for_watch = room_id.clone();
-    let cwd_for_watch = cwd.clone();
+    let state = parking_lot::Mutex::new(Discovery::new(&room_id, &cwd));
     manager
         .start_with_paths(id.clone(), Path::new(&cwd), move |paths| {
+            let mut state = state.lock();
             let inserted = match paths {
-                Some(paths) => discover(
-                    &db_for_watch,
-                    &room_for_watch,
-                    &cwd_for_watch,
-                    paths_to_reported(paths),
-                ),
-                None => catch_up(&db_for_watch, &room_for_watch, &cwd_for_watch),
+                Some(paths) => state.discover(&db_for_watch, paths_to_reported(paths)),
+                None => state.catch_up(&db_for_watch),
             };
+            drop(state);
             if inserted > 0 {
                 emit_review_changed(&app_for_watch, &room_for_watch);
             }

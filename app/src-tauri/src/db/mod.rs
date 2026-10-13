@@ -55,6 +55,7 @@ pub use agent_tokens::TokenLookup;
 pub use element_anchors::ReviewElementAnchorRow;
 pub use harness_log::{HarnessAction, HarnessEvent, NewHarnessAction, action_kind};
 pub use mail::HarnessMessageRow;
+pub use review_baselines::NewBaseline;
 pub use review_threads::{ReviewAddressedRow, ReviewCommentRow, ReviewThreadRow};
 pub use rooms::{CreatedBy, Harness, LoadOutcome, RepoIdentity, Room};
 pub(crate) use snapshots::replace_file;

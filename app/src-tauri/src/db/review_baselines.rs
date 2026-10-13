@@ -1,6 +1,9 @@
 //! The `review_baselines` rows and their image mirror. Split out of db.rs (#454).
 
-use rusqlite::{OptionalExtension, params};
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
+use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{Database, MAX_ROOM_IMAGE_MIRROR_BYTES};
 
@@ -26,6 +29,76 @@ fn row_to_baseline(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewBaseline> 
         captured_ms: row.get(4)?,
         touched_ms: row.get(5)?,
     })
+}
+
+/// One baseline to capture in a batch (#636). `image` is the raw
+/// content to mirror for an image path, as in
+/// [`Database::set_review_baseline_image`].
+#[derive(Debug, Clone, Copy)]
+pub struct NewBaseline<'a> {
+    pub path: &'a str,
+    pub kind: &'a str,
+    pub content: Option<&'a str>,
+    pub image: Option<&'a [u8]>,
+}
+
+/// The image-mirror write shared by the single-path and batch paths.
+/// The caller owns the transaction (a `Transaction` derefs to
+/// `Connection`), so a batch commits once.
+fn apply_image_mirror(
+    conn: &Connection,
+    room_id: &str,
+    path: &str,
+    bytes: Option<&[u8]>,
+    max_room_bytes: u64,
+) -> Result<(), String> {
+    let Some(b) = bytes else {
+        conn.execute(
+            "DELETE FROM review_baseline_images WHERE room_id = ?1 AND path = ?2",
+            params![room_id, path],
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(());
+    };
+    // Every OTHER mirror already stored for this room — the path being
+    // written doesn't count against itself, so replacing an existing
+    // mirror with a same-size blob at the cap still succeeds.
+    let other_bytes: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(length(bytes)), 0) FROM review_baseline_images \
+             WHERE room_id = ?1 AND path != ?2",
+            params![room_id, path],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let other_bytes = u64::try_from(other_bytes).unwrap_or(0);
+    if other_bytes.saturating_add(b.len() as u64) > max_room_bytes {
+        // Over the cap: drop whatever mirror this path had rather than
+        // keep a stale one — an old "before" image is worse than none,
+        // since it would show the wrong diff instead of falling back
+        // honestly.
+        tracing::info!(
+            room_id,
+            path,
+            other_bytes,
+            new_bytes = b.len(),
+            cap_bytes = max_room_bytes,
+            "review baseline image mirror over per-room cap; dropping mirror"
+        );
+        conn.execute(
+            "DELETE FROM review_baseline_images WHERE room_id = ?1 AND path = ?2",
+            params![room_id, path],
+        )
+    } else {
+        conn.execute(
+            "INSERT INTO review_baseline_images (room_id, path, bytes) \
+             VALUES (?1, ?2, ?3) \
+             ON CONFLICT(room_id, path) DO UPDATE SET bytes = excluded.bytes",
+            params![room_id, path, b],
+        )
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 impl Database {
@@ -172,59 +245,115 @@ impl Database {
         max_room_bytes: u64,
     ) -> Result<(), String> {
         let mut conn = self.conn.lock();
-        match bytes {
-            Some(b) => {
-                let tx = conn.transaction().map_err(|e| e.to_string())?;
-                // Every OTHER mirror already stored for this room — the
-                // path being written doesn't count against itself, so
-                // replacing an existing mirror with a same-size blob at
-                // the cap still succeeds.
-                let other_bytes: i64 = tx
-                    .query_row(
-                        "SELECT COALESCE(SUM(length(bytes)), 0) FROM review_baseline_images \
-                         WHERE room_id = ?1 AND path != ?2",
-                        params![room_id, path],
-                        |row| row.get(0),
-                    )
-                    .map_err(|e| e.to_string())?;
-                let other_bytes = u64::try_from(other_bytes).unwrap_or(0);
-                if other_bytes.saturating_add(b.len() as u64) > max_room_bytes {
-                    // Over the cap: drop whatever mirror this path had
-                    // rather than keep a stale one — an old "before"
-                    // image is worse than none, since it would show the
-                    // wrong diff instead of falling back honestly.
-                    tracing::info!(
-                        room_id,
-                        path,
-                        other_bytes,
-                        new_bytes = b.len(),
-                        cap_bytes = max_room_bytes,
-                        "review baseline image mirror over per-room cap; dropping mirror"
-                    );
-                    tx.execute(
-                        "DELETE FROM review_baseline_images WHERE room_id = ?1 AND path = ?2",
-                        params![room_id, path],
-                    )
-                } else {
-                    tx.execute(
-                        "INSERT INTO review_baseline_images (room_id, path, bytes) \
-                         VALUES (?1, ?2, ?3) \
-                         ON CONFLICT(room_id, path) DO UPDATE SET bytes = excluded.bytes",
-                        params![room_id, path, b],
-                    )
-                }
-                .map_err(|e| e.to_string())?;
-                tx.commit().map_err(|e| e.to_string())?;
-            }
-            None => {
-                conn.execute(
-                    "DELETE FROM review_baseline_images WHERE room_id = ?1 AND path = ?2",
-                    params![room_id, path],
-                )
-                .map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        apply_image_mirror(&tx, room_id, path, bytes, max_room_bytes)?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    /// Which of `paths` already have a `review_baselines` row for the
+    /// room — the discovery pre-filter (#636). One lock for the whole
+    /// batch instead of one per path, so a burst of watcher ticks does
+    /// not queue behind (and in front of) every other database user.
+    /// Also returns how long the lock took to acquire, so the caller
+    /// can log contention. Empty `paths` never locks.
+    pub fn review_baseline_paths_present(
+        &self,
+        room_id: &str,
+        paths: &[String],
+    ) -> Result<(HashSet<String>, Duration), String> {
+        if paths.is_empty() {
+            return Ok((HashSet::new(), Duration::ZERO));
+        }
+        let started = Instant::now();
+        let conn = self.conn.lock();
+        let waited = started.elapsed();
+        let mut stmt = conn
+            .prepare("SELECT 1 FROM review_baselines WHERE room_id = ?1 AND path = ?2")
+            .map_err(|e| e.to_string())?;
+        let mut present = HashSet::new();
+        for path in paths {
+            if stmt
+                .exists(params![room_id, path])
+                .map_err(|e| e.to_string())?
+            {
+                present.insert(path.clone());
             }
         }
-        Ok(())
+        Ok((present, waited))
+    }
+
+    /// [`Self::insert_review_baseline_if_absent`] for a whole discovery
+    /// batch (#636): one lock and ONE transaction, so the batch costs a
+    /// single commit (fsync) instead of one per path. Each row is an
+    /// `INSERT OR IGNORE` — an existing baseline is never overwritten,
+    /// the #211 invariant — and only a row that was actually inserted
+    /// gets its image mirror written (`Some` upserts under the per-room
+    /// cap, `None` clears), since for a path that already had a
+    /// baseline the mirror belongs to that older baseline. Returns the
+    /// paths inserted and how long the lock took to acquire. On error
+    /// the transaction rolls back and nothing from the batch lands.
+    /// Empty `rows` never locks.
+    pub fn insert_review_baselines_if_absent(
+        &self,
+        room_id: &str,
+        rows: &[NewBaseline<'_>],
+        harness_id: &str,
+        now_ms: i64,
+    ) -> Result<(Vec<String>, Duration), String> {
+        self.insert_review_baselines_if_absent_capped(
+            room_id,
+            rows,
+            harness_id,
+            now_ms,
+            MAX_ROOM_IMAGE_MIRROR_BYTES,
+        )
+    }
+
+    /// [`Self::insert_review_baselines_if_absent`] with the per-room
+    /// image cap as a parameter, for tests.
+    pub(super) fn insert_review_baselines_if_absent_capped(
+        &self,
+        room_id: &str,
+        rows: &[NewBaseline<'_>],
+        harness_id: &str,
+        now_ms: i64,
+        max_room_bytes: u64,
+    ) -> Result<(Vec<String>, Duration), String> {
+        if rows.is_empty() {
+            return Ok((Vec::new(), Duration::ZERO));
+        }
+        let started = Instant::now();
+        let mut conn = self.conn.lock();
+        let waited = started.elapsed();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let mut inserted = Vec::new();
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT OR IGNORE INTO review_baselines \
+                     (room_id, path, kind, content, harness_id, captured_ms, touched_ms) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                )
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                let changed = stmt
+                    .execute(params![
+                        room_id,
+                        row.path,
+                        row.kind,
+                        row.content,
+                        harness_id,
+                        now_ms
+                    ])
+                    .map_err(|e| e.to_string())?;
+                if changed > 0 {
+                    apply_image_mirror(&tx, room_id, row.path, row.image, max_room_bytes)?;
+                    inserted.push(row.path.to_string());
+                }
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok((inserted, waited))
     }
 
     /// The mirrored bytes for a baseline, when

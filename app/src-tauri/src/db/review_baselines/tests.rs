@@ -240,3 +240,94 @@ fn crlf_and_unicode_content_survives_the_round_trip() {
         Some(content)
     );
 }
+
+fn nb<'a>(path: &'a str, content: Option<&'a str>, image: Option<&'a [u8]>) -> NewBaseline<'a> {
+    NewBaseline {
+        path,
+        kind: if content.is_some() { "text" } else { "binary" },
+        content,
+        image,
+    }
+}
+
+#[test]
+fn present_paths_returns_only_existing_rows_of_that_room() {
+    let (_d, db) = fresh();
+    db.insert_review_baseline_if_absent("r1", "a.rs", "text", Some("a"), "h1", 1)
+        .unwrap();
+    db.insert_review_baseline_if_absent("r2", "b.rs", "text", Some("b"), "h1", 1)
+        .unwrap();
+    let paths = ["a.rs", "b.rs", "c.rs"].map(String::from);
+    let (present, _) = db.review_baseline_paths_present("r1", &paths).unwrap();
+    assert_eq!(present, HashSet::from(["a.rs".to_string()]));
+}
+
+#[test]
+fn batch_insert_skips_existing_rows_without_changing_them() {
+    let (_d, db) = fresh();
+    db.insert_review_baseline_if_absent("r1", "old.rs", "text", Some("v1"), "h1", 100)
+        .unwrap();
+    db.set_review_baseline_image("r1", "old.rs", Some(&[7]))
+        .unwrap();
+    let rows = [
+        nb("old.rs", Some("v2"), Some(&[9, 9])),
+        nb("new.rs", Some("n"), None),
+    ];
+    let (inserted, _) = db
+        .insert_review_baselines_if_absent("r1", &rows, "h2", 200)
+        .unwrap();
+    assert_eq!(inserted, ["new.rs"]);
+    let old = db.review_baseline("r1", "old.rs").unwrap().unwrap();
+    assert_eq!(old.content.as_deref(), Some("v1"));
+    assert_eq!(old.harness_id, "h1");
+    assert_eq!(old.captured_ms, 100);
+    assert_eq!(old.touched_ms, 100);
+    // The skipped row's existing mirror is untouched too.
+    assert_eq!(
+        db.review_baseline_image("r1", "old.rs").unwrap(),
+        Some(vec![7])
+    );
+    let new = db.review_baseline("r1", "new.rs").unwrap().unwrap();
+    assert_eq!(new.harness_id, "h2");
+    assert_eq!(new.captured_ms, 200);
+}
+
+#[test]
+fn batch_insert_mirrors_images_only_for_inserted_rows_under_the_cap() {
+    let (_d, db) = fresh();
+    db.insert_review_baseline_if_absent("r1", "have.png", "binary", None, "h1", 1)
+        .unwrap();
+    let rows = [
+        nb("have.png", None, Some(&[1, 1])),
+        nb("a.png", None, Some(&[1, 2, 3])),
+        nb("b.png", None, Some(&[4, 5, 6])),
+        nb("c.png", None, Some(&[7])),
+    ];
+    // Cap of 4: a.png (3) fits, b.png (3+3) does not, c.png (3+1) fits.
+    let (inserted, _) = db
+        .insert_review_baselines_if_absent_capped("r1", &rows, "h1", 5, 4)
+        .unwrap();
+    assert_eq!(inserted, ["a.png", "b.png", "c.png"]);
+    assert_eq!(db.review_baseline_image("r1", "have.png").unwrap(), None);
+    assert_eq!(
+        db.review_baseline_image("r1", "a.png").unwrap(),
+        Some(vec![1, 2, 3])
+    );
+    assert_eq!(db.review_baseline_image("r1", "b.png").unwrap(), None);
+    assert_eq!(
+        db.review_baseline_image("r1", "c.png").unwrap(),
+        Some(vec![7])
+    );
+}
+
+#[test]
+fn empty_batches_are_no_ops() {
+    let (_d, db) = fresh();
+    let (present, _) = db.review_baseline_paths_present("r1", &[]).unwrap();
+    assert!(present.is_empty());
+    let (inserted, _) = db
+        .insert_review_baselines_if_absent("r1", &[], "h1", 1)
+        .unwrap();
+    assert_eq!(inserted, Vec::<String>::new());
+    assert_eq!(db.review_baselines_for_room("r1").unwrap().len(), 0);
+}
