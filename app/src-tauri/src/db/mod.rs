@@ -103,6 +103,19 @@ impl Database {
         // #178 tunes the rest of the write path.)
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| e.to_string())?;
+        // `synchronous` is per-connection and defaults to FULL, which
+        // fsyncs the WAL on every commit. All access goes through one
+        // Mutex<Connection>, so under disk contention each commit held
+        // that lock through its fsync (#638). WAL + NORMAL stays
+        // corruption-safe and every transaction stays atomic (save_all's
+        // wipe + re-insert is all in the WAL or none of it); the cost is
+        // that the latest commits may roll back on power loss or OS
+        // crash, never on an app crash. `.bak` snapshots (VACUUM INTO)
+        // read through SQLite and see committed WAL frames, so they are
+        // unaffected. https://www.sqlite.org/pragma.html#pragma_synchronous
+        // https://www.sqlite.org/wal.html#performance_considerations
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .map_err(|e| e.to_string())?;
         conn.busy_timeout(Duration::from_secs(5))
             .map_err(|e| e.to_string())?;
         // Fold any WAL left by an unclean previous exit back into the

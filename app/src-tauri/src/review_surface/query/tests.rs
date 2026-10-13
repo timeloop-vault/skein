@@ -279,6 +279,12 @@ mod tests_support {
         fs::write(tmp.path().join("a.txt"), "one\ntwo\n").unwrap();
         fs::write(tmp.path().join("b.txt"), "one\nchanged\n").unwrap();
 
+        // The db lives inside the repo, so its WAL sidecars would show up
+        // as untracked files whose bytes change between two reads (#638).
+        let exclude = tmp.path().join(".git/info/exclude");
+        fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+        fs::write(exclude, "skein.db*\n").unwrap();
+
         let db = Database::open(&tmp.path().join("skein.db")).unwrap();
         (db, tmp)
     }

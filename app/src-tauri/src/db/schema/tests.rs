@@ -21,6 +21,23 @@ fn schema_is_idempotent_across_open_calls() {
 }
 
 #[test]
+fn open_runs_wal_with_synchronous_normal() {
+    // #638: FULL (the default) fsyncs every commit under the single
+    // connection lock; NORMAL is the WAL-safe setting.
+    let dir = TempDir::new().unwrap();
+    let db = Database::open(&dir.path().join("test.db")).unwrap();
+    let conn = db.conn.lock();
+    let sync: i64 = conn
+        .query_row("PRAGMA synchronous", [], |r| r.get(0))
+        .unwrap();
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sync, 1, "synchronous should be NORMAL");
+    assert_eq!(mode, "wal");
+}
+
+#[test]
 fn action_schema_is_idempotent_across_open_calls() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("test.db");
