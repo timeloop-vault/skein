@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { unarchiveRoomTransform } from "./harnessCmd.ts";
-import { dropUnwrittenClaudeSessions } from "./roomsStoreProbe.ts";
+import { dropUnwrittenSessions } from "./roomsStoreProbe.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
 
 const SID = "3c8c4693-3838-46ab-8680-3e60df6fdefe";
@@ -26,19 +26,16 @@ const room = (harnesses: Harness[]): Room => ({
 	archived: 1,
 });
 
-describe("dropUnwrittenClaudeSessions", () => {
+describe("dropUnwrittenSessions", () => {
 	it("drops a claude sessionId whose transcript does not exist", async () => {
 		const exists = vi.fn(async () => false);
-		const out = await dropUnwrittenClaudeSessions(
-			room([harness("claude", { sessionId: SID })]),
-			exists,
-		);
+		const out = await dropUnwrittenSessions(room([harness("claude", { sessionId: SID })]), exists);
 		expect(out.harnesses[0]).not.toHaveProperty("sessionId");
 		expect(exists).toHaveBeenCalledTimes(1);
 	});
 
 	it("keeps a claude sessionId that exists", async () => {
-		const out = await dropUnwrittenClaudeSessions(
+		const out = await dropUnwrittenSessions(
 			room([harness("claude", { sessionId: SID })]),
 			async () => true,
 		);
@@ -48,7 +45,7 @@ describe("dropUnwrittenClaudeSessions", () => {
 	it("never probes or touches opencode harnesses", async () => {
 		const exists = vi.fn(async () => false);
 		const oc = harness("opencode", { sessionId: "ses_1" });
-		const out = await dropUnwrittenClaudeSessions(room([oc]), exists);
+		const out = await dropUnwrittenSessions(room([oc]), exists);
 		expect(exists).not.toHaveBeenCalled();
 		expect(out.harnesses[0]).toBe(oc);
 	});
@@ -56,14 +53,14 @@ describe("dropUnwrittenClaudeSessions", () => {
 	it("leaves a harness without a sessionId alone", async () => {
 		const exists = vi.fn(async () => false);
 		const h = harness("claude");
-		const out = await dropUnwrittenClaudeSessions(room([h]), exists);
+		const out = await dropUnwrittenSessions(room([h]), exists);
 		expect(exists).not.toHaveBeenCalled();
 		expect(out.harnesses[0]).toBe(h);
 	});
 
 	it("makes reopen start fresh with --session-id, not --resume", async () => {
 		const h = harness("claude", { cmd: ["claude", "--session-id", SID], sessionId: SID });
-		const probed = await dropUnwrittenClaudeSessions(room([h]), async () => false);
+		const probed = await dropUnwrittenSessions(room([h]), async () => false);
 		const cmd = unarchiveRoomTransform(probed, new Map()).harnesses[0]?.cmd;
 		expect(cmd).not.toContain("--resume");
 		expect(cmd?.[1]).toBe("--session-id");
@@ -76,15 +73,27 @@ describe("dropUnwrittenClaudeSessions", () => {
 			sessionId: SID,
 			shellClaim: { sessionId: SID },
 		});
-		const live = await dropUnwrittenClaudeSessions(room([h]), async () => true);
+		const live = await dropUnwrittenSessions(room([h]), async () => true);
 		expect(unarchiveRoomTransform(live, new Map()).harnesses[0]?.cmd).toEqual([
 			"claude",
 			"--resume",
 			SID,
 		]);
-		const gone = await dropUnwrittenClaudeSessions(room([h]), async () => false);
+		const gone = await dropUnwrittenSessions(room([h]), async () => false);
 		const out = unarchiveRoomTransform(gone, new Map()).harnesses[0];
 		expect(out?.cmd).toEqual(["/bin/zsh", "-l"]);
 		expect(out).not.toHaveProperty("shellClaim");
+	});
+});
+
+describe("dropUnwrittenSessions hermes (#624)", () => {
+	const HSID = "20260101_120000_abcdef";
+
+	it("drops a hermes sessionId the probe says is gone, keeps a live one", async () => {
+		const h = harness("hermes", { sessionId: HSID });
+		const gone = await dropUnwrittenSessions(room([h]), async () => false);
+		expect(gone.harnesses[0]).not.toHaveProperty("sessionId");
+		const live = await dropUnwrittenSessions(room([h]), async () => true);
+		expect(live.harnesses[0]).toBe(h);
 	});
 });

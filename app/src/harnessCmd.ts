@@ -204,6 +204,13 @@ export const resumeHarness = (
 			// baked in on every rebuild.
 			return { ...h, cmd: withAgent(opencodeResumeArgv(h.sessionId, opencodePort), h.agent) };
 		}
+		case "hermes": {
+			// #624: Hermes mints its own id and can't be told one, so none
+			// is minted here; the capture fills `sessionId` in later.
+			const argv = ["hermes", "--tui"];
+			if (hasSessionId(h)) argv.push("--resume", h.sessionId as string);
+			return { ...h, cmd: argv };
+		}
 		case "remote": {
 			// #568: tmux `-A` reattaches, so the same argv is right every time.
 			const argv = h.remote ? remoteArgv(h.remote) : null;

@@ -155,7 +155,8 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		},
 	},
 	// #623 tier A: phase from the rendered screen (screenPhase.ts) — no L2c adapter
-	// (#625), no resume (#624), no agent API injection (#626).
+	// (#625), no agent API injection (#626). Resume (#624): Hermes mints its own
+	// session id, captured later from its state.db.
 	hermes: {
 		id: "hermes",
 		label: "hm",
@@ -166,7 +167,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 		skillInvocation: null,
 		capabilities: {
 			pty: true,
-			resume: false,
+			resume: true,
 			notify: true,
 			agents: false,
 			agentSwitchable: false,

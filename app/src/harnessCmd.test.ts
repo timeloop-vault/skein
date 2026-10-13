@@ -69,16 +69,36 @@ describe("hermes (#623)", () => {
 		expect(cmdForKind("hermes", SHELL)).toEqual(["hermes", "--tui"]);
 	});
 
-	it("has no resume: the stored cmd, session id and agent pass through", () => {
+	it("resumes the stored session (#624), ignoring any agent", () => {
 		const h = harness("hermes", { cmd: ["hermes", "--tui"], sessionId: SID, agent: "x" });
-		expect(resumeCmd(h)).toEqual(["hermes", "--tui"]);
-		expect(resumeHarness(h)).toEqual(h);
+		expect(resumeCmd(h)).toEqual(["hermes", "--tui", "--resume", SID]);
+		expect(resumeHarness(h)).toEqual({ ...h, cmd: ["hermes", "--tui", "--resume", SID] });
 	});
 
-	it("is a plain notifying PTY with no resume, agents or extras", () => {
+	it("without a session id rebuilds a fresh spawn and mints nothing", () => {
+		const mint = () => {
+			throw new Error("must not mint");
+		};
+		const h = harness("hermes", { cmd: ["hermes", "--tui", "--resume", SID] });
+		const out = resumeHarness(h, undefined, mint);
+		expect(out.cmd).toEqual(["hermes", "--tui"]);
+		expect(out).not.toHaveProperty("sessionId");
+	});
+
+	it("withResumeCmds rewrites a hermes harness from its record", () => {
+		const r = room([harness("hermes", { cmd: ["hermes", "--tui"], sessionId: SID })]);
+		expect(withResumeCmds(r, ports()).harnesses[0]?.cmd).toEqual([
+			"hermes",
+			"--tui",
+			"--resume",
+			SID,
+		]);
+	});
+
+	it("is a plain notifying PTY with resume but no agents or extras", () => {
 		expect(HARNESS_KINDS.hermes.capabilities).toEqual({
 			pty: true,
-			resume: false,
+			resume: true,
 			notify: true,
 			agents: false,
 			agentSwitchable: false,

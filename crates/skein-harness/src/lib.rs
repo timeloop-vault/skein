@@ -18,6 +18,7 @@
 
 pub mod agents;
 pub mod claude;
+pub mod hermes;
 pub mod opencode;
 pub mod time;
 

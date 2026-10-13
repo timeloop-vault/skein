@@ -89,6 +89,7 @@ describe("resume onto a transcript that ends mid tool call (#336)", () => {
 			roomId: "room",
 			cwd: "/cwd",
 			harnessKind: "claude",
+			program: "claude",
 			sessionId: "sid",
 			opencodePort: undefined,
 			onSessionCaptured: undefined,

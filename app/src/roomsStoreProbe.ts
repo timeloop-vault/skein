@@ -66,22 +66,22 @@ export async function inspectFolderMissing(cwd: string, roomId: string): Promise
 	}
 }
 
-/** #508: strip the sessionId of every Claude harness whose transcript
- *  was never written, so the reopen path mints a fresh `--session-id`
+/** #508: strip the sessionId of every Claude (and, #624, Hermes) harness
+ *  whose session was never written, so the reopen path mints a fresh `--session-id`
  *  (#486) instead of spawning `claude --resume <id>` against nothing.
  *  A fresh harness's id is pre-allocated by `cmdForKind`, and a room
  *  archived in the same run never passed hydrate's probe. opencode
  *  harnesses are returned untouched. `exists` errors are the caller's
  *  to make conservative (`stillExists` returns true on a failed invoke). */
-export async function dropUnwrittenClaudeSessions(
+export async function dropUnwrittenSessions(
 	room: Room,
 	exists: (h: Harness) => Promise<boolean>,
 ): Promise<Room> {
 	const harnesses = await Promise.all(
 		room.harnesses.map(async (h) => {
-			if (h.kind !== "claude" || !h.sessionId) return h;
+			if ((h.kind !== "claude" && h.kind !== "hermes") || !h.sessionId) return h;
 			if (await exists(h)) return h;
-			console.info(`[skein] dropping unwritten claude session ${h.sessionId} on reopen`);
+			console.info(`[skein] dropping unwritten ${h.kind} session ${h.sessionId} on reopen`);
 			const { sessionId: _dropped, ...rest } = h;
 			return rest;
 		}),
@@ -107,6 +107,9 @@ export async function stillExists(h: Harness): Promise<boolean> {
 		}
 		if (h.kind === "opencode") {
 			return await invoke<boolean>("opencode_session_exists", { id: h.sessionId });
+		}
+		if (h.kind === "hermes") {
+			return await invoke<boolean>("hermes_session_exists", { id: h.sessionId });
 		}
 	} catch (err) {
 		console.warn(`[skein] ${h.kind} session_exists failed for ${h.sessionId}:`, err);

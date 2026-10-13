@@ -21,12 +21,7 @@ import {
 	unretireRooms as unretireRoomsPure,
 } from "./reopenList.ts";
 import { nextActiveAfterClose } from "./roomGroups.ts";
-import {
-	checkProbe,
-	dropUnwrittenClaudeSessions,
-	probeFolder,
-	stillExists,
-} from "./roomsStoreProbe.ts";
+import { checkProbe, dropUnwrittenSessions, probeFolder, stillExists } from "./roomsStoreProbe.ts";
 import type { Room } from "./types.ts";
 
 export interface RoomsArchiveDeps {
@@ -198,7 +193,7 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 				return;
 			}
 			const portMap = await allocateOpencodePorts(room);
-			const probed = await dropUnwrittenClaudeSessions(room, stillExists);
+			const probed = await dropUnwrittenSessions(room, stillExists);
 			const transformed = unarchiveRoomTransform(probed, portMap);
 			// #418: decide identity BEFORE the remount so a room whose
 			// folder now holds another repo opens on the card, resuming

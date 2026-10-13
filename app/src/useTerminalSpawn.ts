@@ -211,6 +211,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		// dead or about-to-respawn harness must not still be a nudge
 		// target.
 		let detachInputTarget: (() => void) | null = null;
+		let stopHermesCapture: (() => void) | null = null; // #624, unmount only
 
 		const handleExit = (code: number | null) => {
 			if (cancelled) return;
@@ -305,6 +306,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					roomId,
 					cwd,
 					harnessKind,
+					program: cmdToSpawn[0],
 					sessionId,
 					opencodePort,
 					onSessionCaptured,
@@ -314,7 +316,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				});
 				if (detach && opencodePort !== undefined) {
 					opencodeAdapter.current = { detach, port: opencodePort };
-				}
+				} else if (detach && harnessKind === "hermes") stopHermesCapture = detach;
 				shellFollow?.dispose();
 				shellFollow = followOpencodeShell(harnessKind, cmdToSpawn[0], {
 					harnessId,
@@ -363,6 +365,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			claudeAdapterRef.current = null;
 			shellFollow?.dispose();
 			opencodeAdapter.current?.detach();
+			stopHermesCapture?.();
 			detachInputTarget?.();
 			// Key handling + copy-on-select cleanup — see
 			// terminalInteractions.ts.

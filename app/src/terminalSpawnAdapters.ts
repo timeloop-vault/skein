@@ -6,6 +6,7 @@ import {
 	attachOpencodeEvents,
 	hasClaudeTranscriptTail,
 } from "./harnessEvents.ts";
+import { isHermesProgram, markClaimed, startHermesCapture } from "./hermesCapture.ts";
 import type { HarnessKind } from "./types.ts";
 
 export interface AdapterAttach {
@@ -13,6 +14,8 @@ export interface AdapterAttach {
 	roomId: string;
 	cwd: string;
 	harnessKind: HarnessKind;
+	/** argv[0] actually spawned (a post-exit shell is not hermes). */
+	program: string | undefined;
 	sessionId: string | undefined;
 	opencodePort: number | undefined;
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
@@ -60,6 +63,20 @@ export function attachAdapters(a: AdapterAttach): (() => void) | null {
 			() => a.sessionIdRef.current,
 			a.onSessionFollowed,
 		);
+	}
+	// #624: Hermes binds its own session id; poll until its row exists.
+	if (harnessKind === "hermes" && isHermesProgram(a.program)) {
+		const bound = a.sessionIdRef.current;
+		if (bound) {
+			markClaimed(bound);
+			return null;
+		}
+		return startHermesCapture({
+			harnessId,
+			cwd,
+			spawnedAtMs: Date.now(),
+			onCapture: (id) => a.onSessionCaptured?.(id),
+		});
 	}
 	return null;
 }
