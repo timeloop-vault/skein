@@ -327,7 +327,10 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			// replay belongs to a PTY that's already dead (see
 			// `SubagentEntry.fromAttach`) and must not look like fresh
 			// activity.
-			if (event.initial !== true) harnessActivity.noteSubagentStarted(harnessId);
+			if (event.initial !== true) {
+				harnessActivity.noteSubagentStarted(harnessId);
+				harnessActivity.reclaimDelegationFromAdapter(harnessId); // #634
+			}
 			return;
 		case "subagent_label":
 			subagents.relabel(harnessId, event.agent_id, event.agent_type, event.description);
@@ -370,6 +373,7 @@ const translate = (harnessId: string, event: ClaudeEvent): void => {
 			if (event.initial !== true && event.agent_id !== null) {
 				harnessActivity.noteSubagentActivity(harnessId);
 			}
+			if (event.initial !== true) harnessActivity.reclaimDelegationFromAdapter(harnessId); // #634
 			return;
 		case "background_end":
 			backgroundTasks.finish(harnessId, event.task_id);

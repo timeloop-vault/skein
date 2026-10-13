@@ -3,6 +3,7 @@
 use super::ClaudeEvent;
 use super::adapter::{SubagentTail, TailState};
 use super::background_tasks::{BackgroundOut, BackgroundState, now_ms, reconcile_background};
+use super::merge::Stream;
 use super::persist::persist_extracted;
 use crate::harness_actions_claude::ExtractedAction;
 use std::collections::HashSet;
@@ -36,7 +37,7 @@ use std::io::{Read, Seek, SeekFrom};
 /// a subagent finishing ends the tasks it launched.
 pub(super) fn tick_subagents(
     s: &mut TailState,
-    events: &mut Vec<ClaudeEvent>,
+    streams: &mut Vec<Stream>,
     background_rows: &mut Vec<ExtractedAction>,
 ) {
     let Some(dir) = s.subagents_dir.clone() else {
@@ -87,6 +88,12 @@ pub(super) fn tick_subagents(
             continue;
         };
         seen.insert(agent_id.clone());
+        // One stream per transcript (#634); merged with the main file's
+        // by row timestamp in `tick`. Empty ones are harmless.
+        streams.push(Stream::default());
+        let Some(stream) = streams.last_mut() else {
+            continue;
+        };
 
         let first_sighting = !s.subagents.contains_key(&agent_id);
         if first_sighting {
@@ -107,7 +114,7 @@ pub(super) fn tick_subagents(
                 agent_type = ?agent_type,
                 "claude_events: subagent transcript joined the tailed set"
             );
-            events.push(ClaudeEvent::SubagentStart {
+            stream.events.push(ClaudeEvent::SubagentStart {
                 agent_id: agent_id.clone(),
                 agent_type: agent_type.clone(),
                 description: description.clone(),
@@ -141,7 +148,7 @@ pub(super) fn tick_subagents(
         // the sidecar can arrive while the transcript is quiet. Once
         // a read parses, or the subagent finishes, it is not read again.
         if !first_sighting && let Some(label) = refresh_label(tail, &agent_id) {
-            events.push(label);
+            stream.events.push(label);
         }
 
         // `tick` fires on ANY watched-path change — including ordinary
@@ -277,20 +284,20 @@ pub(super) fn tick_subagents(
                 Some(&agent_id),
                 Some(&mut BackgroundOut {
                     harness_id: &s.harness_id,
-                    events,
+                    events: &mut stream.events,
                     rows: background_rows,
                 }),
             );
             match tail.lifecycle.observe(&value) {
                 Some(skein_harness::claude::SubagentTransition::Finished) => {
-                    events.push(ClaudeEvent::SubagentEnd {
+                    stream.events.push(ClaudeEvent::SubagentEnd {
                         agent_id: agent_id.clone(),
                         agent_type: tail.agent_type.clone(),
                         description: tail.description.clone(),
                     });
                     // Its background tasks die with it (#445); Skein
                     // can't know whether they finished, so events only.
-                    s.background.end_owned_by(&agent_id, events);
+                    s.background.end_owned_by(&agent_id, &mut stream.events);
                     // Feed a `subagent_end` row into the activity feed
                     // (epic #298). The delegation itself already
                     // renders via the main transcript's `Agent`
@@ -329,7 +336,7 @@ pub(super) fn tick_subagents(
                     // rather than re-reading the `.meta.json` sidecar —
                     // on the assumption Claude never changes a known
                     // field after the fact.
-                    events.push(ClaudeEvent::SubagentStart {
+                    stream.events.push(ClaudeEvent::SubagentStart {
                         agent_id: agent_id.clone(),
                         agent_type: tail.agent_type.clone(),
                         description: tail.description.clone(),
@@ -339,10 +346,11 @@ pub(super) fn tick_subagents(
                 None => {}
             }
             if is_subagent_tool_result_row(&value) {
-                events.push(ClaudeEvent::SubagentToolResult {
+                stream.events.push(ClaudeEvent::SubagentToolResult {
                     agent_id: agent_id.clone(),
                 });
             }
+            stream.end_row(row_ts);
         }
     }
 
@@ -354,11 +362,12 @@ pub(super) fn tick_subagents(
     s.subagents.retain(|id, _| seen.contains(id));
 
     if reseeded {
-        events.extend(reconcile_background(
+        // No row behind these: an unstamped stream, so they sort last.
+        streams.push(Stream::unstamped(reconcile_background(
             &mut s.background,
             &s.subagents,
             now_ms(),
-        ));
+        )));
     }
 
     tracing::debug!(

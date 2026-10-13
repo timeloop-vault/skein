@@ -310,6 +310,10 @@ export const TRANSITION_SOURCE = {
 	// ceiling is presumed to have lost its end; nothing is claimed
 	// finished.
 	WorkWatchdog: "work-watchdog",
+	// #634: a live subagent/background start landed after the main end of
+	// turn had read `waiting`; `reclaimDelegationFromAdapter` re-arms the
+	// deferral and returns to `running`. waiting -> running, never notifiable.
+	DelegationResumed: "delegation-resumed",
 	// #404: `recoverUnheardSilence` undoing a #259 adapter-silent degrade
 	// that turns out to have been a lost first paste, not a broken tail —
 	// see that method's own doc for the conditions.

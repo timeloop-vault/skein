@@ -45,6 +45,7 @@ mod attach;
 mod background_tasks;
 mod cli_version;
 mod manager;
+mod merge;
 mod parse;
 mod paths;
 mod persist;
@@ -207,6 +208,8 @@ mod background_tests;
 mod cli_version_tests;
 #[cfg(test)]
 mod concurrent_tests;
+#[cfg(test)]
+mod merge_tests;
 #[cfg(test)]
 mod monitor_event_tests;
 #[cfg(test)]

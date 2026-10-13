@@ -4,6 +4,7 @@ use super::ClaudeEvent;
 use super::adapter::TailState;
 use super::background_tasks::{BackgroundOut, now_ms};
 use super::cli_version::live_cli_version_event;
+use super::merge::{Stream, describe, merge_streams};
 use super::parse::parse_value;
 use super::persist::persist_extracted;
 use super::resync::{Reappear, classify_reappear, extend_fingerprint, finish_resync};
@@ -283,7 +284,7 @@ pub(super) fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent
     // while we walk lines (and also so the next tick starts clean).
     let drained = std::mem::take(&mut s.partial);
     let mut lines = drained.split('\n').peekable();
-    let mut events = Vec::new();
+    let mut main = Stream::default();
     let mut background_rows: Vec<ExtractedAction> = Vec::new();
     let harness_id = s.harness_id.clone();
     let mut in_assistant_turn = s.in_assistant_turn;
@@ -311,10 +312,10 @@ pub(super) fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent
             continue;
         };
         if let Some(event) = parse_value(&value, &mut in_assistant_turn, &mut local_command) {
-            events.push(event);
+            main.events.push(event);
         }
         if let Some(event) = live_cli_version_event(&value, &mut s.last_cli_version) {
-            events.push(event);
+            main.events.push(event);
         }
         if let Some(ap) = s.actions.as_mut() {
             let extracted = ap.extractor.ingest(&value);
@@ -326,19 +327,26 @@ pub(super) fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent
             None,
             Some(&mut BackgroundOut {
                 harness_id: &harness_id,
-                events: &mut events,
+                events: &mut main.events,
                 rows: &mut background_rows,
             }),
         );
+        main.end_row(skein_harness::claude::timestamp_ms(&value));
     }
     s.in_assistant_turn = in_assistant_turn;
     s.local_command = local_command;
 
-    // Subagent transcripts, after the main file — same lock, same
-    // events vec, so consumers see main-session events first and
-    // subagent events second within one tick.
-    let main_events = events.len();
-    tick_subagents(&mut s, &mut events, &mut background_rows);
+    // Subagent transcripts, same lock. Each file is its own stream and
+    // the streams are merged by row timestamp (#634), main first on
+    // ties, so a subagent re-open stamped before the main end of turn
+    // reaches the consumer before it.
+    let main_events = main.events.len();
+    let mut streams = vec![main];
+    tick_subagents(&mut s, &mut streams, &mut background_rows);
+    let stamped = merge_streams(streams);
+    let subagent_events = stamped.len() - main_events;
+    let order = tracing::enabled!(tracing::Level::DEBUG).then(|| describe(&stamped));
+    let mut events: Vec<ClaudeEvent> = stamped.into_iter().map(|(_, e)| e).collect();
     // Monitor deadlines, after both files so a real expiry notice that
     // arrived this tick wins over the sweep (#445).
     s.background.sweep(
@@ -352,7 +360,6 @@ pub(super) fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent
     if let Some(ap) = s.actions.as_ref() {
         persist_extracted(ap, background_rows, true);
     }
-    let subagent_events = events.len() - main_events;
     // Only the subagents still being tailed live count as "watched" —
     // a finished one is a cheap stat check, not a file whose new rows
     // we're expecting (#362).
@@ -369,6 +376,7 @@ pub(super) fn tick(state: &Arc<Mutex<TailState>>, on_event: &(dyn Fn(ClaudeEvent
         events = main_events,
         subagent_events,
         watched_files,
+        order = order.as_deref().unwrap_or(""),
         "claude_events: tick"
     );
 

@@ -8,7 +8,7 @@ import {
 	setPhase,
 	store,
 } from "./harnessActivityCore.ts";
-import type { TransitionSource } from "./harnessActivityTypes.ts";
+import { TRANSITION_SOURCE, type TransitionSource } from "./harnessActivityTypes.ts";
 
 export const deferralMethods = {
 	/// L2c adapter says the harness is doing work. Bypasses the
@@ -109,6 +109,28 @@ export const deferralMethods = {
 			for (const cb of delegationDeferredListeners) cb(id);
 		}
 	},
+	/// #634: a LIVE subagent or background task start can be flushed after
+	/// the main session's end_turn already read as `waiting` with no work.
+	/// Waiting while delegated work runs is the lie #277 exists to prevent,
+	/// so re-enter the deferral: arm it and go back to `running`. Call
+	/// AFTER the registry record so the new entry counts. Gated tightly —
+	/// only an authoritative `waiting` that came from an end of turn.
+	/// `lastTurnSignal` is untouched so the next real end of turn or the
+	/// settle flows normally. waiting -> running is never notifiable. Mail
+	/// held (#381) may already have been delivered on the false waiting;
+	/// harmless, deferral counts as deliverable, hence the listener fires.
+	reclaimDelegationFromAdapter(id: string): void {
+		const cur = store.get(id);
+		if (cur?.phase !== "waiting" || !cur.authoritative) return;
+		if (cur.lastTurnSignal?.kind !== "end" || cur.delegationDeferredAt !== null) return;
+		if (outstandingWork(id) === 0) return;
+		setPhase(id, "running", TRANSITION_SOURCE.DelegationResumed, {
+			delegationDeferredAt: Date.now(),
+			delegationEmptiedAt: null,
+		});
+		for (const cb of delegationDeferredListeners) cb(id);
+	},
+
 	/// #277: a subagent started LIVE (never an attach-time replay — the
 	/// translator only calls this for `event.initial !== true`). Bumps
 	/// `delegatedCount` (what the notification wording counts) and
