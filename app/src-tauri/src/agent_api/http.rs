@@ -139,7 +139,7 @@ async fn mcp_post(
         return error_body(
             StatusCode::BAD_REQUEST,
             "unsupported MCP-Protocol-Version — this server speaks 2024-11-05 \
-             through 2025-06-18",
+             through 2025-11-25",
         );
     }
     let caller = match authenticate(&state, &headers) {

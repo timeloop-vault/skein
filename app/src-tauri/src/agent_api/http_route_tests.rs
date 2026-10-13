@@ -71,6 +71,103 @@ async fn the_endpoint_answers_a_real_handshake_and_lists_its_tools() {
     assert!(text.contains("t1"));
 }
 
+async fn post_versioned(
+    http: &reqwest::Client,
+    base: &str,
+    token: &str,
+    version: &str,
+    body: Value,
+) -> reqwest::Response {
+    http.post(format!("{base}/mcp"))
+        .bearer_auth(token)
+        .header("MCP-Protocol-Version", version)
+        .header(auth::HARNESS_HEADER, "h1")
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_2025_11_25_client_can_handshake_list_and_call_over_http() {
+    let f = fixture();
+    let dir = tempfile::TempDir::new().unwrap();
+    super::review_tests::git_repo_with_commit(dir.path());
+    let mut r = room("r1", vec![harness("h1", "claude", "main")]);
+    r.cwd = Some(dir.path().to_string_lossy().into_owned());
+    save(&f.db, &[r]);
+    let token = f.db.ensure_room_token("r1", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+    let v = "2025-11-25";
+
+    let init = post_versioned(
+        &http,
+        &base,
+        &token,
+        v,
+        json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": v }
+        }),
+    )
+    .await;
+    assert_eq!(init.status(), 200);
+    let init: Value = init.json().await.unwrap();
+    assert_eq!(init["result"]["protocolVersion"], v);
+
+    let listed = post_versioned(
+        &http,
+        &base,
+        &token,
+        v,
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+    )
+    .await;
+    assert_eq!(listed.status(), 200);
+    let listed: Value = listed.json().await.unwrap();
+    let tools = listed["result"]["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|t| t["name"] == "review_status"));
+
+    let called = post_versioned(
+        &http,
+        &base,
+        &token,
+        v,
+        json!({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": { "name": "review_status", "arguments": {} }
+        }),
+    )
+    .await;
+    assert_eq!(called.status(), 200);
+    let called: Value = called.json().await.unwrap();
+    assert!(called["error"].is_null(), "{called}");
+    assert_ne!(called["result"]["isError"], true, "{called}");
+    assert!(called["result"]["content"][0]["text"].is_string());
+}
+
+#[tokio::test]
+async fn every_older_protocol_version_header_is_still_accepted() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let token = f.db.ensure_room_token("r1", 1).unwrap();
+    let base = serve_fixture(Arc::clone(&f.db)).await;
+    let http = reqwest::Client::new();
+
+    for v in ["2025-06-18", "2025-03-26", "2024-11-05"] {
+        let res = post_versioned(
+            &http,
+            &base,
+            &token,
+            v,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }),
+        )
+        .await;
+        assert_eq!(res.status(), 200, "{v}");
+    }
+}
+
 #[tokio::test]
 async fn the_endpoint_refuses_the_ways_in_that_are_not_ours() {
     let f = fixture();

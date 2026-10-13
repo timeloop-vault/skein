@@ -60,6 +60,14 @@ on a number in advance because the URL reaches the harness in its
 environment (below), and both harnesses expand `${VAR}` inside their MCP
 config.
 
+**Protocol versions.** `/mcp` speaks MCP `2025-11-25` (what it
+advertises), `2025-06-18`, `2025-03-26` and `2024-11-05`. `initialize`
+echoes a version it knows and answers `2025-11-25` to one it does not. An
+`MCP-Protocol-Version` header with any other value is a `400`; no header
+at all is accepted. Not offered, though `2025-11-25` defines them: tasks,
+icons, elicitation, sampling and server-initiated SSE/polling. The server
+is tools-only and plain request/response.
+
 ## Identity
 
 Every harness Skein spawns gets four variables:

@@ -44,6 +44,27 @@ async fn initialize_echoes_a_version_it_knows_and_states_its_own_otherwise() {
     )
     .await;
     assert_eq!(future["result"]["protocolVersion"], mcp::PROTOCOL_VERSION);
+    assert_eq!(mcp::PROTOCOL_VERSION, "2025-11-25");
+
+    for (i, version) in mcp::SUPPORTED_VERSIONS.iter().enumerate() {
+        let out = handled(
+            &state,
+            &caller,
+            &json!({
+                "jsonrpc": "2.0", "id": 10 + i, "method": "initialize",
+                "params": { "protocolVersion": version }
+            }),
+        )
+        .await;
+        assert_eq!(out["result"]["protocolVersion"], *version);
+    }
+    // A literal list, so dropping a version from the constant fails here.
+    for version in ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] {
+        assert!(
+            mcp::SUPPORTED_VERSIONS.contains(&version),
+            "{version} dropped"
+        );
+    }
 }
 
 #[tokio::test]

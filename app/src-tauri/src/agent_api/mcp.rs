@@ -58,10 +58,10 @@ use super::verbs::{self, MailContext, VerbError};
 /// What we advertise. Older clients negotiate down by sending their own
 /// version in `initialize`; we echo anything we know rather than
 /// forcing an upgrade.
-pub const PROTOCOL_VERSION: &str = "2025-06-18";
+pub const PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Versions whose wire shape this server is compatible with.
-pub const SUPPORTED_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+pub const SUPPORTED_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// Server name, echoed in `initialize`'s `serverInfo.name`. It is not
 /// the prefix a client puts on a tool call — that comes from the
