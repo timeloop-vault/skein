@@ -8,7 +8,8 @@ use super::find_rooms::group_key_for_match;
 use super::mail::MailContext;
 use super::mail_routing::{mail_refusal_for, record_and_emit};
 use super::shared::{
-    KNOWN_HARNESS_KINDS, MAX_MESSAGE_BYTES, RESOLVE_TIMEOUT, first_non_empty_line, frontend_error,
+    MAX_MESSAGE_BYTES, RESOLVE_TIMEOUT, first_non_empty_line, frontend_error, is_known_kind,
+    known_kind_names,
 };
 use super::{VerbError, VerbResult, internal};
 use crate::agent_api::auth::Caller;
@@ -69,7 +70,7 @@ pub struct CreateRoomArgs {
     pub base_branch: Option<String>,
     pub task: String,
     /// Omitted → the frontend applies the user's own default for the
-    /// folder. When given, must be one of [`KNOWN_HARNESS_KINDS`].
+    /// folder. When given, must name a known harness kind.
     #[serde(default)]
     pub kind: Option<String>,
     /// Omitted → the tool's own default, or the folder's remembered
@@ -204,10 +205,11 @@ pub async fn create_room(
     };
 
     if let Some(kind) = args.kind.as_deref()
-        && !KNOWN_HARNESS_KINDS.contains(&kind)
+        && !is_known_kind(kind)
     {
         return Err(VerbError::Refused(format!(
-            "unknown kind {kind:?} — use one of {KNOWN_HARNESS_KINDS:?}"
+            "unknown kind {kind:?} — use one of {:?}",
+            known_kind_names()
         )));
     }
 
@@ -333,7 +335,7 @@ pub async fn create_room(
             "the app returned an unexpected answer for create_room.resolve: {e}"
         ))
     })?;
-    if !KNOWN_HARNESS_KINDS.contains(&resolved.kind.as_str()) {
+    if !is_known_kind(&resolved.kind) {
         return Err(VerbError::Unavailable(format!(
             "the app resolved an unknown harness kind {:?}",
             resolved.kind

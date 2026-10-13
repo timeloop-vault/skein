@@ -294,6 +294,55 @@ async fn open_harness_with_a_prompt_refuses_an_unreachable_resolved_kind_before_
 }
 
 #[tokio::test]
+async fn open_harness_refuses_an_unknown_kind_naming_hermes_among_the_known() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    let args = verbs::OpenHarnessArgs {
+        kind: Some("bogus".to_owned()),
+        ..open_harness_args("r1")
+    };
+    let err = verbs::open_harness(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("bogus") && m.contains("hermes")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_harness_accepts_hermes_with_no_agent() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    let state = agent_api_state(&f);
+    state.set_test_frontend(|kind, args| match kind {
+        "open_harness.resolve" => {
+            assert_eq!(args["kind"], json!("hermes"));
+            Ok(json!({ "kind": "hermes", "agent": null }))
+        }
+        "open_harness" => Ok(json!({
+            "harnessId": "h2",
+            "kind": "hermes",
+            "agent": null,
+            "name": "hermes",
+        })),
+        other => Err(format!("unexpected request_frontend kind {other:?}")),
+    });
+    let args = verbs::OpenHarnessArgs {
+        kind: Some("hermes".to_owned()),
+        ..open_harness_args("r1")
+    };
+    let out = verbs::open_harness(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap();
+    assert_eq!(out.kind, "hermes");
+    assert_eq!(out.agent, None);
+}
+
+#[tokio::test]
 async fn open_harness_happy_path_in_its_own_room() {
     let f = fixture();
     save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);

@@ -3,18 +3,25 @@
 use std::time::Duration;
 
 use super::VerbError;
+use crate::harness_kind::{ALL, HarnessKind};
 
 /// The largest a mailbox message body may be (#327). A message is a
 /// nudge, not a document.
 pub(super) const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 
-/// The harness kinds Skein knows how to spawn. Mirrors the TS
-/// `HarnessKind` union in `app/src/data.tsx`'s `HARNESS_KINDS` — kept as
-/// a plain list here rather than imported, since nothing on the Rust
-/// side otherwise needs that registry; `create_room` only needs to
-/// reject a typo loudly rather than pass it through to the frontend.
-pub(super) const KNOWN_HARNESS_KINDS: &[&str] =
-    &["claude", "opencode", "copilot", "byoh", "files", "design"];
+/// Whether `kind` names a harness kind Skein knows. Derived from the
+/// `HarnessKind` enum (itself parity-tested against the TS registry), so
+/// a new kind cannot be forgotten here. `remote` is deliberately known:
+/// the frontend refuses it for agents with an explanatory message
+/// (`remoteRefusal`), which beats a bare "unknown kind" from this check.
+pub(super) fn is_known_kind(kind: &str) -> bool {
+    HarnessKind::from_name(kind).is_some()
+}
+
+/// The accepted kind names, for refusal messages.
+pub(super) fn known_kind_names() -> Vec<&'static str> {
+    ALL.iter().map(|k| k.as_str()).collect()
+}
 
 /// How long to wait for the frontend to resolve a `(kind, agent)` — a
 /// folder lookup plus a couple of `localStorage` reads, so this should
@@ -60,5 +67,21 @@ pub(super) fn first_non_empty_line(s: &str) -> String {
         line.chars().take(FIRST_LINE_CAP).collect()
     } else {
         line.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod kind_tests {
+    use super::*;
+
+    #[test]
+    fn every_registry_kind_is_known_and_unknown_is_not() {
+        for kind in ALL {
+            assert!(is_known_kind(kind.as_str()), "{kind} must be accepted");
+        }
+        assert!(is_known_kind("hermes"));
+        assert!(is_known_kind("remote"));
+        assert!(!is_known_kind("bogus"));
+        assert_eq!(known_kind_names().len(), ALL.len());
     }
 }

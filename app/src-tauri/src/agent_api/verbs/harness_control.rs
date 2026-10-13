@@ -10,7 +10,9 @@ use super::mail::MailContext;
 use super::mail_routing::mail_refusal_for;
 use super::room_close::AgentClosedBy;
 use super::room_create::{CREATE_ROOM_TIMEOUT, ResolveOut, queue_first_prompt};
-use super::shared::{KNOWN_HARNESS_KINDS, MAX_MESSAGE_BYTES, RESOLVE_TIMEOUT, frontend_error};
+use super::shared::{
+    MAX_MESSAGE_BYTES, RESOLVE_TIMEOUT, frontend_error, is_known_kind, known_kind_names,
+};
 use super::{VerbError, VerbResult, internal};
 use crate::agent_api::auth::Caller;
 use crate::agent_api::state::AgentApiState;
@@ -37,7 +39,7 @@ pub struct OpenHarnessArgs {
     pub room: String,
     /// Omitted → the frontend applies the user's own default for the
     /// folder, the same as `create_room`. When given, must be one of
-    /// [`KNOWN_HARNESS_KINDS`].
+    /// a known harness kind.
     #[serde(default)]
     pub kind: Option<String>,
     /// Omitted → the tool's own default, or the folder's remembered
@@ -114,10 +116,11 @@ pub async fn open_harness(
         return Err(VerbError::Refused("open_harness needs a room id".into()));
     }
     if let Some(kind) = args.kind.as_deref()
-        && !KNOWN_HARNESS_KINDS.contains(&kind)
+        && !is_known_kind(kind)
     {
         return Err(VerbError::Refused(format!(
-            "unknown kind {kind:?} — use one of {KNOWN_HARNESS_KINDS:?}"
+            "unknown kind {kind:?} — use one of {:?}",
+            known_kind_names()
         )));
     }
     if let Some(prompt) = args.prompt.as_deref() {
@@ -239,7 +242,7 @@ pub async fn open_harness(
             "the app returned an unexpected answer for open_harness.resolve: {e}"
         ))
     })?;
-    if !KNOWN_HARNESS_KINDS.contains(&resolved.kind.as_str()) {
+    if !is_known_kind(&resolved.kind) {
         return Err(VerbError::Unavailable(format!(
             "the app resolved an unknown harness kind {:?}",
             resolved.kind

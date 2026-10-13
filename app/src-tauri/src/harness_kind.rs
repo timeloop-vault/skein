@@ -31,10 +31,8 @@ pub(crate) enum HarnessKind {
     Hermes,
 }
 
-// Only this module's own tests iterate every kind today — production
-// code always has one already in hand (from the harness record or a
-// Tauri arg).
-#[cfg(test)]
+// Every kind, for the agent API's kind check (so it cannot drift from
+// the enum) and for this module's own tests.
 pub(crate) const ALL: [HarnessKind; 8] = [
     HarnessKind::Claude,
     HarnessKind::Opencode,

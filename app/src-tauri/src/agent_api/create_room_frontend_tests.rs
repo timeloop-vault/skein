@@ -74,6 +74,32 @@ async fn create_room_with_a_prompt_refuses_an_unreachable_resolved_kind_before_c
 }
 
 #[tokio::test]
+async fn create_room_passes_hermes_and_remote_through_to_the_frontend_resolve() {
+    // Neither kind may die at the Rust kind check: hermes is a real kind,
+    // and remote is refused by the frontend with its own explanation.
+    for kind in ["hermes", "remote"] {
+        let f = fixture();
+        let (_tmp, caller) = git_room(&f);
+        let state = agent_api_state(&f);
+        state.set_test_frontend(|k, _args| match k {
+            "create_room.resolve" => Err("reached the frontend".to_owned()),
+            other => Err(format!("unexpected request_frontend kind {other:?}")),
+        });
+        let args = verbs::CreateRoomArgs {
+            kind: Some(kind.to_owned()),
+            ..create_room_args("hi")
+        };
+        let err = verbs::create_room(&state, &caller, &args, &MailContext::permissive(), true)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, VerbError::Refused(m) if m.contains("reached the frontend")),
+            "{kind}: {err:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn create_room_maps_a_frontend_refusal_to_refused() {
     let f = fixture();
     let (_tmp, caller) = git_room(&f);
