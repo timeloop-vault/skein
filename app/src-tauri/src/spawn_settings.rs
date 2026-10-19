@@ -101,6 +101,9 @@ pub struct SpawnSettings {
     pub inject_claude_plugin: bool,
     /// Point opencode at the shipped config, same server (#215).
     pub inject_opencode_config: bool,
+    /// Keep Skein's MCP entry in Skein's own Hermes profile `skein`
+    /// (#626). Off removes the entry on the next spawn on that profile.
+    pub inject_hermes_config: bool,
     /// Let a harness send another harness a message through the agent
     /// API's mailbox (#327). Off refuses both `send_message` and
     /// `read_messages`, with the reason. Default on, like the two
@@ -144,6 +147,7 @@ impl Default for SpawnSettings {
             strip_host_env: true,
             inject_claude_plugin: true,
             inject_opencode_config: true,
+            inject_hermes_config: true,
             allow_agent_messaging: true,
             allow_agent_room_creation: true,
             allow_agent_room_closing: true,

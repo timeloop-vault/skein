@@ -404,3 +404,38 @@ fn a_session_launched_elsewhere_in_the_cwd_is_claimed_by_the_harness() {
     );
     assert_eq!(got.get("A").map(String::as_str), Some(terminal));
 }
+
+#[test]
+fn profile_home_selects_root_or_profiles_dir() {
+    let root = Path::new("/h");
+    assert_eq!(profile_home(root, None), root);
+    assert_eq!(profile_home(root, Some("default")), root);
+    assert_eq!(profile_home(root, Some("  DeFault ")), root);
+    assert_eq!(
+        profile_home(root, Some(" Skein ")),
+        root.join("profiles").join("skein")
+    );
+}
+
+#[test]
+fn profile_name_validation_mirrors_hermes() {
+    for ok in [
+        "skein",
+        "a",
+        "0x",
+        "my-work_2",
+        " Skein ",
+        "default",
+        "DEFAULT",
+    ] {
+        assert!(valid_profile_name(ok), "{ok:?} should be valid");
+    }
+    for bad in [
+        "", "  ", "-a", "_a", "a b", "a/b", "..", "a.b", "é", "hermes", "Test", "tmp", "root",
+        "sudo",
+    ] {
+        assert!(!valid_profile_name(bad), "{bad:?} should be invalid");
+    }
+    assert!(valid_profile_name(&"a".repeat(64)));
+    assert!(!valid_profile_name(&"a".repeat(65)));
+}

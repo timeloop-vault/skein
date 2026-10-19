@@ -89,6 +89,29 @@ export const EnvToggles = ({
 				<label className="sk-toggle">
 					<input
 						type="checkbox"
+						checked={draft.injectHermesConfig}
+						onChange={(e) => setDraft({ ...draft, injectHermesConfig: e.target.checked })}
+					/>
+					<span className="sk-toggle-label">
+						<span className="sk-toggle-title">Hermes</span>
+						<span className="sk-toggle-sub">
+							Skein's own profile <code>{harnessConfig?.hermesProfile ?? "skein"}</code> carries the
+							review tools: an MCP entry in{" "}
+							<code>
+								{harnessConfig?.hermesRoot ? `${harnessConfig.hermesRoot}/` : ""}profiles/
+								{harnessConfig?.hermesProfile ?? "skein"}/config.yaml
+							</code>
+							. Your own Hermes config is never changed unless you agree when picking one of your
+							profiles. Turning this off removes the entry on the next start. That profile does not
+							read your Hermes <code>.env</code>: put your provider key (e.g.{" "}
+							<code>OPENROUTER_API_KEY</code>) in your shell environment or in the environment
+							below.
+						</span>
+					</span>
+				</label>
+				<label className="sk-toggle">
+					<input
+						type="checkbox"
 						checked={draft.allowAgentMessaging}
 						onChange={(e) => setDraft({ ...draft, allowAgentMessaging: e.target.checked })}
 					/>

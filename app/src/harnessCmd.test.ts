@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import {
 	cmdForKind,
+	resolveHermesProfile,
 	resumeCmd,
 	resumeHarness,
 	unarchiveRoomTransform,
@@ -61,6 +62,44 @@ describe("cmdForKind", () => {
 		expect(cmdForKind("byoh", SHELL)).toEqual(SHELL);
 		expect(cmdForKind("byoh", [])).toEqual(["pwsh.exe"]);
 		expect(cmdForKind("files", SHELL)).toEqual([]);
+	});
+});
+
+describe("hermes profile (#627)", () => {
+	const noMint = () => {
+		throw new Error("must not mint");
+	};
+
+	it("cmdForKind passes -p only for a non-blank profile", () => {
+		expect(
+			cmdForKind("hermes", SHELL, undefined, undefined, undefined, undefined, "skein"),
+		).toEqual(["hermes", "--tui", "-p", "skein"]);
+		expect(cmdForKind("hermes", SHELL, undefined, undefined, undefined, undefined, "  ")).toEqual([
+			"hermes",
+			"--tui",
+		]);
+	});
+
+	it("resume: no profile + no sid, profile + no sid, profile + sid", () => {
+		const base = { cmd: ["hermes", "--tui"] };
+		expect(resumeCmd(harness("hermes", base))).toEqual(["hermes", "--tui"]);
+		expect(resumeCmd(harness("hermes", { ...base, hermesProfile: "work" }))).toEqual([
+			"hermes",
+			"--tui",
+			"-p",
+			"work",
+		]);
+		const h = harness("hermes", { ...base, hermesProfile: "work", sessionId: SID });
+		const once = resumeHarness(h, undefined, noMint);
+		expect(once.cmd).toEqual(["hermes", "--tui", "-p", "work", "--resume", SID]);
+		expect(resumeHarness(once, undefined, noMint)).toEqual(once);
+	});
+
+	it("resolveHermesProfile defaults to skein for hermes only", () => {
+		expect(resolveHermesProfile("hermes")).toBe("skein");
+		expect(resolveHermesProfile("hermes", " ")).toBe("skein");
+		expect(resolveHermesProfile("hermes", " work ")).toBe("work");
+		expect(resolveHermesProfile("claude", "work")).toBeUndefined();
 	});
 });
 

@@ -75,6 +75,13 @@ export interface Harness {
 	// given (measured on #219), so omitting it here would silently
 	// resurrect whatever the conversation started as.
 	agent?: string;
+	// #627: the Hermes profile this harness runs in (`-p <name>`). Absent
+	// = no flag, so a harness created before #627 keeps running on
+	// Hermes' root/active profile and its stored session still resumes.
+	// "skein" is Skein's own profile (#626); "default" is Hermes' root
+	// profile; anything else is one of the user's own profiles under
+	// `<root>/profiles/`. Only meaningful for kind `hermes`.
+	hermesProfile?: string;
 	// #615: per-harness env profile override. Absent = follow the global
 	// active profile. Applies at the next spawn, never to a live PTY.
 	envProfile?: string;
@@ -250,6 +257,8 @@ export interface SpawnSettings {
 	injectClaudePlugin: boolean;
 	/** Point opencode at the shipped config, same server (#215). */
 	injectOpencodeConfig: boolean;
+	/** Keep Skein's MCP entry in Skein's own Hermes profile (#626). */
+	injectHermesConfig: boolean;
 	/** Let agents call the agent-messaging verbs to reach other harnesses
 	 *  in the room (#327). Absent on old persisted data — treat as true. */
 	allowAgentMessaging: boolean;
@@ -358,6 +367,10 @@ export interface HarnessConfigStatus {
 	/** The variable set for a Claude harness's post-exit shell (#318). */
 	claudeShellVar: string;
 	opencodeVar: string;
+	/** Skein's own Hermes profile (#626). */
+	hermesProfile: string;
+	/** The Hermes root the profile lives under; `null` when unresolved. */
+	hermesRoot: string | null;
 }
 
 /** #418: mirrors `git_repo_identity` (minus the null-vs-absent originUrl). */

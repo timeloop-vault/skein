@@ -73,6 +73,10 @@ pub struct Harness {
     /// #615: per-harness env profile override; `None` = follow the global active profile.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env_profile: Option<String>,
+    /// #627: the Hermes profile a `hermes` harness runs in (`-p <name>`);
+    /// `None` = no flag (root/active profile). Round-tripped only.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub hermes_profile: Option<String>,
 }
 
 /// A `remote` harness's target (#568): ssh host, the tool run

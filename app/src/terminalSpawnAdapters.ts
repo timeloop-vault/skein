@@ -16,6 +16,8 @@ export interface AdapterAttach {
 	harnessKind: HarnessKind;
 	/** argv[0] actually spawned (a post-exit shell is not hermes). */
 	program: string | undefined;
+	/** #627: the harness's Hermes profile (`undefined` = no `-p`). */
+	hermesProfile?: string | undefined;
 	sessionId: string | undefined;
 	opencodePort: number | undefined;
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
@@ -75,6 +77,7 @@ export function attachAdapters(a: AdapterAttach): (() => void) | null {
 			harnessId,
 			cwd,
 			spawnedAtMs: Date.now(),
+			profile: a.hermesProfile ?? null,
 			onCapture: (id) => a.onSessionCaptured?.(id),
 		});
 	}

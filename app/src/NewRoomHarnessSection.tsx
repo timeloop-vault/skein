@@ -2,6 +2,12 @@ import type { Dispatch, SetStateAction } from "react";
 import { type AgentListing, kindHasAgents } from "./agents.ts";
 import { HChip } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
+import {
+	type HermesProfileListing,
+	orderProfiles,
+	profileLabel,
+	profileTag,
+} from "./hermesProfiles.ts";
 import { AgentFieldNote } from "./NewRoomAgentFieldNote.tsx";
 import { type DefaultAgents, defaultAgentFor } from "./prefs.ts";
 import type { HarnessKind } from "./types.ts";
@@ -17,6 +23,9 @@ export const HarnessSection = ({
 	agentListing,
 	agentMissing,
 	defaultAgents,
+	hermesProfile,
+	setHermesProfile,
+	hermesListing,
 }: {
 	harness: HarnessKind;
 	setHarness: Dispatch<SetStateAction<HarnessKind>>;
@@ -25,6 +34,10 @@ export const HarnessSection = ({
 	agentListing: AgentListing | null;
 	agentMissing: boolean;
 	defaultAgents: DefaultAgents;
+	/** #627: the profile a hermes starting harness runs in. */
+	hermesProfile: string;
+	setHermesProfile: Dispatch<SetStateAction<string>>;
+	hermesListing: HermesProfileListing | null;
 }) => (
 	<>
 		<div className="sk-field">
@@ -62,6 +75,47 @@ export const HarnessSection = ({
 					    because the modal has one column and four fields above
 					    it; the full list with descriptions is what the `+
 					    harness` picker is for. */}
+		{harness === "hermes" && (
+			<div className="sk-field">
+				<label htmlFor="sk-hermes-profile">Profile</label>
+				<select
+					id="sk-hermes-profile"
+					className="sk-select"
+					value={hermesProfile}
+					onChange={(e) => setHermesProfile(e.target.value)}
+				>
+					{/* A remembered profile the listing no longer has still renders. */}
+					{[
+						...(hermesListing?.profiles ?? orderProfiles([])),
+						...(hermesListing?.profiles.some((p) => p.name === hermesProfile) === false
+							? [
+									{
+										name: hermesProfile,
+										exists: false,
+										skeinEntry: "noConfig" as const,
+										reason: null,
+									},
+								]
+							: []),
+					].map((p) => {
+						const tag = profileTag(p);
+						return (
+							<option key={p.name} value={p.name}>
+								{profileLabel(p.name)}
+								{p.name === "skein" ? " — Skein's own, with review tools" : ""}
+								{tag ? `  (${tag})` : ""}
+							</option>
+						);
+					})}
+				</select>
+				{hermesListing?.error && (
+					<div style={{ fontSize: 10.5, marginTop: 2 }}>
+						This list may be incomplete — {hermesListing.error}
+					</div>
+				)}
+			</div>
+		)}
+
 		{kindHasAgents(harness) && (
 			<div className="sk-field">
 				<label htmlFor="sk-agent">Agent</label>

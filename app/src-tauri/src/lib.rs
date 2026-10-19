@@ -21,6 +21,7 @@ mod harness_config;
 mod harness_events_claude;
 mod harness_events_opencode;
 mod harness_kind;
+mod hermes_profile;
 mod open_request;
 mod os_notify;
 mod pty;
@@ -129,6 +130,9 @@ pub fn run() {
             resume::claude_transcript_stat,
             resume::hermes_session_exists,
             resume::hermes_claim_session,
+            hermes_profile::commands::hermes_list_profiles,
+            hermes_profile::commands::hermes_profile_entry_preview,
+            hermes_profile::commands::hermes_profile_inject,
             commands::harness_events::claude_events_attach,
             commands::harness_events::claude_events_detach,
             commands::harness_events::claude_events_reattach,

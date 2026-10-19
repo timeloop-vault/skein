@@ -14,6 +14,7 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 interface PendingEntry {
 	cwd: string;
 	spawnedAtMs: number;
+	profile: string | null;
 }
 
 const pending = new Map<string, PendingEntry>();
@@ -29,6 +30,8 @@ export type ClaimInvoke = (
 	cmd: "hermes_claim_session",
 	args: {
 		cwd: string;
+		/** #627: the Hermes profile whose store to read; null = root. */
+		profile: string | null;
 		harnessId: string;
 		pending: { harnessId: string; spawnedAtMs: number }[];
 		claimed: string[];
@@ -40,6 +43,8 @@ export interface HermesCaptureParams {
 	harnessId: string;
 	cwd: string;
 	spawnedAtMs: number;
+	/** #627: the harness's Hermes profile (`-p`), null = none. */
+	profile?: string | null;
 	onCapture: (sessionId: string) => void;
 	invoke?: ClaimInvoke;
 	setTimer?: (fn: () => void, ms: number) => unknown;
@@ -52,6 +57,7 @@ export const hermesPollDelay = (elapsedMs: number): number => (elapsedMs < 120_0
 /** Start polling for this harness's session; returns an idempotent stop. */
 export const startHermesCapture = (p: HermesCaptureParams): (() => void) => {
 	const { harnessId, cwd, spawnedAtMs, onCapture } = p;
+	const profile = p.profile ?? null;
 	const call = p.invoke ?? (tauriInvoke as ClaimInvoke);
 	const setTimer = p.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
 	const clearTimer = p.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
@@ -61,7 +67,7 @@ export const startHermesCapture = (p: HermesCaptureParams): (() => void) => {
 	let stopped = false;
 	let timer: unknown = null;
 	const startedAt = Date.now();
-	pending.set(harnessId, { cwd, spawnedAtMs });
+	pending.set(harnessId, { cwd, spawnedAtMs, profile });
 
 	const stop = (): void => {
 		if (stopped) return;
@@ -84,9 +90,10 @@ export const startHermesCapture = (p: HermesCaptureParams): (() => void) => {
 		try {
 			const id = await call("hermes_claim_session", {
 				cwd,
+				profile,
 				harnessId,
 				pending: [...pending]
-					.filter(([, e]) => e.cwd === cwd)
+					.filter(([, e]) => e.cwd === cwd && e.profile === profile)
 					.map(([hid, e]) => ({ harnessId: hid, spawnedAtMs: e.spawnedAtMs })),
 				claimed: [...claimed],
 				localMinusUtcMinutes: -new Date(spawnedAtMs).getTimezoneOffset(),

@@ -26,6 +26,8 @@ export interface CreateRoomArgs {
 	/** The agent the starting harness spawns as (#247), or absent for
 	 *  the tool's own default. */
 	agent?: string;
+	/** #627: Hermes profile for the starting harness; defaults to Skein's own. */
+	hermesProfile?: string;
 	branch?: string;
 	/** The resolved repo root (#76's room-group key), when the folder is
 	 *  a git repo — the main checkout even when the picked folder was a

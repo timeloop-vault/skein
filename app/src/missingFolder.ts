@@ -105,6 +105,7 @@ export function repointRoom(
 			opencodePorts.get(h.id),
 			h.agent,
 			h.remote,
+			h.hermesProfile,
 		);
 		return { ...rest, cwd: newCwd, cmd, spawnGen: (h.spawnGen ?? 0) + 1 };
 	});

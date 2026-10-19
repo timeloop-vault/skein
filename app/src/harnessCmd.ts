@@ -33,6 +33,19 @@ import type { Harness, HarnessKind, RemoteSpec, Room } from "./types.ts";
 const withAgent = (args: string[], agent: string | undefined): string[] =>
 	agent?.trim() ? [...args, "--agent", agent] : args;
 
+/** Skein's own Hermes profile (#626); the default for new Hermes harnesses. */
+export const SKEIN_HERMES_PROFILE = "skein";
+
+/** #627: the Hermes argv head — `hermes --tui` plus `-p <name>` when the
+ *  harness names a profile (blank counts as none). */
+const hermesBase = (profile: string | undefined): string[] =>
+	profile?.trim() ? ["hermes", "--tui", "-p", profile.trim()] : ["hermes", "--tui"];
+
+/** The profile a NEW Hermes harness gets: the given one, else Skein's own.
+ *  Other kinds never carry one. */
+export const resolveHermesProfile = (kind: HarnessKind, profile?: string): string | undefined =>
+	kind === "hermes" ? profile?.trim() || SKEIN_HERMES_PROFILE : undefined;
+
 // Phase 2a: when sessionId is provided (always set by callers for
 // Claude, never for other kinds), pre-allocate Claude's conversation
 // id via --session-id <uuid>. Storing the same id on the harness
@@ -54,6 +67,7 @@ export const cmdForKind = (
 	opencodePort?: number,
 	agent?: string,
 	remote?: RemoteSpec,
+	hermesProfile?: string,
 ): string[] => {
 	switch (kind) {
 		case "claude": {
@@ -76,7 +90,7 @@ export const cmdForKind = (
 		case "hermes":
 			// `--tui` explicit: otherwise the front-end depends on the user's
 			// display.interface setting and TTY detection.
-			return ["hermes", "--tui"];
+			return hermesBase(hermesProfile);
 		case "byoh":
 			return fallbackShell.length > 0 ? fallbackShell : ["pwsh.exe"];
 		case "remote":
@@ -207,7 +221,7 @@ export const resumeHarness = (
 		case "hermes": {
 			// #624: Hermes mints its own id and can't be told one, so none
 			// is minted here; the capture fills `sessionId` in later.
-			const argv = ["hermes", "--tui"];
+			const argv = hermesBase(h.hermesProfile);
 			if (hasSessionId(h)) argv.push("--resume", h.sessionId as string);
 			return { ...h, cmd: argv };
 		}

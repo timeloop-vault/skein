@@ -77,6 +77,9 @@ export interface FolderDefaults {
 	 *  kind — one folder, one starting harness, one agent; the per-kind
 	 *  default is #248's, and it belongs in Settings, not here. */
 	agent?: string;
+	/** #627: the Hermes profile the starting harness was created with. Only
+	 *  meaningful when `harness` is hermes; absent reads as Skein's own. */
+	hermesProfile?: string;
 	/** The worktree branch template this folder last submitted with
 	 *  (#227), e.g. `feat/{slug}` — absent for "use the app-wide
 	 *  template", which is also what every entry written before this
@@ -212,6 +215,12 @@ export const startingAgent = (
 	defaults: DefaultAgents,
 ): string | undefined =>
 	folder?.harness === kind && folder.agent ? folder.agent : defaultAgentFor(defaults, kind);
+
+/** The Hermes profile New Room starts with in a folder: its remembered one
+ *  when the remembered harness is hermes, else Skein's own (#627). Same
+ *  shape as `startingAgent`, with no per-kind Settings layer. */
+export const startingHermesProfile = (folder: FolderDefaults | undefined): string =>
+	folder?.harness === "hermes" && folder.hermesProfile ? folder.hermesProfile : "skein";
 
 // ── Branch template per folder (#227) ──────────────────────────────
 //

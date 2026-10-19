@@ -72,6 +72,7 @@ const HarnessBody = ({
 				sessionId={harness.sessionId}
 				agent={harness.agent}
 				envProfile={harness.envProfile}
+				hermesProfile={harness.hermesProfile}
 				opencodePort={opencodePort}
 				onSessionCaptured={onSessionCaptured}
 				onSessionFollowed={onSessionFollowed}

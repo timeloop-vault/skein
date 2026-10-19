@@ -109,7 +109,10 @@ export async function stillExists(h: Harness): Promise<boolean> {
 			return await invoke<boolean>("opencode_session_exists", { id: h.sessionId });
 		}
 		if (h.kind === "hermes") {
-			return await invoke<boolean>("hermes_session_exists", { id: h.sessionId });
+			return await invoke<boolean>("hermes_session_exists", {
+				id: h.sessionId,
+				profile: h.hermesProfile ?? null,
+			});
 		}
 	} catch (err) {
 		console.warn(`[skein] ${h.kind} session_exists failed for ${h.sessionId}:`, err);

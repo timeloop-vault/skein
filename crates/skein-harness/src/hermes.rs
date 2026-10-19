@@ -64,7 +64,7 @@ pub const CLOCK_SKEW_MS: i64 = 5_000;
 /// Pure `HERMES_HOME` resolution: a non-empty `HERMES_HOME` wins, else
 /// `%LOCALAPPDATA%\hermes` on Windows, else `<home>/.hermes`.
 ///
-/// A future `-p <profile>` (#627) changes the home; extend here.
+/// `-p <profile>` (#627) changes the home: see [`profile_home`].
 pub fn hermes_home_from(
     env_hermes_home: Option<&OsStr>,
     local_app_data: Option<&OsStr>,
@@ -78,6 +78,48 @@ pub fn hermes_home_from(
         return PathBuf::from(l).join("hermes");
     }
     home.join(".hermes")
+}
+
+/// Names Hermes refuses for a profile (`_RESERVED_NAMES` in
+/// `hermes_cli/profiles.py`); `default` is handled separately because
+/// it selects the root.
+const RESERVED_PROFILE_NAMES: [&str; 5] = ["hermes", "test", "tmp", "root", "sudo"];
+
+/// Hermes' `normalize_profile_name`: trimmed, lower-cased.
+fn normalize_profile(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// Whether `-p <name>` would be accepted by Hermes (after its own
+/// strip + lower-case). Mirrors `PROFILE_ID_RE`
+/// (`^[a-z0-9][a-z0-9_-]{0,63}$`, `hermes_constants.py`) and
+/// `validate_profile_name` (`hermes_cli/profiles.py`): `default` is
+/// valid (it means the root); the other reserved names are not.
+pub fn valid_profile_name(name: &str) -> bool {
+    let n = normalize_profile(name);
+    if n == "default" {
+        return true;
+    }
+    let mut bytes = n.bytes();
+    let first_ok = bytes
+        .next()
+        .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+    first_ok
+        && n.len() <= 64
+        && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+        && !RESERVED_PROFILE_NAMES.contains(&n.as_str())
+}
+
+/// The `HERMES_HOME` that `-p <profile>` selects under `root`: `None`
+/// or `default` is the root itself, anything else
+/// `<root>/profiles/<name>`. The name is not validated here; check
+/// [`valid_profile_name`] first.
+pub fn profile_home(root: &Path, profile: Option<&str>) -> PathBuf {
+    match profile.map(normalize_profile) {
+        None => root.to_path_buf(),
+        Some(n) if n == "default" => root.to_path_buf(),
+        Some(n) => root.join("profiles").join(n),
+    }
 }
 
 /// Hermes' home on this machine. `None` when no home directory can be

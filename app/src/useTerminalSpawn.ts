@@ -48,6 +48,8 @@ export interface UseTerminalSpawnParams {
 	agent: string | undefined;
 	/** #615: read at spawn time only (effect deps are [mountKey]). */
 	envProfile: string | undefined;
+	/** #627: scopes Hermes session capture to this harness's profile. */
+	hermesProfile: string | undefined;
 	opencodePort: number | undefined;
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
 	onSessionFollowed: ((sessionId: string) => void) | undefined;
@@ -84,6 +86,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		sessionId,
 		agent,
 		envProfile,
+		hermesProfile,
 		opencodePort,
 		onSessionCaptured,
 		onSessionFollowed,
@@ -307,6 +310,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					cwd,
 					harnessKind,
 					program: cmdToSpawn[0],
+					hermesProfile,
 					sessionId,
 					opencodePort,
 					onSessionCaptured,

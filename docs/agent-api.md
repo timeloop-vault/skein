@@ -1347,6 +1347,7 @@ session only.
 | :-- | :-- |
 | Claude Code | appends `--plugin-dir <resources>/harness-config/claude-plugin` |
 | opencode | sets `OPENCODE_CONFIG=<resources>/harness-config/opencode/opencode.json` |
+| Hermes | runs in Skein's own profile `skein`, whose `config.yaml` carries the `skein` MCP entry (#626) |
 
 The bundle's configs interpolate the variables above — `${VAR}` for
 Claude Code, `{env:VAR}` for opencode — so the ephemeral port still
@@ -1391,6 +1392,37 @@ curl -s -H "Authorization: Bearer $SKEIN_REVIEW_TOKEN" \
 ```
 
 Settings → About shows the bound port, or says why there is none.
+
+### Hermes (#626, #627)
+
+Hermes reads MCP servers only from a profile's `config.yaml` — there is
+no flag or environment variable to point it at one — so this is the one
+harness whose wiring is a file rather than a session switch. By default
+a Hermes harness runs in a profile Skein owns, `skein`
+(`<Hermes root>/profiles/skein`). On first spawn Skein creates it with
+`hermes -p default profile create skein --no-alias --no-skills`, which
+seeds its model block from the root config, and adds a `skein` entry to
+its `config.yaml`, wrapped in `# skein:begin` / `# skein:end` markers:
+
+- `url: ${SKEIN_REVIEW_URL}`
+- `Authorization: Bearer ${SKEIN_REVIEW_TOKEN}`
+- `X-Skein-Harness: ${SKEIN_HARNESS_ID}`
+
+The entry interpolates the same variables as the other harnesses, so a
+stale file points at nothing once Skein is closed. Your root
+`config.yaml` and `.env` are **never written**. A profile does not read
+the root `.env`, so the provider key has to reach the `skein` profile
+through the spawn environment (Settings → Shell & environment).
+Switching Hermes injection off in Settings removes Skein's entry from
+the `skein` profile again.
+
+If you pick a profile of your own instead, Skein adds the entry only
+after a consent dialog that shows exactly what will be inserted. The
+insertion is byte-exact (the rest of the file is untouched) and it
+stays afterwards; outside Skein the variables are unset, so it is inert.
+
+The mail nudge is not wired for Hermes yet (#625): `read_messages`
+works, but Skein will not type "you have new messages" into its prompt.
 
 ## Where the code is
 

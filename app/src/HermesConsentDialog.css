@@ -1,0 +1,31 @@
+/* #627: consent before Skein appends its MCP entry to a Hermes profile. */
+.sk-hermes-consent-path {
+	font-size: calc(var(--cfs) * 0.9);
+	color: var(--fg-2);
+	word-break: break-all;
+}
+.sk-hermes-consent-path code {
+	font-family: var(--sk-mono);
+	color: var(--fg-0);
+}
+.sk-hermes-consent-lines {
+	margin: 0;
+	padding: 8px 10px;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.9);
+	color: var(--fg-0);
+	background: var(--bg-2);
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	overflow-x: auto;
+	white-space: pre;
+}
+.sk-hermes-consent-err {
+	color: var(--err);
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.9);
+	padding: 8px 10px;
+	background: color-mix(in srgb, var(--err) 8%, var(--bg-2));
+	border: 1px solid color-mix(in srgb, var(--err) 35%, var(--line));
+	border-radius: 5px;
+}

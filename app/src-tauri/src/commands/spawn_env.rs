@@ -180,8 +180,9 @@ pub(crate) async fn claude_cli_version(
 #[tauri::command]
 pub(crate) fn harness_config_status(
     harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
+    spawn_env: tauri::State<'_, SpawnEnvState>,
 ) -> crate::harness_config::HarnessConfigStatus {
-    harness_config.status()
+    harness_config.status(crate::hermes_profile::effective_root(&spawn_env.snapshot()))
 }
 
 #[allow(clippy::needless_pass_by_value)]

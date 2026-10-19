@@ -14,6 +14,17 @@
 //! | :-- | :-- |
 //! | Claude Code | `--plugin-dir <dir>` appended to the argv |
 //! | opencode | `OPENCODE_CONFIG=<file>` in the environment |
+//! | Hermes | an MCP entry in `<root>/profiles/skein/config.yaml` (#626) |
+//!
+//! Hermes has no session-scoped switch, so its row is the exception: the
+//! entry lives in a file, and is **not** session-scoped. It sits only in
+//! Skein's own profile `skein` (created on first spawn), and the entry
+//! interpolates the `SKEIN_REVIEW_*` variables, so a stale file points at
+//! nothing once Skein is closed. The user's root config and their own
+//! profiles are never written without their consent (#627). This is why
+//! [`injection_for`] stays empty for Hermes: the work is done by
+//! `hermes_profile::prepare` from the spawn path, which also reports
+//! `injected`.
 //!
 //! Skein ships the bundle they point at as a Tauri resource, so nothing
 //! is ever written into the worktree. That is not merely tidier — a
@@ -163,6 +174,10 @@ pub struct HarnessConfigStatus {
     /// The variable set for a Claude harness's post-exit shell (#318).
     pub claude_shell_var: String,
     pub opencode_var: String,
+    /// Skein's own Hermes profile (#626).
+    pub hermes_profile: String,
+    /// The Hermes root that profile lives under, when it resolves.
+    pub hermes_root: Option<String>,
 }
 
 impl HarnessConfig {
@@ -235,7 +250,7 @@ impl HarnessConfig {
         self.claude_plugin.as_deref()
     }
 
-    pub fn status(&self) -> HarnessConfigStatus {
+    pub fn status(&self, hermes_root: Option<PathBuf>) -> HarnessConfigStatus {
         HarnessConfigStatus {
             claude_plugin: self.claude_plugin.as_ref().map(|p| p.display().to_string()),
             opencode_config: self
@@ -246,6 +261,8 @@ impl HarnessConfig {
             claude_flag: "--plugin-dir".to_owned(),
             claude_shell_var: CLAUDE_PLUGIN_DIRS_VAR.to_owned(),
             opencode_var: OPENCODE_CONFIG_VAR.to_owned(),
+            hermes_profile: crate::hermes_profile::SKEIN_PROFILE.to_owned(),
+            hermes_root: hermes_root.map(|p| p.display().to_string()),
         }
     }
 }
@@ -261,7 +278,7 @@ impl HarnessConfig {
 /// Compared on the file stem, because the argv may carry a path
 /// (`/opt/homebrew/bin/claude`) or a Windows extension
 /// (`claude.cmd`) — and on Windows, case-insensitively.
-fn program_is(program: &str, expected: &str) -> bool {
+pub(crate) fn program_is(program: &str, expected: &str) -> bool {
     let stem = Path::new(program)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -342,8 +359,10 @@ pub(crate) fn injection_for(
                 args: Vec::new(),
                 env: vec![(OPENCODE_CONFIG_VAR.to_owned(), file.display().to_string())],
             }),
-        // Claude/opencode with their own injection switched off, plus
-        // copilot, byoh and files, which reach no review API at all:
+        // Hermes' injection lives in its profile file, not here (#626):
+        // `hermes_profile::prepare` runs from the spawn and reports
+        // `injected` itself. Claude/opencode with their own injection
+        // switched off, plus copilot, byoh and files, which reach no review API at all:
         // gh-copilot has no MCP configuration Skein can inject, a shell
         // is not an agent, and `files` never spawns anything.
         _ => Injection::default(),

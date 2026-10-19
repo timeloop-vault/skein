@@ -33,7 +33,7 @@ export const BranchSection = ({
 	worktreeShortPath: string;
 	baseBranch: string;
 	setBaseBranch: Dispatch<SetStateAction<string>>;
-	submit: () => Promise<void>;
+	submit: () => void;
 	onCancel: () => void;
 }) => (
 	<div className="sk-field">
@@ -74,7 +74,7 @@ export const BranchSection = ({
 						if (branchFieldAttachedAfterBlur(e.target.value)) setBranchAttached(true);
 					}}
 					onKeyDown={(e) => {
-						if (e.key === "Enter") void submit();
+						if (e.key === "Enter") submit();
 						if (e.key === "Escape") onCancel();
 					}}
 				/>

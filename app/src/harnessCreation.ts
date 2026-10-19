@@ -56,6 +56,8 @@ export interface NewHarnessFields {
 	cmd: string[] | undefined;
 	sessionId: string | undefined;
 	agentName: string | undefined;
+	/** #627: only ever set for kind `hermes`. */
+	hermesProfile?: string | undefined;
 	remote?: RemoteSpec | undefined;
 	createdBy?: Harness["createdBy"] | undefined;
 }
@@ -76,6 +78,7 @@ export function buildHarness(f: NewHarnessFields): Harness {
 		cwd: f.cwd,
 		...(f.sessionId ? { sessionId: f.sessionId } : {}),
 		...(f.agentName ? { agent: f.agentName } : {}),
+		...(f.hermesProfile ? { hermesProfile: f.hermesProfile } : {}),
 		...(f.remote ? { remote: f.remote } : {}),
 		...(f.createdBy ? { createdBy: f.createdBy } : {}),
 	};

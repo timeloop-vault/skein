@@ -13,8 +13,10 @@ import {
 	type NewRoomMemory,
 	type RecentFolder,
 	startingAgent,
+	startingHermesProfile,
 } from "./prefs.ts";
 import type { HarnessKind } from "./types.ts";
+import { useNewRoomHermesProfile } from "./useNewRoomHermesProfile.ts";
 import { useWorktreeProbe } from "./useWorktreeProbe.ts";
 import { createRoomArgs } from "./worktreeRoom.ts";
 
@@ -60,6 +62,7 @@ export const useNewRoomForm = ({
 	const [agent, setAgent] = useState<string | undefined>(() =>
 		startingAgent(initialDefaults, initialDefaults?.harness ?? "claude", defaultAgents),
 	);
+	const { gateOnConsent, ...hermes } = useNewRoomHermesProfile(harness, initialDefaults);
 	const [branchMode, setBranchMode] = useState<"worktree" | "current">(
 		initialDefaults?.branchMode ?? "worktree",
 	);
@@ -108,6 +111,7 @@ export const useNewRoomForm = ({
 		// surprise, and neither gesture names a folder we already know.
 		setHarness(r.defaults.harness);
 		setAgent(startingAgent(r.defaults, r.defaults.harness, defaultAgents));
+		hermes.setHermesProfile(startingHermesProfile(r.defaults));
 		setBranchMode(r.defaults.branchMode);
 		// The validation effect drops this again if the branch is gone.
 		setBaseBranch(r.defaults.baseBranch);
@@ -299,8 +303,13 @@ export const useNewRoomForm = ({
 		}
 	};
 
-	const submit = async () => {
-		if (!canCreate) return;
+	const submit = () => {
+		if (!canCreate || gateOnConsent()) return;
+		void create();
+	};
+
+	const create = async () => {
+		hermes.setConsent(null);
 		setBusy(true);
 		setError(null);
 		// Called only on a path that genuinely created the room — a create
@@ -312,6 +321,7 @@ export const useNewRoomForm = ({
 				harness,
 				branchMode,
 				...(agent ? { agent } : {}),
+				...(harness === "hermes" ? { hermesProfile: hermes.hermesProfile } : {}),
 				...(template ? { branchTemplate: template } : {}),
 			});
 		try {
@@ -324,6 +334,7 @@ export const useNewRoomForm = ({
 				task,
 				harness,
 				...(agent ? { agent } : {}),
+				...(harness === "hermes" ? { hermesProfile: hermes.hermesProfile } : {}),
 				branchMode: isRepo ? branchMode : "current",
 				branch,
 				baseBranch,
@@ -357,6 +368,8 @@ export const useNewRoomForm = ({
 		setHarness,
 		agent,
 		setAgent,
+		...hermes,
+		create,
 		branchMode,
 		setBranchMode,
 		baseBranch,

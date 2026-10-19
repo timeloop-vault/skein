@@ -115,7 +115,7 @@ export interface HarnessColumnProps {
 	harnessDrag: HarnessDrag;
 	/** Settings' per-kind default agents (#248), for the picker. */
 	defaultAgents: DefaultAgents;
-	onPick: (kind: HarnessKind, agent?: string, remote?: RemoteInput) => void;
+	onPick: (kind: HarnessKind, agent?: string, remote?: RemoteInput, hermesProfile?: string) => void;
 	onAddHarness: (roomId: string) => void;
 	onCancelPick: () => void;
 	onSwitchHarness: (roomId: string, harnessId: string) => void;

@@ -225,7 +225,7 @@ impl PtyManager {
         // and must not recompute it into something different.
         let injection =
             crate::harness_config::injection_for(kind, program, harness_config, settings, agent);
-        let injected = !injection.is_empty();
+        let mut injected = !injection.is_empty();
         // #569: Claude Code preferences from Skein's own Settings. Not
         // part of `injection`, so they never count toward `injected`.
         let claude_settings = crate::harness_config::claude_settings_args(kind, program, settings);
@@ -316,6 +316,23 @@ impl PtyManager {
                 env_profile,
             );
             builder = rebuilt;
+        }
+
+        // #626: Hermes has no session-scoped injection; its review tools
+        // live in the `skein` profile's config file. Make that ready
+        // against the final command, and let the file decide `injected`.
+        if kind == crate::harness_kind::HarnessKind::Hermes
+            && agent.is_some()
+            && crate::harness_config::program_is(program, "hermes")
+        {
+            let launch =
+                windows_resolved_program(program, &applied.path).unwrap_or_else(|| program.clone());
+            injected = crate::hermes_profile::prepare::prepare_for_spawn(
+                &builder,
+                &launch,
+                stored_args,
+                settings,
+            );
         }
 
         tracing::info!(

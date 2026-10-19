@@ -124,6 +124,25 @@ describe("canSendPrompt", () => {
 		expect(r).toEqual({ ok: false, reason: expect.stringContaining("review tools") });
 	});
 
+	// #626/#627: Hermes can be `injected` (Skein's profile carries the review
+	// tools) but has no L2c adapter, so nothing proves it is at its prompt.
+	// Mail nudges stay off until #625.
+	it("refuses a hermes harness even when injected and waiting, with no adapter heard", () => {
+		const r = canSendPrompt(
+			baseInput({
+				capabilities: HARNESS_KINDS.hermes.capabilities,
+				activity: activity({
+					injected: true,
+					phase: "waiting",
+					adapterHeard: false,
+					authoritative: false,
+					launchSignalAt: null,
+				}),
+			}),
+		);
+		expect(r.ok).toBe(false);
+	});
+
 	// #273: a launch signal is proof-of-life equivalent to `adapterHeard`
 	// — the harness's CLI reaching its own prompt before the tail has
 	// ever spoken (a fresh, just-past-trust-dialog spawn). #404: the PTY

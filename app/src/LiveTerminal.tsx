@@ -73,6 +73,8 @@ interface LiveTerminalProps {
 	// starts (the mount effect depends on mountKey alone), so changing it
 	// never respawns a live terminal; it applies at the next restart.
 	envProfile: string | undefined;
+	/** #627: Hermes profile, read at spawn time only (capture scoping). */
+	hermesProfile: string | undefined;
 	// Epic #50 L2c-2: opencode embedded-server port. Required for
 	// kind === "opencode" to attach the SSE adapter; `undefined`
 	// means the adapter is disabled for this harness and L2a takes
@@ -125,6 +127,7 @@ export const LiveTerminal = ({
 	sessionId,
 	agent,
 	envProfile,
+	hermesProfile,
 	opencodePort,
 	onSessionCaptured,
 	onSessionFollowed,
@@ -214,6 +217,7 @@ export const LiveTerminal = ({
 		sessionId,
 		agent,
 		envProfile,
+		hermesProfile,
 		opencodePort,
 		onSessionCaptured,
 		onSessionFollowed,

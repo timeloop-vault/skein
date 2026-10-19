@@ -89,15 +89,43 @@ pub async fn claude_session_exists(id: String) -> Result<bool, String> {
 ///
 /// Async: opens and queries sqlite, so off the main thread (#171).
 #[tauri::command]
-pub async fn hermes_session_exists(id: String) -> Result<bool, String> {
+pub async fn hermes_session_exists(
+    id: String,
+    profile: Option<String>,
+    spawn_env: tauri::State<'_, crate::commands::spawn_env::SpawnEnvState>,
+) -> Result<bool, String> {
+    let settings = spawn_env.snapshot();
     tauri::async_runtime::spawn_blocking(move || {
-        let Some(home) = hermes::hermes_home() else {
+        let Some(db) = profile_db(&settings, profile.as_deref()) else {
             return Ok(true);
         };
-        hermes_exists_in(&hermes::state_db_path(&home), &id)
+        hermes_exists_in(&db, &id)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The `state.db` of the harness's own Hermes profile (`None`: the
+/// default). `None` back when there is no Hermes home or the profile
+/// name is invalid, which callers read as "can't tell".
+fn profile_db(
+    settings: &crate::spawn_settings::SpawnSettings,
+    profile: Option<&str>,
+) -> Option<PathBuf> {
+    profile_db_in(
+        crate::hermes_profile::effective_root(settings)?.as_path(),
+        profile,
+    )
+}
+
+fn profile_db_in(root: &std::path::Path, profile: Option<&str>) -> Option<PathBuf> {
+    if let Some(p) = profile
+        && !hermes::valid_profile_name(p)
+    {
+        tracing::warn!(profile = p, "invalid Hermes profile name; not probing");
+        return None;
+    }
+    Some(hermes::state_db_path(&hermes::profile_home(root, profile)))
 }
 
 /// `hermes_session_exists` against the db at `db`; a missing file is
@@ -182,13 +210,16 @@ pub async fn hermes_claim_session(
     pending: Vec<PendingDto>,
     claimed: Vec<String>,
     local_minus_utc_minutes: i32,
+    profile: Option<String>,
+    spawn_env: tauri::State<'_, crate::commands::spawn_env::SpawnEnvState>,
 ) -> Result<Option<String>, String> {
+    let settings = spawn_env.snapshot();
     tauri::async_runtime::spawn_blocking(move || {
-        let Some(home) = hermes::hermes_home() else {
+        let Some(db) = profile_db(&settings, profile.as_deref()) else {
             return Ok(None);
         };
         let found = claim_session_in(
-            &hermes::state_db_path(&home),
+            &db,
             &cwd,
             &harness_id,
             &pending,
@@ -352,6 +383,42 @@ mod tests {
             0,
         );
         assert_eq!(got, Ok(None));
+    }
+
+    #[test]
+    fn hermes_probe_and_claim_read_the_profiles_own_db() {
+        let root = tempfile::tempdir().unwrap();
+        let pdir = root.path().join("profiles").join("work");
+        std::fs::create_dir_all(&pdir).unwrap();
+        hermes_db(&pdir);
+        // Default db does not exist; the work profile's does.
+        let work = profile_db_in(root.path(), Some("Work")).unwrap();
+        assert_eq!(work, pdir.join("state.db"));
+        assert_eq!(hermes_exists_in(&work, "20260101_120000_abcdef"), Ok(true));
+        assert_eq!(hermes_exists_in(&work, "nope"), Ok(false));
+        let default = profile_db_in(root.path(), None).unwrap();
+        assert_eq!(default, root.path().join("state.db"));
+        assert_eq!(
+            profile_db_in(root.path(), Some("default")).unwrap(),
+            default
+        );
+        let pending = [PendingDto {
+            harness_id: "h1".into(),
+            spawned_at_ms: 1_767_268_798_000,
+        }];
+        let got = claim_session_in(&work, "/work/a", "h1", &pending, &[], 0).unwrap();
+        assert_eq!(got.as_deref(), Some("20260101_120000_abcdef"));
+        assert_eq!(
+            claim_session_in(&default, "/work/a", "h1", &pending, &[], 0),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn invalid_hermes_profile_name_means_no_db() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(profile_db_in(root.path(), Some("../x")), None);
+        assert_eq!(profile_db_in(root.path(), Some("sudo")), None);
     }
 
     #[test]

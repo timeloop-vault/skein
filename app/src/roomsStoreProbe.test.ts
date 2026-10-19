@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+
+const invokeMock = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+
 import { unarchiveRoomTransform } from "./harnessCmd.ts";
-import { dropUnwrittenSessions } from "./roomsStoreProbe.ts";
+import { dropUnwrittenSessions, stillExists } from "./roomsStoreProbe.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
 
 const SID = "3c8c4693-3838-46ab-8680-3e60df6fdefe";
@@ -95,5 +99,21 @@ describe("dropUnwrittenSessions hermes (#624)", () => {
 		expect(gone.harnesses[0]).not.toHaveProperty("sessionId");
 		const live = await dropUnwrittenSessions(room([h]), async () => true);
 		expect(live.harnesses[0]).toBe(h);
+	});
+});
+
+describe("stillExists hermes profile (#627)", () => {
+	it("passes the harness profile (null when absent) to the probe", async () => {
+		invokeMock.mockResolvedValue(true);
+		await stillExists(harness("hermes", { sessionId: "s1", hermesProfile: "skein" }));
+		expect(invokeMock).toHaveBeenLastCalledWith("hermes_session_exists", {
+			id: "s1",
+			profile: "skein",
+		});
+		await stillExists(harness("hermes", { sessionId: "s1" }));
+		expect(invokeMock).toHaveBeenLastCalledWith("hermes_session_exists", {
+			id: "s1",
+			profile: null,
+		});
 	});
 });

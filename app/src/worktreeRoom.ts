@@ -49,6 +49,8 @@ export interface CreateRoomSpec {
 	/** The agent the starting harness spawns as (#247), or absent for the
 	 *  tool's own default. */
 	agent?: string;
+	/** #627: Hermes profile for the starting harness, when it is hermes. */
+	hermesProfile?: string;
 	branchMode: "worktree" | "current";
 	/** Worktree mode only. Omitted → `branchTemplate` applied to the task
 	 *  slug. Current mode ignores this — the branch is always the repo's
@@ -120,6 +122,7 @@ export async function createRoomArgs(
 				task,
 				harness: spec.harness,
 				...(spec.agent ? { agent: spec.agent } : {}),
+				...(spec.hermesProfile ? { hermesProfile: spec.hermesProfile } : {}),
 			},
 			remember: { baseBranch: "" },
 		};
@@ -137,6 +140,7 @@ export async function createRoomArgs(
 				task,
 				harness: spec.harness,
 				...(spec.agent ? { agent: spec.agent } : {}),
+				...(spec.hermesProfile ? { hermesProfile: spec.hermesProfile } : {}),
 				branch: info.head ?? "HEAD",
 				repoRoot,
 			},
@@ -187,6 +191,7 @@ export async function createRoomArgs(
 			task,
 			harness: spec.harness,
 			...(spec.agent ? { agent: spec.agent } : {}),
+			...(spec.hermesProfile ? { hermesProfile: spec.hermesProfile } : {}),
 			branch,
 			repoRoot,
 		},

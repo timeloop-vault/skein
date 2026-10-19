@@ -1,3 +1,4 @@
+import { HermesConsentDialog } from "./HermesConsentDialog.tsx";
 import { BranchSection } from "./NewRoomBranchSection.tsx";
 import type { CreateRoomArgs } from "./NewRoomDialogTypes.ts";
 import { HarnessSection } from "./NewRoomHarnessSection.tsx";
@@ -65,6 +66,12 @@ export const NewRoomDialog = ({
 		setHarness,
 		agent,
 		setAgent,
+		hermesProfile,
+		setHermesProfile,
+		hermesListing,
+		consent,
+		setConsent,
+		create,
 		branchMode,
 		setBranchMode,
 		baseBranch,
@@ -119,7 +126,7 @@ export const NewRoomDialog = ({
 							value={task}
 							onChange={(e) => setTask(e.target.value)}
 							onKeyDown={(e) => {
-								if (e.key === "Enter") void submit();
+								if (e.key === "Enter") submit();
 								if (e.key === "Escape") onCancel();
 							}}
 						/>
@@ -225,6 +232,9 @@ export const NewRoomDialog = ({
 						agentListing={agentListing}
 						agentMissing={agentMissing}
 						defaultAgents={defaultAgents}
+						hermesProfile={hermesProfile}
+						setHermesProfile={setHermesProfile}
+						hermesListing={hermesListing}
 					/>
 
 					{error && (
@@ -251,12 +261,21 @@ export const NewRoomDialog = ({
 						className="sk-btn primary"
 						disabled={!canCreate}
 						style={{ opacity: canCreate ? 1 : 0.5, cursor: canCreate ? "pointer" : "not-allowed" }}
-						onClick={() => void submit()}
+						onClick={submit}
 					>
 						{busy ? "Creating…" : "Create room"}
 					</button>
 				</div>
 			</div>
+			{consent && (
+				<HermesConsentDialog
+					profile={hermesProfile}
+					mode={consent.mode}
+					reason={consent.reason}
+					onProceed={() => void create()}
+					onCancel={() => setConsent(null)}
+				/>
+			)}
 		</div>
 	);
 };

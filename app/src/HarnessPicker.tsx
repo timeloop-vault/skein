@@ -11,6 +11,7 @@ import {
 } from "./agents.ts";
 import { HChip } from "./components.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
+import { HermesProfileStep } from "./HermesProfileStep.tsx";
 import { type DefaultAgents, defaultAgentFor } from "./prefs.ts";
 import { RemoteHostStep } from "./RemoteHostStep.tsx";
 import type { RemoteInput } from "./remoteCmd.ts";
@@ -248,7 +249,7 @@ export const HarnessPicker = ({
 	defaultAgents: DefaultAgents;
 	/** The picker's room is the active one — gates the agent step's Enter. */
 	active: boolean;
-	onPick: (kind: HarnessKind, agent?: string, remote?: RemoteInput) => void;
+	onPick: (kind: HarnessKind, agent?: string, remote?: RemoteInput, hermesProfile?: string) => void;
 	onCancel: () => void;
 }) => {
 	const [step, setStep] = useState<HarnessKind | null>(null);
@@ -267,6 +268,12 @@ export const HarnessPicker = ({
 			{step === "remote" ? (
 				<RemoteHostStep
 					onSubmit={(input) => onPick("remote", undefined, input)}
+					onBack={() => setStep(null)}
+				/>
+			) : step === "hermes" ? (
+				<HermesProfileStep
+					active={active}
+					onPick={(profile) => onPick("hermes", undefined, undefined, profile)}
 					onBack={() => setStep(null)}
 				/>
 			) : step ? (
@@ -290,7 +297,9 @@ export const HarnessPicker = ({
 								key={k.id}
 								className="sk-harness-card"
 								onClick={() =>
-									kindHasAgents(k.id) || k.id === "remote" ? setStep(k.id) : onPick(k.id)
+									kindHasAgents(k.id) || k.id === "remote" || k.id === "hermes"
+										? setStep(k.id)
+										: onPick(k.id)
 								}
 							>
 								<div className="head">

@@ -253,6 +253,23 @@ fn env_profile_round_trips_and_is_optional() {
     assert_eq!(room.harnesses[0].env_profile, None);
 }
 
+/// #627: `hermesProfile` survives load/save; an old blob parses as None.
+#[test]
+fn hermes_profile_round_trips_and_is_optional() {
+    let (_dir, db) = fresh_db();
+    let mut r = room("r1");
+    let mut a = harness("h1");
+    a.hermes_profile = Some("skein".into());
+    r.harnesses = vec![a, harness("h2")];
+    r.active_harness_id = "h1".into();
+    db.save_all(&[r]).unwrap();
+    let loaded = db.load_all().unwrap().rooms.remove(0);
+    assert_eq!(loaded.harnesses[0].hermes_profile.as_deref(), Some("skein"));
+    assert_eq!(loaded.harnesses[1].hermes_profile, None);
+    let json = serde_json::to_string(&loaded.harnesses[0]).unwrap();
+    assert!(json.contains(r#""hermesProfile":"skein""#), "{json}");
+}
+
 /// #568: `remote` survives load then save; a blob without it parses.
 #[test]
 fn remote_spec_round_trips_and_is_optional() {

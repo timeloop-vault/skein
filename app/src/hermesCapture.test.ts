@@ -159,3 +159,24 @@ describe("isHermesProgram", () => {
 		}
 	});
 });
+
+describe("hermesCapture profile (#627)", () => {
+	it("sends the profile and only pends same-cwd same-profile harnesses", async () => {
+		vi.useFakeTimers();
+		const calls: Args[] = [];
+		const invoke: ClaimInvoke = async (_c, args) => {
+			calls.push(args);
+			return null;
+		};
+		const onCapture = vi.fn();
+		start({ harnessId: "pa", cwd: "/p", spawnedAtMs: 1, profile: "skein", onCapture, invoke });
+		start({ harnessId: "pb", cwd: "/p", spawnedAtMs: 2, profile: "work", onCapture, invoke });
+		start({ harnessId: "pc", cwd: "/p", spawnedAtMs: 3, onCapture, invoke });
+		await vi.advanceTimersByTimeAsync(1_100);
+		const byId = (id: string) => calls.find((c) => c.harnessId === id);
+		expect(byId("pa")?.profile).toBe("skein");
+		expect(byId("pa")?.pending.map((x) => x.harnessId)).toEqual(["pa"]);
+		expect(byId("pb")?.profile).toBe("work");
+		expect(byId("pc")?.profile).toBeNull();
+	});
+});

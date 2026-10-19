@@ -52,5 +52,6 @@ pub(super) fn harness(id: &str) -> Harness {
         shell_claim: None,
         remote: None,
         env_profile: None,
+        hermes_profile: None,
     }
 }

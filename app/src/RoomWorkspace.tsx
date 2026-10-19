@@ -43,7 +43,8 @@ const useRoomHandlers = (p: RoomWorkspaceProps): RoomHandlers => {
 	});
 	return useMemo(
 		(): RoomHandlers => ({
-			pick: (kind, agent, remote) => latest.current.creation.pickHarness(kind, agent, remote),
+			pick: (kind, agent, remote, hermesProfile) =>
+				latest.current.creation.pickHarness(kind, agent, remote, hermesProfile),
 			addHarness: (roomId) => latest.current.actions.addHarness(roomId),
 			cancelPick: () => latest.current.setShowPicker(null),
 			switchHarness: (roomId, harnessId) => latest.current.actions.selectHarness(roomId, harnessId),

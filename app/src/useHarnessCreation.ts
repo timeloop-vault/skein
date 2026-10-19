@@ -17,7 +17,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { useRef } from "react";
 import { HARNESS_KINDS } from "./data.tsx";
-import { cmdForKind } from "./harnessCmd.ts";
+import { cmdForKind, resolveHermesProfile } from "./harnessCmd.ts";
 import {
 	buildHarness,
 	buildRoom,
@@ -120,13 +120,20 @@ export function useHarnessCreation(
 		targetRoomId: string,
 		kind: HarnessKind,
 		agent?: string,
-		opts?: { activate?: boolean; createdBy?: Harness["createdBy"]; remote?: RemoteInput },
+		opts?: {
+			activate?: boolean;
+			createdBy?: Harness["createdBy"];
+			remote?: RemoteInput;
+			hermesProfile?: string;
+		},
 	): Promise<CreateHarnessResult | undefined> => {
 		const activate = opts?.activate ?? true;
 		const targetRoom = roomsRef.current.find((r) => r.id === targetRoomId);
 		if (!targetRoom) return undefined;
 		const caps = HARNESS_KINDS[kind].capabilities;
 		const agentName = resolveAgentName(kind, agent);
+		// #627: new Hermes harnesses run in Skein's own profile unless told otherwise.
+		const hermesProfile = resolveHermesProfile(kind, opts?.hermesProfile);
 		const id = newId("h");
 		// #568: the session name is minted from this same id, so the
 		// record and its argv agree. A remote harness without a host is
@@ -159,7 +166,7 @@ export function useHarnessCreation(
 			}
 		}
 		const cmd = caps.pty
-			? cmdForKind(kind, defaultShell, sessionId, opencodePort, agentName, remote)
+			? cmdForKind(kind, defaultShell, sessionId, opencodePort, agentName, remote, hermesProfile)
 			: undefined;
 		if (kind === "remote" && cmd?.length === 0) return undefined;
 		setRooms((prev) =>
@@ -173,6 +180,7 @@ export function useHarnessCreation(
 					cmd,
 					sessionId,
 					agentName,
+					hermesProfile,
 					remote,
 					createdBy: opts?.createdBy,
 				});
@@ -203,11 +211,19 @@ export function useHarnessCreation(
 		return { harnessId: id, kind, agent: agentName ?? null, name };
 	};
 
-	const pickHarness = (kind: HarnessKind, agent?: string, remote?: RemoteInput) => {
+	const pickHarness = (
+		kind: HarnessKind,
+		agent?: string,
+		remote?: RemoteInput,
+		hermesProfile?: string,
+	) => {
 		const targetRoomId = showPicker;
 		setShowPicker(null);
 		if (!targetRoomId) return;
-		void createHarnessInRoom(targetRoomId, kind, agent, remote ? { remote } : undefined);
+		void createHarnessInRoom(targetRoomId, kind, agent, {
+			...(remote ? { remote } : {}),
+			...(hermesProfile ? { hermesProfile } : {}),
+		});
 	};
 
 	// #49 phase A: Mod+E = jump to the room's Files harness (creating
@@ -263,7 +279,16 @@ export function useHarnessCreation(
 	// `sessionId` for an opencode room isn't settled until the async
 	// capture below lands).
 	const createRoom = async (
-		{ cwd, task, harness, agent, branch, repoRoot, createdBy }: CreateRoomArgs,
+		{
+			cwd,
+			task,
+			harness,
+			agent,
+			hermesProfile: profileArg,
+			branch,
+			repoRoot,
+			createdBy,
+		}: CreateRoomArgs,
 		opts?: { activate?: boolean },
 	): Promise<CreateRoomResult> => {
 		const activate = opts?.activate ?? true;
@@ -298,6 +323,7 @@ export function useHarnessCreation(
 		// Same gate as `createHarnessInRoom`: a kind that does not take
 		// `--agent` never carries a name onto its record.
 		const agentName = resolveAgentName(harness, agent);
+		const hermesProfile = resolveHermesProfile(harness, profileArg);
 		const newRoom: Room = buildRoom({
 			roomId: sid,
 			harness: buildHarness({
@@ -306,10 +332,19 @@ export function useHarnessCreation(
 				name: "main",
 				cwd,
 				cmd: startCaps.pty
-					? cmdForKind(harness, defaultShell, sessionId, opencodePort, agentName)
+					? cmdForKind(
+							harness,
+							defaultShell,
+							sessionId,
+							opencodePort,
+							agentName,
+							undefined,
+							hermesProfile,
+						)
 					: undefined,
 				sessionId,
 				agentName,
+				hermesProfile,
 			}),
 			cwd,
 			task,
