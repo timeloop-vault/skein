@@ -147,8 +147,19 @@ export function attachPtyInput(term: Terminal, harnessId: string, id: string): {
 	// permission dialog won't clear it either. Corner-case
 	// false negative we'll address with a paste listener if
 	// it matters in practice.
+	let keyedSinceSubmit = false;
 	term.onKey(({ key }) => {
-		harnessActivity.recordInput(harnessId, key);
+		// #644: `recordInput` runs before `noteDraftEvent`, so this is the
+		// draft as it stood before this key; Enter on a clean composer
+		// submits nothing and must not arm the silent-adapter watchdog.
+		// Tab / autocomplete can insert text the draft tracker can't see
+		// (it leaves `clean` alone for non-printable keys), so any key
+		// since the last submit marks the composer as possibly non-empty.
+		// An uncertain read must arm: a false-clean loses #259 detection.
+		const emptyComposer =
+			key === "\r" && !keyedSinceSubmit && harnessInput.draft(harnessId).kind === "clean";
+		harnessActivity.recordInput(harnessId, key, { emptyComposer });
+		keyedSinceSubmit = key !== "\r";
 		// #380: a human is typing — `sendPrompt`'s gap/retry
 		// checks need to tell that apart from its own
 		// machine-written "\r".

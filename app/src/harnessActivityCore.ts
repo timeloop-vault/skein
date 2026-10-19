@@ -164,18 +164,30 @@ export const setPhase = (
 /// for this spawn. Each caller adds its own proof a prompt was actually
 /// submitted on top of this — `recordInput` checks `data` for a
 /// `\r`/`\n`; `notePromptSubmitted`'s caller, `sendPrompt`, IS the
-/// submit, so it needs nothing further.
+/// submit, so it needs nothing further. Never while `spawning` (#644):
+/// until the CLI has proven it is at its prompt (launch signal #273 or
+/// the adapter speaking) an Enter can't be a prompt submit — it answers
+/// the trust dialog. A harness stuck in spawning is the #273
+/// launch-silent watchdog's job, so nothing is lost.
 export function shouldArmWatchdog(cur: HarnessActivity): boolean {
-	return cur.authoritative && !cur.adapterHeard && cur.promptSubmittedAt === null;
+	return (
+		cur.authoritative &&
+		!cur.adapterHeard &&
+		cur.promptSubmittedAt === null &&
+		cur.phase !== "spawning"
+	);
 }
 
 /// The adapter never spoke after a prompt was submitted: give up on it.
 /// Without this an adapter watching the wrong place freezes the harness
-/// for good — authority silences PTY output, the tick skips it, and it
-/// never leaves `spawning` (#259, a JSONL path encoded differently from
-/// Claude's). `spawning` is moved on explicitly because the tick below
-/// only ever acts on `running`; `lastOutputAt` restarts so the idle
-/// window is measured from here, not from spawn.
+/// for good — authority silences PTY output and the tick skips it (#259,
+/// a JSONL path encoded differently from Claude's). `lastOutputAt`
+/// restarts so the idle window is measured from here, not from spawn.
+/// The `spawning` branch is defensive: `shouldArmWatchdog` excludes
+/// `spawning` (#644), so the normal arm path never reaches it; it only
+/// matters if state is written directly or a future caller degrades a
+/// spawning harness, which the tick (it only acts on `running`) would
+/// otherwise leave stuck.
 const degradeSilentAdapter = (id: string, cur: HarnessActivity, now: number): void => {
 	logBoth(
 		"warn",

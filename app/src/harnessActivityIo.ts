@@ -31,14 +31,19 @@ export const ioMethods = {
 	/// flag lazily at transition time.
 	///
 	/// #259: the first Enter on a harness whose attached adapter has
-	/// said nothing yet arms the silent-adapter watchdog.
-	recordInput(id: string, data: string): void {
+	/// said nothing yet arms the silent-adapter watchdog (not while the
+	/// harness is still `spawning`, #644: that Enter answers a trust dialog).
+	/// #644: nor when `opts.emptyComposer` says the prompt was empty — a
+	/// bare Enter submits nothing and Claude writes no transcript for it.
+	/// Omitted = today's behaviour; the caller passes the fact in because
+	/// this module must not import harnessInput.
+	recordInput(id: string, data: string, opts?: { emptyComposer?: boolean }): void {
 		const cur = store.get(id);
 		if (!cur) return;
 		const submitted = data.includes("\r") || data.includes("\n");
 		// #423: recorded unconditionally, unlike `promptSubmittedAt` below.
 		if (submitted) cur.lastSubmitAt = Date.now();
-		const armWatchdog = shouldArmWatchdog(cur) && submitted;
+		const armWatchdog = submitted && opts?.emptyComposer !== true && shouldArmWatchdog(cur);
 		if (!cur.hasUserInput || armWatchdog) {
 			store.set(id, {
 				...cur,

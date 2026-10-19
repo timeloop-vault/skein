@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
+import { ADAPTER_SILENT_AFTER_MS } from "./harnessActivityConstants.ts";
 import { store } from "./harnessActivityCore.ts";
 
 // #259 — the silent-adapter watchdog. Its own file because the idle
@@ -44,25 +45,23 @@ const attachedHarness = (): string => {
 describe("silent-adapter watchdog", () => {
 	it("hands a harness back to L2a when the adapter stays silent after a prompt", () => {
 		const id = attachedHarness();
-		const sources: string[] = [];
-		const unsubscribe = harnessActivity.subscribeTransitions((tid, _from, _to, source) => {
-			if (tid === id) sources.push(source);
-		});
 
+		// #644: only an Enter at the prompt (past the launch signal) arms it.
+		harnessActivity.noteLaunchSignal(id);
 		harnessActivity.recordInput(id, "\r");
 		vi.advanceTimersByTime(9_000);
-		expect(harnessActivity.get(id)?.phase).toBe("spawning");
+		expect(harnessActivity.get(id)?.phase).toBe("waiting");
 		expect(harnessActivity.get(id)?.authoritative).toBe(true);
 
 		vi.advanceTimersByTime(2_000);
-		expect(harnessActivity.get(id)?.phase).toBe("running");
 		expect(harnessActivity.get(id)?.authoritative).toBe(false);
-		expect(sources).toEqual([TRANSITION_SOURCE.AdapterSilent]);
+		expect(harnessActivity.get(id)?.degradedBy).toBe("adapter-silent");
 
-		// And L2a actually runs it from here: quiet → idle.
+		// And L2a actually runs it from here: output → running, quiet → idle.
+		harnessActivity.recordOutput(id, "redraw");
+		expect(harnessActivity.get(id)?.phase).toBe("running");
 		vi.advanceTimersByTime(9_000);
 		expect(harnessActivity.get(id)?.phase).toBe("idle");
-		unsubscribe();
 	});
 
 	it("never arms the prompt-gated watchdog on a fresh harness nobody has prompted", () => {
@@ -92,6 +91,7 @@ describe("silent-adapter watchdog", () => {
 
 	it("gives authority back when a silenced adapter speaks after all", () => {
 		const id = attachedHarness();
+		harnessActivity.noteLaunchSignal(id);
 		harnessActivity.recordInput(id, "\r");
 		vi.advanceTimersByTime(11_000);
 		expect(harnessActivity.get(id)?.authoritative).toBe(false);
@@ -208,8 +208,10 @@ describe("launch signal (#273)", () => {
 	// `waiting` even though the tail had never actually spoken.
 	it("does NOT recover a harness the #259 adapter-silent watchdog gave up on", () => {
 		const id = attachedHarness();
+		harnessActivity.noteLaunchSignal(id);
 		harnessActivity.recordInput(id, "\r");
 		vi.advanceTimersByTime(11_000);
+		harnessActivity.recordOutput(id, "some redraw");
 		expect(harnessActivity.get(id)?.phase).toBe("running");
 		expect(harnessActivity.get(id)?.adapterSilent).toBe(true);
 		expect(harnessActivity.get(id)?.degradedBy).toBe("adapter-silent");
@@ -317,6 +319,11 @@ describe("recoverUnheardSilence (#404)", () => {
 
 	it("refuses when launchSignalAt is null", () => {
 		const id = attachedHarness();
+		// Synthetic state: since #644 the watchdog can't arm in spawning, so forcing
+		// waiting is the only way to get an armed prompt with no launch signal.
+		const cur = store.get(id);
+		if (!cur) throw new Error("harness missing");
+		store.set(id, { ...cur, phase: "waiting" });
 		harnessActivity.notePromptSubmitted(id);
 		vi.advanceTimersByTime(11_000);
 		expect(harnessActivity.get(id)?.degradedBy).toBe("adapter-silent");
@@ -376,5 +383,94 @@ describe("adapterDelivered authority re-grant (#422)", () => {
 
 		harnessActivity.adapterDelivered(id, { restoresAuthority: false });
 		expect(harnessActivity.get(id)?.authoritative).toBe(false);
+	});
+});
+
+// #644: an Enter while still `spawning` answers the workspace-trust dialog,
+// not a prompt, and must not arm the #259 watchdog.
+describe("Enter during spawning (#644)", () => {
+	it("does not arm on a trust-dialog Enter; the later launch signal leaves it healthy", () => {
+		const id = attachedHarness();
+		harnessActivity.recordInput(id, "\r");
+		expect(harnessActivity.get(id)?.promptSubmittedAt).toBeNull();
+		harnessActivity.noteLaunchSignal(id);
+		vi.advanceTimersByTime(ADAPTER_SILENT_AFTER_MS + 2_000);
+		const a = harnessActivity.get(id);
+		expect(a?.authoritative).toBe(true);
+		expect(a?.adapterSilent).toBe(false);
+		expect(a?.phase).toBe("waiting");
+		expect(a?.promptSubmittedAt).toBeNull();
+	});
+
+	it("does not degrade when the dialog is answered long before the launch signal", () => {
+		const id = attachedHarness();
+		harnessActivity.recordInput(id, "\r");
+		vi.advanceTimersByTime(12_000);
+		expect(harnessActivity.get(id)?.phase).toBe("spawning");
+		harnessActivity.noteLaunchSignal(id);
+		vi.advanceTimersByTime(ADAPTER_SILENT_AFTER_MS + 2_000);
+		const a = harnessActivity.get(id);
+		expect(a?.authoritative).toBe(true);
+		expect(a?.adapterSilent).toBe(false);
+		expect(a?.phase).toBe("waiting");
+	});
+
+	it("notePromptSubmitted while spawning does not arm", () => {
+		const id = attachedHarness();
+		harnessActivity.notePromptSubmitted(id);
+		expect(harnessActivity.get(id)?.promptSubmittedAt).toBeNull();
+	});
+
+	it("still arms and degrades for an Enter after the launch signal", () => {
+		const id = attachedHarness();
+		harnessActivity.noteLaunchSignal(id);
+		harnessActivity.recordInput(id, "\r");
+		expect(harnessActivity.get(id)?.promptSubmittedAt).not.toBeNull();
+		vi.advanceTimersByTime(ADAPTER_SILENT_AFTER_MS + 2_000);
+		expect(harnessActivity.get(id)?.adapterSilent).toBe(true);
+		expect(harnessActivity.get(id)?.degradedBy).toBe("adapter-silent");
+	});
+});
+
+// #644: an Enter on an empty composer submits nothing (a dialog answer, a
+// stray keypress), so it must not arm the #259 watchdog.
+describe("Enter on an empty composer (#644)", () => {
+	function waitingHarness(): string {
+		const id = attachedHarness();
+		harnessActivity.noteLaunchSignal(id);
+		return id;
+	}
+
+	it("does not arm and leaves the harness healthy", () => {
+		const id = waitingHarness();
+		harnessActivity.recordInput(id, "\r", { emptyComposer: true });
+		vi.advanceTimersByTime(ADAPTER_SILENT_AFTER_MS + 2_000);
+		const a = harnessActivity.get(id);
+		expect(a?.authoritative).toBe(true);
+		expect(a?.adapterSilent).toBe(false);
+		expect(a?.promptSubmittedAt).toBeNull();
+		expect(a?.phase).toBe("waiting");
+	});
+
+	it("arms and degrades when emptyComposer is false", () => {
+		const id = waitingHarness();
+		harnessActivity.recordInput(id, "\r", { emptyComposer: false });
+		vi.advanceTimersByTime(ADAPTER_SILENT_AFTER_MS + 2_000);
+		const a = harnessActivity.get(id);
+		expect(a?.adapterSilent).toBe(true);
+		expect(a?.degradedBy).toBe("adapter-silent");
+	});
+
+	it("still records lastSubmitAt", () => {
+		const id = waitingHarness();
+		harnessActivity.recordInput(id, "\r", { emptyComposer: true });
+		expect(harnessActivity.get(id)?.lastSubmitAt).not.toBeNull();
+	});
+
+	it("a typed-prompt Enter after an empty one arms", () => {
+		const id = waitingHarness();
+		harnessActivity.recordInput(id, "\r", { emptyComposer: true });
+		harnessActivity.recordInput(id, "\r", { emptyComposer: false });
+		expect(harnessActivity.get(id)?.promptSubmittedAt).not.toBeNull();
 	});
 });
