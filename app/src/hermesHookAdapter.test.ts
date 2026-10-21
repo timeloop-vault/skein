@@ -144,7 +144,7 @@ describe("background delegation (D)", () => {
 			}
 		}
 		const stop = steps.find((s) => s.ev.event === "subagent_stop");
-		expect(stop?.effects).toEqual([]);
+		expect(stop?.effects.map((x) => x.kind)).toEqual(["subagentEnd"]);
 		const ends = steps.filter((s) => s.ev.event === "on_session_end" && s.ev.sessionId === parent);
 		expect(ends.length).toBeGreaterThan(0);
 		for (const e of ends) expect(e.effects.map((x) => x.kind)).toEqual(["waiting", "turnEnded"]);
@@ -271,5 +271,42 @@ describe("ambiguity policy", () => {
 		expect(same.effects[0]).toEqual({ kind: "sessionStarted", sessionId: "S2", changed: false });
 		const diff = reduceHermesHook(initialHermesState, e, { currentSessionId: "S1" });
 		expect(diff.effects[0]).toEqual({ kind: "sessionStarted", sessionId: "S2", changed: true });
+	});
+});
+
+describe("delegation effects (#628)", () => {
+	it("subagent_start / subagent_stop carry the child id", () => {
+		const { kinds, steps } = run([
+			ev({ event: "subagent_start", childSessionId: "C" }),
+			ev({ event: "subagent_stop", childSessionId: "C" }),
+		]);
+		expect(kinds).toEqual(["subagentStart", "subagentEnd"]);
+		expect(steps[0]?.effects[0]).toEqual({
+			kind: "subagentStart",
+			agentId: "C",
+			description: null,
+		});
+		expect(steps[1]?.effects[0]).toEqual({ kind: "subagentEnd", agentId: "C" });
+	});
+
+	it("no child id, no effect; a child's own hooks yield no subagent effects", () => {
+		expect(run([ev({ event: "subagent_start" }), ev({ event: "subagent_stop" })]).kinds).toEqual(
+			[],
+		);
+		const { kinds } = run([
+			ev({ event: "subagent_start", childSessionId: "C" }),
+			ev({ event: "on_session_start", sessionId: "C", platform: "subagent" }),
+			ev({ event: "pre_llm_call", sessionId: "C", platform: "subagent" }),
+			ev({ event: "on_session_end", sessionId: "C", platform: "subagent" }),
+		]);
+		expect(kinds).toEqual(["subagentStart"]);
+	});
+
+	it("a child whose own start beat subagent_start still produces the effect", () => {
+		const { kinds } = run([
+			ev({ event: "on_session_start", sessionId: "C", platform: "subagent" }),
+			ev({ event: "subagent_start", childSessionId: "C" }),
+		]);
+		expect(kinds).toEqual(["subagentStart"]);
 	});
 });

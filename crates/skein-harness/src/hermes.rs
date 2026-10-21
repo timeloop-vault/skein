@@ -35,6 +35,7 @@
 pub mod hooks;
 pub mod messages;
 pub mod version;
+pub mod work;
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;

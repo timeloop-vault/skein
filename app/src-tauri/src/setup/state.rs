@@ -11,6 +11,7 @@ use crate::db::Database;
 use crate::harness_actions_hermes::HermesActionsManager;
 use crate::harness_events_claude::ClaudeEventsManager;
 use crate::harness_events_opencode::OpencodeEventsManager;
+use crate::harness_work_hermes::HermesWorkManager;
 use crate::pty::PtyManager;
 use crate::watcher::WatcherManager;
 
@@ -104,5 +105,6 @@ pub(super) fn open_database(
         Arc::clone(&db),
         app.handle().clone(),
     ));
+    app.manage(HermesWorkManager::default());
     Ok(db)
 }

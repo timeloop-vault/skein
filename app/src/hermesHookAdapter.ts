@@ -30,7 +30,11 @@
 //    keystroke clear in harnessActivity still applies on top, because the
 //    answer hook can be lost.
 // Approvals from a child session DO open permission: the harness is
-// blocked on them. Delegation deferral (#628) is out of scope here.
+// blocked on them. Delegation deferral (#628): `subagent_start` /
+// `subagent_stop` become `subagentStart` / `subagentEnd` effects the binding
+// records in the subagents registry, so the end of the parent's turn defers
+// while a child runs (background processes arrive from the Rust disk stream,
+// see `hermesWork.ts`).
 // When the last approval is answered the phase returns to `running` only if
 // the main turn is still open (`mainTurnOpen`); a child's approval answered
 // after the parent's turn ended has no further hooks coming, so it settles
@@ -84,7 +88,9 @@ export type HermesEffect =
 	| { kind: "permissionOpen"; toolName: string | null; description: string | null }
 	| { kind: "permissionAnswered" }
 	| { kind: "permissionAnsweredIdle" }
-	| { kind: "turnEnded" };
+	| { kind: "turnEnded" }
+	| { kind: "subagentStart"; agentId: string; description: string | null }
+	| { kind: "subagentEnd"; agentId: string };
 
 export interface HermesReduceCtx {
 	/** The harness's session id as Skein currently has it. */
@@ -155,9 +161,19 @@ export function reduceHermesHook(
 			return reduceApprovalResponse(s, ev);
 		case "subagent_start": {
 			const child = ev.childSessionId;
-			if (child === null || s.childSessions.includes(child)) return none(s);
-			return { state: { ...s, childSessions: [...s.childSessions, child] }, effects: [] };
+			if (child === null) return none(s);
+			// The goal is not forwarded by the Rust hook route today.
+			const effects: HermesEffect[] = [
+				{ kind: "subagentStart", agentId: child, description: null },
+			];
+			if (s.childSessions.includes(child)) return { state: s, effects };
+			return { state: { ...s, childSessions: [...s.childSessions, child] }, effects };
 		}
+		// childSessions keeps the id: the child's late hooks stay filtered.
+		case "subagent_stop":
+			return ev.childSessionId === null
+				? none(s)
+				: { state: s, effects: [{ kind: "subagentEnd", agentId: ev.childSessionId }] };
 		// A child's own first hook can beat `subagent_start` here: remember it.
 		case "on_session_start":
 			if (isChild(s, ev)) {
@@ -187,7 +203,7 @@ export function reduceHermesHook(
 				state: { ...s, openApprovals: [], mainTurnOpen: false },
 				effects: [{ kind: "waiting", interrupted: ev.interrupted === true }, { kind: "turnEnded" }],
 			};
-		// subagent_stop, post_* and anything unknown change no phase.
+		// post_* and anything unknown change no phase.
 		default:
 			return none(s);
 	}

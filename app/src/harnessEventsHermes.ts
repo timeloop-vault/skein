@@ -4,9 +4,10 @@
 // launch stand-in (see `LAUNCH_POLL_MS`). Attached only when `pty_spawn`
 // reported `hermesHooks: true`.
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
+import { guardChannelHandler } from "./harnessEventsShared.ts";
 import { harnessInput } from "./harnessInputRegistry.ts";
 import { markClaimed, releaseHermesCapture } from "./hermesCapture.ts";
 import {
@@ -16,6 +17,13 @@ import {
 	initialHermesState,
 	reduceHermesHook,
 } from "./hermesHookAdapter.ts";
+import {
+	applyHermesWork,
+	clearHermesWork,
+	endSubagent,
+	type HermesWorkEvent,
+	startSubagent,
+} from "./hermesWork.ts";
 import type { ScreenPhase } from "./screenPhase.ts";
 
 export const HERMES_HOOK_EVENT = "skein://harness-hermes-hook";
@@ -77,16 +85,25 @@ export function createHermesBinding(
 		if (!sessionId || sessionId === attachedFor) return;
 		// A session known at spawn was resumed; its prior spend is not this turn's.
 		const resumed = attachedFor === undefined && sessionId === p.boundSessionId;
+		// The old session's delegations can no longer report their ends.
+		if (attachedFor !== undefined) clearHermesWork(harnessId);
 		attachedFor = sessionId;
+		const args = {
+			harnessId,
+			roomId: p.roomId,
+			sessionId,
+			hermesProfile: p.hermesProfile ?? null,
+			resumed,
+		};
+		void deps.call("hermes_actions_attach", args).catch(warn("hermes_actions_attach", harnessId));
+		// #628: outstanding delegated work (subagents + background processes).
+		const onEvent = new Channel<HermesWorkEvent>();
+		onEvent.onmessage = guardChannelHandler(harnessId, "hermes_work", (e) => {
+			if (!disposed && attachedFor === sessionId) applyHermesWork(harnessId, e);
+		});
 		void deps
-			.call("hermes_actions_attach", {
-				harnessId,
-				roomId: p.roomId,
-				sessionId,
-				hermesProfile: p.hermesProfile ?? null,
-				resumed,
-			})
-			.catch(warn("hermes_actions_attach", harnessId));
+			.call("hermes_work_attach", { ...args, onEvent })
+			.catch(warn("hermes_work_attach", harnessId));
 	};
 	attachActions(p.boundSessionId ?? null);
 
@@ -123,12 +140,18 @@ export function createHermesBinding(
 				harnessActivity.setRunningFromAdapter(harnessId, TRANSITION_SOURCE.L2c3HermesRunning);
 				return;
 			case "waiting":
-				harnessActivity.setWaitingFromAdapter(
-					harnessId,
-					e.interrupted
-						? TRANSITION_SOURCE.L2c3HermesInterrupted
-						: TRANSITION_SOURCE.L2c3HermesEndTurn,
-				);
+				if (e.interrupted) {
+					harnessActivity.setWaitingFromAdapter(harnessId, TRANSITION_SOURCE.L2c3HermesInterrupted);
+				} else {
+					// #628: defers while delegated work is outstanding.
+					harnessActivity.awaitingPromptFromAdapter(harnessId, TRANSITION_SOURCE.L2c3HermesEndTurn);
+				}
+				return;
+			case "subagentStart":
+				startSubagent(harnessId, e.agentId, e.description, false);
+				return;
+			case "subagentEnd":
+				endSubagent(harnessId, e.agentId);
 				return;
 			case "permissionOpen":
 				harnessActivity.setPermissionFromAdapter(
@@ -168,11 +191,15 @@ export function createHermesBinding(
 			if (disposed) return;
 			disposed = true;
 			deps.clearInterval(poll);
+			clearHermesWork(harnessId);
 			harnessActivity.releasePermission(harnessId, TRANSITION_SOURCE.AdapterDetached);
 			harnessActivity.detachAuthoritativeSource(harnessId);
 			void deps
 				.call("hermes_actions_detach", { harnessId })
 				.catch(warn("hermes_actions_detach", harnessId));
+			void deps
+				.call("hermes_work_detach", { harnessId })
+				.catch(warn("hermes_work_detach", harnessId));
 		},
 	};
 }

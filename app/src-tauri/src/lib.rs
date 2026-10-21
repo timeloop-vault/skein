@@ -22,6 +22,7 @@ mod harness_config;
 mod harness_events_claude;
 mod harness_events_opencode;
 mod harness_kind;
+mod harness_work_hermes;
 mod hermes_profile;
 mod open_request;
 mod os_notify;
@@ -143,6 +144,8 @@ pub fn run() {
             harness_actions_hermes::hermes_actions_attach,
             harness_actions_hermes::hermes_actions_detach,
             harness_actions_hermes::hermes_actions_turn_end,
+            harness_work_hermes::hermes_work_attach,
+            harness_work_hermes::hermes_work_detach,
             commands::pty::pick_free_port,
             commands::harness_log::db_record_harness_event,
             commands::harness_log::db_recent_harness_events_by_harness,
