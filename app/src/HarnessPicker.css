@@ -90,6 +90,14 @@
 	max-height: 46vh;
 	overflow-y: auto;
 }
+.sk-agent-heading {
+	margin-top: 8px;
+	font-family: var(--sk-mono);
+	font-size: calc(var(--cfs) * 0.8);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--fg-3);
+}
 .sk-agent-row {
 	padding: 8px 10px;
 	border: 1px solid var(--line);

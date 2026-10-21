@@ -54,9 +54,8 @@ pub fn list(program: &OsStr, home: &Path, cwd: &Path, extra_args: &[String]) -> 
                 .into_iter()
                 .map(|name| match enrich.get(&name) {
                     Some(def) => def.clone(),
-                    // Vouched for by the CLI with no file behind it:
-                    // that is what a builtin looks like from here.
-                    None => AgentDef::bare(name, AgentSource::Builtin),
+                    // Vouched for by the CLI with no file behind it.
+                    None => unfiled(name),
                 })
                 .collect(),
             None,
@@ -68,6 +67,24 @@ pub fn list(program: &OsStr, home: &Path, cwd: &Path, extra_args: &[String]) -> 
             }
             AgentList::new(agents, Some(why))
         }
+    }
+}
+
+/// Classify a name the CLI vouched for that has no file we could read.
+///
+/// Claude Code namespaces every plugin agent as `plugin:agent` and no
+/// builtin carries a colon, so the name itself says where it came from.
+/// That covers any `--plugin-dir` (Skein's own bundle or the user's)
+/// without parsing `extra_args` or reading more directories, at the
+/// cost of no description for those rows. Anything else is a builtin.
+fn unfiled(name: String) -> AgentDef {
+    let plugin = match name.split_once(':') {
+        Some((plugin, agent)) if !plugin.is_empty() && !agent.is_empty() => Some(plugin.to_owned()),
+        _ => None,
+    };
+    match plugin {
+        Some(plugin) => AgentDef::bare(name, AgentSource::Plugin { plugin }),
+        None => AgentDef::bare(name, AgentSource::Builtin),
     }
 }
 
@@ -229,6 +246,27 @@ mod tests {
         assert!(names.contains(&"pr-review-toolkit:code-reviewer".to_owned()));
         assert!(names.contains(&"statusline-setup".to_owned()));
         assert_eq!(names.len(), 11);
+    }
+
+    #[test]
+    fn a_namespaced_name_with_no_file_is_a_plugin_agent() {
+        assert_eq!(
+            unfiled("skein:reviewer".to_owned()).source,
+            AgentSource::Plugin {
+                plugin: "skein".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn a_plain_or_degenerate_name_with_no_file_is_a_builtin() {
+        for name in ["Explore", "general-purpose", ":x", "x:"] {
+            assert_eq!(
+                unfiled(name.to_owned()).source,
+                AgentSource::Builtin,
+                "{name}"
+            );
+        }
     }
 
     #[test]

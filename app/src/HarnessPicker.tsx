@@ -1,7 +1,8 @@
 // The two-step "+ harness" picker (kind, then agent for kinds that
 // take one). Split out of components.tsx (#19) — moved verbatim.
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { groupAgents } from "./agentGroups.ts";
 import {
 	type AgentInfo,
 	type AgentListing,
@@ -181,14 +182,19 @@ const AgentStep = ({
 								This list may be incomplete — {listing.degraded}
 							</div>
 						)}
-						{listing.agents.map((a) => (
-							<AgentRow
-								key={a.name}
-								agent={a}
-								selected={a.name === selected}
-								isDefault={a.name === preferred}
-								onClick={() => onPick(a.name)}
-							/>
+						{groupAgents(listing.agents).map((g) => (
+							<Fragment key={g.key}>
+								<div className="sk-agent-heading">{g.heading}</div>
+								{g.agents.map((a) => (
+									<AgentRow
+										key={a.name}
+										agent={a}
+										selected={a.name === selected}
+										isDefault={a.name === preferred}
+										onClick={() => onPick(a.name)}
+									/>
+								))}
+							</Fragment>
 						))}
 					</>
 				)}
