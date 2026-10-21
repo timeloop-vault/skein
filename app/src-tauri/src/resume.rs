@@ -108,7 +108,7 @@ pub async fn hermes_session_exists(
 /// The `state.db` of the harness's own Hermes profile (`None`: the
 /// default). `None` back when there is no Hermes home or the profile
 /// name is invalid, which callers read as "can't tell".
-fn profile_db(
+pub(crate) fn profile_db(
     settings: &crate::spawn_settings::SpawnSettings,
     profile: Option<&str>,
 ) -> Option<PathBuf> {

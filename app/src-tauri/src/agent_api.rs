@@ -46,6 +46,7 @@ pub mod auth;
 pub mod commands;
 mod element;
 mod element_source;
+pub mod hermes_event;
 pub mod http;
 pub mod mcp;
 mod render;
@@ -76,6 +77,8 @@ mod element_tests;
 mod find_rooms_tests;
 #[cfg(test)]
 mod frontend_request_tests;
+#[cfg(test)]
+mod hermes_hook_route_tests;
 #[cfg(test)]
 mod hook_route_tests;
 #[cfg(test)]

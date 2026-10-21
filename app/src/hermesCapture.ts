@@ -26,6 +26,13 @@ export const markClaimed = (sessionId: string): void => {
 	claimed.add(sessionId);
 };
 
+/** Stop this harness's capture loop (idempotent). Used once the hook adapter
+ *  has the id from `on_session_start`: the loop must not poll on, or the Rust
+ *  claim rule could hand that id to another pending harness in the same cwd. */
+export const releaseHermesCapture = (harnessId: string): void => {
+	loops.get(harnessId)?.();
+};
+
 export type ClaimInvoke = (
 	cmd: "hermes_claim_session",
 	args: {

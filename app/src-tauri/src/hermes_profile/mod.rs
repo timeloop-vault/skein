@@ -5,9 +5,17 @@
 //! file I/O around it. Profile-name rules and home resolution live in
 //! `skein_harness::hermes` (`valid_profile_name`, `profile_home`).
 
+pub(crate) mod allowlist;
 pub(crate) mod commands;
+pub(crate) mod hooks;
+#[cfg(test)]
+mod hooks_tests;
 pub(crate) mod prepare;
+pub(crate) mod version_probe;
 pub(crate) mod yaml;
+pub(crate) mod yaml_hooks;
+#[cfg(test)]
+mod yaml_hooks_tests;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

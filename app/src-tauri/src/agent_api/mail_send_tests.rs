@@ -342,6 +342,26 @@ fn injection_off_for_a_kind_refuses_that_kind() {
 }
 
 #[test]
+fn a_hermes_harness_can_receive_mail_unless_its_injection_is_off() {
+    let f = fixture();
+    save(
+        &f.db,
+        &[
+            room("r1", vec![harness("h1", "claude", "main")]),
+            room("r2", vec![harness("h2", "hermes", "hermes")]),
+        ],
+    );
+    let sender = caller_for(&f.db, "r1", Some("h1"));
+    send(&f.db, &sender, "h2", "hi").expect("hermes receives mail");
+    let off = MailPolicy {
+        hermes_injected: false,
+        ..MailPolicy::permissive()
+    };
+    let err = send_with(&f.db, &sender, "h2", "hi", off, always_sees_mcp).unwrap_err();
+    assert!(err.message().contains("injection"), "{}", err.message());
+}
+
+#[test]
 fn an_agent_that_hides_mcp_tools_refuses_the_send() {
     let f = fixture();
     let mut h2 = harness("h2", "claude", "main");

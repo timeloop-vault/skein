@@ -8,6 +8,7 @@ use tauri::Manager;
 
 use crate::SpawnEnvState;
 use crate::db::Database;
+use crate::harness_actions_hermes::HermesActionsManager;
 use crate::harness_events_claude::ClaudeEventsManager;
 use crate::harness_events_opencode::OpencodeEventsManager;
 use crate::pty::PtyManager;
@@ -96,6 +97,10 @@ pub(super) fn open_database(
         app.handle().clone(),
     ));
     app.manage(OpencodeEventsManager::new(
+        Arc::clone(&db),
+        app.handle().clone(),
+    ));
+    app.manage(HermesActionsManager::new(
         Arc::clone(&db),
         app.handle().clone(),
     ));

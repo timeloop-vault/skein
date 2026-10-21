@@ -6,6 +6,7 @@ import {
 	attachOpencodeEvents,
 	hasClaudeTranscriptTail,
 } from "./harnessEvents.ts";
+import { attachHermesEvents } from "./harnessEventsHermes.ts";
 import { isHermesProgram, markClaimed, startHermesCapture } from "./hermesCapture.ts";
 import type { HarnessKind } from "./types.ts";
 
@@ -18,6 +19,8 @@ export interface AdapterAttach {
 	program: string | undefined;
 	/** #627: the harness's Hermes profile (`undefined` = no `-p`). */
 	hermesProfile?: string | undefined;
+	/** #625: `pty_spawn` reported working Hermes status hooks. */
+	hermesHooks?: boolean;
 	sessionId: string | undefined;
 	opencodePort: number | undefined;
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
@@ -69,17 +72,32 @@ export function attachAdapters(a: AdapterAttach): (() => void) | null {
 	// #624: Hermes binds its own session id; poll until its row exists.
 	if (harnessKind === "hermes" && isHermesProgram(a.program)) {
 		const bound = a.sessionIdRef.current;
-		if (bound) {
-			markClaimed(bound);
-			return null;
-		}
-		return startHermesCapture({
-			harnessId,
-			cwd,
-			spawnedAtMs: Date.now(),
-			profile: a.hermesProfile ?? null,
-			onCapture: (id) => a.onSessionCaptured?.(id),
-		});
+		// #625: hooks give the phase (L2c-3) and, at the first prompt, the id.
+		const detachHooks = a.hermesHooks
+			? attachHermesEvents({
+					harnessId,
+					roomId,
+					hermesProfile: a.hermesProfile,
+					boundSessionId: bound,
+					getSessionId: () => a.sessionIdRef.current,
+					onSessionCaptured: a.onSessionCaptured,
+				})
+			: null;
+		if (bound) markClaimed(bound);
+		const stopCapture = bound
+			? null
+			: startHermesCapture({
+					harnessId,
+					cwd,
+					spawnedAtMs: Date.now(),
+					profile: a.hermesProfile ?? null,
+					onCapture: (id) => a.onSessionCaptured?.(id),
+				});
+		if (!detachHooks) return stopCapture;
+		return () => {
+			stopCapture?.();
+			detachHooks();
+		};
 	}
 	return null;
 }

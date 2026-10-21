@@ -120,6 +120,10 @@ const CLAUDE_PLUGIN_SUBDIR: &str = "claude-plugin";
 /// dot-directories are exactly what a resource glob tends to drop.
 const CLAUDE_PLUGIN_MANIFEST: &str = ".claude-plugin/plugin.json";
 const OPENCODE_CONFIG_FILE: &str = "opencode/opencode.json";
+/// Hermes hook scripts (#625). Hermes runs a hook without a shell, so
+/// the Windows command is the `.py` and macOS/Linux is `sh <the .sh>`.
+const HERMES_HOOK_PY_FILE: &str = "hermes/skein-hook.py";
+const HERMES_HOOK_SH_FILE: &str = "hermes/skein-hook.sh";
 
 /// The resolved bundle. Held as managed state, resolved once in
 /// `setup()`.
@@ -129,7 +133,11 @@ pub struct HarnessConfig {
     claude_plugin: Option<PathBuf>,
     /// The opencode config file, when it was found.
     opencode_config: Option<PathBuf>,
-    /// Why either is missing. A packaging mistake is silent otherwise:
+    /// The Hermes hook script for Windows (#625), when it was found.
+    hermes_hook_py: Option<PathBuf>,
+    /// The Hermes hook script for macOS/Linux (#625), when it was found.
+    hermes_hook_sh: Option<PathBuf>,
+    /// Why any is missing. A packaging mistake is silent otherwise:
     /// the agent simply has no review tools and nothing says why
     /// (#176).
     error: Option<String>,
@@ -191,6 +199,16 @@ impl HarnessConfig {
         let plugin = root.join(CLAUDE_PLUGIN_SUBDIR);
         let opencode = root.join(OPENCODE_CONFIG_FILE);
 
+        let found = |rel: &str, missing: &mut Vec<String>| {
+            let path = root.join(rel);
+            if path.is_file() {
+                Some(path)
+            } else {
+                missing.push(path.display().to_string().replace('\\', "/"));
+                None
+            }
+        };
+
         let mut missing = Vec::new();
         let claude_plugin = if plugin.join(CLAUDE_PLUGIN_MANIFEST).is_file() {
             Some(plugin)
@@ -207,6 +225,9 @@ impl HarnessConfig {
             missing.push(opencode.display().to_string().replace('\\', "/"));
             None
         };
+
+        let hermes_hook_py = found(HERMES_HOOK_PY_FILE, &mut missing);
+        let hermes_hook_sh = found(HERMES_HOOK_SH_FILE, &mut missing);
 
         let error = if missing.is_empty() {
             None
@@ -225,6 +246,8 @@ impl HarnessConfig {
         Self {
             claude_plugin,
             opencode_config,
+            hermes_hook_py,
+            hermes_hook_sh,
             error,
         }
     }
@@ -236,6 +259,8 @@ impl HarnessConfig {
         Self {
             claude_plugin: None,
             opencode_config: None,
+            hermes_hook_py: None,
+            hermes_hook_sh: None,
             error: Some(error.to_owned()),
         }
     }
@@ -248,6 +273,16 @@ impl HarnessConfig {
     /// rather than being a name the list omits and the spawn accepts.
     pub(crate) fn claude_plugin_dir(&self) -> Option<&Path> {
         self.claude_plugin.as_deref()
+    }
+
+    /// The Hermes hook script for Windows (#625), when it resolved.
+    pub(crate) fn hermes_hook_py(&self) -> Option<&Path> {
+        self.hermes_hook_py.as_deref()
+    }
+
+    /// The Hermes hook script for macOS/Linux (#625), when it resolved.
+    pub(crate) fn hermes_hook_sh(&self) -> Option<&Path> {
+        self.hermes_hook_sh.as_deref()
     }
 
     pub fn status(&self, hermes_root: Option<PathBuf>) -> HarnessConfigStatus {
@@ -425,6 +460,11 @@ mod tests {
         let oc = root.join(OPENCODE_CONFIG_FILE);
         std::fs::create_dir_all(oc.parent().expect("oc parent")).expect("mkdir");
         std::fs::write(&oc, "{}").expect("write opencode config");
+        for rel in [HERMES_HOOK_PY_FILE, HERMES_HOOK_SH_FILE] {
+            let hook = root.join(rel);
+            std::fs::create_dir_all(hook.parent().expect("hook parent")).expect("mkdir");
+            std::fs::write(&hook, "").expect("write hermes hook");
+        }
         let config = HarnessConfig::resolve(dir.path());
         (dir, config)
     }
@@ -435,6 +475,21 @@ mod tests {
         assert!(config.error.is_none());
         assert!(config.claude_plugin.is_some());
         assert!(config.opencode_config.is_some());
+        assert!(config.hermes_hook_py.is_some());
+        assert!(config.hermes_hook_sh.is_some());
+    }
+
+    #[test]
+    fn missing_hermes_hooks_resolve_to_none_and_are_reported() {
+        let (tmp, _) = bundle();
+        std::fs::remove_file(tmp.path().join(BUNDLE_DIR).join(HERMES_HOOK_SH_FILE))
+            .expect("remove hook");
+        let config = HarnessConfig::resolve(tmp.path());
+        assert!(config.hermes_hook_py.is_some());
+        assert!(config.hermes_hook_sh.is_none());
+        assert!(config.claude_plugin.is_some());
+        let error = config.error.expect("missing hook is reported");
+        assert!(error.contains("skein-hook.sh"), "{error}");
     }
 
     #[test]

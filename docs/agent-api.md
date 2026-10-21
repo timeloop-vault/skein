@@ -48,6 +48,7 @@ Skein process
      ├─ POST   /api/design/pane        show_design_pane
      ├─ POST   /api/harness/permission     see below — not an agent verb
      ├─ POST   /api/harness/session-start  see below — not an agent verb
+     ├─ POST   /api/harness/hermes-turn    see "Hermes hook routes" — not an agent verb
      └─ POST   /api/harness/session-end    see below — not an agent verb
 ```
 
@@ -1235,6 +1236,51 @@ A successful call emits `skein://harness-session-start` —
 `{ roomId, harnessId, sessionId, source }` (the last two nullable) — and
 answers `204 No Content`.
 
+### Hermes hook routes (#625)
+
+Hermes harnesses report through shell hooks (`skein-hook.py`/`.sh` in the
+injected profile), authenticated like Claude's hooks (Bearer room token
+plus a valid `X-Skein-Harness`, else 401/400). Three URLs receive them:
+`pre_approval_request` and `post_approval_response` post to
+`/api/harness/permission`, `on_session_start` to
+`/api/harness/session-start`, and everything else (`pre_llm_call`,
+`pre_tool_call`, `on_session_end`, `subagent_start`, `subagent_stop`,
+`on_session_finalize`, ...) to `POST /api/harness/hermes-turn`.
+
+A body is Hermes' when its top-level `hook_event_name` is a string
+starting with a lowercase letter (`pre_llm_call`; Claude's names are
+`PascalCase`). On the two shared URLs a Hermes body emits ONLY
+`skein://harness-hermes-hook`, never the Claude-shaped event; any other
+body keeps the Claude behaviour unchanged. On `hermes-turn` a non-Hermes
+body answers `204` and emits nothing. Unparseable bodies always answer
+`204`.
+
+The event payload (camelCase, absent values `null`): `roomId`,
+`harnessId`, `event` (the raw hook name), `sessionId`, `turnId`,
+`toolCallId`, `toolName`, `platform`, `surface`, `description`,
+`choice`, `completed`, `interrupted`, `failed`, `turnExitReason`,
+`model`, `childSessionId`. `sessionId`/`childSessionId` pass the same
+id check as Claude's (else `null`); `description` is capped at 500
+characters and every other string at 128. `tool_input`, prompts and
+conversation history are never read or forwarded, and the one
+`tracing::info!` per request logs only event, harness, session, turn
+and surface.
+
+The three routes accept bodies up to 64 MiB (the rest of the API keeps
+1 MiB): the `.sh` hook posts `pre_llm_call` raw, and it carries the whole
+conversation history.
+
+Every approval produces two `pre_approval_request`s. The first has
+`surface: "smart"` (Hermes' own LLM pre-check): no dialog is shown and
+no `post_approval_response` follows, so a consumer must not treat it as
+a permission wait. The second (`cli`/`gateway`) is the real dialog and
+is answered by `post_approval_response`, paired by `toolCallId`.
+
+Hermes' `on_session_end` fires at the end of every TURN, not of the
+session, so it has nothing to do with `/api/harness/session-end` (#318),
+which is Claude's `SessionEnd`. The real end of a Hermes session is
+`on_session_finalize`, delivered on `hermes-turn`.
+
 ### The session-end signal (#318)
 
 `POST /api/harness/session-end` mirrors the route above, fed by the
@@ -1425,8 +1471,11 @@ after a consent dialog that shows exactly what will be inserted. The
 insertion is byte-exact (the rest of the file is untouched) and it
 stays afterwards; outside Skein the variables are unset, so it is inert.
 
-The mail nudge is not wired for Hermes yet (#625): `read_messages`
-works, but Skein will not type "you have new messages" into its prompt.
+The mail nudge (#625) reaches a Hermes harness through the same #238 gate
+as Claude and opencode: only while its hook telemetry is attached
+(authoritative), the review entry is injected and the terminal is in
+bracketed-paste mode. A Hermes without hooks (screen-read only) is never
+nudged; it can still call `read_messages` itself.
 
 ## Where the code is
 
@@ -1436,7 +1485,7 @@ works, but Skein will not type "you have new messages" into its prompt.
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
 | `agent_api/verbs.rs` + `verbs/` | the twenty-two verbs — the whole testable core, including the mailbox (#327, plus `message_history`, #364), the cross-room reads (#354, #356), `close_room`/`open_harness`/`close_harness` (#411) and the design-pane verbs (#512) |
 | `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve/approve refusals, and the `archive_room`/`remove_worktree`/`delete_room` refusals (#411) |
-| `agent_api/http.rs` + `http/` | the routes, including `/api/messages` and `/api/messages/history` (#327, #364), `/api/rooms`/`/api/rooms/{id}`/`/api/harnesses` (#356), `/api/harness/permission` (#86) and `/api/harness/session-start` (#273) |
+| `agent_api/http.rs` + `http/` | the routes, including `/api/messages` and `/api/messages/history` (#327, #364), `/api/rooms`/`/api/rooms/{id}`/`/api/harnesses` (#356), `/api/harness/permission` (#86), `/api/harness/session-start` (#273) and the Hermes hook routes (`http/hermes_hooks.rs`, `hermes_event.rs`, #625) |
 | `agent_api/tests.rs` + `*_tests.rs` | `tests.rs` holds the shared fixtures; the `*_tests.rs` siblings hold the tests by concern: scoping, both prohibitions (`refusal_tests.rs`), lifecycle, real HTTP |
 | `review_surface/signoff.rs` | the sign-off itself, and the staleness rule (#214) |
 | `harness_config.rs` | what Skein injects at spawn so a CLI finds all this (#215) |

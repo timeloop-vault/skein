@@ -64,6 +64,13 @@ export interface HarnessCapabilities {
 	/// that never goes byte-quiet, so L2a idle and L2b tail patterns can't fire.
 	/// True only for `hermes`; gates the per-tick screen snapshot.
 	screenPhase: boolean;
+	/// The #238 seam may only paste into this kind while its terminal is in
+	/// bracketed-paste mode, even for a single line (#625). True only for
+	/// `hermes`: its TUI opens a file-completion popup when a `/` is typed,
+	/// and the Enter that follows then picks the completion instead of
+	/// submitting. A bracketed paste is not typed, so it never opens the
+	/// popup; an unbracketed one is typed keystrokes and would.
+	bracketedPasteRequired: boolean;
 }
 
 export interface HarnessKindMeta {
@@ -112,6 +119,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			imagePaste: true,
 			opensClickedLinks: true,
 			screenPhase: false,
+			bracketedPasteRequired: false,
 		},
 	},
 	opencode: {
@@ -132,6 +140,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			imagePaste: false,
 			opensClickedLinks: false,
 			screenPhase: false,
+			bracketedPasteRequired: false,
 		},
 	},
 	copilot: {
@@ -152,11 +161,12 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			imagePaste: false,
 			opensClickedLinks: false,
 			screenPhase: false,
+			bracketedPasteRequired: false,
 		},
 	},
-	// #623 tier A: phase from the rendered screen (screenPhase.ts) — no L2c adapter
-	// (#625), no agent API injection (#626). Resume (#624): Hermes mints its own
-	// session id, captured later from its state.db.
+	// #623 tier A: phase from the rendered screen (screenPhase.ts); #625 adds the
+	// hook adapter (authoritative when hooks attach), #626 the review API entry.
+	// Resume (#624): Hermes mints its own session id, captured from its state.db.
 	hermes: {
 		id: "hermes",
 		label: "hm",
@@ -175,6 +185,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			imagePaste: false,
 			opensClickedLinks: false,
 			screenPhase: true,
+			bracketedPasteRequired: true,
 		},
 	},
 	// `byoh` is the kind id we kept from the design's "bring your own
@@ -200,6 +211,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			imagePaste: false,
 			opensClickedLinks: false,
 			screenPhase: false,
+			bracketedPasteRequired: false,
 		},
 	},
 	// #568: the remote harness, a tool run inside tmux on a remote host over
@@ -225,6 +237,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			imagePaste: false,
 			opensClickedLinks: false,
 			screenPhase: false,
+			bracketedPasteRequired: false,
 		},
 	},
 	// #49 phase A: the file surface as a harness. Deliberately not a
@@ -247,6 +260,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			imagePaste: false,
 			opensClickedLinks: false,
 			screenPhase: false,
+			bracketedPasteRequired: false,
 		},
 	},
 	// #433: a live preview of the worktree's HTML in a sandboxed iframe.
@@ -268,6 +282,7 @@ export const HARNESS_KINDS: Record<HarnessKind, HarnessKindMeta> = {
 			imagePaste: false,
 			opensClickedLinks: false,
 			screenPhase: false,
+			bracketedPasteRequired: false,
 		},
 	},
 };

@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use skein_harness::hermes::{profile_home, valid_profile_name};
 
+use super::hooks::{self, HookInputs};
 use super::{
     EnsureOutcome, SKEIN_PROFILE, ensure_skein_entry_creating, remove_skein_entry_owned, yaml,
 };
@@ -43,7 +44,7 @@ const REAP_GRACE: Duration = Duration::from_secs(2);
 /// Preparing the profile is one step at a time, process-wide: two Hermes
 /// harnesses restored together would otherwise both see `profiles/skein`
 /// missing and both run `profile create`, and the loser would fail.
-static PREPARE_LOCK: Mutex<()> = Mutex::new(());
+pub(super) static PREPARE_LOCK: Mutex<()> = Mutex::new(());
 
 /// The profile named by the Hermes argv (`-p x`, `--profile x`,
 /// `--profile=x`); `None` when there is none, or `-p` has no value.
@@ -110,6 +111,27 @@ fn entry_present(root: &Path, profile: Option<&str>) -> bool {
     std::fs::read_to_string(config_path(root, profile)).is_ok_and(|t| yaml::skein_entry_present(&t))
 }
 
+/// What a spawn learns from preparing the profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct Prepared {
+    /// Skein's MCP entry is in the effective profile's config.
+    pub injected: bool,
+    /// Skein's status hooks are in it, approved, and the version is
+    /// supported (#625).
+    pub hooks: bool,
+}
+
+/// [`prepare_with_hooks`] without hook telemetry: the MCP entry only.
+#[cfg(test)]
+pub(crate) fn prepare_in(
+    root: &Path,
+    args: &[String],
+    switch_on: bool,
+    create: impl FnOnce() -> Result<(), String>,
+) -> bool {
+    prepare_with_hooks(root, args, switch_on, &HookInputs::default(), create).injected
+}
+
 /// Run the plan against `root`, then report whether Skein's entry is in
 /// the effective profile's `config.yaml`. Errors are logged and never
 /// returned: a failed preparation must not fail the spawn (Hermes shows
@@ -118,18 +140,24 @@ fn entry_present(root: &Path, profile: Option<&str>) -> bool {
 /// The answer comes from the file, not from the switch: a user profile
 /// the user consented to (#627) carries the entry whatever the switch
 /// says, and a failed removal leaves the tools reachable.
-pub(crate) fn prepare_in(
+///
+/// Hook telemetry (#625) rides along: the script is installed under the
+/// root and, for the `skein` profile with the switch on, the hooks are
+/// written; `hooks` reports whether the effective profile has them
+/// working. A user's own profile is only ever read.
+pub(crate) fn prepare_with_hooks(
     root: &Path,
     args: &[String],
     switch_on: bool,
+    hook_inputs: &HookInputs,
     create: impl FnOnce() -> Result<(), String>,
-) -> bool {
+) -> Prepared {
     let _guard = PREPARE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     let profile = argv_profile(args);
     if let Some(p) = profile.as_deref()
         && !valid_profile_name(p)
     {
-        return false;
+        return Prepared::default();
     }
     let skein_dir = root.join("profiles").join(SKEIN_PROFILE);
     let todo = plan(switch_on, profile.as_deref(), skein_dir.is_dir());
@@ -143,7 +171,7 @@ pub(crate) fn prepare_in(
             tracing::info!(error = %e, "hermes profile: create failed but the profile exists now");
         } else {
             tracing::warn!(error = %e, "hermes profile: creating the skein profile failed");
-            return false;
+            return Prepared::default();
         }
     }
     if todo.ensure {
@@ -173,7 +201,17 @@ pub(crate) fn prepare_in(
             }
         }
     }
-    entry_present(root, profile.as_deref())
+    let hooks = hooks::prepare(
+        root,
+        &profile_home(root, profile.as_deref()),
+        &config_path(root, profile.as_deref()),
+        todo.ensure,
+        hook_inputs,
+    );
+    Prepared {
+        injected: entry_present(root, profile.as_deref()),
+        hooks,
+    }
 }
 
 /// The spawn-path entry: prepare the profile for the finished command.
@@ -186,14 +224,15 @@ pub(crate) fn prepare_for_spawn(
     launch: &str,
     args: &[String],
     settings: &crate::spawn_settings::SpawnSettings,
-) -> bool {
+    harness_config: Option<&crate::harness_config::HarnessConfig>,
+) -> Prepared {
     let root = builder
         .get_env("HERMES_HOME")
         .filter(|h| !h.is_empty())
         .map(PathBuf::from)
         .or_else(skein_harness::hermes::hermes_home);
     let Some(root) = root else {
-        return false;
+        return Prepared::default();
     };
     let seen_elsewhere = super::effective_root(settings);
     if seen_elsewhere.as_deref() != Some(root.as_path()) {
@@ -203,9 +242,24 @@ pub(crate) fn prepare_for_spawn(
             "hermes profile: this spawn's HERMES_HOME differs from the one consent, the profile list and the resume probe read"
         );
     }
-    prepare_in(&root, args, settings.inject_hermes_config, || {
-        create_skein_profile(launch, builder.iter_full_env_as_str())
-    })
+    let hook_inputs = HookInputs {
+        supported: super::version_probe::telemetry_ok(launch, builder.iter_full_env_as_str()),
+        script: harness_config.and_then(|c| {
+            let script = if cfg!(windows) {
+                c.hermes_hook_py()
+            } else {
+                c.hermes_hook_sh()
+            };
+            script.map(Path::to_path_buf)
+        }),
+    };
+    prepare_with_hooks(
+        &root,
+        args,
+        settings.inject_hermes_config,
+        &hook_inputs,
+        || create_skein_profile(launch, builder.iter_full_env_as_str()),
+    )
 }
 
 fn tail(bytes: &[u8]) -> String {

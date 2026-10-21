@@ -43,11 +43,15 @@ pub type AgentSeesMcp = fn(kind: &str, agent: &str, cwd: &str) -> bool;
 /// A plain `Copy` value keeps `send_message`/`read_messages` testable
 /// with no settings file and no Tauri runtime; the MCP and HTTP call
 /// sites build one from the live `SpawnSettings` on every request.
+// Independent on/off settings read separately, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MailPolicy {
     pub messaging_enabled: bool,
     pub claude_injected: bool,
     pub opencode_injected: bool,
+    /// #625: Hermes reads mail through the MCP entry in Skein's profile.
+    pub hermes_injected: bool,
 }
 
 impl MailPolicy {
@@ -62,6 +66,7 @@ impl MailPolicy {
             messaging_enabled: true,
             claude_injected: true,
             opencode_injected: true,
+            hermes_injected: true,
         }
     }
 }

@@ -31,7 +31,7 @@ export const HermesProfileStep = ({
 
 	const choose = (name: string) => {
 		const entry = entryOf(listing, name);
-		if (consentNeeded(name, entry?.skeinEntry) === "none") onPick(name);
+		if (consentNeeded(name, entry?.skeinEntry, entry?.hooksPending) === "none") onPick(name);
 		else setAsking(name);
 	};
 
@@ -110,7 +110,11 @@ export const HermesProfileStep = ({
 			{asking !== null && (
 				<HermesConsentDialog
 					profile={asking}
-					mode={consentNeeded(asking, askingEntry?.skeinEntry) === "manual" ? "manual" : "ask"}
+					mode={
+						consentNeeded(asking, askingEntry?.skeinEntry, askingEntry?.hooksPending) === "manual"
+							? "manual"
+							: "ask"
+					}
 					reason={askingEntry?.reason ?? null}
 					onProceed={() => {
 						const name = asking;

@@ -155,6 +155,14 @@ export function canSendPrompt(input: CanSendPromptInput): GateResult {
 				"this harness's terminal isn't in paste mode, so a multi-line prompt isn't safe to send",
 		};
 	}
+	// #625: a kind whose TUI treats typed text specially (Hermes' `/` file
+	// popup) is only pasted into while the paste is a real bracketed one.
+	if (capabilities.bracketedPasteRequired && !bracketedPasteOn) {
+		return {
+			ok: false,
+			reason: "this harness's terminal isn't in paste mode, so a prompt isn't safe to send",
+		};
+	}
 	return { ok: true };
 }
 

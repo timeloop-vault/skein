@@ -16,6 +16,7 @@ mod fs;
 mod git;
 mod harness_action_event;
 mod harness_actions_claude;
+mod harness_actions_hermes;
 mod harness_actions_opencode;
 mod harness_config;
 mod harness_events_claude;
@@ -139,6 +140,9 @@ pub fn run() {
             commands::app::frontend_log,
             commands::harness_events::opencode_events_attach,
             commands::harness_events::opencode_events_detach,
+            harness_actions_hermes::hermes_actions_attach,
+            harness_actions_hermes::hermes_actions_detach,
+            harness_actions_hermes::hermes_actions_turn_end,
             commands::pty::pick_free_port,
             commands::harness_log::db_record_harness_event,
             commands::harness_log::db_recent_harness_events_by_harness,

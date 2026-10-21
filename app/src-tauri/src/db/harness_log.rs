@@ -273,6 +273,50 @@ impl Database {
         Ok(conn.last_insert_rowid())
     }
 
+    /// The highest Hermes `state.db` `messages.id` already recorded for
+    /// `harness_id` + `session_id` by `source` (#625): the tail's resume
+    /// cursor. `turn_cost` rows carry no `message_id`, so they never count.
+    pub fn max_recorded_message_id(
+        &self,
+        harness_id: &str,
+        session_id: &str,
+        source: &str,
+    ) -> Result<Option<i64>, String> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT MAX(json_extract(payload, '$.message_id')) FROM harness_actions \
+             WHERE harness_id = ?1 AND source = ?2 AND kind <> 'turn_cost' \
+               AND json_extract(payload, '$.session_id') = ?3",
+            params![harness_id, source, session_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    /// Payload of the newest `turn_cost` row of `harness_id` + `session_id`
+    /// by `source` (#625): carries the cumulative snapshot the next
+    /// per-turn delta is measured against.
+    pub fn last_turn_cost_payload(
+        &self,
+        harness_id: &str,
+        session_id: &str,
+        source: &str,
+    ) -> Result<Option<String>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT payload FROM harness_actions \
+                 WHERE harness_id = ?1 AND source = ?2 AND kind = 'turn_cost' \
+                   AND json_extract(payload, '$.session_id') = ?3 \
+                 ORDER BY id DESC LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![harness_id, source, session_id], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        rows.next().transpose().map_err(|e| e.to_string())
+    }
+
     /// Batch counterpart to `record_harness_action` (#171e). The two
     /// backfill scans (Claude JSONL history, opencode `SQLite`
     /// history) walk a whole session's worth of rows in one shot at

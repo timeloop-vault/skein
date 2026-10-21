@@ -124,23 +124,54 @@ describe("canSendPrompt", () => {
 		expect(r).toEqual({ ok: false, reason: expect.stringContaining("review tools") });
 	});
 
-	// #626/#627: Hermes can be `injected` (Skein's profile carries the review
-	// tools) but has no L2c adapter, so nothing proves it is at its prompt.
-	// Mail nudges stay off until #625.
-	it("refuses a hermes harness even when injected and waiting, with no adapter heard", () => {
-		const r = canSendPrompt(
+	// #625: Hermes with hook telemetry attached is authoritative like Claude;
+	// screen-read only (no hooks) proves nothing and stays refused.
+	describe("hermes", () => {
+		const hermes = (over: Partial<CanSendPromptInput> = {}) =>
 			baseInput({
 				capabilities: HARNESS_KINDS.hermes.capabilities,
-				activity: activity({
-					injected: true,
-					phase: "waiting",
-					adapterHeard: false,
-					authoritative: false,
-					launchSignalAt: null,
+				bracketedPasteOn: true,
+				...over,
+			});
+		const hooked = (over: Partial<HarnessActivity> = {}) =>
+			activity({ adapterHeard: true, launchSignalAt: Date.now() - 10_000, ...over });
+
+		it("allows a single- and multi-line prompt with hooks attached and waiting", () => {
+			expect(canSendPrompt(hermes({ activity: hooked() }))).toEqual({ ok: true });
+			expect(canSendPrompt(hermes({ activity: hooked(), body: "a\nb" }))).toEqual({ ok: true });
+		});
+
+		it("refuses screen-read only (no hooks) with the existing reason", () => {
+			const r = canSendPrompt(
+				hermes({
+					activity: activity({ authoritative: false, adapterHeard: false, launchSignalAt: null }),
 				}),
-			}),
-		);
-		expect(r.ok).toBe(false);
+			);
+			expect(r).toEqual({ ok: false, reason: expect.stringContaining("no confirmed adapter") });
+		});
+
+		it("refuses permission and a silent adapter", () => {
+			const p = canSendPrompt(hermes({ activity: hooked({ phase: "permission" }) }));
+			expect(p).toEqual({ ok: false, reason: expect.stringContaining("permission dialog") });
+			const s = canSendPrompt(hermes({ activity: hooked({ adapterSilent: true }) }));
+			expect(s).toEqual({ ok: false, reason: expect.stringContaining("no confirmed adapter") });
+		});
+
+		it("refuses when the profile's review entry isn't injected", () => {
+			const r = canSendPrompt(hermes({ activity: hooked({ injected: false }) }));
+			expect(r).toEqual({ ok: false, reason: expect.stringContaining("review tools") });
+		});
+
+		// The `/` file-completion popup eats the Enter after typed text; only a
+		// bracketed paste avoids it, so even one line needs paste mode.
+		it("refuses even a single line when the terminal is not in paste mode", () => {
+			const r = canSendPrompt(hermes({ activity: hooked(), bracketedPasteOn: false }));
+			expect(r).toEqual({ ok: false, reason: expect.stringContaining("paste mode") });
+		});
+
+		it("does not impose that on a kind that doesn't need it", () => {
+			expect(canSendPrompt(baseInput({ bracketedPasteOn: false }))).toEqual({ ok: true });
+		});
 	});
 
 	// #273: a launch signal is proof-of-life equivalent to `adapterHeard`

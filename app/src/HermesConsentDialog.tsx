@@ -1,5 +1,5 @@
-// #627: asks before Skein writes its MCP entry into one of the user's own
-// Hermes profiles. Consent is per profile and lives in the file, so nothing
+// #627/#625: asks before Skein writes its MCP entry and status hooks into one
+// of the user's own Hermes profiles. Consent is per profile and lives in the file, so nothing
 // is remembered on Skein's side.
 
 import { useEffect, useRef, useState } from "react";
@@ -71,6 +71,18 @@ export const HermesConsentDialog = ({
 		}
 	};
 
+	// What is actually offered; both until the preview says otherwise.
+	const mcp = preview?.offersMcp ?? true;
+	const hooks = preview?.offersHooks ?? true;
+	const what =
+		mcp && hooks ? "Review tools and status hooks" : hooks ? "Status hooks" : "Review tools";
+	const askSub =
+		mcp && hooks
+			? "Skein's review tools reach Hermes through an MCP entry, and its status hooks report what the harness is doing. Both live in the profile's config."
+			: hooks
+				? "Skein's status hooks report what the harness is doing. They live in the profile's config."
+				: "Skein's review tools reach Hermes through an MCP entry in the profile's config.";
+
 	const refusal = mode === "manual" ? (reason ?? previewError) : null;
 
 	return (
@@ -94,11 +106,11 @@ export const HermesConsentDialog = ({
 				}}
 			>
 				<div className="sk-modal-head">
-					<h2>Review tools in "{profile}"?</h2>
+					<h2>
+						{what} in "{profile}"?
+					</h2>
 					<div className="sub">
-						{mode === "ask"
-							? "Skein's review tools reach Hermes through an MCP entry in the profile's config."
-							: "Skein can't edit this profile's config safely."}
+						{mode === "ask" ? askSub : "Skein can't edit this profile's config safely."}
 					</div>
 				</div>
 				<div className="sk-modal-body">
@@ -106,7 +118,7 @@ export const HermesConsentDialog = ({
 					{preview ? (
 						<>
 							<div className="sk-hermes-consent-path">
-								{mode === "ask" ? "Appended to " : "Add by hand to "}
+								{mode === "ask" ? "Written to " : "Add by hand to "}
 								<code>{preview.configPath}</code>
 							</div>
 							<pre className="sk-hermes-consent-lines">{preview.lines.join("\n")}</pre>
@@ -140,7 +152,7 @@ export const HermesConsentDialog = ({
 							disabled={busy || !preview}
 							onClick={() => void add()}
 						>
-							{busy ? "Adding…" : "Add Skein's entry"}
+							{busy ? "Adding…" : "Add and approve"}
 						</button>
 					)}
 				</div>

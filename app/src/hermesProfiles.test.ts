@@ -42,6 +42,10 @@ describe("consentNeeded", () => {
 		expect(consentNeeded("work", "absent")).toBe("ask");
 		expect(consentNeeded("work", "refused")).toBe("manual");
 	});
+	it("asks again for a present entry whose hooks are not approved", () => {
+		expect(consentNeeded("work", "present", true)).toBe("ask");
+		expect(consentNeeded("skein", "present", true)).toBe("none");
+	});
 	it("runs directly when present, no config, or unknown", () => {
 		expect(consentNeeded("work", "present")).toBe("none");
 		expect(consentNeeded("work", "noConfig")).toBe("none");

@@ -321,6 +321,25 @@ export const TRANSITION_SOURCE = {
 	// #423: the harness supervisor moved a harness whose phase had gone
 	// stale (`supervisorSetWaiting`).
 	SupervisorRecovered: "supervisor-recovered",
+	// #625 — L2c-3, the Hermes shell-hook adapter.
+	// First prompt of the process (`on_session_start`); also the launch signal.
+	L2c3HermesSessionStart: "l2c3-hermes-session-start",
+	// The screen reader's `ready` status line stood in for the launch signal
+	// Hermes does not send (its first hook fires at the first prompt).
+	L2c3HermesReady: "l2c3-hermes-ready",
+	// `pre_llm_call` / `pre_tool_call` / `on_session_start`.
+	L2c3HermesRunning: "l2c3-hermes-running",
+	// `on_session_end` — fires at the end of every turn.
+	L2c3HermesEndTurn: "l2c3-hermes-end-turn",
+	// `on_session_end` with `interrupted` (Ctrl+C); the TUI stays open.
+	L2c3HermesInterrupted: "l2c3-hermes-interrupted",
+	// A real (non-`smart`) `pre_approval_request`.
+	L2c3HermesPermission: "l2c3-hermes-approval-request",
+	// The matching `post_approval_response`.
+	L2c3HermesPermissionAnswered: "l2c3-hermes-approval-response",
+	// A dialog answered after the main turn had already ended (a child's
+	// approval): back to `waiting`, from `permission`, so never notifiable.
+	L2c3HermesPermissionAnsweredIdle: "l2c3-hermes-approval-response-idle",
 	// #490: the user (or an agent on their behalf) restarted the harness;
 	// logged straight to harness_events by `restartHarness`, not through
 	// the phase store.

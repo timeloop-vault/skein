@@ -31,6 +31,7 @@
 
 mod design;
 mod harnesses;
+mod hermes_hooks;
 mod hooks;
 mod info;
 mod mail;
@@ -55,6 +56,7 @@ use design::{
     api_design_invoke, api_design_pane, api_design_screenshot, api_design_show, api_design_state,
 };
 use harnesses::{api_close_harness, api_list_harnesses, api_open_harness};
+use hermes_hooks::api_harness_hermes_turn;
 use hooks::{api_harness_permission, api_harness_session_end, api_harness_session_start};
 use info::api_info;
 use mail::{api_message_history, api_read_messages, api_send_message};
@@ -110,14 +112,45 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
         .route("/api/design/changes", post(api_design_changes))
         .route("/api/design/screenshot", post(api_design_screenshot))
         .route("/api/design/pane", post(api_design_pane))
-        .route("/api/harness/permission", post(api_harness_permission))
-        .route(
-            "/api/harness/session-start",
-            post(api_harness_session_start),
-        )
         .route("/api/harness/session-end", post(api_harness_session_end))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
+        // Hermes' hook script posts whole-conversation bodies here (#625),
+        // so these three routes carry their own, raised limit. Merged
+        // AFTER the layer above, which only wraps the routes before it.
+        .merge(
+            Router::new()
+                .route("/api/harness/permission", post(api_harness_permission))
+                .route(
+                    "/api/harness/session-start",
+                    post(api_harness_session_start),
+                )
+                .route("/api/harness/hermes-turn", post(api_harness_hermes_turn))
+                // Before the (raised) body limit matters: handlers read
+                // the body, this runs first, so an unauthenticated
+                // caller never gets 64 MiB buffered.
+                .route_layer(axum::middleware::from_fn_with_state(
+                    Arc::clone(&state),
+                    hook_auth_gate,
+                ))
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    hermes_hooks::MAX_HOOK_BODY,
+                )),
+        )
         .with_state(state)
+}
+
+/// Rejects a hook request that fails authentication before its body is
+/// read. Same refusal (status and body) as the handlers' own check,
+/// which stays: it also yields the caller they need.
+async fn hook_auth_gate(
+    State(state): State<Arc<AgentApiState>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    match authenticate(&state, request.headers()) {
+        Ok(_) => next.run(request).await,
+        Err(e) => refuse(&e),
+    }
 }
 
 /// Serve until the process ends. Skein's PTYs die with it too, so
@@ -191,6 +224,7 @@ fn mail_context(state: &AgentApiState) -> MailContext {
             messaging_enabled: settings.allow_agent_messaging,
             claude_injected: settings.inject_claude_plugin,
             opencode_injected: settings.inject_opencode_config,
+            hermes_injected: settings.inject_hermes_config,
         },
         agent_sees_mcp: crate::agents::agent_sees_mcp,
         app: state.app.clone(),

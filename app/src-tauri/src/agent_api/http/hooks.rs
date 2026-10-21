@@ -45,6 +45,12 @@ pub(super) async fn api_harness_permission(
             "X-Skein-Harness must name a harness this room actually contains",
         );
     };
+    // A Hermes approval hook shares this URL (#625): it gets its own
+    // event, never the Claude-shaped one.
+    if let Some((event, hook)) = super::hermes_hooks::parse_hermes_body(&body) {
+        super::hermes_hooks::emit(&state, &caller.room_id, &harness_id, event, hook);
+        return StatusCode::NO_CONTENT.into_response();
+    }
     let payload: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
     let tool_name = payload
         .get("tool_name")
@@ -121,6 +127,10 @@ pub(super) async fn api_harness_session_start(
             "X-Skein-Harness must name a harness this room actually contains",
         );
     };
+    if let Some((event, hook)) = super::hermes_hooks::parse_hermes_body(&body) {
+        super::hermes_hooks::emit(&state, &caller.room_id, &harness_id, event, hook);
+        return StatusCode::NO_CONTENT.into_response();
+    }
     let (session_id, source) = session_start_fields(&body);
     tracing::info!(
         harness_id = %harness_id,
@@ -168,13 +178,17 @@ fn valid_session_id(payload: &Value) -> Option<String> {
     payload
         .get("session_id")
         .and_then(Value::as_str)
-        .filter(|s| {
-            !s.is_empty()
-                && s.len() <= MAX_SESSION_ID_LEN
-                && s.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        })
+        .filter(|s| plausible_session_id(s))
         .map(str::to_owned)
+}
+
+/// The id rule behind [`valid_session_id`], shared with the Hermes hook
+/// routes (`child_session_id` too).
+pub(super) fn plausible_session_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= MAX_SESSION_ID_LEN
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// A string field of at most [`MAX_SOURCE_LEN`], verbatim; else `None`.

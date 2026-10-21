@@ -151,6 +151,10 @@ pub struct AgentApiState {
     /// and that is `#[cfg(test)]` too.
     #[cfg(test)]
     test_frontend: parking_lot::Mutex<Option<TestFrontend>>,
+    /// Test-only capture of every Hermes hook event (#625), since a
+    /// unit test has no `AppHandle` to emit to.
+    #[cfg(test)]
+    pub(crate) test_hermes_events: parking_lot::Mutex<Vec<super::hermes_event::HarnessHermesHook>>,
 }
 
 /// See [`AgentApiState::test_frontend`].
@@ -239,6 +243,8 @@ impl AgentApiState {
             verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),
             #[cfg(test)]
             test_frontend: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            test_hermes_events: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
@@ -254,6 +260,7 @@ impl AgentApiState {
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
             verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),
             test_frontend: parking_lot::Mutex::new(None),
+            test_hermes_events: parking_lot::Mutex::new(Vec::new()),
         }
     }
 

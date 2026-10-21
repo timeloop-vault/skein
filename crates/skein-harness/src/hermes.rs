@@ -32,6 +32,10 @@
 //! off by an hour and does not match; the harness then stays unbound
 //! rather than claiming wrongly.
 
+pub mod hooks;
+pub mod messages;
+pub mod version;
+
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -158,7 +162,7 @@ pub struct PendingHarness {
 
 /// Open strictly read-only with a short busy timeout. `None` when the
 /// file does not exist.
-fn open(db: &Path) -> Result<Option<Connection>> {
+pub fn open(db: &Path) -> Result<Option<Connection>> {
     if !db.is_file() {
         return Ok(None);
     }

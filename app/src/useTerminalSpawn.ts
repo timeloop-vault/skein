@@ -278,6 +278,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				const {
 					id,
 					injected,
+					hermesHooks,
 					mouseClicksDisabled,
 					envProfile: appliedProfile,
 				} = await ptySpawn({
@@ -311,6 +312,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					harnessKind,
 					program: cmdToSpawn[0],
 					hermesProfile,
+					hermesHooks,
 					sessionId,
 					opencodePort,
 					onSessionCaptured,

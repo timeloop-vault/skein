@@ -5,6 +5,9 @@
 export interface PtySpawnResult {
 	id: string;
 	injected: boolean;
+	/// #625: a Hermes harness whose status hooks are installed, approved
+	/// and on a verified version. Always `false` for other kinds.
+	hermesHooks: boolean;
 	/// `CLAUDE_CODE_DISABLE_MOUSE_CLICKS` is truthy in the child's env
 	/// (#401): Skein must open clicked links itself.
 	mouseClicksDisabled: boolean;

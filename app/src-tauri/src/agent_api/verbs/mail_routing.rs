@@ -79,6 +79,7 @@ pub(super) fn mail_refusal_for(
     let injected = match kind {
         "claude" => policy.claude_injected,
         "opencode" => policy.opencode_injected,
+        "hermes" => policy.hermes_injected,
         _ => {
             return Some(format!(
                 "{kind} harnesses have no MCP connection to receive messages on"

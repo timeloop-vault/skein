@@ -28,6 +28,9 @@ use crate::pty::{PtyEvent, PtyManager};
 pub(crate) struct PtySpawnResult {
     id: String,
     injected: bool,
+    /// A Hermes harness whose status hooks are installed, approved and on
+    /// a verified version (#625); false for every other kind.
+    hermes_hooks: bool,
     mouse_clicks_disabled: bool,
     /// The env profile applied to this spawn (#615), so the frontend can
     /// record which profile a running harness started with.
@@ -121,6 +124,7 @@ pub(crate) async fn pty_spawn(
         Ok(PtySpawnResult {
             id,
             injected: outcome.injected,
+            hermes_hooks: outcome.hermes_hooks,
             mouse_clicks_disabled: outcome.mouse_clicks_disabled,
             env_profile: outcome.env_profile,
         })
@@ -230,6 +234,7 @@ mod tests {
         let json = serde_json::to_value(PtySpawnResult {
             id: "abc".to_owned(),
             injected: true,
+            hermes_hooks: true,
             mouse_clicks_disabled: true,
             env_profile: Some("proxy".to_owned()),
         })
@@ -239,6 +244,7 @@ mod tests {
             serde_json::json!({
                 "id": "abc",
                 "injected": true,
+                "hermesHooks": true,
                 "mouseClicksDisabled": true,
                 "envProfile": "proxy"
             })

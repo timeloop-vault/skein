@@ -13,7 +13,7 @@ import {
 	stopTickIfIdle,
 	store,
 } from "./harnessActivityCore.ts";
-import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
+import { TRANSITION_SOURCE, type TransitionSource } from "./harnessActivityTypes.ts";
 import { forgetScreenPhase } from "./screenPhaseTick.ts";
 import { subagents } from "./subagents.ts";
 
@@ -165,7 +165,10 @@ export const lifecycleMethods = {
 	/// session is mid-turn, which this event can't say either way).
 	/// A second `noteLaunchSignal` while already `waiting` is a no-op
 	/// by construction — `setPhase`'s same-phase short-circuit.
-	noteLaunchSignal(id: string): void {
+	noteLaunchSignal(
+		id: string,
+		source: TransitionSource = TRANSITION_SOURCE.L2c1ClaudeSessionStart,
+	): void {
 		const cur = store.get(id);
 		if (!cur || cur.phase === "exited") return;
 		const recovering = cur.adapterSilent && cur.degradedBy === "launch-silent";
@@ -183,7 +186,7 @@ export const lifecycleMethods = {
 		});
 		if (cur.phase === "permission") return;
 		if (!cur.adapterHeard && (cur.phase === "spawning" || recovering)) {
-			setPhase(id, "waiting", TRANSITION_SOURCE.L2c1ClaudeSessionStart);
+			setPhase(id, "waiting", source);
 		}
 	},
 

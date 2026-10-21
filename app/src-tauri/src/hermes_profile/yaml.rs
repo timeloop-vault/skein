@@ -42,26 +42,26 @@ impl fmt::Display for EditRefused {
     }
 }
 
-fn refuse<T>(why: &str) -> Result<T, EditRefused> {
+pub(super) fn refuse<T>(why: &str) -> Result<T, EditRefused> {
     Err(EditRefused(why.to_string()))
 }
 
-struct Line {
-    start: usize,
+pub(super) struct Line {
+    pub(super) start: usize,
     /// End of the content, before any `\r\n` / `\n`.
-    content_end: usize,
+    pub(super) content_end: usize,
     /// End including the terminator.
-    end: usize,
+    pub(super) end: usize,
 }
 
-struct Doc<'a> {
-    text: &'a str,
-    lines: Vec<Line>,
-    eol: &'static str,
+pub(super) struct Doc<'a> {
+    pub(super) text: &'a str,
+    pub(super) lines: Vec<Line>,
+    pub(super) eol: &'static str,
 }
 
 impl<'a> Doc<'a> {
-    fn new(text: &'a str) -> Self {
+    pub(super) fn new(text: &'a str) -> Self {
         let mut start = if text.starts_with(BOM) { BOM.len() } else { 0 };
         let mut lines = Vec::new();
         while start < text.len() {
@@ -89,36 +89,36 @@ impl<'a> Doc<'a> {
         Doc { text, lines, eol }
     }
 
-    fn content(&self, i: usize) -> &'a str {
+    pub(super) fn content(&self, i: usize) -> &'a str {
         &self.text[self.lines[i].start..self.lines[i].content_end]
     }
 
-    fn has_terminator(&self, i: usize) -> bool {
+    pub(super) fn has_terminator(&self, i: usize) -> bool {
         self.lines[i].end > self.lines[i].content_end
     }
 }
 
-fn is_blank(s: &str) -> bool {
+pub(super) fn is_blank(s: &str) -> bool {
     s.trim().is_empty()
 }
 
-fn is_comment(s: &str) -> bool {
+pub(super) fn is_comment(s: &str) -> bool {
     s.trim_start().starts_with('#')
 }
 
-fn indent_of(s: &str) -> &str {
+pub(super) fn indent_of(s: &str) -> &str {
     &s[..s.len() - s.trim_start_matches([' ', '\t']).len()]
 }
 
 /// `key:` at the start of `s` (already unindented), followed by end or
 /// whitespace. Returns the rest after the colon.
-fn key_rest<'a>(s: &'a str, key: &str) -> Option<&'a str> {
+pub(super) fn key_rest<'a>(s: &'a str, key: &str) -> Option<&'a str> {
     let after = s.strip_prefix(key)?.trim_start_matches([' ', '\t']);
     let rest = after.strip_prefix(':')?;
     (rest.is_empty() || rest.starts_with([' ', '\t'])).then_some(rest)
 }
 
-fn quoted_key(s: &str, key: &str) -> bool {
+pub(super) fn quoted_key(s: &str, key: &str) -> bool {
     ['"', '\''].iter().any(|q| {
         s.strip_prefix(*q)
             .and_then(|r| r.strip_prefix(key))
@@ -143,7 +143,7 @@ fn opens_block_scalar(line: &str) -> bool {
 }
 
 /// Whether any non-comment line in `from..to` opens a block scalar.
-fn block_scalar_between(doc: &Doc<'_>, from: usize, to: usize) -> bool {
+pub(super) fn block_scalar_between(doc: &Doc<'_>, from: usize, to: usize) -> bool {
     (from..to.min(doc.lines.len()))
         .map(|i| doc.content(i))
         .any(|c| !is_comment(c) && opens_block_scalar(c))
@@ -151,7 +151,7 @@ fn block_scalar_between(doc: &Doc<'_>, from: usize, to: usize) -> bool {
 
 /// Whether the document root is a block mapping, judged from its first
 /// content line (after blanks, comments and a bare `---`).
-fn root_is_block_mapping(doc: &Doc<'_>) -> bool {
+pub(super) fn root_is_block_mapping(doc: &Doc<'_>) -> bool {
     let first = (0..doc.lines.len())
         .map(|i| doc.content(i))
         .find(|c| !is_blank(c) && !is_comment(c) && c.trim_end() != "---");
@@ -163,7 +163,7 @@ fn root_is_block_mapping(doc: &Doc<'_>) -> bool {
 }
 
 /// Whole-file check: more than one YAML document makes any edit unsafe.
-fn check_single_document(doc: &Doc<'_>) -> Result<(), EditRefused> {
+pub(super) fn check_single_document(doc: &Doc<'_>) -> Result<(), EditRefused> {
     let mut seen_content = false;
     let mut markers = 0;
     for i in 0..doc.lines.len() {
@@ -182,33 +182,38 @@ fn check_single_document(doc: &Doc<'_>) -> Result<(), EditRefused> {
     Ok(())
 }
 
-enum Value {
+pub(super) enum Value {
     Empty,
     Null,
 }
 
 /// The top-level `mcp_servers:` mapping.
-struct Top {
-    line: usize,
-    value: Value,
+pub(super) struct Top {
+    pub(super) line: usize,
+    pub(super) value: Value,
     /// Indentation of the first child, when there is one.
-    child_indent: Option<String>,
+    pub(super) child_indent: Option<String>,
     /// Last indented content line of the mapping.
-    last_content: Option<usize>,
+    pub(super) last_content: Option<usize>,
     /// Lines that are direct children (`indent == child_indent`).
-    child_lines: Vec<usize>,
+    pub(super) child_lines: Vec<usize>,
     /// A line in the block opens a block scalar.
-    block_scalar: bool,
+    pub(super) block_scalar: bool,
 }
 
 fn find_top(doc: &Doc<'_>) -> Result<Option<Top>, EditRefused> {
+    find_top_key(doc, KEY)
+}
+
+/// [`find_top`] for any top-level key (#625 reuses it for `hooks`).
+pub(super) fn find_top_key(doc: &Doc<'_>, key: &str) -> Result<Option<Top>, EditRefused> {
     let mut found = None;
     for i in 0..doc.lines.len() {
         let c = doc.content(i);
-        if quoted_key(c, KEY) {
-            return refuse("mcp_servers is written as a quoted key");
+        if quoted_key(c, key) {
+            return refuse(&format!("{key} is written as a quoted key"));
         }
-        if let Some(rest) = key_rest(c, KEY) {
+        if let Some(rest) = key_rest(c, key) {
             found = Some((i, rest));
             break;
         }
@@ -220,13 +225,15 @@ fn find_top(doc: &Doc<'_>) -> Result<Option<Top>, EditRefused> {
     let value = if rest.is_empty() || rest.starts_with('#') {
         Value::Empty
     } else if rest.starts_with(['&', '*', '!']) {
-        return refuse("mcp_servers uses a YAML anchor, alias or tag");
+        return refuse(&format!("{key} uses a YAML anchor, alias or tag"));
     } else if rest.starts_with(['{', '[']) {
-        return refuse("mcp_servers is written in flow style ({...} or [...])");
+        return refuse(&format!(
+            "{key} is written in flow style ({{...}} or [...])"
+        ));
     } else if rest == "~" || rest == "null" || rest.starts_with("null ") || rest.starts_with("~ ") {
         Value::Null
     } else {
-        return refuse("mcp_servers has a value Skein does not recognise");
+        return refuse(&format!("{key} has a value Skein does not recognise"));
     };
 
     let mut child_indent: Option<String> = None;
@@ -245,18 +252,18 @@ fn find_top(doc: &Doc<'_>) -> Result<Option<Top>, EditRefused> {
             break;
         }
         if ind.contains('\t') {
-            return refuse("the mcp_servers block is indented with tabs");
+            return refuse(&format!("the {key} block is indented with tabs"));
         }
         if is_comment(c) {
             continue;
         }
         let body = &c[ind.len()..];
         if body.starts_with("<<") {
-            return refuse("mcp_servers uses a merge key");
+            return refuse(&format!("{key} uses a merge key"));
         }
         if child_indent.is_none() {
             if body.starts_with('-') {
-                return refuse("mcp_servers holds a list, not a mapping");
+                return refuse(&format!("{key} holds a list, not a mapping"));
             }
             child_indent = Some(ind.to_string());
         }
@@ -271,7 +278,7 @@ fn find_top(doc: &Doc<'_>) -> Result<Option<Top>, EditRefused> {
             .map(|j| doc.content(j))
             .find(|c| !is_blank(c) && !is_comment(c));
         if next.is_some_and(|c| c.starts_with('-') && !c.starts_with("---")) {
-            return refuse("mcp_servers holds a list, not a mapping");
+            return refuse(&format!("{key} holds a list, not a mapping"));
         }
     }
     let block_scalar =
@@ -347,7 +354,7 @@ fn entry_lines(child: &str, unit: &str) -> Vec<String> {
     lines
 }
 
-fn unit_for(child: &str) -> &str {
+pub(super) fn unit_for(child: &str) -> &str {
     if child.len() == 4 { child } else { "  " }
 }
 

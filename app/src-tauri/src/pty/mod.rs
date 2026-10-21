@@ -119,6 +119,9 @@ struct Pty {
 pub struct SpawnOutcome {
     /// Whether #215's config injection was non-empty.
     pub injected: bool,
+    /// Whether this Hermes harness has working hook telemetry (#625);
+    /// false for every other kind.
+    pub hermes_hooks: bool,
     /// Whether `CLAUDE_CODE_DISABLE_MOUSE_CLICKS` is truthy in the final
     /// spawn environment (#401).
     pub mouse_clicks_disabled: bool,
@@ -226,6 +229,7 @@ impl PtyManager {
         let injection =
             crate::harness_config::injection_for(kind, program, harness_config, settings, agent);
         let mut injected = !injection.is_empty();
+        let mut hermes_hooks = false;
         // #569: Claude Code preferences from Skein's own Settings. Not
         // part of `injection`, so they never count toward `injected`.
         let claude_settings = crate::harness_config::claude_settings_args(kind, program, settings);
@@ -327,12 +331,15 @@ impl PtyManager {
         {
             let launch =
                 windows_resolved_program(program, &applied.path).unwrap_or_else(|| program.clone());
-            injected = crate::hermes_profile::prepare::prepare_for_spawn(
+            let prepared = crate::hermes_profile::prepare::prepare_for_spawn(
                 &builder,
                 &launch,
                 stored_args,
                 settings,
+                harness_config,
             );
+            injected = prepared.injected;
+            hermes_hooks = prepared.hooks;
         }
 
         tracing::info!(
@@ -501,6 +508,7 @@ impl PtyManager {
         self.inner.lock().insert(id, pty);
         Ok(SpawnOutcome {
             injected,
+            hermes_hooks,
             mouse_clicks_disabled: applied.mouse_clicks_disabled,
             env_profile: applied.env_profile,
         })

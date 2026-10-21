@@ -40,7 +40,9 @@
 			"harness-config/claude-plugin/hooks/hooks.json",
 			"harness-config/claude-plugin/skills/skein-review/SKILL.md",
 			"harness-config/claude-plugin/skills/skein-mail/SKILL.md",
-			"harness-config/opencode/opencode.json"
+			"harness-config/opencode/opencode.json",
+			"harness-config/hermes/skein-hook.py",
+			"harness-config/hermes/skein-hook.sh"
 		],
 		"icon": [
 			"icons/32x32.png",

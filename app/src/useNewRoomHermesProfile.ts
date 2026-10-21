@@ -24,7 +24,7 @@ export const useNewRoomHermesProfile = (
 	const gateOnConsent = (): boolean => {
 		if (harness !== "hermes") return false;
 		const entry = entryOf(hermesListing, hermesProfile);
-		const need = consentNeeded(hermesProfile, entry?.skeinEntry);
+		const need = consentNeeded(hermesProfile, entry?.skeinEntry, entry?.hooksPending);
 		if (need === "none") return false;
 		setConsent({ mode: need, reason: entry?.reason ?? null });
 		return true;

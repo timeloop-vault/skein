@@ -15,6 +15,8 @@ export interface HermesProfileInfo {
 	skeinEntry: SkeinEntryState;
 	/** Why the entry cannot be added automatically, when `refused`. */
 	reason: string | null;
+	/** Skein's status hooks can be added and approved here and are not yet (#625). */
+	hooksPending?: boolean;
 }
 
 export interface HermesProfileListing {
@@ -26,6 +28,10 @@ export interface HermesProfileListing {
 export interface EntryPreview {
 	configPath: string;
 	lines: string[];
+	/** The preview includes Skein's MCP entry. */
+	offersMcp: boolean;
+	/** The preview includes Skein's status hooks and their approval. */
+	offersHooks: boolean;
 }
 
 export type InjectResult = "added" | "alreadyPresent";
@@ -79,7 +85,7 @@ export const profileTag = (p: HermesProfileInfo): string | null => {
 	if (p.name === SKEIN_HERMES_PROFILE) return null;
 	switch (p.skeinEntry) {
 		case "present":
-			return "review tools on";
+			return p.hooksPending ? "review tools on · hooks not approved" : "review tools on";
 		case "absent":
 			return "no review tools yet";
 		case "refused":
@@ -92,12 +98,18 @@ export const profileTag = (p: HermesProfileInfo): string | null => {
 export type Consent = "none" | "ask" | "manual";
 
 /** Whether choosing `profile` needs the consent dialog first. Skein's own
- *  profile never does; an `absent` entry is offered for adding; a `refused`
+ *  profile never does; an `absent` entry, or a present one whose status
+ *  hooks are still unapproved (#625), is offered for adding; a `refused`
  *  one is shown for the user to add by hand. `noConfig` runs as-is — there
  *  is no config to edit. Consent persists in the file itself. */
-export const consentNeeded = (profile: string, entry: SkeinEntryState | undefined): Consent => {
+export const consentNeeded = (
+	profile: string,
+	entry: SkeinEntryState | undefined,
+	hooksPending = false,
+): Consent => {
 	if (profile === SKEIN_HERMES_PROFILE) return "none";
 	if (entry === "absent") return "ask";
+	if (entry === "present" && hooksPending) return "ask";
 	if (entry === "refused") return "manual";
 	return "none";
 };
