@@ -5,7 +5,10 @@
 //! filter `.git/`: the index, HEAD ref, and tag refs all live there and
 //! all of them are interesting signals for a "refresh status" trigger.
 //! Debouncing absorbs the burst of events a single git operation
-//! produces, so the noise never reaches the frontend.
+//! produces, so the noise never reaches the frontend. A caller can ask
+//! for gitignored worktree paths to be dropped as well
+//! ([`WatcherManager::start_worktree_watch`], #637); `.git/` stays
+//! unfiltered either way.
 //!
 //! A linked worktree's `.git` is a file, so its HEAD, index and
 //! `logs/HEAD` live in `<main>/.git/worktrees/<name>/`, outside the
@@ -26,6 +29,8 @@ use std::time::Duration;
 use notify_debouncer_mini::notify::RecommendedWatcher;
 use notify_debouncer_mini::{DebounceEventResult, Debouncer, new_debouncer, notify::RecursiveMode};
 use parking_lot::Mutex;
+
+use crate::ignore_filter::WorktreeIgnore;
 
 const DEBOUNCE_MS: u64 = 200;
 
@@ -101,6 +106,34 @@ impl WatcherManager {
         F: Fn() + Send + 'static,
     {
         self.start_inner(id, path, extra, move |_paths| on_change())
+    }
+
+    /// The worktree watch behind `git_watch_start`: [`start_with_extra`]
+    /// semantics, but with `skip_ignored` a batch ticks only if some
+    /// reported path survives [`WorktreeIgnore`] (a notify error always
+    /// ticks). `.git/` and the `extra` admin dir are never filtered out.
+    ///
+    /// [`start_with_extra`]: WatcherManager::start_with_extra
+    pub fn start_worktree_watch<F>(
+        &self,
+        id: String,
+        path: &Path,
+        extra: &[PathBuf],
+        skip_ignored: bool,
+        tick: F,
+    ) -> Result<(), WatcherError>
+    where
+        F: Fn() + Send + 'static,
+    {
+        if !skip_ignored {
+            return self.start_with_extra(id, path, extra, tick);
+        }
+        let ignore = Mutex::new(WorktreeIgnore::new(&path.to_string_lossy()));
+        self.start_inner(id, path, extra, move |paths| {
+            if should_tick(paths, &ignore) {
+                tick();
+            }
+        })
     }
 
     fn start_inner<F>(
@@ -180,6 +213,12 @@ impl WatcherManager {
     }
 }
 
+/// `None` (notify error, events may have been lost) ticks; a batch ticks
+/// when at least one path is not gitignored.
+fn should_tick(paths: Option<Vec<PathBuf>>, ignore: &Mutex<WorktreeIgnore>) -> bool {
+    paths.is_none_or(|p| !ignore.lock().retain_unignored(p).is_empty())
+}
+
 /// True when any path's file name is `HEAD` or `HEAD.lock` (not
 /// `ORIG_HEAD`, `FETCH_HEAD`, ...). `HEAD.lock` counts because git writes
 /// HEAD by renaming the lock over it, and a platform that reports a rename
@@ -196,6 +235,43 @@ fn touches_head<'a>(paths: impl IntoIterator<Item = &'a Path>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn drain(rx: &std::sync::mpsc::Receiver<()>) {
+        while rx.try_recv().is_ok() {}
+    }
+
+    fn write(root: &Path, rel: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "x").unwrap();
+    }
+
+    #[test]
+    fn filtered_watch_skips_ignored_but_ticks_on_source_and_git() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+        let root = dunce::canonicalize(dir.path()).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let manager = WatcherManager::new();
+        manager
+            .start_worktree_watch("t".into(), &root, &[], true, move || {
+                let _ = tx.send(());
+            })
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        drain(&rx);
+
+        write(&root, "target/a.o");
+        assert!(rx.recv_timeout(Duration::from_millis(1500)).is_err());
+
+        write(&root, "src/a.rs");
+        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
+        drain(&rx);
+
+        write(&root, ".git/refs/heads/x");
+        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
+    }
 
     fn hit(paths: &[&str]) -> bool {
         touches_head(paths.iter().map(Path::new))

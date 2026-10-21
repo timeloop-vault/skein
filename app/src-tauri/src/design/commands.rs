@@ -3,7 +3,6 @@
 //! folder always comes from the database by room id, never from the
 //! frontend.
 
-use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -13,7 +12,9 @@ use tauri::State;
 use tauri::ipc::Channel;
 
 use super::PreviewState;
+use super::change_filter::ChangeFilter;
 use crate::db::Database;
+use crate::ignore_filter::WorktreeIgnore;
 use crate::watcher::WatcherManager;
 
 const MAX_DEPTH: usize = 12;
@@ -113,20 +114,21 @@ fn start_design_watch<F>(
 where
     F: Fn() + Send + 'static,
 {
-    let filter = Mutex::new(ChangeFilter::new(
-        canonical.to_path_buf(),
-        SystemTime::now(),
+    // Gitignored paths (build output, caches) are dropped before the
+    // filter sees them, so they neither tick nor fill its `seen` map.
+    let filter = Mutex::new((
+        ChangeFilter::new(canonical.to_path_buf(), SystemTime::now()),
+        WorktreeIgnore::new(&canonical.to_string_lossy()),
     ));
     manager.start_with_paths(id, canonical, move |paths| {
         let (count, changed) = match paths {
             None => (0, true),
-            Some(p) => (
-                p.len(),
-                filter
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .observe(&p),
-            ),
+            Some(p) => {
+                let mut guard = filter.lock().unwrap_or_else(PoisonError::into_inner);
+                let (changes, ignore) = &mut *guard;
+                let kept = ignore.retain_unignored(p);
+                (kept.len(), changes.observe(&kept))
+            }
         };
         tracing::debug!(paths = count, ticked = changed, "design watch batch");
         if changed {
@@ -145,52 +147,6 @@ pub fn should_reload(root: &Path, paths: &[PathBuf]) -> bool {
             matches!(c, Component::Normal(n) if SKIPPED_DIRS.iter().any(|s| n == OsStr::new(s)))
         })
     })
-}
-
-/// Decides from filesystem state, not event kinds, whether a batch is a
-/// real change. On Linux the inotify backend reports opens and reads, so
-/// the preview server's own reads (and the entry listing each tick
-/// triggers) would otherwise queue the next reload forever.
-pub struct ChangeFilter {
-    root: PathBuf,
-    start: SystemTime,
-    seen: HashMap<PathBuf, (Option<SystemTime>, u64)>,
-}
-
-impl ChangeFilter {
-    pub fn new(root: PathBuf, start: SystemTime) -> Self {
-        Self {
-            root,
-            start,
-            seen: HashMap::new(),
-        }
-    }
-
-    /// Whether the batch changed anything; every relevant path is
-    /// recorded even once a change is found.
-    pub fn observe(&mut self, paths: &[PathBuf]) -> bool {
-        let mut changed = false;
-        for p in paths {
-            if !should_reload(&self.root, std::slice::from_ref(p)) {
-                continue;
-            }
-            let Ok(meta) = std::fs::symlink_metadata(p) else {
-                self.seen.remove(p);
-                changed = true;
-                continue;
-            };
-            if meta.is_dir() {
-                // A file added or removed inside reports its own path.
-                continue;
-            }
-            let stamp = (meta.modified().ok(), meta.len());
-            match self.seen.insert(p.clone(), stamp) {
-                Some(prev) => changed |= prev != stamp,
-                None => changed |= stamp.0.is_none_or(|m| m >= self.start),
-            }
-        }
-        changed
-    }
 }
 
 /// Relative, `/`-separated, sorted paths of the `.html`/`.htm` files
@@ -319,50 +275,6 @@ mod tests {
         assert!(reload("/r", &["/r/my_node_modules/a.js"]));
     }
 
-    fn filter(root: &Path, start_offset_secs: i64) -> ChangeFilter {
-        let start = if start_offset_secs >= 0 {
-            SystemTime::now() + Duration::from_secs(start_offset_secs.unsigned_abs())
-        } else {
-            SystemTime::now() - Duration::from_secs(start_offset_secs.unsigned_abs())
-        };
-        ChangeFilter::new(root.to_path_buf(), start)
-    }
-
-    #[test]
-    fn filter_ignores_a_reread_of_an_unchanged_file() {
-        let dir = tempfile::tempdir().unwrap();
-        touch(dir.path(), "a.html");
-        let p = dir.path().join("a.html");
-        let mut f = filter(dir.path(), -5);
-        assert!(f.observe(std::slice::from_ref(&p)), "new file after start");
-        assert!(!f.observe(std::slice::from_ref(&p)));
-        assert!(!f.observe(std::slice::from_ref(&p)));
-    }
-
-    #[test]
-    fn filter_ticks_on_rewrite_and_removal() {
-        let dir = tempfile::tempdir().unwrap();
-        touch(dir.path(), "a.html");
-        let p = dir.path().join("a.html");
-        let mut f = filter(dir.path(), 5);
-        assert!(!f.observe(std::slice::from_ref(&p)), "old unseen file");
-        std::fs::write(&p, "longer body").unwrap();
-        assert!(f.observe(std::slice::from_ref(&p)), "len changed");
-        assert!(!f.observe(std::slice::from_ref(&p)));
-        std::fs::remove_file(&p).unwrap();
-        assert!(f.observe(std::slice::from_ref(&p)), "removed");
-    }
-
-    #[test]
-    fn filter_ignores_directories_and_skipped_paths() {
-        let dir = tempfile::tempdir().unwrap();
-        touch(dir.path(), "sub/a.html");
-        touch(dir.path(), ".git/x");
-        let mut f = filter(dir.path(), -5);
-        assert!(!f.observe(&[dir.path().join("sub")]));
-        assert!(!f.observe(&[dir.path().join(".git/x")]));
-    }
-
     fn rewrite_ticks(watch_root: &Path, file_dir: &Path) -> bool {
         let p = file_dir.join("proto/x.jsx");
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -383,6 +295,30 @@ mod tests {
     fn real_watcher_ticks_on_jsx_rewrite() {
         let dir = tempfile::tempdir().unwrap();
         assert!(rewrite_ticks(dir.path(), dir.path()));
+    }
+
+    #[test]
+    fn real_watcher_ignores_gitignored_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git2::Repository::init(root).unwrap();
+        std::fs::write(root.join(".gitignore"), "dist/\n").unwrap();
+        std::fs::create_dir_all(root.join("dist")).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let manager = WatcherManager::new();
+        let canonical = dunce::canonicalize(root).unwrap();
+        start_design_watch(&manager, "t".into(), &canonical, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::write(root.join("dist/bundle.js"), "one").unwrap();
+        assert!(
+            rx.recv_timeout(Duration::from_millis(1500)).is_err(),
+            "ignored write must not tick"
+        );
+        std::fs::write(root.join("index.html"), "<p>hi</p>").unwrap();
+        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
     }
 
     #[test]

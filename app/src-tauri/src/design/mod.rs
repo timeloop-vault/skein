@@ -14,6 +14,7 @@
 //! by the next launch. The room's folder is resolved at REQUEST time
 //! from the database, never cached, so a repointed room follows.
 
+mod change_filter;
 pub mod commands;
 mod device;
 mod rewrite;

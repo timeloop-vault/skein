@@ -11,33 +11,14 @@
 //! 3. stat / HEAD blob / disk state per new path, with no lock held.
 //! 4. ONE `insert_review_baselines_if_absent` (one lock, one transaction).
 //!
-//! # The ignore cache
-//!
-//! [`IgnoreCache`] remembers, per directory, whether git ignores it. That
-//! is sound because git cannot re-include a file beneath an excluded
-//! directory, and libgit2's status does not descend into ignored
-//! directories, so [`catch_up`](Discovery::catch_up) agrees. A path is
-//! checked shallowest-ancestor-first and the walk stops at the first
-//! ignored one, so `node_modules/**` costs one libgit2 call, once.
-//!
-//! The cache is **cleared** before a batch that names a `.gitignore` or
-//! `.git/info/exclude`, on a notify error, and once it is older than
-//! [`CACHE_TTL`]. The time bound exists because two inputs are not
-//! watched: in a linked worktree `info/exclude` lives in the common git
-//! dir outside the watched folder, and the global `core.excludesFile` is
-//! never watched at all.
-//!
-//! An ignore query that errors never drops a path: it is kept (warn log).
-//!
-//! A tracked or force-added file under an ignored directory is treated as
-//! ignored. That is unchanged from before #636: libgit2's `is_path_ignored`
-//! already walks parent directories and does not consult the index.
+//! The ignore cache lives in [`crate::ignore_filter`] (shared with the
+//! review pane's watcher, #637).
 //!
 //! The opened `Repo` is held for the watcher's life, so a repo
 //! re-initialised in place is only picked up when the watcher restarts,
 //! which a room repoint does.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -45,84 +26,7 @@ use skein_review::FileState;
 
 use super::{abs_path, capture_state_with_repo, now_ms, relative_key};
 use crate::db::{Database, NewBaseline};
-
-/// How long a cached ignore decision may be trusted. See the module docs
-/// for the inputs this bounds.
-const CACHE_TTL: Duration = Duration::from_secs(60);
-
-/// The "is this repo-relative path ignored" query. A trailing `/` asks
-/// about a directory. A seam so tests can count and fail queries.
-pub(crate) type IgnoreQuery<'a> = dyn FnMut(&str) -> Result<bool, String> + 'a;
-
-/// Directory-level ignore decisions. See the module docs.
-pub(crate) struct IgnoreCache {
-    /// dir relpath -> ignored? (`pub(crate)` so tests can inspect it)
-    pub(crate) dirs: HashMap<String, bool>,
-    born: Instant,
-}
-
-impl IgnoreCache {
-    pub(crate) fn new() -> Self {
-        Self {
-            dirs: HashMap::new(),
-            born: Instant::now(),
-        }
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.dirs.clear();
-        self.born = Instant::now();
-    }
-
-    fn expire_if_old(&mut self) {
-        if self.born.elapsed() >= CACHE_TTL {
-            self.clear();
-        }
-    }
-
-    /// Is `key` ignored? Ancestors shallowest-first, cached; then the
-    /// file itself, uncached (file patterns such as `*.log`). An error
-    /// anywhere means "not proven ignored".
-    pub(crate) fn is_ignored(&mut self, key: &str, query: &mut IgnoreQuery<'_>) -> bool {
-        let mut prefix = String::new();
-        let mut segs = key.split('/').peekable();
-        while let Some(seg) = segs.next() {
-            if segs.peek().is_none() {
-                break; // the last segment is the file itself
-            }
-            if !prefix.is_empty() {
-                prefix.push('/');
-            }
-            prefix.push_str(seg);
-            match self.dirs.get(&prefix) {
-                Some(true) => return true,
-                Some(false) => continue,
-                None => {}
-            }
-            // Trailing slash: libgit2 then treats the query as a
-            // directory even when it is gone from disk.
-            match query(&format!("{prefix}/")) {
-                Ok(true) => {
-                    self.dirs.insert(prefix, true);
-                    return true;
-                }
-                Ok(false) => {
-                    self.dirs.insert(prefix.clone(), false);
-                }
-                Err(e) => {
-                    tracing::warn!(path = %prefix, error = %e, "review: discovery dir ignore check failed");
-                }
-            }
-        }
-        match query(key) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(path = %key, error = %e, "review: discovery ignore check failed");
-                false
-            }
-        }
-    }
-}
+use crate::ignore_filter::{IgnoreCache, IgnoreQuery};
 
 /// What [`filter_batch`] kept and how many it dropped for each reason.
 #[derive(Debug, Default)]
@@ -147,15 +51,7 @@ pub(crate) fn filter_batch(
         .filter_map(|r| relative_key(cwd, &r))
         .filter(|k| seen.insert(k.clone()))
         .collect();
-    // Before the `.git` filter: `.git/info/exclude` is a git path.
-    if keys
-        .iter()
-        .any(|k| k == ".git/info/exclude" || k.rsplit('/').next() == Some(".gitignore"))
-    {
-        cache.clear();
-    } else {
-        cache.expire_if_old();
-    }
+    cache.note_batch(&keys);
     let mut out = Filtered::default();
     for key in keys {
         if key.split('/').any(|seg| seg == ".git") {

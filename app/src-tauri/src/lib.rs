@@ -24,6 +24,7 @@ mod harness_events_opencode;
 mod harness_kind;
 mod harness_work_hermes;
 mod hermes_profile;
+mod ignore_filter;
 mod open_request;
 mod os_notify;
 mod pty;

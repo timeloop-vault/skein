@@ -48,7 +48,7 @@ export function useWorktreeWatcher(cwd: string, enabled: boolean, onTick: () => 
 		let watchId: string | null = null;
 		const channel = new Channel<null>();
 		channel.onmessage = () => cb.current();
-		invoke<string>("git_watch_start", { path: cwd, onChange: channel })
+		invoke<string>("git_watch_start", { path: cwd, onChange: channel, skipIgnored: true })
 			.then((id) => {
 				if (cancelled) {
 					void invoke("git_watch_stop", { id });

@@ -456,11 +456,17 @@ pub async fn git_status(path: String) -> Result<Vec<StatusDto>, String> {
 /// `.git/worktrees/`, outside `path`, so that dir is watched too or a
 /// commit of already-on-disk files would never tick (#563). The shared
 /// common dir is not watched: sibling rooms' commits would tick us.
+///
+/// `skip_ignored` (default false) drops batches made only of gitignored
+/// worktree paths (#637), for the review pane. `.git/` stays unfiltered.
+/// The file tree watches arbitrary subdirectories, possibly inside ignored
+/// ones, so it leaves this off.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub fn git_watch_start(
     path: String,
     on_change: Channel<()>,
+    skip_ignored: Option<bool>,
     manager: tauri::State<'_, WatcherManager>,
 ) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
@@ -468,11 +474,17 @@ pub fn git_watch_start(
         .into_iter()
         .collect();
     manager
-        .start_with_extra(id.clone(), Path::new(&path), &extra, move || {
-            // The channel send only fails if the frontend dropped its
-            // half — nothing useful we can do at that point.
-            let _ = on_change.send(());
-        })
+        .start_worktree_watch(
+            id.clone(),
+            Path::new(&path),
+            &extra,
+            skip_ignored.unwrap_or(false),
+            move || {
+                // The channel send only fails if the frontend dropped its
+                // half — nothing useful we can do at that point.
+                let _ = on_change.send(());
+            },
+        )
         .map_err(|e| e.to_string())?;
     Ok(id)
 }
