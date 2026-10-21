@@ -17,6 +17,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { useEffect, useRef } from "react";
 import { confirmDialog } from "./confirmDialog.ts";
 import { filesRegistry } from "./filesRegistry.ts";
+import { flushPerfSummary, startPerfTelemetry } from "./perfTelemetry.ts";
 import { flushRoomsBounded } from "./roomsFlush.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
 import type { Room } from "./types.ts";
@@ -33,6 +34,22 @@ export function useAppWindowEffects(
 	 *  ref it keeps in sync afterwards, not the rooms themselves. */
 	getRooms: () => readonly Room[],
 ) {
+	// #599: always-on main-thread telemetry. Counts read through the
+	// stable rooms ref at each summary, so nothing here goes stale.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: getRooms closes over a stable ref (popoverRoomsRef).
+	useEffect(() => {
+		const stopTelemetry = startPerfTelemetry(() => {
+			const live = getRooms().filter((r) => !r.archived);
+			return { rooms: live.length, harnesses: live.reduce((n, r) => n + r.harnesses.length, 0) };
+		});
+		const onHide = () => flushPerfSummary("shutdown");
+		window.addEventListener("pagehide", onHide);
+		return () => {
+			window.removeEventListener("pagehide", onHide);
+			stopTelemetry();
+		};
+	}, []);
+
 	// Phase 1: pull platform defaults once at boot. New harnesses spawn
 	// into these until Phase 4 wires real worktrees / per-room cwd.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: setDefaultShell/setDefaultCwd are plain useState setters passed in from App.tsx (#19) — stable across renders, but biome can't prove that through a function parameter.
@@ -102,6 +119,7 @@ export function useAppWindowEffects(
 				// this handler, so it runs exactly once.
 				await flushRoomsBounded();
 				if (await confirmQuit()) {
+					flushPerfSummary("shutdown");
 					// Edits made while the confirm was open.
 					await flushRoomsBounded();
 					destroyWindow();
@@ -123,6 +141,7 @@ export function useAppWindowEffects(
 						closing = false;
 						return;
 					}
+					flushPerfSummary("shutdown");
 					await flushRoomsBounded();
 					destroyWindow();
 				})

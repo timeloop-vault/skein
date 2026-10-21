@@ -11,6 +11,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
+import { spanAsync } from "../perfTelemetry.ts";
 
 export function useGitBranchWatcher(
 	cwd: string,
@@ -24,7 +25,8 @@ export function useGitBranchWatcher(
 	useEffect(() => {
 		let cancelled = false;
 
-		const refreshBranch = async () => {
+		const refreshBranch = () => spanAsync("branchWatch.tick", refreshBranchInner);
+		const refreshBranchInner = async () => {
 			try {
 				const repo = await invoke<boolean>("git_is_repo", { path: cwd });
 				if (cancelled) return;

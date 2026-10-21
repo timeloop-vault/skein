@@ -14,6 +14,7 @@ import {
 	useRef,
 } from "react";
 import { withResumeCmds } from "./harnessCmd.ts";
+import { spanAsync } from "./perfTelemetry.ts";
 import { isStorable, nextRepoRoot } from "./repoIdentity.ts";
 import { registerRoomsFlusher } from "./roomsFlush.ts";
 import { createRoomsSaveScheduler, type RoomsSaveScheduler } from "./roomsSaveScheduler.ts";
@@ -249,7 +250,7 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 	const schedulerRef = useRef<RoomsSaveScheduler | null>(null);
 	if (schedulerRef.current === null) {
 		schedulerRef.current = createRoomsSaveScheduler({
-			save: (r) => invoke("db_save_rooms", { rooms: r }),
+			save: (r) => spanAsync("rooms.save", () => invoke("db_save_rooms", { rooms: r })),
 			// Belt and braces for the debounced fire (#167): never save
 			// from an unloaded / failed state.
 			canSave: () => guardRef.current,

@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useState } from "react";
+import { flushPerfSummary } from "./perfTelemetry.ts";
 import { flushRoomsBounded } from "./roomsFlush.ts";
 import { UpdaterProxyField } from "./UpdaterProxyField.tsx";
 import { formatFailure, RELEASES_URL, updaterCheckProxy, updaterDiagnose } from "./updaterProxy.ts";
@@ -113,6 +114,8 @@ export const AboutSettings = () => {
 					downloaded += event.data.chunkLength;
 					setUpdate({ status: "downloading", downloaded, total });
 				} else if (event.event === "Finished") {
+					// Download is done; the install (which may end the app) starts now.
+					flushPerfSummary("shutdown");
 					setUpdate({ status: "ready" });
 				}
 			});

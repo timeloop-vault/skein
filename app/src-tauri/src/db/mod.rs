@@ -49,7 +49,10 @@ mod snapshots;
 mod sweep;
 #[cfg(test)]
 mod test_support;
+mod timed_lock;
 mod todos;
+
+use timed_lock::TimedMutex;
 
 pub use agent_tokens::TokenLookup;
 pub use element_anchors::ReviewElementAnchorRow;
@@ -69,7 +72,7 @@ pub(crate) use snapshots::replace_file;
 pub(crate) const MAX_ROOM_IMAGE_MIRROR_BYTES: u64 = 128 * 1024 * 1024;
 
 pub struct Database {
-    conn: Mutex<Connection>,
+    conn: TimedMutex<Connection>,
     path: PathBuf,
     /// Set once `load_all` has completed successfully in this process.
     /// `save_all` refuses to commit an empty room list before that —
@@ -128,7 +131,7 @@ impl Database {
             .map_err(|e| e.to_string())?;
         Self::init_schema(&conn)?;
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: TimedMutex::new(conn),
             path: path.to_path_buf(),
             loaded_ok: AtomicBool::new(false),
             save_seq: AtomicU64::new(0),

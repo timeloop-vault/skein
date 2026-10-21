@@ -25,6 +25,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { span } from "../perfTelemetry.ts";
 import type { RoomDerived } from "./roomFold.ts";
 import { applyRows, emptyRows, type RowsState } from "./roomRows.ts";
 
@@ -131,13 +132,16 @@ export function useRoomActions(
 		const flush = (reveal = false) => {
 			if (cancelled) return;
 			if (pendingRef.current.length === 0 && !reveal) return;
-			const batch = pendingRef.current;
-			pendingRef.current = [];
-			const res = applyRows(stateRef.current, batch, { reveal, derive: deriveRef.current });
-			if (res.state === stateRef.current) return;
-			for (const t of res.trimmed) liveIdsRef.current.delete(t.id);
-			stateRef.current = res.state;
-			setView(res.state);
+			// Only flushes that do work are timed (the guards above are no-ops).
+			span("liveContext.flush", () => {
+				const batch = pendingRef.current;
+				pendingRef.current = [];
+				const res = applyRows(stateRef.current, batch, { reveal, derive: deriveRef.current });
+				if (res.state === stateRef.current) return;
+				for (const t of res.trimmed) liveIdsRef.current.delete(t.id);
+				stateRef.current = res.state;
+				setView(res.state);
+			});
 		};
 		flushRef.current = flush;
 
@@ -150,14 +154,16 @@ export function useRoomActions(
 		// Attach the listener BEFORE the backfill query so a row
 		// inserted in the gap still lands (de-duped by id if the query
 		// also returned it).
-		const unlistenPromise = listen<HarnessAction>(ACTION_EVENT, (event) => {
-			const a = event.payload;
-			if (a.roomId !== roomId || idsRef.current.has(a.id)) return;
-			idsRef.current.add(a.id);
-			liveIdsRef.current.add(a.id);
-			lastLiveRef.current = Date.now();
-			enqueue([a]);
-		});
+		const unlistenPromise = listen<HarnessAction>(ACTION_EVENT, (event) =>
+			span("liveContext.apply", () => {
+				const a = event.payload;
+				if (a.roomId !== roomId || idsRef.current.has(a.id)) return;
+				idsRef.current.add(a.id);
+				liveIdsRef.current.add(a.id);
+				lastLiveRef.current = Date.now();
+				enqueue([a]);
+			}),
+		);
 
 		void invoke<HarnessAction[]>("db_recent_harness_actions_by_room", {
 			roomId,
