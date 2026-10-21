@@ -51,6 +51,15 @@ impl SpanAgg {
 /// One review-discovery watcher batch (`Discovery::discover`).
 pub(crate) static REVIEW_DISCOVERY_BATCH: SpanAgg = SpanAgg::new();
 
+/// `pty_write` body (#639): runs on the host UI thread.
+pub(crate) static PTY_WRITE: SpanAgg = SpanAgg::new();
+
+/// `on_event.send` of one PTY data chunk (#639); count = delivered chunks.
+pub(crate) static PTY_CHUNK_SEND: SpanAgg = SpanAgg::new();
+
+/// Wait of a probe posted to the host main thread (#639).
+pub(crate) static HOST_MAIN_LAG: SpanAgg = SpanAgg::new();
+
 fn ms(us: u64) -> u64 {
     us.saturating_add(500) / 1000
 }
@@ -76,7 +85,12 @@ pub(crate) fn append_rust_spans(line: &str, areas: &[(&str, SpanSnapshot)]) -> S
 pub(crate) fn drain_and_append(line: &str) -> String {
     append_rust_spans(
         line,
-        &[("reviewDiscovery.batch", REVIEW_DISCOVERY_BATCH.take())],
+        &[
+            ("reviewDiscovery.batch", REVIEW_DISCOVERY_BATCH.take()),
+            ("pty.write", PTY_WRITE.take()),
+            ("pty.chunkSend", PTY_CHUNK_SEND.take()),
+            ("host.mainLag", HOST_MAIN_LAG.take()),
+        ],
     )
 }
 

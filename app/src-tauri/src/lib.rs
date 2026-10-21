@@ -27,6 +27,7 @@ mod hermes_profile;
 mod ignore_filter;
 mod open_request;
 mod os_notify;
+mod perf_main_lag;
 mod perf_spans;
 mod pty;
 mod resume;

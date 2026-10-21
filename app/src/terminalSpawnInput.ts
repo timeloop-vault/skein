@@ -8,7 +8,9 @@ import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { harnessActivity } from "./harnessActivity.ts";
 import { harnessInput } from "./harnessInput.ts";
+import { recordSpan } from "./perfTelemetry.ts";
 import type { ScreenCell } from "./promptScreen.ts";
+import { isTerminalReply, noteInput } from "./ptyLatency.ts";
 import { fitTerminal } from "./terminalFit.ts";
 import type { OutputGate } from "./terminalOutputGate.ts";
 import { isHostHidden } from "./terminalOutputVisibility.ts";
@@ -124,7 +126,23 @@ export function attachPtyInput(term: Terminal, harnessId: string, id: string): {
 		if (data.startsWith("\x1b[200~")) {
 			harnessInput.noteDraftEvent(harnessId, { type: "userPaste" });
 		}
-		void invoke("pty_write", { id, data });
+		// #639: time the write IPC and arm the echo timer, except for
+		// focus escapes and pastes (not keystrokes).
+		if (
+			data === "\x1b[I" ||
+			data === "\x1b[O" ||
+			data.startsWith("\x1b[200~") ||
+			isTerminalReply(data)
+		) {
+			void invoke("pty_write", { id, data });
+			return;
+		}
+		const t0 = performance.now();
+		noteInput(id, t0);
+		// No rejection handler: a failed write stays an unhandled rejection.
+		void invoke("pty_write", { id, data }).then(() =>
+			recordSpan("pty.writeIpc", performance.now() - t0, "wall"),
+		);
 	});
 	// Separate hook for "did the user actually press a
 	// key in this terminal?" — used by L5a notification

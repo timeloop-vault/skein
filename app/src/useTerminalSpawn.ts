@@ -21,6 +21,7 @@ import { harnessInput } from "./harnessInput.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
+import { forget as forgetLatency, recordEcho } from "./ptyLatency.ts";
 import { type PtyEvent, ptySpawn } from "./ptySpawnCall.ts";
 import { shellClaim } from "./shellClaim.ts";
 import { forgetSpawnedProfile, recordSpawnedProfile } from "./spawnedEnvProfile.ts";
@@ -179,6 +180,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			if (cancelled) return;
 			if (ev.kind === "data") {
 				gate.write(ev.chunk);
+				recordEcho(ptyIdRef.current, performance.now()); // #639
 				// Feed the activity model (epic #50) with every chunk, gated
 				// or not: the store throttles internally, and the chunk also
 				// feeds the L2b pattern matcher's per-harness tail buffer.
@@ -220,6 +222,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			if (cancelled) return;
 			phase = "exited";
 			shellFollow?.dispose();
+			if (ptyIdRef.current) forgetLatency(ptyIdRef.current); // #639
 			harnessActivity.exited(harnessId, code);
 			detachInputTarget?.();
 			detachInputTarget = null;
@@ -377,6 +380,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// terminalInteractions.ts.
 			detachInteractions();
 			const id = ptyIdRef.current;
+			if (id) forgetLatency(id); // #639
 			if (id) void invoke("pty_kill", { id });
 			detachGate();
 			term.dispose();

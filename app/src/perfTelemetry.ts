@@ -30,7 +30,9 @@ export type PerfArea =
 	| "liveContext.apply"
 	| "liveContext.flush"
 	| "rooms.save"
-	| "branchWatch.tick";
+	| "branchWatch.tick"
+	| "pty.writeIpc"
+	| "pty.echo";
 
 const PROBE_MS = 250;
 const SUMMARY_MS = 5 * 60 * 1000;

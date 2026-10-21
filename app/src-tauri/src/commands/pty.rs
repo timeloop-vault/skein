@@ -117,7 +117,12 @@ pub(crate) async fn pty_spawn(
                     // Channel send only fails if the frontend dropped
                     // the channel; nothing useful we can do at that
                     // point.
+                    let is_data = matches!(event, crate::pty::PtyEvent::Data { .. });
+                    let t0 = std::time::Instant::now();
                     let _ = on_event.send(event);
+                    if is_data {
+                        crate::perf_spans::PTY_CHUNK_SEND.record(t0.elapsed());
+                    }
                 },
             )
             .map_err(|e| e.to_string())?;
@@ -146,9 +151,12 @@ pub(crate) fn pty_write(
     data: String,
     manager: tauri::State<'_, PtyManager>,
 ) -> Result<(), String> {
-    manager
+    let t0 = std::time::Instant::now();
+    let res = manager
         .write(&id, data.as_bytes())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    crate::perf_spans::PTY_WRITE.record(t0.elapsed());
+    res
 }
 
 // Deliberately sync (#171): same FIFO-ordering reasoning as `pty_write`.
