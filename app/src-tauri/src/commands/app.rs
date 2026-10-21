@@ -33,6 +33,19 @@ pub(crate) fn frontend_log(level: String, target: String, message: String) {
     }
 }
 
+/// Log the frontend's periodic `perf summary` line (#655) with the Rust
+/// span aggregates appended, so one line covers both sides. Same length
+/// cap as `frontend_log`; the cap applies to the frontend part only.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub(crate) fn perf_summary_log(line: String) {
+    const MAX_LEN: usize = 2000;
+    let truncated = line.chars().count() > MAX_LEN;
+    let line: String = line.chars().take(MAX_LEN).collect();
+    let line = crate::perf_spans::drain_and_append(&line);
+    tracing::info!(source = "frontend", target = "perf", truncated, "{line}");
+}
+
 /// Raise and focus the main window (#493). Called from the Control
 /// Center focus listener in the main window's JS: the pop-out only emits
 /// the focus event, and main raises itself through this command.

@@ -116,12 +116,14 @@ impl Discovery {
         if self.cwd.is_empty() {
             return 0;
         }
+        let started = std::time::Instant::now();
         self.ensure_repo();
         let out = self.run(db, reported, true);
         let mut inserted = out.inserted;
         if out.needs_catch_up {
             inserted += self.catch_up(db);
         }
+        crate::perf_spans::REVIEW_DISCOVERY_BATCH.record(started.elapsed());
         inserted
     }
 

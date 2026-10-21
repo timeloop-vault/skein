@@ -15,10 +15,15 @@
 // keystroke-to-echo or PTY-chunk spans) pass `recordSpan(area, ms, "wall")`
 // when the interval spans an await/IPC round trip, else the default "main".
 //
+// Some areas are measured in Rust (off the main thread) and appended to this
+// same line by the `perf_summary_log` command; currently `reviewDiscovery.batch`
+// (`app/src-tauri/src/perf_spans.rs`). Those are NOT members of `PerfArea`,
+// which holds frontend spans only.
+//
 // Must stay negligible: nothing is logged per event, buffers are bounded,
 // and a span is two performance.now() calls plus a map update.
 
-import { logToRust } from "./frontendLog.ts";
+import { invoke } from "@tauri-apps/api/core";
 import { formatPerfSummary, SampleBuffer, SpanAccumulator, type SpanKind } from "./perfStats.ts";
 
 export type PerfArea =
@@ -97,7 +102,11 @@ export function flushPerfSummary(reason: "interval" | "shutdown"): void {
 		harnesses: counts.harnesses,
 		spans: spans.snapshot(),
 	});
-	logToRust("info", "perf", line);
+	try {
+		void invoke("perf_summary_log", { line }).catch(() => {});
+	} catch {
+		// No Tauri runtime, or invoke threw synchronously: telemetry must not throw.
+	}
 	drift.reset();
 	spans.reset();
 	longtasks = 0;

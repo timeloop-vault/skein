@@ -27,6 +27,7 @@ mod hermes_profile;
 mod ignore_filter;
 mod open_request;
 mod os_notify;
+mod perf_spans;
 mod pty;
 mod resume;
 mod review;
@@ -140,6 +141,7 @@ pub fn run() {
             commands::harness_events::claude_events_detach,
             commands::harness_events::claude_events_reattach,
             commands::app::frontend_log,
+            commands::app::perf_summary_log,
             commands::harness_events::opencode_events_attach,
             commands::harness_events::opencode_events_detach,
             harness_actions_hermes::hermes_actions_attach,
