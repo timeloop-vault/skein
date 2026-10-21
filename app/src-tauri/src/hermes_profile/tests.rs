@@ -231,6 +231,45 @@ fn ensure_and_remove_on_disk() {
 }
 
 #[test]
+fn creating_surfaces_a_real_write_error() {
+    let dir = tempfile::tempdir().unwrap();
+    // The parent is a regular file, so the file is absent and can't be made.
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, "x").unwrap();
+    let err = ensure_skein_entry_creating(&blocker.join("config.yaml")).unwrap_err();
+    // Windows reports the failed write; Unix fails the first read (ENOTDIR).
+    // Either way a real error names the path, never "profile config not found".
+    assert!(
+        err.contains("cannot write") || err.contains("cannot read"),
+        "{err}"
+    );
+    assert!(err.contains("config.yaml"), "{err}");
+}
+
+#[test]
+fn owned_off_then_on_deletes_then_recreates_the_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("config.yaml");
+    assert_eq!(
+        ensure_skein_entry_creating(&p).unwrap(),
+        EnsureOutcome::Added
+    );
+    assert!(remove_skein_entry_owned(&p).unwrap());
+    assert!(!p.exists(), "an emptied config is deleted");
+    assert_eq!(
+        ensure_skein_entry_creating(&p).unwrap(),
+        EnsureOutcome::Added
+    );
+    assert!(skein_entry_present(&std::fs::read_to_string(&p).unwrap()));
+
+    // A config with other content is kept.
+    std::fs::write(&p, "model: x\n").unwrap();
+    ensure_skein_entry(&p).unwrap();
+    assert!(remove_skein_entry_owned(&p).unwrap());
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), "model: x\n");
+}
+
+#[test]
 fn non_utf8_and_refused_files_are_left_alone() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("config.yaml");

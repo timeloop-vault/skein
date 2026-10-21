@@ -1400,9 +1400,11 @@ no flag or environment variable to point it at one — so this is the one
 harness whose wiring is a file rather than a session switch. By default
 a Hermes harness runs in a profile Skein owns, `skein`
 (`<Hermes root>/profiles/skein`). On first spawn Skein creates it with
-`hermes -p default profile create skein --no-alias --no-skills`, which
-seeds its model block from the root config, and adds a `skein` entry to
-its `config.yaml`, wrapped in `# skein:begin` / `# skein:end` markers:
+`hermes -p default profile create skein --no-alias --no-skills` (some
+Hermes versions seed a config from the root config, others write none;
+when the profile's `config.yaml` is missing Skein writes it itself), and
+adds a `skein` entry to its `config.yaml`, wrapped in `# skein:begin` /
+`# skein:end` markers:
 
 - `url: ${SKEIN_REVIEW_URL}`
 - `Authorization: Bearer ${SKEIN_REVIEW_TOKEN}`
@@ -1414,7 +1416,9 @@ stale file points at nothing once Skein is closed. Your root
 the root `.env`, so the provider key has to reach the `skein` profile
 through the spawn environment (Settings → Shell & environment).
 Switching Hermes injection off in Settings removes Skein's entry from
-the `skein` profile again.
+the `skein` profile again, and deletes that `config.yaml` when Skein's
+entry was all it held (Hermes runs fine without one; switching back on
+recreates it).
 
 If you pick a profile of your own instead, Skein adds the entry only
 after a consent dialog that shows exactly what will be inserted. The

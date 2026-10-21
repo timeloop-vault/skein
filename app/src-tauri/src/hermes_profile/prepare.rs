@@ -13,6 +13,10 @@
 //! carries a per-harness env profile (#615); a `HERMES_HOME` set only there
 //! is seen by the spawn alone, which logs a warning when the roots differ.
 //!
+//! Some Hermes versions don't write a `config.yaml` on `profile create`,
+//! so Skein writes the profile's config itself when it is missing (only
+//! ever for `skein`, and only if the file is still absent at write time).
+//!
 //! The decision is a pure function ([`plan`]); the I/O around it takes
 //! the profile-creating step as a closure so tests never run Hermes.
 
@@ -25,7 +29,9 @@ use std::time::{Duration, Instant};
 
 use skein_harness::hermes::{profile_home, valid_profile_name};
 
-use super::{EnsureOutcome, SKEIN_PROFILE, ensure_skein_entry, remove_skein_entry_at, yaml};
+use super::{
+    EnsureOutcome, SKEIN_PROFILE, ensure_skein_entry_creating, remove_skein_entry_owned, yaml,
+};
 
 /// How long `hermes profile create` may take before it is abandoned.
 const CREATE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -141,7 +147,9 @@ pub(crate) fn prepare_in(
         }
     }
     if todo.ensure {
-        match ensure_skein_entry(&cfg) {
+        // `todo.ensure` is only ever set for the Skein-owned profile (see
+        // `plan`), so creating its config here never touches a user's file.
+        match ensure_skein_entry_creating(&cfg) {
             Ok(EnsureOutcome::Added) => tracing::info!("hermes profile: added skein MCP entry"),
             Ok(EnsureOutcome::AlreadyPresent) => {}
             Err(e) => {
@@ -150,7 +158,8 @@ pub(crate) fn prepare_in(
         }
     }
     if todo.remove {
-        match remove_skein_entry_at(&cfg) {
+        // `todo.remove` is only set for the Skein-owned profile (see `plan`).
+        match remove_skein_entry_owned(&cfg) {
             Ok(true) => tracing::info!("hermes profile: removed skein MCP entry"),
             Ok(false) => {
                 if entry_present(root, profile.as_deref()) {
@@ -292,6 +301,7 @@ pub(crate) fn create_skein_profile<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hermes_profile::ensure_skein_entry;
     use std::cell::Cell;
 
     fn args(a: &[&str]) -> Vec<String> {
@@ -472,6 +482,58 @@ mod tests {
             false,
             || panic!("no create")
         ));
+    }
+
+    #[test]
+    fn skein_profile_without_a_config_gets_one_with_just_the_entry() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("profiles/skein")).expect("mkdir");
+        let a = args(&["-p", "skein"]);
+        assert!(prepare_in(dir.path(), &a, true, || panic!("no create")));
+        let first = std::fs::read(dir.path().join("profiles/skein/config.yaml")).expect("read");
+        let text = String::from_utf8(first.clone()).expect("utf8");
+        assert!(yaml::skein_entry_present(&text));
+        assert!(text.starts_with("mcp_servers:") || text.starts_with("# skein:begin"));
+        assert!(text.ends_with('\n') && !text.contains('\r') && !text.starts_with('\u{feff}'));
+        // Second run: already present, file untouched.
+        assert!(prepare_in(dir.path(), &a, true, || panic!("no create")));
+        assert_eq!(
+            std::fs::read(dir.path().join("profiles/skein/config.yaml")).expect("read"),
+            first
+        );
+        assert_eq!(
+            ensure_skein_entry_creating(&dir.path().join("profiles/skein/config.yaml")),
+            Ok(EnsureOutcome::AlreadyPresent)
+        );
+    }
+
+    #[test]
+    fn create_that_writes_no_config_still_gets_the_entry() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().to_path_buf();
+        let injected = prepare_in(&root, &args(&["-p", "skein"]), true, || {
+            std::fs::create_dir_all(root.join("profiles/skein")).map_err(|e| e.to_string())
+        });
+        assert!(injected);
+        assert!(yaml::skein_entry_present(&skein_cfg(&root)));
+    }
+
+    #[test]
+    fn user_profile_without_a_config_is_never_given_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let work = dir.path().join("profiles/work");
+        std::fs::create_dir_all(&work).expect("mkdir");
+        for sw in [true, false] {
+            assert!(!prepare_in(
+                dir.path(),
+                &args(&["-p", "work"]),
+                sw,
+                || panic!("no create")
+            ));
+        }
+        assert!(!work.join("config.yaml").exists());
+        assert!(ensure_skein_entry(&work.join("config.yaml")).is_err());
+        assert!(!work.join("config.yaml").exists());
     }
 
     #[test]
