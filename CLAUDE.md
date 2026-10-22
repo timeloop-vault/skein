@@ -48,8 +48,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
 - **React 18 + strict TypeScript** UI (Vite); xterm.js for terminals,
   react-virtuoso for the activity feed, CodeMirror 6 for the file
   editor (#185)
-- **Six Rust workspace crates** — `skein-git`, `skein-harness`,
-  `skein-review`, `skein-sysload`, `skein-webshot`, `skein-winnotify` — plus
+- **Seven Rust workspace crates** — `skein-git`, `skein-harness`,
+  `skein-review`, `skein-procprio`, `skein-sysload`, `skein-webshot`,
+  `skein-winnotify` — plus
   `app/src-tauri`, which is deliberately **excluded** from the
   workspace. Every cargo command therefore needs running twice; see
   Conventions
@@ -130,14 +131,22 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   unpackaged-app AUMID registration, a
     │                                #   INotificationActivationCallback so Action Center/cold-start
     │                                #   clicks work, foreground-window recovery. With
-    │                                #   skein-webshot and skein-sysload, one of the workspace's
-    │                                #   THREE crates allowed `unsafe`: each has its own `[lints]` table (not
+    │                                #   skein-webshot, skein-sysload and skein-procprio, one of
+    │                                #   the workspace's FOUR crates allowed `unsafe`: each has its
+    │                                #   own `[lints]` table (not
     │                                #   `workspace = true`) setting `unsafe_code = "allow"` and
     │                                #   clippy `undocumented_unsafe_blocks = "deny"`, so every
     │                                #   unsafe block carries a `// SAFETY:` comment — raw
     │                                #   WinRT/Win32/COM (webshot: Objective-C) calls can't be made
     │                                #   safe otherwise. app/src-tauri keeps `forbid` and only
     │                                #   calls their safe functions
+    ├── crates/skein-procprio/       # Lowers a spawned harness PTY child to BELOW_NORMAL
+    │                                #   (Windows, OpenProcess + SetPriorityClass by pid) or nice
+    │                                #   10 (unix, rustix, which is safe). Never raises priority.
+    │                                #   It exists because cargo/rustc builds run by harnesses
+    │                                #   inherit the class and otherwise starve Skein's WebView2.
+    │                                #   Allowed `unsafe` on the same terms as skein-winnotify,
+    │                                #   above; the unsafe is Windows-only
     ├── app/
     │   ├── src/                     # React + TS UI
     │   │   ├── App.tsx              # The root component (~750 LOC) — hook wiring
@@ -294,6 +303,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   so a wedged child can't block write/resize/kill)
     │       ├── src/pty/procscan.rs  # Scans a PTY's own process descendants (#517): finds an
     │       │                        #   opencode TUI restarted from the post-exit shell
+    │       ├── src/pty/priority.rs  # Applies `SpawnSettings.lower_harness_priority` right after
+    │       │                        #   spawn, because portable-pty exposes no creation flags;
+    │       │                        #   anything the child starts before the call keeps normal
+    │       │                        #   priority
     │       ├── src/git.rs           # DTO wrappers around skein-git; GitError → String
     │       ├── src/watcher.rs       # notify-debouncer-mini, 200 ms, .git/ deliberately unfiltered
     │       ├── src/db.rs            # rusqlite: rooms (table `sessions` — legacy name),
@@ -932,7 +945,7 @@ the agent API from a shell harness); macOS isn't covered yet.
 ## Conventions
 
 - **Rust:** edition 2024. `unsafe_code = "forbid"` (except
-  skein-winnotify, skein-webshot and skein-sysload, see Layout). Clippy pedantic
+  skein-winnotify, skein-webshot, skein-sysload and skein-procprio, see Layout). Clippy pedantic
   warn, `-D warnings`. Tauri commands collapse `GitError` / `PtyError`
   to `String` at the boundary — they round-trip via JSON anyway.
   The toolchain is pinned in `rust-toolchain.toml` (currently 1.99, also

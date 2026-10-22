@@ -41,6 +41,7 @@
 mod env;
 mod output;
 mod preview;
+mod priority;
 mod probe;
 pub(crate) mod procscan;
 
@@ -358,6 +359,7 @@ impl PtyManager {
         })?;
         let killer = child.clone_killer();
         let pid = child.process_id();
+        priority::apply(&id, pid, settings.child_priority());
 
         // Drop the slave handle so EOF reaches the read end correctly
         // when the child exits *and* the master is closed. (On Windows

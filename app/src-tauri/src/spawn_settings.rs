@@ -22,6 +22,8 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) mod env_profile;
 pub use env_profile::EnvProfile;
+pub(crate) mod priority;
+pub(crate) use priority::ChildPriority;
 
 /// Lives beside `skein.db` in `app_data_dir()`, so the three build
 /// profiles stay isolated from each other exactly like the database.
@@ -67,7 +69,7 @@ pub struct EnvVar {
 /// — or hand-edited down to `{}` — still parses. A required field here
 /// would make a stale file unloadable, and the failure mode of *that*
 /// is a harness with no `PATH`.
-// Four independent on/off toggles a user sees as four separate
+// Independent on/off toggles a user sees as separate
 // Settings switches, not a state machine — `struct_excessive_bools`'
 // alternative (two-variant enums) would just rename the same booleans.
 #[allow(clippy::struct_excessive_bools)]
@@ -132,6 +134,11 @@ pub struct SpawnSettings {
     /// outranks the user's own Claude Code settings, so Skein only does
     /// it when asked.
     pub disable_claude_wheel_acceleration: bool,
+    /// Spawn harnesses at below-normal CPU priority (Windows) or nice +10
+    /// (macOS/Linux), so a busy build yields to Skein's UI. Default on.
+    /// Applies to harnesses spawned after the change — running ones keep
+    /// their priority — and is inherited by everything a harness starts.
+    pub lower_harness_priority: bool,
 }
 
 impl Default for SpawnSettings {
@@ -153,6 +160,7 @@ impl Default for SpawnSettings {
             allow_agent_room_closing: true,
             allow_agent_harness_control: true,
             disable_claude_wheel_acceleration: false,
+            lower_harness_priority: true,
         }
     }
 }
@@ -470,6 +478,40 @@ mod tests {
         assert!(loaded.allow_agent_harness_control);
         // And the field that *was* present still round-trips.
         assert!(!loaded.allow_agent_room_creation);
+    }
+
+    #[test]
+    fn lower_harness_priority_defaults_on() {
+        assert!(SpawnSettings::default().lower_harness_priority);
+        let parsed: SpawnSettings = serde_json::from_str("{}").expect("empty object parses");
+        assert!(parsed.lower_harness_priority);
+    }
+
+    #[test]
+    fn an_old_settings_file_without_lower_harness_priority_defaults_on() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            file_path(dir.path()),
+            r#"{"schema":1,"stripHostEnv":false,"injectClaudePlugin":true,"injectOpencodeConfig":false,"allowAgentMessaging":true,"allowAgentRoomCreation":true,"allowAgentRoomClosing":true,"allowAgentHarnessControl":true,"disableClaudeWheelAcceleration":true}"#,
+        )
+        .expect("write");
+        let (loaded, degraded) = load(dir.path());
+        assert!(degraded.is_none());
+        assert!(loaded.lower_harness_priority);
+        assert!(loaded.disable_claude_wheel_acceleration);
+    }
+
+    #[test]
+    fn lower_harness_priority_false_round_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let settings = SpawnSettings {
+            lower_harness_priority: false,
+            ..SpawnSettings::default()
+        };
+        save(dir.path(), &settings).expect("save");
+        let (loaded, degraded) = load(dir.path());
+        assert!(degraded.is_none());
+        assert!(!loaded.lower_harness_priority);
     }
 
     #[test]

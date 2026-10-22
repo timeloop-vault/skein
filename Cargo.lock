@@ -559,6 +559,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "skein-procprio"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "windows",
+]
+
+[[package]]
 name = "skein-review"
 version = "0.1.0"
 dependencies = [

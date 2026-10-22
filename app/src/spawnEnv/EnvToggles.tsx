@@ -205,6 +205,22 @@ export const EnvToggles = ({
 						</span>
 					</span>
 				</label>
+				<label className="sk-toggle">
+					<input
+						type="checkbox"
+						checked={draft.lowerHarnessPriority}
+						onChange={(e) => setDraft({ ...draft, lowerHarnessPriority: e.target.checked })}
+					/>
+					<span className="sk-toggle-label">
+						<span className="sk-toggle-title">Run harnesses at lower CPU priority</span>
+						<span className="sk-toggle-sub">
+							Harnesses and everything they start — builds, tests, language servers — run at
+							below-normal priority (Windows) or nice 10 (macOS/Linux), so a busy build yields to
+							Skein and the rest of your desktop instead of freezing it. Applies to harnesses
+							started after you change it; running ones keep their priority until restarted.
+						</span>
+					</span>
+				</label>
 			</div>
 		</div>
 	</>

@@ -4170,6 +4170,7 @@ dependencies = [
  "serde_json",
  "skein-git",
  "skein-harness",
+ "skein-procprio",
  "skein-review",
  "skein-sysload",
  "skein-webshot",
@@ -4210,6 +4211,14 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "skein-procprio"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "windows",
 ]
 
 [[package]]

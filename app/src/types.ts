@@ -279,6 +279,7 @@ export interface SpawnSettings {
 	 *  (#569). Default false — it outranks the user's own Claude
 	 *  settings, so Skein only does it when asked. */
 	disableClaudeWheelAcceleration: boolean;
+	lowerHarnessPriority: boolean;
 }
 
 export interface SpawnSettingsPayload {

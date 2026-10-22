@@ -82,6 +82,9 @@ skein-review = { path = "../../crates/skein-review" }
 skein-sysload = { path = "../../crates/skein-sysload" }
 # Native screenshot of the design pane's preview rectangle (#552).
 skein-webshot = { path = "../../crates/skein-webshot" }
+# Lowers a harness child's CPU priority (#596: builds starving the UI); the
+# unsafe Win32 call lives there, same policy as skein-winnotify/webshot.
+skein-procprio = { path = "../../crates/skein-procprio" }
 # PNG bytes into the MCP image block / JSON mirror; already locked.
 base64 = "0.22"
 tracing = "0.1"
