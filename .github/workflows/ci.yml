@@ -175,4 +175,7 @@ jobs:
 
       - name: Build app
         working-directory: app/src-tauri
+        env:
+          # Matches release.yml, so warnings that fail the release fail here too (v0.5.3).
+          RUSTFLAGS: -D warnings
         run: cargo check --target ${{ matrix.target }}

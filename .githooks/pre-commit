@@ -34,6 +34,29 @@ cargo clippy --manifest-path "$REPO_ROOT/app/src-tauri/Cargo.toml" --tests -- -D
     exit 1
 }
 
+# Only the pure-Rust, cfg-heavy crates are checked per target: skein-git,
+# skein-harness and app/src-tauri pull C build scripts (libgit2/zlib, sqlite,
+# dbus, objc2) that need a target C toolchain to cross-compile. ci.yml is the
+# full check. This exists because release.yml builds with -D warnings, and a
+# helper that is dead code on another OS failed v0.5.3.
+echo "=== pre-commit: cross-target clippy (warn only) ==="
+if command -v rustup >/dev/null 2>&1; then
+    host=$(rustc -vV | sed -n 's/^host: //p') || true
+    installed=$(rustup target list --installed) || true
+    for t in x86_64-unknown-linux-gnu aarch64-apple-darwin x86_64-pc-windows-msvc; do
+        [ "$t" = "$host" ] && continue
+        if ! echo "$installed" | grep -qx "$t"; then
+            echo "skipped: target $t not installed (rustup target add $t)"
+            continue
+        fi
+        cargo clippy --manifest-path "$REPO_ROOT/Cargo.toml" -p skein-sysload -p skein-procprio -p skein-review -p skein-webshot -p skein-winnotify --all-targets --target "$t" -- -D warnings 2>&1 || {
+            echo "WARNING: clippy failed for target $t. release.yml builds with -D warnings, so this would fail the release."
+        }
+    done
+else
+    echo "skipped: rustup not on PATH"
+fi
+
 echo "=== pre-commit: cargo test (workspace) ==="
 cargo test --manifest-path "$REPO_ROOT/Cargo.toml" --workspace 2>&1 || {
     echo "ERROR: workspace tests failed. Fix them before committing."

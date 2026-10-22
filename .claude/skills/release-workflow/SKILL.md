@@ -245,7 +245,27 @@ in "The counter-example" above, and against v0.3.0 read side by side.
 The repo is **public**: no local paths, usernames, machine names or
 room names.
 
-### 5. Create or update the draft
+### 5. Gate: CI green on the release commit
+
+Before any draft exists, run `ci.yml` on the commit being released and
+require every job green, including all three `build-app` platforms:
+
+```bash
+last=$(gh run list --workflow ci.yml --branch main -L 1 --json databaseId -q '.[0].databaseId')
+gh workflow run ci.yml --ref main
+# `gh workflow run` prints no run id; list until a run newer than $last appears.
+gh run list --workflow ci.yml --branch main -L 1 --json databaseId,headSha,status,conclusion
+gh run watch <id> --exit-status
+```
+
+The id must differ from `$last` (otherwise you are looking at the
+previous run), and the run's `headSha` must equal the commit the release
+targets. If main moved, re-run. If any job fails, stop and do not draft. Why: v0.5.3
+shipped Windows-only: a Windows-only helper crate was dead code on
+macOS/Linux, and release.yml's `-D warnings` failed both builds; the
+host-only pre-commit gate could not see it.
+
+### 6. Create or update the draft
 
 ```bash
 SHA=$(git rev-parse origin/main)
@@ -269,7 +289,7 @@ gh release edit vX.Y.Z --target "$SHA" \
 - No `--prerelease` unless the user asks. It keeps the release away
   from every installed app (see Traps).
 
-### 6. Read it back
+### 7. Read it back
 
 `gh` printing a URL does not mean the body landed:
 
@@ -283,7 +303,7 @@ gh release view vX.Y.Z --json body -q .body | diff - <notes-file>
 show nothing beyond trailing whitespace. If it shows more, fix it with
 `gh release edit … --notes-file` and read it back again.
 
-### 7. Report and stop
+### 8. Report and stop
 
 Tell the user the title, the draft URL, the target SHA, and which PRs
 went where (and any left out). List the gaps in Verified that only they
@@ -292,6 +312,9 @@ publish, it tags the target and starts the build.
 
 ## Traps
 
+- **A host-only gate cannot see other OSes.** The pre-commit hook
+  compiles for the host, and `release.yml` builds with `-D warnings`.
+  Skipping the step 5 CI run is how v0.5.3 failed on macOS and Linux.
 - **`0.1.0` version strings are placeholders.** `tauri.conf.json`,
   `package.json` and `Cargo.toml` all say `0.1.0`. The pipeline patches
   the tag's version in at build time. Never "fix" them, and never bump

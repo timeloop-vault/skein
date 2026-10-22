@@ -1,5 +1,7 @@
 //! Platform-independent parts: sample/window types, aggregation, the
-//! idle-to-busy conversion and counter path construction.
+//! idle-to-busy conversion and counter path construction. The conversion and
+//! path helpers are only called from the Windows PDH sampler, but they are
+//! platform-neutral, so they stay here and are unit-tested on every OS.
 
 /// One reading of system load.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -66,6 +68,7 @@ impl Accum {
 }
 
 /// Clamp a percentage into 0..=100; NaN becomes 0.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn clamp_pct(v: f64) -> f32 {
     if v.is_nan() {
         return 0.0;
@@ -76,11 +79,13 @@ pub fn clamp_pct(v: f64) -> f32 {
 }
 
 /// Busy % from `% Idle Time` (`% Disk Time` can exceed 100, so it is unused).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn busy_from_idle(idle: f64) -> f32 {
     clamp_pct(100.0 - idle)
 }
 
 /// Clamp a queue length to a non-negative, non-NaN value.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn clamp_queue(v: f64) -> f32 {
     if v.is_nan() {
         return 0.0;
@@ -91,6 +96,7 @@ pub fn clamp_queue(v: f64) -> f32 {
 }
 
 /// Normalise a `SystemDrive` value ("C:", "c:\\", "") to "C:".
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn normalize_drive(raw: Option<&str>) -> String {
     let t = raw.unwrap_or("").trim();
     let mut chars = t.chars();
@@ -102,12 +108,15 @@ pub fn normalize_drive(raw: Option<&str>) -> String {
     }
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub const CPU_PATH: &str = r"\Processor(_Total)\% Processor Time";
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn idle_path(drive: &str) -> String {
     format!(r"\LogicalDisk({drive})\% Idle Time")
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn queue_path(drive: &str) -> String {
     format!(r"\LogicalDisk({drive})\Current Disk Queue Length")
 }
