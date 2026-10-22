@@ -28,12 +28,62 @@ use super::{abs_path, capture_state_with_repo, now_ms, relative_key};
 use crate::db::{Database, NewBaseline};
 use crate::ignore_filter::{IgnoreCache, IgnoreQuery};
 
+/// Directory names that hold build output or installed dependencies.
+/// A build burst wrote up to 230 MB of baselines in 10 minutes (#658), so
+/// discovery skips anything under one of these.
+///
+/// Applies whether or not the folder is a git repo or its `.gitignore`
+/// covers them. Matches any DIRECTORY segment at any depth, ASCII
+/// case-insensitively — not the final file-name segment, so a file named
+/// `build` is still baselined. A tracked file under such a directory is skipped
+/// too: it then reads as fully added on its first harness edit
+/// (over-reporting, the safe direction per #211), and branch scope still
+/// shows it. Add an entry here to extend.
+const DEFAULT_IGNORED_DIRS: &[&str] = &[
+    "target",
+    "build",
+    "dist",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".next",
+    ".gradle",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".tox",
+];
+
+/// Most new baselines examined per batch: a backstop for build output the
+/// set above doesn't name. Applies to live watcher batches only; a path
+/// over the cap is baselined when that file is next written, or by the
+/// next catch-up (watcher start, or a notify error), which is uncapped.
+/// In a batch over the cap, a dir-replaced-by-file key past the cap does
+/// not request a catch-up; accepted for a backstop.
+const MAX_NEW_BASELINES_PER_BATCH: usize = 500;
+
+fn under_default_ignored_dir(key: &str) -> bool {
+    let mut segs = key.split('/').peekable();
+    while let Some(seg) = segs.next() {
+        if segs.peek().is_some()
+            && DEFAULT_IGNORED_DIRS
+                .iter()
+                .any(|d| d.eq_ignore_ascii_case(seg))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// What [`filter_batch`] kept and how many it dropped for each reason.
 #[derive(Debug, Default)]
 pub(crate) struct Filtered {
     pub survivors: Vec<String>,
     /// Paths inside the worktree's `.git`.
     pub under_git: usize,
+    /// Paths under a [`DEFAULT_IGNORED_DIRS`] directory.
+    pub default_ignored: usize,
     pub ignored: usize,
 }
 
@@ -51,11 +101,22 @@ pub(crate) fn filter_batch(
         .filter_map(|r| relative_key(cwd, &r))
         .filter(|k| seen.insert(k.clone()))
         .collect();
-    cache.note_batch(&keys);
+    // A `.gitignore` shipped inside `node_modules/` must not clear the
+    // cache mid-burst; `.git/info/exclude` still reaches it.
+    let relevant: Vec<String> = keys
+        .iter()
+        .filter(|k| !under_default_ignored_dir(k))
+        .cloned()
+        .collect();
+    cache.note_batch(&relevant);
     let mut out = Filtered::default();
     for key in keys {
         if key.split('/').any(|seg| seg == ".git") {
             out.under_git += 1;
+            continue;
+        }
+        if under_default_ignored_dir(&key) {
+            out.default_ignored += 1;
             continue;
         }
         if let Some(q) = is_ignored.as_deref_mut()
@@ -75,6 +136,8 @@ pub(crate) struct Outcome {
     pub inserted: usize,
     /// New paths skipped because baseline == disk (nothing pending).
     pub unchanged: usize,
+    /// New paths left unexamined because the per-batch cap was hit.
+    pub capped: usize,
     pub needs_catch_up: bool,
 }
 
@@ -118,7 +181,7 @@ impl Discovery {
         }
         let started = std::time::Instant::now();
         self.ensure_repo();
-        let out = self.run(db, reported, true);
+        let out = self.run(db, reported, true, MAX_NEW_BASELINES_PER_BATCH);
         let mut inserted = out.inserted;
         if out.needs_catch_up {
             inserted += self.catch_up(db);
@@ -148,7 +211,8 @@ impl Discovery {
         // `status()` paths exist or are real tracked deletions, so the
         // needs-catch-up flag is moot; and it already excludes ignored
         // files, so no ignore re-check.
-        self.run(db, entries.into_iter().map(|e| e.path), false)
+        // Uncapped: `git status` is bounded and every entry meaningful.
+        self.run(db, entries.into_iter().map(|e| e.path), false, usize::MAX)
             .inserted
     }
 
@@ -157,6 +221,7 @@ impl Discovery {
         db: &Database,
         reported: impl IntoIterator<Item = String>,
         check_ignores: bool,
+        cap: usize,
     ) -> Outcome {
         let started = Instant::now();
         let reported: Vec<String> = reported.into_iter().collect();
@@ -174,12 +239,14 @@ impl Discovery {
         };
         let f = filter_batch(&self.cwd, reported, &mut self.cache, ignore);
         let (out, already, max_wait) =
-            capture_survivors(db, &self.room_id, &self.cwd, repo, &f.survivors);
+            capture_survivors(db, &self.room_id, &self.cwd, repo, &f.survivors, cap);
         tracing::debug!(
             room_id = %self.room_id,
             reported = n_reported,
             under_git = f.under_git,
+            default_ignored = f.default_ignored,
             ignored = f.ignored,
+            capped = out.capped,
             already_baselined = already,
             unchanged = out.unchanged,
             inserted = out.inserted,
@@ -207,6 +274,7 @@ fn capture_survivors(
     cwd: &str,
     repo: Option<&skein_git::Repo>,
     survivors: &[String],
+    cap: usize,
 ) -> (Outcome, usize, Duration) {
     let mut out = Outcome::default();
     if survivors.is_empty() {
@@ -220,8 +288,18 @@ fn capture_survivors(
         }
     };
     // Computed with no lock held.
+    let fresh: Vec<&String> = survivors.iter().filter(|k| !present.contains(*k)).collect();
+    out.capped = fresh.len().saturating_sub(cap);
+    if out.capped > 0 {
+        tracing::warn!(
+            room_id = %room_id,
+            cap,
+            dropped = out.capped,
+            "review: discovery batch capped; extra new paths left for a later event"
+        );
+    }
     let mut pending = Vec::new();
-    for key in survivors.iter().filter(|k| !present.contains(*k)) {
+    for key in fresh.into_iter().take(cap) {
         let abs = abs_path(cwd, key);
         // `symlink_metadata` so a symlink-to-directory doesn't get
         // followed into "yes, it's a directory".

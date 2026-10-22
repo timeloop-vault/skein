@@ -86,7 +86,7 @@ fn directory_decision_is_asked_once_for_a_thousand_paths() {
     let mut q = |p: &str| -> Result<bool, String> {
         if p.ends_with('/') {
             dir_queries.push(p.to_owned());
-            Ok(p == "target/")
+            Ok(p == "out/")
         } else {
             file_queries += 1;
             Ok(false)
@@ -95,13 +95,13 @@ fn directory_decision_is_asked_once_for_a_thousand_paths() {
     let mut cache = IgnoreCache::new();
     let f = filter_batch(
         "/w",
-        keys(1000, "target/a/"),
+        keys(1000, "out/a/"),
         &mut cache,
         Some(&mut q as &mut IgnoreQuery<'_>),
     );
     assert_eq!(f.survivors, Vec::<String>::new());
     assert_eq!(f.ignored, 1000);
-    assert_eq!(dir_queries, ["target/"]);
+    assert_eq!(dir_queries, ["out/"]);
     assert_eq!(file_queries, 0);
 }
 
@@ -111,18 +111,18 @@ fn query_errors_keep_the_path_and_directory_errors_are_not_cached() {
     let mut fail = |_: &str| -> Result<bool, String> { Err("boom".into()) };
     let f = filter_batch(
         "/w",
-        vec!["target/a.o".to_owned(), "x.txt".to_owned()],
+        vec!["out/a.o".to_owned(), "x.txt".to_owned()],
         &mut cache,
         Some(&mut fail as &mut IgnoreQuery<'_>),
     );
-    assert_eq!(f.survivors, ["target/a.o", "x.txt"]);
+    assert_eq!(f.survivors, ["out/a.o", "x.txt"]);
     assert_eq!(f.ignored, 0);
     assert!(cache.dirs.is_empty(), "an error must not be remembered");
 
     // A later healthy query still gets to decide.
-    let mut ok = |p: &str| -> Result<bool, String> { Ok(p == "target/") };
-    assert!(cache.is_ignored("target/a.o", &mut ok));
-    assert_eq!(cache.dirs.get("target"), Some(&true));
+    let mut ok = |p: &str| -> Result<bool, String> { Ok(p == "out/") };
+    assert!(cache.is_ignored("out/a.o", &mut ok));
+    assert_eq!(cache.dirs.get("out"), Some(&true));
 }
 
 #[test]
@@ -148,8 +148,8 @@ fn git_paths_are_dropped_and_counted() {
 
 #[test]
 fn an_all_ignored_batch_inserts_nothing() {
-    let fx = Fx::git("target/\n");
-    let names: Vec<String> = (0..20).map(|i| format!("target/debug/f{i}.o")).collect();
+    let fx = Fx::git("out/\n");
+    let names: Vec<String> = (0..20).map(|i| format!("out/debug/f{i}.o")).collect();
     for r in &names {
         fx.write(r, "x");
     }
@@ -231,11 +231,11 @@ fn editing_gitignore_invalidates_the_cached_decisions() {
 
 #[test]
 fn a_deleted_ignored_directory_is_still_ignored() {
-    let fx = Fx::git("build/\n");
-    fx.write("build/x", "1");
-    fs::remove_dir_all(fx.dir.path().join("build")).unwrap();
+    let fx = Fx::git("gen/\n");
+    fx.write("gen/x", "1");
+    fs::remove_dir_all(fx.dir.path().join("gen")).unwrap();
     let mut d = Discovery::new(ROOM, &fx.cwd);
-    assert_eq!(d.discover(&fx.db, fx.reported(&["build/x", "build"])), 0);
+    assert_eq!(d.discover(&fx.db, fx.reported(&["gen/x", "gen"])), 0);
     assert_eq!(fx.paths(), Vec::<String>::new());
 }
 
@@ -250,8 +250,8 @@ fn a_non_git_room_still_baselines_new_files() {
 
 #[test]
 fn five_thousand_ignored_paths_are_cheap() {
-    let fx = Fx::git("target/\n");
-    let names = keys(5000, "target/debug/deps/f");
+    let fx = Fx::git("out/\n");
+    let names = keys(5000, "out/debug/deps/f");
     let strs: Vec<&str> = names.iter().map(String::as_str).collect();
     let reported = fx.reported(&strs);
 
@@ -274,4 +274,112 @@ fn five_thousand_ignored_paths_are_cheap() {
     eprintln!(
         "discovery timing: batched {new_ms} ms, naive per-path is_path_ignored {naive_ms} ms (5000 paths)"
     );
+}
+
+// ── default build-output dirs and the per-batch cap (#658) ────
+
+#[test]
+fn default_ignored_dirs_drop_without_a_git_query() {
+    let mut cache = IgnoreCache::new();
+    let f = filter_batch(
+        "/w",
+        [
+            "target/debug/x.o",
+            "crates/a/node_modules/p/i.js",
+            "Build/out.txt",
+            ".venv/lib/x.py",
+            "src/build.rs",
+            "src/target.txt",
+            "docs/building/x.md",
+            "src/build",
+        ]
+        .map(str::to_owned),
+        &mut cache,
+        None,
+    );
+    assert_eq!(f.default_ignored, 4);
+    assert_eq!(f.ignored, 0);
+    assert_eq!(
+        f.survivors,
+        [
+            "src/build.rs",
+            "src/target.txt",
+            "docs/building/x.md",
+            "src/build"
+        ]
+    );
+}
+
+#[test]
+fn a_non_git_room_skips_build_output() {
+    let fx = Fx::bare();
+    fx.write("target/debug/x.o", "x");
+    fx.write("node_modules/p/i.js", "x");
+    fx.write("keep.txt", "k");
+    let mut d = Discovery::new(ROOM, &fx.cwd);
+    let n = d.discover(
+        &fx.db,
+        fx.reported(&["target/debug/x.o", "node_modules/p/i.js", "keep.txt"]),
+    );
+    assert_eq!(n, 1);
+    assert_eq!(fx.paths(), ["keep.txt"]);
+}
+
+#[test]
+fn the_cap_stops_work_on_the_excess() {
+    let fx = Fx::bare();
+    let names = ["a.txt", "b.txt", "c.txt"];
+    for n in names {
+        fx.write(n, "x");
+    }
+    let survivors: Vec<String> = names.iter().map(|s| (*s).to_owned()).collect();
+    let (out, already, _) = capture_survivors(&fx.db, ROOM, &fx.cwd, None, &survivors, 2);
+    assert_eq!(out.inserted, 2);
+    assert_eq!(out.capped, 1);
+    assert_eq!(already, 0);
+    assert_eq!(fx.paths(), ["a.txt", "b.txt"]);
+}
+
+#[test]
+fn catch_up_is_not_capped_where_a_live_batch_is() {
+    let fx = Fx::git("");
+    let names = ["a.txt", "b.txt", "c.txt"];
+    for n in names {
+        fx.write(n, "x");
+    }
+    let mut d = Discovery::new(ROOM, &fx.cwd);
+    d.ensure_repo();
+    let out = d.run(&fx.db, fx.reported(&names[..2]), true, 1);
+    assert_eq!((out.inserted, out.capped), (1, 1));
+    assert_eq!(d.catch_up(&fx.db), 2);
+    assert_eq!(fx.paths(), ["a.txt", "b.txt", "c.txt"]);
+}
+
+#[test]
+fn a_gitignore_inside_build_output_does_not_clear_the_cache() {
+    let mut cache = IgnoreCache::new();
+    cache.dirs.insert("out".to_owned(), true);
+    let batch = |k: &str| vec![format!("/w/{k}")];
+    filter_batch("/w", batch("node_modules/p/.gitignore"), &mut cache, None);
+    assert_eq!(cache.dirs.get("out"), Some(&true));
+    filter_batch("/w", batch("sub/.gitignore"), &mut cache, None);
+    assert!(cache.dirs.is_empty());
+}
+
+#[test]
+fn a_reported_path_gone_from_disk_and_head_gets_no_row() {
+    let fx = Fx::git("");
+    let mut d = Discovery::new(ROOM, &fx.cwd);
+    assert_eq!(d.discover(&fx.db, fx.reported(&["ghost.txt"])), 0);
+    assert_eq!(fx.paths(), Vec::<String>::new());
+}
+
+#[test]
+fn a_tracked_file_deleted_from_disk_is_baselined() {
+    let fx = Fx::git("");
+    fs::remove_file(fx.dir.path().join("tracked.txt")).unwrap();
+    let mut d = Discovery::new(ROOM, &fx.cwd);
+    assert_eq!(d.discover(&fx.db, fx.reported(&["tracked.txt"])), 1);
+    let b = fx.db.review_baseline(ROOM, "tracked.txt").unwrap().unwrap();
+    assert_eq!(b.content.as_deref(), Some("one\n"));
 }
