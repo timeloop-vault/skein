@@ -12,6 +12,7 @@ import {
 	profileBlurb,
 	profileLabel,
 	profileTag,
+	rootNoteText,
 } from "./hermesProfiles.ts";
 import { useHermesProfiles } from "./useHermesProfiles.ts";
 
@@ -62,6 +63,7 @@ export const HermesProfileStep = ({
 		return () => window.removeEventListener("keydown", onKey);
 	});
 
+	const noteText = listing === null ? null : rootNoteText(listing);
 	const askingEntry = asking === null ? undefined : entryOf(listing, asking);
 
 	return (
@@ -76,6 +78,18 @@ export const HermesProfileStep = ({
 					<div className="sk-agent-note">asking hermes…</div>
 				) : (
 					<>
+						{listing.root !== null && (
+							<div className="sk-agent-note">
+								Hermes root: <code>{listing.root}</code>
+							</div>
+						)}
+						{noteText !== null && (
+							<div
+								className={`sk-agent-note ${listing.rootNote?.kind === "noProfilesDir" ? "" : "warn"}`}
+							>
+								{noteText}
+							</div>
+						)}
 						{listing.error && (
 							<div className="sk-agent-note warn">
 								This list may be incomplete — {listing.error}

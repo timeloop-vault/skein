@@ -39,6 +39,27 @@ pub struct ProfileListDto {
     pub root: Option<String>,
     pub profiles: Vec<ProfileDto>,
     pub error: Option<String>,
+    /// Why the listing may not be what the user expects of this root.
+    pub root_note: Option<RootNoteDto>,
+}
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum RootNoteKind {
+    /// The root is not a directory.
+    Missing,
+    /// The root exists but has no `profiles/` (normal for a fresh Hermes).
+    NoProfilesDir,
+    /// The root itself is named `profiles` and has no `profiles/` below it:
+    /// the user probably pointed at the profiles dir, not at Hermes' home.
+    LooksLikeProfilesDir,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RootNoteDto {
+    pub kind: RootNoteKind,
+    pub suggested_root: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -119,30 +140,81 @@ pub(crate) fn list_profiles_in(root: Option<&Path>, inputs: &HookInputs) -> Prof
                 hooks_pending: false,
             }],
             error: None,
+            root_note: None,
         };
     };
     let mut names = vec![SKEIN_PROFILE.to_string(), "default".to_string()];
     let mut error = None;
+    let mut not_found = false;
     match std::fs::read_dir(root.join("profiles")) {
         Ok(entries) => {
-            let mut found: Vec<String> = entries
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|n| hermes::valid_profile_name(n) && n.as_str() != "default")
-                .filter(|n| !names.contains(n))
-                .collect();
+            let mut found: Vec<String> = Vec::new();
+            for entry in entries.flatten() {
+                let Ok(name) = entry.file_name().into_string() else {
+                    tracing::info!(
+                        entry = ?entry.file_name(),
+                        "hermes profile list: skipped an entry: not valid UTF-8 name"
+                    );
+                    continue;
+                };
+                if !entry.path().is_dir() {
+                    tracing::info!(
+                        profile = name,
+                        "hermes profile list: skipped an entry: not a directory"
+                    );
+                } else if !hermes::valid_profile_name(&name) {
+                    tracing::info!(
+                        profile = name,
+                        "hermes profile list: skipped an entry: invalid Hermes profile name"
+                    );
+                } else if !names.contains(&name) {
+                    found.push(name);
+                }
+            }
             found.sort();
             names.extend(found);
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => not_found = true,
         Err(e) => error = Some(format!("cannot read profiles: {:?}", e.kind())),
     }
+    let root_note = root_note_for(root, not_found);
+    tracing::info!(
+        root = %root.display(),
+        note = ?root_note.as_ref().map(|n| n.kind),
+        "hermes profile list: read root"
+    );
     ProfileListDto {
         root: Some(root.to_string_lossy().into_owned()),
         profiles: names.iter().map(|n| profile_dto(root, n, inputs)).collect(),
         error,
+        root_note,
     }
+}
+
+/// What to tell the user about `root`, given whether `<root>/profiles`
+/// was `NotFound`. A root named `profiles` without one below it is the
+/// "pointed at the profiles dir" mistake, whether or not it exists.
+fn root_note_for(root: &Path, profiles_not_found: bool) -> Option<RootNoteDto> {
+    let named_profiles = root
+        .file_name()
+        .is_some_and(|n| n.eq_ignore_ascii_case("profiles"));
+    if named_profiles && !root.join("profiles").is_dir() {
+        return Some(RootNoteDto {
+            kind: RootNoteKind::LooksLikeProfilesDir,
+            suggested_root: root.parent().map(|p| p.to_string_lossy().into_owned()),
+        });
+    }
+    let kind = if !root.is_dir() {
+        RootNoteKind::Missing
+    } else if profiles_not_found {
+        RootNoteKind::NoProfilesDir
+    } else {
+        return None;
+    };
+    Some(RootNoteDto {
+        kind,
+        suggested_root: None,
+    })
 }
 
 fn profile_config(root: &Path, profile: &str) -> Result<PathBuf, String> {

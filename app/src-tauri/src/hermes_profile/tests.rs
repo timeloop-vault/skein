@@ -362,3 +362,21 @@ fn atomic_write_temp_names_are_unique() {
     assert_eq!(std::fs::read(&p).expect("read"), b"b");
     assert_eq!(std::fs::read_dir(dir.path()).expect("dir").count(), 1);
 }
+
+#[test]
+fn effective_root_expands_a_leading_tilde() {
+    use crate::spawn_settings::EnvVar;
+    let Some(home) = skein_harness::home_dir() else {
+        return;
+    };
+    let s = SpawnSettings {
+        extra_env: vec![EnvVar {
+            key: "HERMES_HOME".to_string(),
+            value: " ~/x ".to_string(),
+        }],
+        ..SpawnSettings::default()
+    };
+    let root = effective_root(&s).unwrap();
+    assert_eq!(root, home.join("x"));
+    assert!(root.is_absolute());
+}

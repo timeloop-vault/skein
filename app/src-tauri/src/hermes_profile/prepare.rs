@@ -12,6 +12,9 @@
 //! environment). The spawn uses the final builder env instead, which also
 //! carries a per-harness env profile (#615); a `HERMES_HOME` set only there
 //! is seen by the spawn alone, which logs a warning when the roots differ.
+//! A `HERMES_HOME` starting with `~` is expanded here with the same helper
+//! as `effective_root`, and written back to the builder so Hermes itself
+//! receives an absolute path.
 //!
 //! Some Hermes versions don't write a `config.yaml` on `profile create`,
 //! so Skein writes the profile's config itself when it is missing (only
@@ -220,17 +223,28 @@ pub(crate) fn prepare_with_hooks(
 /// create step sees the same `PATH` and `HERMES_HOME` the TUI will.
 /// Blocking (it may run Hermes); the caller is already off the UI thread.
 pub(crate) fn prepare_for_spawn(
-    builder: &portable_pty::CommandBuilder,
+    builder: &mut portable_pty::CommandBuilder,
     launch: &str,
     args: &[String],
     settings: &crate::spawn_settings::SpawnSettings,
     harness_config: Option<&crate::harness_config::HarnessConfig>,
 ) -> Prepared {
-    let root = builder
+    let from_env = builder
         .get_env("HERMES_HOME")
+        .and_then(|h| h.to_str())
         .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-        .or_else(skein_harness::hermes::hermes_home);
+        .map(str::to_string);
+    let root = match from_env {
+        Some(raw) if raw.starts_with('~') => {
+            let expanded = skein_harness::hermes::expand_tilde(&raw);
+            if expanded.as_os_str() != raw.as_str() {
+                builder.env("HERMES_HOME", &expanded);
+            }
+            Some(expanded)
+        }
+        Some(raw) => Some(PathBuf::from(raw)),
+        None => skein_harness::hermes::hermes_home(),
+    };
     let Some(root) = root else {
         return Prepared::default();
     };

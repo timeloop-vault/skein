@@ -77,6 +77,12 @@ pub fn hermes_home_from(
     windows: bool,
 ) -> PathBuf {
     if let Some(h) = env_hermes_home.filter(|h| !h.is_empty()) {
+        // A `~` in Skein's own env is expanded, as the spawn does.
+        if let Some(s) = h.to_str()
+            && !home.as_os_str().is_empty()
+        {
+            return expand_tilde_from(s, Some(home));
+        }
         return PathBuf::from(h);
     }
     if windows && let Some(l) = local_app_data.filter(|l| !l.is_empty()) {
@@ -139,6 +145,31 @@ pub fn hermes_home() -> Option<PathBuf> {
         return None;
     }
     Some(resolved)
+}
+
+/// Expand a leading `~` the way a shell would: `~` alone, or `~/` / `~\`
+/// followed by a path, becomes `home` joined with the rest. Anything else
+/// (including `~user`) and a missing `home` leave the value unchanged.
+pub fn expand_tilde_from(value: &str, home: Option<&Path>) -> PathBuf {
+    let Some(rest) = value.strip_prefix('~') else {
+        return PathBuf::from(value);
+    };
+    let Some(home) = home else {
+        return PathBuf::from(value);
+    };
+    if rest.is_empty() {
+        return home.to_path_buf();
+    }
+    match rest.strip_prefix(['/', '\\']) {
+        Some("") => home.to_path_buf(),
+        Some(tail) => home.join(tail),
+        None => PathBuf::from(value),
+    }
+}
+
+/// [`expand_tilde_from`] with this machine's home directory.
+pub fn expand_tilde(value: &str) -> PathBuf {
+    expand_tilde_from(value, crate::home_dir().as_deref())
 }
 
 /// `<home>/state.db`.

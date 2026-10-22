@@ -36,7 +36,8 @@ pub(crate) enum EnsureOutcome {
 /// the `HERMES_HOME` the user put in Settings -> Shell & environment
 /// (the last non-empty one wins, as at spawn), else Skein's own process
 /// environment. One resolver for all of them, so they agree with the
-/// spawn on the common case.
+/// spawn on the common case. A leading `~` in the Settings value is
+/// expanded to the home directory (the spawn expands it the same way).
 ///
 /// Known limit: a `HERMES_HOME` set only in a per-harness env profile
 /// (#615) is seen by the spawn but not here; the spawn logs a warning
@@ -47,7 +48,7 @@ pub(crate) fn effective_root(settings: &SpawnSettings) -> Option<PathBuf> {
         .iter()
         .rev()
         .find(|v| v.key.trim().eq_ignore_ascii_case("HERMES_HOME") && !v.value.trim().is_empty())
-        .map(|v| PathBuf::from(v.value.trim()))
+        .map(|v| skein_harness::hermes::expand_tilde(v.value.trim()))
         .or_else(skein_harness::hermes::hermes_home)
 }
 

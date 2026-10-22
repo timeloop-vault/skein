@@ -19,11 +19,37 @@ export interface HermesProfileInfo {
 	hooksPending?: boolean;
 }
 
+export type RootNoteKind = "missing" | "noProfilesDir" | "looksLikeProfilesDir";
+
+export interface RootNote {
+	kind: RootNoteKind;
+	/** Where the root probably is, when the note can tell. */
+	suggestedRoot: string | null;
+}
+
 export interface HermesProfileListing {
 	root: string | null;
 	profiles: HermesProfileInfo[];
 	error: string | null;
+	/** Why the root looks wrong (#670); null when it looks fine or there is no root. */
+	rootNote?: RootNote | null;
 }
+
+/** The non-blocking note under the picker's intro; null when there is none. */
+export const rootNoteText = (listing: HermesProfileListing): string | null => {
+	const note = listing.rootNote;
+	if (!note) return null;
+	switch (note.kind) {
+		case "looksLikeProfilesDir":
+			return note.suggestedRoot
+				? `HERMES_HOME points at a profiles folder. Skein adds profiles/ itself — set HERMES_HOME to ${note.suggestedRoot} in Settings → Shell & environment.`
+				: "HERMES_HOME points at a profiles folder. Skein adds profiles/ itself — set HERMES_HOME to the folder above it in Settings → Shell & environment.";
+		case "missing":
+			return "No Hermes folder at this path. If Hermes lives elsewhere, set HERMES_HOME in Settings → Shell & environment.";
+		case "noProfilesDir":
+			return "No profiles/ folder here, so only Skein's profile and the default are listed.";
+	}
+};
 
 export interface EntryPreview {
 	configPath: string;

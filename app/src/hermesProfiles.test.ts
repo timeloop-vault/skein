@@ -7,6 +7,8 @@ import {
 	orderProfiles,
 	profileLabel,
 	profileTag,
+	type RootNote,
+	rootNoteText,
 } from "./hermesProfiles.ts";
 
 const p = (
@@ -66,5 +68,34 @@ describe("labels", () => {
 		const l = { root: null, profiles: [p("a")], error: null };
 		expect(entryOf(l, "a")?.name).toBe("a");
 		expect(entryOf(null, "a")).toBeUndefined();
+	});
+});
+
+describe("rootNoteText", () => {
+	const l = (rootNote?: RootNote | null) => ({
+		root: "/h",
+		profiles: [],
+		error: null,
+		...(rootNote === undefined ? {} : { rootNote }),
+	});
+	it("is null with no note", () => {
+		expect(rootNoteText(l())).toBeNull();
+		expect(rootNoteText(l(null))).toBeNull();
+	});
+	it("suggests the root for a profiles folder", () => {
+		expect(rootNoteText(l({ kind: "looksLikeProfilesDir", suggestedRoot: "/h/up" }))).toBe(
+			"HERMES_HOME points at a profiles folder. Skein adds profiles/ itself — set HERMES_HOME to /h/up in Settings → Shell & environment.",
+		);
+		expect(rootNoteText(l({ kind: "looksLikeProfilesDir", suggestedRoot: null }))).toContain(
+			"the folder above it",
+		);
+	});
+	it("words missing and noProfilesDir", () => {
+		expect(rootNoteText(l({ kind: "missing", suggestedRoot: null }))).toBe(
+			"No Hermes folder at this path. If Hermes lives elsewhere, set HERMES_HOME in Settings → Shell & environment.",
+		);
+		expect(rootNoteText(l({ kind: "noProfilesDir", suggestedRoot: null }))).toBe(
+			"No profiles/ folder here, so only Skein's profile and the default are listed.",
+		);
 	});
 });

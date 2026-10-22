@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "commands_tests_hooks.rs"]
 mod hooks_consent;
+#[path = "commands_tests_root.rs"]
+mod root_note;
 
 fn write(root: &Path, rel: &str, text: &str) {
     let p = root.join(rel);

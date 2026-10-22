@@ -388,6 +388,19 @@ fn hermes_home_resolution() {
         hermes_home_from(None, None, home, true),
         home.join(".hermes")
     );
+    assert_eq!(
+        hermes_home_from(Some(OsStr::new("~/.hermes")), None, home, false),
+        home.join(".hermes")
+    );
+    assert_eq!(
+        hermes_home_from(Some(OsStr::new("~")), None, home, false),
+        home.to_path_buf()
+    );
+    // No known home: stays relative, as before.
+    assert_eq!(
+        hermes_home_from(Some(OsStr::new("~/.hermes")), None, Path::new(""), false),
+        PathBuf::from("~/.hermes")
+    );
     assert_eq!(state_db_path(home), home.join("state.db"));
 }
 
@@ -438,4 +451,18 @@ fn profile_name_validation_mirrors_hermes() {
     }
     assert!(valid_profile_name(&"a".repeat(64)));
     assert!(!valid_profile_name(&"a".repeat(65)));
+}
+
+#[test]
+fn expand_tilde_from_handles_each_shape() {
+    let home = Path::new("/home/u");
+    let x = |v| expand_tilde_from(v, Some(home));
+    assert_eq!(x("~"), PathBuf::from("/home/u"));
+    assert_eq!(x("~/"), PathBuf::from("/home/u"));
+    assert_eq!(x("~/h/p"), home.join("h/p"));
+    assert_eq!(x(r"~\h"), home.join("h"));
+    assert_eq!(x("~other/h"), PathBuf::from("~other/h"));
+    assert_eq!(x("/abs/~/x"), PathBuf::from("/abs/~/x"));
+    assert_eq!(x(""), PathBuf::new());
+    assert_eq!(expand_tilde_from("~/h", None), PathBuf::from("~/h"));
 }

@@ -333,7 +333,7 @@ impl PtyManager {
             let launch =
                 windows_resolved_program(program, &applied.path).unwrap_or_else(|| program.clone());
             let prepared = crate::hermes_profile::prepare::prepare_for_spawn(
-                &builder,
+                &mut builder,
                 &launch,
                 stored_args,
                 settings,
