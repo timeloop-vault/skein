@@ -26,13 +26,85 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use notify_debouncer_mini::notify::RecommendedWatcher;
-use notify_debouncer_mini::{DebounceEventResult, Debouncer, new_debouncer, notify::RecursiveMode};
+use notify_debouncer_mini::notify::event::{AccessKind, AccessMode};
+use notify_debouncer_mini::notify::{
+    Config as NotifyConfig, EventHandler, EventKind, RecommendedWatcher, Watcher, WatcherKind,
+};
+use notify_debouncer_mini::{
+    Config, DebounceEventResult, Debouncer, new_debouncer_opt, notify::RecursiveMode,
+};
 use parking_lot::Mutex;
 
 use crate::ignore_filter::WorktreeIgnore;
 
 const DEBOUNCE_MS: u64 = 200;
+
+/// True for events that only report a file being opened or read.
+///
+/// Linux inotify reports every open and read-only close, and
+/// `notify-debouncer-mini` forwards every event kind as a changed path, so
+/// reading a file (including our own tick handler reading `.git/config`
+/// through libgit2) would tick the watch again. `Close(Write)` is kept: it
+/// is a real write signal (an mmap write, say). macOS and Windows never
+/// report these kinds.
+fn is_read_only_access(kind: EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Access(
+            AccessKind::Open(_) | AccessKind::Read | AccessKind::Close(AccessMode::Read)
+        )
+    )
+}
+
+/// A [`RecommendedWatcher`] that drops read-side access events (see
+/// [`is_read_only_access`]) before they reach the debouncer.
+struct ReadFilteredWatcher(RecommendedWatcher);
+
+impl Watcher for ReadFilteredWatcher {
+    fn new<F: EventHandler>(
+        mut event_handler: F,
+        config: NotifyConfig,
+    ) -> notify_debouncer_mini::notify::Result<Self> {
+        RecommendedWatcher::new(
+            move |res: notify_debouncer_mini::notify::Result<
+                notify_debouncer_mini::notify::Event,
+            >| {
+                if let Ok(event) = &res
+                    && is_read_only_access(event.kind)
+                {
+                    return;
+                }
+                event_handler.handle_event(res);
+            },
+            config,
+        )
+        .map(Self)
+    }
+
+    fn watch(
+        &mut self,
+        path: &Path,
+        recursive_mode: RecursiveMode,
+    ) -> notify_debouncer_mini::notify::Result<()> {
+        self.0.watch(path, recursive_mode)
+    }
+
+    fn unwatch(&mut self, path: &Path) -> notify_debouncer_mini::notify::Result<()> {
+        self.0.unwatch(path)
+    }
+
+    fn configure(&mut self, option: NotifyConfig) -> notify_debouncer_mini::notify::Result<bool> {
+        self.0.configure(option)
+    }
+
+    fn kind() -> WatcherKind {
+        RecommendedWatcher::kind()
+    }
+}
+
+fn debounce_config() -> Config {
+    Config::default().with_timeout(Duration::from_millis(DEBOUNCE_MS))
+}
 
 #[derive(Debug)]
 pub struct WatcherError(pub String);
@@ -54,7 +126,7 @@ impl WatcherError {
 /// `Debouncer` ties together the `notify` watcher and the timer that
 /// flushes batched events. We just need to keep it alive for as long as
 /// the watcher should run — dropping it stops the watch.
-type ManagedDebouncer = Debouncer<RecommendedWatcher>;
+type ManagedDebouncer = Debouncer<ReadFilteredWatcher>;
 
 #[derive(Default)]
 pub struct WatcherManager {
@@ -146,8 +218,8 @@ impl WatcherManager {
     where
         F: Fn(Option<Vec<PathBuf>>) + Send + 'static,
     {
-        let mut debouncer = new_debouncer(
-            Duration::from_millis(DEBOUNCE_MS),
+        let mut debouncer: ManagedDebouncer = new_debouncer_opt(
+            debounce_config(),
             move |result: DebounceEventResult| match result {
                 Ok(events) => on_change(Some(events.into_iter().map(|e| e.path).collect())),
                 Err(_) => on_change(None),
@@ -184,9 +256,8 @@ impl WatcherManager {
     where
         F: Fn() + Send + 'static,
     {
-        let mut debouncer = new_debouncer(
-            Duration::from_millis(DEBOUNCE_MS),
-            move |result: DebounceEventResult| {
+        let mut debouncer: ManagedDebouncer =
+            new_debouncer_opt(debounce_config(), move |result: DebounceEventResult| {
                 let fire = match result {
                     Ok(events) => touches_head(events.iter().map(|e| e.path.as_path())),
                     Err(_) => true,
@@ -194,9 +265,8 @@ impl WatcherManager {
                 if fire {
                     on_change();
                 }
-            },
-        )
-        .map_err(WatcherError::from_err)?;
+            })
+            .map_err(WatcherError::from_err)?;
         debouncer
             .watcher()
             .watch(dir, RecursiveMode::NonRecursive)
@@ -244,6 +314,39 @@ mod tests {
         let p = root.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, "x").unwrap();
+    }
+
+    #[test]
+    fn read_only_access_kinds_are_dropped() {
+        use notify_debouncer_mini::notify::event::AccessMode::{Any, Execute, Other};
+        use notify_debouncer_mini::notify::event::{
+            CreateKind, DataChange, MetadataKind, ModifyKind, RemoveKind, RenameMode,
+        };
+        let cases = [
+            (EventKind::Access(AccessKind::Open(Any)), true),
+            (EventKind::Access(AccessKind::Open(Execute)), true),
+            (EventKind::Access(AccessKind::Read), true),
+            (EventKind::Access(AccessKind::Close(AccessMode::Read)), true),
+            (
+                EventKind::Access(AccessKind::Close(AccessMode::Write)),
+                false,
+            ),
+            (EventKind::Access(AccessKind::Close(Other)), false),
+            (EventKind::Access(AccessKind::Any), false),
+            (EventKind::Any, false),
+            (EventKind::Create(CreateKind::File), false),
+            (EventKind::Remove(RemoveKind::File), false),
+            (EventKind::Modify(ModifyKind::Data(DataChange::Any)), false),
+            (
+                EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
+                false,
+            ),
+            (EventKind::Modify(ModifyKind::Name(RenameMode::Both)), false),
+            (EventKind::Other, false),
+        ];
+        for (kind, dropped) in cases {
+            assert_eq!(is_read_only_access(kind), dropped, "{kind:?}");
+        }
     }
 
     #[test]

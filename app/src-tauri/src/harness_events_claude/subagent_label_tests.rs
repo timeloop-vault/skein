@@ -120,6 +120,9 @@ fn late_sidecar_labels_subagent_once_and_end_carries_it() {
     let mut f = fs::OpenOptions::new().append(true).open(&sub_path).unwrap();
     writeln!(f, "{END_TURN}").unwrap();
     f.sync_all().unwrap();
+    // Close before draining: macOS FSEvents reports the change on
+    // close, not per write (#437, #666).
+    drop(f);
     let events = drain_until(&rx, |evs| {
         evs.iter()
             .any(|e| matches!(e, ClaudeEvent::SubagentEnd { .. }))
@@ -200,6 +203,9 @@ fn finished_subagent_is_not_reread_for_its_label() {
     let mut f = fs::OpenOptions::new().append(true).open(&sub_path).unwrap();
     writeln!(f, "{END_TURN}").unwrap();
     f.sync_all().unwrap();
+    // Close before draining: macOS FSEvents reports the change on
+    // close, not per write (#437, #666).
+    drop(f);
     let events = drain_until(&rx, |evs| {
         evs.iter()
             .any(|e| matches!(e, ClaudeEvent::SubagentEnd { .. }))

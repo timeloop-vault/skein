@@ -8,6 +8,7 @@ struct Fx {
     dir: TempDir,
     cwd: String,
     db: Database,
+    _db_dir: TempDir,
 }
 
 impl Fx {
@@ -26,8 +27,16 @@ impl Fx {
     fn bare() -> Self {
         let dir = TempDir::new().unwrap();
         let cwd = dir.path().to_string_lossy().to_string();
-        let db = Database::open(&dir.path().join("skein.db")).unwrap();
-        Self { dir, cwd, db }
+        // The db must not live in the (possibly git) worktree, or `commit`
+        // would add it and `git status` would report it as modified.
+        let db_dir = TempDir::new().unwrap();
+        let db = Database::open(&db_dir.path().join("skein.db")).unwrap();
+        Self {
+            dir,
+            cwd,
+            db,
+            _db_dir: db_dir,
+        }
     }
 
     fn write(&self, rel: &str, text: &str) {
