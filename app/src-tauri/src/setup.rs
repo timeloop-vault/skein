@@ -72,6 +72,7 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
     menu::build(app, &product_name)?;
 
     // #639: host main-thread lag, shown in the perf summary line.
+    crate::perf_load::start();
     crate::perf_main_lag::start(app.handle().clone());
 
     Ok(())

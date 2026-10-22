@@ -24,6 +24,17 @@ pub(crate) fn frontend_log(level: String, target: String, message: String) {
     let message: String = message.chars().take(MAX_LEN).collect();
     if level == "debug" {
         tracing::debug!(source = "frontend", target = %target, truncated, "{message}");
+    } else if level == "warn" && target == "perf" {
+        let (cpu, disk, queue) = crate::perf_load::current_fields();
+        tracing::warn!(
+            source = "frontend",
+            target = %target,
+            truncated,
+            cpu_pct = %cpu,
+            disk_busy_pct = %disk,
+            disk_queue = %queue,
+            "{message}"
+        );
     } else if level == "warn" {
         tracing::warn!(source = "frontend", target = %target, truncated, "{message}");
     } else if level == "error" {
@@ -42,7 +53,10 @@ pub(crate) fn perf_summary_log(line: String) {
     const MAX_LEN: usize = 2000;
     let truncated = line.chars().count() > MAX_LEN;
     let line: String = line.chars().take(MAX_LEN).collect();
-    let line = crate::perf_spans::drain_and_append(&line);
+    let mut line = crate::perf_spans::drain_and_append(&line);
+    if let Some(seg) = crate::perf_load::window_segment() {
+        line.push_str(&seg);
+    }
     tracing::info!(source = "frontend", target = "perf", truncated, "{line}");
 }
 

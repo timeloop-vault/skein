@@ -4171,6 +4171,7 @@ dependencies = [
  "skein-git",
  "skein-harness",
  "skein-review",
+ "skein-sysload",
  "skein-webshot",
  "skein-winnotify",
  "sysinfo",
@@ -4218,6 +4219,13 @@ dependencies = [
  "serde",
  "similar",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "skein-sysload"
+version = "0.1.0"
+dependencies = [
+ "windows",
 ]
 
 [[package]]

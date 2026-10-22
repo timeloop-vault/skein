@@ -10,7 +10,7 @@ import { harnessActivity } from "./harnessActivity.ts";
 import { harnessInput } from "./harnessInput.ts";
 import { recordSpan } from "./perfTelemetry.ts";
 import type { ScreenCell } from "./promptScreen.ts";
-import { isTerminalReply, noteInput } from "./ptyLatency.ts";
+import { classifyInput, echoPhase, isTerminalReply, noteInput } from "./ptyLatency.ts";
 import { fitTerminal } from "./terminalFit.ts";
 import type { OutputGate } from "./terminalOutputGate.ts";
 import { isHostHidden } from "./terminalOutputVisibility.ts";
@@ -138,7 +138,7 @@ export function attachPtyInput(term: Terminal, harnessId: string, id: string): {
 			return;
 		}
 		const t0 = performance.now();
-		noteInput(id, t0);
+		noteInput(id, t0, classifyInput(data), echoPhase(harnessActivity.get(harnessId)?.phase));
 		// No rejection handler: a failed write stays an unhandled rejection.
 		void invoke("pty_write", { id, data }).then(() =>
 			recordSpan("pty.writeIpc", performance.now() - t0, "wall"),

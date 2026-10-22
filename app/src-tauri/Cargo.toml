@@ -79,6 +79,7 @@ axum = "0.8"
 skein-git = { path = "../../crates/skein-git" }
 skein-harness = { path = "../../crates/skein-harness" }
 skein-review = { path = "../../crates/skein-review" }
+skein-sysload = { path = "../../crates/skein-sysload" }
 # Native screenshot of the design pane's preview rectangle (#552).
 skein-webshot = { path = "../../crates/skein-webshot" }
 # PNG bytes into the MCP image block / JSON mirror; already locked.

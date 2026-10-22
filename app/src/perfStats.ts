@@ -90,17 +90,34 @@ export class SampleBuffer {
  *  latency including awaited IPC/I/O (the main thread was NOT busy for it). */
 export type SpanKind = "main" | "wall";
 
+/** Per-area reservoir size: spans are far lower volume than the drift probe,
+ *  and there is one buffer per area, so keep it small. */
+export const SPAN_SAMPLE_CAP = 1024;
+
 export interface SpanStat {
 	count: number;
 	totalMs: number;
 	maxMs: number;
+	p50Ms: number;
+	p95Ms: number;
 	kind: SpanKind;
 }
 
+interface SpanEntry {
+	count: number;
+	totalMs: number;
+	maxMs: number;
+	kind: SpanKind;
+	buf: SampleBuffer;
+}
+
 /** Accumulates span durations per area; remembers the kind per area (the
- *  latest recorded kind wins). */
+ *  latest recorded kind wins). count/total/max are exact; p50/p95 come from
+ *  a bounded per-area reservoir. */
 export class SpanAccumulator<A extends string> {
-	private stats = new Map<A, SpanStat>();
+	private stats = new Map<A, SpanEntry>();
+
+	constructor(private readonly random: () => number = Math.random) {}
 
 	record(area: A, ms: number, kind: SpanKind = "main"): void {
 		const cur = this.stats.get(area);
@@ -109,13 +126,29 @@ export class SpanAccumulator<A extends string> {
 			cur.totalMs += ms;
 			cur.kind = kind;
 			if (ms > cur.maxMs) cur.maxMs = ms;
+			cur.buf.add(ms);
 		} else {
-			this.stats.set(area, { count: 1, totalMs: ms, maxMs: ms, kind });
+			const buf = new SampleBuffer(SPAN_SAMPLE_CAP, this.random);
+			buf.add(ms);
+			this.stats.set(area, { count: 1, totalMs: ms, maxMs: ms, kind, buf });
 		}
 	}
 
 	snapshot(): [A, SpanStat][] {
-		return [...this.stats.entries()].map(([a, s]) => [a, { ...s }]);
+		return [...this.stats.entries()].map(([a, e]) => {
+			const sum = e.buf.summary();
+			return [
+				a,
+				{
+					count: e.count,
+					totalMs: e.totalMs,
+					maxMs: e.maxMs,
+					p50Ms: sum.p50,
+					p95Ms: sum.p95,
+					kind: e.kind,
+				},
+			];
+		});
 	}
 
 	reset(): void {
@@ -146,7 +179,7 @@ export function formatPerfSummary(i: PerfSummaryInput): string {
 	for (const [area, s] of i.spans) {
 		if (s.count === 0) continue;
 		parts.push(
-			`${area}${s.kind === "wall" ? "[wall]" : ""} n=${s.count} total=${ms(s.totalMs)} max=${ms(s.maxMs)}`,
+			`${area}${s.kind === "wall" ? "[wall]" : ""} n=${s.count} total=${ms(s.totalMs)} max=${ms(s.maxMs)} p50=${ms(s.p50Ms)} p95=${ms(s.p95Ms)}`,
 		);
 	}
 	return parts.join(" | ");

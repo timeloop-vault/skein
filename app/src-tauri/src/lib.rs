@@ -27,6 +27,9 @@ mod hermes_profile;
 mod ignore_filter;
 mod open_request;
 mod os_notify;
+mod perf_cmds;
+mod perf_hist;
+mod perf_load;
 mod perf_main_lag;
 mod perf_spans;
 mod pty;
@@ -89,7 +92,7 @@ pub fn run() {
         .on_menu_event(setup::on_menu_event)
         .on_window_event(setup::on_window_event)
         .setup(setup::setup)
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(perf_cmds::timed(tauri::generate_handler![
             commands::app::ping,
             commands::app::window_raise_main,
             fs::list_dir,
@@ -191,7 +194,7 @@ pub fn run() {
             updater_proxy::commands::updater_proxy_set,
             updater_proxy::commands::updater_diagnose,
             updater_proxy::commands::updater_check_proxy,
-        ])
+        ]))
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

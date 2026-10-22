@@ -4,7 +4,10 @@
 // Measures: (1) timer drift of a 250 ms probe (how late the main thread let
 // it run), with stall counts over 50/200 ms; (2) `longtask` entries where the
 // webview supports them (WKWebView does not: reported as n/a); (3) named
-// spans around hot paths, accumulated as count/total/max per area.
+// spans around hot paths, accumulated as count/total/max plus p50/p95 (bounded per-area
+// reservoir) per area. A single drift sample over STALL_WARN_MS also emits one
+// timestamped WARN (target "perf") at once, so a long freeze can be placed in
+// time rather than only counted in the next summary.
 //
 // Add an area: add a member to `PerfArea`, then wrap the hot path with
 // `span` / `spanAsync`, or time it yourself and call `recordSpan`. Pick the
@@ -24,6 +27,7 @@
 // and a span is two performance.now() calls plus a map update.
 
 import { invoke } from "@tauri-apps/api/core";
+import { logToRust } from "./frontendLog.ts";
 import { formatPerfSummary, SampleBuffer, SpanAccumulator, type SpanKind } from "./perfStats.ts";
 
 export type PerfArea =
@@ -32,9 +36,26 @@ export type PerfArea =
 	| "rooms.save"
 	| "branchWatch.tick"
 	| "pty.writeIpc"
-	| "pty.echo";
+	| "pty.echo"
+	| "pty.echo.key"
+	| "pty.echo.enter"
+	| "pty.echo.ctrl"
+	| "pty.echo.mouse"
+	| "pty.echo.paste"
+	| "pty.echo@waiting"
+	| "pty.echo@running"
+	| "pty.echo@other";
 
 const PROBE_MS = 250;
+
+/** A counted drift sample strictly over this many ms is logged immediately. */
+export const STALL_WARN_MS = 1000;
+
+/** Pure decision: the WARN message for a drift sample, or null if not a stall. */
+export function stallWarning(driftMs: number): string | null {
+	return driftMs > STALL_WARN_MS ? `ui stall drift=${Math.round(driftMs)}ms` : null;
+}
+
 const SUMMARY_MS = 5 * 60 * 1000;
 
 const drift = new SampleBuffer();
@@ -147,7 +168,12 @@ export function startPerfTelemetry(counts: () => { rooms: number; harnesses: num
 		const hidden = hasDoc && document.visibilityState === "hidden";
 		// Throttled timers while hidden, or an interval that spanned a
 		// visibility change, say nothing about main-thread congestion.
-		if (!hidden && lastVisChange <= prevTick) drift.add(Math.max(0, t - expected));
+		if (!hidden && lastVisChange <= prevTick) {
+			const d = Math.max(0, t - expected);
+			drift.add(d);
+			const warn = stallWarning(d);
+			if (warn) logToRust("warn", "perf", warn);
+		}
 		prevTick = t;
 		expected = t + PROBE_MS;
 	}, PROBE_MS);

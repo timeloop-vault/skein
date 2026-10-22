@@ -48,8 +48,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
 - **React 18 + strict TypeScript** UI (Vite); xterm.js for terminals,
   react-virtuoso for the activity feed, CodeMirror 6 for the file
   editor (#185)
-- **Five Rust workspace crates** — `skein-git`, `skein-harness`,
-  `skein-review`, `skein-webshot`, `skein-winnotify` — plus
+- **Six Rust workspace crates** — `skein-git`, `skein-harness`,
+  `skein-review`, `skein-sysload`, `skein-webshot`, `skein-winnotify` — plus
   `app/src-tauri`, which is deliberately **excluded** from the
   workspace. Every cargo command therefore needs running twice; see
   Conventions
@@ -108,6 +108,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   the line number; three tiers (exact/exact-elsewhere/
     │                                #   max-overlap) then outdated. Never silently moves or
     │                                #   drops a comment; 22 table tests, no repo needed
+    ├── crates/skein-sysload/        # System CPU % plus the system drive's disk busy % and
+    │                                #   queue length (#639), sampled through Windows PDH
+    │                                #   (`PdhAddEnglishCounterW`, locale-independent) at 1 Hz on
+    │                                #   a background thread. Feeds the perf summary line's
+    │                                #   ` | sys …` segment and the perf stall WARNs. Yields None
+    │                                #   on other OSes, with no thread. Allowed `unsafe` on the
+    │                                #   same terms as skein-winnotify, below
     ├── crates/skein-webshot/        # Native PNG of a rectangle of a Tauri webview (#552):
     │                                #   WebView2 DevTools `Page.captureScreenshot` with a `clip`
     │                                #   on Windows, `WKWebView takeSnapshotWithConfiguration:` on
@@ -123,8 +130,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   unpackaged-app AUMID registration, a
     │                                #   INotificationActivationCallback so Action Center/cold-start
     │                                #   clicks work, foreground-window recovery. With
-    │                                #   skein-webshot, one of the workspace's TWO crates allowed
-    │                                #   `unsafe`: each has its own `[lints]` table (not
+    │                                #   skein-webshot and skein-sysload, one of the workspace's
+    │                                #   THREE crates allowed `unsafe`: each has its own `[lints]` table (not
     │                                #   `workspace = true`) setting `unsafe_code = "allow"` and
     │                                #   clippy `undocumented_unsafe_blocks = "deny"`, so every
     │                                #   unsafe block carries a `// SAFETY:` comment — raw
@@ -925,7 +932,7 @@ the agent API from a shell harness); macOS isn't covered yet.
 ## Conventions
 
 - **Rust:** edition 2024. `unsafe_code = "forbid"` (except
-  skein-winnotify and skein-webshot, see Layout). Clippy pedantic
+  skein-winnotify, skein-webshot and skein-sysload, see Layout). Clippy pedantic
   warn, `-D warnings`. Tauri commands collapse `GitError` / `PtyError`
   to `String` at the boundary — they round-trip via JSON anyway.
   The toolchain is pinned in `rust-toolchain.toml` (currently 1.99, also

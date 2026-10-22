@@ -570,6 +570,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "skein-sysload"
+version = "0.1.0"
+dependencies = [
+ "windows",
+]
+
+[[package]]
 name = "skein-webshot"
 version = "0.1.0"
 dependencies = [
