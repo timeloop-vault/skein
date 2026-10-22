@@ -250,6 +250,13 @@ impl Database {
             [],
         )
         .map_err(|e| e.to_string())?;
+        // #658: the orphan sweep seeks by room_id; without this it scanned.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_review_comments_room \
+             ON review_comments(room_id)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
 
         // Which files the user has marked as looked at, and what they
         // looked at. Storing the *content hash* rather than a flag is

@@ -114,6 +114,105 @@ fn row_count(db: &Database, table: &str, room_id: &str) -> i64 {
         .unwrap()
 }
 
+/// #658: the sweep's room-keyed list covers every table with a `room_id`.
+#[test]
+fn room_keyed_tables_matches_schema() {
+    let (_d, db) = fresh();
+    let conn = db.conn.lock();
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let mut with_room = Vec::new();
+    for t in &tables {
+        let has: bool = conn
+            .prepare(&format!("PRAGMA table_info({t})"))
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .any(|c| c == "room_id");
+        if has && t != "sessions" && t != "sessions_quarantine" {
+            with_room.push(t.clone());
+        }
+    }
+    for t in &with_room {
+        assert!(ROOM_KEYED_TABLES.contains(&t.as_str()), "{t} not swept");
+    }
+    for t in ROOM_KEYED_TABLES {
+        assert!(
+            with_room.iter().any(|w| w == t),
+            "{t} missing or no room_id"
+        );
+    }
+}
+
+/// #658: neither the loose scan nor the delete may scan a table.
+#[test]
+fn sweep_queries_use_an_index() {
+    let (_d, db) = fresh();
+    let conn = db.conn.lock();
+    for table in ROOM_KEYED_TABLES {
+        for sql in [
+            first_room_sql(table),
+            next_room_sql(table),
+            delete_room_sql(table),
+        ] {
+            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            let details: Vec<String> = stmt
+                .query_map(
+                    rusqlite::params_from_iter(sql.contains("?1").then_some("x")),
+                    |r| r.get::<_, String>(3),
+                )
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            let plan = details.join(" | ");
+            assert!(
+                plan.contains("USING INDEX")
+                    || plan.contains("USING COVERING INDEX")
+                    || plan.contains("USING PRIMARY KEY"),
+                "{table}: `{sql}` plan: {plan}"
+            );
+        }
+    }
+}
+
+/// #658: several orphans, several rows each, all go; the count is exact.
+#[test]
+fn sweep_deletes_every_row_of_every_orphan() {
+    let (_d, db) = fresh();
+    db.save_all(&[room("live")]).unwrap();
+    db.load_all().unwrap();
+    for room_id in ["live", "o1", "o2", "o3"] {
+        seed_row(&db, "harness_events", room_id);
+        seed_row(&db, "harness_events", room_id);
+        seed_row(&db, "harness_actions", room_id);
+    }
+    assert_eq!(db.sweep_orphans().unwrap(), 9);
+    assert_eq!(row_count(&db, "harness_events", "live"), 2);
+    assert_eq!(row_count(&db, "harness_actions", "live"), 1);
+    for o in ["o1", "o2", "o3"] {
+        assert_eq!(row_count(&db, "harness_events", o), 0);
+        assert_eq!(row_count(&db, "harness_actions", o), 0);
+    }
+}
+
+/// #658: nothing orphaned, nothing deleted.
+#[test]
+fn sweep_without_orphans_deletes_nothing() {
+    let (_d, db) = fresh();
+    db.save_all(&[room("live")]).unwrap();
+    db.load_all().unwrap();
+    for table in ROOM_KEYED_TABLES {
+        seed_row(&db, table, "live");
+    }
+    assert_eq!(db.sweep_orphans().unwrap(), 0);
+}
+
 /// #237: every room-keyed table is swept for a room that is gone
 /// from `sessions` entirely, while rows for a live room are left
 /// untouched — and the returned count matches what was deleted.
@@ -191,4 +290,9 @@ fn sweep_keeps_rows_for_a_quarantined_room() {
         assert_eq!(row_count(&db, table, "bad"), 1, "table {table}");
         assert_eq!(row_count(&db, table, "orphan"), 0, "table {table}");
     }
+}
+
+#[test]
+fn first_room_query_skips_null_room_ids() {
+    assert!(first_room_sql("t").contains("WHERE room_id IS NOT NULL"));
 }
