@@ -33,6 +33,11 @@ moves into an active phase, delete it here.
 - **OS code signing** — chapter 8 shipped unsigned installers with a
   Tauri-signed auto-updater; real Apple / Authenticode signing waits
   until an audience justifies the certificate cost.
+- **Per-kind program path** — a Settings override for the program a
+  harness kind spawns, so one machine can keep opencode v1 and v2
+  installed under different paths. Not needed while each machine runs one
+  version: epic #674 detects the version per spawn instead
+  (`docs/opencode-v2-recon.md` §1.8).
 
 ## From the grok-build recon (2026-07-16)
 
