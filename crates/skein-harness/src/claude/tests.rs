@@ -655,3 +655,28 @@ fn rows_skips_bad_lines_and_reads_the_rest() {
     assert!(matches!(got[0], Row::Assistant(_)));
     assert!(matches!(got[1], Row::CostState(_)));
 }
+
+#[test]
+fn context_tokens_table() {
+    let cases = [
+        (
+            json!({"input_tokens": 3, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 20, "output_tokens": 9}),
+            Some(123),
+        ),
+        (json!({"input_tokens": 3}), Some(3)),
+        (json!({"cache_read_input_tokens": 50}), Some(50)),
+        (
+            json!({"input_tokens": 1, "cache_creation": {"ephemeral_5m_input_tokens": 10, "ephemeral_1h_input_tokens": 4}}),
+            Some(15),
+        ),
+        (
+            json!({"input_tokens": 1, "cache_creation_input_tokens": 7, "cache_creation": {"ephemeral_5m_input_tokens": 10}}),
+            Some(8),
+        ),
+        (json!({"output_tokens": 5}), None),
+        (json!({"cache_creation": {}}), None),
+    ];
+    for (usage, want) in cases {
+        assert_eq!(context_tokens(&usage), want, "{usage}");
+    }
+}

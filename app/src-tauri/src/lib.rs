@@ -161,6 +161,7 @@ pub fn run() {
             commands::harness_log::db_recent_harness_actions_by_harness,
             commands::harness_log::db_recent_harness_actions_by_room,
             commands::harness_log::db_recent_harness_actions_by_room_and_kind,
+            commands::harness_log::db_harness_context_sizes,
             review::review_pending,
             review::review_accept,
             review::review_reject,

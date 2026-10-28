@@ -28,6 +28,16 @@ pub struct HarnessEvent {
     pub source: Option<String>,
 }
 
+/// The newest `turn_cost` row of one harness (see `latest_turn_costs`).
+#[derive(Debug, Clone)]
+pub struct LatestTurnCost {
+    pub harness_id: String,
+    pub payload: String,
+    /// `None` for rows written before the column existed (#538).
+    pub harness_kind: Option<String>,
+    pub timestamp_ms: i64,
+}
+
 /// One row in the `harness_actions` append-only log. Issue #80.
 ///
 /// Sibling of [`HarnessEvent`] — that table tracks phase transitions
@@ -315,6 +325,39 @@ impl Database {
             .query_map(params![harness_id, source, session_id], |r| r.get(0))
             .map_err(|e| e.to_string())?;
         rows.next().transpose().map_err(|e| e.to_string())
+    }
+
+    /// Newest `turn_cost` row of each given harness, as
+    /// `(harness_id, payload, harness_kind, timestamp_ms)`. Newest by `id`,
+    /// never by timestamp: opencode rows carry `timestamp_ms` 0. Harnesses
+    /// with no such row are absent. One indexed lookup per id, via
+    /// `idx_harness_actions_harness_kind(harness_id, kind, id)`.
+    pub fn latest_turn_costs(&self, harness_ids: &[String]) -> Result<Vec<LatestTurnCost>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT payload, harness_kind, timestamp_ms FROM harness_actions \
+                 WHERE harness_id = ?1 AND kind = 'turn_cost' \
+                 ORDER BY id DESC LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for id in harness_ids {
+            let mut rows = stmt
+                .query_map(params![id], |r| {
+                    Ok(LatestTurnCost {
+                        harness_id: id.clone(),
+                        payload: r.get(0)?,
+                        harness_kind: r.get(1)?,
+                        timestamp_ms: r.get(2)?,
+                    })
+                })
+                .map_err(|e| e.to_string())?;
+            if let Some(row) = rows.next().transpose().map_err(|e| e.to_string())? {
+                out.push(row);
+            }
+        }
+        Ok(out)
     }
 
     /// Batch counterpart to `record_harness_action` (#171e). The two

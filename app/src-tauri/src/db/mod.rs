@@ -48,7 +48,7 @@ mod schema;
 mod snapshots;
 mod sweep;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 mod timed_lock;
 mod todos;
 
@@ -56,7 +56,7 @@ use timed_lock::TimedMutex;
 
 pub use agent_tokens::TokenLookup;
 pub use element_anchors::ReviewElementAnchorRow;
-pub use harness_log::{HarnessAction, HarnessEvent, NewHarnessAction, action_kind};
+pub use harness_log::{HarnessAction, HarnessEvent, LatestTurnCost, NewHarnessAction, action_kind};
 pub use mail::HarnessMessageRow;
 pub use review_baselines::NewBaseline;
 pub use review_threads::{ReviewAddressedRow, ReviewCommentRow, ReviewThreadRow};

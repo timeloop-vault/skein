@@ -2,7 +2,7 @@ use tempfile::TempDir;
 
 use super::{Database, Harness, Room};
 
-pub(super) fn fresh_db() -> (TempDir, Database) {
+pub(crate) fn fresh_db() -> (TempDir, Database) {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("test.db");
     let db = Database::open(&path).unwrap();

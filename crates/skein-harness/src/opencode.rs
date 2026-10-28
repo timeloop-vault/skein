@@ -352,6 +352,25 @@ pub fn assistant_messages(
     Ok(out)
 }
 
+/// Context size of one opencode step from its `tokens` object
+/// (`{input, output, reasoning, cache: {read, write}}`):
+/// `input + cache.read + cache.write`. Missing fields read as zero;
+/// `None` when input and both cache counts are all absent.
+///
+/// This is the opencode v1 shape (one `step-finish` row per API call).
+/// A future v2 adapter (#617) feeds the same consumer either by writing
+/// `turn_cost` rows in this shape or by adding its own extractor here.
+pub fn context_tokens(tokens: &Value) -> Option<u64> {
+    let input = tokens.get("input").and_then(Value::as_u64);
+    let cache = tokens.get("cache");
+    let read = cache.and_then(|c| c.get("read")).and_then(Value::as_u64);
+    let write = cache.and_then(|c| c.get("write")).and_then(Value::as_u64);
+    if input.is_none() && read.is_none() && write.is_none() {
+        return None;
+    }
+    Some(input.unwrap_or(0) + read.unwrap_or(0) + write.unwrap_or(0))
+}
+
 #[cfg(test)]
 #[allow(clippy::unreadable_literal, clippy::float_cmp)]
 mod tests {
@@ -570,5 +589,22 @@ mod tests {
     #[test]
     fn open_read_only_refuses_a_missing_file() {
         assert!(open_read_only(Path::new("/definitely/missing/opencode.db")).is_err());
+    }
+
+    #[test]
+    fn context_tokens_table() {
+        let cases = [
+            (
+                json!({"input": 5, "output": 9, "reasoning": 2, "cache": {"read": 100, "write": 20}}),
+                Some(125),
+            ),
+            (json!({"input": 5, "output": 9}), Some(5)),
+            (json!({"cache": {"read": 7}}), Some(7)),
+            (json!({"output": 9, "reasoning": 1}), None),
+            (json!({}), None),
+        ];
+        for (tokens, want) in cases {
+            assert_eq!(context_tokens(&tokens), want, "{tokens}");
+        }
     }
 }

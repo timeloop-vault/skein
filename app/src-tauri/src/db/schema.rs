@@ -123,6 +123,12 @@ impl Database {
         )
         .map_err(|e| e.to_string())?;
         conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_harness_actions_harness_kind \
+             ON harness_actions(harness_id, kind, id)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_harness_actions_room \
              ON harness_actions(room_id, timestamp_ms)",
             [],

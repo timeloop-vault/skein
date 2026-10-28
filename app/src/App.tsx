@@ -34,6 +34,7 @@ import { useHarnessActions } from "./useHarnessActions.ts";
 import { useHarnessCreation } from "./useHarnessCreation.ts";
 import { useHarnessNotifications } from "./useHarnessNotifications.ts";
 import { useRenameHarnessProfiles } from "./useRenameHarnessProfiles.ts";
+import { useRoomContextSizes } from "./useRoomContextSizes.ts";
 import { useRoomStripNav } from "./useRoomStripNav.ts";
 import { useRoomsStore } from "./useRoomsStore.ts";
 import { useTabDrag } from "./useTabDrag.ts";
@@ -98,6 +99,7 @@ export default function App() {
 	// archived ones aren't rendered as tabs.
 	const activeRoomsRef = useRef(activeRooms);
 	activeRoomsRef.current = activeRooms;
+	useRoomContextSizes(activeRooms); // #368
 	// #331: keep in sync for the status-popover breakdown.
 	popoverRoomsRef.current = roomsRef.current;
 

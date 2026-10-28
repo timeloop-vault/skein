@@ -517,6 +517,34 @@ impl Usage {
     }
 }
 
+/// Context size of one API response from its raw Claude `usage` object:
+/// `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`
+/// — what the model was handed on that call. Not a sum over a turn and
+/// not a cost; callers feed it the usage of a turn's LAST response.
+///
+/// `cache_creation_input_tokens` falls back to the sum of the
+/// `cache_creation` breakdown's 5m + 1h fields when absent. Missing
+/// fields read as zero, but `None` when all three counts are absent.
+pub fn context_tokens(usage: &Value) -> Option<u64> {
+    let input = usage.get("input_tokens").and_then(Value::as_u64);
+    let read = usage.get("cache_read_input_tokens").and_then(Value::as_u64);
+    let flat = usage
+        .get("cache_creation_input_tokens")
+        .and_then(Value::as_u64);
+    let created = flat.or_else(|| {
+        let b = usage.get("cache_creation")?;
+        let (m5, h1) = (
+            b.get("ephemeral_5m_input_tokens").and_then(Value::as_u64),
+            b.get("ephemeral_1h_input_tokens").and_then(Value::as_u64),
+        );
+        (m5.is_some() || h1.is_some()).then(|| m5.unwrap_or(0) + h1.unwrap_or(0))
+    });
+    if input.is_none() && read.is_none() && created.is_none() {
+        return None;
+    }
+    Some(input.unwrap_or(0) + read.unwrap_or(0) + created.unwrap_or(0))
+}
+
 /// One `assistant` row.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssistantRow {
