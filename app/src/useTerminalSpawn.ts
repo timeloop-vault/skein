@@ -1,13 +1,7 @@
 // useTerminalSpawn — the xterm.js ↔ PTY binding at the heart of
 // LiveTerminal: spawns/kills the child on the mountKey, attaches the
-// L2c event adapters (Claude JSONL tail / opencode SSE), and registers
-// the #238 nudge seam. Split out of LiveTerminal.tsx purely to keep
-// the effect under the ~600-line house limit (#19); no behaviour
-// change — this is the same mount effect (plus the #116 re-point
-// effect that used to follow it in the component), just moved into a
-// hook so LiveTerminal.tsx's own body stays short. See
-// LiveTerminal.tsx's header comment for what the three PTY↔terminal
-// flows are.
+// L2c event adapters, and registers the #238 nudge seam. Split out of
+// LiveTerminal.tsx (#19); see its header for the PTY↔terminal flows.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { FitAddon } from "@xterm/addon-fit";
@@ -18,9 +12,10 @@ import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import { harnessInput } from "./harnessInput.ts";
-import { recordOpencodeVersion } from "./opencodeCli.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
+import { createSidecarDeathRecord, watchSidecarExit } from "./opencodeSidecarExit.ts";
+import { prepareOpencodeSpawn, realPrepareDeps } from "./opencodeV2Spawn.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
 import { forget as forgetLatency, recordEcho } from "./ptyLatency.ts";
 import { type PtyEvent, ptySpawn } from "./ptySpawnCall.ts";
@@ -109,16 +104,10 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 	} = params;
 
 	// Run only on mountKey changes. cmd / cwd / fontSize are consumed
-	// once at first mount: cmd seeds the closure's programName /
-	// startPty call; cwd is fixed for a harness; fontSize has its own
-	// retune effect (in LiveTerminal.tsx). Listing them in the dep
-	// array (the obvious fix to satisfy useExhaustiveDependencies) made
-	// every App render produce a fresh cmd-array reference, which made
-	// the cleanup tear down the live PTY and the next effect-run
-	// re-spawn with the same `--session-id <uuid>`. Claude refuses to
-	// reclaim a session whose .jsonl file already exists, so the
-	// existing harness died with "Session ID is already in use."
-	// Suppress the lint instead.
+	// once at first mount (fontSize has its own retune effect). Listing
+	// them made every App render's fresh cmd array tear down the live PTY
+	// and respawn with the same `--session-id <uuid>`, which Claude
+	// refuses ("Session ID is already in use."). Suppress the lint instead.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: see comment.
 	useEffect(() => {
 		const host = containerRef.current;
@@ -143,12 +132,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		const noteComposition = () => harnessInput.noteDraftEvent(harnessId, { type: "userPaste" });
 		term.textarea?.addEventListener("compositionstart", noteComposition);
 		term.textarea?.addEventListener("compositionend", noteComposition);
-		// Initial focus is handled by the `visible` effect in
-		// LiveTerminal.tsx — that effect fires on mount as well as on
-		// every visible-flip, so a terminal mounting visible (e.g.
-		// fresh harness from picker, only room at boot) still gets
-		// focus, but a terminal mounting hidden (inactive room's
-		// pre-mounted harness) doesn't steal it.
+		// Initial focus: the `visible` effect in LiveTerminal.tsx.
 
 		// Track whether we're showing the post-exit prompt, plus the
 		// program name for the "[skein] x exited (N)" line.
@@ -195,29 +179,23 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		let cancelled = false;
 		let dataDisposable: { dispose(): void } | null = null;
 		let resizeObserver: ResizeObserver | null = null;
-		// L2c-1: when a Claude harness has a pre-allocated sessionId
-		// (chapter 5), attach the JSONL adapter so the dot reflects
-		// `last-prompt` rows directly instead of waiting for the L2a
-		// idle heuristic to time out. `null` for every other case
-		// (non-claude kinds, claude without sessionId — picker
-		// fallback). Cleaned up alongside pty_kill below. Lives in
-		// `claudeAdapterRef` (not a local) so the #116 step two re-point
-		// effect below can detach/reattach it without re-running this
-		// whole spawn effect.
-		// L2c-2: same shape for opencode. Adapter SSE-subscribes to
-		// opencode's embedded server on the pre-allocated port, plus
-		// captures the auto-allocated sessionID via the SSE
-		// `session.created` event (chapter 5 phase 2b's sqlite poll
-		// stays as fallback in App.tsx).
+		// L2c-1: a Claude harness with a pre-allocated sessionId gets the
+		// JSONL adapter (see attachAdapters); it lives in `claudeAdapterRef`
+		// so the #116 re-point effect can swap it without a respawn.
+		// L2c-2: opencode's SSE adapter subscribes on the pre-allocated port
+		// and captures the sessionID from `session.created`.
 		const opencodeAdapter: { current: OpencodeAdapter | null } = { current: null };
 		let shellFollow: ReturnType<typeof followOpencodeShell> | null = null;
-		// #238: this harness's entry in the `harnessInput` seam (the
-		// Nudge button today, #41's file drop later). Registered once
-		// the PTY is live, unregistered on exit/unmount/respawn — a
-		// dead or about-to-respawn harness must not still be a nudge
-		// target.
+		// #238: this harness's `harnessInput` entry; live PTY only, so a dead
+		// or respawning harness is never a nudge target.
 		let detachInputTarget: (() => void) | null = null;
 		let stopHermesCapture: (() => void) | null = null; // #624, unmount only
+		let sidecarGeneration: number | undefined; // #676
+		const sidecarDied = createSidecarDeathRecord((s) => gate.write(s));
+		const stopSidecarWatch =
+			harnessKind === "opencode"
+				? watchSidecarExit(harnessId, () => sidecarGeneration, sidecarDied.note)
+				: null;
 
 		const handleExit = (code: number | null) => {
 			if (cancelled) return;
@@ -239,6 +217,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// \x1b[2m = dim, \x1b[1m = bold, \x1b[0m = reset.
 			gate.write(`\r\n\x1b[2m[skein] ${programName} exited (${codeStr})\x1b[0m\r\n`);
 			gate.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
+			gate.write(sidecarDied.take()); // #676: "" unless the sidecar died
 		};
 
 		const agentResolvesFor = (cmdToSpawn: string[]) =>
@@ -262,14 +241,11 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			startupAdoption.forget(harnessId); // #539: a new process voids the old one's candidates
 			if (!(await agentResolvesFor(cmdToSpawn)) || cancelled) return;
 			phase = "running";
-			// Record the spawn before we await — gives a deterministic
-			// `spawning` window in the activity store even when
-			// pty_spawn is slow. recordOutput in the channel handler
-			// will flip it to `running` on the first chunk. Epic #50.
+			// Record the spawn before we await: a deterministic `spawning`
+			// window; the first output chunk flips it to `running`. Epic #50.
 			harnessActivity.spawned(harnessId);
 			// #491: transcript rows older than this process say nothing about it.
 			claudeVersionStore.markSpawned(harnessId, Date.now());
-			recordOpencodeVersion(harnessKind, opencodeClaim?.setOpencodeVersion, () => cancelled);
 			// #484: catch xterm's reply to ConPTY's cursor query (portable-pty
 			// 0.9 waits for it), which can arrive before pty_spawn resolves. If
 			// unmounted meanwhile, the settle paths below dispose it.
@@ -278,6 +254,27 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// post-exit shell is invisible to Rust and not covered.
 			linkPolicy.mouseClicksDisabled = false;
 			try {
+				// #675/#676: probes the version, and for v2 starts the sidecar.
+				const prep = await prepareOpencodeSpawn({
+					kind: harnessKind,
+					cmd: cmdToSpawn,
+					roomId,
+					harnessId,
+					cwd,
+					sessionId,
+					agent,
+					envProfile,
+					setOpencodeVersion: opencodeClaim?.setOpencodeVersion,
+					setSessionId: onSessionCaptured,
+					isCancelled: () => cancelled,
+				});
+				if (!prep) {
+					early.dispose();
+					return;
+				}
+				sidecarGeneration = prep.sidecarGeneration;
+				// #677: no v2 SSE adapter yet; v1's /event route serves HTML on v2.
+				const port = prep.v2 ? undefined : opencodePort;
 				const {
 					id,
 					injected,
@@ -285,7 +282,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					mouseClicksDisabled,
 					envProfile: appliedProfile,
 				} = await ptySpawn({
-					cmd: cmdToSpawn,
+					cmd: prep.argv,
 					cwd,
 					rows: term.rows,
 					cols: term.cols,
@@ -294,6 +291,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					kind: harnessKind,
 					envProfile,
 					onEvent: channel,
+					sidecarGeneration,
 				});
 				if (cancelled) {
 					early.dispose();
@@ -317,14 +315,14 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					hermesProfile,
 					hermesHooks,
 					sessionId,
-					opencodePort,
+					opencodePort: port,
 					onSessionCaptured,
 					onSessionFollowed,
 					sessionIdRef,
 					claudeAdapterRef,
 				});
-				if (detach && opencodePort !== undefined) {
-					opencodeAdapter.current = { detach, port: opencodePort };
+				if (detach && port !== undefined) {
+					opencodeAdapter.current = { detach, port };
 				} else if (detach && harnessKind === "hermes") stopHermesCapture = detach;
 				shellFollow?.dispose();
 				shellFollow = followOpencodeShell(harnessKind, cmdToSpawn[0], {
@@ -348,6 +346,9 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				if (!resizeObserver) resizeObserver = observeResize(term, fit, host, ptyIdRef, gate);
 			} catch (err: unknown) {
 				early.dispose();
+				if (sidecarGeneration !== undefined && !cancelled) {
+					void realPrepareDeps.stop(harnessId, sidecarGeneration).catch(() => {});
+				}
 				const msg = err instanceof Error ? err.message : String(err);
 				gate.write(`\r\n\x1b[31m[skein] pty_spawn failed: ${msg}\x1b[0m\r\n`);
 				// Reprompt — else the user can't tell Enter opens a shell.
@@ -375,6 +376,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			shellFollow?.dispose();
 			opencodeAdapter.current?.detach();
 			stopHermesCapture?.();
+			stopSidecarWatch?.();
 			detachInputTarget?.();
 			// Key handling + copy-on-select cleanup — see
 			// terminalInteractions.ts.
@@ -388,9 +390,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			fitRef.current = null;
 			spawnedRef.current = null;
 			ptyIdRef.current = null;
-			// Drop the activity record so the store doesn't keep growing
-			// across the app's lifetime; a respawn (mountKey change for
-			// "Enter for shell") re-records via spawned() above. Epic #50.
+			// Drop the activity record; a respawn re-records via spawned().
 			harnessActivity.forget(harnessId);
 			// #298: same lifetime — Rust rediscovers live subagents on the
 			// next attach, so dropping the cache loses nothing.

@@ -12,7 +12,7 @@ import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import { hasClaudeTranscriptTail } from "./harnessEvents.ts";
 import { harnessInput } from "./harnessInput.ts";
-import { canRestart } from "./harnessRestart.ts";
+import { canRestart, exitedRestartable } from "./harnessRestart.ts";
 import { mailHold } from "./mailHold.ts";
 import { hints } from "./shortcuts.ts";
 import type { Harness, Room, Theme } from "./types.ts";
@@ -179,6 +179,7 @@ export function buildPaletteItems(params: BuildPaletteItemsParams): PaletteItem[
 					phase: harnessActivity.get(activeHarness.id)?.phase ?? null,
 					mailHeld: mailHold.get(activeHarness.id).held,
 					draft: harnessInput.draft(activeHarness.id),
+					exitedRestartable: exitedRestartable(activeHarness),
 				});
 				const entry: PaletteItem = {
 					id: "cmd:restart-harness",

@@ -16,6 +16,8 @@
 //!   and opencode's SSE stream (L2c-2).
 //! - `harness_log` — the `harness_events` and `harness_actions` tables:
 //!   record and recent-rows queries.
+//! - `opencode_sidecar` — start/stop of the per-harness `opencode serve`
+//!   sidecar on opencode v2 (#676).
 //! - `rooms` — `db_load_rooms` / `db_save_rooms`.
 //! - `todos` — `db_load_global_todos` / `db_save_global_todos` (#335).
 //! - `spawn_env` — `SpawnEnvState`, the Settings environment commands,
@@ -24,6 +26,7 @@
 pub(crate) mod app;
 pub(crate) mod harness_events;
 pub(crate) mod harness_log;
+pub(crate) mod opencode_sidecar;
 pub(crate) mod pty;
 pub(crate) mod rooms;
 pub(crate) mod spawn_env;

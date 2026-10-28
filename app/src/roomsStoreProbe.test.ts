@@ -117,3 +117,24 @@ describe("stillExists hermes profile (#627)", () => {
 		});
 	});
 });
+
+describe("stillExists: opencode v2 bridge (#679)", () => {
+	const v = (major: number) => ({ major, minor: 0, patch: 0 }) as never;
+	it("a v2 record keeps its id without probing", async () => {
+		invokeMock.mockClear();
+		const h = harness("opencode", { sessionId: "ses_x", opencodeVersion: v(2) });
+		expect(await stillExists(h)).toBe(true);
+		expect(invokeMock).not.toHaveBeenCalled();
+	});
+	it("v1 and unversioned records still probe", async () => {
+		for (const h of [
+			harness("opencode", { sessionId: "ses_x", opencodeVersion: v(1) }),
+			harness("opencode", { sessionId: "ses_x" }),
+		]) {
+			invokeMock.mockClear();
+			invokeMock.mockResolvedValueOnce(false);
+			expect(await stillExists(h)).toBe(false);
+			expect(invokeMock).toHaveBeenCalledWith("opencode_session_exists", { id: "ses_x" });
+		}
+	});
+});

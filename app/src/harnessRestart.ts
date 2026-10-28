@@ -11,9 +11,9 @@ import { checkDraft } from "./composerDraft.ts";
 import type { HarnessCapabilities } from "./data.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { ActivityPhase } from "./harnessActivityTypes.ts";
-import { resumeHarness } from "./harnessCmd.ts";
+import { isOpencodeV2, resumeHarness } from "./harnessCmd.ts";
 import type { GateResult } from "./harnessInputGate.ts";
-import type { Harness, HarnessKind } from "./types.ts";
+import type { Harness, HarnessKind, OpencodeVersion } from "./types.ts";
 
 export interface CanRestartInput {
 	kind: HarnessKind;
@@ -23,6 +23,19 @@ export interface CanRestartInput {
 	/// `mailHold.get(id).held` — mail waiting on the draft guard.
 	mailHeld: boolean;
 	draft: ComposerDraft;
+	/// `exitedRestartable(harness)`: an `exited` phase may restart.
+	exitedRestartable: boolean;
+}
+
+/// #676: an opencode v2 harness whose sidecar died has its TUI terminated by
+/// Skein, so it reads `exited`; Restart respawns sidecar + TUI against the
+/// same session. Needs a session to resume; every other kind stays refused.
+export function exitedRestartable(h: {
+	kind: HarnessKind;
+	opencodeVersion?: OpencodeVersion | undefined;
+	sessionId?: string | undefined;
+}) {
+	return h.kind === "opencode" && isOpencodeV2(h.opencodeVersion) && !!h.sessionId?.trim();
 }
 
 function refuse(reason: string): GateResult {
@@ -46,6 +59,7 @@ export function canRestart(input: CanRestartInput): GateResult {
 		case "spawning":
 			return refuse("it is still starting");
 		case "exited":
+			if (input.exitedRestartable) break;
 			return refuse("it has already exited — no live process to restart");
 		case null:
 			return refuse("no live process to restart");

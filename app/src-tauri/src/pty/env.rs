@@ -93,6 +93,16 @@ pub(super) const AGENT_IDENTITY_ENV_KEYS: &[&str] = &[
     "SKEIN_HARNESS_ID",
 ];
 
+/// The builder's full environment as owned pairs, for a non-PTY child
+/// (the opencode sidecar) that must see exactly what a PTY harness would.
+/// Entries that are not valid UTF-8 are skipped.
+pub(crate) fn env_pairs(builder: &CommandBuilder) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    builder
+        .iter_full_env_as_str()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect()
+}
+
 /// Apply Skein's environment policy to a `CommandBuilder`.
 ///
 /// Shared verbatim by `spawn` and by the Settings preview, so "what the

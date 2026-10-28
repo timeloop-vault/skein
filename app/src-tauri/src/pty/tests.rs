@@ -195,6 +195,8 @@ fn capture_pty(cmd: &[String], settings: &SpawnSettings) -> String {
                 agent: None,
                 kind: HarnessKind::Byoh,
                 harness_config: None,
+                secret_env: Vec::new(),
+                sidecar: None,
             },
             move |event| match event {
                 PtyEvent::Data { chunk } => {

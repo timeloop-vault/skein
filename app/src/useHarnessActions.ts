@@ -33,7 +33,7 @@ import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { withRespawnedCmd } from "./harnessCreation.ts";
 import { harnessInput } from "./harnessInput.ts";
 import type { GateResult } from "./harnessInputGate.ts";
-import { canRestart, restartedHarness } from "./harnessRestart.ts";
+import { canRestart, exitedRestartable, restartedHarness } from "./harnessRestart.ts";
 import { mailHold } from "./mailHold.ts";
 import type { RenameTarget } from "./RoomStrip.tsx";
 import { stillExists } from "./roomsStoreProbe.ts";
@@ -273,6 +273,7 @@ export function useHarnessActions(
 				phase: harnessActivity.get(harnessId)?.phase ?? null,
 				mailHeld: mailHold.get(harnessId).held,
 				draft: harnessInput.draft(harnessId),
+				exitedRestartable: exitedRestartable(h),
 			});
 		const first = gate();
 		if (!first.ok) return first;

@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { ComposerDraft } from "./composerDraft.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { ActivityPhase } from "./harnessActivityTypes.ts";
-import { type CanRestartInput, canRestart, restartedHarness } from "./harnessRestart.ts";
+import {
+	type CanRestartInput,
+	canRestart,
+	exitedRestartable,
+	restartedHarness,
+} from "./harnessRestart.ts";
 import type { Harness, HarnessKind } from "./types.ts";
 
 const input = (over: Partial<CanRestartInput> = {}): CanRestartInput => ({
@@ -11,6 +16,7 @@ const input = (over: Partial<CanRestartInput> = {}): CanRestartInput => ({
 	phase: "waiting",
 	mailHeld: false,
 	draft: { kind: "clean" },
+	exitedRestartable: false,
 	...over,
 });
 
@@ -141,5 +147,42 @@ describe("restartedHarness", () => {
 			"--session",
 			"s",
 		]);
+	});
+});
+
+describe("canRestart: exited opencode v2 (#676)", () => {
+	type H = Parameters<typeof exitedRestartable>[0];
+	const h = (over: Partial<H> = {}): H => ({
+		kind: "opencode",
+		opencodeVersion: { major: 2, version: "2.0.0" },
+		sessionId: "ses_1",
+		...over,
+	});
+
+	it("exited v2 with a session is restartable", () => {
+		const r = canRestart(
+			input({ ...forKind("opencode"), phase: "exited", exitedRestartable: exitedRestartable(h()) }),
+		);
+		expect(r.ok).toBe(true);
+	});
+
+	it("exited v2 still honours held mail", () => {
+		const r = canRestart(
+			input({ ...forKind("opencode"), phase: "exited", exitedRestartable: true, mailHeld: true }),
+		);
+		expect(reasonOf(r)).toContain("held mail");
+	});
+
+	it("exited v2 without a session is refused", () => {
+		expect(exitedRestartable(h({ sessionId: undefined }))).toBe(false);
+		expect(exitedRestartable(h({ sessionId: "  " }))).toBe(false);
+		const r = canRestart(input({ ...forKind("opencode"), phase: "exited" }));
+		expect(reasonOf(r)).toContain("already exited");
+	});
+
+	it("v1, unversioned and claude are never exited-restartable", () => {
+		expect(exitedRestartable(h({ opencodeVersion: { major: 1, version: "1.4.0" } }))).toBe(false);
+		expect(exitedRestartable(h({ opencodeVersion: undefined }))).toBe(false);
+		expect(exitedRestartable(h({ kind: "claude" }))).toBe(false);
 	});
 });

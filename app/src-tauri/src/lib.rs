@@ -26,6 +26,7 @@ mod harness_work_hermes;
 mod hermes_profile;
 mod ignore_filter;
 mod open_request;
+mod opencode_sidecar;
 mod os_notify;
 mod perf_cmds;
 mod perf_hist;
@@ -104,6 +105,8 @@ pub fn run() {
             commands::pty::pty_resize,
             commands::pty::pty_kill,
             commands::pty::pty_scan_opencode,
+            commands::opencode_sidecar::opencode_sidecar_start,
+            commands::opencode_sidecar::opencode_sidecar_stop,
             commands::spawn_env::default_shell,
             commands::spawn_env::spawn_settings_load,
             commands::spawn_env::spawn_settings_save,
@@ -197,8 +200,17 @@ pub fn run() {
             updater_proxy::commands::updater_diagnose,
             updater_proxy::commands::updater_check_proxy,
         ]))
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // Sidecars are non-PTY children: nothing else reaps them on exit.
+            if matches!(event, tauri::RunEvent::Exit)
+                && let Some(sidecars) =
+                    tauri::Manager::try_state::<opencode_sidecar::OpencodeSidecarManager>(app)
+            {
+                sidecars.stop_all();
+            }
+        });
 }
 
 #[cfg(test)]

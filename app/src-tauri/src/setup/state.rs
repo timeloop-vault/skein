@@ -92,6 +92,11 @@ pub(super) fn open_database(
         Err(e) => tracing::error!(error = %e, "agent api: revoking stale tokens failed"),
     }
     app.manage(PtyManager::new());
+    // `new` sweeps orphaned sidecars of a crashed Skein before returning,
+    // so no new record can be written ahead of it.
+    app.manage(crate::opencode_sidecar::OpencodeSidecarManager::new(Some(
+        data_dir.to_path_buf(),
+    )));
     app.manage(WatcherManager::new());
     app.manage(ClaudeEventsManager::new(
         Arc::clone(&db),

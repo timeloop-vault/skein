@@ -22,7 +22,7 @@
 
 import { HARNESS_KINDS } from "./data.tsx";
 import { remoteArgv } from "./remoteCmd.ts";
-import type { Harness, HarnessKind, RemoteSpec, Room } from "./types.ts";
+import type { Harness, HarnessKind, OpencodeVersion, RemoteSpec, Room } from "./types.ts";
 
 /** Append `--agent <name>` when the harness names one.
  *
@@ -234,6 +234,36 @@ export const resumeHarness = (
 			return { ...h, cmd };
 	}
 };
+
+/** #676: opencode v2 attaches its TUI to a Skein-owned server. The URL is
+ *  per spawn, so this argv is derived at spawn time and never stored in
+ *  `Harness.cmd` (which is part of the pane's mountKey). No `--agent`: the
+ *  v2 TUI rejects it; the agent is applied when the session is created. */
+export const opencodeV2Argv = (serverUrl: string, sessionId: string): string[] => [
+	"opencode",
+	"--server",
+	serverUrl,
+	"--session",
+	sessionId,
+];
+
+/** Major version 2 or later. Null / unknown reads as v1 (#675). */
+export const isOpencodeV2 = (version: OpencodeVersion | null | undefined): boolean =>
+	(version?.major ?? 0) >= 2;
+
+/** Which spawn path an opencode harness takes. v2 only for an opencode
+ *  harness on a v2 CLI whose argv is still opencode's own (argv[0], the
+ *  same ownership test as `resumeHarness`) - a post-exit shell stays as is. */
+export const opencodeSpawnPlan = (
+	cmd: string[],
+	kind: HarnessKind,
+	version: OpencodeVersion | null | undefined,
+): { mode: "v1" | "v2" } => ({
+	mode:
+		kind === "opencode" && isOpencodeV2(version) && cmd[0] === HARNESS_KINDS.opencode.program
+			? "v2"
+			: "v1",
+});
 
 /** Every harness in the room rewritten to resume form. Harnesses with
  *  no cmd (the `files` kind, or a record that never spawned) pass

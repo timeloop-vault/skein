@@ -68,6 +68,7 @@ pub(crate) async fn pty_spawn(
     harness_id: String,
     kind: crate::harness_kind::HarnessKind,
     env_profile: Option<String>,
+    sidecar_generation: Option<u64>,
     on_event: Channel<PtyEvent>,
     app: tauri::AppHandle,
 ) -> Result<PtySpawnResult, String> {
@@ -85,20 +86,23 @@ pub(crate) async fn pty_spawn(
         // refuse the spawn — the terminal still works, the agent
         // simply has no review tools — but it is logged rather than
         // swallowed (#176).
-        let agent = endpoint.mcp_url().and_then(|url| {
-            match db.ensure_room_token(&room_id, crate::review::now_ms()) {
-                Ok(token) => Some(crate::agent_api::state::HarnessIdentity {
-                    url,
-                    token,
-                    room_id: room_id.clone(),
-                    harness_id: harness_id.clone(),
-                }),
-                Err(e) => {
-                    tracing::error!(room_id, error = %e, "agent api: minting a room token failed");
-                    None
-                }
+        let agent = harness_identity(&endpoint, &db, &room_id, &harness_id);
+        // #676: the TUI of an opencode v2 harness attaches to the sidecar
+        // with its password; the password is gone with the sidecar.
+        let secret_env = match sidecar_generation {
+            None => Vec::new(),
+            Some(generation) => {
+                let sidecars = app.state::<crate::opencode_sidecar::OpencodeSidecarManager>();
+                let Some(password) = sidecars.password_for(&harness_id, generation) else {
+                    return Err("opencode server for this harness is gone".to_owned());
+                };
+                vec![("OPENCODE_PASSWORD".to_owned(), password)]
             }
-        });
+        };
+        let binding = sidecar_generation.map(|g| (harness_id.clone(), g));
+        let exit_app = app.clone();
+        let exit_binding = binding.clone();
+        let bound_for_failure = binding.clone();
         let outcome = manager
             .spawn(
                 crate::pty::SpawnRequest {
@@ -112,12 +116,17 @@ pub(crate) async fn pty_spawn(
                     kind,
                     harness_config: Some(&harness_config),
                     env_profile: env_profile.as_deref(),
+                    secret_env,
+                    sidecar: binding,
                 },
                 move |event| {
                     // Channel send only fails if the frontend dropped
                     // the channel; nothing useful we can do at that
                     // point.
                     let is_data = matches!(event, crate::pty::PtyEvent::Data { .. });
+                    if matches!(event, crate::pty::PtyEvent::Exit { .. }) {
+                        stop_bound_sidecar(&exit_app, exit_binding.as_ref());
+                    }
                     let t0 = std::time::Instant::now();
                     let _ = on_event.send(event);
                     if is_data {
@@ -125,7 +134,11 @@ pub(crate) async fn pty_spawn(
                     }
                 },
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                // The spawn failed: nothing will ever attach to the sidecar.
+                stop_bound_sidecar(&app, bound_for_failure.as_ref());
+                e.to_string()
+            })?;
         Ok(PtySpawnResult {
             id,
             injected: outcome.injected,
@@ -174,8 +187,51 @@ pub(crate) fn pty_resize(
 // Deliberately sync (#171): same FIFO-ordering reasoning as `pty_write`.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-pub(crate) fn pty_kill(id: String, manager: tauri::State<'_, PtyManager>) {
-    manager.kill(&id);
+pub(crate) fn pty_kill(
+    id: String,
+    manager: tauri::State<'_, PtyManager>,
+    sidecars: tauri::State<'_, crate::opencode_sidecar::OpencodeSidecarManager>,
+) {
+    if let Some((harness_id, generation)) = manager.kill(&id) {
+        sidecars.stop_if_generation(&harness_id, generation);
+    }
+}
+
+/// End the sidecar generation a PTY was bound to (#676). Generation-keyed,
+/// so a late exit of an old PTY cannot stop a restart's newer sidecar.
+fn stop_bound_sidecar(app: &tauri::AppHandle, binding: Option<&crate::pty::SidecarBinding>) {
+    if let Some((harness_id, generation)) = binding {
+        let sidecars = app.state::<crate::opencode_sidecar::OpencodeSidecarManager>();
+        if sidecars.stop_if_generation(harness_id, *generation) {
+            tracing::info!(harness = %harness_id, generation, "opencode sidecar stopped with its PTY");
+        }
+    }
+}
+
+/// #213: mint (or reuse) the room's review token and hand the harness its
+/// endpoint. A failure is not a reason to refuse a spawn — the agent
+/// simply has no review tools — but it is logged rather than swallowed
+/// (#176).
+pub(crate) fn harness_identity(
+    endpoint: &crate::agent_api::state::AgentApiEndpoint,
+    db: &Database,
+    room_id: &str,
+    harness_id: &str,
+) -> Option<crate::agent_api::state::HarnessIdentity> {
+    endpoint.mcp_url().and_then(|url| {
+        match db.ensure_room_token(room_id, crate::review::now_ms()) {
+            Ok(token) => Some(crate::agent_api::state::HarnessIdentity {
+                url,
+                token,
+                room_id: room_id.to_owned(),
+                harness_id: harness_id.to_owned(),
+            }),
+            Err(e) => {
+                tracing::error!(room_id, error = %e, "agent api: minting a room token failed");
+                None
+            }
+        }
+    })
 }
 
 /// Wire shape for `pty_scan_opencode` (#517).

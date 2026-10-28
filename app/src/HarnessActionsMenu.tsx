@@ -23,7 +23,7 @@ import { type ActionsMenuItem, actionsButtonState } from "./harnessActionsMenu.t
 import { useHarnessActivity } from "./harnessActivity.ts";
 import { hasClaudeTranscriptTail } from "./harnessEvents.ts";
 import { canSendPrompt, type GateResult, harnessInput, sendPrompt } from "./harnessInput.ts";
-import { canRestart } from "./harnessRestart.ts";
+import { canRestart, exitedRestartable } from "./harnessRestart.ts";
 import { useMailHold } from "./mailHold.ts";
 import { actionNudges } from "./nudgeRegistry.ts";
 import { useNudgeOverrides } from "./nudgeStore.ts";
@@ -151,6 +151,7 @@ export const HarnessActionsMenu = ({
 					phase: activity?.phase ?? null,
 					mailHeld,
 					draft: harnessInput.draft(activeHarness.id),
+					exitedRestartable: exitedRestartable(activeHarness),
 				})
 			: undefined,
 	);

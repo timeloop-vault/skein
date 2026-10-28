@@ -38,12 +38,13 @@
 //! reader yet, so the waiter gives up waiting and emits `Exit` anyway
 //! rather than hang forever.
 
-mod env;
+pub(crate) mod env;
 mod output;
 mod preview;
 mod priority;
 mod probe;
 pub(crate) mod procscan;
+mod sidecar;
 
 use env::apply_env;
 use output::{COALESCE_BYTE_CAP, COALESCE_WINDOW, run_coalescer, spawn_pty_writer};
@@ -54,6 +55,7 @@ pub(crate) use preview::{EnvPreview, env_preview, harness_program_lookup};
 #[cfg(not(target_os = "windows"))]
 pub(crate) use probe::probe_shell;
 pub(crate) use probe::{login_shell_path, prewarm_probe, reprobe};
+pub(crate) use sidecar::sidecar_env;
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -114,6 +116,30 @@ struct Pty {
     killer: Box<dyn ChildKiller + Send + Sync>,
     /// The child's OS pid, kept so #517 can scan its descendants.
     pid: Option<u32>,
+    /// The opencode sidecar (#676) this PTY's TUI is attached to; killing
+    /// the PTY ends that generation too.
+    sidecar: Option<SidecarBinding>,
+}
+
+/// `(harness id, generation)` of an opencode sidecar a PTY is bound to.
+pub type SidecarBinding = (String, u64);
+
+fn binding_matches(binding: Option<&SidecarBinding>, harness_id: &str, generation: u64) -> bool {
+    binding.is_some_and(|(h, g)| h == harness_id && *g == generation)
+}
+
+#[cfg(test)]
+mod binding_tests {
+    use super::binding_matches;
+
+    #[test]
+    fn binding_matches_only_the_exact_harness_and_generation() {
+        let b = ("h".to_owned(), 2);
+        assert!(binding_matches(Some(&b), "h", 2));
+        assert!(!binding_matches(Some(&b), "h", 3));
+        assert!(!binding_matches(Some(&b), "g", 2));
+        assert!(!binding_matches(None, "h", 2));
+    }
 }
 
 /// What `spawn` reports back about the environment it built.
@@ -156,6 +182,12 @@ pub struct SpawnRequest<'a> {
     /// The harness's own env-profile override (#615); `None` follows the
     /// global active profile.
     pub env_profile: Option<&'a str>,
+    /// Variables put into the child env after `apply_env` and never
+    /// logged (the sidecar's `OPENCODE_PASSWORD`, #676). Deliberately not
+    /// part of `injection.env`, which is.
+    pub secret_env: Vec<(String, String)>,
+    /// The sidecar this PTY is bound to, recorded for `kill`.
+    pub sidecar: Option<SidecarBinding>,
 }
 
 /// #164: refuse a spawn whose cwd doesn't exist (or isn't a directory)
@@ -217,6 +249,8 @@ impl PtyManager {
             kind,
             harness_config,
             env_profile,
+            secret_env,
+            sidecar,
         } = req;
         check_cwd(cwd)?;
         let Some((program, stored_args)) = cmd.split_first() else {
@@ -321,6 +355,15 @@ impl PtyManager {
                 env_profile,
             );
             builder = rebuilt;
+        }
+        // After `apply_env` (and the Windows rebuild above), so neither
+        // can drop them; never logged.
+        // A bound (v2) TUI must not inherit a server password either.
+        if sidecar.is_some() {
+            sidecar::strip_password_vars(&mut builder);
+        }
+        for (key, value) in &secret_env {
+            builder.env(key, value);
         }
 
         // #626: Hermes has no session-scoped injection; its review tools
@@ -506,6 +549,7 @@ impl PtyManager {
             writer_tx,
             killer,
             pid,
+            sidecar,
         };
         self.inner.lock().insert(id, pty);
         Ok(SpawnOutcome {
@@ -551,6 +595,21 @@ impl PtyManager {
         self.inner.lock().get(id).and_then(|p| p.pid)
     }
 
+    /// Kill (without removing the entry) every PTY bound to this sidecar
+    /// generation, so the waiter thread still emits the normal `Exit` and
+    /// the pane goes through its usual exited state. Returns how many.
+    pub fn terminate_bound(&self, harness_id: &str, generation: u64) -> usize {
+        let mut map = self.inner.lock();
+        let mut n = 0;
+        for pty in map.values_mut() {
+            if binding_matches(pty.sidecar.as_ref(), harness_id, generation) {
+                let _ = pty.killer.kill();
+                n += 1;
+            }
+        }
+        n
+    }
+
     /// Best-effort: if the child has already exited, this is a no-op.
     ///
     /// Removing the `Pty` drops `writer_tx`, which is the writer
@@ -558,11 +617,14 @@ impl PtyManager {
     /// not join it. A writer wedged on a `write_all` to a child that
     /// stopped reading stdin may never wake up; `kill` must return
     /// regardless.
-    pub fn kill(&self, id: &str) {
+    ///
+    /// Returns the sidecar binding the PTY had, so the caller can end
+    /// that generation (#676).
+    pub fn kill(&self, id: &str) -> Option<SidecarBinding> {
         let mut map = self.inner.lock();
-        if let Some(mut pty) = map.remove(id) {
-            let _ = pty.killer.kill();
-        }
+        let mut pty = map.remove(id)?;
+        let _ = pty.killer.kill();
+        pty.sidecar.take()
     }
 }
 

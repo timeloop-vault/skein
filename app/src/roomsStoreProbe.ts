@@ -2,6 +2,7 @@
 // probing (#164 / #418) and the wire shape of `db_load_rooms` (#167).
 
 import { invoke } from "@tauri-apps/api/core";
+import { isOpencodeV2 } from "./harnessCmd.ts";
 import type { FolderInfoDto } from "./NewRoomDialog.tsx";
 import {
 	compareIdentity,
@@ -89,6 +90,14 @@ export async function dropUnwrittenSessions(
 	return { ...room, harnesses };
 }
 
+/** #679: the v1 `session` table cannot see v2 sessions (`session_v2`, maybe
+ *  another db file), so a recorded-v2 opencode harness skips the probe and
+ *  `stillExists` trusts its stored id. #679's real probe replaces this ONE
+ *  helper. Everything else (v1, no recorded version) probes as before. */
+export function opencodeSessionProbeApplies(h: Harness): boolean {
+	return !(h.kind === "opencode" && isOpencodeV2(h.opencodeVersion));
+}
+
 // Chapter 5 phase 4: drop any stored sessionId that no longer
 // exists on disk before resumeCmd uses it. claude --resume <id>
 // or opencode --session <id> against a deleted conversation
@@ -101,6 +110,7 @@ export async function dropUnwrittenSessions(
 // rusqlite or fs hiccup.
 export async function stillExists(h: Harness): Promise<boolean> {
 	if (!h.sessionId) return true;
+	if (!opencodeSessionProbeApplies(h)) return h.sessionId.trim() !== "";
 	try {
 		if (h.kind === "claude") {
 			return await invoke<boolean>("claude_session_exists", { id: h.sessionId });

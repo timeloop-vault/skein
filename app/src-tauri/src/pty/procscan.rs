@@ -213,7 +213,7 @@ mod listener_tests {
     }
 }
 
-fn process_table(sys: &System) -> Vec<(u32, Option<u32>)> {
+pub(crate) fn process_table(sys: &System) -> Vec<(u32, Option<u32>)> {
     sys.processes()
         .iter()
         .map(|(pid, p)| (pid.as_u32(), p.parent().map(Pid::as_u32)))

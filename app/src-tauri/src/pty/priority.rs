@@ -67,6 +67,8 @@ mod tests {
                         agent: None,
                         kind: HarnessKind::Byoh,
                         harness_config: None,
+                        secret_env: Vec::new(),
+                        sidecar: None,
                     },
                     |_| {},
                 )
