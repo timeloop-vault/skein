@@ -1,11 +1,9 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { contextSizeTitle, formatContextTokens } from "./contextSize.ts";
 import type { DragProps } from "./dragProps.ts";
 import { HChip, StatusDot } from "./HChip.tsx";
 import { RoomNameInput } from "./RoomNameInput.tsx";
 import { useTodoMenu } from "./todos/TodoMenuProvider.tsx";
 import type { Room } from "./types.ts";
-import { useRoomContextSize } from "./useRoomContextSizes.ts";
 import "./RoomStrip.css";
 
 export const RoomTab = ({
@@ -44,7 +42,6 @@ export const RoomTab = ({
 	onRenameEnd?: (() => void) | undefined;
 } & DragProps) => {
 	const openTodoMenu = useTodoMenu();
-	const ctx = useRoomContextSize(r.id); // #368
 	return (
 		<div
 			className={`sk-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
@@ -115,11 +112,6 @@ export const RoomTab = ({
 					// — see its handler's comment for why.
 					<span className="name" title={r.task}>
 						{r.name}
-					</span>
-				)}
-				{ctx !== undefined && (
-					<span className="ctx" title={contextSizeTitle(ctx.tokens, ctx.harnessName)}>
-						{formatContextTokens(ctx.tokens)}
 					</span>
 				)}
 				{r.badge > 0 && <span className="tab-badge">{r.badge}</span>}

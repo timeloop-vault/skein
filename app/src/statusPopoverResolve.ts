@@ -5,6 +5,7 @@
 import { activityToStatus, harnessActivity } from "./harnessActivity.ts";
 import { resolveTasks, type TaskState } from "./statusPopoverTasks.ts";
 import { subagents } from "./subagents.ts";
+import { getHarnessContextSize } from "./useHarnessContextSizes.ts";
 
 // Rows where a lone status dot describes the same harness as the row's
 // chip, so the dot can borrow that chip for its kind (harness tab, feed
@@ -43,6 +44,8 @@ export interface Resolved {
 	mailFrom: readonly string[];
 	/** #491: "Claude Code X → Y available" (+ refusal), off the chip. */
 	update: string | null;
+	/** #368: this harness's context size in tokens, when known. */
+	contextTokens: number | null;
 }
 
 // Resolve the {kind, status} to show for a hovered chip/dot. A chip
@@ -61,6 +64,7 @@ export const resolve = (el: HTMLElement): Resolved | null => {
 	let agentType: string | null = null;
 	let workingCount = 0;
 	let tasks: TaskState = { workingCount: 0, text: null };
+	let contextTokens: number | null = null;
 	// #248: the chip carries its harness's agent label, already worded
 	// by `agentLabel` — the popover repeats it rather than deciding
 	// for itself what an opencode agent can be said to be.
@@ -95,6 +99,7 @@ export const resolve = (el: HTMLElement): Resolved | null => {
 		}
 		workingCount = subagents.workingCount(stateChip.dataset.harnessId);
 		tasks = resolveTasks(stateChip.dataset.harnessId);
+		contextTokens = getHarnessContextSize(stateChip.dataset.harnessId) ?? null;
 	}
 	// A lone status dot (or the mail marker) borrows its row's chip for
 	// the kind (harness tab etc.); skipped for the room dot, which is
@@ -125,6 +130,18 @@ export const resolve = (el: HTMLElement): Resolved | null => {
 		: el.closest<HTMLElement>(ROW_SEL)?.querySelector<HTMLElement>(".h-chip[data-version-notice]");
 	const update = updateChip?.dataset.versionNotice ?? null;
 	return kind || status
-		? { kind, status, agent, tool, agentType, workingCount, tasks, mailCount, mailFrom, update }
+		? {
+				kind,
+				status,
+				agent,
+				tool,
+				agentType,
+				workingCount,
+				tasks,
+				mailCount,
+				mailFrom,
+				update,
+				contextTokens,
+			}
 		: null;
 };

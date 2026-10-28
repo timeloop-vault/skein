@@ -1,6 +1,7 @@
 // The one-line popover's content (#132): `harness · agent · state · tasks
 // · mail` segments. Split out of statusPopover.ts (#460).
 
+import { formatContextTokens } from "./contextSize.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { statusLabel } from "./harnessActivity.ts";
 import { mailPopoverText } from "./mailNudge.ts";
@@ -40,6 +41,8 @@ export const render = (el: HTMLDivElement, c: Resolved) => {
 			`pv-${c.status}`,
 		);
 	if (c.tasks.text) seg("tasks", c.tasks.text);
+	// #368: absent = unknown, never "0".
+	if (c.contextTokens !== null) seg("context", formatContextTokens(c.contextTokens));
 	// #491: the Claude Code update notice (and any refused auto-restart).
 	if (c.update) seg("update", c.update);
 	// #329: the tab's unread-mail marker, as a segment rather than its

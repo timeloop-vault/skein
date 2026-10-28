@@ -90,13 +90,6 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
-/* #368: the room's context size, muted, right after the name. */
-.sk-tab .ctx {
-	flex: 0 0 auto;
-	color: var(--fg-3);
-	font-family: var(--sk-mono);
-	font-size: 0.79em;
-}
 /* #241: inline room rename — same slot as the static .name span. */
 .sk-tab .name-input {
 	flex: 1;

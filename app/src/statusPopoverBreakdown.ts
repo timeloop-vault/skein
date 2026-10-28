@@ -3,6 +3,7 @@
 // statusPopover.ts (#460).
 
 import { backgroundTasks } from "./backgroundTasks.ts";
+import { formatContextTokens } from "./contextSize.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity, statusLabel } from "./harnessActivity.ts";
 import {
@@ -15,6 +16,7 @@ import {
 import { renderTaskLines } from "./statusPopoverTasks.ts";
 import { subagents } from "./subagents.ts";
 import type { Room } from "./types.ts";
+import { getHarnessContextSize } from "./useHarnessContextSizes.ts";
 
 const rule = (): HTMLDivElement => {
 	const r = document.createElement("div");
@@ -39,6 +41,12 @@ const renderRow = (row: BreakdownRow, single: boolean): HTMLDivElement => {
 	label.className = `bd-label pv-${row.status}`;
 	label.textContent = row.label;
 	div.append(dot, path, chip, label);
+	if (row.context !== undefined) {
+		const ctx = document.createElement("span");
+		ctx.className = "bd-ctx";
+		ctx.textContent = `· ${formatContextTokens(row.context)}`;
+		div.appendChild(ctx);
+	}
 	return div;
 };
 
@@ -82,6 +90,15 @@ export const renderBreakdown = (
 	statusSpan.textContent = statusLabel(b.status);
 	header.append(nameSpan, sep, statusSpan);
 	el.appendChild(header);
+
+	if (b.maxContext) {
+		const m = b.maxContext;
+		const line = document.createElement("div");
+		line.className = "bd-ctx-line";
+		const who = single ? m.harnessName : `${m.roomName} › ${m.harnessName}`;
+		line.textContent = `max context ${formatContextTokens(m.tokens)} · ${who}`;
+		el.appendChild(line);
+	}
 
 	if (b.rows.length > 0) {
 		el.appendChild(rule());
@@ -144,6 +161,7 @@ export const buildFor = (
 		workingCount: subagents.workingCount,
 		backgroundTasks: backgroundTasks.live,
 		workingTaskCount: backgroundTasks.workingCount,
+		contextSize: getHarnessContextSize,
 	});
 	return { breakdown, rooms };
 };

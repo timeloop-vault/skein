@@ -18,6 +18,7 @@ import { render } from "./statusPopoverRender.ts";
 import { resolve } from "./statusPopoverResolve.ts";
 import { subagents } from "./subagents.ts";
 import type { Room } from "./types.ts";
+import { subscribeContextSizes } from "./useHarnessContextSizes.ts";
 import "./statusPopover.css";
 
 // #329: `.tab-mail` (the harness tab's unread-mail marker) is a trigger
@@ -43,6 +44,7 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 	// place a shown/pending popover is torn down (#314).
 	const idSubs = new Map<string, () => void>();
 	let transitionUnsub: (() => void) | null = null;
+	let contextUnsub: (() => void) | null = null;
 	let rebuildRaf: number | null = null;
 
 	const clearLiveSubs = () => {
@@ -51,6 +53,10 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 		if (transitionUnsub) {
 			transitionUnsub();
 			transitionUnsub = null;
+		}
+		if (contextUnsub) {
+			contextUnsub();
+			contextUnsub = null;
 		}
 		if (rebuildRaf !== null) {
 			cancelAnimationFrame(rebuildRaf);
@@ -155,6 +161,9 @@ export function attachStatusPopover(getRooms: () => readonly Room[]): () => void
 		transitionUnsub = harnessActivity.subscribeTransitions((id) => {
 			if (!idSubs.has(id)) scheduleRebuild();
 		});
+		// #368: a turn ending changes a context size; rebuild so an open
+		// popover reflects it.
+		contextUnsub = subscribeContextSizes(scheduleRebuild);
 		rebuild();
 	};
 

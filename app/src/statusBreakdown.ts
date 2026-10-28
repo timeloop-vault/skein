@@ -7,6 +7,7 @@
 // `aggregateRoomStatus` uses for `lookup` — see harnessActivityLabels.ts.
 
 import type { BackgroundTaskEntry } from "./backgroundTasks.ts";
+import { CONTEXT_SIZE_KINDS, maxContext } from "./contextSize.ts";
 import {
 	aggregateRoomStatus,
 	effectiveStatus,
@@ -49,6 +50,9 @@ export interface BreakdownDeps {
 	/// #447: live background tasks and how many of them count as working.
 	backgroundTasks(id: string): readonly BackgroundTaskEntry[];
 	workingTaskCount(id: string): number;
+	/// #368: a harness's latest context size in tokens; absent = unknown.
+	/// Optional so a caller without the store simply shows no context.
+	contextSize?(id: string): number | undefined;
 }
 
 /// One background task as shown in the breakdown. The entry itself:
@@ -83,6 +87,8 @@ export interface BreakdownRow {
 	hiddenSubagents: number;
 	tasks: BreakdownTask[];
 	hiddenTasks: number;
+	/// #368: this harness's own context size in tokens, when known.
+	context?: number;
 }
 
 /// One room's worth of quiet harnesses, grouped for the popover's
@@ -102,6 +108,9 @@ export interface Breakdown {
 	moreRows: number;
 	quietCount: number;
 	quiet: BreakdownQuietRoom[];
+	/// #368: the largest context across ALL context-reporting harnesses of
+	/// the covered rooms (surfaced or quiet); absent when none has a value.
+	maxContext?: { roomName: string; harnessName: string; tokens: number };
 }
 
 export const BREAKDOWN_MAX_ROWS = 6;
@@ -182,7 +191,9 @@ export function buildBreakdown(
 				}),
 			);
 			const liveTasks = deps.backgroundTasks(h.id);
+			const context = deps.contextSize?.(h.id);
 			rows.push({
+				...(context !== undefined && { context }),
 				roomId: room.id,
 				roomName: room.name,
 				harnessId: h.id,
@@ -210,11 +221,34 @@ export function buildBreakdown(
 	rows.sort((a, b) => compareRowStatus(a.status, b.status));
 	const capped = rows.length > maxRows ? rows.slice(0, maxRows) : rows;
 
+	let maxCtx: Breakdown["maxContext"];
+	const get = deps.contextSize;
+	if (get) {
+		const roomOf = new Map<string, string>();
+		const candidates = rooms.flatMap((r) =>
+			r.harnesses
+				.filter((h) => CONTEXT_SIZE_KINDS.has(h.kind))
+				.map((h) => {
+					roomOf.set(h.id, r.name);
+					return { id: h.id, name: h.name };
+				}),
+		);
+		const best = maxContext(candidates, get);
+		if (best) {
+			maxCtx = {
+				roomName: roomOf.get(best.harnessId) ?? "",
+				harnessName: best.harnessName,
+				tokens: best.tokens,
+			};
+		}
+	}
+
 	return {
 		status,
 		rows: capped,
 		moreRows: rows.length - capped.length,
 		quietCount,
 		quiet,
+		...(maxCtx && { maxContext: maxCtx }),
 	};
 }

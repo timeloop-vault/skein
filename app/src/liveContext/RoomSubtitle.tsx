@@ -2,9 +2,6 @@
 // card stack. Hosts the latest Claude `away_summary` verbatim, or an
 // idle empty state. Read-only in v1 (handover §4).
 
-import { contextSizeTitle, formatContextTokens } from "../contextSize.ts";
-import { useRoomContextSize } from "../useRoomContextSizes.ts";
-
 interface Subtitle {
 	text: string;
 	age: string;
@@ -12,13 +9,10 @@ interface Subtitle {
 }
 
 export const RoomSubtitle = ({
-	roomId,
 	awaySummary,
 }: {
-	roomId: string;
 	awaySummary: { content: string; timestampMs: number } | null;
 }) => {
-	const ctx = useRoomContextSize(roomId); // #368
 	const subtitle: Subtitle = awaySummary
 		? { text: awaySummary.content, age: relativeAge(awaySummary.timestampMs), empty: false }
 		: { text: "No agent has worked here yet", age: "", empty: true };
@@ -26,11 +20,6 @@ export const RoomSubtitle = ({
 		<div className={`lc-subtitle ${subtitle.empty ? "is-empty" : ""}`}>
 			<span className="glyph">{subtitle.empty ? "IDLE" : "AT"}</span>
 			<span className="text">{subtitle.text}</span>
-			{ctx !== undefined && (
-				<span className="meta" title={contextSizeTitle(ctx.tokens, ctx.harnessName)}>
-					ctx {formatContextTokens(ctx.tokens)}
-				</span>
-			)}
 			{!subtitle.empty && <span className="meta">{subtitle.age}</span>}
 		</div>
 	);

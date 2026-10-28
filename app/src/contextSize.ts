@@ -1,5 +1,5 @@
-// Room context size (#368): the lead harness's latest-turn input tokens.
-// Pure helpers only; the fetching lives in useRoomContextSizes.ts and the
+// Harness context size (#368): a harness's latest-turn input tokens.
+// Pure helpers only; the fetching lives in useHarnessContextSizes.ts and the
 // formula in Rust (`db_harness_context_sizes`).
 
 import type { HarnessKind } from "./types.ts";
@@ -11,18 +11,6 @@ export const CONTEXT_SIZE_KINDS: ReadonlySet<HarnessKind> = new Set<HarnessKind>
 	"claude",
 	"opencode",
 ]);
-
-/** The harness whose context size stands for the room: the first in room
- *  order whose kind has a source. The mailbox's lead (mail_routing.rs) is
- *  the first harness that can read mail; for claude/opencode rooms that is
- *  usually the same harness, but mail eligibility depends on injection and
- *  MCP-allowlist settings that are irrelevant here, so we pick by having a
- *  source instead. */
-export function contextLeadHarness<H extends { id: string; kind: HarnessKind }>(room: {
-	harnesses: readonly H[];
-}): H | undefined {
-	return room.harnesses.find((h) => CONTEXT_SIZE_KINDS.has(h.kind));
-}
 
 /** "999", "1.2k", "142k", "1.2M". */
 export function formatContextTokens(n: number): string {
@@ -38,22 +26,33 @@ export function formatContextTokens(n: number): string {
 	return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
 }
 
-export function contextSizeTitle(n: number, harnessName: string): string {
-	return `Context: ${Math.round(n).toLocaleString("en-US")} tokens — latest turn of ${harnessName} (input + cache)`;
+/** "context 142k". */
+export function contextLabel(tokens: number): string {
+	return `context ${formatContextTokens(tokens)}`;
 }
 
-/** What a room shows: the lead's tokens and which harness they came from. */
-export interface ContextSizeEntry {
+export interface MaxContext {
+	harnessId: string;
+	harnessName: string;
 	tokens: number;
-	harnessName: string;
 }
 
-/** The current lead of a room, keyed by harness id in `ContextLeads`. */
-export interface ContextLead {
-	roomId: string;
-	harnessName: string;
+/** The harness with the largest context size; ties go to the first in
+ *  order. Undefined when none has a value. */
+export function maxContext(
+	harnesses: readonly { id: string; name: string }[],
+	get: (id: string) => number | undefined,
+): MaxContext | undefined {
+	let best: MaxContext | undefined;
+	for (const h of harnesses) {
+		const tokens = get(h.id);
+		if (tokens === undefined) continue;
+		if (best === undefined || tokens > best.tokens) {
+			best = { harnessId: h.id, harnessName: h.name, tokens };
+		}
+	}
+	return best;
 }
-export type ContextLeads = ReadonlyMap<string, ContextLead>;
 
 export interface ContextSizeRow {
 	harnessId: string;
@@ -61,36 +60,35 @@ export interface ContextSizeRow {
 	timestampMs: number;
 }
 
-/** Fold one `db_harness_context_sizes` response into the per-room state.
+/** Fold one `db_harness_context_sizes` response into the per-harness state.
  *  `issued` is the sequence number each requested harness was given when the
  *  request went out; `latest` is the newest sequence issued per harness now.
  *  A harness's value is applied only if its request is still the newest for
- *  that harness (a slow older response never overwrites a newer one) and its
- *  (room, harness) pair is still a lead (a response for a closed room or a
- *  lost lead never re-adds an entry). Returns `state` itself when nothing
- *  changed, so callers can skip notifying. */
+ *  that harness (a slow older response never overwrites a newer one) and it
+ *  is still tracked (a response for a closed room never re-adds an entry).
+ *  Returns `state` itself when nothing changed, so callers can skip
+ *  notifying. */
 export function applyResponse(
-	state: ReadonlyMap<string, ContextSizeEntry>,
+	state: ReadonlyMap<string, number>,
 	latest: ReadonlyMap<string, number>,
 	issued: ReadonlyMap<string, number>,
-	currentLeads: ContextLeads,
+	tracked: ReadonlySet<string>,
 	rows: readonly ContextSizeRow[],
-): ReadonlyMap<string, ContextSizeEntry> {
+): ReadonlyMap<string, number> {
 	const byHarness = new Map(rows.map((r) => [r.harnessId, r.tokens]));
-	let next: Map<string, ContextSizeEntry> | undefined;
+	let next: Map<string, number> | undefined;
 	for (const [harnessId, seq] of issued) {
 		if (latest.get(harnessId) !== seq) continue;
-		const lead = currentLeads.get(harnessId);
-		if (!lead) continue;
+		if (!tracked.has(harnessId)) continue;
 		const tokens = byHarness.get(harnessId);
-		const prev = state.get(lead.roomId);
+		const prev = state.get(harnessId);
 		if (tokens === undefined) {
 			if (prev === undefined) continue;
 			next ??= new Map(state);
-			next.delete(lead.roomId);
-		} else if (prev?.tokens !== tokens || prev.harnessName !== lead.harnessName) {
+			next.delete(harnessId);
+		} else if (prev !== tokens) {
 			next ??= new Map(state);
-			next.set(lead.roomId, { tokens, harnessName: lead.harnessName });
+			next.set(harnessId, tokens);
 		}
 	}
 	return next ?? state;

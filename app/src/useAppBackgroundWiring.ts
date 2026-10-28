@@ -6,11 +6,11 @@ import { useAgentRequests } from "./useAgentRequests.ts";
 import type { useAppSettings } from "./useAppSettings.ts";
 import { useClaudeVersionWatch } from "./useClaudeVersionWatch.ts";
 import type { useHarnessActions } from "./useHarnessActions.ts";
+import { useHarnessContextSizes } from "./useHarnessContextSizes.ts";
 import type { useHarnessCreation } from "./useHarnessCreation.ts";
 import { useMailDelivery } from "./useMailDelivery.ts";
 import { useOpenRequests } from "./useOpenRequests.ts";
 import { useOsNotificationClicks } from "./useOsNotificationClicks.ts";
-import { useRoomContextSizes } from "./useRoomContextSizes.ts";
 import type { useRoomStripNav } from "./useRoomStripNav.ts";
 import type { useRoomsStore } from "./useRoomsStore.ts";
 
@@ -60,7 +60,7 @@ export function useAppBackgroundWiring(a: {
 	// keeps the tab marker fresh. Scoped to active rooms only: an archived
 	// room's harnesses have no live PTY to nudge.
 	useMailDelivery(store.activeRooms);
-	useRoomContextSizes(store.activeRooms); // #368
+	useHarnessContextSizes(store.activeRooms); // #368
 
 	// #491: Claude Code update notice — installed-version probe + auto policy.
 	useClaudeVersionWatch(
