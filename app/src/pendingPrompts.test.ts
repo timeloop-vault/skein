@@ -76,4 +76,21 @@ describe("pendingPrompts", () => {
 		expect(pendingPrompts.questionAsked(b, "q_1")).toBe("waiting");
 		expect(pendingPrompts.permissionReplied(a, "req_1")).toBe("running");
 	});
+
+	it("hasQuestion is true only while a question is outstanding (#672)", () => {
+		const h = nextId();
+		expect(pendingPrompts.hasQuestion(h)).toBe(false);
+		pendingPrompts.permissionAsked(h, "req_1");
+		expect(pendingPrompts.hasQuestion(h)).toBe(false);
+		pendingPrompts.questionAsked(h, "q_1");
+		pendingPrompts.questionAsked(h, "q_2");
+		expect(pendingPrompts.hasQuestion(h)).toBe(true);
+		pendingPrompts.questionResolved(h, "q_1");
+		expect(pendingPrompts.hasQuestion(h)).toBe(true);
+		pendingPrompts.questionResolved(h, "q_2");
+		expect(pendingPrompts.hasQuestion(h)).toBe(false);
+		pendingPrompts.questionAsked(h, "q_3");
+		pendingPrompts.forget(h);
+		expect(pendingPrompts.hasQuestion(h)).toBe(false);
+	});
 });

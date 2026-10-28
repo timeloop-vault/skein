@@ -126,7 +126,7 @@ export function attachOpencodeEvents(
 		observedAgents.forget(harnessId);
 		// #86: outstanding permission/question ids are meaningless once
 		// this adapter is gone — nothing will ever resolve them.
-		pendingPrompts.forget(harnessId);
+		forgetPending(harnessId);
 		void invoke("opencode_events_detach", { harnessId }).catch((err: unknown) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.warn(`[skein] opencode_events_detach failed for ${harnessId}:`, msg);
@@ -157,6 +157,17 @@ const applyPendingPhase = (
 	}
 };
 
+/// #672: mirror "a question prompt is open" into the activity record,
+/// which `canSendPrompt` reads. Call after every pendingPrompts mutation.
+const syncQuestion = (harnessId: string): void => {
+	harnessActivity.setQuestionOpen(harnessId, pendingPrompts.hasQuestion(harnessId));
+};
+
+const forgetPending = (harnessId: string): void => {
+	pendingPrompts.forget(harnessId);
+	syncQuestion(harnessId);
+};
+
 const translateOpencode = (
 	harnessId: string,
 	event: OpencodeEvent,
@@ -183,7 +194,7 @@ const translateOpencode = (
 			// question ids we were tracking are gone for good — the
 			// SessionBaselineIdle that follows puts the harness in
 			// `waiting`, not stuck in `permission` forever.
-			pendingPrompts.forget(harnessId);
+			forgetPending(harnessId);
 			harnessActivity.attachAuthoritativeSource(harnessId);
 			return;
 		case "session_created": {
@@ -256,41 +267,39 @@ const translateOpencode = (
 			return;
 		case "permission_asked":
 			pendingPrompts.permissionAsked(harnessId, event.request_id);
+			syncQuestion(harnessId);
 			harnessActivity.setPermissionFromAdapter(
 				harnessId,
 				TRANSITION_SOURCE.L2c2OpencodePermission,
 				null,
 			);
 			return;
-		case "permission_replied":
-			applyPendingPhase(
-				harnessId,
-				pendingPrompts.permissionReplied(harnessId, event.request_id),
-				TRANSITION_SOURCE.L2c2OpencodePermissionReplied,
-			);
+		case "permission_replied": {
+			const next = pendingPrompts.permissionReplied(harnessId, event.request_id);
+			syncQuestion(harnessId);
+			applyPendingPhase(harnessId, next, TRANSITION_SOURCE.L2c2OpencodePermissionReplied);
 			return;
-		case "question_asked":
+		}
+		case "question_asked": {
 			// Outranked by a pending permission — `applyPendingPhase`
 			// re-asserts `permission` rather than overwriting it with
 			// `waiting` in that case.
-			applyPendingPhase(
-				harnessId,
-				pendingPrompts.questionAsked(harnessId, event.request_id),
-				TRANSITION_SOURCE.L2c2OpencodeQuestion,
-			);
+			const next = pendingPrompts.questionAsked(harnessId, event.request_id);
+			syncQuestion(harnessId);
+			applyPendingPhase(harnessId, next, TRANSITION_SOURCE.L2c2OpencodeQuestion);
 			return;
-		case "question_resolved":
-			applyPendingPhase(
-				harnessId,
-				pendingPrompts.questionResolved(harnessId, event.request_id),
-				TRANSITION_SOURCE.L2c2OpencodeQuestionResolved,
-			);
+		}
+		case "question_resolved": {
+			const next = pendingPrompts.questionResolved(harnessId, event.request_id);
+			syncQuestion(harnessId);
+			applyPendingPhase(harnessId, next, TRANSITION_SOURCE.L2c2OpencodeQuestionResolved);
 			return;
+		}
 		case "session_idle":
 			// The signal we built this for: opencode finished its
 			// turn and is awaiting user input. Unconditional — #86:
 			// whatever was pending is moot once the turn itself ends.
-			pendingPrompts.forget(harnessId);
+			forgetPending(harnessId);
 			harnessActivity.setWaitingFromAdapter(harnessId, TRANSITION_SOURCE.L2c2OpencodeIdle);
 			return;
 		case "session_baseline_idle":
@@ -299,7 +308,7 @@ const translateOpencode = (
 			// not stick on running). A guess, not a transition: applied
 			// quietly (never notifies). Also clears `permission`, whose
 			// pending ids the reconnect already forgot.
-			pendingPrompts.forget(harnessId);
+			forgetPending(harnessId);
 			harnessActivity.setBaselineWaitingFromAdapter(
 				harnessId,
 				TRANSITION_SOURCE.L2c2OpencodeBaseline,
@@ -311,7 +320,7 @@ const translateOpencode = (
 			// reconnects (it keeps trying with backoff while the
 			// PTY lives). #86: also drop any pending permission/
 			// question ids — nothing will resolve them across the gap.
-			pendingPrompts.forget(harnessId);
+			forgetPending(harnessId);
 			harnessActivity.releasePermission(harnessId, TRANSITION_SOURCE.AdapterDetached);
 			harnessActivity.detachAuthoritativeSource(harnessId);
 			return;

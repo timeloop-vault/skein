@@ -1,7 +1,7 @@
 // harnessActivity.ts split (#458): the #86 permission phase. Methods are spread into the
 // `harnessActivity` store object there; shared state lives in harnessActivityCore.ts.
 
-import { setPhase, store } from "./harnessActivityCore.ts";
+import { emit, setPhase, store } from "./harnessActivityCore.ts";
 import type { TransitionSource } from "./harnessActivityTypes.ts";
 
 export const permissionMethods = {
@@ -33,6 +33,15 @@ export const permissionMethods = {
 			permissionAgentId: agentId ?? null,
 			permissionAt: Date.now(),
 		});
+	},
+	/// Mirror whether an opencode question prompt is outstanding (#672).
+	/// Changes no phase and logs no transition; notifies subscribers
+	/// only when the value actually changes. No-op for an unknown id.
+	setQuestionOpen(id: string, open: boolean): void {
+		const cur = store.get(id);
+		if (!cur || cur.questionOpen === open) return;
+		store.set(id, { ...cur, questionOpen: open });
+		emit(id);
 	},
 	/// Leave `permission` for `running`, and touch no other phase. For
 	/// an adapter detaching mid-dialog: nothing it would have sent can

@@ -19,6 +19,7 @@ const activity = (over: Partial<HarnessActivity> = {}): HarnessActivity => ({
 	permissionTool: null,
 	permissionAgentType: null,
 	permissionAgentId: null,
+	questionOpen: false,
 	adapterHeard: true,
 	promptSubmittedAt: null,
 	adapterSilent: false,
@@ -71,6 +72,23 @@ describe("canSendPrompt", () => {
 	it("gives permission its own reason rather than a generic 'not waiting'", () => {
 		const r = canSendPrompt(baseInput({ activity: activity({ phase: "permission" }) }));
 		expect(r).toEqual({ ok: false, reason: expect.stringContaining("permission dialog") });
+	});
+
+	it("refuses a waiting harness with an open question (#672)", () => {
+		const r = canSendPrompt(
+			baseInput({ activity: activity({ phase: "waiting", questionOpen: true }) }),
+		);
+		expect(r).toEqual({
+			ok: false,
+			reason: "the harness is waiting on an answer to its own question",
+		});
+	});
+
+	it("allows a waiting harness once the question is closed (#672)", () => {
+		const r = canSendPrompt(
+			baseInput({ activity: activity({ phase: "waiting", questionOpen: false }) }),
+		);
+		expect(r).toEqual({ ok: true });
 	});
 
 	it("refuses any other non-waiting phase", () => {

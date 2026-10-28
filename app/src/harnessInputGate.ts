@@ -102,6 +102,10 @@ function checkWatched(activity: HarnessActivity): GateResult | null {
 ///    than "not at a stopping point", not a variant of it, and outranks
 ///    the deferral too — `atSafeStoppingPoint` never treats a
 ///    `permission` phase as safe even with a deferral armed underneath;
+///  - #672: no opencode `question` prompt is open (`questionOpen`). Its
+///    phase reads `waiting` because it is the user's turn (badge,
+///    notification), but the turn has not ended — a pasted nudge or mail
+///    body would answer the question;
 ///  - an L2c adapter is attached, has not gone silent, and has proven
 ///    itself either by speaking or by the harness's own launch signal
 ///    (`authoritative && (adapterHeard || launchSignalAt !== null) &&
@@ -130,6 +134,9 @@ export function canSendPrompt(input: CanSendPromptInput): GateResult {
 	const a = activity as HarnessActivity;
 	if (a.phase === "permission") {
 		return { ok: false, reason: "the harness is waiting on a permission dialog" };
+	}
+	if (a.questionOpen) {
+		return { ok: false, reason: "the harness is waiting on an answer to its own question" };
 	}
 	if (!atSafeStoppingPoint(a)) {
 		return {

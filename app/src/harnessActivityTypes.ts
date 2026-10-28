@@ -61,6 +61,11 @@ export interface HarnessActivity {
 	/// spawn; cleared automatically whenever the phase leaves
 	/// `permission`, same as `permissionAgentType` (#298).
 	permissionAgentId: string | null;
+	/// An opencode `question` prompt is outstanding (#672). The phase
+	/// reads `waiting` (the user's turn) but the turn has not ended, so
+	/// `canSendPrompt` refuses while this is set. Not a phase: never
+	/// logged as a transition. Reset on every spawn.
+	questionOpen: boolean;
 	/// Has the L2c adapter delivered at least one event since spawn?
 	/// Proof it is reading the right file / stream. #259.
 	adapterHeard: boolean;

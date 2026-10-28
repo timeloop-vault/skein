@@ -18,6 +18,7 @@ const mkActivity = (phase: ActivityPhase): HarnessActivity => ({
 	permissionTool: null,
 	permissionAgentType: null,
 	permissionAgentId: null,
+	questionOpen: false,
 	adapterHeard: false,
 	promptSubmittedAt: null,
 	adapterSilent: false,

@@ -70,6 +70,11 @@ export const pendingPrompts = {
 		return resolvePhase(pending.get(harnessId));
 	},
 
+	/// Is any question prompt outstanding for this harness (#672)?
+	hasQuestion(harnessId: string): boolean {
+		return (pending.get(harnessId)?.questions.size ?? 0) > 0;
+	},
+
 	/// Drop every pending id for a harness: `session_idle` (opencode
 	/// finished its turn, whatever was in flight is moot),
 	/// `session_end` / `connected` (a reconnect replays nothing, per
