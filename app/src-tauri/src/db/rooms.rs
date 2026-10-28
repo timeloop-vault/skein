@@ -77,6 +77,18 @@ pub struct Harness {
     /// `None` = no flag (root/active profile). Round-tripped only.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub hermes_profile: Option<String>,
+    /// #675: the opencode version seen at the last spawn. `None` =
+    /// unknown / never probed, which means v1. Round-tripped only.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub opencode_version: Option<OpencodeVersion>,
+}
+
+/// The opencode CLI version a harness last spawned under (#675, epic #674).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpencodeVersion {
+    pub major: u32,
+    pub version: String,
 }
 
 /// A `remote` harness's target (#568): ssh host, the tool run

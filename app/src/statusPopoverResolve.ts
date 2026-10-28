@@ -22,6 +22,8 @@ export interface Resolved {
 	kind: string | null;
 	status: string | null;
 	agent: { key: string; value: string } | null;
+	/** #675: "opencode 1.19.5", off the chip. */
+	version: string | null;
 	/** #86: the tool a `permission` status is blocked on, when the
 	 *  adapter could say. Only ever populated via the chip's live
 	 *  harnessId lookup — a lone status dot has no harness id to ask. */
@@ -129,11 +131,15 @@ export const resolve = (el: HTMLElement): Resolved | null => {
 		? el
 		: el.closest<HTMLElement>(ROW_SEL)?.querySelector<HTMLElement>(".h-chip[data-version-notice]");
 	const update = updateChip?.dataset.versionNotice ?? null;
+	const version =
+		row?.querySelector<HTMLElement>(".h-chip[data-opencode-version]")?.dataset.opencodeVersion ??
+		null;
 	return kind || status
 		? {
 				kind,
 				status,
 				agent,
+				version,
 				tool,
 				agentType,
 				workingCount,

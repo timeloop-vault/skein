@@ -4,7 +4,7 @@
 // owns the async/port/state wiring around these.
 
 import { HARNESS_KINDS } from "./data.tsx";
-import type { Harness, HarnessKind, RemoteSpec, Room } from "./types.ts";
+import type { Harness, HarnessKind, OpencodeVersion, RemoteSpec, Room } from "./types.ts";
 
 export const newId = (prefix: string): string => prefix + Math.random().toString(36).slice(2, 7);
 
@@ -210,6 +210,25 @@ export const withoutShellClaim = (rooms: Room[], targetRoomId: string, harnessId
 		if (!("shellClaim" in h)) return h;
 		const { shellClaim: _released, ...rest } = h;
 		return rest;
+	});
+
+// #675: record the opencode version the last spawn ran under. null = the probe
+// failed (unknown, so v1) and removes the key. Unchanged = same rooms reference.
+export const withOpencodeVersion = (
+	rooms: Room[],
+	targetRoomId: string,
+	harnessId: string,
+	version: OpencodeVersion | null,
+): Room[] =>
+	mapHarness(rooms, targetRoomId, harnessId, (h) => {
+		if (version === null) {
+			if (!("opencodeVersion" in h)) return h;
+			const { opencodeVersion: _unknown, ...rest } = h;
+			return rest;
+		}
+		const cur = h.opencodeVersion;
+		if (cur && cur.major === version.major && cur.version === version.version) return h;
+		return { ...h, opencodeVersion: { major: version.major, version: version.version } };
 	});
 
 // A cmd replacement (Enter-for-shell, restart) is a fresh process: bump

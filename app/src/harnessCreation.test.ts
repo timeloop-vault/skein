@@ -7,6 +7,7 @@ import {
 	harnessDisplayName,
 	resolveAgentName,
 	withCapturedSessionId,
+	withOpencodeVersion,
 	withoutShellClaim,
 	withReplacedSessionId,
 	withRespawnedCmd,
@@ -176,5 +177,20 @@ describe("shell claim helpers (#520)", () => {
 			"sid-1",
 		]);
 		expect(h0([withResumeCmds(releasedRoom, new Map())])?.cmd).toEqual(SHELL);
+	});
+});
+
+describe("withOpencodeVersion (#675)", () => {
+	const v = { major: 1, version: "1.19.5" };
+	it("sets the version, no-ops when unchanged, clears on null", () => {
+		const rooms = [room("sid")];
+		const set = withOpencodeVersion(rooms, "s1", "h1", v);
+		expect(set[0]?.harnesses[0]?.opencodeVersion).toEqual(v);
+		expect(withOpencodeVersion(set, "s1", "h1", { ...v })).toBe(set);
+		const changed = withOpencodeVersion(set, "s1", "h1", { major: 2, version: "2.0.1" });
+		expect(changed[0]?.harnesses[0]?.opencodeVersion?.major).toBe(2);
+		const cleared = withOpencodeVersion(set, "s1", "h1", null);
+		expect(cleared[0]?.harnesses[0] && "opencodeVersion" in cleared[0].harnesses[0]).toBe(false);
+		expect(withOpencodeVersion(cleared, "s1", "h1", null)).toBe(cleared);
 	});
 });

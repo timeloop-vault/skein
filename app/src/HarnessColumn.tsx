@@ -7,7 +7,7 @@ import type { DockedDesign } from "./designDock.ts";
 import { HarnessActionsMenu } from "./HarnessActionsMenu.tsx";
 import { HarnessPaneBody } from "./HarnessPaneBody.tsx";
 import { harnessDisplayStatus, useHarnessActivity } from "./harnessActivity.ts";
-import { agentLabel, useObservedAgent } from "./harnessAgent.ts";
+import { agentLabel, opencodeVersionLabel, useObservedAgent } from "./harnessAgent.ts";
 import type { GateResult } from "./harnessInputGate.ts";
 import { LiveHarnessTab } from "./LiveHarnessTab.tsx";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
@@ -69,11 +69,18 @@ export const LiveStatusBarChip = ({ harness }: { harness: Harness }) => {
 // an opencode harness says "started as" rather than claiming to know.
 export const AgentStatusBarSeg = ({ harness }: { harness: Harness }) => {
 	const label = agentLabel(harness, useObservedAgent(harness.id));
-	if (!label) return null;
+	const version = opencodeVersionLabel(harness); // #675
+	if (!label && !version) return null;
 	return (
-		<span className="seg sk-statusbar-agent" title={label.title}>
-			<span className="pk">{label.key}</span>
-			{label.value}
+		<span className="seg sk-statusbar-agent" title={label?.title}>
+			{label && <span className="pk">{label.key}</span>}
+			{label?.value}
+			{version && (
+				<>
+					{label && " · "}
+					{version}
+				</>
+			)}
 		</span>
 	);
 };

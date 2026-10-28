@@ -77,6 +77,8 @@ const useRoomHandlers = (p: RoomWorkspaceProps): RoomHandlers => {
 				latest.current.creation.setHarnessShellClaim(roomId, harnessId, sid, port),
 			shellClaimRelease: (roomId, harnessId) =>
 				latest.current.creation.clearHarnessShellClaim(roomId, harnessId),
+			opencodeVersion: (roomId, harnessId, version) =>
+				latest.current.creation.setHarnessOpencodeVersion(roomId, harnessId, version),
 			reattach: (roomId, harnessId) => latest.current.onReattachTelemetry(roomId, harnessId),
 			envProfile: (roomId, harnessId, name) =>
 				latest.current.onEnvProfileChange(roomId, harnessId, name),

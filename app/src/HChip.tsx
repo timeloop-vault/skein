@@ -13,6 +13,7 @@ export const HChip = ({
 	kind,
 	harnessId,
 	agent,
+	version,
 	mailCount,
 	mailFromRoomNames,
 	versionUpdate,
@@ -22,6 +23,8 @@ export const HChip = ({
 	/** #248: the harness's agent label, for the popover. Omitted where the
 	 *  chip is a kind rather than one harness (pickers, room-tab row). */
 	agent?: AgentLabel | null | undefined;
+	/** #675: "opencode 1.19.5", for the popover's version segment. */
+	version?: string | null | undefined;
 	/** #329: this harness's unread-mail count/senders, for the hover
 	 *  popover's mail segment. The chip is the one element every trigger
 	 *  in the row (chip, dot, the ✉ marker itself) can find, so it's the
@@ -59,6 +62,7 @@ export const HChip = ({
 			data-harness-id={harnessId}
 			data-agent-key={agent?.key}
 			data-agent-value={agent?.value}
+			data-opencode-version={version ?? undefined}
 			data-mail-count={mailCount && mailCount > 0 ? mailCount : undefined}
 			data-mail-from={
 				mailCount && mailCount > 0 ? JSON.stringify(mailFromRoomNames ?? []) : undefined

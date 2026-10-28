@@ -93,6 +93,13 @@ export interface AgentLabel {
  *  that has to stay tellable apart from any name. */
 export const TOOL_DEFAULT_AGENT = "tool default";
 
+/** #675: "opencode 1.19.5" for an opencode harness whose last spawn recorded a
+ *  version; null for any other kind or when none is recorded. */
+export const opencodeVersionLabel = (
+	h: Pick<Harness, "kind" | "opencodeVersion">,
+): string | null =>
+	h.kind === "opencode" && h.opencodeVersion ? `opencode ${h.opencodeVersion.version}` : null;
+
 export const agentLabel = (
 	h: Pick<Harness, "kind" | "agent" | "sessionId">,
 	seen: ObservedAgent | undefined,

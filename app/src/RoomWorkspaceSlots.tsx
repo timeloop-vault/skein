@@ -7,7 +7,7 @@ import { MissingFolderCard } from "./MissingFolderCard.tsx";
 import type { DefaultAgents, VersionNoticeModes } from "./prefs.ts";
 import { RepoMismatchCard } from "./RepoMismatchCard.tsx";
 import { RightPane, type RightPaneTab } from "./RightPane.tsx";
-import type { Room } from "./types.ts";
+import type { OpencodeVersion, Room } from "./types.ts";
 import type { useHarnessCreation } from "./useHarnessCreation.ts";
 import type { useRoomsStore } from "./useRoomsStore.ts";
 
@@ -36,6 +36,7 @@ export interface RoomHandlers {
 	sessionFollowed: (roomId: string, harnessId: string, sessionId: string) => void;
 	shellClaimSet: (roomId: string, harnessId: string, sessionId: string, port?: number) => void;
 	shellClaimRelease: (roomId: string, harnessId: string) => void;
+	opencodeVersion: (roomId: string, harnessId: string, version: OpencodeVersion | null) => void;
 	reattach: (roomId: string, harnessId: string) => void;
 	envProfile: (roomId: string, harnessId: string, name: string | undefined) => void;
 	restart: (roomId: string, harnessId: string) => Promise<GateResult>;
@@ -115,6 +116,7 @@ export const LeftSlot = memo((p: LeftSlotProps) => {
 		(harnessId: string) => ({
 			set: (sid: string, port?: number) => h.shellClaimSet(id, harnessId, sid, port),
 			release: () => h.shellClaimRelease(id, harnessId),
+			setOpencodeVersion: (v: OpencodeVersion | null) => h.opencodeVersion(id, harnessId, v),
 		}),
 		[h, id],
 	);

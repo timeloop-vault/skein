@@ -10,11 +10,14 @@
 // until it exits.
 
 import type { OpencodeScan } from "./opencodeShellFollow.ts";
+import type { OpencodeVersion } from "./types.ts";
 
 /** Persists / removes the claim (`sessionId` stays on release, as claude's). */
 export interface ShellClaimSink {
 	set: (sessionId: string, port?: number) => void;
 	release: () => void;
+	/** #675: records the opencode version a spawn ran under (null = unknown). */
+	setOpencodeVersion?: (version: OpencodeVersion | null) => void;
 }
 
 /** One transient empty scan must not lose the claim: release takes this many

@@ -2,7 +2,7 @@ import type { VersionNotice } from "./claudeVersion.ts";
 import { badgeAriaLabel, badgeTitle, updateSegmentText } from "./claudeVersionText.ts";
 import type { DragProps } from "./dragProps.ts";
 import { HChip, StatusDot } from "./HChip.tsx";
-import type { AgentLabel } from "./harnessAgent.ts";
+import { type AgentLabel, opencodeVersionLabel } from "./harnessAgent.ts";
 import { requestDeliverNow } from "./mailDeliverNow.ts";
 import { useMailHold } from "./mailHold.ts";
 import { useUnreadMail } from "./mailStore.ts";
@@ -79,6 +79,7 @@ export const HarnessTab = ({
 				kind={h.kind}
 				harnessId={h.id}
 				agent={agent}
+				version={opencodeVersionLabel(h)}
 				mailCount={mail.count}
 				mailFromRoomNames={mail.fromRoomNames}
 				versionUpdate={

@@ -18,6 +18,7 @@ import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import { harnessInput } from "./harnessInput.ts";
+import { opencodeCliVersion } from "./opencodeCli.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
@@ -270,6 +271,13 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			harnessActivity.spawned(harnessId);
 			// #491: transcript rows older than this process say nothing about it.
 			claudeVersionStore.markSpawned(harnessId, Date.now());
+			// #675: probe in parallel with pty_spawn, never awaited on its path.
+			if (harnessKind === "opencode" && opencodeClaim?.setOpencodeVersion) {
+				const record = opencodeClaim.setOpencodeVersion;
+				void opencodeCliVersion().then((v) => {
+					if (!cancelled) record(v);
+				});
+			}
 			// #484: catch xterm's reply to ConPTY's cursor query (portable-pty
 			// 0.9 waits for it), which can arrive before pty_spawn resolves. If
 			// unmounted meanwhile, the settle paths below dispose it.

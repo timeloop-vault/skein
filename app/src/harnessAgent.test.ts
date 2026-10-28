@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { agentLabel, observedAgents, TOOL_DEFAULT_AGENT } from "./harnessAgent.ts";
+import {
+	agentLabel,
+	observedAgents,
+	opencodeVersionLabel,
+	TOOL_DEFAULT_AGENT,
+} from "./harnessAgent.ts";
 
 describe("agentLabel", () => {
 	it("is null for kinds that take no --agent", () => {
@@ -82,5 +87,18 @@ describe("observedAgents", () => {
 		observedAgents.record("h-obs", "s", "plan");
 		expect(calls).toBe(3);
 		observedAgents.forget("h-obs");
+	});
+});
+
+describe("opencodeVersionLabel (#675)", () => {
+	it("words an opencode harness's recorded version", () => {
+		const opencodeVersion = { major: 1, version: "1.19.5" };
+		expect(opencodeVersionLabel({ kind: "opencode", opencodeVersion })).toBe("opencode 1.19.5");
+	});
+	it("is null for other kinds and when absent", () => {
+		expect(opencodeVersionLabel({ kind: "opencode" })).toBeNull();
+		expect(
+			opencodeVersionLabel({ kind: "claude", opencodeVersion: { major: 1, version: "1" } }),
+		).toBeNull();
 	});
 });

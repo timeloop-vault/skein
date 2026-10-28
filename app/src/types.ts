@@ -127,6 +127,15 @@ export interface Harness {
 	// Absent = no live claim. Resume honours it only while it still
 	// equals `sessionId` (see `resumeHarness`).
 	shellClaim?: ShellClaim;
+	// #675 (epic #674): the opencode version seen at the last spawn. Absent =
+	// unknown / never probed, which means v1. Resume needs it because v1 and
+	// v2 session ids look alike. Not structural for the save scheduler.
+	opencodeVersion?: OpencodeVersion;
+}
+
+export interface OpencodeVersion {
+	major: number;
+	version: string;
 }
 
 export type ShellClaim = { sessionId: string; port?: number };

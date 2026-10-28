@@ -28,6 +28,7 @@ import {
 	newId,
 	resolveAgentName,
 	withCapturedSessionId,
+	withOpencodeVersion,
 	withoutShellClaim,
 	withReplacedSessionId,
 	withShellClaim,
@@ -36,7 +37,7 @@ import type { CreateRoomArgs } from "./NewRoomDialog.tsx";
 import { captureOpencodeSessionId } from "./opencodeCapture.ts";
 import { buildRemoteSpec, type RemoteInput } from "./remoteCmd.ts";
 import { defaultRoomName } from "./roomName.ts";
-import type { Harness, HarnessKind, Room } from "./types.ts";
+import type { Harness, HarnessKind, OpencodeVersion, Room } from "./types.ts";
 
 export type { CreateHarnessResult, CreateRoomResult };
 
@@ -99,6 +100,13 @@ export function useHarnessCreation(
 		port?: number,
 	) => {
 		setRooms((prev) => withShellClaim(prev, targetRoomId, harnessId, sessionId, port));
+	};
+	const setHarnessOpencodeVersion = (
+		targetRoomId: string,
+		harnessId: string,
+		version: OpencodeVersion | null,
+	) => {
+		setRooms((prev) => withOpencodeVersion(prev, targetRoomId, harnessId, version));
 	};
 	const clearHarnessShellClaim = (targetRoomId: string, harnessId: string) => {
 		setRooms((prev) => withoutShellClaim(prev, targetRoomId, harnessId));
@@ -388,6 +396,7 @@ export function useHarnessCreation(
 		replaceHarnessSessionId,
 		setHarnessShellClaim,
 		clearHarnessShellClaim,
+		setHarnessOpencodeVersion,
 		createHarnessInRoom,
 		pickHarness,
 		toggleFilesHarness,

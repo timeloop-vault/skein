@@ -73,6 +73,7 @@ fn fixture() -> Fx {
         remote: None,
         env_profile: None,
         hermes_profile: None,
+        opencode_version: None,
     };
     let r1 = Room {
         id: "r1".into(),

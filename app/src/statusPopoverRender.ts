@@ -30,6 +30,7 @@ export const render = (el: HTMLDivElement, c: Resolved) => {
 	};
 	if (c.kind && isKind(c.kind)) seg("harness", HARNESS_KINDS[c.kind].name);
 	if (c.agent) seg(c.agent.key, c.agent.value);
+	if (c.version) seg("version", c.version); // #675
 	// #86: "permission needed" (+ tool) rather than the bare word —
 	// the dataset value stays the raw Status for the `pv-*` class,
 	// only the printed text goes through `statusLabel`. #277:

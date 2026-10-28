@@ -53,5 +53,6 @@ pub(super) fn harness(id: &str) -> Harness {
         remote: None,
         env_profile: None,
         hermes_profile: None,
+        opencode_version: None,
     }
 }

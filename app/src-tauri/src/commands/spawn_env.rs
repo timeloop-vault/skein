@@ -172,6 +172,78 @@ pub(crate) async fn claude_cli_version(
     .map_err(|e| format!("claude version probe panicked: {e}"))
 }
 
+/// The major opencode version a spawn would run (#675), from
+/// `opencode --version`, cached per (path, size, mtime) because the v2
+/// binary is huge. `Ok(None)` = unknown; the caller treats it as v1.
+#[tauri::command]
+pub(crate) async fn opencode_cli_version(
+    spawn_env: tauri::State<'_, SpawnEnvState>,
+) -> Result<Option<OpencodeVersionDto>, String> {
+    let settings = spawn_env.snapshot();
+    tauri::async_runtime::spawn_blocking(move || {
+        let program = crate::harness_kind::HarnessKind::Opencode
+            .program()
+            .expect("opencode has a program");
+        let (resolved, path) = crate::pty::harness_program_lookup(program, &settings);
+        let Some(exe) = resolved else {
+            tracing::info!(
+                program,
+                "opencode --version gave no usable version; treating as v1"
+            );
+            return None;
+        };
+        let version = skein_harness::opencode::version::probe_version(
+            std::ffi::OsStr::new(&exe),
+            std::time::Duration::from_secs(10),
+            Some(path.as_os_str()),
+        );
+        if let Some(v) = &version {
+            tracing::debug!(
+                program = %exe,
+                major = v.major,
+                version = %v.version,
+                "opencode version probed"
+            );
+        } else {
+            tracing::info!(
+                program = %exe,
+                "opencode --version gave no usable version; treating as v1"
+            );
+        }
+        version.map(|v| OpencodeVersionDto {
+            major: v.major,
+            version: v.version,
+        })
+    })
+    .await
+    .map_err(|e| format!("opencode version probe panicked: {e}"))
+}
+
+/// Wire shape of [`opencode_cli_version`].
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OpencodeVersionDto {
+    pub major: u32,
+    pub version: String,
+}
+
+#[cfg(test)]
+mod opencode_version_tests {
+    use super::OpencodeVersionDto;
+
+    #[test]
+    fn opencode_version_dto_is_camel_case() {
+        let dto = OpencodeVersionDto {
+            major: 2,
+            version: "2.2.0".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&dto).unwrap(),
+            r#"{"major":2,"version":"2.2.0"}"#
+        );
+    }
+}
+
 /// What Skein injects into each agent CLI so it can reach the review
 /// API, and where the shipped bundle resolved to (#215 E3). Read by the
 /// spawn-environment panel — the injection is additive, but the user
