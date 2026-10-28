@@ -240,6 +240,14 @@ export interface EnvProfile {
 	vars: EnvProfileVar[];
 }
 
+export interface ToolGroups {
+	review: boolean;
+	mail: boolean;
+	rooms: boolean;
+	directory: boolean;
+	design: boolean;
+}
+
 export interface SpawnSettings {
 	schema: number;
 	/** Named env profiles. Absent in old persisted payloads. */
@@ -259,22 +267,9 @@ export interface SpawnSettings {
 	injectOpencodeConfig: boolean;
 	/** Keep Skein's MCP entry in Skein's own Hermes profile (#626). */
 	injectHermesConfig: boolean;
-	/** Let agents call the agent-messaging verbs to reach other harnesses
-	 *  in the room (#327). Absent on old persisted data — treat as true. */
-	allowAgentMessaging: boolean;
-	/** Let agents call `create_room` to open a new room (#330). Same
-	 *  shape as `allowAgentMessaging` — absent on old persisted data,
-	 *  treat as true. */
-	allowAgentRoomCreation: boolean;
-	/** Let agents call `close_room` to archive a room they created, once
-	 *  it is signed off (#411). Same shape as `allowAgentRoomCreation` —
-	 *  absent on old persisted data, treat as true. */
-	allowAgentRoomClosing: boolean;
-	/** Let agents call `open_harness`/`close_harness` on their own room
-	 *  or a room they created (#411). Same shape as
-	 *  `allowAgentRoomCreation` — absent on old persisted data, treat as
-	 *  true. */
-	allowAgentHarnessControl: boolean;
+	/** Which MCP tool groups agents see (#534). Every group defaults to
+	 *  true; an object or key missing from an older file also means true. */
+	toolGroups?: Partial<ToolGroups>;
 	/** Pass Claude Code `--settings` turning its wheel acceleration off
 	 *  (#569). Default false — it outranks the user's own Claude
 	 *  settings, so Skein only does it when asked. */

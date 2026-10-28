@@ -7,6 +7,15 @@
 //! which the Streamable HTTP transport explicitly permits, and every
 //! client has to support.
 //!
+//! # Tool groups (#534)
+//!
+//! Every tool belongs to a [`ToolGroup`] the user switches on or off
+//! globally in Settings. A group that is off is hidden from `tools/list`
+//! and its instructions paragraph, *and* refused in [`call_tool`] (and on
+//! the `/api` mirror) — hidden-and-refused, which supersedes #176's
+//! list-and-refuse for the old per-feature kill switches. `skein_info`
+//! is in no group and is always available.
+//!
 //! # The tool list is the contract
 //!
 //! Several things are absent from [`tool_specs`] *and*
@@ -44,6 +53,7 @@
 //! hang on a busy or absent webview.
 
 mod design_specs;
+mod instructions;
 mod specs;
 
 pub use specs::tool_specs;
@@ -52,6 +62,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::auth::Caller;
+use super::groups::{ToolGroup, ToolGroups, group_of};
 use super::state::AgentApiState;
 use super::verbs::{self, MailContext, VerbError};
 
@@ -122,65 +133,18 @@ pub enum Outcome {
     BadRequest(String),
 }
 
-/// The MCP-level description a client sees at `initialize`.
-fn instructions() -> &'static str {
-    "This server is Skein's agent API for the room this token belongs \
-     to. It covers three things: reviewing your work, messaging other \
-     harnesses, and opening new rooms.\n\n\
-     Review: use list_comments to see the reviewer's outstanding \
-     comments, get_comment to read one together with the code it is \
-     about, and get_diff to read the change under review. Answer with \
-     reply, and use mark_addressed once you have made the change (give \
-     the commit sha when you have one). You cannot resolve threads: the \
-     reviewer closes them after reading your reply. Before you merge, \
-     push, or open a pull request, call review_status — it says whether \
-     the reviewer has signed off on the commit you are about to land. \
-     You cannot sign off yourself.\n\n\
-     Mail: send_message sends a short message to another harness — give \
-     `to` as a harness id or a room id, which is routed to that room's \
-     lead harness. read_messages returns your unread messages oldest \
-     first and marks them read; pass include_read for the whole \
-     history. When Skein tells you that you have new messages, call \
-     read_messages. message_history is the read-only counterpart: \
-     filtered by counterpart, paged with since/limit, and — with \
-     direction — able to show what you sent as well, all without \
-     marking anything read; reach for it to rebuild a thread after \
-     your own context is compacted.\n\n\
-     Rooms: create_room opens a real Skein room and spawns a real agent \
-     in it, in the background — not a simulation. Give it a prompt and \
-     that agent starts working unattended the moment it exists. \
-     find_rooms_for_path lists every room, across all projects, whose \
-     folder is, contains, or sits under a path; a room with \
-     safe_to_remove false is open, so do not touch its folder. \
-     list_rooms (optionally created_by: \"me\" for only the rooms you \
-     opened), get_room and list_harnesses read rooms and harnesses \
-     across the whole install, including ones you did not create — use \
-     them to rebuild a picture of a room after your own context is \
-     compacted, without replaying mail. A harness's phase may read \
-     \"unknown\" when Skein cannot currently vouch for it. close_room \
-     archives a room you created, once its reviewer sign-off is \
-     approved for its current HEAD — that is the only way to close one: \
-     you cannot close your own room, and you cannot otherwise destroy \
-     one at all. Archiving keeps the worktree, the branch and the room \
-     record; the user can reopen it any time. open_harness adds a \
-     harness to your own room, or to one you opened, in the background — \
-     never taking focus. close_harness stops one the way closing its tab \
-     does — your own room's harnesses (never itself), or any harness in \
-     a room you opened — refusing on the room's last harness (use \
-     close_room instead), an open permission dialog, or unsaved Files \
-     buffers; closing mid-turn is allowed, and the reply names the phase \
-     it interrupted.\n\n\
-     Design pane: list_design_harnesses, get_design_state, \
-     open_design_entry, set_design_device, show_element and invoke_element read and drive the design \
-     harnesses of your own room only, and never take focus or switch \
-     the visible room or harness. show_element highlights an element in \
-     the pane transiently and creates no thread. invoke_element taps or \
-     swipes an element of the prototype itself, as page events. show_changes \
-     outlines the rendered elements whose JSX opening tag is on a line a \
-     diff scope changed, and lists everything it cannot map as unmapped. \
-     get_design_screenshot returns an image of the preview and refuses \
-     (not_visible) when the pane is not on screen; show_design_pane makes \
-     it visible and, unlike the rest, may switch the active room and tab."
+/// The tools a client may see with these groups on: every spec whose
+/// group is enabled, plus `skein_info`, which is in no group.
+pub fn tool_specs_for(groups: ToolGroups) -> Vec<Value> {
+    tool_specs()
+        .into_iter()
+        .filter(|spec| {
+            spec["name"]
+                .as_str()
+                .and_then(group_of)
+                .is_none_or(|g| groups.allows(g))
+        })
+        .collect()
 }
 
 /// Handle one JSON-RPC message.
@@ -212,9 +176,15 @@ pub async fn handle(
     };
 
     match method {
-        "initialize" => Outcome::Json(Box::new(ok(&id, &initialize_result(&params)))),
+        "initialize" => Outcome::Json(Box::new(ok(
+            &id,
+            &initialize_result(&params, state.tool_groups()),
+        ))),
         "ping" => Outcome::Json(Box::new(ok(&id, &json!({})))),
-        "tools/list" => Outcome::Json(Box::new(ok(&id, &json!({ "tools": tool_specs() })))),
+        "tools/list" => Outcome::Json(Box::new(ok(
+            &id,
+            &json!({ "tools": tool_specs_for(state.tool_groups()) }),
+        ))),
         "tools/call" => Outcome::Json(Box::new(
             tools_call(state, caller, &id, &params, mail).await,
         )),
@@ -226,7 +196,13 @@ pub async fn handle(
     }
 }
 
-fn initialize_result(params: &Value) -> Value {
+/// Build the `initialize` result: protocol version, capabilities and instructions.
+///
+/// `listChanged` stays `false`: the server is stateless (no SSE, nothing
+/// to push a notification down), so a changed group setting shows up in
+/// `tools/list` the next time the client lists, in practice on a harness
+/// restart. The refusal in [`call_tool`] applies immediately.
+fn initialize_result(params: &Value, groups: ToolGroups) -> Value {
     // Echo the client's version when we know it; otherwise state ours
     // and let the client decide whether it can live with that.
     let asked = params.get("protocolVersion").and_then(Value::as_str);
@@ -241,7 +217,7 @@ fn initialize_result(params: &Value) -> Value {
             "title": "Skein agent API",
             "version": crate::build_info::VERSION,
         },
-        "instructions": instructions(),
+        "instructions": instructions::instructions(groups),
     })
 }
 
@@ -312,6 +288,13 @@ pub async fn call_tool(
         };
         return Err(VerbError::Refused(message.to_owned()));
     }
+    // A group that is off is hidden from `tools/list` and refused here,
+    // so a client that cached the list (or guesses a name) learns why.
+    if let Some(g) = group_of(name)
+        && !state.tool_groups().allows(g)
+    {
+        return Err(group_refusal(g, name));
+    }
     match name {
         "list_comments" => to_value(verbs::list_comments(db, caller, &parse(args)?)?),
         "get_comment" => to_value(verbs::get_comment(db, caller, &parse(args)?)?),
@@ -334,7 +317,7 @@ pub async fn call_tool(
                 caller,
                 &parse(args)?,
                 mail,
-                state.spawn_settings().allow_agent_room_creation,
+                state.tool_groups().allows(ToolGroup::Rooms),
             )
             .await?,
         ),
@@ -343,7 +326,7 @@ pub async fn call_tool(
                 state,
                 caller,
                 &parse(args)?,
-                state.spawn_settings().allow_agent_room_closing,
+                state.tool_groups().allows(ToolGroup::Rooms),
             )
             .await?,
         ),
@@ -353,7 +336,7 @@ pub async fn call_tool(
                 caller,
                 &parse(args)?,
                 mail,
-                state.spawn_settings().allow_agent_harness_control,
+                state.tool_groups().allows(ToolGroup::Rooms),
             )
             .await?,
         ),
@@ -362,7 +345,7 @@ pub async fn call_tool(
                 state,
                 caller,
                 &parse(args)?,
-                state.spawn_settings().allow_agent_harness_control,
+                state.tool_groups().allows(ToolGroup::Rooms),
             )
             .await?,
         ),
@@ -375,7 +358,7 @@ pub async fn call_tool(
                 state,
                 caller,
                 &parse(args)?,
-                state.spawn_settings().allow_agent_harness_control,
+                state.tool_groups().allows(ToolGroup::Design),
             )
             .await?,
         ),
@@ -384,7 +367,7 @@ pub async fn call_tool(
                 state,
                 caller,
                 &parse(args)?,
-                state.spawn_settings().allow_agent_harness_control,
+                state.tool_groups().allows(ToolGroup::Design),
             )
             .await?,
         ),
@@ -393,7 +376,7 @@ pub async fn call_tool(
                 state,
                 caller,
                 &parse(args)?,
-                state.spawn_settings().allow_agent_harness_control,
+                state.tool_groups().allows(ToolGroup::Design),
             )
             .await?,
         ),
@@ -402,7 +385,7 @@ pub async fn call_tool(
                 state,
                 caller,
                 &parse(args)?,
-                state.spawn_settings().allow_agent_harness_control,
+                state.tool_groups().allows(ToolGroup::Design),
             )
             .await?,
         ),
@@ -411,7 +394,7 @@ pub async fn call_tool(
                 state,
                 caller,
                 &parse(args)?,
-                state.spawn_settings().allow_agent_harness_control,
+                state.tool_groups().allows(ToolGroup::Design),
             )
             .await?,
         ),
@@ -420,7 +403,7 @@ pub async fn call_tool(
                 state,
                 caller,
                 &parse(args)?,
-                state.spawn_settings().allow_agent_harness_control,
+                state.tool_groups().allows(ToolGroup::Design),
             )
             .await?,
         ),
@@ -429,7 +412,7 @@ pub async fn call_tool(
                 state,
                 caller,
                 &parse(args)?,
-                state.spawn_settings().allow_agent_harness_control,
+                state.tool_groups().allows(ToolGroup::Design),
             )
             .await?,
         ),
@@ -457,6 +440,21 @@ pub async fn call_tool(
         "list_harnesses" => to_value(verbs::list_harnesses(state, &parse(args)?).await?),
         other => Err(VerbError::NotFound(format!("no such tool: {other}"))),
     }
+}
+
+/// The refusal for a tool whose group is off in Settings (#534). Shared
+/// with the `/api` mirror so both surfaces say the same thing.
+pub(crate) fn group_refusal(group: ToolGroup, what: &str) -> VerbError {
+    tracing::info!(
+        group = group.key(),
+        tool = what,
+        "agent api: refused, group is off"
+    );
+    VerbError::Refused(format!(
+        "the {} tools ({what}) are turned off in Skein's Settings for every \
+         harness. Ask the user if you need them.",
+        group.label()
+    ))
 }
 
 /// Whether a tool call mutates the review — the HTTP layer uses it to

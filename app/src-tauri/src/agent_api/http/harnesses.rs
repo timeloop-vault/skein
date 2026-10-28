@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
+use super::super::groups::ToolGroup;
 use super::super::state::AgentApiState;
 use super::super::verbs::{self, CloseHarnessArgs, ListHarnessesArgs, OpenHarnessArgs};
 use super::{authenticate, error_body, json_of, mail_context, refuse};
@@ -26,7 +27,7 @@ pub(super) async fn api_open_harness(
         Err(e) => return refuse(&e),
     };
     let mail = mail_context(&state);
-    let harness_control_enabled = state.spawn_settings().allow_agent_harness_control;
+    let harness_control_enabled = state.tool_groups().allows(ToolGroup::Rooms);
     match verbs::open_harness(&state, &caller, &args, &mail, harness_control_enabled).await {
         Ok(v) => match json_of(v) {
             Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
@@ -53,7 +54,7 @@ pub(super) async fn api_close_harness(
         Ok(c) => c,
         Err(e) => return refuse(&e),
     };
-    let harness_control_enabled = state.spawn_settings().allow_agent_harness_control;
+    let harness_control_enabled = state.tool_groups().allows(ToolGroup::Rooms);
     let out = verbs::close_harness(
         &state,
         &caller,

@@ -1,4 +1,5 @@
 import type { EnvPreview, HarnessConfigStatus, SpawnSettings } from "../types.ts";
+import { ToolGroupToggles } from "./ToolGroupToggles.tsx";
 import "../Settings.css";
 import "../SpawnEnvPanel.css";
 
@@ -109,62 +110,10 @@ export const EnvToggles = ({
 						</span>
 					</span>
 				</label>
-				<label className="sk-toggle">
-					<input
-						type="checkbox"
-						checked={draft.allowAgentMessaging}
-						onChange={(e) => setDraft({ ...draft, allowAgentMessaging: e.target.checked })}
-					/>
-					<span className="sk-toggle-label">
-						<span className="sk-toggle-title">Let agents message other harnesses</span>
-						<span className="sk-toggle-sub">
-							When off, an agent's <code>send_message</code> and <code>read_messages</code> calls
-							are refused with the reason.
-						</span>
-					</span>
-				</label>
-				<label className="sk-toggle">
-					<input
-						type="checkbox"
-						checked={draft.allowAgentRoomCreation}
-						onChange={(e) => setDraft({ ...draft, allowAgentRoomCreation: e.target.checked })}
-					/>
-					<span className="sk-toggle-label">
-						<span className="sk-toggle-title">Let agents open rooms</span>
-						<span className="sk-toggle-sub">
-							When off, an agent's <code>create_room</code> calls are refused with the reason.
-						</span>
-					</span>
-				</label>
-				<label className="sk-toggle">
-					<input
-						type="checkbox"
-						checked={draft.allowAgentRoomClosing}
-						onChange={(e) => setDraft({ ...draft, allowAgentRoomClosing: e.target.checked })}
-					/>
-					<span className="sk-toggle-label">
-						<span className="sk-toggle-title">Let agents close rooms they created</span>
-						<span className="sk-toggle-sub">
-							When off, an agent's <code>close_room</code> calls are refused with the reason.
-						</span>
-					</span>
-				</label>
-				<label className="sk-toggle">
-					<input
-						type="checkbox"
-						checked={draft.allowAgentHarnessControl}
-						onChange={(e) => setDraft({ ...draft, allowAgentHarnessControl: e.target.checked })}
-					/>
-					<span className="sk-toggle-label">
-						<span className="sk-toggle-title">Let agents open or close harnesses</span>
-						<span className="sk-toggle-sub">
-							When off, an agent's <code>open_harness</code> and <code>close_harness</code> calls
-							are refused with the reason.
-						</span>
-					</span>
-				</label>
 			</div>
 		</div>
+
+		<ToolGroupToggles draft={draft} setDraft={setDraft} />
 
 		<div className="sk-field">
 			<div className="sk-toggles">

@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
+use super::super::groups::ToolGroup;
 use super::super::state::AgentApiState;
 use super::super::verbs::{
     self, CloseRoomArgs, CreateRoomArgs, FindRoomsForPathArgs, GetRoomArgs, ListRoomsArgs,
@@ -28,7 +29,7 @@ pub(super) async fn api_create_room(
         Err(e) => return refuse(&e),
     };
     let mail = mail_context(&state);
-    let room_creation_enabled = state.spawn_settings().allow_agent_room_creation;
+    let room_creation_enabled = state.tool_groups().allows(ToolGroup::Rooms);
     match verbs::create_room(&state, &caller, &args, &mail, room_creation_enabled).await {
         Ok(v) => match json_of(v) {
             Ok(json) => (StatusCode::OK, axum::Json(json)).into_response(),
@@ -56,7 +57,7 @@ pub(super) async fn api_close_room(
         Ok(c) => c,
         Err(e) => return refuse(&e),
     };
-    let closing_enabled = state.spawn_settings().allow_agent_room_closing;
+    let closing_enabled = state.tool_groups().allows(ToolGroup::Rooms);
     let out = verbs::close_room(
         &state,
         &caller,

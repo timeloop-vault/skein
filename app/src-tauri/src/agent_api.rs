@@ -46,6 +46,7 @@ pub mod auth;
 pub mod commands;
 mod element;
 mod element_source;
+pub mod groups;
 pub mod hermes_event;
 pub mod http;
 pub mod mcp;
@@ -107,5 +108,7 @@ mod room_listing_tests;
 mod tests;
 #[cfg(test)]
 mod token_tests;
+#[cfg(test)]
+mod tool_groups_tests;
 
 pub use state::AgentApiState;

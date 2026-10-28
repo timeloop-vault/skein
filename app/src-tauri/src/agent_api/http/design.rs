@@ -8,6 +8,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
+use super::super::groups::ToolGroup;
 use super::super::state::AgentApiState;
 use super::super::verbs::{
     self, DesignTargetArgs, InvokeElementArgs, OpenDesignEntryArgs, SetDesignDeviceArgs,
@@ -71,7 +72,7 @@ pub(super) async fn api_design_entry(
         Ok(c) => c,
         Err(e) => return refuse(&e),
     };
-    let enabled = state.spawn_settings().allow_agent_harness_control;
+    let enabled = state.tool_groups().allows(ToolGroup::Design);
     respond(verbs::open_design_entry(&state, &caller, &args, enabled).await)
 }
 
@@ -85,7 +86,7 @@ pub(super) async fn api_design_device(
         Ok(c) => c,
         Err(e) => return refuse(&e),
     };
-    let enabled = state.spawn_settings().allow_agent_harness_control;
+    let enabled = state.tool_groups().allows(ToolGroup::Design);
     respond(verbs::set_design_device(&state, &caller, &args, enabled).await)
 }
 
@@ -99,7 +100,7 @@ pub(super) async fn api_design_show(
         Ok(c) => c,
         Err(e) => return refuse(&e),
     };
-    let enabled = state.spawn_settings().allow_agent_harness_control;
+    let enabled = state.tool_groups().allows(ToolGroup::Design);
     respond(verbs::show_element(&state, &caller, &args, enabled).await)
 }
 
@@ -113,7 +114,7 @@ pub(super) async fn api_design_invoke(
         Ok(c) => c,
         Err(e) => return refuse(&e),
     };
-    let enabled = state.spawn_settings().allow_agent_harness_control;
+    let enabled = state.tool_groups().allows(ToolGroup::Design);
     respond(verbs::invoke_element(&state, &caller, &args, enabled).await)
 }
 
@@ -128,7 +129,7 @@ pub(super) async fn api_design_screenshot(
         Ok(c) => c,
         Err(e) => return refuse(&e),
     };
-    let enabled = state.spawn_settings().allow_agent_harness_control;
+    let enabled = state.tool_groups().allows(ToolGroup::Design);
     respond(verbs::get_design_screenshot(&state, &caller, &args, enabled).await)
 }
 
@@ -142,7 +143,7 @@ pub(super) async fn api_design_pane(
         Ok(c) => c,
         Err(e) => return refuse(&e),
     };
-    let enabled = state.spawn_settings().allow_agent_harness_control;
+    let enabled = state.tool_groups().allows(ToolGroup::Design);
     respond(verbs::show_design_pane(&state, &caller, &args, enabled).await)
 }
 
@@ -156,6 +157,6 @@ pub(super) async fn api_design_changes(
         Ok(c) => c,
         Err(e) => return refuse(&e),
     };
-    let enabled = state.spawn_settings().allow_agent_harness_control;
+    let enabled = state.tool_groups().allows(ToolGroup::Design);
     respond(verbs::show_changes(&state, &caller, &args, enabled).await)
 }

@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent_api::groups::ToolGroups;
+
 pub(crate) mod env_profile;
 pub use env_profile::EnvProfile;
 pub(crate) mod priority;
@@ -106,29 +108,10 @@ pub struct SpawnSettings {
     /// Keep Skein's MCP entry in Skein's own Hermes profile `skein`
     /// (#626). Off removes the entry on the next spawn on that profile.
     pub inject_hermes_config: bool,
-    /// Let a harness send another harness a message through the agent
-    /// API's mailbox (#327). Off refuses both `send_message` and
-    /// `read_messages`, with the reason. Default on, like the two
-    /// injection flags above.
-    pub allow_agent_messaging: bool,
-    /// Let a harness open a whole new room — a new worktree, a new
-    /// spawned process, optionally a queued first prompt — through the
-    /// agent API's `create_room` verb (#330). Off refuses it outright,
-    /// with the reason. Default on, like the mailbox flag above, but
-    /// called out separately because unlike a message this spawns a
-    /// real, unattended agent process.
-    pub allow_agent_room_creation: bool,
-    /// Let a harness archive a room it created, once that room is
-    /// signed off, through the agent API's `close_room` verb (#411).
-    /// Off refuses it outright, with the reason. Default on, like the
-    /// room-creation flag above — its narrow counterpart, since closing
-    /// is archiving (reversible), not destroying.
-    pub allow_agent_room_closing: bool,
-    /// Let a harness open or close a *harness* — never a room — in its
-    /// own room or a room it created, through the agent API's
-    /// `open_harness`/`close_harness` verbs (#411). Off refuses both,
-    /// with the reason. Default on, like the two room flags above.
-    pub allow_agent_harness_control: bool,
+    /// Which families of agent-API tools harnesses may use (#534).
+    /// Replaces the four `allowAgent*` kill switches; `load` migrates an
+    /// old file that still carries them (see `migrate_legacy_tool_groups`).
+    pub tool_groups: ToolGroups,
     /// Pass Claude Code `--settings` turning its wheel acceleration off
     /// (#569). Default off, unlike every flag above: `--settings`
     /// outranks the user's own Claude Code settings, so Skein only does
@@ -155,10 +138,7 @@ impl Default for SpawnSettings {
             inject_claude_plugin: true,
             inject_opencode_config: true,
             inject_hermes_config: true,
-            allow_agent_messaging: true,
-            allow_agent_room_creation: true,
-            allow_agent_room_closing: true,
-            allow_agent_harness_control: true,
+            tool_groups: ToolGroups::default(),
             disable_claude_wheel_acceleration: false,
             lower_harness_priority: true,
         }
@@ -256,7 +236,10 @@ pub(crate) fn load(dir: &Path) -> (SpawnSettings, Option<String>) {
         }
     };
     match serde_json::from_str::<SpawnSettings>(&raw) {
-        Ok(settings) => (settings, None),
+        Ok(mut settings) => {
+            migrate_legacy_tool_groups(&raw, &mut settings);
+            (settings, None)
+        }
         Err(e) => {
             let msg = format!(
                 "{} is not valid JSON ({e}). Using defaults — saving will overwrite it.",
@@ -266,6 +249,34 @@ pub(crate) fn load(dir: &Path) -> (SpawnSettings, Option<String>) {
             (SpawnSettings::default(), Some(msg))
         }
     }
+}
+
+/// Derive `tool_groups` from the four pre-#534 `allowAgent*` kill
+/// switches when the file has no `toolGroups` key. Conservative: a group
+/// stays on only if every switch that used to gate any of its tools was
+/// on. A file that has `toolGroups` ignores the legacy keys entirely.
+fn migrate_legacy_tool_groups(raw: &str, settings: &mut SpawnSettings) {
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return;
+    };
+    if map.contains_key("toolGroups") {
+        return;
+    }
+    let flag = |key: &str| {
+        map.get(key)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true)
+    };
+    let messaging = flag("allowAgentMessaging");
+    let creation = flag("allowAgentRoomCreation");
+    let closing = flag("allowAgentRoomClosing");
+    let harness_control = flag("allowAgentHarnessControl");
+    settings.tool_groups = ToolGroups {
+        mail: messaging,
+        rooms: creation && closing && harness_control,
+        design: harness_control,
+        ..ToolGroups::default()
+    };
 }
 
 /// Write the settings file via a temp file + rename, so an interrupted
@@ -287,6 +298,7 @@ pub(crate) fn file_path(dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_api::groups::ToolGroup;
 
     #[test]
     fn defaults_are_what_the_ui_promises() {
@@ -421,7 +433,7 @@ mod tests {
         .expect("write");
         let (loaded, degraded) = load(dir.path());
         assert!(degraded.is_none());
-        assert!(loaded.allow_agent_messaging);
+        assert_eq!(loaded.tool_groups, ToolGroups::default());
         // And the fields that *were* present still round-trip, so this
         // is genuinely the old-file case and not just an empty object.
         assert!(loaded.inject_claude_plugin);
@@ -444,40 +456,71 @@ mod tests {
         assert!(!loaded.disable_claude_wheel_acceleration);
     }
 
-    #[test]
-    fn an_old_settings_file_without_the_room_creation_key_defaults_to_allowed() {
-        // #330 added the field after settings.json was already shipping
-        // in the wild — same story as #327's messaging flag just above.
+    fn load_str(json: &str) -> SpawnSettings {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            file_path(dir.path()),
-            r#"{"schema":1,"allowAgentMessaging":false}"#,
-        )
-        .expect("write");
+        std::fs::write(file_path(dir.path()), json).expect("write");
         let (loaded, degraded) = load(dir.path());
         assert!(degraded.is_none());
-        assert!(loaded.allow_agent_room_creation);
-        // And the field that *was* present still round-trips.
-        assert!(!loaded.allow_agent_messaging);
+        loaded
     }
 
     #[test]
-    fn an_old_settings_file_without_the_411_keys_defaults_both_to_allowed() {
-        // #411 added these fields after settings.json was already
-        // shipping in the wild — same story as #327's and #330's flags
-        // just above.
+    fn fresh_default_has_every_tool_group_on() {
+        let d = SpawnSettings::default();
+        assert!(ToolGroup::ALL.iter().all(|g| d.tool_groups.allows(*g)));
+        let parsed: SpawnSettings = serde_json::from_str("{}").expect("parses");
+        assert_eq!(parsed.tool_groups, ToolGroups::default());
+    }
+
+    #[test]
+    fn legacy_messaging_off_turns_only_mail_off() {
+        let g = load_str(r#"{"schema":1,"allowAgentMessaging":false}"#).tool_groups;
+        assert!(!g.mail);
+        assert!(g.review && g.rooms && g.directory && g.design);
+    }
+
+    #[test]
+    fn legacy_harness_control_off_turns_rooms_and_design_off() {
+        let g = load_str(r#"{"allowAgentHarnessControl":false}"#).tool_groups;
+        assert!(!g.rooms && !g.design);
+        assert!(g.review && g.mail && g.directory);
+    }
+
+    #[test]
+    fn legacy_room_creation_or_closing_off_turns_rooms_off_only() {
+        for key in ["allowAgentRoomCreation", "allowAgentRoomClosing"] {
+            let g = load_str(&format!(r#"{{"{key}":false}}"#)).tool_groups;
+            assert!(!g.rooms, "{key}");
+            assert!(g.design && g.mail && g.review && g.directory, "{key}");
+        }
+    }
+
+    #[test]
+    fn tool_groups_present_ignores_legacy_keys() {
+        let s = load_str(
+            r#"{"allowAgentMessaging":false,"allowAgentHarnessControl":false,"toolGroups":{"review":false}}"#,
+        );
+        assert!(!s.tool_groups.review);
+        assert!(s.tool_groups.mail && s.tool_groups.rooms && s.tool_groups.design);
+    }
+
+    #[test]
+    fn tool_groups_round_trip_and_legacy_keys_are_dropped() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            file_path(dir.path()),
-            r#"{"schema":1,"allowAgentRoomCreation":false}"#,
-        )
-        .expect("write");
+        let settings = SpawnSettings {
+            tool_groups: ToolGroups {
+                mail: false,
+                ..ToolGroups::default()
+            },
+            ..SpawnSettings::default()
+        };
+        save(dir.path(), &settings).expect("save");
+        let written = std::fs::read_to_string(file_path(dir.path())).expect("read");
+        assert!(written.contains("toolGroups"));
+        assert!(!written.contains("allowAgent"));
         let (loaded, degraded) = load(dir.path());
         assert!(degraded.is_none());
-        assert!(loaded.allow_agent_room_closing);
-        assert!(loaded.allow_agent_harness_control);
-        // And the field that *was* present still round-trips.
-        assert!(!loaded.allow_agent_room_creation);
+        assert_eq!(loaded.tool_groups, settings.tool_groups);
     }
 
     #[test]

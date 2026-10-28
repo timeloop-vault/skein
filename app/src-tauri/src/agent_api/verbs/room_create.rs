@@ -158,8 +158,8 @@ struct CreatedRoomOut {
 ///
 /// This is the one verb an agent can use to start *another* agent
 /// working unattended, so it is guarded more heavily than anything else
-/// in this file: a dedicated Settings kill switch
-/// (`allow_agent_room_creation`), a per-room rate cap, and a per-
+/// in this file: the Rooms tool group's Settings switch
+/// (`tool_groups.rooms`), a per-room rate cap, and a per-
 /// repository-group ceiling on how many agent-opened rooms Skein will
 /// hold at once (see [`MAX_OPEN_ROOMS_PER_GROUP`]) — on top of the
 /// frontend round trips themselves, which can refuse for reasons only
@@ -173,7 +173,7 @@ struct CreatedRoomOut {
 /// could never be delivered (an unreachable kind, injection turned off)
 /// is caught *before* anything is created, never partially.
 ///
-/// `room_creation_enabled` is `allow_agent_room_creation` off the live
+/// `room_creation_enabled` is the Rooms tool group off the live
 /// `SpawnSettings`, read by the caller (`mcp.rs`/`http.rs`) the same way
 /// `mail.policy` is — passed in rather than read from `state` here, so
 /// this verb stays testable with a plain bool and no managed
@@ -227,7 +227,7 @@ pub async fn create_room(
         }
         if !mail.policy.messaging_enabled {
             return Err(VerbError::Refused(
-                "a prompt was given, but agent messaging is turned off in Settings, \
+                "a prompt was given, but the Mail tools are turned off in Skein's Settings, \
                  so it could never be delivered"
                     .into(),
             ));
@@ -273,7 +273,7 @@ pub async fn create_room(
 
     if !room_creation_enabled {
         return Err(VerbError::Refused(
-            "agent room creation is turned off in Settings".into(),
+            "the Rooms tools are turned off in Skein's Settings".into(),
         ));
     }
     if !state.check_room_creation_rate(

@@ -240,7 +240,7 @@ pub(super) fn guard_write(
     if !harness_control_enabled {
         log_outcome(verb, &caller.room_id, "", "disabled");
         return Err(VerbError::Refused(
-            "disabled: agent harness control is turned off in Settings".into(),
+            "disabled: the Design tools are turned off in Skein's Settings".into(),
         ));
     }
     if !state.check_verb_rate(

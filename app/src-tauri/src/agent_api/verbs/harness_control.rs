@@ -137,7 +137,7 @@ pub async fn open_harness(
         }
         if !mail.policy.messaging_enabled {
             return Err(VerbError::Refused(
-                "a prompt was given, but agent messaging is turned off in Settings, \
+                "a prompt was given, but the Mail tools are turned off in Skein's Settings, \
                  so it could never be delivered"
                     .into(),
             ));
@@ -147,7 +147,7 @@ pub async fn open_harness(
     if !harness_control_enabled {
         log_open_harness_outcome(&caller.room_id, room_id, "disabled");
         return Err(VerbError::Refused(
-            "disabled: agent harness control is turned off in Settings".into(),
+            "disabled: the Rooms tools are turned off in Skein's Settings".into(),
         ));
     }
     if !state.check_verb_rate(
@@ -413,7 +413,7 @@ pub async fn close_harness(
     if !harness_control_enabled {
         log_close_harness_outcome(&caller.room_id, harness_id, "disabled");
         return Err(VerbError::Refused(
-            "disabled: agent harness control is turned off in Settings".into(),
+            "disabled: the Rooms tools are turned off in Skein's Settings".into(),
         ));
     }
     if !state.check_verb_rate(

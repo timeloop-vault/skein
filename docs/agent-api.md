@@ -103,6 +103,57 @@ PTY dies with the app, so nothing legitimate is still holding one after
 a restart — and a token that ended up in an old transcript stops working
 at the next boot.
 
+## Tool groups (#534)
+
+Skein's MCP tools come in five groups. Each has one global on/off
+switch in Settings → Shell & environment, stored in `settings.json` as
+`toolGroups: {review, mail, rooms, directory, design}`. Every group
+defaults on.
+
+| group | tools |
+| :-- | :-- |
+| `review` | `list_comments`, `get_comment`, `get_diff`, `reply`, `mark_addressed`, `review_status` |
+| `mail` | `send_message`, `read_messages`, `message_history` |
+| `rooms` | `create_room`, `close_room`, `open_harness`, `close_harness` |
+| `directory` | `find_rooms_for_path`, `list_rooms`, `get_room`, `list_harnesses` |
+| `design` | `list_design_harnesses`, `get_design_state`, `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes`, `get_design_screenshot`, `show_design_pane` |
+
+`skein_info` is in no group and is always available.
+
+**A group that is off is hidden and refused.** Its tools are left out of
+`tools/list` and out of the `initialize` `instructions` text, for every
+harness; a listed tool's description invites the call, which is why
+this supersedes the list-and-refuse of #176. A call by name, bare or
+client-namespaced, is still refused, with a message saying the group is
+turned off in Skein's Settings, in the form `the {Label} tools ({tool}) are
+turned off in Skein's Settings for every harness. Ask the user if you need
+them.` The `/api` JSON mirror refuses the same
+routes. The hook routes (permission, session-start/end, hermes-turn)
+are not tools and are never gated. The `resolve`/sign-off/destroy
+refusals under "What it will not do" are unchanged and take precedence.
+
+**Live change.** The server is stateless (no SSE) and `initialize`
+advertises `listChanged: false`, so there is no `tools/list_changed`
+push. A switch takes effect for refusal on the next call; the list
+refreshes when the client next lists tools, in practice when the
+harness restarts.
+
+**Migration.** The groups replace the four former switches
+`allowAgentMessaging`, `allowAgentRoomCreation`, `allowAgentRoomClosing`
+and `allowAgentHarnessControl`. A `settings.json` without `toolGroups`
+derives it from them: `mail` = messaging; `rooms` = creation && closing
+&& harness control; `design` = harness control; `review` and
+`directory` on. Once `toolGroups` is saved the legacy keys are ignored
+and no longer written.
+
+**Grants are global, never per agent or per harness**, and the token
+stays room-scoped. To restrict Skein's tools for one agent, use that
+agent's own definition: a Claude Code agent's `tools` allowlist with the
+`mcp__plugin_skein_api__<verb>` names, or opencode's `skein_<verb>`.
+Skein never edits agent definitions.
+
+Adding a group later is one enum variant plus one settings field.
+
 ## The verbs
 
 All twenty-two verbs carry the token, but not all twenty-two are scoped
@@ -307,7 +358,7 @@ readable confirmation.
 
 Refused, with the exact reason as text:
 
-- `"agent messaging is turned off in Settings"` — the kill switch, below
+- `"the Mail tools (send_message) are turned off in Skein's Settings for every harness. Ask the user if you need them."` — the dispatcher's wording (the tool name varies); see "Tool groups"
 - `"a message needs a body"` — an empty body
 - `"a message body is capped at 65536 bytes; this one is N bytes"`
 - `"send_message needs a to"` — an empty or whitespace `to`
@@ -417,7 +468,7 @@ A harness can receive a message only if all of this holds:
 The same check picks a room's lead harness: the first harness in room
 order that passes it, not necessarily the first harness in the room.
 
-### Caps and the kill switch
+### Caps
 
 | cap | value |
 | :-- | :-- |
@@ -426,11 +477,8 @@ order that passes it, not necessarily the first harness in the room.
 | unread per receiver | 100 |
 
 Each cap errors loudly, as text above, rather than queueing or
-truncating. Settings → Shell & environment has a toggle beside the #215
-injection switches, **"Let agents message other harnesses"**
-(`allowAgentMessaging` in `settings.json`, default on): off refuses both
-verbs by name, with the reason, exactly like the injection toggles
-refuse the review tools when off.
+truncating. The mailbox verbs belong to the `mail` tool group (see
+"Tool groups"): with it off they are hidden and refused.
 
 ### Two things worth writing down
 
@@ -455,7 +503,7 @@ refuse the review tools when off.
 A third shape, past review and mail: `create_room` is the one verb that
 lets an agent start *another* agent working, unattended, in a room of
 its own. It is guarded more heavily than anything else in this API —
-see "Caps and the kill switch" just below.
+see "Caps" just below.
 
 ### `create_room`
 
@@ -520,23 +568,23 @@ exhaustive, list):
 
 - `"task can't be empty"`
 - `"unknown branchMode …"` / `"unknown kind …"`
-- `"agent room creation is turned off in Settings"` — the kill switch, below
+- `"the Rooms tools (create_room) are turned off in Skein's Settings for every harness. Ask the user if you need them."` — the dispatcher's wording; see "Tool groups". A call that gets past it with the group off (defence in depth) is refused `"the Rooms tools are turned off in Skein's Settings"`
 - `"rate limit: this room has attempted 5 room creations in the last minute (cap 5)"`
 - `"agents have already opened N open rooms in the repository group <repoRoot> (cap 20 per group); close or archive some before opening another"`
 - `"agents have already opened N open rooms outside any repository group (cap 20 for ungrouped rooms); close or archive some before opening another"`
 - `"{path} is not a git checkout, so branchMode \"worktree\" cannot be used (try \"current\")"`
-- `"a prompt was given, but agent messaging is turned off in Settings, so it could never be delivered"`
+- `"a prompt was given, but the Mail tools are turned off in Skein's Settings, so it could never be delivered"`
 - `"cannot queue the prompt: the new harness …"` — the #327 "who can read mail" check, run against the resolved kind/agent
 - whatever the frontend round trip itself refuses for — an unresolvable folder, a colliding branch name, an unknown agent name — surfaces verbatim
 
-### Caps and the kill switch
+### Caps
 
 | cap | value |
 | :-- | :-- |
 | room creations | 5 per calling room per rolling minute |
 | open (non-archived), agent-opened rooms per repository group | 20 |
 | open (non-archived), agent-opened rooms with no repository (ungrouped bucket) | 20 |
-| prompt | refused outright when agent messaging is off in Settings |
+| prompt | refused outright when the `mail` tool group is off in Settings |
 
 The open-room ceiling (#375) only counts rooms `create_room` itself
 opened — a room the user made by hand, or one from before #330 with no
@@ -548,11 +596,8 @@ would join, resolved from `path` before anything is created, so a
 runaway agent can fan out inside one repository's group but can't
 starve every other project of room slots at the same time.
 
-Settings → Shell & environment has **"Let agents open rooms"**
-(`allowAgentRoomCreation` in `settings.json`, default on), right
-beside the messaging toggle: off refuses `create_room` by name, with
-the reason, the same way the messaging and #215 injection toggles
-refuse their own verbs.
+`create_room` belongs to the `rooms` tool group (see "Tool groups"):
+with the group off it is hidden and refused.
 
 ## Closing a room, and controlling harnesses (#411)
 
@@ -572,7 +617,7 @@ the identical string unchanged:
 
 | code | verb(s) | meaning |
 | :-- | :-- | :-- |
-| `disabled` | all three | the relevant Settings switch is off |
+| `disabled` | all three | the Rooms tools are off: `disabled: the Rooms tools are turned off in Skein's Settings` |
 | `rate_limited` | all three | the per-calling-room rate cap was hit |
 | `not_creator` | `close_room` | the caller is not the target's `createdBy.roomId` — including a target with no `createdBy` at all |
 | `self` | `close_room`, `close_harness` | `close_room` on the caller's own room; `close_harness` on the harness making the call |
@@ -618,8 +663,7 @@ A branch's work already sitting on the base branch (squash-merge
 included) was considered as a second "landed" path alongside sign-off,
 but did not ship with #411 — sign-off is the only condition today.
 
-Settings → Shell & environment: **"Let agents close rooms they
-created"** (`allowAgentRoomClosing`, default on). Rate cap: 5 calls per
+`close_room` belongs to the `rooms` tool group (see "Tool groups"). Rate cap: 5 calls per
 calling room per rolling minute, its own bucket, separate from
 `create_room`'s.
 
@@ -686,9 +730,7 @@ own log (#176) naming caller, target and outcome — the same one every
 guard above also logs on refusal. HTTP route:
 `POST /api/harnesses/{harness_id}/close`, no body.
 
-Settings → Shell & environment: **"Let agents open or close
-harnesses"** (`allowAgentHarnessControl`, default on) gates both
-`open_harness` and `close_harness`. They also share one rate-limit
+Both belong to the `rooms` tool group (see "Tool groups"). They share one rate-limit
 bucket — 10 combined calls per calling room per rolling minute — since
 either one changes what harnesses a room has, which is the same amount
 of trust.
@@ -899,7 +941,7 @@ Refusals (a code, then a reason):
 | `too_large` | `get_design_screenshot` | the PNG is over 4 MiB; pass a smaller `maxEdge` |
 | `capture_failed` | `get_design_screenshot` | the capture timed out (5 s), or the window is missing (409) |
 | `busy` | `invoke_element` | reported by the webview: the user is picking an element in this design pane; try again once they finish |
-| `disabled` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes`, `get_design_screenshot`, `show_design_pane` | Settings → "Let agents open or close harnesses" (`allowAgentHarnessControl`) is off |
+| `disabled` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes`, `get_design_screenshot`, `show_design_pane` | the Design tools are off: `disabled: the Design tools are turned off in Skein's Settings` (the dispatcher refuses first, with its own wording; see "Tool groups") |
 | `rate_limited` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes`, `get_design_screenshot`, `show_design_pane` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |
 
 A webview that is absent, times out or drops the request is a 409

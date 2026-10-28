@@ -48,6 +48,7 @@ use axum::routing::{get, post};
 use serde_json::{Value, json};
 
 use super::auth::{self, AuthError, Caller, HARNESS_HEADER};
+use super::groups::ToolGroup;
 use super::mcp;
 use super::state::AgentApiState;
 use super::verbs::{MailContext, MailPolicy, VerbError};
@@ -80,38 +81,66 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
     Router::new()
         .route("/mcp", post(mcp_post).get(no_stream).delete(no_stream))
         .route("/api/health", get(health))
-        .route("/api/comments", get(api_list))
-        .route("/api/comments/{thread_id}", get(api_get))
-        .route("/api/comments/{thread_id}/reply", post(api_reply))
-        .route("/api/comments/{thread_id}/addressed", post(api_addressed))
-        .route("/api/comments/{thread_id}/resolve", post(api_resolve))
-        .route("/api/diff", get(api_diff))
-        // POST is present and always refuses — see `api_signoff`.
-        .route("/api/status", get(api_status).post(api_signoff))
         .route("/api/info", get(api_info))
-        .route(
-            "/api/messages",
-            post(api_send_message).get(api_read_messages),
-        )
-        .route("/api/messages/history", get(api_message_history))
-        .route("/api/rooms", get(api_list_rooms).post(api_create_room))
-        .route("/api/rooms/find", get(api_find_rooms_for_path))
-        .route("/api/rooms/{room_id}", get(api_get_room))
-        .route("/api/rooms/{room_id}/close", post(api_close_room))
-        .route(
-            "/api/harnesses",
-            get(api_list_harnesses).post(api_open_harness),
-        )
-        .route("/api/harnesses/{harness_id}/close", post(api_close_harness))
-        .route("/api/design/harnesses", get(api_design_harnesses))
-        .route("/api/design/state", get(api_design_state))
-        .route("/api/design/entry", post(api_design_entry))
-        .route("/api/design/device", post(api_design_device))
-        .route("/api/design/show", post(api_design_show))
-        .route("/api/design/invoke", post(api_design_invoke))
-        .route("/api/design/changes", post(api_design_changes))
-        .route("/api/design/screenshot", post(api_design_screenshot))
-        .route("/api/design/pane", post(api_design_pane))
+        // Tool routes, one sub-router per group (#534): a group that is
+        // off refuses its routes exactly as MCP refuses its tools. A path
+        // shared by two groups (`/api/rooms`, `/api/harnesses`) is split by
+        // method; axum merges the method routers.
+        .merge(gated(
+            &state,
+            ToolGroup::Review,
+            Router::new()
+                .route("/api/comments", get(api_list))
+                .route("/api/comments/{thread_id}", get(api_get))
+                .route("/api/comments/{thread_id}/reply", post(api_reply))
+                .route("/api/comments/{thread_id}/addressed", post(api_addressed))
+                .route("/api/comments/{thread_id}/resolve", post(api_resolve))
+                .route("/api/diff", get(api_diff))
+                // POST is present and always refuses — see `api_signoff`.
+                .route("/api/status", get(api_status).post(api_signoff)),
+        ))
+        .merge(gated(
+            &state,
+            ToolGroup::Mail,
+            Router::new()
+                .route(
+                    "/api/messages",
+                    post(api_send_message).get(api_read_messages),
+                )
+                .route("/api/messages/history", get(api_message_history)),
+        ))
+        .merge(gated(
+            &state,
+            ToolGroup::Rooms,
+            Router::new()
+                .route("/api/rooms", post(api_create_room))
+                .route("/api/rooms/{room_id}/close", post(api_close_room))
+                .route("/api/harnesses", post(api_open_harness))
+                .route("/api/harnesses/{harness_id}/close", post(api_close_harness)),
+        ))
+        .merge(gated(
+            &state,
+            ToolGroup::Directory,
+            Router::new()
+                .route("/api/rooms", get(api_list_rooms))
+                .route("/api/rooms/find", get(api_find_rooms_for_path))
+                .route("/api/rooms/{room_id}", get(api_get_room))
+                .route("/api/harnesses", get(api_list_harnesses)),
+        ))
+        .merge(gated(
+            &state,
+            ToolGroup::Design,
+            Router::new()
+                .route("/api/design/harnesses", get(api_design_harnesses))
+                .route("/api/design/state", get(api_design_state))
+                .route("/api/design/entry", post(api_design_entry))
+                .route("/api/design/device", post(api_design_device))
+                .route("/api/design/show", post(api_design_show))
+                .route("/api/design/invoke", post(api_design_invoke))
+                .route("/api/design/changes", post(api_design_changes))
+                .route("/api/design/screenshot", post(api_design_screenshot))
+                .route("/api/design/pane", post(api_design_pane)),
+        ))
         .route("/api/harness/session-end", post(api_harness_session_end))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
         // Hermes' hook script posts whole-conversation bodies here (#625),
@@ -137,6 +166,34 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
                 )),
         )
         .with_state(state)
+}
+
+/// Wrap one group's routes so they refuse while the group is off. Runs
+/// after authentication (an unauthenticated caller still gets its 401, and
+/// learns nothing about settings) and before the handler.
+fn gated(
+    state: &Arc<AgentApiState>,
+    group: ToolGroup,
+    routes: Router<Arc<AgentApiState>>,
+) -> Router<Arc<AgentApiState>> {
+    routes.route_layer(axum::middleware::from_fn_with_state(
+        Arc::clone(state),
+        move |State(state): State<Arc<AgentApiState>>,
+              request: axum::extract::Request,
+              next: axum::middleware::Next| async move {
+            if let Err(e) = authenticate(&state, request.headers()) {
+                return refuse(&e);
+            }
+            if !state.tool_groups().allows(group) {
+                let e = mcp::group_refusal(group, request.uri().path());
+                return error_body(
+                    StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                    e.message(),
+                );
+            }
+            next.run(request).await
+        },
+    ))
 }
 
 /// Rejects a hook request that fails authentication before its body is
@@ -221,7 +278,7 @@ fn mail_context(state: &AgentApiState) -> MailContext {
     let settings = state.spawn_settings();
     MailContext {
         policy: MailPolicy {
-            messaging_enabled: settings.allow_agent_messaging,
+            messaging_enabled: state.tool_groups().allows(ToolGroup::Mail),
             claude_injected: settings.inject_claude_plugin,
             opencode_injected: settings.inject_opencode_config,
             hermes_injected: settings.inject_hermes_config,

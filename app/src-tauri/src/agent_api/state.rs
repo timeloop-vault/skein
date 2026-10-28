@@ -151,6 +151,10 @@ pub struct AgentApiState {
     /// and that is `#[cfg(test)]` too.
     #[cfg(test)]
     test_frontend: parking_lot::Mutex<Option<TestFrontend>>,
+    /// Test seam: stands in for the live `SpawnSettings.tool_groups`,
+    /// which a `for_test` state (no app, no managed settings) cannot read.
+    #[cfg(test)]
+    pub(crate) test_tool_groups: parking_lot::Mutex<Option<super::groups::ToolGroups>>,
     /// Test-only capture of every Hermes hook event (#625), since a
     /// unit test has no `AppHandle` to emit to.
     #[cfg(test)]
@@ -244,6 +248,8 @@ impl AgentApiState {
             #[cfg(test)]
             test_frontend: parking_lot::Mutex::new(None),
             #[cfg(test)]
+            test_tool_groups: parking_lot::Mutex::new(None),
+            #[cfg(test)]
             test_hermes_events: parking_lot::Mutex::new(Vec::new()),
         }
     }
@@ -260,6 +266,7 @@ impl AgentApiState {
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
             verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),
             test_frontend: parking_lot::Mutex::new(None),
+            test_tool_groups: parking_lot::Mutex::new(None),
             test_hermes_events: parking_lot::Mutex::new(Vec::new()),
         }
     }
@@ -352,6 +359,16 @@ impl AgentApiState {
             .and_then(tauri::Manager::try_state::<crate::SpawnEnvState>)
             .map(|s| s.snapshot())
             .unwrap_or_default()
+    }
+
+    /// Which tool groups are on right now, read live (#534). A test can
+    /// pin it through `test_tool_groups`.
+    pub fn tool_groups(&self) -> super::groups::ToolGroups {
+        #[cfg(test)]
+        if let Some(g) = *self.test_tool_groups.lock() {
+            return g;
+        }
+        self.spawn_settings().tool_groups
     }
 
     /// Tell the frontend that this harness has (re)started a session

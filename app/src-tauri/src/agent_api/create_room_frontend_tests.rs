@@ -32,7 +32,7 @@ async fn create_room_with_a_prompt_refuses_up_front_when_messaging_is_off() {
         .await
         .unwrap_err();
     assert!(
-        matches!(&err, VerbError::Refused(m) if m.contains("messaging")),
+        matches!(&err, VerbError::Refused(m) if m.contains("Mail tools are turned off")),
         "{err:?}"
     );
 }

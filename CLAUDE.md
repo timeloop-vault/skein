@@ -749,8 +749,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   read). `to` is a harness id or a room id; a room id resolves *at send
   time* to that room's lead harness — the first harness in room order
   that can read mail — so the stored row names someone concrete.
-  Messaging has its own kill switch in Settings
-  (`allowAgentMessaging` in `settings.json`, default on) plus per-token
+  Messaging is the `mail` tool group, switched in Settings
+  (`toolGroups` in `settings.json`, default on) plus per-token
   rate and per-receiver unread caps. Delivering mail into a waiting
   harness — the nudge through the #238 seam — is #329; this issue only
   stores and serves the queue. **`create_room`** (#330) is the one verb
@@ -764,7 +764,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   so a `prompt` that could never be delivered refuses before anything
   exists. The new `Room` carries `createdBy`, naming the calling room
   and harness. It is guarded harder than any other verb —
-  a Settings kill switch (`allowAgentRoomCreation`, default on), a
+  the `rooms` tool group switch in Settings (default on), a
   per-room rate cap, an open-room ceiling. Since #411 it is no longer
   alone: `close_room` can archive a room back closed, but only the room
   named in the target's `createdBy` may call it, never itself, and only
@@ -772,8 +772,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   archiving stays reversible (worktree, branch and record all survive;
   Reopen restores it), which is why this exception exists where
   deletion still doesn't. `open_harness`/`close_harness` extend the
-  same *whose decision* line to individual harnesses, behind their own
-  kill switch (`allowAgentHarnessControl`) and rate cap. `archive_room`
+  same *whose decision* line to individual harnesses, in the same
+  `rooms` group and behind their own rate cap. `archive_room`
   is still refused **by name**, now pointing at `close_room` instead of
   at "no"; `remove_worktree` and `delete_room` stay refused by name
   outright, because destroying — unlike archiving — stays the user's

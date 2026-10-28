@@ -270,7 +270,7 @@ pub fn send_message(
 ) -> VerbResult<SendMessageOut> {
     if !policy.messaging_enabled {
         return Err(VerbError::Refused(
-            "agent messaging is turned off in Settings".into(),
+            "the Mail tools are turned off in Skein's Settings".into(),
         ));
     }
     if args.body.is_empty() {
@@ -348,7 +348,7 @@ pub fn read_messages(
 ) -> VerbResult<ReadMessagesOut> {
     if !policy.messaging_enabled {
         return Err(VerbError::Refused(
-            "agent messaging is turned off in Settings".into(),
+            "the Mail tools are turned off in Skein's Settings".into(),
         ));
     }
     let Some(harness_id) = caller.harness_id.as_deref() else {
@@ -495,7 +495,7 @@ pub fn message_history(
 ) -> VerbResult<MessageHistoryOut> {
     if !policy.messaging_enabled {
         return Err(VerbError::Refused(
-            "agent messaging is turned off in Settings".into(),
+            "the Mail tools are turned off in Skein's Settings".into(),
         ));
     }
     let direction = args.direction.unwrap_or_default();

@@ -109,7 +109,7 @@ pub async fn close_room(
     if !room_closing_enabled {
         log_close_room_outcome(&caller.room_id, room_id, "disabled");
         return Err(VerbError::Refused(
-            "disabled: agent room closing is turned off in Settings".into(),
+            "disabled: the Rooms tools are turned off in Skein's Settings".into(),
         ));
     }
     if !state.check_verb_rate(
