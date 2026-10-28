@@ -7,7 +7,6 @@
 // `aggregateRoomStatus` uses for `lookup` — see harnessActivityLabels.ts.
 
 import type { BackgroundTaskEntry } from "./backgroundTasks.ts";
-import { CONTEXT_SIZE_KINDS, maxContext } from "./contextSize.ts";
 import {
 	aggregateRoomStatus,
 	effectiveStatus,
@@ -108,9 +107,6 @@ export interface Breakdown {
 	moreRows: number;
 	quietCount: number;
 	quiet: BreakdownQuietRoom[];
-	/// #368: the largest context across ALL context-reporting harnesses of
-	/// the covered rooms (surfaced or quiet); absent when none has a value.
-	maxContext?: { roomName: string; harnessName: string; tokens: number };
 }
 
 export const BREAKDOWN_MAX_ROWS = 6;
@@ -221,34 +217,11 @@ export function buildBreakdown(
 	rows.sort((a, b) => compareRowStatus(a.status, b.status));
 	const capped = rows.length > maxRows ? rows.slice(0, maxRows) : rows;
 
-	let maxCtx: Breakdown["maxContext"];
-	const get = deps.contextSize;
-	if (get) {
-		const roomOf = new Map<string, string>();
-		const candidates = rooms.flatMap((r) =>
-			r.harnesses
-				.filter((h) => CONTEXT_SIZE_KINDS.has(h.kind))
-				.map((h) => {
-					roomOf.set(h.id, r.name);
-					return { id: h.id, name: h.name };
-				}),
-		);
-		const best = maxContext(candidates, get);
-		if (best) {
-			maxCtx = {
-				roomName: roomOf.get(best.harnessId) ?? "",
-				harnessName: best.harnessName,
-				tokens: best.tokens,
-			};
-		}
-	}
-
 	return {
 		status,
 		rows: capped,
 		moreRows: rows.length - capped.length,
 		quietCount,
 		quiet,
-		...(maxCtx && { maxContext: maxCtx }),
 	};
 }

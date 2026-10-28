@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyResponse, contextLabel, formatContextTokens, maxContext } from "./contextSize.ts";
+import { applyResponse, contextLabel, formatContextTokens } from "./contextSize.ts";
 
 describe("formatContextTokens", () => {
 	it.each([
@@ -24,31 +24,6 @@ describe("contextLabel", () => {
 	it("formats", () => {
 		expect(contextLabel(142_318)).toBe("context 142k");
 		expect(contextLabel(999)).toBe("context 999");
-	});
-});
-
-describe("maxContext", () => {
-	const hs = [
-		{ id: "a", name: "A" },
-		{ id: "b", name: "B" },
-		{ id: "c", name: "C" },
-	];
-	const from = (m: Record<string, number>) => (id: string) => m[id];
-	it("is undefined with no values", () => {
-		expect(maxContext(hs, from({}))).toBeUndefined();
-		expect(maxContext([], from({ a: 1 }))).toBeUndefined();
-	});
-	it("returns a single value", () => {
-		expect(maxContext(hs, from({ b: 7 }))).toEqual({ harnessId: "b", harnessName: "B", tokens: 7 });
-	});
-	it("returns the largest", () => {
-		expect(maxContext(hs, from({ a: 1, b: 9, c: 5 }))?.harnessId).toBe("b");
-	});
-	it("ties go to the first in order", () => {
-		expect(maxContext(hs, from({ a: 4, c: 4 }))?.harnessId).toBe("a");
-	});
-	it("skips undefined values", () => {
-		expect(maxContext(hs, from({ a: 3, c: 2 }))?.harnessId).toBe("a");
 	});
 });
 

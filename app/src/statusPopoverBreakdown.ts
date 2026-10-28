@@ -91,15 +91,6 @@ export const renderBreakdown = (
 	header.append(nameSpan, sep, statusSpan);
 	el.appendChild(header);
 
-	if (b.maxContext) {
-		const m = b.maxContext;
-		const line = document.createElement("div");
-		line.className = "bd-ctx-line";
-		const who = single ? m.harnessName : `${m.roomName} › ${m.harnessName}`;
-		line.textContent = `max context ${formatContextTokens(m.tokens)} · ${who}`;
-		el.appendChild(line);
-	}
-
 	if (b.rows.length > 0) {
 		el.appendChild(rule());
 		for (const row of b.rows) {

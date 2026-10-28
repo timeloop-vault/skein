@@ -31,29 +31,6 @@ export function contextLabel(tokens: number): string {
 	return `context ${formatContextTokens(tokens)}`;
 }
 
-export interface MaxContext {
-	harnessId: string;
-	harnessName: string;
-	tokens: number;
-}
-
-/** The harness with the largest context size; ties go to the first in
- *  order. Undefined when none has a value. */
-export function maxContext(
-	harnesses: readonly { id: string; name: string }[],
-	get: (id: string) => number | undefined,
-): MaxContext | undefined {
-	let best: MaxContext | undefined;
-	for (const h of harnesses) {
-		const tokens = get(h.id);
-		if (tokens === undefined) continue;
-		if (best === undefined || tokens > best.tokens) {
-			best = { harnessId: h.id, harnessName: h.name, tokens };
-		}
-	}
-	return best;
-}
-
 export interface ContextSizeRow {
 	harnessId: string;
 	tokens: number;
