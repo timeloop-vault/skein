@@ -18,7 +18,7 @@ import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import { harnessInput } from "./harnessInput.ts";
-import { opencodeCliVersion } from "./opencodeCli.ts";
+import { recordOpencodeVersion } from "./opencodeCli.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
@@ -235,7 +235,6 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// manager entry. respawn pty_kills it before spawning a
 			// fresh one, which evicts the leaked Windows reader thread.
 			// Unmount cleanup also calls pty_kill so it doesn't leak.
-
 			const codeStr = code === null ? "?" : String(code);
 			// \x1b[2m = dim, \x1b[1m = bold, \x1b[0m = reset.
 			gate.write(`\r\n\x1b[2m[skein] ${programName} exited (${codeStr})\x1b[0m\r\n`);
@@ -261,8 +260,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			programName = cmdToSpawn[0] ?? "child";
 			shellClaim.noteSpawn(harnessId, harnessKind, cmdToSpawn[0]); // #318
 			startupAdoption.forget(harnessId); // #539: a new process voids the old one's candidates
-			if (!(await agentResolvesFor(cmdToSpawn))) return;
-			if (cancelled) return;
+			if (!(await agentResolvesFor(cmdToSpawn)) || cancelled) return;
 			phase = "running";
 			// Record the spawn before we await — gives a deterministic
 			// `spawning` window in the activity store even when
@@ -271,13 +269,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			harnessActivity.spawned(harnessId);
 			// #491: transcript rows older than this process say nothing about it.
 			claudeVersionStore.markSpawned(harnessId, Date.now());
-			// #675: probe in parallel with pty_spawn, never awaited on its path.
-			if (harnessKind === "opencode" && opencodeClaim?.setOpencodeVersion) {
-				const record = opencodeClaim.setOpencodeVersion;
-				void opencodeCliVersion().then((v) => {
-					if (!cancelled) record(v);
-				});
-			}
+			recordOpencodeVersion(harnessKind, opencodeClaim?.setOpencodeVersion, () => cancelled);
 			// #484: catch xterm's reply to ConPTY's cursor query (portable-pty
 			// 0.9 waits for it), which can arrive before pty_spawn resolves. If
 			// unmounted meanwhile, the settle paths below dispose it.

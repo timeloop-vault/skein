@@ -10,3 +10,17 @@ export async function opencodeCliVersion(): Promise<OpencodeVersion | null> {
 		return null;
 	}
 }
+
+/// #675: record the CLI version on a harness at spawn. Fire-and-forget (the
+/// caller never awaits it on the spawn path); a result that lands after
+/// `isCancelled()` is dropped.
+export function recordOpencodeVersion(
+	kind: string,
+	record: ((version: OpencodeVersion | null) => void) | undefined,
+	isCancelled: () => boolean,
+): void {
+	if (kind !== "opencode" || !record) return;
+	void opencodeCliVersion().then((v) => {
+		if (!isCancelled()) record(v);
+	});
+}

@@ -1,8 +1,7 @@
 // Harness/room creation, extracted out of App.tsx (#19) — pure move,
 // no behaviour change. Owns the two creation entry points (pickHarness
 // off the + harness menu, createRoom off New room), the shared
-// sessionId bookkeeping both lean on (claimedSessionIds,
-// setHarnessSessionId, replaceHarnessSessionId), the opencode
+// claimedSessionIds bookkeeping both lean on, the opencode
 // sqlite-poll capture fallback, and the Mod+E Files-harness toggle
 // (with its own "where did I come from" / in-flight-creation refs).
 // App.tsx calls this at the point `createHarnessInRoom` used to start
@@ -11,7 +10,8 @@
 //
 // #459: the record building (harnessCreation.ts) and the opencode
 // capture poll (opencodeCapture.ts) live in their own modules; this
-// file is the React wiring around them.
+// file is the React wiring around them. The post-spawn write-backs
+// (setHarnessSessionId and friends) live in useHarnessWriteBacks.ts.
 
 import { invoke } from "@tauri-apps/api/core";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
@@ -27,17 +27,13 @@ import {
 	harnessDisplayName,
 	newId,
 	resolveAgentName,
-	withCapturedSessionId,
-	withOpencodeVersion,
-	withoutShellClaim,
-	withReplacedSessionId,
-	withShellClaim,
 } from "./harnessCreation.ts";
 import type { CreateRoomArgs } from "./NewRoomDialog.tsx";
 import { captureOpencodeSessionId } from "./opencodeCapture.ts";
 import { buildRemoteSpec, type RemoteInput } from "./remoteCmd.ts";
 import { defaultRoomName } from "./roomName.ts";
-import type { Harness, HarnessKind, OpencodeVersion, Room } from "./types.ts";
+import type { Harness, HarnessKind, Room } from "./types.ts";
+import { useHarnessWriteBacks } from "./useHarnessWriteBacks.ts";
 
 export type { CreateHarnessResult, CreateRoomResult };
 
@@ -54,6 +50,8 @@ export function useHarnessCreation(
 	setShowNewRoom: Dispatch<SetStateAction<boolean>>,
 	switchHarnessInRoom: (roomId: string, harnessId: string) => void,
 ) {
+	const writeBacks = useHarnessWriteBacks(setRooms);
+	const { setHarnessSessionId } = writeBacks;
 	// #49 phase A: per room, the last PTY harness the user was on
 	// before Mod+E jumped to a Files harness — so Mod+E toggles back
 	// to where they came from, not just "the first terminal".
@@ -65,52 +63,6 @@ export function useHarnessCreation(
 	// excludes these so a fresh capture can't claim someone else's id
 	// when two opencode harnesses race in the same cwd.
 	const claimedSessionIds = (): Set<string> => claimedSessionIdsOf(roomsRef.current);
-
-	// Update one harness's sessionId after phase 2b's async capture
-	// finds the new opencode row. Wrapped here so both creation paths
-	// (pickHarness, createRoom) share the same setRooms shape.
-	const setHarnessSessionId = (targetRoomId: string, harnessId: string, captured: string) => {
-		setRooms((prev) => withCapturedSessionId(prev, targetRoomId, harnessId, captured));
-	};
-
-	// #116 step two: overwrite a harness's sessionId after Claude's own
-	// `/clear`/`/resume`/fork hook reports the conversation moved onto a
-	// new id — and (step four) after opencode's own adapter decides the
-	// harness followed its TUI onto a different root session (`/new` or
-	// a `/sessions` pick). This is deliberately NOT `setHarnessSessionId`
-	// above — that one is first-writer-wins to survive opencode's
-	// create-vs-poll capture race, but both these reports are
-	// authoritative: the old id is definitely gone (Claude) or definitely
-	// superseded (opencode), so the new one must win even though
-	// `sessionId` is already set. `cmd` is untouched here — it's part of
-	// LiveTerminal's mountKey, so changing it would respawn the PTY;
-	// `resumeCmd` (harnessCmd.ts) rebuilds the argv from `sessionId` on
-	// the next boot/reopen, which is what makes the new conversation the
-	// one resumed.
-	const replaceHarnessSessionId = (targetRoomId: string, harnessId: string, sessionId: string) => {
-		setRooms((prev) => withReplacedSessionId(prev, targetRoomId, harnessId, sessionId));
-	};
-
-	// #520: persist the post-exit-shell claim (sessionId + claim in one
-	// update) so a restart can resume it; release removes it again.
-	const setHarnessShellClaim = (
-		targetRoomId: string,
-		harnessId: string,
-		sessionId: string,
-		port?: number,
-	) => {
-		setRooms((prev) => withShellClaim(prev, targetRoomId, harnessId, sessionId, port));
-	};
-	const setHarnessOpencodeVersion = (
-		targetRoomId: string,
-		harnessId: string,
-		version: OpencodeVersion | null,
-	) => {
-		setRooms((prev) => withOpencodeVersion(prev, targetRoomId, harnessId, version));
-	};
-	const clearHarnessShellClaim = (targetRoomId: string, harnessId: string) => {
-		setRooms((prev) => withoutShellClaim(prev, targetRoomId, harnessId));
-	};
 
 	// #49 phase A: harness creation, callable from both the + harness
 	// menu (pickHarness) and the Mod+E files jump. Kind-specific setup
@@ -392,11 +344,7 @@ export function useHarnessCreation(
 
 	return {
 		claimedSessionIds,
-		setHarnessSessionId,
-		replaceHarnessSessionId,
-		setHarnessShellClaim,
-		clearHarnessShellClaim,
-		setHarnessOpencodeVersion,
+		writeBacks,
 		createHarnessInRoom,
 		pickHarness,
 		toggleFilesHarness,

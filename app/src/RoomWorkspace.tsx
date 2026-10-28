@@ -70,15 +70,15 @@ const useRoomHandlers = (p: RoomWorkspaceProps): RoomHandlers => {
 				latest.current.actions.switchHarnessInRoom(roomId, harnessId);
 			},
 			sessionCaptured: (roomId, harnessId, sid) =>
-				latest.current.creation.setHarnessSessionId(roomId, harnessId, sid),
+				latest.current.creation.writeBacks.setHarnessSessionId(roomId, harnessId, sid),
 			sessionFollowed: (roomId, harnessId, sid) =>
-				latest.current.creation.replaceHarnessSessionId(roomId, harnessId, sid),
+				latest.current.creation.writeBacks.replaceHarnessSessionId(roomId, harnessId, sid),
 			shellClaimSet: (roomId, harnessId, sid, port) =>
-				latest.current.creation.setHarnessShellClaim(roomId, harnessId, sid, port),
+				latest.current.creation.writeBacks.setHarnessShellClaim(roomId, harnessId, sid, port),
 			shellClaimRelease: (roomId, harnessId) =>
-				latest.current.creation.clearHarnessShellClaim(roomId, harnessId),
+				latest.current.creation.writeBacks.clearHarnessShellClaim(roomId, harnessId),
 			opencodeVersion: (roomId, harnessId, version) =>
-				latest.current.creation.setHarnessOpencodeVersion(roomId, harnessId, version),
+				latest.current.creation.writeBacks.setHarnessOpencodeVersion(roomId, harnessId, version),
 			reattach: (roomId, harnessId) => latest.current.onReattachTelemetry(roomId, harnessId),
 			envProfile: (roomId, harnessId, name) =>
 				latest.current.onEnvProfileChange(roomId, harnessId, name),
