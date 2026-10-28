@@ -284,6 +284,9 @@ export interface SpawnSettings {
 	 *  settings, so Skein only does it when asked. */
 	disableClaudeWheelAcceleration: boolean;
 	lowerHarnessPriority: boolean;
+	/** Context size in tokens above which a harness is marked (#368).
+	 *  `null`/absent = off. */
+	contextThreshold?: number | null;
 }
 
 export interface SpawnSettingsPayload {

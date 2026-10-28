@@ -1,10 +1,11 @@
 // Settings → agent defaults and the worktree branch template.
 
 import { kindHasAgents } from "./agents.ts";
+import { ContextThresholdField } from "./ContextThresholdField.tsx";
 import { HChip, NO_REVIEW_TOOLS_TITLE, useAgentListing } from "./components.tsx";
 import { HARNESS_KINDS, HARNESS_ORDER } from "./data.tsx";
 import { type DefaultAgents, defaultAgentFor } from "./prefs.ts";
-import type { HarnessKind } from "./types.ts";
+import type { HarnessKind, SpawnSettings } from "./types.ts";
 import "./Settings.css";
 
 /** One kind's default-agent field. Its own component so each kind runs
@@ -74,12 +75,16 @@ export const AgentSettings = ({
 	agentCwd,
 	branchTemplate,
 	onBranchTemplate,
+	spawnSettings,
+	onSpawnSettings,
 }: {
 	defaultAgents: DefaultAgents;
 	onDefaultAgent: (kind: HarnessKind, agent: string | undefined) => void;
 	agentCwd: string;
 	branchTemplate: string;
 	onBranchTemplate: (v: string) => void;
+	spawnSettings: SpawnSettings | null;
+	onSpawnSettings: (next: SpawnSettings) => Promise<void>;
 }) => (
 	<>
 		<div className="sk-field">
@@ -112,5 +117,11 @@ export const AgentSettings = ({
 				onChange={(e) => onBranchTemplate(e.target.value)}
 			/>
 		</div>
+
+		<ContextThresholdField
+			value={spawnSettings?.contextThreshold}
+			loaded={spawnSettings !== null}
+			onSpawnSettings={onSpawnSettings}
+		/>
 	</>
 );

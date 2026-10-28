@@ -26,6 +26,35 @@ export function formatContextTokens(n: number): string {
 	return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
 }
 
+/** Parse a token count typed by a person: "150000", "150k", "1.2M". Spaces,
+ *  underscores and commas are accepted only as thousands separators (groups of
+ *  exactly three digits: "150,000", "1_200_000"), so "1,5M" and "1 5" are
+ *  invalid rather than silently 15M. Empty is `null` (feature off); anything
+ *  else that is not a positive count is "invalid". */
+export function parseTokenCount(text: string): number | null | "invalid" {
+	const s = text.trim().toLowerCase();
+	if (s === "") return null;
+	const m = /^(\d{1,3}(?:[\s_,]\d{3})+|\d*)(\.\d+)?\s*([km]?)$/.exec(s);
+	if (!m || (m[1] === "" && m[2] === undefined)) return "invalid";
+	const mult = m[3] === "k" ? 1000 : m[3] === "m" ? 1_000_000 : 1;
+	const n = Math.round(Number(`${(m[1] ?? "").replace(/[\s_,]/g, "")}${m[2] ?? ""}`) * mult);
+	return Number.isSafeInteger(n) && n > 0 ? n : "invalid";
+}
+
+/** How the settings field shows a stored threshold: the compact form when it
+ *  parses back to the same number, the exact count when compacting would round. */
+export function thresholdDisplay(v: number | null | undefined): string {
+	if (v === null || v === undefined) return "";
+	const compact = formatContextTokens(v);
+	return parseTokenCount(compact) === v ? compact : String(v);
+}
+
+/** Whether committing `text` would change anything: false when it is exactly
+ *  what the field rendered for `value`, so focus+blur never re-saves. */
+export function thresholdTextChanged(text: string, value: number | null | undefined): boolean {
+	return text !== thresholdDisplay(value);
+}
+
 /** "context 142k". */
 export function contextLabel(tokens: number): string {
 	return `context ${formatContextTokens(tokens)}`;
@@ -69,4 +98,23 @@ export function applyResponse(
 		}
 	}
 	return next ?? state;
+}
+
+/** True only when both are known, the threshold is positive and the
+ *  context size is strictly above it (#368). */
+export function isOverThreshold(
+	tokens: number | undefined,
+	threshold: number | null | undefined,
+): boolean {
+	if (tokens === undefined || threshold === undefined || threshold === null) return false;
+	return threshold > 0 && tokens > threshold;
+}
+
+/** Whether any of `ids` is over the threshold, given a size lookup. */
+export function anyOver(
+	ids: readonly string[],
+	getSize: (id: string) => number | undefined,
+	threshold: number | null | undefined,
+): boolean {
+	return ids.some((id) => isOverThreshold(getSize(id), threshold));
 }

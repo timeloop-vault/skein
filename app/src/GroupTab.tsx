@@ -1,5 +1,7 @@
 import { type MouseEvent as ReactMouseEvent, useMemo } from "react";
+import { ContextMark } from "./ContextMarks.tsx";
 import { RoomNameInput, StatusDot } from "./components.tsx";
+import { contextHarnessIds } from "./contextHarnessIds.ts";
 import { useRoomActivity } from "./harnessActivity.ts";
 import { groupDisplayName, groupRooms, type StripSegment, segmentId } from "./roomGroups.ts";
 import { type RoomDragWiring, useStableRooms } from "./roomStripShared.tsx";
@@ -44,6 +46,7 @@ export const GroupTab = ({
 		[rooms],
 	);
 	const status = useRoomActivity(harnessRefs);
+	const ctxIds = useMemo(() => contextHarnessIds(rooms), [rooms]);
 	const badge = rooms.reduce(
 		(acc, r) => acc + r.harnesses.reduce((a, h) => a + (h.pendingNotifications ?? 0), 0),
 		0,
@@ -109,6 +112,7 @@ export const GroupTab = ({
 					</span>
 				)}
 				{badge > 0 && <span className="tab-badge">{badge}</span>}
+				<ContextMark harnessIds={ctxIds} />
 				{hasAttention && <span className="tab-attention-dot" title="New room" />}
 				<span className="sk-group-count">({roomCount})</span>
 			</div>

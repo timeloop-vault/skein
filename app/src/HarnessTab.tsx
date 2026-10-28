@@ -1,5 +1,7 @@
+import { ContextChip } from "./ContextMarks.tsx";
 import type { VersionNotice } from "./claudeVersion.ts";
 import { badgeAriaLabel, badgeTitle, updateSegmentText } from "./claudeVersionText.ts";
+import { CONTEXT_SIZE_KINDS } from "./contextSize.ts";
 import type { DragProps } from "./dragProps.ts";
 import { HChip, StatusDot } from "./HChip.tsx";
 import { type AgentLabel, opencodeVersionLabel } from "./harnessAgent.ts";
@@ -110,6 +112,7 @@ export const HarnessTab = ({
 				</span>
 			)}
 			{mail.count > 0 && !hold.held && <span className="tab-mail">✉ {mail.count}</span>}
+			{CONTEXT_SIZE_KINDS.has(h.kind) && <ContextChip harnessId={h.id} />}
 			{update && (
 				// #491: a real button so it is keyboard-reachable; the click
 				// restarts in place (#490) and must not also switch tabs.

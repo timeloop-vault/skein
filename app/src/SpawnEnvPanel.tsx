@@ -13,6 +13,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getContextThreshold } from "./contextThresholdStore.ts";
 import { EnvProfilesPanel } from "./EnvProfilesPanel.tsx";
 import {
 	envProfileState,
@@ -49,6 +50,11 @@ interface SpawnEnvPanelProps {
 	onDirtyChange: (dirty: boolean) => void;
 }
 
+const onlyThresholdChanged = (a: SpawnSettings, b: SpawnSettings): boolean =>
+	(a.contextThreshold ?? null) !== (b.contextThreshold ?? null) &&
+	JSON.stringify({ ...a, contextThreshold: null }) ===
+		JSON.stringify({ ...b, contextThreshold: null });
+
 export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: SpawnEnvPanelProps) => {
 	const [draft, setDraft] = useState<SpawnSettings | null>(settings);
 	const [preview, setPreview] = useState<EnvPreview | null>(null);
@@ -63,6 +69,7 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 	// palette, so the store — not `settings` — is its source of truth here.
 	const { active: storeActive, loaded } = useEnvProfiles();
 	const baseActive = useRef<string | null>(storeActive);
+	const prevSettings = useRef<SpawnSettings | null>(settings);
 	// Profiles renamed in this draft (original -> current), for the active
 	// selection and per-harness overrides (#619). Reset when the draft re-adopts.
 	const renames = useRef<Renames>({});
@@ -73,6 +80,15 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 	);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: adopt on a new `settings` only
 	useEffect(() => {
+		const prev = prevSettings.current;
+		prevSettings.current = settings;
+		// The Agents section saves contextThreshold on its own. When that is
+		// the only thing that moved, keep the draft's unsaved edits and take
+		// just the new threshold, instead of re-adopting and wiping them.
+		if (prev && settings && onlyThresholdChanged(prev, settings)) {
+			setDraft((d) => (d ? { ...d, contextThreshold: settings.contextThreshold ?? null } : d));
+			return;
+		}
 		baseActive.current = storeActive;
 		renames.current = {};
 		setDraft(withStoreActive(settings));
@@ -155,6 +171,9 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 					shell: draft.shell?.trim() ? draft.shell.trim() : null,
 					pathPrepend: draft.pathPrepend.map((p) => p.trim()).filter(Boolean),
 					extraEnv: draft.extraEnv.filter((v) => v.key.trim()),
+					// Not this panel's setting: take the latest saved value,
+					// never the draft's possibly older copy.
+					contextThreshold: getContextThreshold(),
 				});
 				recordSavedRenames(applied);
 			});

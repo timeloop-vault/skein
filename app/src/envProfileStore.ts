@@ -5,6 +5,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useSyncExternalStore } from "react";
+import { setContextThreshold } from "./contextThresholdStore.ts";
 import {
 	profileNames,
 	type Renames,
@@ -52,8 +53,12 @@ const listeners = new Set<() => void>();
 
 /** Feed the store from any successful settings load or save. */
 export function publishSpawnSettings(
-	settings: Pick<SpawnSettings, "envProfiles" | "activeEnvProfile"> | null | undefined,
+	settings:
+		| Pick<SpawnSettings, "envProfiles" | "activeEnvProfile" | "contextThreshold">
+		| null
+		| undefined,
 ): void {
+	setContextThreshold(settings?.contextThreshold);
 	const next = stateFromSettings(settings);
 	if (sameState(state, next)) return;
 	state = next;

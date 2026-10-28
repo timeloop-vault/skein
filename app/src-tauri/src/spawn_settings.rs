@@ -122,6 +122,10 @@ pub struct SpawnSettings {
     /// Applies to harnesses spawned after the change — running ones keep
     /// their priority — and is inherited by everything a harness starts.
     pub lower_harness_priority: bool,
+    /// Context size in tokens above which a harness is marked (#368).
+    /// `None` = off. Held here, not in the webview, so the agent API
+    /// (#689) can read it later.
+    pub context_threshold: Option<u64>,
 }
 
 impl Default for SpawnSettings {
@@ -141,6 +145,7 @@ impl Default for SpawnSettings {
             tool_groups: ToolGroups::default(),
             disable_claude_wheel_acceleration: false,
             lower_harness_priority: true,
+            context_threshold: None,
         }
     }
 }
@@ -555,6 +560,21 @@ mod tests {
         let (loaded, degraded) = load(dir.path());
         assert!(degraded.is_none());
         assert!(!loaded.lower_harness_priority);
+    }
+
+    #[test]
+    fn context_threshold_defaults_off_and_round_trips() {
+        let parsed: SpawnSettings = serde_json::from_str("{}").expect("empty object parses");
+        assert_eq!(parsed.context_threshold, None);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let settings = SpawnSettings {
+            context_threshold: Some(150_000),
+            ..SpawnSettings::default()
+        };
+        save(dir.path(), &settings).expect("save");
+        let (loaded, degraded) = load(dir.path());
+        assert!(degraded.is_none());
+        assert_eq!(loaded.context_threshold, Some(150_000));
     }
 
     #[test]

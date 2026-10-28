@@ -203,6 +203,8 @@ export const SettingsModal = ({
 						agentCwd={agentCwd}
 						branchTemplate={branchTemplate}
 						onBranchTemplate={onBranchTemplate}
+						spawnSettings={spawnSettings}
+						onSpawnSettings={onSpawnSettings}
 					/>
 
 					<VersionNoticeSettings mode={versionNoticeMode} onChange={onVersionNoticeMode} />

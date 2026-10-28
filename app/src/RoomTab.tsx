@@ -1,4 +1,6 @@
-import type { MouseEvent as ReactMouseEvent } from "react";
+import { type MouseEvent as ReactMouseEvent, useMemo } from "react";
+import { ContextMark } from "./ContextMarks.tsx";
+import { contextHarnessIds } from "./contextHarnessIds.ts";
 import type { DragProps } from "./dragProps.ts";
 import { HChip, StatusDot } from "./HChip.tsx";
 import { RoomNameInput } from "./RoomNameInput.tsx";
@@ -42,6 +44,9 @@ export const RoomTab = ({
 	onRenameEnd?: (() => void) | undefined;
 } & DragProps) => {
 	const openTodoMenu = useTodoMenu();
+	const ctxKey = JSON.stringify(contextHarnessIds([r]));
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the ids' primitive JSON
+	const ctxIds = useMemo(() => contextHarnessIds([r]), [ctxKey]);
 	return (
 		<div
 			className={`sk-tab ${active ? "active" : ""} ${dragging ? "dragging" : ""} ${dropSide ? `drop-${dropSide}` : ""}`}
@@ -115,6 +120,7 @@ export const RoomTab = ({
 					</span>
 				)}
 				{r.badge > 0 && <span className="tab-badge">{r.badge}</span>}
+				<ContextMark harnessIds={ctxIds} />
 				{/* #328: a room created without switching to it (`createRoom`,
 			    `{ activate: false }`) — a dot, not a count, since there is
 			    nothing yet to count. Cleared the moment this room becomes

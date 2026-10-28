@@ -1,0 +1,18 @@
+/* #368: context size above the user's threshold. Same sizing as .tab-mail. */
+.tab-ctx {
+	display: inline-flex;
+	align-items: center;
+	padding: 1px 4px;
+	font-size: calc(var(--cfs, 12px) * 0.78);
+	line-height: 1;
+	color: var(--warn);
+	border: 1px solid var(--warn);
+	border-radius: 3px;
+	white-space: nowrap;
+}
+/* On a room/group tab: a quieter pill so it sits beside the count badge. */
+.tab-ctx--room {
+	font-size: calc(var(--cfs, 12px) * 0.7);
+	padding: 1px 3px;
+	background: color-mix(in srgb, var(--warn) 15%, transparent);
+}
