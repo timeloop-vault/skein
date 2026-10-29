@@ -1,0 +1,319 @@
+[
+  {
+    "id": "build",
+    "name": "Build",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "description": "The default agent. Executes tools based on configured permissions.",
+    "mode": "primary",
+    "hidden": false,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  },
+  {
+    "id": "cfgagent",
+    "name": "cfgagent",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "description": "Config agents-key agent",
+    "mode": "primary",
+    "hidden": false,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  },
+  {
+    "id": "compaction",
+    "name": "Compaction",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "mode": "primary",
+    "hidden": true,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  },
+  {
+    "id": "explore",
+    "name": "Explore",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "system": "You are a file search specialist. You ex",
+    "description": "Fast agent specialized for exploring codebases. Use this when you need to quickl",
+    "mode": "subagent",
+    "hidden": false,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  },
+  {
+    "id": "general",
+    "name": "General",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "description": "General-purpose agent for researching complex questions and executing multi-step",
+    "mode": "subagent",
+    "hidden": false,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  },
+  {
+    "id": "Hidden_One",
+    "name": "Hidden_One",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "system": "You are hidden.",
+    "description": "Hidden agent",
+    "mode": "primary",
+    "hidden": true,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  },
+  {
+    "id": "plan",
+    "name": "Plan",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "description": "Read-only agent for exploring the codebase and planning work before implementati",
+    "mode": "primary",
+    "hidden": false,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  },
+  {
+    "id": "pluralfoo",
+    "name": "pluralfoo",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "system": "You are pluralfoo.",
+    "description": "Plural dir agent",
+    "mode": "primary",
+    "hidden": false,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  },
+  {
+    "id": "projfoo",
+    "name": "projfoo",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "system": "You are projfoo.",
+    "description": "Project dot-opencode agent",
+    "mode": "primary",
+    "hidden": false,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  },
+  {
+    "id": "singularbar",
+    "name": "singularbar",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "system": "You are singularbar.",
+    "description": "Singular dir agent",
+    "mode": "primary",
+    "hidden": false,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  },
+  {
+    "id": "subby",
+    "name": "subby",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "system": "You are subby.",
+    "description": "A subagent",
+    "mode": "subagent",
+    "hidden": false,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  },
+  {
+    "id": "summary",
+    "name": "Summary",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "system": "Summarize what was done in this conversa",
+    "mode": "primary",
+    "hidden": true,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  },
+  {
+    "id": "title",
+    "name": "Title",
+    "request": {
+      "settings": {},
+      "headers": {},
+      "body": {}
+    },
+    "system": "You name conversations so the user can f",
+    "mode": "primary",
+    "hidden": true,
+    "permissions": [
+      {
+        "action": "*",
+        "resource": "*",
+        "effect": "allow"
+      },
+      {
+        "action": "read",
+        "resource": "*.env",
+        "effect": "ask"
+      }
+    ]
+  }
+]

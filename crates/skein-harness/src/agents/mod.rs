@@ -19,8 +19,10 @@
 //! 1
 //! ```
 //!
-//! opencode has a real subcommand, `opencode agent list`, printing
-//! `name (mode)` per line.
+//! opencode has a real subcommand: v1's `opencode agent list` prints
+//! `name (mode)` per line; v2's `opencode debug agents --standalone`
+//! prints a JSON array (`--standalone` stops it leaving a background
+//! server holding the pipe).
 //!
 //! Replicating Claude's own resolution instead would mean reading
 //! `installed_plugins.json` for each plugin's install path,
@@ -45,7 +47,8 @@
 //! - [`files`] — the definition files on disk, and their frontmatter.
 //!   Shared: both CLIs use `---`-fenced markdown.
 //! - [`claude`] — the probe, and Claude's four sources.
-//! - [`opencode`] — `agent list`, and why only primaries are offered.
+//! - [`opencode`] — `agent list` / `debug agents`, and why only
+//!   primaries are offered.
 //!
 //! Note the sibling collision: [`claude`] here is agent *discovery*,
 //! while [`crate::claude`] is the session store. Same for `opencode`.
