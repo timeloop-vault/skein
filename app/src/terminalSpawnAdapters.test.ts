@@ -13,6 +13,7 @@ vi.mock("./hermesCapture.ts", () => ({
 	startHermesCapture: vi.fn(() => () => {}),
 }));
 
+import { attachOpencodeEvents } from "./harnessEvents.ts";
 import { type AdapterAttach, attachAdapters } from "./terminalSpawnAdapters.ts";
 
 const attach = (over: Partial<AdapterAttach>): AdapterAttach => ({
@@ -45,5 +46,31 @@ describe("attachAdapters for Hermes", () => {
 		attachAdapters(attach({ hermesHooks: false }));
 		attachAdapters(attach({}));
 		expect(attachHermesEvents).not.toHaveBeenCalled();
+	});
+});
+
+describe("attachAdapters for opencode (#677)", () => {
+	const opencode = (over: Partial<AdapterAttach>) =>
+		attach({ harnessKind: "opencode", program: "opencode", ...over });
+
+	beforeEach(() => vi.mocked(attachOpencodeEvents).mockClear());
+
+	it("attaches v1 with a port and no generation", () => {
+		attachAdapters(opencode({ opencodePort: 4321 }));
+		const args = vi.mocked(attachOpencodeEvents).mock.calls[0];
+		expect(args?.[3]).toBe(4321);
+		expect(args?.[8]).toBeUndefined();
+	});
+
+	it("attaches v2 by sidecar generation without a port", () => {
+		attachAdapters(opencode({ opencodeSidecarGeneration: 7 }));
+		const args = vi.mocked(attachOpencodeEvents).mock.calls[0];
+		expect(args?.[3]).toBe(0);
+		expect(args?.[8]).toBe(7);
+	});
+
+	it("attaches nothing with neither", () => {
+		expect(attachAdapters(opencode({}))).toBeNull();
+		expect(attachOpencodeEvents).not.toHaveBeenCalled();
 	});
 });

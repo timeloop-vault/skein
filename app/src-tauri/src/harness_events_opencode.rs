@@ -20,6 +20,7 @@
 mod connection;
 mod frames;
 mod session;
+mod v2;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -239,6 +240,38 @@ impl OpencodeEventsManager {
             )
             .await;
         });
+        self.inner.lock().insert(
+            harness_id,
+            Adapter {
+                cancel,
+                _handle: handle,
+            },
+        );
+    }
+
+    /// Start watching a v2 sidecar's `GET /api/event` (#677) with Basic
+    /// auth. Emits the same `OpencodeEvent`s as `attach`. Shares `inner`, so
+    /// `detach` and re-attach idempotency cover both. No backfill and no
+    /// action rows yet (#678).
+    pub fn attach_v2<F>(
+        &self,
+        harness_id: String,
+        port: u16,
+        password: String,
+        session_id: Option<String>,
+        on_event: F,
+    ) where
+        F: Fn(OpencodeEvent) + Send + Sync + 'static,
+    {
+        self.inner.lock().remove(&harness_id);
+        let cancel = Arc::new(Notify::new());
+        let handle = tokio::spawn(v2::run_adapter_v2(
+            port,
+            password,
+            Arc::clone(&cancel),
+            Arc::new(on_event),
+            session_id,
+        ));
         self.inner.lock().insert(
             harness_id,
             Adapter {

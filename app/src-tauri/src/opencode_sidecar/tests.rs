@@ -146,8 +146,16 @@ fn stop_kills_and_clears_record_without_exit_notice() {
             .is_some_and(|p| p.len() == 64)
     );
     assert!(m.password_for("a", info.generation + 1).is_none());
+    let (port, pw) = m.connect_info("a", info.generation).unwrap();
+    assert_eq!(
+        (port, Some(pw)),
+        (4242, m.password_for("a", info.generation))
+    );
+    assert!(m.connect_info("a", info.generation + 1).is_none());
+    assert!(m.connect_info("nope", info.generation).is_none());
 
     m.stop("a");
+    assert!(m.connect_info("a", info.generation).is_none());
     assert!(gone(info.pid));
     assert_eq!(record::read(dir.path()).len(), 0);
     std::thread::sleep(Duration::from_millis(1200));

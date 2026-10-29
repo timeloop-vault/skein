@@ -8,6 +8,7 @@ use tauri::ipc::Channel;
 
 use crate::harness_events_claude::{ClaudeEvent, ClaudeEventsManager, ReattachOutcome};
 use crate::harness_events_opencode::{OpencodeEvent, OpencodeEventsManager};
+use crate::opencode_sidecar::OpencodeSidecarManager;
 
 /// Start tailing the Claude JSONL session log for a harness. Emits
 /// semantic `ClaudeEvent` values over `on_event` whenever the file
@@ -202,9 +203,22 @@ pub(crate) async fn opencode_events_attach(
     cwd: String,
     port: u16,
     session_id: Option<String>,
+    sidecar_generation: Option<u64>,
     on_event: Channel<OpencodeEvent>,
     manager: tauri::State<'_, OpencodeEventsManager>,
+    sidecars: tauri::State<'_, OpencodeSidecarManager>,
 ) -> Result<(), String> {
+    // v2 (#677): the sidecar manager, not the caller's `port`, is the source
+    // of truth for where to connect and the password.
+    if let Some(generation) = sidecar_generation {
+        let (port, password) = sidecars
+            .connect_info(&harness_id, generation)
+            .ok_or_else(|| "no live opencode sidecar for this harness".to_owned())?;
+        manager.attach_v2(harness_id, port, password, session_id, move |event| {
+            let _ = on_event.send(event);
+        });
+        return Ok(());
+    }
     manager.attach(harness_id, room_id, cwd, port, session_id, move |event| {
         let _ = on_event.send(event);
     });

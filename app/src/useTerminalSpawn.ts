@@ -186,10 +186,9 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		// and captures the sessionID from `session.created`.
 		const opencodeAdapter: { current: OpencodeAdapter | null } = { current: null };
 		let shellFollow: ReturnType<typeof followOpencodeShell> | null = null;
-		// #238: this harness's `harnessInput` entry; live PTY only, so a dead
-		// or respawning harness is never a nudge target.
+		// #238: this harness's `harnessInput` entry; live PTY only, never a dead one.
 		let detachInputTarget: (() => void) | null = null;
-		let stopHermesCapture: (() => void) | null = null; // #624, unmount only
+		let stopOtherAdapter: (() => void) | null = null; // Hermes capture (#624) + opencode v2 SSE (#677), not #517's v1 opencodeAdapter; unmount only
 		let sidecarGeneration: number | undefined; // #676
 		const sidecarDied = createSidecarDeathRecord((s) => gate.write(s));
 		const stopSidecarWatch =
@@ -273,8 +272,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					return;
 				}
 				sidecarGeneration = prep.sidecarGeneration;
-				// #677: no v2 SSE adapter yet; v1's /event route serves HTML on v2.
-				const port = prep.v2 ? undefined : opencodePort;
+				const port = prep.v2 ? undefined : opencodePort; // #677: v2 attaches by sidecar generation
 				const {
 					id,
 					injected,
@@ -316,6 +314,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					hermesHooks,
 					sessionId,
 					opencodePort: port,
+					opencodeSidecarGeneration: sidecarGeneration,
 					onSessionCaptured,
 					onSessionFollowed,
 					sessionIdRef,
@@ -323,7 +322,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				});
 				if (detach && port !== undefined) {
 					opencodeAdapter.current = { detach, port };
-				} else if (detach && harnessKind === "hermes") stopHermesCapture = detach;
+				} else if (detach && (harnessKind === "hermes" || harnessKind === "opencode"))
+					stopOtherAdapter = detach;
 				shellFollow?.dispose();
 				shellFollow = followOpencodeShell(harnessKind, cmdToSpawn[0], {
 					harnessId,
@@ -375,7 +375,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			claudeAdapterRef.current = null;
 			shellFollow?.dispose();
 			opencodeAdapter.current?.detach();
-			stopHermesCapture?.();
+			stopOtherAdapter?.();
 			stopSidecarWatch?.();
 			detachInputTarget?.();
 			// Key handling + copy-on-select cleanup — see

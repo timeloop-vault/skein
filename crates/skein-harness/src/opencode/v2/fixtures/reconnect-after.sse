@@ -1,0 +1,516 @@
+data: {"id":"evt_1882bf14e001rdDQ52lW1rS3yA","type":"server.connected","data":{}}
+
+: heartbeat
+
+data: {"id":"evt_1882bf186001kTLnARcVwZ6a1u","created":1793285943686,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" its quality by eye. What they lacked,"}}
+
+data: {"id":"evt_1882bf1fe001nD8bFTfaWpfPI7","created":1793285943806,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" or did not combine"}}
+
+data: {"id":"evt_1882bf265001oUCsouncOw8NBO","created":1793285943909,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", was the idea of placing two lenses in a"}}
+
+data: {"id":"evt_1882bf2d2001gzQfIlA6XmKxSl","created":1793285944018,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" line so that the image from one was"}}
+
+data: {"id":"evt_1882bf35c001wMyAmCBKgseND5","created":1793285944156,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" magnified by the other. Several people"}}
+
+data: {"id":"evt_1882bf3fc001zompOEbdpYygRQ","created":1793285944316,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" seem"}}
+
+data: {"id":"evt_1882bf4a9001GWlqb2eltiH5N3","created":1793285944489,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" to have stumbled on this"}}
+
+data: {"id":"evt_1882bf537001aLyRSM36lIIaSa","created":1793285944631,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" combination independently. The English mathematician Leonard"}}
+
+data: {"id":"evt_1882bf5d9001eISTOV2nQJlCeS","created":1793285944793,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Digges may"}}
+
+data: {"id":"evt_1882bf64d0013spYwDFTnidGmj","created":1793285944909,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" have experimented with combinations of lenses and a mirror as"}}
+
+data: {"id":"evt_1882bf6bb001EvtqfWzRLIg8jN","created":1793285945019,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" early as the 1550s, though the evidence is fragmentary and disputed. In 1586"}}
+
+data: {"id":"evt_1882bf737001jriymSA42ilG8s","created":1793285945143,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", Giambattista della Porta described in his *"}}
+
+data: {"id":"evt_1882bf7b5001mP27f7iUsmiTvu","created":1793285945269,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"Natural Magic* how a concave"}}
+
+data: {"id":"evt_1882bf83d001CloPUvcU7ZzO1V","created":1793285945405,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" and a convex lens could be arranged to make distant objects appear nearer and larger — a description that is tantal"}}
+
+data: {"id":"evt_1882bf8a3001og81wT5n4gMX1o","created":1793285945507,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"izingly close to a working instrument, though it is unclear whether he built one.\n\nThe decisive moment"}}
+
+data: {"id":"evt_1882bf975001Odwk9XYCv1YMKl","created":1793285945717,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" came in the Netherlands in the autumn"}}
+
+data: {"id":"evt_1882bf9fa001imMFuZ94HfXOLI","created":1793285945850,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" of 1608. Hans Lippershey, a spectacle maker in Middelburg, applied to the States of Ze"}}
+
+data: {"id":"evt_1882bfacb001zI03NgIElfH0UN","created":1793285946059,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"eland for"}}
+
+data: {"id":"evt_1882bfb65001IjVp0f34TWHA6v","created":1793285946213,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" a patent on \"a certain instrument for"}}
+
+data: {"id":"evt_1882bfbdd001cgf6QfjmfAIkIL","created":1793285946333,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" seeing far.\" His device used two lenses in a tube"}}
+
+data: {"id":"evt_1882bfc5f001MXzEXr3sMbABh3","created":1793285946463,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" and offered magnification of roughly three times. Within weeks, the instrument was being demonstrated to Maurice of Nassau, and"}}
+
+data: {"id":"evt_1882bfcd6001VGY3P4aJ7ZahXI","created":1793285946583,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" news of it spread rapidly through"}}
+
+data: {"id":"evt_1882bfd79001M7jV7MzPUHnUwh","created":1793285946745,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" diplomatic"}}
+
+data: {"id":"evt_1882bfde2001YGM7g2bp7z1nRy","created":1793285946850,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" channels. Jacob Metius of Alkmaar filed a competing claim, and Sacharias"}}
+
+data: {"id":"evt_1882bfe57001mMwrDI0OCdVhWf","created":1793285946967,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Janssen, another Middelburg lens maker"}}
+
+data: {"id":"evt_1882bfebd001lbyx7iu4dLHFhg","created":1793285947069,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", was later credited by some accounts."}}
+
+data: {"id":"evt_1882bff36001vpYaOas6mlufpM","created":1793285947190,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" The patent was refused — the States General judged"}}
+
+data: {"id":"evt_1882bffa20010dkvJl1uvKBP4q","created":1793285947298,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" the device too easy to copy — but the cat"}}
+
+data: {"id":"evt_1882c00180010SgojCQIdkf14H","created":1793285947416,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" was out of the bag. By 1609, telescopes"}}
+
+data: {"id":"evt_1882c008d0013CsgsEzAnhzH5d","created":1793285947533,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" were being sold in Paris and Venice"}}
+
+data: {"id":"evt_1882c01580012FS6cKHyDHCLVt","created":1793285947736,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", and Galileo"}}
+
+data: {"id":"evt_1882c01d6001M4ElRojkh6Z05N","created":1793285947862,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Galilei, then a professor of mathematics at Padua, heard of the invention while visiting the Venetian Republic.\n\n## Galileo Turns the Instrument Sky"}}
+
+data: {"id":"evt_1882c02480016MxX1BOlICC0l4","created":1793285947976,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ward\n\nGalileo's contribution was not the telescope"}}
+
+data: {"id":"evt_1882c02ba001lJZaQ9RjX5612T","created":1793285948090,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" itself but the decision to point"}}
+
+data: {"id":"evt_1882c031f001alvisRgVZjAgsh","created":1793285948191,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" it at the heavens and to trust what"}}
+
+data: {"id":"evt_1882c0387001gFlP7B4RXuv6v6","created":1793285948295,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" he saw. Working from a description rather than a physical model"}}
+
+data: {"id":"evt_1882c04030019RB04GuU0IOZ8m","created":1793285948419,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", he ground his own lenses and assembled instruments of"}}
+
+data: {"id":"evt_1882c04770019mfqwWorovEaWU","created":1793285948535,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" increasing power, eventually reaching magnifications of about twenty"}}
+
+data: {"id":"evt_1882c04dc0014VXCilzceJjMZH","created":1793285948636,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" or thirty times. His first telescope,"}}
+
+data: {"id":"evt_1882c0544001Q2Dj1y7dbjEvvU","created":1793285948740,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" presented to the Venetian Senate"}}
+
+data: {"id":"evt_1882c05d4001ti8q0J6vyX6Aa3","created":1793285948885,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" in August 1609, was a modest thing of eight-power magnification; his"}}
+
+data: {"id":"evt_1882c0639001UonvjhKwhUQ86u","created":1793285948985,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" later instruments were better.\n\nWhat"}}
+
+data: {"id":"evt_1882c072b001CS4qFCsAuunmey","created":1793285949227,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" he found in the winter of 1609"}}
+
+data: {"id":"evt_1882c0791001PakQ7owkD3XPBs","created":1793285949329,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"–1610 transformed astronomy. The Moon, which Aristotelian cosmology held to be a perfect, smooth sphere, revealed"}}
+
+data: {"id":"evt_1882c0804001jBtlL6uUDCyO83","created":1793285949444,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" mountains, craters, and what Galileo called \"se"}}
+
+data: {"id":"evt_1882c08710017X0q1HbpC14ALw","created":1793285949553,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"as.\" The Milky"}}
+
+data: {"id":"evt_1882c08d9001azuRxZSNwC07AF","created":1793285949657,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Way, supposedly a vaporous exhalation, resolved into innumerable stars. The constellation of"}}
+
+data: {"id":"evt_1882c094a00168Z4gvkh0xOogc","created":1793285949770,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Orion, which had seemed to contain"}}
+
+data: {"id":"evt_1882c09bc001I9qNnqT6HTRQhM","created":1793285949884,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" a handful of stars, proved to hold hundreds. Most"}}
+
+data: {"id":"evt_1882c0a34001EPdWiY32roSO28","created":1793285950004,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" consequentially, Jupiter showed four small bodies"}}
+
+data: {"id":"evt_1882c0aaa001erZqWV6dl8xWPU","created":1793285950122,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" circling"}}
+
+data: {"id":"evt_1882c0b34001g1bl9lm3A4e8Zf","created":1793285950260,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" it — the Medicean stars"}}
+
+data: {"id":"evt_1882c0bab001IWpYQUpyZkxRe2","created":1793285950379,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", as Galileo named them in honor of his patron — providing a visible, tangible miniature of the Cop"}}
+
+data: {"id":"evt_1882c0c29001zqrutdziW5TaBL","created":1793285950505,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ernican system. And Venus exhibited phases, waxing and waning in a pattern"}}
+
+data: {"id":"evt_1882c0c9b0011Uprh95TOp2tsO","created":1793285950619,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" that only made"}}
+
+data: {"id":"evt_1882c0d39001RCoS1PDPkU1yad","created":1793285950777,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" sense if the planet orb"}}
+
+data: {"id":"evt_1882c0dd3001p2KbDe6z53liBZ","created":1793285950931,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ited the Sun.\n\nGalileo published these observations in *Sidereus Nuncius* in March 1610, a slim book that made him famous across"}}
+
+data: {"id":"evt_1882c0e48001mdJYnyTSyiTR5U","created":1793285951048,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Europe within months. He was appointed court"}}
+
+data: {"id":"evt_1882c0ec8001lcQH4JLR291623","created":1793285951176,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" philosopher to the Medici in Florence, and he continued observing"}}
+
+data: {"id":"evt_1882c0f45001zEXVuh9gjSXoDB","created":1793285951301,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", discovering the odd \"ears\" of Saturn ("}}
+
+data: {"id":"evt_1882c0fbc001HTC0sv5bafB1z9","created":1793285951420,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"which he could not resolve and which H"}}
+
+data: {"id":"evt_1882c103d001xRsTiZDc9WPyQy","created":1793285951549,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"uygens would later explain as a ring), the spots on"}}
+
+data: {"id":"evt_1882c10b50017Sk0dUTNj8fa0m","created":1793285951669,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" the Sun, and the rotation of that"}}
+
+data: {"id":"evt_1882c1128001WpEnJ9peUFzQRJ","created":1793285951784,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" body. His work did not settle the Copernican question by itself"}}
+
+data: {"id":"evt_1882c11a7001T8Cns5lT0zZXg2","created":1793285951911,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", but it shifted the burden of proof decisively. The telescope had"}}
+
+data: {"id":"evt_1882c121c001ErD6G7BoXda91V","created":1793285952028,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" become an instrument of natural philosophy, and the"}}
+
+data: {"id":"evt_1882c12960018NVbPG9oqgFRMo","created":1793285952150,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" heavens had become a place"}}
+
+data: {"id":"evt_1882c130a001K03T0HGqILhfBF","created":1793285952266,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" one could inspect.\n\n## The Keplerian Revolution and the Problem"}}
+
+data: {"id":"evt_1882c137e0013rCkXkE6ziHpnE","created":1793285952383,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" of Color\n\nThe Galilean telescope used a convex objective"}}
+
+data: {"id":"evt_1882c13e300137co3M62Jxjv1y","created":1793285952483,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" lens and a concave eyepiece, which produced an upright image but a"}}
+
+data: {"id":"evt_1882c14580019koCYVK1I6sx17","created":1793285952600,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" very narrow field of view. In 1611"}}
+
+data: {"id":"evt_1882c14cb0013tYnK2ZpgIpQJP","created":1793285952715,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", Johannes Kepler, in his *Dioptr"}}
+
+data: {"id":"evt_1882c1538001XIHeZPoHISRw2V","created":1793285952825,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ice*, laid out the optical theory of a different arrangement: a convex objective with"}}
+
+data: {"id":"evt_1882c15bc001vHa14zzH0vhHye","created":1793285952956,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" a convex eyepiece,"}}
+
+data: {"id":"evt_1882c16a5001v6ZIplzoFWn7Ex","created":1793285953189,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" which produced an inverted image but a far wider field and greater magnification. Kepler himself may not have built such an instrument, but by the"}}
+
+data: {"id":"evt_1882c1717001a5CTTsxoTJCJuc","created":1793285953303,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" 1630s the \"astronomical\" or"}}
+
+data: {"id":"evt_1882c1784001NVYHsGNDL7I8L9","created":1793285953412,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Keplerian telescope had"}}
+
+data: {"id":"evt_1882c1827001lsyu0d0JBEXuBf","created":1793285953575,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" become standard, and"}}
+
+data: {"id":"evt_1882c18a7001zImvUgemBwosGo","created":1793285953703,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" it remained the basic design for refractors for the next two centuries.\n\nThe problem that plagued these instruments was chromatic aberration. Because glass"}}
+
+data: {"id":"evt_1882c191a001AYmz54qi7580z5","created":1793285953818,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" refracts different colors by different amounts, a simple lens brings"}}
+
+data: {"id":"evt_1882c1996001n6MknSyR4mtA54","created":1793285953943,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" blue light to a focus closer to the lens than red light, producing images"}}
+
+data: {"id":"evt_1882c1a1a0010yuQONArQraXl1","created":1793285954074,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" fringed with false color and blurred at"}}
+
+data: {"id":"evt_1882c1ab90014yog7nGX8kdtTD","created":1793285954233,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" high magnifications. Opticians tried to solve this by making telescopes"}}
+
+data: {"id":"evt_1882c1b1e001JGFXXDi366u7SC","created":1793285954334,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" longer and longer, reducing the curvature"}}
+
+data: {"id":"evt_1882c1ba1001jJ7crblcB6Ma3G","created":1793285954465,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" of the lenses and thereby the chromatic error"}}
+
+data: {"id":"evt_1882c1c28001bo9GJlLEE5qvcB","created":1793285954600,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":". By the late seventeenth century, the astronomer Johannes Hevel"}}
+
+data: {"id":"evt_1882c1c8f001iqrkk6UvASvHUZ","created":1793285954703,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ius was using refractors with focal"}}
+
+data: {"id":"evt_1882c1d160014hZkU9SZR7q9Sy","created":1793285954838,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" lengths of 45 meters or more, mounted"}}
+
+data: {"id":"evt_1882c1d8e001e8BMb4a0y0JN0Y","created":1793285954958,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" on immense wooden poles"}}
+
+data: {"id":"evt_1882c1e7d0010aF5sOEUhj8zxG","created":1793285955197,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" and hoisted by ropes"}}
+
+data: {"id":"evt_1882c1ee8001WR4LN0QQl68jIT","created":1793285955304,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" and pulleys. Christiaan Huygens built aerial telescopes of similar length, with the objective lens held in a separate frame and the eyepiece in the observer's hand, aligned by a taut"}}
+
+data: {"id":"evt_1882c1f960013ResyPQunj9U4O","created":1793285955478,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" string. These instruments were triumphs of patience and mechanical ingenuity, but they were unw"}}
+
+data: {"id":"evt_1882c200f001t0VpYwUpNbex0I","created":1793285955599,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ieldy, hard to point, and vulnerable"}}
+
+data: {"id":"evt_1882c207f001ypFh3fV8Muya9j","created":1793285955711,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" to the slightest breeze.\n\n## Newton, the Reflector, and a"}}
+
+data: {"id":"evt_1882c2105001dJfQaYscX6Pe35","created":1793285955845,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" New Path\n\nIsaac Newton, thinking about the problem of color in"}}
+
+data: {"id":"evt_1882c216c001jb6cUusydJviFk","created":1793285955948,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" the 1660s, concluded that chromatic aberration could not"}}
+
+data: {"id":"evt_1882c21d7001v400ypXUd9o0dC","created":1793285956055,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" be eliminated by any combination of lenses, because dispersion was"}}
+
+data: {"id":"evt_1882c2247001U4bGG7Kiu7qN5m","created":1793285956167,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" an inherent property of refraction. His solution was to abandon refraction altogether."}}
+
+data: {"id":"evt_1882c22f8001deX0vC7ynUSQ50","created":1793285956344,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" In 1668 he built a small reflecting telescope: a concave"}}
+
+data: {"id":"evt_1882c2365001C0skm3u3XxTDgq","created":1793285956453,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" parabolic mirror collected the light and focused it onto"}}
+
+data: {"id":"evt_1882c23cc001M3SsUYd35BhLcZ","created":1793285956556,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" a small flat"}}
+
+data: {"id":"evt_1882c246300119ZrCl4cl0jNWP","created":1793285956707,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" diagonal mirror,"}}
+
+data: {"id":"evt_1882c24cc00146mVX4ACVXt2aI","created":1793285956812,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" which deflected the converging beam out through a hole in the side of the tube to an eyepiece. The mirror had no chromatic aberration, and the instrument"}}
+
+data: {"id":"evt_1882c253d001FjAmUnnafjEY3k","created":1793285956925,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" was compact — about 15 centimeters"}}
+
+data: {"id":"evt_1882c25a30012caN1Rt4fYX5OJ","created":1793285957027,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" long but"}}
+
+data: {"id":"evt_1882c2620001ka8Mz4cCjalXfF","created":1793285957152,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" capable of magnification comparable to a refractor several meters long.\n\nNewton's reflector"}}
+
+data: {"id":"evt_1882c26b30018PfKl2h447TmRg","created":1793285957299,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" was not the first. James Gregory, a Scottish mathematician, had"}}
+
+data: {"id":"evt_1882c271a001LuKp1R3OS01HD8","created":1793285957402,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" proposed a reflecting design in 166"}}
+
+data: {"id":"evt_1882c27a1001XeipRIlB77c7LW","created":1793285957537,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"3 using two concave mirrors, and the \""}}
+
+data: {"id":"evt_1882c282c001xmHle6QUr96UXL","created":1793285957676,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"Gregorian\" telescope was built in 1673 by Robert Hooke. But"}}
+
+data: {"id":"evt_1882c289a001miNlNbMJ5o3JUz","created":1793285957786,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Newton's design was simpler and easier"}}
+
+data: {"id":"evt_1882c2908001MzTBSASNJjIukQ","created":1793285957896,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" to make, and it set the pattern for the great reflectors of"}}
+
+data: {"id":"evt_1882c2979001S9RelPbUg3X36F","created":1793285958009,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" the future. The catch was the"}}
+
+data: {"id":"evt_1882c2a01001k8RMIqFx74R9zg","created":1793285958145,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" mirror"}}
+
+data: {"id":"evt_1882c2b2b001KI4izkIbbm67Pl","created":1793285958443,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" itself. Early speculum mirrors, made of copper and tin, tarnished quickly and reflected only a fraction of the light that fell on them. For"}}
+
+data: {"id":"evt_1882c2b97001krG3OjUFaRI5l2","created":1793285958551,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" a century and a half, refractors remained superior for most"}}
+
+: heartbeat
+
+data: {"id":"evt_1882c2c1d001iS5EGySlRRpRZr","created":1793285958685,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" precise work, and reflectors were seen as a promising but imperfect alternative"}}
+
+data: {"id":"evt_1882c2c90001V24dmrkdWylKiA","created":1793285958800,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":".\n\n## The Achromat and the Refractor"}}
+
+data: {"id":"evt_1882c2d0000127AdRsHPcFo94g","created":1793285958912,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"'s Golden Age\n\nThe refractor's fortunes revived in the"}}
+
+data: {"id":"evt_1882c2d87001V2LnYtvN2EZila","created":1793285959047,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" 1730s, when Chester Moor Hall, an"}}
+
+data: {"id":"evt_1882c2dfa001uMxG4CCFtJO5I1","created":1793285959163,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" English barrister and amateur optician, realized"}}
+
+data: {"id":"evt_1882c2e6b001shEE6FpC0UQkPf","created":1793285959275,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" that two lenses made of glasses with"}}
+
+data: {"id":"evt_1882c2eeb001MIaxUWi5HH2lcD","created":1793285959403,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" different dispersive powers could be combined to cancel"}}
+
+data: {"id":"evt_1882c2f51001c6A7ir45l9B0wD","created":1793285959505,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" chromatic aberration. Hall kept his"}}
+
+data: {"id":"evt_1882c2fc5001AyqewKiPb3SRdG","created":1793285959621,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" discovery quiet, and the credit"}}
+
+data: {"id":"evt_1882c30d5001gMsVlZXiAM4wpX","created":1793285959893,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" went to John Dollond, a London optician who patented the achromatic doublet in 1758. The achromat —"}}
+
+data: {"id":"evt_1882c3149001JkwEo2VZCYc63G","created":1793285960009,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" a crown glass convex lens cemented to a fl"}}
+
+data: {"id":"evt_1882c31b9001p9Eb1MIhuqV4wH","created":1793285960121,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"int glass concave lens — made possible refractors that"}}
+
+data: {"id":"evt_1882c321e001lLqubyGVqfs2fq","created":1793285960222,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" were both powerful and manageable. By the early nineteenth century, the"}}
+
+data: {"id":"evt_1882c32aa0018s1NkAhegSNeMz","created":1793285960362,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" German optician Joseph von Fraunhofer had perfected"}}
+
+data: {"id":"evt_1882c332b0015K1XoIRqV4nn4G","created":1793285960491,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" the manufacture of achromatic objectives of"}}
+
+data: {"id":"evt_1882c3398001x7TMKw27bOdNcO","created":1793285960600,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" unprecedented quality, and his firm in"}}
+
+data: {"id":"evt_1882c33fd001k71fG5t7ObHhrM","created":1793285960701,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Munich produced instruments that equipped"}}
+
+data: {"id":"evt_1882c3463001Q7eh1oc0QfUOwm","created":1793285960803,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" the leading observatories of Europe.\n\nFraunhofer's refract"}}
+
+data: {"id":"evt_1882c34e10014VWXkghgyDff6A","created":1793285960929,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ors were not only optically superb; they were also mounted"}}
+
+data: {"id":"evt_1882c3557001iDTBGswkMIje3w","created":1793285961047,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" with precision equatorial drives that could"}}
+
+data: {"id":"evt_1882c35d30017Jas3OorDK9D0B","created":1793285961171,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" track the stars."}}
+
+data: {"id":"evt_1882c367b001Ov5f6jWaBM4r7F","created":1793285961339,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" The "}}
+
+data: {"id":"evt_1882c36e80012NOjowWBpcuvsF","created":1793285961448,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"24-centimeter refractor he built for the Dorpat Observatory in Estonia, and the 24-centimeter instrument at Kön"}}
+
+data: {"id":"evt_1882c378b0018mpnLS3HhM75Up","created":1793285961611,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"igsberg, became legendary. At the same time, Fraunhofer's study of the solar"}}
+
+data: {"id":"evt_1882c37fd001dYLKc71WZMSrC2","created":1793285961725,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" spectrum — he discovered the dark absorption lines that now bear his"}}
+
+data: {"id":"evt_1882c386e001LQZeZKNZExiU07","created":1793285961838,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" name — opened the door to astrophysics, the"}}
+
+data: {"id":"evt_1882c38d90015o8Gfn7GTQnixe","created":1793285961945,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" application of physics to the light of the"}}
+
+data: {"id":"evt_1882c3942001UxmMOzTWTaCn9x","created":1793285962050,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" stars.\n\n## The Great Reflectors: Herschel, Ros"}}
+
+data: {"id":"evt_1882c39ae0012Ylk4Rff1e0wBH","created":1793285962158,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"se, and the Quest for Light\n\nWhile"}}
+
+data: {"id":"evt_1882c3a24001Ml7SBFGKz7ROT1","created":1793285962276,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" refractors reached their optical limit — a lens"}}
+
+data: {"id":"evt_1882c3a8a001yX5fAatMVVsKn4","created":1793285962378,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" can only be so large before it sags under its own weight"}}
+
+data: {"id":"evt_1882c3afa001XExwes0KTDIZZa","created":1793285962490,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" — reflectors grew steadily larger. William Herschel,"}}
+
+data: {"id":"evt_1882c3b75001bp6gSlrQI442xa","created":1793285962613,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" a German-born musician and amateur astronomer living in Bath"}}
+
+data: {"id":"evt_1882c3bfd001CXduHgB3amrQaQ","created":1793285962749,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", built his own mirrors in the 1770s and 1780s, culminating in a 1."}}
+
+data: {"id":"evt_1882c3c91001aKQulFTf1I1Zrz","created":1793285962897,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"2-meter speculum mirror in a telescope 12 meters long. With"}}
+
+data: {"id":"evt_1882c3d0e001KoWE82Ctj8Jd4j","created":1793285963022,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" these instruments he discovered the planet Uranus in 1781, catalogued thousands"}}
+
+data: {"id":"evt_1882c3d78001faC966ddRfjQgc","created":1793285963128,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" of nebulae and star clusters, and mapped the structure"}}
+
+data: {"id":"evt_1882c3e2e001hcIE6wG1vrs2HP","created":1793285963310,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" of the Milky Way. His sister Caroline"}}
+
+data: {"id":"evt_1882c3e9b001hE3LK2PLhDw8nr","created":1793285963419,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", working alongside him, became a distinguished observer and discoverer of comets in her own right"}}
+
+data: {"id":"evt_1882c3f040015ph2Y34NJNiX2Z","created":1793285963524,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":".\n\nThe next leap came from Ireland. William Parsons, the"}}
+
+data: {"id":"evt_1882c3f71001yH49OpWh1TgFMP","created":1793285963633,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" third Earl of Ros"}}
+
+data: {"id":"evt_1882c3fe00011HnzLud9TZFjek","created":1793285963744,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"se, built at Birr Castle a reflecting telescope with"}}
+
+data: {"id":"evt_1882c404f001Ba8Jj9zX3979Ls","created":1793285963855,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" a 1.8-meter mirror, the largest in the world"}}
+
+data: {"id":"evt_1882c40ba001UzBMVpuv9o413O","created":1793285963962,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" when it was completed in 1845. Known as the Levi"}}
+
+data: {"id":"evt_1882c41230018lavM079Xe2GCz","created":1793285964067,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"athan of Parsonstown"}}
+
+data: {"id":"evt_1882c41c7001AvIspjFeCB0wCs","created":1793285964231,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", it"}}
+
+data: {"id":"evt_1882c4280001Rt5BxE85n3Sfib","created":1793285964416,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" revealed the spiral structure of galaxies such as M51 and demonstrated that nebulae were not all clouds of gas. Rosse's mirrors were made of spec"}}
+
+data: {"id":"evt_1882c42f5001cFzFR4fuQflK7x","created":1793285964534,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ulum metal, and they required"}}
+
+data: {"id":"evt_1882c435f001K5r2wO7myxP55G","created":1793285964639,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" constant polishing and re-pol"}}
+
+data: {"id":"evt_1882c43da001Pfp8xZoKyz9B9E","created":1793285964762,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ishing; the instrument was difficult to use, but it proved the principle that larger"}}
+
+data: {"id":"evt_1882c4447001XfYLzmqcU1ccEN","created":1793285964871,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" apertures gather more light and reveal fainter,"}}
+
+data: {"id":"evt_1882c44b4001cNAO7KFhczGuXg","created":1793285964980,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" more distant objects.\n\n## Photography, Spectroscopy"}}
+
+data: {"id":"evt_1882c45220015HaXqC022rJtim","created":1793285965090,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", and the Birth of Astrophysics\n\nThe nineteenth century transformed the telescope from an"}}
+
+data: {"id":"evt_1882c459c001sXwDocuJrU4Vvm","created":1793285965212,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" instrument of positional astronomy into a"}}
+
+data: {"id":"evt_1882c46190017COZ4kKlQfTFAQ","created":1793285965337,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" tool for understanding the physical nature of the stars. In 181"}}
+
+data: {"id":"evt_1882c468f001ZyrOJQ34aTnS4k","created":1793285965455,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"4, Fraunhofer mapped the solar spectrum; in the"}}
+
+data: {"id":"evt_1882c47540011DjadXjVstGBHz","created":1793285965652,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" 1850s and"}}
+
+data: {"id":"evt_1882c47c50011gpoerLuObe83v","created":1793285965765,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" 1860s, Gustav Kirchhoff and Robert Bunsen established that each chemical element produces a characteristic set of spectral lines."}}
+
+data: {"id":"evt_1882c4831001AtuRne9a53yosP","created":1793285965873,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" When William Huggins turned"}}
+
+data: {"id":"evt_1882c489b001RuGUzmDxASzcLU","created":1793285965979,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" a spectroscope on the stars in 186"}}
+
+data: {"id":"evt_1882c4909001xWftzOQBnw1KgI","created":1793285966089,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"3, he found that they were"}}
+
+data: {"id":"evt_1882c4981001Up6lzkQX6MIcIw","created":1793285966209,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" made of the same elements as the Sun and the"}}
+
+data: {"id":"evt_1882c49ed0011HX1S8ONdw3O9x","created":1793285966317,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Earth. Astronomy"}}
+
+data: {"id":"evt_1882c4a54001FHx3lOf12n9B2h","created":1793285966420,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" had become a branch of physics.\n\nPhotography arrived in the 184"}}
+
+data: {"id":"evt_1882c4ac90013W92FjwVLCQTRA","created":1793285966537,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"0s,"}}
+
+data: {"id":"evt_1882c4b44001CQOfDfbIQ7bjXS","created":1793285966660,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" and by the 1880s dry-plate emulsions were sensitive enough to record faint"}}
+
+data: {"id":"evt_1882c4ba9001I0bMP1c9dQpv8T","created":1793285966761,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" nebulae and star fields. The telescope could now"}}
+
+data: {"id":"evt_1882c4c8a001xpZ0DT6kjNi0m0","created":1793285966986,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" accumulate light over hours"}}
+
+data: {"id":"evt_1882c4d13001bA5myo6JswjQ9B","created":1793285967123,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", revealing"}}
+
+data: {"id":"evt_1882c4d89001KxEYDSC08igzpA","created":1793285967241,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" objects"}}
+
+data: {"id":"evt_1882c4e03001SeaAaxUQvtYeYA","created":1793285967363,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" far beyond the reach of the human eye. The great refractors"}}
+
+data: {"id":"evt_1882c4e6e001f3mvZq8X6djxtx","created":1793285967470,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" of the late"}}
+
+data: {"id":"evt_1882c4eed0012HQM1PXeeWDpvt","created":1793285967597,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" nineteenth century — the 91-centimeter instrument at Lick Observatory, the 102-centimeter at Yerkes — were built as photographic machines, and the systematic photography of the sky produced catalogues of millions"}}
+
+data: {"id":"evt_1882c4fe2001L2HP5CG4EEZa0k","created":1793285967842,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" of stars.\n\n## Mount Wilson, Hubble, and the Expanding Universe\n\nThe twentieth century belonged to the reflector. In 1908, George Ellery Hale completed the 1"}}
+
+data: {"id":"evt_1882c5053001kZhFCH0xlSFUgf","created":1793285967955,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":".5-meter telescope on Mount"}}
+
+data: {"id":"evt_1882c50c4001JOOLAlSuUst0lQ","created":1793285968068,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Wilson in California; in 1917, the 2.5-meter Hooker telescope followed, the largest in the world for three decades. With"}}
+
+data: {"id":"evt_1882c51ae001urVUYGPOwCJ5Ug","created":1793285968302,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" it, Harlow Shapley mapped the distribution of globular clusters and located the Sun"}}
+
+data: {"id":"evt_1882c521d001v28lHJ1Bjb6sze","created":1793285968413,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" far"}}
+
+data: {"id":"evt_1882c5292001VO3jiq0G1A00kd","created":1793285968531,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" from the center of the Milky Way. In the 1920s, Edwin Hubble used the Hooker telescope to resolve individual stars in the Andromeda neb"}}
+
+data: {"id":"evt_1882c52fb001mXUU7Aota511iV","created":1793285968636,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ula, proving that it lay far outside"}}
+
+data: {"id":"evt_1882c5393001vgBJvwQnOyQ2wd","created":1793285968787,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" our"}}
+
+data: {"id":"evt_1882c5407001B2u71nthpQxX7T","created":1793285968903,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" galaxy, and then to measure the redshifts"}}
+
+data: {"id":"evt_1882c5474001w8XHwsk06FEcKa","created":1793285969012,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" of distant galaxies, establishing that the universe is expanding. The telescope had revealed the scale and the motion of the cosmos.\n\nThe 5-meter Hale telescope on Pal"}}
+
+data: {"id":"evt_1882c54f2001SejQb9ge69og2i","created":1793285969138,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"omar Mountain, completed in 1948, was the last of the great monolithic"}}
+
+data: {"id":"evt_1882c5573001jwKF31ids6vhPD","created":1793285969267,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" reflectors built with"}}
+
+data: {"id":"evt_1882c55d9001SO24VUkWX4qWD1","created":1793285969369,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" traditional techniques. Its mirror, made of Py"}}
+
+data: {"id":"evt_1882c5640001JVXK8DRU6UmX7W","created":1793285969472,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"rex, was a triumph of engineering, and for a"}}
+
+data: {"id":"evt_1882c56b6001VNZm63CNjI6Aws","created":1793285969590,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" quarter century it was the most powerful telescope in the"}}
+
+data: {"id":"evt_1882c573b001haGwZtzeX6CBnj","created":1793285969723,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" world. But the future lay in new technologies: computer"}}
+
+data: {"id":"evt_1882c57a2001DhxN77kpwlRuIv","created":1793285969826,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"-controlled mounts, lightweight"}}
+
+data: {"id":"evt_1882c58110016zUvIEx4Y1kt1v","created":1793285969937,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" mirrors, and detectors far more sensitive than photographic"}}
+
+data: {"id":"evt_1882c589100162Kpanbjl4xF2n","created":1793285970065,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" plates.\n\n## Beyond Visible Light: Radio, Space, and Adaptive Optics\n\nIn"}}
+
+data: {"id":"evt_1882c58fa001eD6yV7dxTuH12D","created":1793285970171,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" 1932, Karl Jansky"}}
+
+data: {"id":"evt_1882c597f001wFkEdR6sq4X1tq","created":1793285970303,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":","}}
+
+data: {"id":"evt_1882c5a53001uuEeF6iI2iziIc","created":1793285970515,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" an engineer at Bell Labs, detected radio"}}
+
+data: {"id":"evt_1882c5ac900186tSTvZyuGdyG7","created":1793285970633,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" waves coming from the Milky Way. After the Second World War, radio astronomy burgeoned, using large dish antennas to map the hydrogen clouds of the galaxy and to discover quas"}}
+
+data: {"id":"evt_1882c5b48001YlGLyqPuTCqDBf","created":1793285970760,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ars and pulsars"}}
+
+data: {"id":"evt_1882c5bc00014bigDseOBJXbn8","created":1793285970880,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":". The telescope had escaped the narrow band of visible light.\n\nThe 1990 launch"}}
+
+data: {"id":"evt_1882c5c260014Ce53MrnZxqJg3","created":1793285970982,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" of the Hubble Space Telescope put a 2.4-meter reflector"}}
+
+data: {"id":"evt_1882c5caa001hwrd11MT6kxgbh","created":1793285971114,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" above the atmosphere, eliminating the blurring caused by turbulence and opening"}}
+
+data: {"id":"evt_1882c5d150010uP27fvXPGZF6G","created":1793285971221,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" the ultraviolet and near"}}
+
+data: {"id":"evt_1882c5d8d001CZWCQ6dw4WTeCt","created":1793285971341,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"-infrared sky. Its dramatic first images"}}
+
+data: {"id":"evt_1882c5e28001sA5LKOk2t18jkn","created":1793285971496,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" — and the 1993 servicing mission that corrected its flawed mirror — made"}}
+
+data: {"id":"evt_1882c5e90001QdBLNE1qWLrOY5","created":1793285971600,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" it the most famous scientific instrument of"}}
+
+data: {"id":"evt_1882c5ef7001FWAHT0t7CXn8ep","created":1793285971703,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" its era. Meanwhile, ground-based telescopes adopted"}}
+
+data: {"id":"evt_1882c5fbe001lOmmYA2ySuKIvo","created":1793285971902,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" adaptive optics, using"}}
+
+data: {"id":"evt_1882c6059001wj3Jw7Ed7Cng7G","created":1793285972057,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" deformable mirrors to correct atmospheric distortion in real time, and interferometry, combining the light from separated telescopes to achieve the resolution of a much"}}
+
+data: {"id":"evt_1882c6140001Z7kSabE31NsmRt","created":1793285972288,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" larger aperture.\n\n## The Present and the Future\n\nThe largest optical telescopes today are segmented giants"}}
+
+data: {"id":"evt_1882c61ab001YYismljBg7yWBs","created":1793285972395,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":": the 10-meter Keck telescopes"}}
+
+data: {"id":"evt_1882c622d0014r85q7Y4vIFkDO","created":1793285972525,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" in Hawaii, the four 8.2-meter Very Large Telesc"}}
+
+data: {"id":"evt_1882c62af001HeyrSXhNYKewNx","created":1793285972656,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"opes in Chile, and the 10"}}
+
+data: {"id":"evt_1882c6317001GaVefrU83mFP0Z","created":1793285972759,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":".4-meter Gran Telescopio Canarias. Under construction are the 39-meter Extrem"}}
+
+data: {"id":"evt_1882c63940014DgPKk343uhGN1","created":1793285972884,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ely Large Telescope in Chile, the 30-meter"}}
+
+data: {"id":"evt_1882c63fb001Q9SYQaQl1ZcrE8","created":1793285972987,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Thirty Meter Telescope, and the 25-meter Giant Mag"}}
+
+data: {"id":"evt_1882c6460001E0oyncKGftH1ov","created":1793285973089,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ellan Telescope. The James Webb Space Telescope, launched in December 2021, observes"}}
+
+data: {"id":"evt_1882c64da001Xk6jKvntbsBR60","created":1793285973210,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" in the infrared from a point 1.5 million kilometers from Earth, with a 6.5"}}
+
+data: {"id":"evt_1882c65440017pPRdq56sW6Q5p","created":1793285973316,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"-meter segmented mirror and a sunshield the size of a tennis court. It"}}
+
+data: {"id":"evt_1882c65e4001ht6qEAOyC3QlCy","created":1793285973476,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" has already probed the atmospheres of exoplanets and imaged galaxies formed within a"}}
+
+data: {"id":"evt_1882c6655001Hy2qpItogzO5Ph","created":1793285973589,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" few hundred million years of the Big Bang.\n\nFrom a spectacle maker"}}
+
+: heartbeat
+
+data: {"id":"evt_1882c66bc001xyZInZE7EzjpMc","created":1793285973692,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"'s tube in Middelburg to a segmented golden eye at the Lagrange point, the telescope"}}
+
+data: {"id":"evt_1882c6723001P1dGw67EdrcZ0H","created":1793285973795,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"'s history is a story of one"}}
+
+data: {"id":"evt_1882c678e0010qu8TaJxFYqwS9","created":1793285973902,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" persistent idea: that the universe is leg"}}
+
+data: {"id":"evt_1882c680d0010bANX66ti1EzT7","created":1793285974029,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ible, and that a sufficiently careful arrangement"}}
+
+data: {"id":"evt_1882c6897001myDN4QT0VqAcgh","created":1793285974167,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" of glass and mirror can read it. Each generation"}}
+
+data: {"id":"evt_1882c691a001Y9b5PMPKGbRJhD","created":1793285974298,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" of instrument has not merely seen farther"}}
+
+data: {"id":"evt_1882c69ce001Xb43loR5C4qw4i","created":1793285974478,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" but"}}
+
+data: {"id":"evt_1882c6a5800100HqcDCyECAeIm","created":1793285974616,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" has changed what counts as a question worth asking. The next century will likely bring telescopes on the Moon,"}}
+
+data: {"id":"evt_1882c6abe001o47g7O2rxWsAWb","created":1793285974718,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" arrays of gravitational-wave and neutrino"}}
+
+data: {"id":"evt_1882c6b2d001QP8ZLiFNOJ7x5j","created":1793285974829,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" detectors that complement light, and instruments"}}
+
+data: {"id":"evt_1882c6b9b0014D3DNUAgEtpsNm","created":1793285974939,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" whose designs we can barely imagine. But the essential gesture"}}
+
+data: {"id":"evt_1882c6c05001IpT0F0csOl0t6m","created":1793285975045,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" — building a machine to look"}}
+
+data: {"id":"evt_1882c6c790018KRAygoSVkfooI","created":1793285975161,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", and then looking — remains the same."}}
+
+data: {"id":"evt_1882c6c82001wrIRAe6RbMnlwG","created":1793285975170,"type":"session.reasoning.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"text":"The user wants a 2000-word essay about the history of the telescope. No tools. Just write it. Detailed. ~2000 words.\n\nLet me write a well-structured essay with headings, covering: origins (lens making, Lippershey 1608), Galileo, Keplerian, Huygens, Newton reflector, Gregorian, achromats, Dollond, Herschel, Lord Rosse, spectroscopy, photography, Mount Wilson, Hubble, radio astronomy, space telescopes, adaptive optics, interferometry, JWST, future.\n\nI'll aim for about 2000 words. Let me write carefully and count roughly. I'll write substantial paragraphs.\n\nLet me draft with sections. Target ~2000 words — I should be generous but not bloated. Roughly 12-14 paragraphs at ~150 words each.\n\nLet me write.","native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":10,"version":1}}
+
+data: {"id":"evt_1882c6c84001K4H3kZtndsliC8","created":1793285975172,"type":"session.text.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"text":"# The Long Eye: A History of the Telescope\n\n## Before the Telescope: Lenses Without a Purpose\n\nThe telescope did not arrive out of nowhere in 1608. Its essential ingredients — properly ground and polished glass lenses that could bend light in a controlled way — had been developing for three centuries. Spectacle makers in northern Italy and the Low Countries had been grinding convex lenses for the farsighted since at least the late thirteenth century, and concave lenses for the nearsighted soon followed. By the sixteenth century, cities such as Middelburg, in Zeeland, had become small centers of lens craft, where artisans polished discs of glass for reading spectacles, for merchants inspecting cloth, and for scholars studying the geometry of refraction.\n\nWhat these craftsmen possessed was not theory but tacit skill: the ability to shape a piece of glass to a specific curvature and to judge its quality by eye. What they lacked, or did not combine, was the idea of placing two lenses in a line so that the image from one was magnified by the other. Several people seem to have stumbled on this combination independently. The English mathematician Leonard Digges may have experimented with combinations of lenses and a mirror as early as the 1550s, though the evidence is fragmentary and disputed. In 1586, Giambattista della Porta described in his *Natural Magic* how a concave and a convex lens could be arranged to make distant objects appear nearer and larger — a description that is tantalizingly close to a working instrument, though it is unclear whether he built one.\n\nThe decisive moment came in the Netherlands in the autumn of 1608. Hans Lippershey, a spectacle maker in Middelburg, applied to the States of Zeeland for a patent on \"a certain instrument for seeing far.\" His device used two lenses in a tube and offered magnification of roughly three times. Within weeks, the instrument was being demonstrated to Maurice of Nassau, and news of it spread rapidly through diplomatic channels. Jacob Metius of Alkmaar filed a competing claim, and Sacharias Janssen, another Middelburg lens maker, was later credited by some accounts. The patent was refused — the States General judged the device too easy to copy — but the cat was out of the bag. By 1609, telescopes were being sold in Paris and Venice, and Galileo Galilei, then a professor of mathematics at Padua, heard of the invention while visiting the Venetian Republic.\n\n## Galileo Turns the Instrument Skyward\n\nGalileo's contribution was not the telescope itself but the decision to point it at the heavens and to trust what he saw. Working from a description rather than a physical model, he ground his own lenses and assembled instruments of increasing power, eventually reaching magnifications of about twenty or thirty times. His first telescope, presented to the Venetian Senate in August 1609, was a modest thing of eight-power magnification; his later instruments were better.\n\nWhat he found in the winter of 1609–1610 transformed astronomy. The Moon, which Aristotelian cosmology held to be a perfect, smooth sphere, revealed mountains, craters, and what Galileo called \"seas.\" The Milky Way, supposedly a vaporous exhalation, resolved into innumerable stars. The constellation of Orion, which had seemed to contain a handful of stars, proved to hold hundreds. Most consequentially, Jupiter showed four small bodies circling it — the Medicean stars, as Galileo named them in honor of his patron — providing a visible, tangible miniature of the Copernican system. And Venus exhibited phases, waxing and waning in a pattern that only made sense if the planet orbited the Sun.\n\nGalileo published these observations in *Sidereus Nuncius* in March 1610, a slim book that made him famous across Europe within months. He was appointed court philosopher to the Medici in Florence, and he continued observing, discovering the odd \"ears\" of Saturn (which he could not resolve and which Huygens would later explain as a ring), the spots on the Sun, and the rotation of that body. His work did not settle the Copernican question by itself, but it shifted the burden of proof decisively. The telescope had become an instrument of natural philosophy, and the heavens had become a place one could inspect.\n\n## The Keplerian Revolution and the Problem of Color\n\nThe Galilean telescope used a convex objective lens and a concave eyepiece, which produced an upright image but a very narrow field of view. In 1611, Johannes Kepler, in his *Dioptrice*, laid out the optical theory of a different arrangement: a convex objective with a convex eyepiece, which produced an inverted image but a far wider field and greater magnification. Kepler himself may not have built such an instrument, but by the 1630s the \"astronomical\" or Keplerian telescope had become standard, and it remained the basic design for refractors for the next two centuries.\n\nThe problem that plagued these instruments was chromatic aberration. Because glass refracts different colors by different amounts, a simple lens brings blue light to a focus closer to the lens than red light, producing images fringed with false color and blurred at high magnifications. Opticians tried to solve this by making telescopes longer and longer, reducing the curvature of the lenses and thereby the chromatic error. By the late seventeenth century, the astronomer Johannes Hevelius was using refractors with focal lengths of 45 meters or more, mounted on immense wooden poles and hoisted by ropes and pulleys. Christiaan Huygens built aerial telescopes of similar length, with the objective lens held in a separate frame and the eyepiece in the observer's hand, aligned by a taut string. These instruments were triumphs of patience and mechanical ingenuity, but they were unwieldy, hard to point, and vulnerable to the slightest breeze.\n\n## Newton, the Reflector, and a New Path\n\nIsaac Newton, thinking about the problem of color in the 1660s, concluded that chromatic aberration could not be eliminated by any combination of lenses, because dispersion was an inherent property of refraction. His solution was to abandon refraction altogether. In 1668 he built a small reflecting telescope: a concave parabolic mirror collected the light and focused it onto a small flat diagonal mirror, which deflected the converging beam out through a hole in the side of the tube to an eyepiece. The mirror had no chromatic aberration, and the instrument was compact — about 15 centimeters long but capable of magnification comparable to a refractor several meters long.\n\nNewton's reflector was not the first. James Gregory, a Scottish mathematician, had proposed a reflecting design in 1663 using two concave mirrors, and the \"Gregorian\" telescope was built in 1673 by Robert Hooke. But Newton's design was simpler and easier to make, and it set the pattern for the great reflectors of the future. The catch was the mirror itself. Early speculum mirrors, made of copper and tin, tarnished quickly and reflected only a fraction of the light that fell on them. For a century and a half, refractors remained superior for most precise work, and reflectors were seen as a promising but imperfect alternative.\n\n## The Achromat and the Refractor's Golden Age\n\nThe refractor's fortunes revived in the 1730s, when Chester Moor Hall, an English barrister and amateur optician, realized that two lenses made of glasses with different dispersive powers could be combined to cancel chromatic aberration. Hall kept his discovery quiet, and the credit went to John Dollond, a London optician who patented the achromatic doublet in 1758. The achromat — a crown glass convex lens cemented to a flint glass concave lens — made possible refractors that were both powerful and manageable. By the early nineteenth century, the German optician Joseph von Fraunhofer had perfected the manufacture of achromatic objectives of unprecedented quality, and his firm in Munich produced instruments that equipped the leading observatories of Europe.\n\nFraunhofer's refractors were not only optically superb; they were also mounted with precision equatorial drives that could track the stars. The 24-centimeter refractor he built for the Dorpat Observatory in Estonia, and the 24-centimeter instrument at Königsberg, became legendary. At the same time, Fraunhofer's study of the solar spectrum — he discovered the dark absorption lines that now bear his name — opened the door to astrophysics, the application of physics to the light of the stars.\n\n## The Great Reflectors: Herschel, Rosse, and the Quest for Light\n\nWhile refractors reached their optical limit — a lens can only be so large before it sags under its own weight — reflectors grew steadily larger. William Herschel, a German-born musician and amateur astronomer living in Bath, built his own mirrors in the 1770s and 1780s, culminating in a 1.2-meter speculum mirror in a telescope 12 meters long. With these instruments he discovered the planet Uranus in 1781, catalogued thousands of nebulae and star clusters, and mapped the structure of the Milky Way. His sister Caroline, working alongside him, became a distinguished observer and discoverer of comets in her own right.\n\nThe next leap came from Ireland. William Parsons, the third Earl of Rosse, built at Birr Castle a reflecting telescope with a 1.8-meter mirror, the largest in the world when it was completed in 1845. Known as the Leviathan of Parsonstown, it revealed the spiral structure of galaxies such as M51 and demonstrated that nebulae were not all clouds of gas. Rosse's mirrors were made of speculum metal, and they required constant polishing and re-polishing; the instrument was difficult to use, but it proved the principle that larger apertures gather more light and reveal fainter, more distant objects.\n\n## Photography, Spectroscopy, and the Birth of Astrophysics\n\nThe nineteenth century transformed the telescope from an instrument of positional astronomy into a tool for understanding the physical nature of the stars. In 1814, Fraunhofer mapped the solar spectrum; in the 1850s and 1860s, Gustav Kirchhoff and Robert Bunsen established that each chemical element produces a characteristic set of spectral lines. When William Huggins turned a spectroscope on the stars in 1863, he found that they were made of the same elements as the Sun and the Earth. Astronomy had become a branch of physics.\n\nPhotography arrived in the 1840s, and by the 1880s dry-plate emulsions were sensitive enough to record faint nebulae and star fields. The telescope could now accumulate light over hours, revealing objects far beyond the reach of the human eye. The great refractors of the late nineteenth century — the 91-centimeter instrument at Lick Observatory, the 102-centimeter at Yerkes — were built as photographic machines, and the systematic photography of the sky produced catalogues of millions of stars.\n\n## Mount Wilson, Hubble, and the Expanding Universe\n\nThe twentieth century belonged to the reflector. In 1908, George Ellery Hale completed the 1.5-meter telescope on Mount Wilson in California; in 1917, the 2.5-meter Hooker telescope followed, the largest in the world for three decades. With it, Harlow Shapley mapped the distribution of globular clusters and located the Sun far from the center of the Milky Way. In the 1920s, Edwin Hubble used the Hooker telescope to resolve individual stars in the Andromeda nebula, proving that it lay far outside our galaxy, and then to measure the redshifts of distant galaxies, establishing that the universe is expanding. The telescope had revealed the scale and the motion of the cosmos.\n\nThe 5-meter Hale telescope on Palomar Mountain, completed in 1948, was the last of the great monolithic reflectors built with traditional techniques. Its mirror, made of Pyrex, was a triumph of engineering, and for a quarter century it was the most powerful telescope in the world. But the future lay in new technologies: computer-controlled mounts, lightweight mirrors, and detectors far more sensitive than photographic plates.\n\n## Beyond Visible Light: Radio, Space, and Adaptive Optics\n\nIn 1932, Karl Jansky, an engineer at Bell Labs, detected radio waves coming from the Milky Way. After the Second World War, radio astronomy burgeoned, using large dish antennas to map the hydrogen clouds of the galaxy and to discover quasars and pulsars. The telescope had escaped the narrow band of visible light.\n\nThe 1990 launch of the Hubble Space Telescope put a 2.4-meter reflector above the atmosphere, eliminating the blurring caused by turbulence and opening the ultraviolet and near-infrared sky. Its dramatic first images — and the 1993 servicing mission that corrected its flawed mirror — made it the most famous scientific instrument of its era. Meanwhile, ground-based telescopes adopted adaptive optics, using deformable mirrors to correct atmospheric distortion in real time, and interferometry, combining the light from separated telescopes to achieve the resolution of a much larger aperture.\n\n## The Present and the Future\n\nThe largest optical telescopes today are segmented giants: the 10-meter Keck telescopes in Hawaii, the four 8.2-meter Very Large Telescopes in Chile, and the 10.4-meter Gran Telescopio Canarias. Under construction are the 39-meter Extremely Large Telescope in Chile, the 30-meter Thirty Meter Telescope, and the 25-meter Giant Magellan Telescope. The James Webb Space Telescope, launched in December 2021, observes in the infrared from a point 1.5 million kilometers from Earth, with a 6.5-meter segmented mirror and a sunshield the size of a tennis court. It has already probed the atmospheres of exoplanets and imaged galaxies formed within a few hundred million years of the Big Bang.\n\nFrom a spectacle maker's tube in Middelburg to a segmented golden eye at the Lagrange point, the telescope's history is a story of one persistent idea: that the universe is legible, and that a sufficiently careful arrangement of glass and mirror can read it. Each generation of instrument has not merely seen farther but has changed what counts as a question worth asking. The next century will likely bring telescopes on the Moon, arrays of gravitational-wave and neutrino detectors that complement light, and instruments whose designs we can barely imagine. But the essential gesture — building a machine to look, and then looking — remains the same."},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":11,"version":1}}
+
+data: {"id":"evt_1882c6c85001ptOFZDxtfbt30K","created":1793285975173,"type":"session.step.streamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr"},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":12,"version":1}}
+
+data: {"id":"evt_1882c6c86001J5j0ywl634HIXV","created":1793285975174,"type":"session.step.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","finish":"stop","rawFinish":"stop","tokens":{"input":70,"output":2975,"reasoning":172,"cache":{"read":7040,"write":0}},"cost":0},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":13,"version":1}}
+
+data: {"id":"evt_1882c6c86002PBaI7asSUWx0B4","created":1793285975174,"type":"session.usage.updated","data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","cost":0,"tokens":{"input":170,"output":2980,"reasoning":249,"cache":{"read":7424,"write":0}}}}
+
+data: {"id":"evt_1882c6c87001cCUXPuMxTfabzw","created":1793285975175,"type":"session.execution.succeeded","data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi"},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":14,"version":1}}
+

@@ -1,0 +1,176 @@
+data: {"id":"evt_1822cb2fa001VELBvfOx0bN2Hf","type":"server.connected","data":{}}
+
+: heartbeat
+
+: heartbeat
+
+: heartbeat
+
+: heartbeat
+
+data: {"id":"evt_1822d643c00132hJQWgaYmGVHt","created":1793185375292,"type":"session.created","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","slug":"swift-orchid","version":"2.2.0","projectID":"d0f40f0aa47eb5c38fe590efb8297e899aee2ad0","location":{"directory":"C:\\work\\proj"},"subpath":"","title":"recon","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode"}},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":0,"version":1}}
+
+data: {"id":"evt_1822d643f001HPLlzca6SoF21H","created":1793185375295,"type":"project.updated","data":{"id":"d0f40f0aa47eb5c38fe590efb8297e899aee2ad0","canonical":"C:\\work\\proj","time":{"created":1793185260741,"updated":1793185260741,"active":1793185375295},"sandboxes":[]}}
+
+data: {"id":"evt_1822d6487001e2i2dDzy7VWyFb","created":1793185375367,"type":"session.inbox.enqueued","location":{"directory":"C:\\work\\proj"},"data":{"inboxID":"msg_1822d6486001O0TuRaxQ9pGvYV","sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","item":{"type":"user","payload":{"text":"Use your tools to list the files in the current directory and tell me their names. Be brief."},"delivery":"steer"}},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":1,"version":1}}
+
+data: {"id":"evt_1822d648a001x6sqfauIML12t7","created":1793185375370,"type":"session.execution.started","data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":2,"version":1}}
+
+data: {"id":"evt_1822d6490001PyW9nmiXHMEhmu","created":1793185375376,"metadata":{"instructions":{"initial":true}},"type":"session.instructions.updated","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","delta":{"core/codemode":"e6428fd7742161f6c3a6c86e53cbbe2c6e4dcc462bbf1a1a07bc4fcbeb9e0b0b","core/skill-guidance":"2fe9d54785ac07f73f24d1eec103869492c2c89e10b48f853cd935b8e3f377e3","core/date":"6d4a8d82bb3953b301cff314b2033faa106b99e39c298d2db8f5b01935e78f7f","core/environment":"57c2e3dfd36ea0ff21859b9fac1768506df99fc94abf0225de1ca06baba766f1"}},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":3,"version":2}}
+
+data: {"id":"evt_1822d649200170YThcqjAiHI4h","created":1793185375378,"type":"session.inbox.delivered","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","inboxID":"msg_1822d6486001O0TuRaxQ9pGvYV"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":4,"version":1}}
+
+data: {"id":"evt_1822d69fe0017SQpIa3tgNr1Ao","created":1793185376766,"type":"session.step.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode","variant":"default"},"assistantMessageID":"msg_1822d6499001dyYDpy852YSbTt","started":1793185375407},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":5,"version":1}}
+
+data: {"id":"evt_1822d6a00001aPv11BmZEB9gCV","created":1793185376768,"type":"session.tool.input.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6499001dyYDpy852YSbTt","id":"call_00_ET_UTJBD9vMiVeeuWu3XMPd8933","name":"execute"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":6,"version":1}}
+
+data: {"id":"evt_1822d6a7c001I3OG6op5dcvep7","created":1793185376892,"type":"session.tool.input.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6499001dyYDpy852YSbTt","id":"call_00_ET_UTJBD9vMiVeeuWu3XMPd8933","text":"{\"code\": \"const r = await tools.glob({pattern: \\\"*\\\"});\\nreturn r;\"}"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":7,"version":1}}
+
+data: {"id":"evt_1822d6a7e0012H7W271t1rgwH5","created":1793185376894,"type":"session.tool.called","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6499001dyYDpy852YSbTt","id":"call_00_ET_UTJBD9vMiVeeuWu3XMPd8933","input":{"code":"const r = await tools.glob({pattern: \"*\"});\nreturn r;"},"executed":false},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":8,"version":1}}
+
+data: {"id":"evt_1822d6a7f001FSXMnSZpRWwZD8","created":1793185376895,"type":"session.step.streamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6499001dyYDpy852YSbTt"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":9,"version":1}}
+
+data: {"id":"evt_1822d6a84001SJCT1EwQztGxQs","created":1793185376900,"type":"session.tool.success","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6499001dyYDpy852YSbTt","id":"call_00_ET_UTJBD9vMiVeeuWu3XMPd8933","content":[{"type":"text","text":"Unknown tool 'glob'.\nUse search to find available tools."}],"metadata":{"toolCalls":[],"error":true,"truncated":false},"executed":false},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":10,"version":2}}
+
+data: {"id":"evt_1822d6a86001PxftRzKo0uygf5","created":1793185376902,"type":"session.step.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6499001dyYDpy852YSbTt","finish":"tool-calls","rawFinish":"tool_calls","tokens":{"input":4932,"output":51,"reasoning":0,"cache":{"read":2176,"write":0}},"cost":0},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":11,"version":1}}
+
+data: {"id":"evt_1822d6a87001SmwVAQRkuLDUZk","created":1793185376903,"type":"session.usage.updated","data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","cost":0,"tokens":{"input":4932,"output":51,"reasoning":0,"cache":{"read":2176,"write":0}}}}
+
+data: {"id":"evt_1822d6fce001K3wLlJ06ne94gj","created":1793185378254,"type":"session.step.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode","variant":"default"},"assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","started":1793185376912},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":12,"version":1}}
+
+data: {"id":"evt_1822d6fd10012EP7trwwKynR6s","created":1793185378257,"type":"session.reasoning.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","ordinal":0,"native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":13,"version":1}}
+
+data: {"id":"evt_1822d7038001F02aSQnVb6URHM","created":1793185378360,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","ordinal":0,"delta":"In code mode, only listed tools. Glob isn't in the catalog. Use shell"}}
+
+data: {"id":"evt_1822d70b7001D6rGHVtFbwPE2X","created":1793185378487,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","ordinal":0,"delta":" via execute? Shell isn't in the code-mode catalog either. Hmm, the catalog only includes open"}}
+
+data: {"id":"evt_1822d712200141G1rVg476sdkK","created":1793185378594,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","ordinal":0,"delta":"code tools. But I have direct tools available outside code mode (glob, shell). Instructions say use execute"}}
+
+data: {"id":"evt_1822d718d001zv4zOZMR0cKDIr","created":1793185378701,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","ordinal":0,"delta":" to call tools listed below, they only work inside code"}}
+
+data: {"id":"evt_1822d71f6001OAFGmncWCofS62","created":1793185378806,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","ordinal":0,"delta":". But glob/shell are separate tools I can call directly per my tool list. Let me just call glob directly."}}
+
+data: {"id":"evt_1822d72040015EPlk0bW1E7MRi","created":1793185378820,"type":"session.tool.input.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","id":"call_00_O4uKM99yz7q2BVrlt5oc3968","name":"glob"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":14,"version":1}}
+
+data: {"id":"evt_1822d725c001tWV6XERANZVwdP","created":1793185378908,"type":"session.reasoning.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","ordinal":0,"text":"In code mode, only listed tools. Glob isn't in the catalog. Use shell via execute? Shell isn't in the code-mode catalog either. Hmm, the catalog only includes opencode tools. But I have direct tools available outside code mode (glob, shell). Instructions say use execute to call tools listed below, they only work inside code. But glob/shell are separate tools I can call directly per my tool list. Let me just call glob directly.","native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":15,"version":1}}
+
+data: {"id":"evt_1822d725e001x2n8hIbDEbkxjT","created":1793185378910,"type":"session.tool.input.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","id":"call_00_O4uKM99yz7q2BVrlt5oc3968","text":"{\"pattern\": \"*\"}"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":16,"version":1}}
+
+data: {"id":"evt_1822d725f0011Lj1hxQq2Jqq3q","created":1793185378911,"type":"session.tool.called","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","id":"call_00_O4uKM99yz7q2BVrlt5oc3968","input":{"pattern":"*"},"executed":false},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":17,"version":1}}
+
+data: {"id":"evt_1822d72600015LMch3racu7YHo","created":1793185378912,"type":"session.step.streamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":18,"version":1}}
+
+data: {"id":"evt_1822d729200182JV5SxWOQzLZ7","created":1793185378962,"type":"session.tool.success","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","id":"call_00_O4uKM99yz7q2BVrlt5oc3968","content":[{"type":"text","text":"C:\\work\\proj"}],"metadata":{"count":1,"truncated":false},"executed":false},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":19,"version":2}}
+
+data: {"id":"evt_1822d7294001ULlweNQogOB9ST","created":1793185378964,"type":"session.step.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d6a8c001PMZBZCOHVhJCQF","finish":"tool-calls","rawFinish":"tool_calls","tokens":{"input":142,"output":37,"reasoning":94,"cache":{"read":7040,"write":0}},"cost":0},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":20,"version":1}}
+
+data: {"id":"evt_1822d7295001OtWhB66kNg16FA","created":1793185378965,"type":"session.usage.updated","data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","cost":0,"tokens":{"input":5074,"output":88,"reasoning":94,"cache":{"read":9216,"write":0}}}}
+
+data: {"id":"evt_1822d774d001JjTnSbrPYN548b","created":1793185380173,"type":"session.step.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode","variant":"default"},"assistantMessageID":"msg_1822d7299001bwL1nG1nBwTE5K","started":1793185378972},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":21,"version":1}}
+
+data: {"id":"evt_1822d774f001NgKiXs5oUfZFrE","created":1793185380175,"type":"session.text.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d7299001bwL1nG1nBwTE5K","ordinal":0},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":22,"version":1}}
+
+data: {"id":"evt_1822d77700013WGWrTB6hv2cwO","created":1793185380208,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d7299001bwL1nG1nBwTE5K","ordinal":0,"delta":"One file: `hello.txt`"}}
+
+data: {"id":"evt_1822d7770002oQYRawcX9X6QXp","created":1793185380208,"type":"session.text.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d7299001bwL1nG1nBwTE5K","ordinal":0,"text":"One file: `hello.txt`"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":23,"version":1}}
+
+data: {"id":"evt_1822d7771001sFFeGIEnAqd7IS","created":1793185380209,"type":"session.step.streamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d7299001bwL1nG1nBwTE5K"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":24,"version":1}}
+
+data: {"id":"evt_1822d777200171pMOTzHIZL4Kp","created":1793185380210,"type":"session.step.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822d7299001bwL1nG1nBwTE5K","finish":"stop","rawFinish":"stop","tokens":{"input":226,"output":8,"reasoning":0,"cache":{"read":7168,"write":0}},"cost":0},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":25,"version":1}}
+
+data: {"id":"evt_1822d7773001UZcD9APvO85Kcj","created":1793185380211,"type":"session.usage.updated","data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","cost":0,"tokens":{"input":5300,"output":96,"reasoning":94,"cache":{"read":16384,"write":0}}}}
+
+data: {"id":"evt_1822d7773002tLe3dicUhcs5uR","created":1793185380211,"type":"session.execution.succeeded","data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":26,"version":1}}
+
+: heartbeat
+
+: heartbeat
+
+: heartbeat
+
+data: {"id":"evt_1822e1519001M2lkLEvUiBrUMM","created":1793185420569,"type":"session.inbox.enqueued","location":{"directory":"C:\\work\\proj"},"data":{"inboxID":"msg_1822e151800172P9giKNDn8kaR","sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","item":{"type":"user","payload":{"text":"Use the question tool to ask me which color I prefer, with options red and blue. Do not proceed until I answer."},"delivery":"steer"}},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":27,"version":1}}
+
+data: {"id":"evt_1822e151b0013Dl4i1UPV0Y6Vw","created":1793185420571,"type":"session.execution.started","data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":28,"version":1}}
+
+data: {"id":"evt_1822e151f001dUaXxsfD567EHz","created":1793185420575,"type":"session.inbox.delivered","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","inboxID":"msg_1822e151800172P9giKNDn8kaR"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":29,"version":1}}
+
+data: {"id":"evt_1822e19da001bFI9HN322u5c8m","created":1793185421786,"type":"session.step.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode","variant":"default"},"assistantMessageID":"msg_1822e1524001QISX53zTL09LMY","started":1793185420583},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":30,"version":1}}
+
+data: {"id":"evt_1822e19dc001061YN6wPKNhtrQ","created":1793185421788,"type":"session.tool.input.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822e1524001QISX53zTL09LMY","id":"call_00_ET_GGQ1kJOguegRKBgL2fc35750","name":"question"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":31,"version":1}}
+
+data: {"id":"evt_1822e1b14001H3XBEVq210EOUC","created":1793185422101,"type":"session.tool.input.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822e1524001QISX53zTL09LMY","id":"call_00_ET_GGQ1kJOguegRKBgL2fc35750","text":"{\"questions\": [{\"question\": \"Which color do you prefer?\", \"header\": \"Color preference\", \"options\": [{\"label\": \"Red\", \"description\": \"I prefer red.\"}, {\"label\": \"Blue\", \"description\": \"I prefer blue.\"}]}]}"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":32,"version":1}}
+
+data: {"id":"evt_1822e1b16001mLwpFV7UZqFe6n","created":1793185422102,"type":"session.tool.called","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822e1524001QISX53zTL09LMY","id":"call_00_ET_GGQ1kJOguegRKBgL2fc35750","input":{"questions":[{"question":"Which color do you prefer?","header":"Color preference","options":[{"label":"Red","description":"I prefer red."},{"label":"Blue","description":"I prefer blue."}]}]},"executed":false},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":33,"version":1}}
+
+data: {"id":"evt_1822e1b18001zTt8LB65CU1d2i","created":1793185422104,"type":"session.step.streamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822e1524001QISX53zTL09LMY"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":34,"version":1}}
+
+data: {"id":"evt_1822e1b1b0024iTUseZoCo5QY2","created":1793185422107,"type":"form.created","location":{"directory":"C:\\work\\proj"},"data":{"form":{"id":"frm_1822e1b1b001Dbj9AOoUvUQsyS","sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","title":"Questions","metadata":{"kind":"question","tool":{"messageID":"msg_1822e1524001QISX53zTL09LMY","id":"call_00_ET_GGQ1kJOguegRKBgL2fc35750"}},"fields":[{"key":"q0","title":"Color preference","description":"Which color do you prefer?","type":"string","options":[{"value":"Red","label":"Red","description":"I prefer red."},{"value":"Blue","label":"Blue","description":"I prefer blue."}],"custom":true}]}}}
+
+: heartbeat
+
+: heartbeat
+
+: heartbeat
+
+: heartbeat
+
+data: {"id":"evt_1822f01f5001wF6XobQbc41sDi","created":1793185481205,"type":"form.replied","location":{"directory":"C:\\work\\proj"},"data":{"id":"frm_1822e1b1b001Dbj9AOoUvUQsyS","sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","answer":{"q0":"Blue"}}}
+
+data: {"id":"evt_1822f01f5002PWaDz0BWbFKOO7","created":1793185481205,"type":"session.tool.success","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822e1524001QISX53zTL09LMY","id":"call_00_ET_GGQ1kJOguegRKBgL2fc35750","content":[{"type":"text","text":"User has answered your questions: \"Which color do you prefer?\"=\"Blue\". You can now continue with the user's answers in mind."}],"metadata":{"answers":[["Blue"]],"truncated":false},"executed":false},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":35,"version":2}}
+
+data: {"id":"evt_1822f01f7001cPz4h65DWhuijB","created":1793185481207,"type":"session.step.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822e1524001QISX53zTL09LMY","finish":"tool-calls","rawFinish":"tool_calls","tokens":{"input":135,"output":89,"reasoning":0,"cache":{"read":7296,"write":0}},"cost":0},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":36,"version":1}}
+
+data: {"id":"evt_1822f01f8001okhKbg8xDSnovt","created":1793185481208,"type":"session.usage.updated","data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","cost":0,"tokens":{"input":5435,"output":185,"reasoning":94,"cache":{"read":23680,"write":0}}}}
+
+data: {"id":"evt_1822f0203001RBdvVtPmzE4C7I","created":1793185481219,"type":"project.updated","location":{"directory":"C:\\work\\proj"},"data":{"id":"d0f40f0aa47eb5c38fe590efb8297e899aee2ad0","canonical":"C:\\work\\proj","time":{"created":1793185260741,"updated":1793185260741,"active":1793185481219},"sandboxes":[]}}
+
+data: {"id":"evt_1822f0719001xHJ8gzHWsib2BW","created":1793185482521,"type":"session.step.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode","variant":"default"},"assistantMessageID":"msg_1822f01fe001DjK2dNtPhZM7J7","started":1793185481217},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":37,"version":1}}
+
+data: {"id":"evt_1822f071b001jkmMmh0mCsNoYN","created":1793185482523,"type":"session.text.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f01fe001DjK2dNtPhZM7J7","ordinal":0},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":38,"version":1}}
+
+data: {"id":"evt_1822f0769001oTSY1rBB7bzqgW","created":1793185482601,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f01fe001DjK2dNtPhZM7J7","ordinal":0,"delta":"You chose **blue**. What would you like to do next?"}}
+
+data: {"id":"evt_1822f0769002YsZUir28GbQp0f","created":1793185482601,"type":"session.text.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f01fe001DjK2dNtPhZM7J7","ordinal":0,"text":"You chose **blue**. What would you like to do next?"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":39,"version":1}}
+
+data: {"id":"evt_1822f076b0017GW8sotGfGOGPV","created":1793185482603,"type":"session.step.streamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f01fe001DjK2dNtPhZM7J7"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":40,"version":1}}
+
+data: {"id":"evt_1822f076c001b1ajlCmtfUtpBR","created":1793185482604,"type":"session.step.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f01fe001DjK2dNtPhZM7J7","finish":"stop","rawFinish":"stop","tokens":{"input":135,"output":14,"reasoning":0,"cache":{"read":7424,"write":0}},"cost":0},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":41,"version":1}}
+
+data: {"id":"evt_1822f076d0010M3qfwAgLlyXHP","created":1793185482605,"type":"session.usage.updated","data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","cost":0,"tokens":{"input":5570,"output":199,"reasoning":94,"cache":{"read":31104,"write":0}}}}
+
+data: {"id":"evt_1822f076d002fYNwTxcbeO3QBu","created":1793185482605,"type":"session.execution.succeeded","data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":42,"version":1}}
+
+: heartbeat
+
+: heartbeat
+
+data: {"id":"evt_1822f98d70016FugPdFtsClpLy","created":1793185519831,"type":"session.inbox.enqueued","location":{"directory":"C:\\work\\proj"},"data":{"inboxID":"msg_1822f98d6001JBYxWCvGhMMTF2","sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","item":{"type":"user","payload":{"text":"Read the file secret.env in the current directory and tell me its content."},"delivery":"steer"}},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":43,"version":1}}
+
+data: {"id":"evt_1822f98d8001x86B3oKN2HIPBJ","created":1793185519832,"type":"session.execution.started","data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":44,"version":1}}
+
+data: {"id":"evt_1822f98db001wvdzPqfpTKYAs9","created":1793185519835,"type":"session.inbox.delivered","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","inboxID":"msg_1822f98d6001JBYxWCvGhMMTF2"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":45,"version":1}}
+
+data: {"id":"evt_1822f9d87001ADEzbsH21NBF4X","created":1793185521031,"type":"session.step.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode","variant":"default"},"assistantMessageID":"msg_1822f98dd001v4R2FRxNEXA12M","started":1793185519840},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":46,"version":1}}
+
+data: {"id":"evt_1822f9d88001c4kYfH44MLkFZJ","created":1793185521032,"type":"session.reasoning.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f98dd001v4R2FRxNEXA12M","ordinal":0,"native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":47,"version":1}}
+
+data: {"id":"evt_1822f9dee001v4khdHh6NAYrtW","created":1793185521134,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f98dd001v4R2FRxNEXA12M","ordinal":0,"delta":"The file"}}
+
+data: {"id":"evt_1822f9e50001fJ07Y7GOPq24qM","created":1793185521232,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f98dd001v4R2FRxNEXA12M","ordinal":0,"delta":" isn't there (only hello.txt). Let me check anyway."}}
+
+data: {"id":"evt_1822f9e51001H5krf0LRg5yCwN","created":1793185521233,"type":"session.tool.input.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f98dd001v4R2FRxNEXA12M","id":"call_00_2LLeHqW3sL9aKtkCmM492107","name":"read"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":48,"version":1}}
+
+data: {"id":"evt_1822f9f52001t0XZIsFdFe2WaA","created":1793185521490,"type":"session.reasoning.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f98dd001v4R2FRxNEXA12M","ordinal":0,"text":"The file isn't there (only hello.txt). Let me check anyway.","native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":49,"version":1}}
+
+data: {"id":"evt_1822f9f53001UimZi07Ga5HJxJ","created":1793185521491,"type":"session.tool.input.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f98dd001v4R2FRxNEXA12M","id":"call_00_2LLeHqW3sL9aKtkCmM492107","text":"{\"path\": \"C:\\work\\proj"}"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":50,"version":1}}
+
+data: {"id":"evt_1822f9f54001Kx2AT4QyNMndWL","created":1793185521492,"type":"session.tool.called","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f98dd001v4R2FRxNEXA12M","id":"call_00_2LLeHqW3sL9aKtkCmM492107","input":{"path":"C:\\work\\proj"},"executed":false},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":51,"version":1}}
+
+data: {"id":"evt_1822f9f54002PtGh4rxx6XKG6e","created":1793185521493,"type":"session.step.streamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","assistantMessageID":"msg_1822f98dd001v4R2FRxNEXA12M"},"durable":{"aggregateID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","seq":52,"version":1}}
+
+data: {"id":"evt_1822f9f57002LmYACPJ4n8pjA6","created":1793185521495,"type":"permission.asked","location":{"directory":"C:\\work\\proj"},"data":{"id":"per_1822f9f57001H2Tj3Z3ZbDSEPa","sessionID":"ses_e7dd29bc7ffe6SxdD4hNEuFY1a","action":"read","resources":["secret.env"],"save":["*"],"source":{"type":"tool","messageID":"msg_1822f98dd001v4R2FRxNEXA12M","id":"call_00_2LLeHqW3sL9aKtkCmM492107"}}}
+
+: heartbeat
+
+: heartbeat
+

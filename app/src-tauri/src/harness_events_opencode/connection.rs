@@ -19,7 +19,7 @@ use crate::harness_actions_opencode;
 /// for any further attempts. 1 → 2 → 4 → 8 → 16 → 30 → 30 … gets us
 /// from "opencode hasn't bound yet" to "opencode is dead" with
 /// minimal wasted polling.
-const BACKOFF_SCHEDULE_SECS: &[u64] = &[1, 2, 4, 8, 16, 30];
+pub(super) const BACKOFF_SCHEDULE_SECS: &[u64] = &[1, 2, 4, 8, 16, 30];
 
 /// TCP connect timeout. Localhost is sub-millisecond when opencode is
 /// alive; we keep a small budget so a wedged opencode (port bound but
@@ -31,7 +31,7 @@ const BACKOFF_SCHEDULE_SECS: &[u64] = &[1, 2, 4, 8, 16, 30];
 /// expires with "error decoding response body" (observed against a
 /// live opencode session in v1: 5 s timeout, stream healthy, error
 /// fired after 5 s every reconnect cycle).
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Budget for `/event` to answer with its response headers once the TCP
 /// connect has succeeded. opencode writes them immediately, followed by a
@@ -39,14 +39,14 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// opencode accepted but never answered waited forever: no retry, no log,
 /// and the harness sat on `running` with an empty Live Context.
 /// `CONNECT_TIMEOUT` doesn't cover this, and `timeout` can't (see above).
-const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long cold-connect attempts may keep failing before the adapter
 /// logs a warning. Those failures are normal for the first second or two
 /// while opencode binds its port, so each one logs at `debug`. That level
 /// is off by default, so an adapter that never connects would otherwise
 /// leave nothing in the log.
-const COLD_CONNECT_WARN_AFTER: Duration = Duration::from_secs(30);
+pub(super) const COLD_CONNECT_WARN_AFTER: Duration = Duration::from_secs(30);
 
 /// The reconnect / read loop. Lives in a tokio task. Loops until
 /// `cancel` fires, with exponential backoff between attempts.
