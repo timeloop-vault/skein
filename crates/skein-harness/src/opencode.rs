@@ -19,6 +19,7 @@
 //! The database is always opened read-only so we never contend with
 //! a running opencode for the writer lock.
 
+pub mod v2;
 pub mod version;
 
 use std::path::{Path, PathBuf};

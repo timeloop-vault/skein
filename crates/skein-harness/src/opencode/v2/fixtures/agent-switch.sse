@@ -1,0 +1,10 @@
+data: {"id":"evt_1882b9d19001qgptjDuamAC3x3","type":"server.connected","data":{}}
+
+: heartbeat
+
+data: {"id":"evt_1882ba0f3001FDPeboPY82WLbY","created":1793285923059,"type":"session.created","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d45f10ffe7tN9eKUWVyDeVL","slug":"brave-garden","version":"2.2.0","projectID":"e7bf334446c3961b7cf3e36034b7a1f7a68cc6bc","location":{"directory":"C:\\work\\proj"},"subpath":"","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode"}},"durable":{"aggregateID":"ses_e77d45f10ffe7tN9eKUWVyDeVL","seq":0,"version":1}}
+
+data: {"id":"evt_1882ba0ff001HFtOO7gym96Ou9","created":1793285923071,"type":"session.agent.selected","data":{"sessionID":"ses_e77d45f10ffe7tN9eKUWVyDeVL","agent":"plan","previous":"build"},"durable":{"aggregateID":"ses_e77d45f10ffe7tN9eKUWVyDeVL","seq":1,"version":1}}
+
+data: {"id":"evt_1882ba100002hNsB206021gHFQ","created":1793285923072,"type":"session.inbox.enqueued","location":{"directory":"C:\\work\\proj"},"data":{"inboxID":"msg_1882ba100001jnOncrOPIxwVg0","sessionID":"ses_e77d45f10ffe7tN9eKUWVyDeVL","item":{"type":"synthetic","payload":{"text":"<system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:\nC:\\work\\proj not modify any other files or ask a subagent to do so.\n\nYou remain in Plan mode until the user switches agents. If the user asks you to implement changes, do not do so. Tell them they need to switch agents.\n</system-reminder>"},"delivery":"steer"}},"durable":{"aggregateID":"ses_e77d45f10ffe7tN9eKUWVyDeVL","seq":2,"version":1}}
+

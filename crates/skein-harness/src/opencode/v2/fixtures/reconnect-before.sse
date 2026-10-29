@@ -1,0 +1,46 @@
+data: {"id":"evt_1882bd43b001StQJXe4yXA0V4Q","type":"server.connected","data":{}}
+
+: heartbeat
+
+data: {"id":"evt_1882bd8e1001fgmQVHUMOSAmRx","created":1793285937377,"type":"session.created","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","slug":"lucky-island","version":"2.2.0","projectID":"e7bf334446c3961b7cf3e36034b7a1f7a68cc6bc","location":{"directory":"C:\\work\\proj"},"subpath":"","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode"}},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":0,"version":1}}
+
+data: {"id":"evt_1882bd94b002qgixXmhiLYH2iV","created":1793285937483,"type":"session.inbox.enqueued","location":{"directory":"C:\\work\\proj"},"data":{"inboxID":"msg_1882bd94b001FvqRoUxYq2knll","sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","item":{"type":"user","payload":{"text":"Write a very detailed 2000-word essay about the history of the telescope. No tools."},"delivery":"steer"}},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":1,"version":1}}
+
+data: {"id":"evt_1882bd94d001E4gOsYGdn5Jqow","created":1793285937485,"type":"session.execution.started","data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi"},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":2,"version":1}}
+
+data: {"id":"evt_1882bd951001mFMuWj5m1snNcg","created":1793285937489,"metadata":{"instructions":{"initial":true}},"type":"session.instructions.updated","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","delta":{"core/codemode":"e6428fd7742161f6c3a6c86e53cbbe2c6e4dcc462bbf1a1a07bc4fcbeb9e0b0b","core/skill-guidance":"2fe9d54785ac07f73f24d1eec103869492c2c89e10b48f853cd935b8e3f377e3","core/date":"f7913ba03d70df1ee3d8d6d6002d0990295442ad1ca37d8569918612fd09eaf1","core/environment":"ce6e8d58a27a3101b673cbc3d3e1a363c11018a6520fadb4f1bb5fd9b50485a3"}},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":3,"version":2}}
+
+data: {"id":"evt_1882bd952001tvDFolc4GUDDXR","created":1793285937490,"type":"session.inbox.delivered","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","inboxID":"msg_1882bd94b001FvqRoUxYq2knll"},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":4,"version":1}}
+
+data: {"id":"evt_1882be0e80017i49HvXCXq3Ujv","created":1793285939432,"type":"session.usage.updated","data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","cost":0,"tokens":{"input":100,"output":5,"reasoning":77,"cache":{"read":384,"write":0}}}}
+
+data: {"id":"evt_1882be0ea001ymzk7cfR914VpL","created":1793285939434,"type":"session.renamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","title":"History of the telescope"},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":6,"version":1}}
+
+data: {"id":"evt_1882be37f001AYnO4vm0a44jvd","created":1793285940095,"type":"session.step.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode","variant":"default"},"assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","started":1793285937502},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":7,"version":1}}
+
+data: {"id":"evt_1882be381001HKz8IqAaVX67b8","created":1793285940097,"type":"session.reasoning.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":8,"version":1}}
+
+data: {"id":"evt_1882be3e8001iHzdWKZSGCEjLV","created":1793285940200,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"The user wants a 2000-word essay about the history of the telescope. No tools. Just write it. Detailed. ~2000 words.\n\nLet me write a well-structured essay with headings, covering: origins"}}
+
+data: {"id":"evt_1882be48f0015X56v8JGBwP7VQ","created":1793285940367,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" (l"}}
+
+data: {"id":"evt_1882be503001VuGYxExyXdeWxv","created":1793285940483,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ens making, Lippershey 1608), Galileo, Keplerian, Huygens, Newton reflector"}}
+
+data: {"id":"evt_1882be56f001lh48c8dT1wsaTF","created":1793285940592,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", Gregorian, achromats, Doll"}}
+
+data: {"id":"evt_1882be5ec001NRvTTWh5qtOtkm","created":1793285940716,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"ond, Herschel, Lord"}}
+
+data: {"id":"evt_1882be65e0011hD2FNUZJvi4eS","created":1793285940830,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":" Rosse, spectroscopy, photography"}}
+
+data: {"id":"evt_1882be7c9001NA04VFcZ4JBMXG","created":1793285941193,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":", Mount Wilson, Hubble, radio astronomy, space telescopes, adaptive optics, interferometry, JWST, future.\n\nI'll aim for about 2000 words. Let me write carefully and count roughly. I'll write substantial paragraphs"}}
+
+data: {"id":"evt_1882be8340018auZdRcKMyDeaB","created":1793285941300,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":".\n\nLet me draft with sections"}}
+
+data: {"id":"evt_1882be8aa001VZeg5WvmjlrQfx","created":1793285941418,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":". Target ~2000 words — I should be generous but not bloated. Roughly 12-14 paragraphs at ~150 words each.\n\nLet me write."}}
+
+data: {"id":"evt_1882be8aa002FaYaXJGPbhMcSj","created":1793285941418,"type":"session.text.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0},"durable":{"aggregateID":"ses_e77d42725ffeuLGdD79r08PKXi","seq":9,"version":1}}
+
+data: {"id":"evt_1882be8ac0014g6mMxJ1EvQnlM","created":1793285941420,"type":"project.updated","location":{"directory":"C:\\work\\proj"},"data":{"id":"e7bf334446c3961b7cf3e36034b7a1f7a68cc6bc","canonical":"C:\\work\\proj","time":{"created":1793285814553,"updated":1793285814553,"active":1793285941420},"sandboxes":[]}}
+
+data: {"id":"evt_1882be9110010lSxEgzMscmUvA","created":1793285941521,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d42725ffeuLGdD79r08PKXi","assistantMessageID":"msg_1882bd95b001MbEqg2RhSqWAIr","ordinal":0,"delta":"# The Long"}}
+

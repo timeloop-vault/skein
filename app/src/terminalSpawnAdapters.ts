@@ -23,6 +23,8 @@ export interface AdapterAttach {
 	hermesHooks?: boolean;
 	sessionId: string | undefined;
 	opencodePort: number | undefined;
+	/** #677: opencode v2 sidecar generation; set = v2 SSE adapter. */
+	opencodeSidecarGeneration?: number | undefined;
 	onSessionCaptured: ((sessionId: string) => void) | undefined;
 	onSessionFollowed: ((sessionId: string) => void) | undefined;
 	sessionIdRef: { current: string | undefined };
@@ -54,12 +56,15 @@ export function attachAdapters(a: AdapterAttach): (() => void) | null {
 	// spawn argv was finalized). Without a port the adapter
 	// can't know where to subscribe — graceful fallback to
 	// L2a + the sqlite-poll session-id capture.
-	if (harnessKind === "opencode" && opencodePort !== undefined) {
+	// #677: v2 has no allocated port; Rust reads the sidecar's own port +
+	// password from the generation and ignores the port argument (0 here).
+	const v2Generation = a.opencodeSidecarGeneration;
+	if (harnessKind === "opencode" && (opencodePort !== undefined || v2Generation !== undefined)) {
 		return attachOpencodeEvents(
 			harnessId,
 			roomId,
 			cwd,
-			opencodePort,
+			opencodePort ?? 0,
 			sessionId,
 			a.onSessionCaptured,
 			// #116: live, not the `sessionId` closed over above —
@@ -67,6 +72,7 @@ export function attachAdapters(a: AdapterAttach): (() => void) | null {
 			// long-lived adapter (`/new`, a `/sessions` pick).
 			() => a.sessionIdRef.current,
 			a.onSessionFollowed,
+			v2Generation,
 		);
 	}
 	// #624: Hermes binds its own session id; poll until its row exists.

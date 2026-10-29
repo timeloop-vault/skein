@@ -319,6 +319,20 @@ impl OpencodeSidecarManager {
         }
         Some(sc.password.clone())
     }
+
+    /// `(port, password)` for the telemetry adapter (#677); same liveness
+    /// rule as `password_for`. The password goes nowhere but the request's
+    /// basic-auth header.
+    pub(crate) fn connect_info(&self, harness_id: &str, generation: u64) -> Option<(u16, String)> {
+        let mut map = self.inner.sidecars.lock();
+        let sc = map
+            .get_mut(harness_id)
+            .filter(|s| s.generation == generation)?;
+        if sc.exit.is_some() || !matches!(sc.child.try_wait(), Ok(None)) {
+            return None;
+        }
+        Some((sc.port, sc.password.clone()))
+    }
 }
 
 /// Polls `try_wait` under the lock; stops when the entry is gone or

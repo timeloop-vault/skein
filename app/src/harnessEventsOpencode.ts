@@ -85,6 +85,9 @@ export function attachOpencodeEvents(
 	onSessionCaptured: ((sessionId: string) => void) | undefined,
 	getSessionId: () => string | undefined,
 	onSessionFollowed: ((sessionId: string) => void) | undefined,
+	/// #677: opencode v2 — the Skein-owned sidecar's generation. Rust then
+	/// takes the sidecar's port + password itself and ignores `port`.
+	sidecarGeneration?: number,
 ): () => void {
 	const channel = new Channel<OpencodeEvent>();
 	let closed = false;
@@ -112,6 +115,7 @@ export function attachOpencodeEvents(
 		port,
 		sessionId: sessionId ?? null,
 		onEvent: channel,
+		...(sidecarGeneration !== undefined ? { sidecarGeneration } : {}),
 	}).catch((err: unknown) => {
 		const msg = err instanceof Error ? err.message : String(err);
 		console.warn(`[skein] opencode_events_attach failed for ${harnessId}:`, msg);

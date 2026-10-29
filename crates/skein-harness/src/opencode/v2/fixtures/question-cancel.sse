@@ -1,0 +1,58 @@
+data: {"id":"evt_1882aa0f1001KgbY5Grlqhr4tH","type":"server.connected","data":{}}
+
+: heartbeat
+
+data: {"id":"evt_1882aa4cc001bi7jUgoSkRDzOp","created":1793285858508,"type":"session.created","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","slug":"sunny-nebula","version":"2.2.0","projectID":"e7bf334446c3961b7cf3e36034b7a1f7a68cc6bc","location":{"directory":"C:\\work\\proj"},"subpath":"","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode"}},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":0,"version":1}}
+
+data: {"id":"evt_1882aa4d9002ObriaPl91N1yBt","created":1793285858521,"type":"session.inbox.enqueued","location":{"directory":"C:\\work\\proj"},"data":{"inboxID":"msg_1882aa4d9001Wvdt0YwiNeSW3F","sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","item":{"type":"user","payload":{"text":"Use the question tool to ask me whether I prefer red or blue"},"delivery":"steer"}},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":1,"version":1}}
+
+data: {"id":"evt_1882aa4da001uG1tdDjLN0AuAO","created":1793285858522,"type":"session.execution.started","data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks"},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":2,"version":1}}
+
+data: {"id":"evt_1882aa4dd001TkFLyK0ccz38C2","created":1793285858525,"metadata":{"instructions":{"initial":true}},"type":"session.instructions.updated","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","delta":{"core/codemode":"e6428fd7742161f6c3a6c86e53cbbe2c6e4dcc462bbf1a1a07bc4fcbeb9e0b0b","core/skill-guidance":"2fe9d54785ac07f73f24d1eec103869492c2c89e10b48f853cd935b8e3f377e3","core/date":"f7913ba03d70df1ee3d8d6d6002d0990295442ad1ca37d8569918612fd09eaf1","core/environment":"ce6e8d58a27a3101b673cbc3d3e1a363c11018a6520fadb4f1bb5fd9b50485a3"}},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":3,"version":2}}
+
+data: {"id":"evt_1882aa4dd002ZD0uDYms5AYqRq","created":1793285858525,"type":"session.inbox.delivered","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","inboxID":"msg_1882aa4d9001Wvdt0YwiNeSW3F"},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":4,"version":1}}
+
+data: {"id":"evt_1882aaf60001LDghhB2EQbjVgu","created":1793285861216,"type":"session.usage.updated","data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","cost":0,"tokens":{"input":95,"output":5,"reasoning":75,"cache":{"read":384,"write":0}}}}
+
+data: {"id":"evt_1882aaf61001UT3Hg5HxXJ6SZ3","created":1793285861217,"type":"session.renamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","title":"Red or blue preference"},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":6,"version":1}}
+
+data: {"id":"evt_1882ab02a001dr2AQ9R0Bkh1ok","created":1793285861418,"type":"session.step.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode","variant":"default"},"assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","started":1793285858533},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":7,"version":1}}
+
+data: {"id":"evt_1882ab02b001uaq5gQRqqa7csW","created":1793285861419,"type":"session.reasoning.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","ordinal":0,"native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":8,"version":1}}
+
+data: {"id":"evt_1882ab091001ANAs1WomR1P82q","created":1793285861521,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","ordinal":0,"delta":"The user wants me to ask a question with the question tool. But the question tool"}}
+
+data: {"id":"evt_1882ab12b001X2HfznLLH0tBuu","created":1793285861675,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","ordinal":0,"delta":" is not in the Code Mode catalog... The catalog only lists opencode tools. Hmm, but the harness shows \""}}
+
+data: {"id":"evt_1882ab1e5001R3eGKIud1bbAF3","created":1793285861861,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","ordinal":0,"delta":"question\" as a tool outside the catalog. Instruction says inside Code Mode, ignore tools shown outside the catalog"}}
+
+data: {"id":"evt_1882ab2c10019tTHp6hQB7T0mg","created":1793285862082,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","ordinal":0,"delta":"; they are not available in the Code Mode runtime.\n\nBut the user explicitly asks to use the question tool. Let me try calling it directly —"}}
+
+data: {"id":"evt_1882ab347001WE10wmj0HBW2J3","created":1793285862215,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","ordinal":0,"delta":" as a non-code-mode tool? The system says tools listed in the catalog must"}}
+
+data: {"id":"evt_1882ab3c4001TEnnedfKeyF3Da","created":1793285862340,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","ordinal":0,"delta":" be called via execute. But question isn't there. I can just call question directly since it's a harness tool provided"}}
+
+data: {"id":"evt_1882ab40c001iJl7ATmSo3vGWr","created":1793285862412,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","ordinal":0,"delta":" to me.\n\nLet me attempt a direct call."}}
+
+data: {"id":"evt_1882ab40c002giLxPlXKhfDCwg","created":1793285862412,"type":"session.tool.input.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","id":"call_00_pim80cff8mi3x9ad280ebiod","name":"question"},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":9,"version":1}}
+
+data: {"id":"evt_1882ab565001XKP22cgbXMLiOQ","created":1793285862758,"type":"session.reasoning.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","ordinal":0,"text":"The user wants me to ask a question with the question tool. But the question tool is not in the Code Mode catalog... The catalog only lists opencode tools. Hmm, but the harness shows \"question\" as a tool outside the catalog. Instruction says inside Code Mode, ignore tools shown outside the catalog; they are not available in the Code Mode runtime.\n\nBut the user explicitly asks to use the question tool. Let me try calling it directly — as a non-code-mode tool? The system says tools listed in the catalog must be called via execute. But question isn't there. I can just call question directly since it's a harness tool provided to me.\n\nLet me attempt a direct call.","native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":10,"version":1}}
+
+data: {"id":"evt_1882ab5670015Ug0LU6KhYgCU9","created":1793285862759,"type":"session.tool.input.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","id":"call_00_pim80cff8mi3x9ad280ebiod","text":"{\"questions\": [{\"header\": \"Color preference\", \"question\": \"Which color do you prefer: red or blue?\", \"options\": [{\"label\": \"Red\", \"description\": \"You prefer red.\"}, {\"label\": \"Blue\", \"description\": \"You prefer blue.\"}]}]}"},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":11,"version":1}}
+
+data: {"id":"evt_1882ab568001CkfxdlJzRwt7bM","created":1793285862760,"type":"session.tool.called","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","id":"call_00_pim80cff8mi3x9ad280ebiod","input":{"questions":[{"header":"Color preference","question":"Which color do you prefer: red or blue?","options":[{"label":"Red","description":"You prefer red."},{"label":"Blue","description":"You prefer blue."}]}]},"executed":false},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":12,"version":1}}
+
+data: {"id":"evt_1882ab569001CvKStsjMnOyS1M","created":1793285862761,"type":"session.step.streamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp"},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":13,"version":1}}
+
+data: {"id":"evt_1882ab56b002mEaQfvfltQAIhq","created":1793285862763,"type":"form.created","location":{"directory":"C:\\work\\proj"},"data":{"form":{"id":"frm_1882ab56b001QoQ9pQLCWPj7kI","sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","title":"Questions","metadata":{"kind":"question","tool":{"messageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","id":"call_00_pim80cff8mi3x9ad280ebiod"}},"fields":[{"key":"q0","title":"Color preference","description":"Which color do you prefer: red or blue?","type":"string","options":[{"value":"Red","label":"Red","description":"You prefer red."},{"value":"Blue","label":"Blue","description":"You prefer blue."}],"custom":true}]}}}
+
+data: {"id":"evt_1882abc9c001EpntsNsSsrMb9k","created":1793285864604,"type":"form.cancelled","location":{"directory":"C:\\work\\proj"},"data":{"id":"frm_1882ab56b001QoQ9pQLCWPj7kI","sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks"}}
+
+data: {"id":"evt_1882abc9c002xMNOIv70JzHXRZ","created":1793285864604,"type":"session.tool.failed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","id":"call_00_pim80cff8mi3x9ad280ebiod","error":{"type":"aborted","message":"The user dismissed this question"},"executed":false},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":14,"version":2}}
+
+data: {"id":"evt_1882abc9e001COFSzuwFwzP96k","created":1793285864606,"type":"session.step.failed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","assistantMessageID":"msg_1882aa4e3001gqJvmuBtG3KDWp","error":{"type":"aborted","message":"Step interrupted"},"rawFinish":"tool_calls","tokens":{"input":5056,"output":93,"reasoning":141,"cache":{"read":2048,"write":0}},"cost":0},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":15,"version":1}}
+
+data: {"id":"evt_1882abc9f001CUzu1GTR7VF7Oj","created":1793285864607,"type":"session.usage.updated","data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","cost":0,"tokens":{"input":5151,"output":98,"reasoning":216,"cache":{"read":2432,"write":0}}}}
+
+data: {"id":"evt_1882abc9f002Xl870lXMCWlF01","created":1793285864607,"type":"session.execution.interrupted","data":{"sessionID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","reason":"shutdown"},"durable":{"aggregateID":"ses_e77d55b37ffeQVaTaXT6P7L7ks","seq":16,"version":1}}
+

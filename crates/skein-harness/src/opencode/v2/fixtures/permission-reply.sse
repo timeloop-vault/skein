@@ -1,0 +1,100 @@
+data: {"id":"evt_1882a15f0001OE4umnOb3j1J2z","type":"server.connected","data":{}}
+
+: heartbeat
+
+data: {"id":"evt_1882a1a7b001AR33quNpqW5TPb","created":1793285823099,"type":"session.created","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","slug":"nimble-wolf","version":"2.2.0","projectID":"e7bf334446c3961b7cf3e36034b7a1f7a68cc6bc","location":{"directory":"C:\\work\\proj"},"subpath":"","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode"}},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":0,"version":1}}
+
+data: {"id":"evt_1882a1ad3001LVxe9xEtTkPS0S","created":1793285823187,"type":"session.inbox.enqueued","location":{"directory":"C:\\work\\proj"},"data":{"inboxID":"msg_1882a1ad1001bNqu4Gf8JacJY4","sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","item":{"type":"user","payload":{"text":"Run the bash command `echo hi` and tell me its output. Use the bash tool."},"delivery":"steer"}},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":1,"version":1}}
+
+data: {"id":"evt_1882a1ad5001VvEqLD2JdY3Ojv","created":1793285823189,"type":"session.execution.started","data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR"},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":2,"version":1}}
+
+data: {"id":"evt_1882a1add001MT9ZhIjeAEcTcu","created":1793285823197,"metadata":{"instructions":{"initial":true}},"type":"session.instructions.updated","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","delta":{"core/codemode":"e6428fd7742161f6c3a6c86e53cbbe2c6e4dcc462bbf1a1a07bc4fcbeb9e0b0b","core/skill-guidance":"2fe9d54785ac07f73f24d1eec103869492c2c89e10b48f853cd935b8e3f377e3","core/date":"f7913ba03d70df1ee3d8d6d6002d0990295442ad1ca37d8569918612fd09eaf1","core/environment":"ce6e8d58a27a3101b673cbc3d3e1a363c11018a6520fadb4f1bb5fd9b50485a3"}},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":3,"version":2}}
+
+data: {"id":"evt_1882a1adf001IouhVLTXcCo0NU","created":1793285823199,"type":"session.inbox.delivered","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","inboxID":"msg_1882a1ad1001bNqu4Gf8JacJY4"},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":4,"version":1}}
+
+data: {"id":"evt_1882a2111001Hb7O5hWEUQRwe1","created":1793285824785,"type":"session.step.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode","variant":"default"},"assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","started":1793285823231},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":5,"version":1}}
+
+data: {"id":"evt_1882a2113001Aa0VjiWCmXuvhv","created":1793285824787,"type":"session.reasoning.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","ordinal":0,"native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":6,"version":1}}
+
+data: {"id":"evt_1882a215f001p0PeONMd32ehiL","created":1793285824863,"type":"session.usage.updated","data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","cost":0,"tokens":{"input":100,"output":5,"reasoning":0,"cache":{"read":384,"write":0}}}}
+
+data: {"id":"evt_1882a215f002BrRbVJOFY6e8Gj","created":1793285824863,"type":"session.renamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","title":"Bash echo output"},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":8,"version":1}}
+
+data: {"id":"evt_1882a21790015qF8Y6k3WvtrWp","created":1793285824889,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","ordinal":0,"delta":"The user asks to run bash `echo hi`"}}
+
+data: {"id":"evt_1882a21e8001CEEGyrj535daGZ","created":1793285825000,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","ordinal":0,"delta":" using the bash tool. I have no bash tool, but I"}}
+
+data: {"id":"evt_1882a2265001DMJ16cKzNrQ0oC","created":1793285825125,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","ordinal":0,"delta":" have shell (powershell). The instruction says use the \"bash tool\" — I don't have"}}
+
+data: {"id":"evt_1882a22ea001eLBNxAFVGmeuia","created":1793285825258,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","ordinal":0,"delta":" one. I should be"}}
+
+data: {"id":"evt_1882a236300160IWdhpwk4r7Tu","created":1793285825379,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","ordinal":0,"delta":" honest: no bash tool available, but I can run via shell."}}
+
+data: {"id":"evt_1882a23e8001mylNOERYbKUtlE","created":1793285825512,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","ordinal":0,"delta":" Let me just run it.\n\nThe command runs"}}
+
+data: {"id":"evt_1882a244e001Y40ncjLVwXGnCH","created":1793285825615,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","ordinal":0,"delta":" on Windows using powershell. Let me do"}}
+
+data: {"id":"evt_1882a24b9001vAeUG4Kid1ufWA","created":1793285825721,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","ordinal":0,"delta":" it."}}
+
+data: {"id":"evt_1882a2642001JiKIFb0LuR5ZSl","created":1793285826115,"type":"session.tool.input.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","id":"call_00_zzl1a8cwq0zparlmev2hoh1a","name":"shell"},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":9,"version":1}}
+
+data: {"id":"evt_1882a2649001vzDpufIaS2TIVz","created":1793285826122,"type":"session.reasoning.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","ordinal":0,"text":"The user asks to run bash `echo hi` using the bash tool. I have no bash tool, but I have shell (powershell). The instruction says use the \"bash tool\" — I don't have one. I should be honest: no bash tool available, but I can run via shell. Let me just run it.\n\nThe command runs on Windows using powershell. Let me do it.","native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":10,"version":1}}
+
+data: {"id":"evt_1882a264b001LVntVUQEtyT4du","created":1793285826123,"type":"session.tool.input.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","id":"call_00_zzl1a8cwq0zparlmev2hoh1a","text":"{\"command\": \"echo hi\"}"},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":11,"version":1}}
+
+data: {"id":"evt_1882a264c001jDS6o8mwzQWtiH","created":1793285826124,"type":"session.tool.called","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","id":"call_00_zzl1a8cwq0zparlmev2hoh1a","input":{"command":"echo hi"},"executed":false},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":12,"version":1}}
+
+data: {"id":"evt_1882a264d0013r0uR8e7SOB7jQ","created":1793285826125,"type":"session.step.streamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny"},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":13,"version":1}}
+
+data: {"id":"evt_1882a2665002G0FsscyW9BE03D","created":1793285826149,"type":"permission.asked","location":{"directory":"C:\\work\\proj"},"data":{"id":"per_1882a2665001Kog56Z2g7goL4g","sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","action":"shell","resources":["echo hi"],"save":["echo *"],"source":{"type":"tool","messageID":"msg_1882a1aeb00141R7gIGOzxNnny","id":"call_00_zzl1a8cwq0zparlmev2hoh1a"}}}
+
+data: {"id":"evt_1882a4095001BQ5QQhdP91upDv","created":1793285832853,"type":"permission.replied","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","requestID":"per_1882a2665001Kog56Z2g7goL4g","reply":"once"}}
+
+data: {"id":"evt_1882a40a5001y6c7Jj3E17XDuJ","created":1793285832869,"type":"shell.created","location":{"directory":"C:\\work\\proj"},"data":{"info":{"id":"sh_1882a4096001sr3slWmKcgGgP1","status":"running","command":"echo hi","cwd":"C:\\work\\proj","shell":"C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.EXE","file":"C:\\work\\proj","metadata":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR"},"time":{"started":1793285832854}}}}
+
+data: {"id":"evt_1882a40a6001rXYddfnlU3VwfZ","created":1793285832870,"type":"session.tool.progress","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","id":"call_00_zzl1a8cwq0zparlmev2hoh1a","metadata":{"shellID":"sh_1882a4096001sr3slWmKcgGgP1"}}}
+
+data: {"id":"evt_1882a4677001puOYmmqQt8EtwK","created":1793285834359,"type":"shell.exited","location":{"directory":"C:\\work\\proj"},"data":{"id":"sh_1882a4096001sr3slWmKcgGgP1","exit":0,"status":"exited"}}
+
+data: {"id":"evt_1882a4678001cxxaxGExZP1y8G","created":1793285834360,"type":"session.tool.success","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","id":"call_00_zzl1a8cwq0zparlmev2hoh1a","content":[{"type":"text","text":"hi\r\n"}],"metadata":{"status":"completed","truncated":false,"exit":0},"executed":false},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":14,"version":2}}
+
+data: {"id":"evt_1882a467a001ankEaVy7MQELhq","created":1793285834362,"type":"session.step.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a1aeb00141R7gIGOzxNnny","finish":"tool-calls","rawFinish":"tool_calls","tokens":{"input":5062,"output":38,"reasoning":82,"cache":{"read":2048,"write":0}},"cost":0},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":15,"version":1}}
+
+data: {"id":"evt_1882a467b001sB85Fwb47lSNOW","created":1793285834363,"type":"session.usage.updated","data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","cost":0,"tokens":{"input":5162,"output":43,"reasoning":82,"cache":{"read":2432,"write":0}}}}
+
+data: {"id":"evt_1882a4a13001sXy3NCw68O8EXN","created":1793285835283,"type":"session.step.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","agent":"build","model":{"id":"deepseek-v4.1-flash-free","providerID":"opencode","variant":"default"},"assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","started":1793285834370},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":16,"version":1}}
+
+data: {"id":"evt_1882a4a15001Iqb3kioff7fkG7","created":1793285835285,"type":"session.reasoning.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0,"native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":17,"version":1}}
+
+data: {"id":"evt_1882a4a7b0018MJcOo5GDKDCk8","created":1793285835387,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0,"delta":"The user asked to use the \"bash tool"}}
+
+data: {"id":"evt_1882a4af3001g5hHI2pq25hlEp","created":1793285835507,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0,"delta":"\" — I don't have one. I used the shell tool (PowerShell on Windows). I should"}}
+
+data: {"id":"evt_1882a4b630010ee6nRWExaRVix","created":1793285835619,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0,"delta":" note this honestly but keep it brief.\n\nThe output is `"}}
+
+data: {"id":"evt_1882a4ba7001Ne9qN0WSHVcRBO","created":1793285835687,"type":"session.reasoning.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0,"delta":"hi`. That's it. Keep response concise."}}
+
+data: {"id":"evt_1882a4ba70024HCZmjpxz8vrSE","created":1793285835687,"type":"session.text.started","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":18,"version":1}}
+
+data: {"id":"evt_1882a4c0d001kgsaFkVpYsTXvk","created":1793285835789,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0,"delta":"I don't have a `bash` tool in this"}}
+
+data: {"id":"evt_1882a4c77001amRHmbfLfk0IG3","created":1793285835895,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0,"delta":" environment — the shell here"}}
+
+data: {"id":"evt_1882a4d08001qaoy5hHD4z7v5o","created":1793285836040,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0,"delta":" runs PowerShell on Windows. I ran `echo hi` through that shell"}}
+
+data: {"id":"evt_1882a4d86001x1JussBtEwrCdm","created":1793285836166,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0,"delta":" instead.\n\nOutput:\n\n```\nhi\n```\n\nSo the command printed **"}}
+
+data: {"id":"evt_1882a4db3001gECur85otRluEQ","created":1793285836211,"type":"session.reasoning.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0,"text":"The user asked to use the \"bash tool\" — I don't have one. I used the shell tool (PowerShell on Windows). I should note this honestly but keep it brief.\n\nThe output is `hi`. That's it. Keep response concise.","native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":19,"version":1}}
+
+data: {"id":"evt_1882a4db5001GV0h89i1BFAmnz","created":1793285836213,"type":"session.text.delta","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0,"delta":"hi**."}}
+
+data: {"id":"evt_1882a4db5002KjVxTG2oiu7sNs","created":1793285836213,"type":"session.text.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","ordinal":0,"text":"I don't have a `bash` tool in this environment — the shell here runs PowerShell on Windows. I ran `echo hi` through that shell instead.\n\nOutput:\n\n```\nhi\n```\n\nSo the command printed **hi**."},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":20,"version":1}}
+
+data: {"id":"evt_1882a4db6001LZIfz7HoC1bceG","created":1793285836214,"type":"session.step.streamed","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn"},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":21,"version":1}}
+
+data: {"id":"evt_1882a4db7001uRaFK7nwCoC5CB","created":1793285836215,"type":"session.step.ended","location":{"directory":"C:\\work\\proj"},"data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","assistantMessageID":"msg_1882a467f001yMbyawD0ihQKvn","finish":"stop","rawFinish":"stop","tokens":{"input":205,"output":46,"reasoning":52,"cache":{"read":7040,"write":0}},"cost":0},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":22,"version":1}}
+
+data: {"id":"evt_1882a4db8001Ym4TbumdYNCg2h","created":1793285836216,"type":"session.usage.updated","data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR","cost":0,"tokens":{"input":5367,"output":89,"reasoning":134,"cache":{"read":9472,"write":0}}}}
+
+data: {"id":"evt_1882a4db9001eAWJ7TQ2qxq7Wl","created":1793285836217,"type":"session.execution.succeeded","data":{"sessionID":"ses_e77d5e587ffeylOS3IgWhX1xrR"},"durable":{"aggregateID":"ses_e77d5e587ffeylOS3IgWhX1xrR","seq":23,"version":1}}
+
