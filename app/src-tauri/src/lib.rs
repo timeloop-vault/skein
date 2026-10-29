@@ -96,6 +96,7 @@ pub fn run() {
         .invoke_handler(perf_cmds::timed(tauri::generate_handler![
             commands::app::ping,
             commands::app::window_raise_main,
+            commands::app::app_restart,
             fs::list_dir,
             fs::read_file_text,
             fs::write_file_text,

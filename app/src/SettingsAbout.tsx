@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useState } from "react";
+import { restartApp } from "./exitGuard.ts";
 import { flushPerfSummary } from "./perfTelemetry.ts";
 import { flushRoomsBounded } from "./roomsFlush.ts";
 import { UpdaterProxyField } from "./UpdaterProxyField.tsx";
@@ -19,8 +20,15 @@ type UpdateState =
 	| { status: "current" }
 	| { status: "available"; version: string; notes: string | undefined }
 	| { status: "downloading"; downloaded: number; total: number | undefined }
+	| { status: "installing" }
 	| { status: "ready" }
+	| { status: "restarting" }
 	| { status: "error"; message: string; lines: string[] };
+
+// #692: an install outlives the About panel. Closing Settings must not
+// lose the restart, and a fresh check would offer the same version again
+// while the old binary is still the one running.
+let installedThisSession = false;
 
 /// Mirror of `agent_api::state::AgentApiStatus` (#213).
 interface AgentApiStatus {
@@ -68,7 +76,9 @@ export const AboutSettings = () => {
 			});
 	}, []);
 
-	const [update, setUpdate] = useState<UpdateState>({ status: "idle" });
+	const [update, setUpdate] = useState<UpdateState>(() =>
+		installedThisSession ? { status: "ready" } : { status: "idle" },
+	);
 	// #614: keep the plugin's message, then ask Rust why (cause chain +
 	// effective proxy). The diagnosis failing must not hide the real error.
 	const failWith = useCallback(async (err: unknown) => {
@@ -116,13 +126,32 @@ export const AboutSettings = () => {
 				} else if (event.event === "Finished") {
 					// Download is done; the install (which may end the app) starts now.
 					flushPerfSummary("shutdown");
-					setUpdate({ status: "ready" });
+					setUpdate({ status: "installing" });
 				}
 			});
+			// Only now is the bundle replaced: restarting any earlier could
+			// relaunch a half-written one.
+			installedThisSession = true;
+			setUpdate({ status: "ready" });
 		} catch (err: unknown) {
 			await failWith(err);
 		}
 	}, [failWith]);
+
+	const restart = useCallback(async () => {
+		setUpdate({ status: "restarting" });
+		try {
+			if (!(await restartApp())) setUpdate({ status: "ready" });
+		} catch (err: unknown) {
+			console.error("[skein] restart failed:", err);
+			setUpdate({ status: "ready" });
+		}
+	}, []);
+
+	// Nothing to check while an update is in flight or waiting on the restart.
+	const busy = ["checking", "downloading", "installing", "ready", "restarting"].includes(
+		update.status,
+	);
 
 	return (
 		<div className="sk-field">
@@ -130,12 +159,7 @@ export const AboutSettings = () => {
 			<div className="sk-update">
 				<div className="sk-update-row">
 					<span className="sk-update-version">Skein {version || "—"}</span>
-					<button
-						type="button"
-						className="sk-btn"
-						onClick={checkForUpdate}
-						disabled={update.status === "checking" || update.status === "downloading"}
-					>
+					<button type="button" className="sk-btn" onClick={checkForUpdate} disabled={busy}>
 						{update.status === "checking" ? "Checking…" : "Check for updates"}
 					</button>
 				</div>
@@ -166,9 +190,19 @@ export const AboutSettings = () => {
 							: `${(update.downloaded / 1024).toFixed(0)} KB`}
 					</div>
 				)}
-				{update.status === "ready" && (
+				{update.status === "installing" && <div className="sk-update-msg">Installing…</div>}
+				{(update.status === "ready" || update.status === "restarting") && (
 					<div className="sk-update-msg ok">
-						Update installed. Restart Skein to use the new version.
+						<div>Update installed. Restart Skein to use the new version.</div>
+						<button
+							type="button"
+							className="sk-btn primary"
+							onClick={restart}
+							disabled={update.status === "restarting"}
+							style={{ marginTop: 6 }}
+						>
+							{update.status === "restarting" ? "Restarting…" : "Restart now"}
+						</button>
 					</div>
 				)}
 				{update.status === "error" && (

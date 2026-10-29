@@ -14,9 +14,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Dispatch, SetStateAction } from "react";
-import { useEffect, useRef } from "react";
-import { confirmDialog } from "./confirmDialog.ts";
-import { filesRegistry } from "./filesRegistry.ts";
+import { useEffect } from "react";
+import { confirmDiscardUnsaved } from "./exitGuard.ts";
 import { flushPerfSummary, startPerfTelemetry } from "./perfTelemetry.ts";
 import { flushRoomsBounded } from "./roomsFlush.ts";
 import { attachStatusPopover } from "./statusPopover.ts";
@@ -63,28 +62,9 @@ export function useAppWindowEffects(
 	// deliberately routes here as skein://quit-requested because the
 	// predefined quit item would terminate: without any prompt.
 	// destroy() bypasses onCloseRequested, so confirming quits for
-	// real; the ref guard stops stacked prompts when close is clicked
-	// twice.
-	const quitPromptOpenRef = useRef(false);
+	// real. The prompt itself is shared with the #692 restart.
 	useEffect(() => {
-		const confirmQuit = async (): Promise<boolean> => {
-			const dirty = filesRegistry.anyDirty();
-			if (dirty.length === 0) return true;
-			if (quitPromptOpenRef.current) return false;
-			quitPromptOpenRef.current = true;
-			try {
-				const shown = dirty.slice(0, 5).join(", ") + (dirty.length > 5 ? ", …" : "");
-				return await confirmDialog({
-					title: "Unsaved changes",
-					message: `${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${shown}) will be discarded. Quit anyway?`,
-					confirmLabel: "Quit anyway",
-					cancelLabel: "Cancel",
-					kind: "warning",
-				});
-			} finally {
-				quitPromptOpenRef.current = false;
-			}
-		};
+		const confirmQuit = () => confirmDiscardUnsaved("Quit");
 		// One close/quit sequence at a time, shared by both paths: a second
 		// request during the bounded flush must not reach destroy() again.
 		// Reset when the user cancels the confirm.

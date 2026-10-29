@@ -1,0 +1,53 @@
+// What every path that ends the process runs first: quit and window
+// close (useAppWindowEffects.ts) and the post-update restart
+// (SettingsAbout.tsx, #692). Files buffer text lives only in memory
+// (#185), so each one asks before discarding it.
+
+import { invoke } from "@tauri-apps/api/core";
+import { confirmDialog } from "./confirmDialog.ts";
+import { filesRegistry } from "./filesRegistry.ts";
+import { flushPerfSummary } from "./perfTelemetry.ts";
+import { flushRoomsBounded } from "./roomsFlush.ts";
+
+// Stops stacked prompts when close is clicked twice.
+let promptOpen = false;
+
+/** True when nothing is unsaved or the user accepts discarding it. */
+export async function confirmDiscardUnsaved(action: "Quit" | "Restart"): Promise<boolean> {
+	const dirty = filesRegistry.anyDirty();
+	if (dirty.length === 0) return true;
+	if (promptOpen) return false;
+	promptOpen = true;
+	try {
+		const shown = dirty.slice(0, 5).join(", ") + (dirty.length > 5 ? ", …" : "");
+		return await confirmDialog({
+			title: "Unsaved changes",
+			message: `${dirty.length} unsaved file${dirty.length === 1 ? "" : "s"} (${shown}) will be discarded. ${action} anyway?`,
+			confirmLabel: `${action} anyway`,
+			cancelLabel: "Cancel",
+			kind: "warning",
+		});
+	} finally {
+		promptOpen = false;
+	}
+}
+
+/**
+ * #692: relaunch into an update the updater has installed in place.
+ * Resolves false when the user keeps Skein running. The restart tears
+ * the windows down without a CloseRequested, so the quit handler never
+ * sees it and this runs the same steps itself. Unlike quit it fails
+ * CLOSED: a confirm that cannot be shown rejects and nothing restarts,
+ * since quitting by hand is still possible and lost text is not
+ * recoverable.
+ */
+export async function restartApp(): Promise<boolean> {
+	// #594: land the debounced rooms save before anything can end the app.
+	await flushRoomsBounded();
+	if (!(await confirmDiscardUnsaved("Restart"))) return false;
+	flushPerfSummary("shutdown");
+	// Edits made while the confirm was open.
+	await flushRoomsBounded();
+	await invoke("app_restart");
+	return true;
+}

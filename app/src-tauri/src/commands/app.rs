@@ -68,3 +68,16 @@ pub(crate) fn perf_summary_log(line: String) {
 pub(crate) fn window_raise_main(app: tauri::AppHandle) {
     crate::setup::raise_main_window(&app);
 }
+
+/// Relaunch Skein into an update the updater installed in place (#692).
+/// `request_restart` exits through `RunEvent::Exit` first, so the
+/// sidecar cleanup in `lib.rs` and the single-instance socket release
+/// both run before the new process starts. The frontend has already
+/// landed the rooms save and confirmed unsaved Files buffers: the exit
+/// tears the windows down without a `CloseRequested`.
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+pub(crate) fn app_restart(app: tauri::AppHandle) {
+    tracing::info!("restart requested from the updater");
+    app.request_restart();
+}
