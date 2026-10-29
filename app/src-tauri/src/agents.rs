@@ -11,6 +11,7 @@
 
 use std::ffi::OsStr;
 use std::path::Path;
+use std::time::Duration;
 
 use serde::Serialize;
 use skein_harness::agents::{AgentDef, AgentSource, allows_mcp_tools, claude, opencode};
@@ -118,7 +119,8 @@ pub(crate) fn list(
             unsupported: false,
         };
     };
-    let (resolved, _path) = crate::pty::harness_program_lookup(program, settings);
+    let (resolved, path) = crate::pty::harness_program_lookup(program, settings);
+    let resolved_is_some = resolved.is_some();
     // An unresolved program still goes to the crate as a bare name: the
     // spawn error then names the program the user is missing, which is
     // more use than a message invented here.
@@ -130,13 +132,48 @@ pub(crate) fn list(
             let extra = claude_probe_args(settings, config);
             claude::list(OsStr::new(&exe), &home, cwd_path, &extra)
         }
-        _ => opencode::list(OsStr::new(&exe), &home, cwd_path),
+        _ => opencode_list(resolved_is_some, &exe, path.as_os_str(), &home, cwd_path),
     };
     AgentListDto {
         agents: list.agents.into_iter().map(to_dto).collect(),
         degraded: list.degraded,
         unsupported: false,
     }
+}
+
+/// opencode discovery: v2 lists agents through `debug agents`, v1
+/// through `agent list` (#680). Unknown version (or an unresolved
+/// program, which is never probed) is v1, as everywhere (#675).
+fn opencode_list(
+    resolved: bool,
+    exe: &str,
+    path: &OsStr,
+    home: &Path,
+    cwd: &Path,
+) -> skein_harness::agents::AgentList {
+    let major = resolved
+        .then(|| {
+            skein_harness::opencode::version::probe_version(
+                OsStr::new(exe),
+                Duration::from_secs(10),
+                Some(path),
+            )
+        })
+        .flatten()
+        .map(|v| v.major);
+    if use_v2(major) {
+        tracing::debug!(?major, "opencode agent discovery: v2 (debug agents)");
+        opencode::list_v2(OsStr::new(exe), Some(path), home, cwd)
+    } else {
+        tracing::debug!(?major, "opencode agent discovery: v1 (agent list)");
+        opencode::list(OsStr::new(exe), home, cwd)
+    }
+}
+
+/// Whether opencode's v2 agent discovery applies: major >= 2. An
+/// unknown version is v1 (#675).
+fn use_v2(major: Option<u32>) -> bool {
+    major.is_some_and(|m| m >= 2)
 }
 
 /// The extra argv the probe needs so its list matches what the spawn
@@ -181,6 +218,14 @@ pub(crate) fn agent_sees_mcp(kind: &str, agent: &str, cwd: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v2_discovery_only_for_major_two_and_up() {
+        assert!(!use_v2(None));
+        assert!(!use_v2(Some(1)));
+        assert!(use_v2(Some(2)));
+        assert!(use_v2(Some(3)));
+    }
 
     fn def(name: &str, tools: Option<Vec<String>>, source: AgentSource) -> AgentDef {
         AgentDef {
@@ -312,7 +357,8 @@ mod tests {
 /// so they depend on the box rather than on the repository, and the
 /// pre-commit gate must stay hermetic. They catch the one class of
 /// failure no unit test can — an upstream change to Claude's refusal
-/// message or to `opencode agent list` — so run them by hand after
+/// message, to `opencode agent list` (v1) or to `opencode debug agents`
+/// (v2, #680) — so run them by hand after
 /// upgrading either CLI:
 ///
 /// ```text
