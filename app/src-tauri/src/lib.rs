@@ -209,7 +209,7 @@ pub fn run() {
                 && let Some(sidecars) =
                     tauri::Manager::try_state::<opencode_sidecar::OpencodeSidecarManager>(app)
             {
-                sidecars.stop_all();
+                opencode_sidecar::exit_cleanup(&sidecars);
             }
         });
 }

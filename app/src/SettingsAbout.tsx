@@ -7,9 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useState } from "react";
-import { restartApp } from "./exitGuard.ts";
-import { flushPerfSummary } from "./perfTelemetry.ts";
-import { flushRoomsBounded } from "./roomsFlush.ts";
+import { installUpdate, restartApp } from "./exitGuard.ts";
 import { UpdaterProxyField } from "./UpdaterProxyField.tsx";
 import { formatFailure, RELEASES_URL, updaterCheckProxy, updaterDiagnose } from "./updaterProxy.ts";
 import "./Settings.css";
@@ -112,23 +110,40 @@ export const AboutSettings = () => {
 				setUpdate({ status: "current" });
 				return;
 			}
-			// #594: the installer can terminate the app; land the rooms first.
-			await flushRoomsBounded();
 			let downloaded = 0;
 			let total: number | undefined;
-			await found.downloadAndInstall((event) => {
+			await found.download((event) => {
 				if (event.event === "Started") {
 					total = event.data.contentLength;
 					setUpdate({ status: "downloading", downloaded: 0, total });
 				} else if (event.event === "Progress") {
 					downloaded += event.data.chunkLength;
 					setUpdate({ status: "downloading", downloaded, total });
-				} else if (event.event === "Finished") {
-					// Download is done; the install (which may end the app) starts now.
-					flushPerfSummary("shutdown");
-					setUpdate({ status: "installing" });
 				}
 			});
+			// #698: the guard runs after the download so its prompt covers
+			// edits made meanwhile; the install may end the app.
+			setUpdate({ status: "installing" });
+			const back = { status: "available", version: found.version, notes: found.body } as const;
+			// A failing install is an updater error; a failing guard is not.
+			let installError: { err: unknown } | undefined;
+			let installed = false;
+			try {
+				installed = await installUpdate({
+					install: () =>
+						found.install().catch((err: unknown) => {
+							installError = { err };
+							throw err;
+						}),
+				});
+			} catch (err: unknown) {
+				if (installError) throw installError.err;
+				console.error("[skein] install guard failed:", err);
+			}
+			if (!installed) {
+				setUpdate(back);
+				return;
+			}
 			// Only now is the bundle replaced: restarting any earlier could
 			// relaunch a half-written one.
 			installedThisSession = true;

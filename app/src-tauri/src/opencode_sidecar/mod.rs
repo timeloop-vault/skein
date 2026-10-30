@@ -3,6 +3,7 @@
 //! and the boot sweep. HTTP readiness lives in `http`; the commands and the
 //! PTY wiring sit above it.
 
+mod exit_guard;
 pub(crate) mod http;
 mod process;
 mod record;
@@ -22,6 +23,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
+pub use exit_guard::{SidecarExitGuard, exit_cleanup};
 #[allow(unused_imports)] // the report type is part of the API
 pub use sweep::{SweepReport, sweep_orphans};
 
@@ -143,7 +145,8 @@ impl Inner {
     }
 }
 
-#[derive(Default)]
+/// Cloning shares the same sidecars (it clones the `Arc`).
+#[derive(Default, Clone)]
 pub struct OpencodeSidecarManager {
     inner: Arc<Inner>,
 }

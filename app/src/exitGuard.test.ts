@@ -2,10 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 const confirmMock = vi.hoisted(() => vi.fn());
+const flushRoomsMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const flushPerfMock = vi.hoisted(() => vi.fn());
+vi.mock("./roomsFlush.ts", () => ({ flushRoomsBounded: flushRoomsMock }));
+vi.mock("./perfTelemetry.ts", () => ({ flushPerfSummary: flushPerfMock }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 vi.mock("./confirmDialog.ts", () => ({ confirmDialog: confirmMock }));
 
-import { confirmDiscardUnsaved, restartApp } from "./exitGuard.ts";
+import { confirmDiscardUnsaved, installUpdate, restartApp } from "./exitGuard.ts";
 import { filesRegistry } from "./filesRegistry.ts";
 
 let unregister: (() => void) | undefined;
@@ -16,6 +20,8 @@ const dirty = (...names: string[]) => {
 beforeEach(() => {
 	invokeMock.mockReset().mockResolvedValue(undefined);
 	confirmMock.mockReset();
+	flushRoomsMock.mockClear();
+	flushPerfMock.mockClear();
 });
 afterEach(() => unregister?.());
 
@@ -51,6 +57,36 @@ describe("restartApp (#692)", () => {
 		confirmMock.mockRejectedValue(new Error("no dialog host"));
 		await expect(restartApp()).rejects.toThrow("no dialog host");
 		expect(invokeMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("installUpdate (#698)", () => {
+	it("installs without asking when nothing is unsaved", async () => {
+		const install = vi.fn().mockResolvedValue(undefined);
+		expect(await installUpdate({ install })).toBe(true);
+		expect(confirmMock).not.toHaveBeenCalled();
+		expect(install).toHaveBeenCalledTimes(1);
+		expect(flushRoomsMock).toHaveBeenCalled();
+		expect(flushPerfMock).toHaveBeenCalledWith("shutdown");
+	});
+
+	it("does not install when the user cancels, and says install", async () => {
+		dirty("a.ts");
+		confirmMock.mockResolvedValue(false);
+		const install = vi.fn();
+		expect(await installUpdate({ install })).toBe(false);
+		expect(confirmMock).toHaveBeenCalledWith(
+			expect.objectContaining({ confirmLabel: "Install anyway" }),
+		);
+		expect(install).not.toHaveBeenCalled();
+	});
+
+	it("fails closed: a prompt that cannot be shown installs nothing", async () => {
+		dirty("a.ts");
+		confirmMock.mockRejectedValue(new Error("no dialog host"));
+		const install = vi.fn();
+		await expect(installUpdate({ install })).rejects.toThrow("no dialog host");
+		expect(install).not.toHaveBeenCalled();
 	});
 });
 

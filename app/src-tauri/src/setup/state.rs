@@ -94,9 +94,15 @@ pub(super) fn open_database(
     app.manage(PtyManager::new());
     // `new` sweeps orphaned sidecars of a crashed Skein before returning,
     // so no new record can be written ahead of it.
-    app.manage(crate::opencode_sidecar::OpencodeSidecarManager::new(Some(
-        data_dir.to_path_buf(),
-    )));
+    let sidecars =
+        crate::opencode_sidecar::OpencodeSidecarManager::new(Some(data_dir.to_path_buf()));
+    // #698: the Windows updater exits without RunEvent::Exit; this guard's
+    // Drop (via cleanup_before_exit) stops the sidecars on that path.
+    app.resources_table()
+        .add(crate::opencode_sidecar::SidecarExitGuard::new(
+            sidecars.clone(),
+        ));
+    app.manage(sidecars);
     app.manage(WatcherManager::new());
     app.manage(ClaudeEventsManager::new(
         Arc::clone(&db),
