@@ -167,6 +167,8 @@ fn content_type(path: &Path) -> &'static str {
         Some("ttf") => "font/ttf",
         Some("otf") => "font/otf",
         Some("txt" | "md") => "text/plain; charset=utf-8",
+        // `WebAssembly.compileStreaming` rejects any other type (#700).
+        Some("wasm") => "application/wasm",
         _ => "application/octet-stream",
     }
 }
@@ -263,6 +265,13 @@ mod tests {
         #[cfg(windows)]
         let r = std::os::windows::fs::symlink_file(target, link);
         r.ok()
+    }
+
+    #[test]
+    fn serves_wasm_as_application_wasm() {
+        for name in ["canvaskit.wasm", "build/CANVASKIT.WASM"] {
+            assert_eq!(content_type(Path::new(name)), "application/wasm", "{name}");
+        }
     }
 
     #[test]
