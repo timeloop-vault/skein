@@ -194,7 +194,7 @@ fn walk(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     fn touch(root: &Path, rel: &str) {
         let p = root.join(rel);
@@ -319,6 +319,48 @@ mod tests {
         );
         std::fs::write(root.join("index.html"), "<p>hi</p>").unwrap();
         assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
+    }
+
+    fn moved_in_ticks(build: impl FnOnce(&Path) -> PathBuf, dest: &str) -> bool {
+        let src = tempfile::tempdir().unwrap();
+        let from = build(src.path());
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let manager = WatcherManager::new();
+        let canonical = dunce::canonicalize(dir.path()).unwrap();
+        start_design_watch(&manager, "t".into(), &canonical, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::rename(&from, canonical.join(dest)).unwrap();
+        rx.recv_timeout(Duration::from_secs(3)).is_ok()
+    }
+
+    #[test]
+    fn real_watcher_ticks_when_a_folder_is_moved_in() {
+        assert!(moved_in_ticks(
+            |s| {
+                std::fs::create_dir_all(s.join("moved")).unwrap();
+                std::fs::write(s.join("moved/a.html"), "<p>x</p>").unwrap();
+                s.join("moved")
+            },
+            "moved"
+        ));
+    }
+
+    #[test]
+    fn real_watcher_ticks_when_an_old_html_is_moved_in() {
+        assert!(moved_in_ticks(
+            |s| {
+                let p = s.join("old.html");
+                let f = std::fs::File::create(&p).unwrap();
+                f.set_modified(SystemTime::now() - Duration::from_secs(3600))
+                    .unwrap();
+                p
+            },
+            "old.html"
+        ));
     }
 
     #[test]
