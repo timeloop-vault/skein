@@ -102,6 +102,7 @@ export const useDesignControl = ({
 						{
 							id: "a",
 							...(a.odId ? { odId: a.odId } : {}),
+							...(a.frame && a.frame.length > 0 ? { frame: a.frame } : {}),
 							selector: a.selector,
 							tag: a.tag,
 							text: a.text,

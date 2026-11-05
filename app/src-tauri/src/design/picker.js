@@ -116,11 +116,16 @@
 			.trim();
 	const clipTo = (s, n) => String(s).slice(0, n);
 
+	// Flutter's flt-semantic-node-<n> ids are layout counters, not identity.
+	const unstableId = (id) =>
+		window.__skeinHit?.isUnstableId ? window.__skeinHit.isUnstableId(id) : false;
+	const stableId = (el) => {
+		const id = el.getAttribute("id");
+		return id && !unstableId(id) ? id : undefined;
+	};
+
 	const odIdOf = (el) =>
-		el.getAttribute("data-od-id") ||
-		el.getAttribute("data-screen-label") ||
-		el.getAttribute("id") ||
-		undefined;
+		el.getAttribute("data-od-id") || el.getAttribute("data-screen-label") || stableId(el);
 
 	const textOf = (el) => {
 		// Clone-free: overlay nodes live on documentElement, never inside
@@ -138,7 +143,7 @@
 		let cur = el;
 		while (cur && cur.nodeType === 1) {
 			const tag = cur.tagName.toLowerCase();
-			const id = cur.getAttribute("id");
+			const id = stableId(cur);
 			if (id && document.getElementById(id) === cur) {
 				parts.unshift(`#${esc(id)}`);
 				break;
@@ -210,6 +215,10 @@
 		}
 	};
 
+	// Current scroll, sent with picked/located so a parent picker can convert
+	// this document's coordinates (#708).
+	const scrollNow = () => ({ x: Math.round(window.scrollX), y: Math.round(window.scrollY) });
+
 	let describe = (el) => {
 		const d = {
 			selector: selectorOf(el),
@@ -229,6 +238,7 @@
 
 	let picking = false;
 	let box = null;
+	let tag = null;
 
 	const ensureOverlay = () => {
 		let root = document.documentElement.querySelector(`:scope > [${OVERLAY}="root"]`);
@@ -257,25 +267,127 @@
 		box.style.height = `${r.h}px`;
 	};
 
+	// First ~120 chars of an element's text, walking text nodes with an early
+	// exit so a huge subtree is never read whole.
+	const shortText = (el) => {
+		let out = "";
+		const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+		for (let n = w.nextNode(); n && out.length < 120; n = w.nextNode()) out += n.nodeValue;
+		return out.slice(0, 120);
+	};
+
+	const moveLabel = (el) => {
+		const hit = window.__skeinHit;
+		if (!hit || !box) return;
+		let text = "";
+		try {
+			text = hit.labelOf({
+				tag: el.tagName.toLowerCase(),
+				role: el.getAttribute("role") || "",
+				ariaLabel: el.getAttribute("aria-label") || "",
+				text: shortText(el),
+			});
+		} catch (_) {
+			return;
+		}
+		if (!tag) {
+			tag = document.createElement("div");
+			tag.setAttribute(OVERLAY, "label");
+			tag.style.cssText =
+				"position:absolute;box-sizing:border-box;background:#4f8cff;color:#fff;font:11px/1.4 system-ui,sans-serif;padding:1px 6px;white-space:nowrap;pointer-events:none;max-width:90vw;overflow:hidden;";
+			ensureOverlay().appendChild(tag);
+		}
+		tag.textContent = text;
+		const r = rectOf(el);
+		const above = r.y - 18;
+		const maxLeft = window.scrollX + document.documentElement.clientWidth - tag.offsetWidth;
+		tag.style.left = `${Math.max(window.scrollX, Math.min(r.x, maxLeft))}px`;
+		tag.style.top = `${above >= window.scrollY ? above : r.y + 2}px`;
+	};
+
+	// The element the pointer is over. On a Flutter web page the event
+	// target is the canvas host, so resolve to the innermost flt-semantics
+	// node whose box holds the pointer; anything else falls back to target.
+	const targetAt = (e) => {
+		const t = e.target;
+		try {
+			const hit = window.__skeinHit;
+			if (!hit || !document.querySelector("flt-semantics")) return t;
+			const inView =
+				t === document.documentElement ||
+				t === document.body ||
+				(t?.nodeType === 1 && t.closest("flutter-view, flt-glass-pane, flt-semantics-host"));
+			if (!inView) return t;
+			const nodes = Array.from(document.querySelectorAll("flt-semantics")).slice(0, 2000);
+			const seen = new Set(nodes);
+			// Map the target / stack hits (e.g. a text span) to their node.
+			const extra = [t, ...(document.elementsFromPoint?.(e.clientX, e.clientY) || [])];
+			for (const x of extra) {
+				const n = x?.nodeType === 1 ? x.closest("flt-semantics") : null;
+				if (n && !seen.has(n)) {
+					seen.add(n);
+					nodes.push(n);
+				}
+			}
+			const cands = nodes.map((n, order) => {
+				let depth = 0;
+				for (let p = n.parentElement; p; p = p.parentElement) {
+					if (p.localName === "flt-semantics") depth++;
+				}
+				const b = n.getBoundingClientRect();
+				return {
+					rect: { left: b.left, top: b.top, width: b.width, height: b.height },
+					depth,
+					order,
+				};
+			});
+			const i = hit.pickDeepest({ x: e.clientX, y: e.clientY }, cands);
+			return i >= 0 ? nodes[i] : t;
+		} catch (_) {
+			return t;
+		}
+	};
+
+	let moveRaf = 0;
+	let lastMove = null;
 	const onMove = (e) => {
-		const el = e.target;
-		if (el?.nodeType !== 1 || isOverlay(el)) return;
-		moveBox(el);
+		lastMove = e;
+		if (moveRaf) return;
+		moveRaf = requestAnimationFrame(() => {
+			moveRaf = 0;
+			const ev = lastMove;
+			lastMove = null;
+			if (!picking || !ev) return;
+			const el = targetAt(ev);
+			if (el?.nodeType !== 1 || isOverlay(el)) return;
+			moveBox(el);
+			moveLabel(el);
+		});
 	};
 	const onClick = (e) => {
 		e.preventDefault();
 		e.stopPropagation();
-		const el = e.target;
+		const el = targetAt(e);
 		if (el?.nodeType !== 1 || isOverlay(el)) return;
-		stopPick();
-		post({ type: "picked", element: describe(el) });
+		endPick();
+		post({ type: "picked", element: describe(el), scroll: scrollNow() });
 	};
 	const onKey = (e) => {
 		if (e.key !== "Escape") return;
 		e.preventDefault();
 		e.stopPropagation();
-		stopPick();
+		endPick();
 		post({ type: "pick-cancelled" });
+	};
+	// The pointer left this document: drop the hover box so a parent and a
+	// child picker never both show one.
+	const onOut = (e) => {
+		if (e.relatedTarget) return;
+		lastMove = null;
+		if (box) box.remove();
+		box = null;
+		if (tag) tag.remove();
+		tag = null;
 	};
 	// Swallow the rest of the gesture so the page does not react to it.
 	const swallow = (e) => {
@@ -287,23 +399,32 @@
 		if (picking) return;
 		picking = true;
 		document.addEventListener("mousemove", onMove, true);
+		document.addEventListener("mouseout", onOut, true);
 		document.addEventListener("click", onClick, true);
 		document.addEventListener("keydown", onKey, true);
 		document.addEventListener("mousedown", swallow, true);
 		document.addEventListener("mouseup", swallow, true);
+		document.addEventListener("pointerdown", swallow, true);
+		document.addEventListener("pointerup", swallow, true);
 		document.addEventListener("auxclick", swallow, true);
 	};
 	function stopPick() {
 		if (!picking) return;
 		picking = false;
 		document.removeEventListener("mousemove", onMove, true);
+		document.removeEventListener("mouseout", onOut, true);
 		document.removeEventListener("click", onClick, true);
 		document.removeEventListener("keydown", onKey, true);
 		document.removeEventListener("mousedown", swallow, true);
 		document.removeEventListener("mouseup", swallow, true);
+		document.removeEventListener("pointerdown", swallow, true);
+		document.removeEventListener("pointerup", swallow, true);
 		document.removeEventListener("auxclick", swallow, true);
 		if (box) box.remove();
 		box = null;
+		if (tag) tag.remove();
+		tag = null;
+		lastMove = null;
 	}
 
 	// ---- locate ----------------------------------------------------------
@@ -373,8 +494,8 @@
 		const anchors = Array.isArray(msg.anchors) ? msg.anchors.slice(0, 100) : [];
 		const all = Array.from(document.querySelectorAll("*")).filter((el) => !isOverlay(el));
 		const results = [];
-		for (const a of anchors) {
-			if (!a || typeof a !== "object") continue;
+		const { local, byFrame } = window.__skeinFrames.partitionAnchors(anchors);
+		for (const a of local) {
 			try {
 				results.push({ id: a.id, found: locateOne(a, all) });
 			} catch (_) {
@@ -393,8 +514,158 @@
 		} catch (_) {
 			// Resource timing unavailable.
 		}
-		post({ type: "located", requestId: msg.requestId, results, files });
+		if (byFrame.length) relayFrames(byFrame, results, files, msg.requestId);
+		else post({ type: "located", requestId: msg.requestId, results, files, scroll: scrollNow() });
 	};
+
+	// ---- child frames (#708) -----------------------------------------------
+	// Child pickers are reached only by postMessage (the preview is sandboxed
+	// to an opaque origin). A window counts as a child only once it has sent
+	// a skein-design message AND is the contentWindow of one of our frames.
+
+	const kids = new Set();
+	const frameElOf = (w) => {
+		for (const f of document.querySelectorAll("iframe,frame")) {
+			if (f.contentWindow === w && !isOverlay(f)) return f;
+		}
+		return null;
+	};
+	const sendKid = (w, msg) => {
+		try {
+			w.postMessage({ source: HOST, v: 1, ...msg }, "*");
+		} catch (_) {
+			// Frame is gone.
+		}
+	};
+	const eachKid = (fn) => {
+		for (const w of kids) {
+			if (frameElOf(w)) fn(w);
+			else kids.delete(w);
+		}
+	};
+	// The iframe's content-box origin in this document's coordinates.
+	const boxOf = (f) => {
+		const r = f.getBoundingClientRect();
+		const cs = getComputedStyle(f);
+		return {
+			x: r.left + window.scrollX + f.clientLeft + (Number.parseFloat(cs.paddingLeft) || 0),
+			y: r.top + window.scrollY + f.clientTop + (Number.parseFloat(cs.paddingTop) || 0),
+		};
+	};
+
+	// End a pick here and in every child picker.
+	const endPick = () => {
+		stopPick();
+		eachKid((w) => sendKid(w, { type: "pick-cancel" }));
+	};
+
+	const pendingSubs = new Map();
+	let subSeq = 0;
+	const relayFrames = (groups, results, files, requestId) => {
+		const F = window.__skeinFrames;
+		const mySubs = new Set();
+		let done = false;
+		const settle = (g, reply, frameEl) => {
+			const byId = new Map();
+			for (const r of Array.isArray(reply?.results) ? reply.results : []) {
+				if (r) byId.set(r.id, r.found);
+			}
+			for (const a of g.anchors) {
+				results.push({
+					id: a.id,
+					found:
+						frameEl && byId.has(a.id)
+							? F.relayLocated(byId.get(a.id), g.sel, boxOf(frameEl), reply.scroll)
+							: F.emptyFound(),
+				});
+			}
+			if (frameEl && Array.isArray(reply?.files)) {
+				for (const f of reply.files) {
+					if (files.length >= 200) break;
+					if (typeof f === "string") files.push(f);
+				}
+			}
+		};
+		const finish = () => {
+			if (done) return;
+			done = true;
+			clearTimeout(timer);
+			for (const id of mySubs) {
+				const p = pendingSubs.get(id);
+				pendingSubs.delete(id);
+				if (p) settle(p.g, null, null);
+			}
+			post({ type: "located", requestId, results, files, scroll: scrollNow() });
+		};
+		const timer = setTimeout(finish, 1500);
+		for (const g of groups) {
+			const el = safeQuery(g.sel);
+			const win = el && /^i?frame$/i.test(el.tagName) ? el.contentWindow : null;
+			if (!win || !kids.has(win)) {
+				settle(g, null, null);
+				continue;
+			}
+			const id = `skein-frame-${++subSeq}`;
+			mySubs.add(id);
+			pendingSubs.set(id, {
+				g,
+				win,
+				cb: (reply) => {
+					mySubs.delete(id);
+					settle(g, reply, el);
+					if (mySubs.size === 0) finish();
+				},
+			});
+			sendKid(win, { type: "locate", requestId: id, anchors: g.anchors });
+		}
+		if (mySubs.size === 0) finish();
+	};
+
+	// Trust model: any direct child frame that speaks the protocol is trusted;
+	// the worst it can do is end or fake the user's own in-progress pick.
+	// Messages from child pickers. Only picked / pick-cancelled / located are
+	// relayed (rewritten); dom-changed and scroll just re-measure our pins.
+	window.addEventListener("message", (e) => {
+		const m = e.data;
+		if (e.source === window || e.source === window.parent) return;
+		if (!m || typeof m !== "object" || m.source !== SOURCE || m.v !== 1) return;
+		const f = frameElOf(e.source);
+		if (!f) return;
+		kids.add(e.source);
+		switch (m.type) {
+			case "ready":
+				if (picking) sendKid(e.source, { type: "pick-start" });
+				break;
+			case "picked":
+			case "pick-cancelled": {
+				if (!picking) break;
+				endPick();
+				if (m.type === "pick-cancelled") post({ type: "pick-cancelled" });
+				else if (m.element && typeof m.element === "object") {
+					const d = window.__skeinFrames.prefixDescriptor(
+						m.element,
+						selectorOf(f),
+						boxOf(f),
+						m.scroll,
+					);
+					post({ type: "picked", element: d, scroll: scrollNow() });
+				}
+				break;
+			}
+			case "located": {
+				const p = pendingSubs.get(m.requestId);
+				if (p && p.win === e.source) {
+					pendingSubs.delete(m.requestId);
+					p.cb(m);
+				}
+				break;
+			}
+			case "dom-changed":
+			case "scroll":
+				domChanged();
+				break;
+		}
+	});
 
 	// ---- pins ------------------------------------------------------------
 
@@ -645,9 +916,10 @@
 			switch (m.type) {
 				case "pick-start":
 					startPick();
+					eachKid((w) => sendKid(w, { type: "pick-start" }));
 					break;
 				case "pick-cancel":
-					stopPick();
+					endPick();
 					break;
 				case "locate":
 					locate(m);

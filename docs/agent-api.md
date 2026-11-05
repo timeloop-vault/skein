@@ -795,7 +795,7 @@ a thread, resolves one, or writes source.
 - **`show_element`** `{harness?, selector | anchor, reveal?}` — exactly one of a
   CSS `selector` or an `anchor` object (the #434 shape: `selector`,
   `tag`, `text`, `attrs`, `odId`, `source`; at least a `selector` or
-  `tag` string is required, everything else is optional). Answers `{tier, highlighted, element, count?, score?,
+  `tag` string is required, everything else is optional). `frame` (optional array of `<iframe>` CSS selectors from the top preview document down to the element's own document; absent = the top document) is carried on stored element anchors. Answers `{tier, highlighted, element, count?, score?,
   revealed?, harnessId}`. `tier`: `anchored`, `reanchored`, `selector` (a unique
   match) highlight the element. `stale` returns the best candidate in
   `element` but does **not** highlight it — never a guess. `ambiguous`

@@ -45,6 +45,7 @@ const MAX_ATTR_KEY_CHARS: usize = 64;
 const MAX_ATTR_VALUE_CHARS: usize = 300;
 const MAX_SOURCE_POS: u32 = 10_000_000;
 const MAX_RECT_ABS: f64 = 1e6;
+const MAX_FRAME_DEPTH: usize = 8;
 const MAX_SEEN_FILES: usize = 200;
 
 /// The states the design pane may report, best first.
@@ -85,6 +86,10 @@ pub struct ElementAnchor {
     pub attrs: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<ElementSource>,
+    /// Selectors of the `<iframe>`s from the top preview document down to
+    /// the document holding the element; absent = the top document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<Vec<String>>,
     pub rect: ElementRect,
 }
 
@@ -251,6 +256,21 @@ pub fn validate_anchor(a: ElementAnchor, file_path: &str) -> Result<ElementAncho
         }
     }
     check_rect(&a.rect, "the element rect")?;
+    let frame = match a.frame {
+        Some(f) if f.len() > MAX_FRAME_DEPTH => {
+            return Err(format!(
+                "an element may sit at most {MAX_FRAME_DEPTH} frames deep"
+            ));
+        }
+        Some(f) if f.is_empty() => None,
+        Some(f) => {
+            for s in &f {
+                check_selector(s)?;
+            }
+            Some(f)
+        }
+        None => None,
+    };
     Ok(ElementAnchor {
         entry: a.entry,
         od_id,
@@ -264,6 +284,7 @@ pub fn validate_anchor(a: ElementAnchor, file_path: &str) -> Result<ElementAncho
             line_text: None,
             ..s
         }),
+        frame,
         rect: a.rect,
     })
 }

@@ -75,6 +75,7 @@ impl Fx {
                 column: None,
                 line_text: text.map(str::to_owned),
             }),
+            frame: None,
             rect: ElementRect {
                 x: 0.0,
                 y: 0.0,

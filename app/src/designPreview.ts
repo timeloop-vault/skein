@@ -130,6 +130,16 @@ const parseSource = (v: unknown): ElementSource | undefined => {
 	return column === null ? { file, line } : { file, line, column };
 };
 
+const MAX_FRAME_DEPTH = 8;
+const parseFrame = (v: unknown): string[] | undefined => {
+	if (!Array.isArray(v)) return undefined;
+	const out = v
+		.filter((s): s is string => typeof s === "string" && s !== "")
+		.slice(0, MAX_FRAME_DEPTH)
+		.map((s) => clipTo(s, 1000));
+	return out.length > 0 ? out : undefined;
+};
+
 const parseDescriptor = (v: unknown): ElementDescriptor | null => {
 	if (!isObj(v)) return null;
 	if (typeof v.selector !== "string" || typeof v.tag !== "string" || typeof v.text !== "string") {
@@ -154,6 +164,8 @@ const parseDescriptor = (v: unknown): ElementDescriptor | null => {
 	if (typeof v.odId === "string" && v.odId !== "") out.odId = clipTo(v.odId, 200);
 	const source = parseSource(v.rawSource);
 	if (source) out.source = source;
+	const frame = parseFrame(v.frame);
+	if (frame) out.frame = frame;
 	return out;
 };
 
@@ -207,7 +219,14 @@ export type HostMessage =
 	| {
 			type: "locate";
 			requestId: string;
-			anchors: { id: string; odId?: string; selector: string; tag: string; text: string }[];
+			anchors: {
+				id: string;
+				odId?: string;
+				selector: string;
+				tag: string;
+				text: string;
+				frame?: string[];
+			}[];
 	  }
 	| { type: "pins"; pins: { n: number; state: string; rect: ElementRect }[] }
 	| { type: "highlight"; n: number }
@@ -239,7 +258,14 @@ export type HostMessage =
 			type: "proposals";
 			items: {
 				id: string;
-				anchor: { id: string; odId?: string; selector: string; tag: string; text: string };
+				anchor: {
+					id: string;
+					odId?: string;
+					selector: string;
+					tag: string;
+					text: string;
+					frame?: string[];
+				};
 				changes: Change[];
 			}[];
 	  };

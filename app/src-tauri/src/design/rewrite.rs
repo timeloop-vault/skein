@@ -11,7 +11,12 @@
 /// `data-plugins` to Babel scripts.
 pub fn rewrite_html(src: &str, picker: &str, extras: &[(&str, &str)]) -> String {
     let src = tag_babel_scripts(src);
-    let mut script = format!("<script data-skein-picker>{picker}</script>");
+    // The hit-testing helpers go first: the picker reads `window.__skeinHit`.
+    let mut script = format!(
+        "<script data-skein-hit>{}</script><script data-skein-frames>{}</script><script data-skein-picker>{picker}</script>",
+        include_str!("hit.js"),
+        include_str!("frames.js")
+    );
     for (attr, source) in extras {
         script.push_str("<script ");
         script.push_str(attr);
@@ -204,7 +209,26 @@ mod tests {
     use super::*;
 
     const P: &str = "PICK";
-    const S: &str = "<script data-skein-picker>PICK</script>";
+    const S: &str = concat!(
+        "<script data-skein-hit>",
+        include_str!("hit.js"),
+        "</script><script data-skein-frames>",
+        include_str!("frames.js"),
+        "</script><script data-skein-picker>PICK</script>"
+    );
+
+    #[test]
+    fn hit_script_precedes_picker() {
+        let out = rewrite_html("<head></head>", P, &[]);
+        let hit = out.find("<script data-skein-hit>").expect("hit script");
+        let frames = out
+            .find("<script data-skein-frames>")
+            .expect("frames script");
+        let pick = out.find("<script data-skein-picker>").expect("picker");
+        assert!(hit < frames && frames < pick);
+        assert!(out.contains("__skeinHit"));
+        assert!(out.contains("__skeinFrames"));
+    }
 
     #[test]
     fn injects_before_closing_head() {

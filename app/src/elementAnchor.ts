@@ -14,6 +14,9 @@ export type ElementDescriptor = {
 	text: string;
 	attrs: Record<string, string>;
 	source?: ElementSource;
+	/** Selectors of the <iframe>s from the top preview document down to the
+	 *  document holding the element; absent or empty = the top document. */
+	frame?: string[];
 	rect: ElementRect;
 };
 /** The stored evidence: what the element looked like when commented on. */
@@ -106,7 +109,25 @@ function overlap(anchor: ElementAnchor, c: ElementDescriptor): number {
 	return score;
 }
 
-export function matchElement(anchor: ElementAnchor, found: LocateResult): Placement {
+/** Two frame paths are the same document; absent and [] are both the top. */
+export function sameFrame(
+	a: readonly string[] | undefined,
+	b: readonly string[] | undefined,
+): boolean {
+	const x = a ?? [];
+	const y = b ?? [];
+	return x.length === y.length && x.every((s, i) => s === y[i]);
+}
+
+export function matchElement(anchor: ElementAnchor, rawFound: LocateResult): Placement {
+	// A candidate only counts when it sits in the anchor's own frame.
+	const inFrame = (c: ElementDescriptor) => sameFrame(c.frame, anchor.frame);
+	const found: LocateResult = {
+		bySelector: rawFound.bySelector && inFrame(rawFound.bySelector) ? rawFound.bySelector : null,
+		byOdId: rawFound.byOdId.filter(inFrame),
+		byText: rawFound.byText.filter(inFrame),
+		sameTag: rawFound.sameTag.filter(inFrame),
+	};
 	const text = normalizeText(anchor.text);
 	const sel = found.bySelector;
 

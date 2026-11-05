@@ -180,6 +180,10 @@ export function parseAnchor(v: unknown): ElementAnchor | null {
 		entry: "",
 	};
 	if (typeof r.odId === "string" && r.odId) out.odId = r.odId;
+	if (Array.isArray(r.frame)) {
+		const frame = r.frame.filter((s): s is string => typeof s === "string" && s !== "");
+		if (frame.length > 0) out.frame = frame.slice(0, 8);
+	}
 	const src = asRecord(r.source);
 	if (src && typeof src.file === "string" && isNum(src.line)) {
 		out.source = { file: src.file, line: src.line };
