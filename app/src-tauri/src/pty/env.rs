@@ -231,6 +231,11 @@ pub(super) fn apply_env(
         builder.env(key, &var.value);
     }
 
+    // After every layer that can set a locale, before the profile, so a
+    // profile that unsets `LANG` on purpose still gets its way.
+    #[cfg(target_os = "macos")]
+    apply_default_lang(builder);
+
     // #615: the resolved env profile, over extra_env.
     let mut profile_set_keys = Vec::new();
     let mut profile_unset_keys = Vec::new();
@@ -383,6 +388,38 @@ fn same_env_key(a: &str, b: &str) -> bool {
         a.eq_ignore_ascii_case(b)
     } else {
         a == b
+    }
+}
+
+/// Give the child a UTF-8 locale when it inherited none.
+///
+/// A Dock-launched Skein inherits launchd's environment, which has no
+/// `LANG`, and rc files rarely set one, so harnesses ran in the `C`
+/// locale. That garbles text: macOS `pbcopy` decodes stdin as Mac Roman
+/// outside a UTF-8 locale, so copying "Malmö" out of Claude Code gave
+/// "Malm√∂".
+///
+/// Only when `LC_ALL`, `LC_CTYPE` and `LANG` are all unset or empty, so a
+/// locale chosen anywhere (inherited, login shell, extra env) is never
+/// overridden. `LANG`, not `LC_CTYPE=UTF-8`: ssh forwards `LANG`/`LC_*`
+/// by default, and bare `UTF-8` is not a locale on Linux, where every
+/// remote shell would warn about it.
+///
+/// macOS only. A Linux desktop session sets `LANG`, and minimal installs
+/// often lack `en_US.UTF-8`, so a default there would cause `setlocale`
+/// warnings; Git Bash on Windows derives `LANG` from the Windows locale.
+///
+/// The `remote` kind (ssh) gets it too, on purpose: `apply_env` does not
+/// know the kind, and a remote tmux without a UTF-8 locale garbles the
+/// same way. A remote lacking the locale warns; an env profile can set
+/// or unset `LANG`.
+#[cfg(target_os = "macos")]
+fn apply_default_lang(builder: &mut CommandBuilder) {
+    let has_locale = ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .any(|k| builder.get_env(k).is_some_and(|v| !v.is_empty()));
+    if !has_locale {
+        builder.env("LANG", "en_US.UTF-8");
     }
 }
 
