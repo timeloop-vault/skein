@@ -322,9 +322,13 @@
 			const seen = new Set(nodes);
 			// Map the target / stack hits (e.g. a text span) to their node.
 			const extra = [t, ...(document.elementsFromPoint?.(e.clientX, e.clientY) || [])];
+			// The browser's own hit: the deepest semantics node among them.
+			let browserHit = null;
 			for (const x of extra) {
 				const n = x?.nodeType === 1 ? x.closest("flt-semantics") : null;
-				if (n && !seen.has(n)) {
+				if (!n) continue;
+				if (!browserHit || (browserHit !== n && browserHit.contains(n))) browserHit = n;
+				if (!seen.has(n)) {
 					seen.add(n);
 					nodes.push(n);
 				}
@@ -342,7 +346,8 @@
 				};
 			});
 			const i = hit.pickDeepest({ x: e.clientX, y: e.clientY }, cands);
-			return i >= 0 ? nodes[i] : t;
+			const winner = i >= 0 ? nodes[i] : null;
+			return hit.chooseTarget(winner, browserHit, (a, b) => a.contains(b)) ?? t;
 		} catch (_) {
 			return t;
 		}
@@ -889,6 +894,7 @@
 		describe: (el) => describe(el),
 		locateOne: (a, all) => locateOne(a, all),
 		isOverlay,
+		targetAt,
 		isPicking: () => picking,
 		root: ensureOverlay,
 		rectOf,

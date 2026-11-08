@@ -10,7 +10,7 @@
 (() => {
 	const api = window.__skeinPickerApi;
 	if (!api?.tokens) return;
-	const { OVERLAY, HOST, post, describe, isOverlay, root, rectOf, flush } = api;
+	const { OVERLAY, HOST, post, describe, isOverlay, root, rectOf, flush, targetAt } = api;
 	const { scanTokens, sameValue } = api.tokens;
 
 	// Keep identical to PROPERTY_ALLOWLIST in app/src/designProposal.ts and in
@@ -237,8 +237,9 @@
 		e.stopPropagation();
 	};
 	const onMove = (e) => {
-		const t = e.target;
-		if (mode !== "pick" || t?.nodeType !== 1 || isOverlay(t)) return;
+		if (mode !== "pick") return;
+		const t = targetAt(e);
+		if (t?.nodeType !== 1 || isOverlay(t)) return;
 		if (!hover) {
 			hover = document.createElement("div");
 			hover.setAttribute(OVERLAY, "hover");
@@ -257,7 +258,9 @@
 		if (textEdit && el?.contains(e.target)) return;
 		e.preventDefault();
 		e.stopPropagation();
-		if (mode === "pick" && e.target?.nodeType === 1) select(e.target);
+		if (mode !== "pick") return;
+		const t = targetAt(e);
+		if (t?.nodeType === 1) select(t);
 	};
 	const onDown = (e) => {
 		if (isOverlay(e.target)) return;

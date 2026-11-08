@@ -9,6 +9,7 @@ type Cand = {
 type Hit = {
 	pickDeepest: (p: { x: number; y: number }, c: Cand[]) => number;
 	isUnstableId: (id: string) => boolean;
+	chooseTarget: <T>(w: T | null, b: T | null, contains: (a: T, b: T) => boolean) => T | null;
 	labelOf: (i: { tag?: string; role?: string; ariaLabel?: string; text?: string }) => string;
 };
 
@@ -80,5 +81,24 @@ describe("labelOf", () => {
 	it("clips long labels", () => {
 		const out = labelOf({ tag: "p", ariaLabel: "x".repeat(100) });
 		expect(out).toBe(`p · "${"x".repeat(39)}…"`);
+	});
+});
+
+describe("chooseTarget", () => {
+	const { chooseTarget } = load();
+	const nest: Record<string, string[]> = { a: ["b"], b: [] };
+	const contains = (x: string, y: string) => (nest[x] ?? []).includes(y);
+	it("prefers the browser hit when it is inside the rect winner", () => {
+		expect(chooseTarget("a", "b", contains)).toBe("b");
+	});
+	it("keeps the rect winner when the browser hit is an ancestor or unrelated", () => {
+		expect(chooseTarget("b", "a", contains)).toBe("b");
+		expect(chooseTarget("b", "z", contains)).toBe("b");
+	});
+	it("handles equal and missing inputs", () => {
+		expect(chooseTarget("a", "a", contains)).toBe("a");
+		expect(chooseTarget(null, "b", contains)).toBe("b");
+		expect(chooseTarget("a", null, contains)).toBe("a");
+		expect(chooseTarget(null, null, contains)).toBeNull();
 	});
 });
