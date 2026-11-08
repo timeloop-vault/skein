@@ -3,7 +3,7 @@
 // answer. No DOM, no React: the hook (useDesignChanges.ts) does the posting.
 
 import { asRecord, isOmitted, type RequestResult } from "./agentRequestsShared.ts";
-import { stripSourcePrefix } from "./designPreview.ts";
+import { stripSourcePrefix } from "./designDescriptor.ts";
 
 export const LIMITS =
 	"Highlights elements whose JSX opening tag (including its attribute lines) is on a changed line, every rendered instance. It cannot show changes to logic, styles defined outside the tag, tokens, CSS or plain .js, or elements not rendered right now; those are listed as unmapped. It shows where changed lines render, not everything that looks different.";

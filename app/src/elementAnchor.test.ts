@@ -5,6 +5,7 @@ import {
 	type LocateResult,
 	matchElement,
 	normalizeText,
+	sameFrame,
 } from "./elementAnchor";
 
 const rect = { x: 0, y: 0, w: 10, h: 10 };
@@ -331,5 +332,34 @@ describe("known limit", () => {
 			found({ bySelector: el("main > button", { text: "Buy" }) }),
 		);
 		expect(p.state).toBe("anchored");
+	});
+});
+
+describe("frame", () => {
+	it("absent and empty are the same (top) frame", () => {
+		expect(sameFrame(undefined, [])).toBe(true);
+		expect(sameFrame(["iframe#a"], ["iframe#a"])).toBe(true);
+		expect(sameFrame(["iframe#a"], ["iframe#b"])).toBe(false);
+		expect(sameFrame(["iframe#a"], undefined)).toBe(false);
+		expect(sameFrame(["a", "b"], ["a"])).toBe(false);
+	});
+
+	it("an old anchor matches a top-document candidate, with or without frame: []", () => {
+		const p = matchElement(anchor(), found({ bySelector: el("main > button", { frame: [] }) }));
+		expect(p.state).toBe("anchored");
+	});
+
+	it("a frame anchor only matches candidates in its own frame", () => {
+		const a = anchor({ frame: ["iframe#a"] });
+		const same = el("main > button", { frame: ["iframe#a"] });
+		expect(matchElement(a, found({ bySelector: same })).state).toBe("anchored");
+		expect(matchElement(a, found({ bySelector: el("main > button") })).state).toBe("lost");
+		const other = el("main > button", { frame: ["iframe#b"] });
+		expect(matchElement(a, found({ bySelector: other, byText: [other] })).state).toBe("lost");
+	});
+
+	it("a top anchor ignores a same-selector element inside a frame", () => {
+		const inner = el("main > button", { frame: ["iframe#a"] });
+		expect(matchElement(anchor(), found({ bySelector: inner })).state).toBe("lost");
 	});
 });

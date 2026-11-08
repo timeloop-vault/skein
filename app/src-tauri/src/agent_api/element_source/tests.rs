@@ -27,6 +27,7 @@ fn anchor(entry: &str, od_id: Option<&str>, text: &str, src: Option<(&str, u32)>
             column: None,
             line_text: None,
         }),
+        frame: None,
         rect: ElementRect {
             x: 0.0,
             y: 0.0,

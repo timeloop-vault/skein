@@ -51,6 +51,7 @@ export const buildLocateAnchors = (threads: readonly ElementThread[]): Anchors =
 		if (!a) return [];
 		const out: Anchors[number] = { id: t.id, selector: a.selector, tag: a.tag, text: a.text };
 		if (a.odId) out.odId = a.odId;
+		if (a.frame && a.frame.length > 0) out.frame = a.frame;
 		return [out];
 	});
 

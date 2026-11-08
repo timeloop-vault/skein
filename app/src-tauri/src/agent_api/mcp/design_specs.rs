@@ -171,6 +171,11 @@ pub(super) fn design_tool_specs() -> Vec<Value> {
                             "attrs": {},
                             "odId": { "type": "string" },
                             "source": {},
+                            "frame": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Iframe selectors from the top document down to the frame holding the element (max 8). Absent or empty = the top document.",
+                            },
                         },
                     },
                     "reveal": {
@@ -242,6 +247,11 @@ pub(super) fn design_tool_specs() -> Vec<Value> {
                             "attrs": {},
                             "odId": { "type": "string" },
                             "source": {},
+                            "frame": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Iframe selectors from the top document down to the frame holding the element (max 8). Absent or empty = the top document.",
+                            },
                         },
                     },
                     "action": {

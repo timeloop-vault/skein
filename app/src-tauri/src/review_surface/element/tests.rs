@@ -26,6 +26,7 @@ fn anchor() -> ElementAnchor {
             column: Some(9),
             line_text: None,
         }),
+        frame: None,
         rect: ElementRect {
             x: 41.0,
             y: 197.0,
@@ -102,6 +103,26 @@ fn selector_tag_and_id_are_capped() {
         check(|a| a.od_id = Some(String::new())).unwrap().od_id,
         None
     );
+}
+
+#[test]
+fn frame_is_optional_bounded_and_round_trips() {
+    let old = r##"{"entry":"p/i.html","selector":"#a","tag":"div","text":"","attrs":{},"rect":{"x":0.0,"y":0.0,"w":1.0,"h":1.0}}"##;
+    let a: ElementAnchor = serde_json::from_str(old).unwrap();
+    assert_eq!(a.frame, None);
+    assert!(!serde_json::to_string(&a).unwrap().contains("frame"));
+
+    let with = r##"{"entry":"p/i.html","selector":"#a","tag":"div","text":"","attrs":{},"frame":["iframe#a","iframe.b"],"rect":{"x":0.0,"y":0.0,"w":1.0,"h":1.0}}"##;
+    let a: ElementAnchor = serde_json::from_str(with).unwrap();
+    assert_eq!(a.frame.as_deref().map(<[String]>::len), Some(2));
+    let back: ElementAnchor = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+    assert_eq!(back, a);
+
+    assert_eq!(check(|a| a.frame = Some(vec![])).unwrap().frame, None);
+    assert!(check(|a| a.frame = Some(vec!["iframe".into(); 8])).is_ok());
+    assert!(check(|a| a.frame = Some(vec!["iframe".into(); 9])).is_err());
+    assert!(check(|a| a.frame = Some(vec![String::new()])).is_err());
+    assert!(check(|a| a.frame = Some(vec!["a".repeat(1001)])).is_err());
 }
 
 #[test]

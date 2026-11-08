@@ -5,14 +5,11 @@
 // `e.source === iframe.contentWindow`; this module checks the shape,
 // caps every string and never yields anything but plain text.
 
+import { cap, clipTo, isObj, num, parseDescriptor, stripSourcePrefix } from "./designDescriptor";
 import { type Change, type EditBeacon, parseEditBeacon } from "./designProposal";
-import type { ElementDescriptor, ElementRect, ElementSource, LocateResult } from "./elementAnchor";
+import type { ElementDescriptor, ElementRect, LocateResult } from "./elementAnchor";
 
-export const MAX_BEACON_TEXT = 500;
 export const MAX_BEACONS = 50;
-/** Same cap as Rust `check_rel_path`. */
-const MAX_SOURCE_PATH = 500;
-const NUL = String.fromCharCode(0);
 
 export type Beacon =
 	| { type: "ready"; href: string }
@@ -62,100 +59,12 @@ export type Beacon =
 	| { type: "scroll"; x: number; y: number }
 	| EditBeacon;
 
-const MAX_ATTRS = 16;
 const MAX_ANCHORS = 100;
 const MAX_FILES = 200;
 const MAX_SITES = 5000;
 const MAX_BY_ID = 10;
 const MAX_BY_TEXT = 10;
 const MAX_SAME_TAG = 200;
-
-const clipTo = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s);
-const cap = (s: string): string => clipTo(s, MAX_BEACON_TEXT);
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
-const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
-
-/** A worktree-relative path from a URL the preview served
- *  (`/preview/<token>/<path>`, possibly mangled by Babel into
- *  `/http:/127.0.0.1:1234/preview/tok/proto/shell.jsx`). Undefined for
- *  anything else, and for paths that could escape the worktree. */
-export const stripSourcePrefix = (fileName: string): string | undefined => {
-	let name = fileName;
-	const q = name.search(/[?#]/);
-	if (q >= 0) name = name.slice(0, q);
-	const at = name.indexOf("/preview/");
-	if (at < 0) return undefined;
-	const segs = name.slice(at + "/preview/".length).split("/");
-	if (segs.length < 2 || segs[0] === "") return undefined; // token + path
-	const out: string[] = [];
-	for (const raw of segs.slice(1)) {
-		let seg: string;
-		try {
-			seg = decodeURIComponent(raw);
-		} catch {
-			return undefined;
-		}
-		if (
-			seg === "" ||
-			seg === ".." ||
-			seg === "." ||
-			seg.includes("\\") ||
-			seg.includes("/") ||
-			seg.includes(":") ||
-			seg.includes(NUL)
-		) {
-			return undefined;
-		}
-		out.push(seg);
-	}
-	const path = out.join("/");
-	return [...path].length > MAX_SOURCE_PATH ? undefined : path;
-};
-
-const parseRect = (v: unknown): ElementRect | null => {
-	if (!isObj(v)) return null;
-	const x = num(v.x);
-	const y = num(v.y);
-	const w = num(v.w);
-	const h = num(v.h);
-	return x === null || y === null || w === null || h === null ? null : { x, y, w, h };
-};
-
-const parseSource = (v: unknown): ElementSource | undefined => {
-	if (!isObj(v) || typeof v.fileName !== "string") return undefined;
-	const file = stripSourcePrefix(v.fileName);
-	const line = num(v.lineNumber);
-	if (file === undefined || line === null) return undefined;
-	const column = num(v.columnNumber);
-	return column === null ? { file, line } : { file, line, column };
-};
-
-const parseDescriptor = (v: unknown): ElementDescriptor | null => {
-	if (!isObj(v)) return null;
-	if (typeof v.selector !== "string" || typeof v.tag !== "string" || typeof v.text !== "string") {
-		return null;
-	}
-	const rect = parseRect(v.rect);
-	if (!rect) return null;
-	const attrs: Record<string, string> = {};
-	if (isObj(v.attrs)) {
-		for (const [k, val] of Object.entries(v.attrs)) {
-			if (Object.keys(attrs).length >= MAX_ATTRS) break;
-			if (typeof val === "string") attrs[clipTo(k, 64)] = clipTo(val, 300);
-		}
-	}
-	const out: ElementDescriptor = {
-		selector: clipTo(v.selector, 1000),
-		tag: clipTo(v.tag, 64),
-		text: cap(v.text),
-		attrs,
-		rect,
-	};
-	if (typeof v.odId === "string" && v.odId !== "") out.odId = clipTo(v.odId, 200);
-	const source = parseSource(v.rawSource);
-	if (source) out.source = source;
-	return out;
-};
 
 const parseDescriptors = (v: unknown, max: number): ElementDescriptor[] => {
 	if (!Array.isArray(v)) return [];
@@ -207,7 +116,14 @@ export type HostMessage =
 	| {
 			type: "locate";
 			requestId: string;
-			anchors: { id: string; odId?: string; selector: string; tag: string; text: string }[];
+			anchors: {
+				id: string;
+				odId?: string;
+				selector: string;
+				tag: string;
+				text: string;
+				frame?: string[];
+			}[];
 	  }
 	| { type: "pins"; pins: { n: number; state: string; rect: ElementRect }[] }
 	| { type: "highlight"; n: number }
@@ -239,7 +155,14 @@ export type HostMessage =
 			type: "proposals";
 			items: {
 				id: string;
-				anchor: { id: string; odId?: string; selector: string; tag: string; text: string };
+				anchor: {
+					id: string;
+					odId?: string;
+					selector: string;
+					tag: string;
+					text: string;
+					frame?: string[];
+				};
 				changes: Change[];
 			}[];
 	  };
