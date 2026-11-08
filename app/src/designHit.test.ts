@@ -9,7 +9,11 @@ type Cand = {
 type Hit = {
 	pickDeepest: (p: { x: number; y: number }, c: Cand[]) => number;
 	isUnstableId: (id: string) => boolean;
-	chooseTarget: <T>(w: T | null, b: T | null, contains: (a: T, b: T) => boolean) => T | null;
+	refine: <T>(
+		hit: T,
+		w: T | null,
+		o: { isHost: (x: T) => boolean; contains: (a: T, b: T) => boolean },
+	) => T;
 	labelOf: (i: { tag?: string; role?: string; ariaLabel?: string; text?: string }) => string;
 };
 
@@ -84,21 +88,26 @@ describe("labelOf", () => {
 	});
 });
 
-describe("chooseTarget", () => {
-	const { chooseTarget } = load();
+describe("refine", () => {
+	const { refine } = load();
 	const nest: Record<string, string[]> = { a: ["b"], b: [] };
 	const contains = (x: string, y: string) => (nest[x] ?? []).includes(y);
-	it("prefers the browser hit when it is inside the rect winner", () => {
-		expect(chooseTarget("a", "b", contains)).toBe("b");
+	const opts = { isHost: (x: string) => x === "host", contains };
+	it("replaces a host target with the rect winner", () => {
+		expect(refine("host", "b", opts)).toBe("b");
 	});
-	it("keeps the rect winner when the browser hit is an ancestor or unrelated", () => {
-		expect(chooseTarget("b", "a", contains)).toBe("b");
-		expect(chooseTarget("b", "z", contains)).toBe("b");
+	it("keeps a host target when there is no winner", () => {
+		expect(refine("host", null, opts)).toBe("host");
 	});
-	it("handles equal and missing inputs", () => {
-		expect(chooseTarget("a", "a", contains)).toBe("a");
-		expect(chooseTarget(null, "b", contains)).toBe("b");
-		expect(chooseTarget("a", null, contains)).toBe("a");
-		expect(chooseTarget(null, null, contains)).toBeNull();
+	it("refines downward to a winner inside a fine hit", () => {
+		expect(refine("a", "b", opts)).toBe("b");
+	});
+	it("keeps the hit when the winner is its ancestor", () => {
+		expect(refine("b", "a", opts)).toBe("b");
+	});
+	it("keeps the hit for an unrelated winner or none", () => {
+		expect(refine("b", "z", opts)).toBe("b");
+		expect(refine("b", null, opts)).toBe("b");
+		expect(refine("a", "a", opts)).toBe("a");
 	});
 });

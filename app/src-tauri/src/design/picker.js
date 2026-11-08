@@ -318,16 +318,26 @@
 				t === document.body ||
 				(t?.nodeType === 1 && t.closest("flutter-view, flt-glass-pane, flt-semantics-host"));
 			if (!inView) return t;
+			const hosts = [
+				"flutter-view",
+				"flt-glass-pane",
+				"flt-semantics-host",
+				"flt-scene-host",
+				"flt-scene",
+				"canvas",
+			];
+			const isHost = (el) =>
+				el === document.documentElement ||
+				el === document.body ||
+				hosts.includes(el?.localName) ||
+				(el?.localName === "flt-semantics" && !!el.querySelector("flt-semantics"));
 			const nodes = Array.from(document.querySelectorAll("flt-semantics")).slice(0, 2000);
 			const seen = new Set(nodes);
 			// Map the target / stack hits (e.g. a text span) to their node.
 			const extra = [t, ...(document.elementsFromPoint?.(e.clientX, e.clientY) || [])];
-			// The browser's own hit: the deepest semantics node among them.
-			let browserHit = null;
 			for (const x of extra) {
 				const n = x?.nodeType === 1 ? x.closest("flt-semantics") : null;
 				if (!n) continue;
-				if (!browserHit || (browserHit !== n && browserHit.contains(n))) browserHit = n;
 				if (!seen.has(n)) {
 					seen.add(n);
 					nodes.push(n);
@@ -347,7 +357,7 @@
 			});
 			const i = hit.pickDeepest({ x: e.clientX, y: e.clientY }, cands);
 			const winner = i >= 0 ? nodes[i] : null;
-			return hit.chooseTarget(winner, browserHit, (a, b) => a.contains(b)) ?? t;
+			return hit.refine(t, winner, { isHost, contains: (a, b) => a.contains(b) }) ?? t;
 		} catch (_) {
 			return t;
 		}

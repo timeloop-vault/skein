@@ -52,16 +52,14 @@
 	// Flutter web numbers semantics nodes by layout; they change on rebuild.
 	const isUnstableId = (id) => /^flt-semantic-node-\d+$/.test(String(id ?? ""));
 
-	// Rect search vs the browser's own hit: the browser's wins when it is
-	// the same node or sits inside the rect winner (a finer element whose
-	// own box the rect search missed); otherwise the rect winner stands.
-	const chooseTarget = (rectWinner, browserHit, contains) => {
-		if (!browserHit) return rectWinner ?? null;
-		if (!rectWinner || rectWinner === browserHit || contains(rectWinner, browserHit)) {
-			return browserHit;
-		}
-		return rectWinner;
+	// The pick is never coarser than the browser's own hit. The rect winner
+	// may replace a whole-page host target, or refine downward to a
+	// descendant of the hit; anything else keeps the hit.
+	const refine = (hit, rectWinner, { isHost, contains }) => {
+		if (isHost(hit)) return rectWinner ?? hit;
+		if (rectWinner && rectWinner !== hit && contains(hit, rectWinner)) return rectWinner;
+		return hit;
 	};
 
-	window.__skeinHit = { pickDeepest, labelOf, isUnstableId, chooseTarget };
+	window.__skeinHit = { pickDeepest, labelOf, isUnstableId, refine };
 })();
