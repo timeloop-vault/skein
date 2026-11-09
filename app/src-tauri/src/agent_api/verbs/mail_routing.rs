@@ -130,7 +130,7 @@ pub(super) fn find_room<'a>(rooms: &'a [Room], room_id: &str) -> Option<&'a Room
 /// hidden (no body).
 pub(super) fn record_mail_actions(
     db: &Database,
-    app: Option<&tauri::AppHandle>,
+    events: Option<&dyn crate::event_sink::EventSink>,
     rooms: &[Room],
     caller: &Caller,
     to_room: &Room,
@@ -166,7 +166,7 @@ pub(super) fn record_mail_actions(
 
     record_and_emit(
         db,
-        app,
+        events,
         &to_harness.id,
         &to_room.id,
         message.created_ms,
@@ -176,7 +176,7 @@ pub(super) fn record_mail_actions(
     );
     record_and_emit(
         db,
-        app,
+        events,
         caller.harness_id.as_deref().unwrap_or(""),
         &caller.room_id,
         message.created_ms,
@@ -194,7 +194,7 @@ pub(super) fn record_mail_actions(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_and_emit(
     db: &Database,
-    app: Option<&tauri::AppHandle>,
+    events: Option<&dyn crate::event_sink::EventSink>,
     harness_id: &str,
     room_id: &str,
     timestamp_ms: i64,
@@ -212,9 +212,9 @@ pub(super) fn record_and_emit(
         harness_kind,
     ) {
         Ok(id) => {
-            if let Some(app) = app {
+            if let Some(events) = events {
                 crate::harness_action_event::emit(
-                    app,
+                    events,
                     id,
                     harness_id,
                     room_id,

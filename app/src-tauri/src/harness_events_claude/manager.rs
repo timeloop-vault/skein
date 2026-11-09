@@ -41,23 +41,23 @@ pub struct ClaudeEventsManager {
     db: Arc<Database>,
     /// Cloned into each attach's `ActionPersistence` so the live tail
     /// can broadcast new rows. `None` in tests. Issue #80 D1.
-    app: Option<tauri::AppHandle>,
+    events: Option<crate::event_sink::SharedEventSink>,
 }
 
 impl ClaudeEventsManager {
-    pub fn new(db: Arc<Database>, app: tauri::AppHandle) -> Self {
+    pub fn new(db: Arc<Database>, events: crate::event_sink::SharedEventSink) -> Self {
         let inner = Arc::new(Mutex::new(Registry::default()));
         spawn_supervisor_thread(Arc::downgrade(&inner));
         Self {
             inner,
             db,
-            app: Some(app),
+            events: Some(events),
         }
     }
 
-    /// Test constructor — no `AppHandle`, so the live tail persists
+    /// Test constructor — no event sink, so the live tail persists
     /// without broadcasting (nothing to assert on the emit in a unit
-    /// test, and building a real `AppHandle` needs a running app). No
+    /// test, and a real sink needs a running app). No
     /// background thread either (#362) — tests drive re-arming
     /// deterministically via `supervise_once` instead of racing a 2 s
     /// timer.
@@ -66,7 +66,7 @@ impl ClaudeEventsManager {
         Self {
             inner: Arc::new(Mutex::new(Registry::default())),
             db,
-            app: None,
+            events: None,
         }
     }
 
@@ -183,7 +183,7 @@ impl ClaudeEventsManager {
             harness_id: harness_id.clone(),
             room_id,
             cwd: cwd.to_string(),
-            app: self.app.clone(),
+            events: self.events.clone(),
         });
         self.attach_at_with(&harness_id, path, on_event, persistence, fresh_process)
     }

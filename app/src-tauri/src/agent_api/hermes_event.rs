@@ -1,7 +1,6 @@
 //! The one event every Hermes shell-hook POST turns into (#625).
 
 use serde::Serialize;
-use tauri::Emitter;
 
 use super::state::AgentApiState;
 
@@ -44,12 +43,17 @@ pub struct HarnessHermesHook {
 
 impl AgentApiState {
     /// Tell the frontend a Hermes hook fired for this harness.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn notify_harness_hermes_hook(&self, payload: HarnessHermesHook) {
         #[cfg(test)]
         self.test_hermes_events.lock().push(payload.clone());
-        let Some(app) = self.app.as_ref() else { return };
+        let Some(events) = self.events.as_ref() else {
+            return;
+        };
         let (room_id, harness_id) = (payload.room_id.clone(), payload.harness_id.clone());
-        if let Err(e) = app.emit(HARNESS_HERMES_HOOK_EVENT, payload) {
+        if let Err(e) =
+            crate::event_sink::emit(events.as_ref(), HARNESS_HERMES_HOOK_EVENT, &payload)
+        {
             tracing::warn!(room_id, harness_id, error = %e, "agent api: harness-hermes-hook emit failed");
         }
     }

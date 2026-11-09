@@ -309,7 +309,7 @@ pub async fn call_tool(
             &parse(args)?,
             mail.policy,
             mail.agent_sees_mcp,
-            mail.app.as_ref(),
+            mail.events.as_deref(),
         )?),
         "create_room" => to_value(
             verbs::create_room(

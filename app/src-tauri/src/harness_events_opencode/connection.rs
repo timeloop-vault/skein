@@ -56,7 +56,7 @@ pub(super) async fn run_adapter(
     cancel: Arc<Notify>,
     on_event: Arc<dyn Fn(OpencodeEvent) + Send + Sync>,
     db: Arc<Database>,
-    app: Option<tauri::AppHandle>,
+    events: Option<crate::event_sink::SharedEventSink>,
     harness_id: String,
     room_id: String,
     cwd: String,
@@ -115,7 +115,7 @@ pub(super) async fn run_adapter(
             on_event.as_ref(),
             &connected_for_call,
             &db,
-            app.as_ref(),
+            events.as_deref(),
             &harness_id,
             &room_id,
             &cwd,
@@ -239,7 +239,7 @@ pub(super) async fn stream_events(
     on_event: &(dyn Fn(OpencodeEvent) + Send + Sync),
     connected_once: &AtomicBool,
     db: &Database,
-    app: Option<&tauri::AppHandle>,
+    events: Option<&dyn crate::event_sink::EventSink>,
     harness_id: &str,
     room_id: &str,
     cwd: &str,
@@ -279,7 +279,7 @@ pub(super) async fn stream_events(
                 let chunk = chunk?;
                 buf.extend_from_slice(&chunk);
                 let unresolved =
-                    process_buffer(&mut buf, on_event, db, app, harness_id, room_id, cwd, root_cache, prompts);
+                    process_buffer(&mut buf, on_event, db, events, harness_id, room_id, cwd, root_cache, prompts);
                 // Resolve outside process_buffer: this is the only
                 // point in the adapter allowed to do network I/O, and
                 // process_buffer stays synchronous and unit-testable.

@@ -162,15 +162,15 @@ pub struct OpencodeEventsManager {
     db: Arc<Database>,
     /// Frontend emitter for live action rows. `None` in tests.
     /// Issue #80 D1.
-    app: Option<tauri::AppHandle>,
+    events: Option<crate::event_sink::SharedEventSink>,
 }
 
 impl OpencodeEventsManager {
-    pub fn new(db: Arc<Database>, app: tauri::AppHandle) -> Self {
+    pub fn new(db: Arc<Database>, events: crate::event_sink::SharedEventSink) -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
             db,
-            app: Some(app),
+            events: Some(events),
         }
     }
 
@@ -223,7 +223,7 @@ impl OpencodeEventsManager {
         let cancel_for_task = Arc::clone(&cancel);
         let on_event = Arc::new(on_event);
         let db = Arc::clone(&self.db);
-        let app = self.app.clone();
+        let events = self.events.clone();
         let hid = harness_id.clone();
         let rid = room_id;
         let handle = tokio::spawn(async move {
@@ -232,7 +232,7 @@ impl OpencodeEventsManager {
                 cancel_for_task,
                 on_event,
                 db,
-                app,
+                events,
                 hid,
                 rid,
                 cwd,

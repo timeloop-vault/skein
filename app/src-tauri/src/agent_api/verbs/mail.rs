@@ -74,17 +74,17 @@ impl MailPolicy {
 /// [`MailPolicy`] plus the disk-lookup seam, bundled for the MCP and
 /// HTTP layers that carry both from one request to `call_tool`.
 ///
-/// `app` (#329) is the emitter for the `message_in`/`message_out`
+/// `events` (#329) is the sink for the `message_in`/`message_out`
 /// `harness_actions` rows `send_message` writes — `None` in a unit
 /// test (no Tauri runtime) or when the agent API's own `AgentApiState`
 /// has none (`for_test`), in which case the rows still get written,
 /// only the live broadcast is skipped, same as every other emit in
-/// this codebase. No `Copy`: an `AppHandle` is a handle, not a value.
+/// this codebase. No `Copy`: a shared sink is a handle, not a value.
 #[derive(Clone)]
 pub struct MailContext {
     pub policy: MailPolicy,
     pub agent_sees_mcp: AgentSeesMcp,
-    pub app: Option<tauri::AppHandle>,
+    pub events: Option<crate::event_sink::SharedEventSink>,
 }
 
 impl MailContext {
@@ -95,7 +95,7 @@ impl MailContext {
         Self {
             policy: MailPolicy::permissive(),
             agent_sees_mcp: |_, _, _| true,
-            app: None,
+            events: None,
         }
     }
 }
@@ -266,7 +266,7 @@ pub fn send_message(
     args: &SendMessageArgs,
     policy: MailPolicy,
     agent_sees_mcp: AgentSeesMcp,
-    app: Option<&tauri::AppHandle>,
+    events: Option<&dyn crate::event_sink::EventSink>,
 ) -> VerbResult<SendMessageOut> {
     if !policy.messaging_enabled {
         return Err(VerbError::Refused(
@@ -327,7 +327,7 @@ pub fn send_message(
     };
     db.insert_harness_message(&row).map_err(internal)?;
 
-    record_mail_actions(db, app, &rooms, caller, &room, &harness, &row);
+    record_mail_actions(db, events, &rooms, caller, &room, &harness, &row);
 
     Ok(SendMessageOut {
         message_id: row.id,

@@ -22,6 +22,7 @@ use crate::agent_api::state::{REVIEW_CHANGED_EVENT, ReviewChanged};
 use crate::db::{Database, ReviewCommentRow};
 use crate::design::PreviewState;
 use crate::design::commands::room_root;
+use crate::event_sink::SharedEventSink;
 use crate::review::now_ms;
 
 /// The review header, commit list and file list for one scope.
@@ -134,7 +135,7 @@ pub async fn review_element_seen(
     room_id: String,
     thread_id: String,
     seen: SeenInput,
-    app: tauri::AppHandle,
+    events: tauri::State<'_, SharedEventSink>,
     db: tauri::State<'_, Arc<Database>>,
     preview: tauri::State<'_, Arc<PreviewState>>,
 ) -> Result<(), String> {
@@ -149,10 +150,10 @@ pub async fn review_element_seen(
     .await
     .map_err(|e| e.to_string())??;
     if changed
-        && let Err(e) = tauri::Emitter::emit(
-            &app,
+        && let Err(e) = crate::event_sink::emit(
+            events.as_ref(),
             REVIEW_CHANGED_EVENT,
-            ReviewChanged {
+            &ReviewChanged {
                 room_id: emit_room.clone(),
             },
         )

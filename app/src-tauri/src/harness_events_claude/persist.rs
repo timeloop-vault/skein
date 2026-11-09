@@ -99,9 +99,9 @@ pub(super) fn persist_extracted(
                             &action.payload,
                         );
                     }
-                    if let Some(app) = &ap.app {
+                    if let Some(events) = &ap.events {
                         crate::harness_action_event::emit(
-                            app,
+                            events.as_ref(),
                             id,
                             &ap.harness_id,
                             &ap.room_id,

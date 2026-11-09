@@ -56,10 +56,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use serde_json::Value;
 use skein_review::{FileState, Hunk};
-use tauri::Emitter;
 
 use crate::agent_api::state::{REVIEW_CHANGED_EVENT, ReviewChanged};
 use crate::db::Database;
+use crate::event_sink::{self, EventSink, SharedEventSink};
 use crate::watcher::WatcherManager;
 
 // ── path keys ─────────────────────────────────────────────────────
@@ -663,7 +663,7 @@ pub async fn review_reject(
 pub fn review_discovery_start(
     room_id: String,
     cwd: String,
-    app: tauri::AppHandle,
+    events: tauri::State<'_, SharedEventSink>,
     db: tauri::State<'_, Arc<Database>>,
     manager: tauri::State<'_, WatcherManager>,
 ) -> Result<String, String> {
@@ -672,7 +672,8 @@ pub fn review_discovery_start(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let db_for_watch = Arc::clone(&db);
-    let app_for_watch = app.clone();
+    let events_for_watch = Arc::clone(&events);
+    let events_for_catchup = Arc::clone(&events);
     let room_for_watch = room_id.clone();
     let state = parking_lot::Mutex::new(Discovery::new(&room_id, &cwd));
     manager
@@ -684,7 +685,7 @@ pub fn review_discovery_start(
             };
             drop(state);
             if inserted > 0 {
-                emit_review_changed(&app_for_watch, &room_for_watch);
+                emit_review_changed(events_for_watch.as_ref(), &room_for_watch);
             }
         })
         .map_err(|e| e.to_string())?;
@@ -697,7 +698,7 @@ pub fn review_discovery_start(
     tauri::async_runtime::spawn_blocking(move || {
         let inserted = catch_up(&db_for_catchup, &room_for_catchup, &cwd_for_catchup);
         if inserted > 0 {
-            emit_review_changed(&app, &room_for_catchup);
+            emit_review_changed(events_for_catchup.as_ref(), &room_for_catchup);
         }
     });
 
@@ -711,10 +712,11 @@ fn paths_to_reported(paths: Vec<PathBuf>) -> Vec<String> {
         .collect()
 }
 
-fn emit_review_changed(app: &tauri::AppHandle, room_id: &str) {
-    if let Err(e) = app.emit(
+fn emit_review_changed(sink: &dyn EventSink, room_id: &str) {
+    if let Err(e) = event_sink::emit(
+        sink,
         REVIEW_CHANGED_EVENT,
-        ReviewChanged {
+        &ReviewChanged {
             room_id: room_id.to_owned(),
         },
     ) {

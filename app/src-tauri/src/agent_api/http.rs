@@ -284,7 +284,7 @@ fn mail_context(state: &AgentApiState) -> MailContext {
             hermes_injected: settings.inject_hermes_config,
         },
         agent_sees_mcp: crate::agents::agent_sees_mcp,
-        app: state.app.clone(),
+        events: state.events.clone(),
     }
 }
 

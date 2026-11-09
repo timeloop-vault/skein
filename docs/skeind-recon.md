@@ -484,7 +484,8 @@ Module table (all under `app/src-tauri/src/` unless stated):
    `verbs/mail.rs`. No dependencies; done in place in `app/src-tauri`.
    *Check:* no `AppHandle` or `Emitter` in those modules; the Tauri
    implementation emits the same seven event names; tests that pass
-   `None` or `for_test` pass unchanged.
+   `None` or `for_test` pass unchanged. Done in #577; see
+   skeind-event-sink.md.
 2. **Stream sink and request/response split.** For the five `Channel`
    commands and the `fs.rs:196` `ipc::Response`. Wrappers hold only
    `State` and a call into an `_impl`; the stream is a trait or closure.

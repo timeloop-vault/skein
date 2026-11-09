@@ -42,7 +42,7 @@ pub(super) fn make_persisting_adapter_with_events(
         room_id: room_id.into(),
         // Phase/action tests only; note_patch no-ops on an empty cwd.
         cwd: String::new(),
-        app: None,
+        events: None,
     });
     manager
         .attach_at(
