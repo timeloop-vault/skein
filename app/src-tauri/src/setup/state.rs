@@ -8,11 +8,13 @@ use tauri::Manager;
 
 use crate::SpawnEnvState;
 use crate::db::Database;
+use crate::event_sink::SharedEventSink;
 use crate::harness_actions_hermes::HermesActionsManager;
 use crate::harness_events_claude::ClaudeEventsManager;
 use crate::harness_events_opencode::OpencodeEventsManager;
 use crate::harness_work_hermes::HermesWorkManager;
 use crate::pty::PtyManager;
+use crate::tauri_event_sink::TauriEventSink;
 use crate::watcher::WatcherManager;
 
 /// Resolves (and creates) the app data dir, loads the spawn settings,
@@ -104,18 +106,11 @@ pub(super) fn open_database(
         ));
     app.manage(sidecars);
     app.manage(WatcherManager::new());
-    app.manage(ClaudeEventsManager::new(
-        Arc::clone(&db),
-        app.handle().clone(),
-    ));
-    app.manage(OpencodeEventsManager::new(
-        Arc::clone(&db),
-        app.handle().clone(),
-    ));
-    app.manage(HermesActionsManager::new(
-        Arc::clone(&db),
-        app.handle().clone(),
-    ));
+    let events: SharedEventSink = Arc::new(TauriEventSink::new(app.handle().clone()));
+    app.manage(ClaudeEventsManager::new(Arc::clone(&db), events.clone()));
+    app.manage(OpencodeEventsManager::new(Arc::clone(&db), events.clone()));
+    app.manage(HermesActionsManager::new(Arc::clone(&db), events.clone()));
+    app.manage(events);
     app.manage(HermesWorkManager::default());
     Ok(db)
 }

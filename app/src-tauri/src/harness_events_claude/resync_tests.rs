@@ -227,7 +227,7 @@ pub(super) fn t425_persistence(db_path: &Path) -> (Arc<crate::db::Database>, Act
         harness_id: "h1".into(),
         room_id: "r1".into(),
         cwd: String::new(),
-        app: None,
+        events: None,
     };
     (db, ap)
 }

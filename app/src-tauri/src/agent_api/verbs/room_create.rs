@@ -523,7 +523,7 @@ pub(super) fn queue_first_prompt(
     .to_string();
     record_and_emit(
         db,
-        state.app.as_ref(),
+        state.events.as_deref(),
         to_harness_id,
         to_room_id,
         now,
@@ -536,7 +536,7 @@ pub(super) fn queue_first_prompt(
     );
     record_and_emit(
         db,
-        state.app.as_ref(),
+        state.events.as_deref(),
         caller.harness_id.as_deref().unwrap_or(""),
         &caller.room_id,
         now,

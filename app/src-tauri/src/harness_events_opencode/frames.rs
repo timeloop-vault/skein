@@ -28,7 +28,7 @@ pub(super) fn process_buffer(
     buf: &mut Vec<u8>,
     on_event: &(dyn Fn(OpencodeEvent) + Send + Sync),
     db: &Database,
-    app: Option<&tauri::AppHandle>,
+    events: Option<&dyn crate::event_sink::EventSink>,
     harness_id: &str,
     room_id: &str,
     cwd: &str,
@@ -109,7 +109,7 @@ pub(super) fn process_buffer(
                 actions.push(prompt.action);
             }
             for action in actions {
-                record_and_emit(db, app, harness_id, room_id, cwd, &action);
+                record_and_emit(db, events, harness_id, room_id, cwd, &action);
             }
         }
     }
@@ -126,7 +126,7 @@ pub(super) fn should_emit_prompt(root: Option<bool>) -> bool {
 /// baselines (see review.rs).
 pub(super) fn record_and_emit(
     db: &Database,
-    app: Option<&tauri::AppHandle>,
+    events: Option<&dyn crate::event_sink::EventSink>,
     harness_id: &str,
     room_id: &str,
     cwd: &str,
@@ -145,9 +145,9 @@ pub(super) fn record_and_emit(
             if action.kind == crate::db::action_kind::PATCH {
                 crate::review::note_patch(db, room_id, cwd, harness_id, &action.payload);
             }
-            if let Some(app) = app {
+            if let Some(events) = events {
                 crate::harness_action_event::emit(
-                    app,
+                    events,
                     id,
                     harness_id,
                     room_id,

@@ -79,7 +79,7 @@ pub(super) struct ReattachRecipe {
     pub(super) harness_id: String,
     pub(super) room_id: String,
     pub(super) cwd: String,
-    pub(super) app: Option<tauri::AppHandle>,
+    pub(super) events: Option<crate::event_sink::SharedEventSink>,
 }
 
 impl ReattachRecipe {
@@ -90,7 +90,7 @@ impl ReattachRecipe {
             harness_id: self.harness_id.clone(),
             room_id: self.room_id.clone(),
             cwd: self.cwd.clone(),
-            app: self.app.clone(),
+            events: self.events.clone(),
         }
     }
 }
@@ -471,7 +471,7 @@ pub(super) struct ActionPersistence {
     /// Frontend emitter for live rows. `None` in tests. Backfill never
     /// emits (the frontend loads history via its initial query); only
     /// the live tail broadcasts. Issue #80 D1.
-    pub(super) app: Option<tauri::AppHandle>,
+    pub(super) events: Option<crate::event_sink::SharedEventSink>,
 }
 
 /// Diagnostics returned from a successful `attach`/`attach_at`, for the

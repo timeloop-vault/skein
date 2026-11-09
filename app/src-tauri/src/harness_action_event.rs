@@ -1,9 +1,9 @@
 //! Live `harness_actions` broadcast. Issue #80 D1.
 //!
 //! When an adapter persists a *live* action row (i.e. one that landed
-//! after Skein attached — not a backfilled history row), it emits a
-//! Tauri event so the Live Context pane can append it without
-//! re-querying. Backfilled rows are NOT broadcast: the frontend loads
+//! after Skein attached — not a backfilled history row), it emits an
+//! event through the `EventSink` so the Live Context pane can append
+//! it without re-querying. Backfilled rows are NOT broadcast: the frontend loads
 //! those once via `db_recent_harness_actions_by_room` on mount.
 //!
 //! The event is global (`EVENT_NAME`); the payload carries `roomId`
@@ -11,7 +11,8 @@
 //! camelCase to match the rest of the Tauri/serde boundary.
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+
+use crate::event_sink::EventSink;
 
 /// Global event name. Frontend listens once and filters by `roomId`.
 pub const EVENT_NAME: &str = "harness-action";
@@ -40,7 +41,7 @@ pub struct HarnessActionEvent<'a> {
 /// it on next mount instead of live.
 #[allow(clippy::too_many_arguments)]
 pub fn emit(
-    app: &AppHandle,
+    sink: &dyn EventSink,
     id: i64,
     harness_id: &str,
     room_id: &str,
@@ -60,7 +61,7 @@ pub fn emit(
         source,
         harness_kind,
     };
-    if let Err(e) = app.emit(EVENT_NAME, event) {
+    if let Err(e) = crate::event_sink::emit(sink, EVENT_NAME, &event) {
         tracing::trace!(error = %e, "harness_action_event: emit failed");
     }
 }

@@ -118,7 +118,7 @@ fn run_concurrent_attach_variant(precreate_parent: bool, precreate_file: bool) -
                         harness_id: harness_id.clone(),
                         room_id,
                         cwd: String::new(),
-                        app: None,
+                        events: None,
                     });
                     barrier.wait();
                     manager.attach_at(

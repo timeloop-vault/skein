@@ -35,13 +35,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
+use crate::event_sink::SharedEventSink;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use skein_harness::hermes::{
     self,
     messages::{self, HermesCost},
 };
-use tauri::AppHandle;
 use tokio::task::JoinHandle;
 
 use crate::db::Database;
@@ -179,7 +179,7 @@ struct Inner {
 pub(crate) struct Tail {
     db: Arc<Database>,
     /// `None` in tests.
-    app: Option<AppHandle>,
+    events: Option<SharedEventSink>,
     harness_id: String,
     room_id: String,
     session_id: String,
@@ -191,7 +191,7 @@ pub(crate) struct Tail {
 impl Tail {
     pub(crate) fn new(
         db: Arc<Database>,
-        app: Option<AppHandle>,
+        events: Option<SharedEventSink>,
         harness_id: String,
         room_id: String,
         session_id: String,
@@ -225,7 +225,7 @@ impl Tail {
         });
         Self {
             db,
-            app,
+            events,
             harness_id,
             room_id,
             session_id,
@@ -281,9 +281,9 @@ impl Tail {
         if kind == crate::db::action_kind::PATCH {
             self.note_patch(&text);
         }
-        if let Some(app) = &self.app {
+        if let Some(events) = &self.events {
             crate::harness_action_event::emit(
-                app,
+                events.as_ref(),
                 id,
                 &self.harness_id,
                 &self.room_id,
@@ -420,15 +420,15 @@ impl Drop for Entry {
 pub struct HermesActionsManager {
     inner: Mutex<HashMap<String, Entry>>,
     db: Arc<Database>,
-    app: AppHandle,
+    events: SharedEventSink,
 }
 
 impl HermesActionsManager {
-    pub fn new(db: Arc<Database>, app: AppHandle) -> Self {
+    pub fn new(db: Arc<Database>, events: SharedEventSink) -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
             db,
-            app,
+            events,
         }
     }
 
@@ -453,10 +453,10 @@ impl HermesActionsManager {
             }
         }
         let tail = {
-            let (db, app) = (Arc::clone(&self.db), self.app.clone());
+            let (db, events) = (Arc::clone(&self.db), self.events.clone());
             let (h, s, p) = (harness_id.clone(), session_id.clone(), state_db.clone());
             tokio::task::spawn_blocking(move || {
-                Arc::new(Tail::new(db, Some(app), h, room_id, s, p, resumed))
+                Arc::new(Tail::new(db, Some(events), h, room_id, s, p, resumed))
             })
             .await
             .map_err(|e| e.to_string())?

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::Emitter;
 
 use crate::db::Database;
 use crate::spawn_settings::SpawnSettings;
@@ -112,12 +111,20 @@ impl Drop for PendingRequestGuard<'_> {
 
 /// Shared by every route.
 ///
-/// `app` is optional for the same reason it is in the harness-event
-/// managers: a unit test has a `Database` but no Tauri runtime, and
-/// building a real `AppHandle` needs a running app.
+/// `app` and `events` are optional for the same reason they are in the
+/// harness-event managers: a unit test has a `Database` but no Tauri
+/// runtime, and building a real `AppHandle` needs a running app.
 pub struct AgentApiState {
     pub db: Arc<Database>,
+    /// No longer used for events (use [`Self::events`]). Only two
+    /// non-emit reads remain: `spawn_settings()`
+    /// (`Manager::try_state::<SpawnEnvState>`) and
+    /// `verbs/design_screenshot.rs` (`get_webview_window`). To be removed
+    /// when the agent API moves (#580/#582).
     pub app: Option<tauri::AppHandle>,
+    /// The event sink for every server-to-UI emit from the agent API
+    /// (#577). `None` in a unit test.
+    pub events: Option<crate::event_sink::SharedEventSink>,
     /// The Tauri bundle identifier, captured at construction so the
     /// `skein_info` verb (#535) needs no live `AppHandle`.
     pub identifier: String,
@@ -146,7 +153,7 @@ pub struct AgentApiState {
     verb_rate_attempts: parking_lot::Mutex<HashMap<String, Vec<Instant>>>,
     /// Test-only bypass for [`Self::request_frontend`] (#330): lets a
     /// verb's frontend round-trip be driven deterministically —
-    /// keyed answers per `kind`, no real `AppHandle` required. Production
+    /// keyed answers per `kind`, no real event sink required. Production
     /// code never populates this; only [`Self::set_test_frontend`] does,
     /// and that is `#[cfg(test)]` too.
     #[cfg(test)]
@@ -156,7 +163,7 @@ pub struct AgentApiState {
     #[cfg(test)]
     pub(crate) test_tool_groups: parking_lot::Mutex<Option<super::groups::ToolGroups>>,
     /// Test-only capture of every Hermes hook event (#625), since a
-    /// unit test has no `AppHandle` to emit to.
+    /// unit test has no event sink to emit to.
     #[cfg(test)]
     pub(crate) test_hermes_events: parking_lot::Mutex<Vec<super::hermes_event::HarnessHermesHook>>,
 }
@@ -241,6 +248,9 @@ impl AgentApiState {
         Self {
             db,
             identifier: app.config().identifier.clone(),
+            events: Some(std::sync::Arc::new(
+                crate::tauri_event_sink::TauriEventSink::new(app.clone()),
+            )),
             app: Some(app),
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
@@ -262,6 +272,7 @@ impl AgentApiState {
             db,
             identifier: "com.timeloop-vault.skein.dev".to_owned(),
             app: None,
+            events: None,
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
             verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),
@@ -287,10 +298,13 @@ impl AgentApiState {
 
     /// Tell the frontend that this room's review moved.
     pub fn notify_review_changed(&self, room_id: &str) {
-        let Some(app) = self.app.as_ref() else { return };
-        if let Err(e) = app.emit(
+        let Some(events) = self.events.as_ref() else {
+            return;
+        };
+        if let Err(e) = crate::event_sink::emit(
+            events.as_ref(),
             REVIEW_CHANGED_EVENT,
-            ReviewChanged {
+            &ReviewChanged {
                 room_id: room_id.to_owned(),
             },
         ) {
@@ -313,10 +327,13 @@ impl AgentApiState {
         agent_id: Option<String>,
         session_id: Option<String>,
     ) {
-        let Some(app) = self.app.as_ref() else { return };
-        if let Err(e) = app.emit(
+        let Some(events) = self.events.as_ref() else {
+            return;
+        };
+        if let Err(e) = crate::event_sink::emit(
+            events.as_ref(),
             HARNESS_PERMISSION_EVENT,
-            HarnessPermission {
+            &HarnessPermission {
                 room_id: room_id.to_owned(),
                 harness_id: harness_id.to_owned(),
                 tool_name,
@@ -334,10 +351,13 @@ impl AgentApiState {
     /// `room_id`/`harness_id` name whoever's inbox changed, which for a
     /// send is almost always a different room than the caller's.
     pub fn notify_mail_changed(&self, room_id: &str, harness_id: &str) {
-        let Some(app) = self.app.as_ref() else { return };
-        if let Err(e) = app.emit(
+        let Some(events) = self.events.as_ref() else {
+            return;
+        };
+        if let Err(e) = crate::event_sink::emit(
+            events.as_ref(),
             MAIL_CHANGED_EVENT,
-            MailChanged {
+            &MailChanged {
                 room_id: room_id.to_owned(),
                 harness_id: harness_id.to_owned(),
             },
@@ -382,10 +402,13 @@ impl AgentApiState {
         session_id: Option<String>,
         source: Option<String>,
     ) {
-        let Some(app) = self.app.as_ref() else { return };
-        if let Err(e) = app.emit(
+        let Some(events) = self.events.as_ref() else {
+            return;
+        };
+        if let Err(e) = crate::event_sink::emit(
+            events.as_ref(),
             HARNESS_SESSION_START_EVENT,
-            HarnessSessionStart {
+            &HarnessSessionStart {
                 room_id: room_id.to_owned(),
                 harness_id: harness_id.to_owned(),
                 session_id,
@@ -405,10 +428,13 @@ impl AgentApiState {
         session_id: Option<String>,
         reason: Option<String>,
     ) {
-        let Some(app) = self.app.as_ref() else { return };
-        if let Err(e) = app.emit(
+        let Some(events) = self.events.as_ref() else {
+            return;
+        };
+        if let Err(e) = crate::event_sink::emit(
+            events.as_ref(),
             HARNESS_SESSION_END_EVENT,
-            HarnessSessionEnd {
+            &HarnessSessionEnd {
                 room_id: room_id.to_owned(),
                 harness_id: harness_id.to_owned(),
                 session_id,
@@ -422,7 +448,7 @@ impl AgentApiState {
     /// Register a pending request and return the id and the receiving
     /// half. Split out of [`Self::request_frontend`] so a test can
     /// exercise the map (double-complete, unknown id, timeout leaving
-    /// it empty) without a real `AppHandle` to emit through.
+    /// it empty) without a real event sink to emit through.
     pub(crate) fn register(
         &self,
     ) -> (
@@ -483,7 +509,7 @@ impl AgentApiState {
     /// [`Self::await_response`].
     ///
     /// In a test with [`Self::set_test_frontend`] set, this answers
-    /// straight from that hook instead of touching `app` or the pending
+    /// straight from that hook instead of touching the event sink or the pending
     /// map at all — there is no webview to cancel mid-wait, so none of
     /// that plumbing is exercised on this path (it has its own direct
     /// coverage elsewhere in this module's tests).
@@ -497,13 +523,14 @@ impl AgentApiState {
         if let Some(f) = self.test_frontend.lock().as_ref() {
             return f(kind, &args);
         }
-        let Some(app) = self.app.as_ref() else {
+        let Some(events) = self.events.as_ref() else {
             return Err("no webview is listening for agent requests".to_owned());
         };
         let (id, rx) = self.register();
-        if let Err(e) = app.emit(
+        if let Err(e) = crate::event_sink::emit(
+            events.as_ref(),
             AGENT_REQUEST_EVENT,
-            AgentRequest {
+            &AgentRequest {
                 id: id.clone(),
                 kind: kind.to_owned(),
                 args,

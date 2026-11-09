@@ -40,7 +40,7 @@ pub(super) async fn api_send_message(
         },
         mail.policy,
         mail.agent_sees_mcp,
-        mail.app.as_ref(),
+        mail.events.as_deref(),
     );
     match out {
         Ok(v) => {

@@ -118,7 +118,7 @@ where
             harness_id: ap.harness_id.clone(),
             room_id: ap.room_id.clone(),
             cwd: ap.cwd.clone(),
-            app: ap.app.clone(),
+            events: ap.events.clone(),
         });
         let mut background = BackgroundState::default();
         let mut local_command = LocalCommandTracker::default();
