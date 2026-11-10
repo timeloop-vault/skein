@@ -27,7 +27,7 @@ pub use env_profile::EnvProfile;
 pub(crate) mod priority;
 pub(crate) use priority::ChildPriority;
 
-/// Lives beside `skein.db` in `app_data_dir()`, so the three build
+/// Lives beside `skein.db` in `Paths::data_dir`, so the three build
 /// profiles stay isolated from each other exactly like the database.
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
 

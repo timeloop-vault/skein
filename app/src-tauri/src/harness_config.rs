@@ -189,7 +189,24 @@ pub struct HarnessConfigStatus {
 }
 
 impl HarnessConfig {
-    /// Resolve the bundle out of the app's resource directory.
+    /// #215: the shipped Claude Code plugin and opencode config that teach
+    /// the agent CLIs about the review API, resolved once from
+    /// `Paths::resource_dir` (the directory does not move while the app
+    /// runs). Never fatal: a bundle that failed to package costs the agent
+    /// its review tools, which the Settings pane reports rather than
+    /// leaving as a mystery (#176).
+    pub fn from_paths(paths: &crate::paths::Paths) -> Self {
+        match &paths.resource_dir {
+            Ok(dir) => Self::resolve(dir),
+            Err(e) => {
+                tracing::error!(error = %e, "harness config: no resource dir");
+                Self::unavailable(&format!("resource directory unavailable: {e}"))
+            }
+        }
+    }
+
+    /// Resolve the bundle out of the app's resource directory
+    /// (`Paths::resource_dir`).
     ///
     /// Never fails the boot: a missing bundle costs the agent its
     /// review tools, which is worse than nothing but much better than
