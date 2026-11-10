@@ -69,7 +69,7 @@ fn start_blocking(
     let (resolved, _path) = crate::pty::harness_program_lookup(program, &settings);
     let exe = resolved.ok_or_else(|| format!("{program} was not found on PATH"))?;
 
-    let agent = super::pty::harness_identity(&endpoint, &db, room_id, harness_id);
+    let agent = crate::pty::command::harness_identity(&endpoint, &db, room_id, harness_id);
     let env = crate::pty::sidecar_env(
         &exe,
         &settings,

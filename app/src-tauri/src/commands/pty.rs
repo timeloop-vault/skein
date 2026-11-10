@@ -1,7 +1,6 @@
 //! The PTY commands: spawn, write, resize, kill, and the free-port
 //! picker opencode's embedded server needs.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use tauri::Manager;
@@ -9,33 +8,9 @@ use tauri::ipc::Channel;
 
 use super::spawn_env::SpawnEnvState;
 use crate::db::Database;
+use crate::pty::command::{PtySpawnArgs, PtySpawnDeps, PtySpawnResult, pty_spawn_impl};
 use crate::pty::{PtyEvent, PtyManager};
-
-/// Wire shape for `pty_spawn`'s return value.
-///
-/// `injected` names whether #215's config injection actually happened
-/// for this spawn (a non-empty `Injection`) — the one thing the
-/// frontend cannot compute itself, since `injection_for` lives entirely
-/// on the Rust side. #238's nudge gate refuses to send a prompt to a
-/// harness whose CLI might not even have the review tools wired up.
-///
-/// `mouse_clicks_disabled` is whether `CLAUDE_CODE_DISABLE_MOUSE_CLICKS`
-/// is truthy in the final spawn environment. Only Rust sees that env
-/// (login shell, inherited, user extras): the frontend's link-click
-/// deferral (#269) must not stand aside when Claude ignores clicks (#401).
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PtySpawnResult {
-    id: String,
-    injected: bool,
-    /// A Hermes harness whose status hooks are installed, approved and on
-    /// a verified version (#625); false for every other kind.
-    hermes_hooks: bool,
-    mouse_clicks_disabled: bool,
-    /// The env profile applied to this spawn (#615), so the frontend can
-    /// record which profile a running harness started with.
-    env_profile: Option<String>,
-}
+use crate::tauri_stream_sink::TauriChannelSink;
 
 /// Spawn a child process attached to a fresh PTY and stream its output
 /// over `on_output`. Returns an opaque id the frontend uses for follow-up
@@ -78,74 +53,31 @@ pub(crate) async fn pty_spawn(
         let db = app.state::<Arc<Database>>();
         let endpoint = app.state::<crate::agent_api::state::AgentApiEndpoint>();
         let harness_config = app.state::<crate::harness_config::HarnessConfig>();
-
-        let id = uuid::Uuid::new_v4().to_string();
-        let settings = spawn_env.snapshot();
-        // #213: mint (or reuse) the room's review token and hand the
-        // harness its endpoint. A failure here is not a reason to
-        // refuse the spawn — the terminal still works, the agent
-        // simply has no review tools — but it is logged rather than
-        // swallowed (#176).
-        let agent = harness_identity(&endpoint, &db, &room_id, &harness_id);
-        // #676: the TUI of an opencode v2 harness attaches to the sidecar
-        // with its password; the password is gone with the sidecar.
-        let secret_env = match sidecar_generation {
-            None => Vec::new(),
-            Some(generation) => {
-                let sidecars = app.state::<crate::opencode_sidecar::OpencodeSidecarManager>();
-                let Some(password) = sidecars.password_for(&harness_id, generation) else {
-                    return Err("opencode server for this harness is gone".to_owned());
-                };
-                vec![("OPENCODE_PASSWORD".to_owned(), password)]
-            }
-        };
-        let binding = sidecar_generation.map(|g| (harness_id.clone(), g));
+        let sidecars = app.state::<crate::opencode_sidecar::OpencodeSidecarManager>();
         let exit_app = app.clone();
-        let exit_binding = binding.clone();
-        let bound_for_failure = binding.clone();
-        let outcome = manager
-            .spawn(
-                crate::pty::SpawnRequest {
-                    id: id.clone(),
-                    cmd: &cmd,
-                    cwd: Path::new(&cwd),
-                    rows,
-                    cols,
-                    settings: &settings,
-                    agent: agent.as_ref(),
-                    kind,
-                    harness_config: Some(&harness_config),
-                    env_profile: env_profile.as_deref(),
-                    secret_env,
-                    sidecar: binding,
-                },
-                move |event| {
-                    // Channel send only fails if the frontend dropped
-                    // the channel; nothing useful we can do at that
-                    // point.
-                    let is_data = matches!(event, crate::pty::PtyEvent::Data { .. });
-                    if matches!(event, crate::pty::PtyEvent::Exit { .. }) {
-                        stop_bound_sidecar(&exit_app, exit_binding.as_ref());
-                    }
-                    let t0 = std::time::Instant::now();
-                    let _ = on_event.send(event);
-                    if is_data {
-                        crate::perf_spans::PTY_CHUNK_SEND.record(t0.elapsed());
-                    }
-                },
-            )
-            .map_err(|e| {
-                // The spawn failed: nothing will ever attach to the sidecar.
-                stop_bound_sidecar(&app, bound_for_failure.as_ref());
-                e.to_string()
-            })?;
-        Ok(PtySpawnResult {
-            id,
-            injected: outcome.injected,
-            hermes_hooks: outcome.hermes_hooks,
-            mouse_clicks_disabled: outcome.mouse_clicks_disabled,
-            env_profile: outcome.env_profile,
-        })
+        pty_spawn_impl(
+            PtySpawnDeps {
+                manager: &manager,
+                spawn_env: &spawn_env,
+                db: &db,
+                endpoint: &endpoint,
+                harness_config: &harness_config,
+                sidecars: &sidecars,
+            },
+            PtySpawnArgs {
+                cmd,
+                cwd,
+                rows,
+                cols,
+                room_id,
+                harness_id,
+                kind,
+                env_profile,
+                sidecar_generation,
+            },
+            TauriChannelSink::new(on_event),
+            move |binding| stop_bound_sidecar(&exit_app, binding),
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -199,39 +131,12 @@ pub(crate) fn pty_kill(
 
 /// End the sidecar generation a PTY was bound to (#676). Generation-keyed,
 /// so a late exit of an old PTY cannot stop a restart's newer sidecar.
-fn stop_bound_sidecar(app: &tauri::AppHandle, binding: Option<&crate::pty::SidecarBinding>) {
-    if let Some((harness_id, generation)) = binding {
-        let sidecars = app.state::<crate::opencode_sidecar::OpencodeSidecarManager>();
-        if sidecars.stop_if_generation(harness_id, *generation) {
-            tracing::info!(harness = %harness_id, generation, "opencode sidecar stopped with its PTY");
-        }
+fn stop_bound_sidecar(app: &tauri::AppHandle, binding: &crate::pty::SidecarBinding) {
+    let (harness_id, generation) = binding;
+    let sidecars = app.state::<crate::opencode_sidecar::OpencodeSidecarManager>();
+    if sidecars.stop_if_generation(harness_id, *generation) {
+        tracing::info!(harness = %harness_id, generation, "opencode sidecar stopped with its PTY");
     }
-}
-
-/// #213: mint (or reuse) the room's review token and hand the harness its
-/// endpoint. A failure is not a reason to refuse a spawn — the agent
-/// simply has no review tools — but it is logged rather than swallowed
-/// (#176).
-pub(crate) fn harness_identity(
-    endpoint: &crate::agent_api::state::AgentApiEndpoint,
-    db: &Database,
-    room_id: &str,
-    harness_id: &str,
-) -> Option<crate::agent_api::state::HarnessIdentity> {
-    endpoint.mcp_url().and_then(|url| {
-        match db.ensure_room_token(room_id, crate::review::now_ms()) {
-            Ok(token) => Some(crate::agent_api::state::HarnessIdentity {
-                url,
-                token,
-                room_id: room_id.to_owned(),
-                harness_id: harness_id.to_owned(),
-            }),
-            Err(e) => {
-                tracing::error!(room_id, error = %e, "agent api: minting a room token failed");
-                None
-            }
-        }
-    })
 }
 
 /// Wire shape for `pty_scan_opencode` (#517).
@@ -284,34 +189,4 @@ pub(crate) fn pick_free_port() -> Result<u16, String> {
         .and_then(|l| l.local_addr())
         .map(|a| a.port())
         .map_err(|e| format!("pick_free_port: {e}"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::PtySpawnResult;
-
-    /// #238: the frontend's `harnessInput` gate reads `injected` off
-    /// `pty_spawn`'s resolved value — pin the wire shape so a field
-    /// rename here doesn't silently turn into `undefined` there.
-    #[test]
-    fn pty_spawn_result_serializes_as_camel_case() {
-        let json = serde_json::to_value(PtySpawnResult {
-            id: "abc".to_owned(),
-            injected: true,
-            hermes_hooks: true,
-            mouse_clicks_disabled: true,
-            env_profile: Some("proxy".to_owned()),
-        })
-        .expect("serialize");
-        assert_eq!(
-            json,
-            serde_json::json!({
-                "id": "abc",
-                "injected": true,
-                "hermesHooks": true,
-                "mouseClicksDisabled": true,
-                "envProfile": "proxy"
-            })
-        );
-    }
 }

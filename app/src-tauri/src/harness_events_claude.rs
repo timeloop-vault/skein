@@ -44,6 +44,7 @@ mod adapter;
 mod attach;
 mod background_tasks;
 mod cli_version;
+mod command;
 mod manager;
 mod merge;
 mod parse;
@@ -54,6 +55,7 @@ mod subagents;
 mod supervise;
 mod tick;
 
+pub(crate) use command::claude_events_attach_impl;
 pub use manager::{ClaudeEventsManager, ReattachOutcome};
 
 /// Semantic events emitted to the frontend. The translator in

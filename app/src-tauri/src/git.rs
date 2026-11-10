@@ -1,8 +1,9 @@
-//! Tauri command wrappers around `skein-git`.
+//! The logic behind the git commands, around `skein-git`. Tauri-free: the
+//! command wrappers live in `commands/git.rs`.
 //!
-//! These are thin glue: take the inputs from JS, invoke the typed API,
-//! collapse `GitError` to `String` for the Result. Any logic richer
-//! than that belongs in `skein-git` so it stays testable without Tauri.
+//! This is thin glue: invoke the typed API and collapse `GitError` to
+//! `String` for the Result. Any logic richer than that belongs in
+//! `skein-git` so it stays testable on its own.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,9 +15,9 @@ use skein_git::{
     BranchInfo, DiffHunk, DiffLine, DiffLineKind, FileDiff, Repo, StatusEntry, StatusKind,
     WorktreeInfo, propose_worktree_path,
 };
-use tauri::ipc::Channel;
 
 use crate::db::RepoIdentity;
+use crate::stream_sink::StreamSink;
 use crate::watcher::WatcherManager;
 
 /// Serializes `git_add_worktree` (#171): nothing else stops two
@@ -71,14 +72,8 @@ impl From<WorktreeInfo> for WorktreeDto {
 }
 
 /// Returns true iff `path` is a git repository (per libgit2).
-///
-/// Async: `is_repo` discovers `.git` by walking up from `path` — a
-/// disk walk, and #171 wants that off the main thread.
-#[tauri::command]
-pub async fn git_is_repo(path: String) -> Result<bool, String> {
-    tauri::async_runtime::spawn_blocking(move || Repo::is_repo(Path::new(&path)))
-        .await
-        .map_err(|e| e.to_string())
+pub(crate) fn git_is_repo_impl(path: &str) -> bool {
+    Repo::is_repo(Path::new(path))
 }
 
 /// Everything the New Room dialog needs to know about a picked folder,
@@ -115,19 +110,6 @@ pub struct FolderInfoDto {
     pub remote_branches: Vec<String>,
 }
 
-/// Inspect a folder for the New Room dialog: existence, repo-ness,
-/// worktree resolution and the branch list, in a single call.
-///
-/// Async: opens the repo, resolves the worktree root and walks the
-/// branch list — several libgit2 calls, each of which touches disk
-/// (#171).
-#[tauri::command]
-pub async fn git_inspect_folder(path: String) -> Result<FolderInfoDto, String> {
-    tauri::async_runtime::spawn_blocking(move || git_inspect_folder_impl(&path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
 /// The `repoRoot` a room created at `path` would get: `Some` when
 /// `path` is inside a git checkout — the main checkout's path when
 /// `path` is itself a linked worktree, else `path` unchanged — and
@@ -147,7 +129,9 @@ pub(crate) fn repo_root_for_path(path: &Path) -> Option<String> {
     }
 }
 
-fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
+/// Inspect a folder for the New Room dialog: existence, repo-ness,
+/// worktree resolution and the branch list, in a single call.
+pub(crate) fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
     let picked = Path::new(path);
     let exists = picked.is_dir();
     let mut info = FolderInfoDto {
@@ -298,36 +282,18 @@ pub(crate) fn repo_identity_impl(path: &str) -> Result<Option<RepoIdentityDto>, 
     }))
 }
 
-/// The repository identity of `path` (root commit ids + origin URL);
-/// `None` when the path is missing or not a repo. Async for the same
-/// reason as [`git_inspect_folder`] (#171).
-#[tauri::command]
-pub async fn git_repo_identity(path: String) -> Result<Option<RepoIdentityDto>, String> {
-    tauri::async_runtime::spawn_blocking(move || repo_identity_impl(&path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
 /// Current HEAD branch name, or `None` for detached HEAD / unborn branch /
 /// non-repo path. Used by the bottom status bar to track checkouts that
 /// happen inside a harness — `room.branch` is captured at room creation
 /// and doesn't follow `git checkout`.
-///
-/// Async: opening the repo and reading HEAD are libgit2 calls that
-/// touch disk, and this fires on every debounced watcher tick (#171).
-#[tauri::command]
-pub async fn git_head_branch(path: String) -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || Repo::open(Path::new(&path)).ok()?.head_branch())
-        .await
-        .map_err(|e| e.to_string())
+pub(crate) fn git_head_branch_impl(path: &str) -> Option<String> {
+    Repo::open(Path::new(path)).ok()?.head_branch()
 }
 
 /// Default path proposal for a worktree under `repo_path` named after
 /// `task_slug`. Pure function; no filesystem access.
-#[allow(clippy::needless_pass_by_value)]
-#[tauri::command]
-pub fn git_propose_worktree_path(repo_path: String, task_slug: String) -> String {
-    propose_worktree_path(Path::new(&repo_path), &task_slug)
+pub(crate) fn git_propose_worktree_path_impl(repo_path: &str, task_slug: &str) -> String {
+    propose_worktree_path(Path::new(repo_path), task_slug)
         .to_string_lossy()
         .into_owned()
 }
@@ -335,30 +301,13 @@ pub fn git_propose_worktree_path(repo_path: String, task_slug: String) -> String
 /// Create a new worktree on a fresh branch. Returns the worktree path
 /// (which the frontend uses as the new room's `cwd`).
 ///
-/// Async: `add_worktree` creates a branch ref and a new checkout on
-/// disk — real libgit2 + filesystem work (#171). `ADD_WORKTREE_LOCK`
-/// serializes it against any other concurrent call, since nothing else
-/// stops two of them from colliding on the same repo.
-#[tauri::command]
-pub async fn git_add_worktree(
-    repo_path: String,
-    branch: String,
-    base_branch: String,
-    worktree_path: String,
-) -> Result<WorktreeDto, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_add_worktree_impl(&repo_path, &branch, &base_branch, &worktree_path)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Guarded by `ADD_WORKTREE_LOCK` for its whole body (see
-/// `git_add_worktree`'s doc comment) so the lock travels with the
+/// Guarded by `ADD_WORKTREE_LOCK` for its whole body, which serializes it
+/// against any other concurrent call (nothing else stops two of them from
+/// colliding on the same repo), so the lock travels with the
 /// open-then-add-worktree sequence it protects rather than living only
 /// in the command closure, where an extracted-fn test could bypass it
 /// unnoticed.
-fn git_add_worktree_impl(
+pub(crate) fn git_add_worktree_impl(
     repo_path: &str,
     branch: &str,
     base_branch: &str,
@@ -376,25 +325,9 @@ fn git_add_worktree_impl(
 /// the room's worktree directory was deleted but its branch survives.
 /// Never creates or moves a branch — see `Repo::restore_worktree`.
 ///
-/// Async + `ADD_WORKTREE_LOCK`: same reasoning as `git_add_worktree` —
-/// this also does real libgit2 + filesystem work, and shares the same
-/// `.git/worktrees/` namespace it would race on.
-#[tauri::command]
-pub async fn git_restore_worktree(
-    repo_path: String,
-    branch: String,
-    worktree_path: String,
-) -> Result<WorktreeDto, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_restore_worktree_impl(&repo_path, &branch, &worktree_path)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 /// Guarded by `ADD_WORKTREE_LOCK` for its whole body — see
 /// `git_add_worktree_impl`'s doc comment, same reasoning applies here.
-fn git_restore_worktree_impl(
+pub(crate) fn git_restore_worktree_impl(
     repo_path: &str,
     branch: &str,
     worktree_path: &str,
@@ -430,26 +363,16 @@ impl From<StatusEntry> for StatusDto {
 /// Snapshot of the worktree's status — every changed file relative to
 /// HEAD, sorted by path. The frontend re-fetches on demand (Phase 5a)
 /// and via the file watcher (Phase 5b).
-///
-/// Async: `status` walks the whole worktree via libgit2 — #171 wants
-/// that off the main thread, since this fires on every debounced
-/// watcher tick.
-#[tauri::command]
-pub async fn git_status(path: String) -> Result<Vec<StatusDto>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = Repo::open(Path::new(&path)).map_err(|e| e.to_string())?;
-        let entries = repo.status().map_err(|e| e.to_string())?;
-        Ok(entries.into_iter().map(StatusDto::from).collect())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub(crate) fn git_status_impl(path: &str) -> Result<Vec<StatusDto>, String> {
+    let repo = Repo::open(Path::new(path)).map_err(|e| e.to_string())?;
+    let entries = repo.status().map_err(|e| e.to_string())?;
+    Ok(entries.into_iter().map(StatusDto::from).collect())
 }
 
-/// Start a recursive filesystem watcher rooted at `path`. `on_change`
-/// is fired (with no payload) every time a debounced quiet-window
-/// passes after a real change — the frontend re-runs `git_status` in
-/// response. Returns an opaque id; pass it to `git_watch_stop` to end
-/// the watch.
+/// Start a recursive filesystem watcher rooted at `path`. `sink` is fired
+/// (with no payload) every time a debounced quiet-window passes after a
+/// real change — the frontend re-runs `git_status` in response. Returns
+/// an opaque id; pass it to `git_watch_stop` to end the watch.
 ///
 /// For a linked worktree (every Skein room) HEAD, the index and
 /// `logs/HEAD` live in the worktree's admin dir under the main repo's
@@ -461,28 +384,26 @@ pub async fn git_status(path: String) -> Result<Vec<StatusDto>, String> {
 /// worktree paths (#637), for the review pane. `.git/` stays unfiltered.
 /// The file tree watches arbitrary subdirectories, possibly inside ignored
 /// ones, so it leaves this off.
-#[allow(clippy::needless_pass_by_value)]
-#[tauri::command]
-pub fn git_watch_start(
-    path: String,
-    on_change: Channel<()>,
+pub(crate) fn git_watch_start_impl(
+    manager: &WatcherManager,
+    path: &str,
+    sink: impl StreamSink<()>,
     skip_ignored: Option<bool>,
-    manager: tauri::State<'_, WatcherManager>,
 ) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
-    let extra: Vec<std::path::PathBuf> = Repo::worktree_admin_dir(Path::new(&path))
+    let extra: Vec<std::path::PathBuf> = Repo::worktree_admin_dir(Path::new(path))
         .into_iter()
         .collect();
     manager
         .start_worktree_watch(
             id.clone(),
-            Path::new(&path),
+            Path::new(path),
             &extra,
             skip_ignored.unwrap_or(false),
             move || {
-                // The channel send only fails if the frontend dropped its
-                // half — nothing useful we can do at that point.
-                let _ = on_change.send(());
+                // The send only fails if the frontend dropped its half —
+                // nothing useful we can do at that point.
+                let _ = sink.send(());
             },
         )
         .map_err(|e| e.to_string())?;
@@ -490,33 +411,25 @@ pub fn git_watch_start(
 }
 
 /// Watch only the git dir that holds `path`'s `HEAD` (non-recursive) and
-/// fire `on_change` when `HEAD` itself is touched — a branch switch,
+/// fire `sink` when `HEAD` itself is touched — a branch switch,
 /// detached commit or rebase. A build in the worktree never ticks.
 /// `None` when `path` is not a repo (nothing watched). Stop it with
 /// `git_watch_stop`.
-#[allow(clippy::needless_pass_by_value)]
-#[tauri::command]
-pub fn git_head_watch_start(
-    path: String,
-    on_change: Channel<()>,
-    manager: tauri::State<'_, WatcherManager>,
+pub(crate) fn git_head_watch_start_impl(
+    manager: &WatcherManager,
+    path: &str,
+    sink: impl StreamSink<()>,
 ) -> Result<Option<String>, String> {
-    let Some(dir) = Repo::head_dir(Path::new(&path)) else {
+    let Some(dir) = Repo::head_dir(Path::new(path)) else {
         return Ok(None);
     };
     let id = uuid::Uuid::new_v4().to_string();
     manager
         .start_head_watch(id.clone(), &dir, move || {
-            let _ = on_change.send(());
+            let _ = sink.send(());
         })
         .map_err(|e| e.to_string())?;
     Ok(Some(id))
-}
-
-#[allow(clippy::needless_pass_by_value)]
-#[tauri::command]
-pub fn git_watch_stop(id: String, manager: tauri::State<'_, WatcherManager>) {
-    manager.stop(&id);
 }
 
 #[derive(Debug, Serialize)]
@@ -580,6 +493,26 @@ impl From<FileDiff> for FileDiffDto {
             hunks: f.hunks.into_iter().map(DiffHunkDto::from).collect(),
         }
     }
+}
+
+const fn status_kind_str(k: StatusKind) -> &'static str {
+    match k {
+        StatusKind::Added => "added",
+        StatusKind::Modified => "modified",
+        StatusKind::Deleted => "deleted",
+        StatusKind::Renamed => "renamed",
+        StatusKind::Untracked => "untracked",
+        StatusKind::Conflicted => "conflicted",
+        StatusKind::Typechange => "typechange",
+    }
+}
+
+/// Structured diff of every changed file in the worktree against HEAD.
+/// One entry per file; binary files have `binary: true` and empty hunks.
+pub(crate) fn git_diff_impl(path: &str) -> Result<Vec<FileDiffDto>, String> {
+    let repo = Repo::open(Path::new(path)).map_err(|e| e.to_string())?;
+    let files = repo.diff_workdir().map_err(|e| e.to_string())?;
+    Ok(files.into_iter().map(FileDiffDto::from).collect())
 }
 
 #[cfg(test)]
@@ -827,33 +760,4 @@ mod tests {
         assert_eq!(dto.path, worktree_path);
         assert!(Path::new(&worktree_path).exists());
     }
-}
-
-const fn status_kind_str(k: StatusKind) -> &'static str {
-    match k {
-        StatusKind::Added => "added",
-        StatusKind::Modified => "modified",
-        StatusKind::Deleted => "deleted",
-        StatusKind::Renamed => "renamed",
-        StatusKind::Untracked => "untracked",
-        StatusKind::Conflicted => "conflicted",
-        StatusKind::Typechange => "typechange",
-    }
-}
-
-/// Structured diff of every changed file in the worktree against HEAD.
-/// One entry per file; binary files have `binary: true` and empty hunks.
-///
-/// Async: `diff_workdir` computes a real diff over the whole worktree —
-/// libgit2 work that can be sizeable, and #171 wants it off the main
-/// thread since this fires on every debounced watcher tick.
-#[tauri::command]
-pub async fn git_diff(path: String) -> Result<Vec<FileDiffDto>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = Repo::open(Path::new(&path)).map_err(|e| e.to_string())?;
-        let files = repo.diff_workdir().map_err(|e| e.to_string())?;
-        Ok(files.into_iter().map(FileDiffDto::from).collect())
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }

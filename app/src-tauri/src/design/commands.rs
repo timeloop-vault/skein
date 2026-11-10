@@ -15,6 +15,8 @@ use super::PreviewState;
 use super::change_filter::ChangeFilter;
 use crate::db::Database;
 use crate::ignore_filter::WorktreeIgnore;
+use crate::stream_sink::StreamSink;
+use crate::tauri_stream_sink::TauriChannelSink;
 use crate::watcher::WatcherManager;
 
 const MAX_DEPTH: usize = 12;
@@ -95,9 +97,10 @@ pub fn design_watch_start(
     let canonical = dunce::canonicalize(&root).map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
     tracing::info!(room_id = %room_id, root = %canonical.display(), "design watch start");
+    let sink = TauriChannelSink::new(on_change);
     start_design_watch(&manager, id.clone(), &canonical, move || {
         // Fails only if the frontend dropped its half.
-        let _ = on_change.send(());
+        let _ = sink.send(());
     })
     .map_err(|e| e.to_string())?;
     Ok(id)
