@@ -16,8 +16,6 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
-
 use crate::spawn_settings::CaptureMode;
 
 /// Sentinel wrapping the probe's `PATH` payload. A login+interactive
@@ -47,7 +45,7 @@ pub(crate) const PATH_PROBE_END: &str = "___SKEIN_PATH_END___";
 /// csh/tcsh, so it uses only `;` and `||`: no redirections (csh has no
 /// `2>`; the caller already sends stderr to /dev/null), no `{ }`
 /// grouping and no `$(...)`.
-pub(crate) const PROBE_SCRIPT: &str = "printf '%s%s%s' '___SKEIN_PATH_BEGIN___' \"$PATH\" '___SKEIN_PATH_END___'; printf '%s' '___SKEIN_ENV_BEGIN___'; env -0 || perl -e 'print \"$_=$ENV{$_}\\0\" for keys %ENV'; printf '%s' '___SKEIN_ENV_END___'";
+pub const PROBE_SCRIPT: &str = "printf '%s%s%s' '___SKEIN_PATH_BEGIN___' \"$PATH\" '___SKEIN_PATH_END___'; printf '%s' '___SKEIN_ENV_BEGIN___'; env -0 || perl -e 'print \"$_=$ENV{$_}\\0\" for keys %ENV'; printf '%s' '___SKEIN_ENV_END___'";
 
 /// Flags that make a given shell source its rc chain and then run one
 /// command. `None` means "we can't drive this shell" — the caller must
@@ -61,7 +59,7 @@ pub(crate) const PROBE_SCRIPT: &str = "printf '%s%s%s' '___SKEIN_PATH_BEGIN___' 
 /// Only shells verified by hand on a real machine are listed. Anything
 /// else falls through to `None`, which is safe: the caller keeps the
 /// inherited `PATH` and still applies the user's additions.
-pub(crate) fn probe_args(shell: &str, mode: CaptureMode) -> Option<&'static [&'static str]> {
+pub fn probe_args(shell: &str, mode: CaptureMode) -> Option<&'static [&'static str]> {
     if mode == CaptureMode::None {
         return None;
     }
@@ -102,7 +100,7 @@ pub(crate) fn probe_args(shell: &str, mode: CaptureMode) -> Option<&'static [&'s
 /// Unreachable on Windows outside the test build — see
 /// `PATH_PROBE_START`.
 #[cfg_attr(target_os = "windows", allow(dead_code))]
-pub(crate) fn extract_probe_path(stdout: &str) -> Option<String> {
+pub fn extract_probe_path(stdout: &str) -> Option<String> {
     let start = stdout.find(PATH_PROBE_START)? + PATH_PROBE_START.len();
     let rest = &stdout[start..];
     let end = rest.find(PATH_PROBE_END)?;
@@ -238,7 +236,7 @@ fn dedupe_key(path: &Path) -> String {
 /// correct on every platform, and so it compiles and is tested
 /// everywhere even though only Windows needs it. `merge_path` dedupes
 /// afterwards, so overlap between the two is free.
-pub(crate) fn concat_paths(first: Option<OsString>, second: Option<OsString>) -> OsString {
+pub fn concat_paths(first: Option<OsString>, second: Option<OsString>) -> OsString {
     match (first, second) {
         (Some(a), Some(b)) => {
             let joined = std::env::split_paths(&a).chain(std::env::split_paths(&b));
@@ -251,29 +249,10 @@ pub(crate) fn concat_paths(first: Option<OsString>, second: Option<OsString>) ->
     }
 }
 
-/// Why one of the user's `PATH` additions didn't make it in.
-///
-/// Reported rather than silently swallowed: "I added a directory and
-/// nothing happened" is the exact confusion this whole feature exists
-/// to end, and a dropped entry with no explanation reproduces it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum DropReason {
-    /// References a variable that isn't set, or a `~user` form.
-    Unresolved,
-    /// Relative. A relative entry — `.` above all — makes an agent run
-    /// whatever happens to be in the working directory.
-    NotAbsolute,
-    /// Contains a character that can't appear in a single `PATH` entry.
-    Separator,
-    /// The directory doesn't exist.
-    Missing,
-    /// Already on the `PATH`.
-    Duplicate,
-}
+pub use skein_proto::spawn_env::DropReason;
 
 /// The outcome of building a child's `PATH`.
-pub(crate) struct MergedPath {
+pub struct MergedPath {
     pub path: OsString,
     /// Additions that actually made it in, expanded, in order.
     pub added: Vec<String>,
@@ -297,7 +276,7 @@ pub(crate) struct MergedPath {
 /// - Prepend-only by design (issue #3): we never replace what the shell
 ///   or the OS reported, because a mistyped replacement is a state you
 ///   cannot recover from inside the app.
-pub(crate) fn merge_path(
+pub fn merge_path(
     base: &OsStr,
     prepends: &[String],
     home: Option<&Path>,
@@ -483,7 +462,7 @@ pub(crate) const HOST_TERMINAL_ENV_KEEP: &[&str] = &[
 /// Whether `key` is host-terminal identity that must not reach a
 /// harness. Case-insensitive: Windows environment keys are, and
 /// `portable-pty` lowercases them there anyway.
-pub(crate) fn is_host_terminal_var(key: &str) -> bool {
+pub fn is_host_terminal_var(key: &str) -> bool {
     if HOST_TERMINAL_ENV_KEEP
         .iter()
         .any(|k| k.eq_ignore_ascii_case(key))
@@ -502,7 +481,7 @@ pub(crate) fn is_host_terminal_var(key: &str) -> bool {
         .any(|p| upper.starts_with(p))
 }
 
-pub(crate) mod login_env;
+pub mod login_env;
 
 #[cfg(test)]
 mod tests;

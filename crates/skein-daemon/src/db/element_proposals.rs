@@ -2,7 +2,7 @@
 //! table and the `Database` methods over it. The JSON is owned by
 //! `review_surface::proposal`, which validates it before it gets here.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use rusqlite::OptionalExtension;
 use rusqlite::{Connection, Transaction, params};
 
@@ -66,7 +66,7 @@ pub(super) const SEED_SQL: &str = "INSERT INTO review_element_proposals      (th
 
 impl Database {
     /// One thread's proposal JSON, or `None` for a thread without one.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn review_element_proposal(&self, thread_id: &str) -> Result<Option<String>, String> {
         let conn = self.conn.lock();
         conn.query_row(

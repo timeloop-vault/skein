@@ -48,9 +48,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
 - **React 18 + strict TypeScript** UI (Vite); xterm.js for terminals,
   react-virtuoso for the activity feed, CodeMirror 6 for the file
   editor (#185)
-- **Seven Rust workspace crates** — `skein-git`, `skein-harness`,
+- **Nine Rust workspace crates** — `skein-git`, `skein-harness`,
   `skein-review`, `skein-procprio`, `skein-sysload`, `skein-webshot`,
-  `skein-winnotify` — plus
+  `skein-winnotify`, `skein-proto`, `skein-daemon` — plus
   `app/src-tauri`, which is deliberately **excluded** from the
   workspace. Every cargo command therefore needs running twice; see
   Conventions
@@ -98,6 +98,23 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   A tested git-CLI write layer sits unshipped in
     │                                #   2bcae5a (tag archive/214-land-actions) — lift it, don't
     │                                #   rewrite it, if an issue ever needs writes
+    ├── crates/skein-proto/          # Wire types skeind and its clients share (#580, epic #575).
+    │   └── src/lib.rs               #   Pure data, serde only: the Room/Harness family (rooms),
+    │                                #   HarnessEvent/HarnessAction (harness_log), HarnessKind,
+    │                                #   PendingDto/TranscriptStatDto (resume), DropReason
+    │                                #   (spawn_env), and PROTO_VERSION. No handshake (#584), no
+    │                                #   framing (transport phase, #585/#582)
+    ├── crates/skein-daemon/         # The Tauri-free server side (#580): `cargo tree -p
+    │   └── src/                     #   skein-daemon` lists no tauri. Depends on skein-proto,
+    │                                #   skein-harness, skein-git. Holds db/ (the sqlite layer),
+    │                                #   spawn_env (+ login_env), spawn_settings (+ env_profile,
+    │                                #   priority), tool_groups, watcher, ignore_filter,
+    │                                #   worktree_key, room_paths, resume (the probe logic), and
+    │                                #   the seams event_sink, stream_sink, paths. app/src-tauri
+    │                                #   re-exports each at its OLD path (`pub(crate) use
+    │                                #   skein_daemon::db;` in lib.rs), so importers are
+    │                                #   unchanged. `test-support` feature = db::test_support
+    │                                #   for the app's tests. See docs/skeind-crates.md
     ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
     │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
     │             anchor}.rs         #   (text/binary/toolarge/symlink/unreadable), diff
@@ -310,19 +327,23 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   priority
     │       ├── src/git.rs           # DTOs + `_impl` logic over skein-git, Tauri-free since
     │       │                        #   #578 (commands in commands/git.rs); GitError → String
-    │       ├── src/watcher.rs       # notify-debouncer-mini, 200 ms, .git/ deliberately unfiltered
-    │       ├── src/db.rs            # rusqlite: rooms (table `sessions` — legacy name),
-    │       │                        #   harness_events, harness_actions, review_baselines (#211),
-    │       │                        #   sessions_quarantine;
-    │       │                        #   WAL + .bak/.bak.1 snapshots (#167)
+    │       ├── src/{watcher,db,       # Moved to crates/skein-daemon (#580), re-exported here
+    │       │    spawn_env,            #   at the old path. watcher: notify-debouncer-mini, 200 ms,
+    │       │    spawn_settings,       #   .git/ deliberately unfiltered. db: rusqlite — rooms
+    │       │    room_paths}           #   (table `sessions` — legacy name), harness_events,
+    │       │                        #   harness_actions, review_baselines (#211),
+    │       │                        #   sessions_quarantine; WAL + .bak/.bak.1 snapshots (#167).
+    │       │                        #   spawn_env: PATH/env merge for harness PTYs (#72, #192,
+    │       │                        #   #197, #207): login-shell probe, host-terminal identity
+    │       │                        #   stripping, PATHEXT resolution before portable-pty.
+    │       │                        #   spawn_settings: persisted user overrides for it.
+    │       │                        #   room_paths: the one path → room matcher, shared with the
+    │       │                        #   agent API's find_rooms_for_path (#354); String-only,
+    │       │                        #   callers that can touch disk canonicalize first
     │       ├── src/fs.rs            # list_dir + read/write_file_text `_impl`s (commands in
     │       │                        #   commands/fs.rs, #578) — LIVE, called by
     │       │                        #   FileTree/FilesBody since #185. write returns an mtime
     │       │                        #   token for staleness. Paths are NOT yet scoped to the room (#174)
-    │       ├── src/spawn_env.rs     # PATH/env merge for harness PTYs (#72, #192, #197, #207):
-    │       │                        #   login-shell probe, host-terminal identity stripping,
-    │       │                        #   PATHEXT resolution before portable-pty. 50 unit tests
-    │       ├── src/spawn_settings.rs # Persisted user overrides for the above
     │       ├── src/harness_config.rs # What Skein injects at spawn so an agent CLI finds the
     │       │                        #   #213 review API (#215): `--plugin-dir` for Claude Code,
     │       │                        #   OPENCODE_CONFIG for opencode, both session-scoped and
@@ -338,12 +359,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   the two things it can't do: resolve the program the way
     │       │                        #   a real spawn does, and pass #215's --plugin-dir so the
     │       │                        #   list matches what the spawn will accept
-    │       ├── src/resume.rs        # session-existence probes against the tools' own stores
+    │       ├── src/resume.rs        # The 6 #[tauri::command] wrappers (+ profile_db) over the
+    │       │                        #   session-existence probes, which live in skein-daemon
     │       ├── src/open_request.rs  # Opening a folder from outside Skein (#255): argv / link
     │       │                        #   parsing, the pending slot, and path → room resolution
-    │       ├── src/room_paths.rs    # The one path → room matcher, shared with the agent
-    │       │                        #   API's find_rooms_for_path (#354). String-only; callers
-    │       │                        #   that can touch disk canonicalize first
     │       ├── src/cli_shim.rs      # The `skein` sh script Settings installs in ~/.local/bin
     │       ├── src/review.rs        # Baseline capture + the three baseline commands (#211).
     │       │                        #   Captures from the HEAD blob the moment a LIVE patch
@@ -393,10 +412,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       ├── src/harness_events_opencode.rs  # SSE client → OpencodeEvent (L2c-2)
     │       ├── src/harness_actions_claude.rs   # JSONL → harness_actions rows (#80)
     │       ├── src/harness_actions_opencode.rs # SSE/opencode.db → harness_actions rows (#80)
-    │       ├── src/event_sink.rs + stream_sink.rs # Tauri-free seams a daemon can serve (#577,
-    │       │   (+ tauri_event_sink.rs, tauri_stream_sink.rs) #   #578): EventSink = broadcast events, StreamSink<T> = a
-    │       │                                   #   stream one call opens. See docs/skeind-event-sink.md
-    │       │                                   #   and docs/skeind-stream-sink.md
+    │       ├── src/tauri_event_sink.rs, tauri_stream_sink.rs, tauri_paths.rs, shared_state.rs
+    │       │                                   # The Tauri impls of the skein-daemon seams (#577,
+    │       │                                   #   #578, #579): EventSink = broadcast events,
+    │       │                                   #   StreamSink<T> = a stream one call opens, Paths =
+    │       │                                   #   where state lives. See docs/skeind-event-sink.md,
+    │       │                                   #   skeind-stream-sink.md and skeind-paths.md
     │       └── src/harness_action_event.rs     # "harness-action" live broadcast (live rows only)
     ├── docs/
     │   ├── audit-2026-07-03.md      # Full-codebase audit; §5 = structural backlog. Predates
@@ -451,8 +472,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   matched by open-from-outside (`open_request.rs`), and reported by
   `find_rooms_for_path` with `retired: true` / `safe_to_remove`. It keeps
   its `sessions` row, so the #237 `sweep_orphans` never erases its
-  history; only Delete forever does. `db.rs`'s `Room` struct is what
-  `save_all` serializes and it has no catch-all, so any new frontend Room
+  history; only Delete forever does. The `Room` struct (skein-proto
+  `rooms.rs`, serialized by skein-daemon's `db`) is what `save_all`
+  writes and it has no catch-all, so any new frontend Room
   field must be added there too or it is silently dropped on save.
   **Repo identity (#418):** `Room.repoIdentity` = `{rootCommits, originUrl?}`,
   the root commits from a first-parent walk of HEAD (`originUrl` is display
@@ -954,7 +976,10 @@ the agent API from a shell harness); macOS isn't covered yet.
 ## Conventions
 
 - **Rust:** edition 2024. `unsafe_code = "forbid"` (except
-  skein-winnotify, skein-webshot, skein-sysload and skein-procprio, see Layout). Clippy pedantic
+  skein-winnotify, skein-webshot, skein-sysload and skein-procprio, see Layout;
+  skein-daemon keeps `forbid` although it has its own `[lints]` table, which
+  also allows `missing_errors_doc`/`missing_panics_doc` because it is app code
+  moved as-is). Clippy pedantic
   warn, `-D warnings`. Tauri commands collapse `GitError` / `PtyError`
   to `String` at the boundary — they round-trip via JSON anyway.
   The toolchain is pinned in `rust-toolchain.toml` (currently 1.99, also
@@ -981,11 +1006,12 @@ the agent API from a shell harness); macOS isn't covered yet.
 - **Tests live with the code that owns them.**
   `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `crates/skein-review` has 45; `app/src-tauri` has ~285 in-module unit
-  tests in source, of which ~245 run on any one platform — 244 on
-  Windows; the rest are
-  `cfg`-gated per OS (#202) (spawn-env merging, harness JSONL/SSE
-  parsers, db persistence, pty). All run in the hook
+  `crates/skein-review` has 45; `crates/skein-daemon` has ~225
+  in-module tests on Windows (db persistence, spawn-env merging, resume
+  probes, …); `crates/skein-proto` has the 4 harness_kind tests;
+  `app/src-tauri` has ~1,090 in-module unit tests that run on Windows
+  (harness JSONL/SSE parsers, pty, agent API, review); in both, more sit
+  in source `cfg`-gated per OS (#202). All run in the hook
   and CI, but **`cargo test --workspace` does NOT reach the tauri
   crate** — it is excluded from the workspace (#168), so the hook runs
   it via a second `--manifest-path`. Same for fmt and clippy. The

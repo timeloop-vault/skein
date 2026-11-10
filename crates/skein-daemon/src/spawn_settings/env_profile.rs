@@ -33,10 +33,7 @@ impl SpawnSettings {
     /// an existing profile, else the active profile if it exists, else
     /// `None`. Names match trimmed and case-sensitively; with duplicate
     /// names the first wins.
-    pub(crate) fn resolve_env_profile(
-        &self,
-        harness_override: Option<&str>,
-    ) -> Option<&EnvProfile> {
+    pub fn resolve_env_profile(&self, harness_override: Option<&str>) -> Option<&EnvProfile> {
         let find = |name: &str| {
             let name = name.trim();
             self.env_profiles.iter().find(|p| p.name.trim() == name)

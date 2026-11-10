@@ -49,7 +49,7 @@ if command -v rustup >/dev/null 2>&1; then
             echo "skipped: target $t not installed (rustup target add $t)"
             continue
         fi
-        cargo clippy --manifest-path "$REPO_ROOT/Cargo.toml" -p skein-sysload -p skein-procprio -p skein-review -p skein-webshot -p skein-winnotify --all-targets --target "$t" -- -D warnings 2>&1 || {
+        cargo clippy --manifest-path "$REPO_ROOT/Cargo.toml" -p skein-sysload -p skein-procprio -p skein-proto -p skein-review -p skein-webshot -p skein-winnotify --all-targets --target "$t" -- -D warnings 2>&1 || {
             echo "WARNING: clippy failed for target $t. release.yml builds with -D warnings, so this would fail the release."
         }
     done

@@ -17,7 +17,7 @@ use std::fmt;
 /// because agent discovery and config injection both gate on kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum HarnessKind {
+pub enum HarnessKind {
     Claude,
     Opencode,
     Copilot,
@@ -33,7 +33,7 @@ pub(crate) enum HarnessKind {
 
 // Every kind, for the agent API's kind check (so it cannot drift from
 // the enum) and for this module's own tests.
-pub(crate) const ALL: [HarnessKind; 8] = [
+pub const ALL: [HarnessKind; 8] = [
     HarnessKind::Claude,
     HarnessKind::Opencode,
     HarnessKind::Copilot,
@@ -48,7 +48,7 @@ impl HarnessKind {
     /// The kind named by `name` (the `as_str` form), or `None` for
     /// anything unknown — for strings that came over a boundary and
     /// must not be stored unchecked.
-    pub(crate) fn from_name(name: &str) -> Option<Self> {
+    pub fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "claude" => Self::Claude,
             "opencode" => Self::Opencode,
@@ -62,7 +62,7 @@ impl HarnessKind {
         })
     }
 
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Opencode => "opencode",
@@ -79,7 +79,7 @@ impl HarnessKind {
     /// Mirrors `HARNESS_KINDS[kind].program` in `app/src/data.tsx`
     /// (formerly `managedProgram` in `harnessCmd.ts`): `byoh` runs the
     /// user's own shell and `files` runs nothing, so neither has one.
-    pub(crate) fn program(self) -> Option<&'static str> {
+    pub fn program(self) -> Option<&'static str> {
         match self {
             Self::Claude => Some("claude"),
             Self::Opencode => Some("opencode"),
@@ -95,7 +95,7 @@ impl HarnessKind {
     /// `app/src/data.tsx`: `copilot` is a managed program with no agent
     /// concept, which is exactly the distinction `program().is_some()`
     /// alone would lose.
-    pub(crate) fn takes_agent(self) -> bool {
+    pub fn takes_agent(self) -> bool {
         matches!(self, Self::Claude | Self::Opencode)
     }
 }
@@ -143,11 +143,11 @@ mod tests {
     /// disagrees) fails loudly here instead of silently at spawn time.
     #[test]
     fn agrees_with_the_typescript_registry() {
-        // Paths are relative to this file: app/src-tauri/src/
-        // harness_kind.rs → ../../src/{types.ts,data.tsx} is
+        // Paths are relative to this file: crates/skein-daemon/src/
+        // harness_kind.rs → ../../../app/src/{types.ts,data.tsx} is
         // app/src/{types.ts,data.tsx}.
-        let types_ts = include_str!("../../src/types.ts");
-        let data_tsx = include_str!("../../src/data.tsx");
+        let types_ts = include_str!("../../../app/src/types.ts");
+        let data_tsx = include_str!("../../../app/src/data.tsx");
 
         let ts_kinds = parse_harness_kind_union(types_ts);
         let rust_kinds: BTreeSet<&str> = ALL.iter().map(|k| k.as_str()).collect();

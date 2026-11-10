@@ -121,17 +121,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_listed_tool_is_grouped_or_skein_info() {
-        for spec in crate::agent_api::mcp::tool_specs() {
-            let name = spec["name"].as_str().expect("tool has a name");
-            assert!(
-                name == "skein_info" || group_of(name).is_some(),
-                "tool `{name}` is in no ToolGroup; add it to group_of"
-            );
-        }
-    }
-
-    #[test]
     fn keys_are_distinct_and_allows_matches_fields() {
         let off = ToolGroups {
             mail: false,

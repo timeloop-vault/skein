@@ -76,6 +76,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 # axum rides the hyper 1 / http 1 / tower stack reqwest already locks,
 # so the real cost is the router, not the transport.
 axum = "0.8"
+skein-daemon = { path = "../../crates/skein-daemon" }
 skein-git = { path = "../../crates/skein-git" }
 skein-harness = { path = "../../crates/skein-harness" }
 skein-review = { path = "../../crates/skein-review" }
@@ -129,6 +130,7 @@ skein-winnotify = { path = "../../crates/skein-winnotify" }
 
 [dev-dependencies]
 tempfile = "3"
+skein-daemon = { path = "../../crates/skein-daemon", features = ["test-support"] }
 # Same feature set as the workspace: local repos only, no OpenSSL/libssh2.
 # Used to build real repos in the review-baseline tests (#211).
 git2 = { version = "0.21", default-features = false }

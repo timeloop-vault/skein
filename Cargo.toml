@@ -1,9 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/skein-daemon",
     "crates/skein-git",
     "crates/skein-harness",
     "crates/skein-procprio",
+    "crates/skein-proto",
     "crates/skein-review",
     "crates/skein-sysload",
     "crates/skein-webshot",

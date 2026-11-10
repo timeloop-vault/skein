@@ -84,7 +84,7 @@ impl Database {
     /// Create an element thread and its anchor row together (#434): a
     /// thread with no anchor row would render as an element comment with
     /// nothing to point at, so either both exist or neither does.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn insert_review_element_thread(
         &self,
         t: &ReviewThreadRow,
