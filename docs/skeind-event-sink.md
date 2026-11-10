@@ -5,7 +5,8 @@ told the UI something took a Tauri handle and called `emit`. Now they
 take an `EventSink` instead. The Tauri build plugs in `TauriEventSink`,
 so the webview receives the same bytes as before. A network transport
 (#580 onward) will implement the same trait later, with no change to
-the producers.
+the producers. Streams opened by one call are covered by
+[skeind-stream-sink.md](skeind-stream-sink.md) (#578).
 
 Figure: how a server-side event reaches a client. Renders
 `event_sink.rs` and `tauri_event_sink.rs` in `app/src-tauri/src`;

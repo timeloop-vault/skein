@@ -38,6 +38,7 @@
 //! reader yet, so the waiter gives up waiting and emits `Exit` anyway
 //! rather than hang forever.
 
+pub(crate) mod command;
 pub(crate) mod env;
 mod output;
 mod preview;

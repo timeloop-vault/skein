@@ -295,7 +295,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   app_log_dir() + stderr, RUST_LOG overrides), managed
     │       │                        #   state, agent-API/design servers, window, macOS menu
     │       ├── src/commands.rs +    # The shell's own commands by domain: pty, harness
-    │       │   commands/            #   events, harness log rows, rooms, spawn env, app
+    │       │   commands/            #   events, hermes work, harness log rows, rooms, fs,
+    │       │                        #   git, spawn env, app
     │       ├── src/pty.rs           # PtyManager (portable-pty); 4 threads per spawn (raw
     │       │                        #   reader + coalescer + writer + waiter — the waiter is
     │       │                        #   load-bearing on Windows ConPTY; #171 split the reader
@@ -307,13 +308,15 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   spawn, because portable-pty exposes no creation flags;
     │       │                        #   anything the child starts before the call keeps normal
     │       │                        #   priority
-    │       ├── src/git.rs           # DTO wrappers around skein-git; GitError → String
+    │       ├── src/git.rs           # DTOs + `_impl` logic over skein-git, Tauri-free since
+    │       │                        #   #578 (commands in commands/git.rs); GitError → String
     │       ├── src/watcher.rs       # notify-debouncer-mini, 200 ms, .git/ deliberately unfiltered
     │       ├── src/db.rs            # rusqlite: rooms (table `sessions` — legacy name),
     │       │                        #   harness_events, harness_actions, review_baselines (#211),
     │       │                        #   sessions_quarantine;
     │       │                        #   WAL + .bak/.bak.1 snapshots (#167)
-    │       ├── src/fs.rs            # list_dir + read/write_file_text — LIVE, called by
+    │       ├── src/fs.rs            # list_dir + read/write_file_text `_impl`s (commands in
+    │       │                        #   commands/fs.rs, #578) — LIVE, called by
     │       │                        #   FileTree/FilesBody since #185. write returns an mtime
     │       │                        #   token for staleness. Paths are NOT yet scoped to the room (#174)
     │       ├── src/spawn_env.rs     # PATH/env merge for harness PTYs (#72, #192, #197, #207):
@@ -390,6 +393,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       ├── src/harness_events_opencode.rs  # SSE client → OpencodeEvent (L2c-2)
     │       ├── src/harness_actions_claude.rs   # JSONL → harness_actions rows (#80)
     │       ├── src/harness_actions_opencode.rs # SSE/opencode.db → harness_actions rows (#80)
+    │       ├── src/event_sink.rs + stream_sink.rs # Tauri-free seams a daemon can serve (#577,
+    │       │   (+ tauri_event_sink.rs, tauri_stream_sink.rs) #   #578): EventSink = broadcast events, StreamSink<T> = a
+    │       │                                   #   stream one call opens. See docs/skeind-event-sink.md
+    │       │                                   #   and docs/skeind-stream-sink.md
     │       └── src/harness_action_event.rs     # "harness-action" live broadcast (live rows only)
     ├── docs/
     │   ├── audit-2026-07-03.md      # Full-codebase audit; §5 = structural backlog. Predates

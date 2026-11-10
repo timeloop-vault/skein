@@ -30,8 +30,9 @@ use skein_harness::hermes::work::{
     live_delegation_count, notify_process_ids_after, read_processes, running_delegations,
 };
 use sysinfo::{Pid, ProcessesToUpdate, System};
-use tauri::ipc::Channel;
 use tokio::task::JoinHandle;
+
+use crate::stream_sink::StreamSink;
 
 const POLL: Duration = Duration::from_secs(1);
 
@@ -183,7 +184,7 @@ pub(crate) struct NotifyState {
 struct Poller {
     state_db: PathBuf,
     session_id: String,
-    channel: Channel<HermesWorkEvent>,
+    sink: Box<dyn StreamSink<HermesWorkEvent>>,
     prev: Work,
     notify: NotifyState,
     seeded: bool,
@@ -214,7 +215,7 @@ impl Poller {
         let prev_live = self.seeded.then_some(self.prev.live_delegations);
         let idle = idle_edge(prev_live, next.live_delegations);
         for ev in diff(&self.prev, &next, !self.seeded, idle) {
-            if self.channel.send(ev).is_err() {
+            if self.sink.send(ev).is_err() {
                 return false;
             }
         }
@@ -245,19 +246,19 @@ pub struct HermesWorkManager {
 impl HermesWorkManager {
     /// Must run inside the tokio runtime. Replaces any previous poller
     /// for the harness (its channel is new, so it must re-snapshot).
-    fn attach(
+    pub(crate) fn attach(
         &self,
         harness_id: String,
         session_id: String,
         state_db: PathBuf,
-        channel: Channel<HermesWorkEvent>,
+        sink: Box<dyn StreamSink<HermesWorkEvent>>,
     ) {
         let stopped = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stopped);
         let poller = Arc::new(Mutex::new(Poller {
             state_db,
             session_id,
-            channel,
+            sink,
             prev: Work::default(),
             notify: NotifyState::default(),
             seeded: false,
@@ -284,38 +285,29 @@ impl HermesWorkManager {
             .insert(harness_id, Entry { stopped, handle });
     }
 
-    fn detach(&self, harness_id: &str) {
+    pub(crate) fn detach(&self, harness_id: &str) {
         self.inner.lock().remove(harness_id);
     }
 }
 
-/// Start (or replace) the work poller for a Hermes harness; the attach
-/// snapshot arrives as `initial: true` starts on the first tick.
-#[tauri::command]
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
-pub(crate) async fn hermes_work_attach(
+/// Resolve the profile's `state.db` and start (or replace) the work poller
+/// for a Hermes harness; the attach snapshot arrives as `initial: true`
+/// starts on the first tick. Must run inside the tokio runtime.
+///
+/// # Errors
+/// No Hermes home, or an invalid profile name.
+pub(crate) fn hermes_work_attach_impl(
+    manager: &HermesWorkManager,
+    settings: &crate::spawn_settings::SpawnSettings,
     harness_id: String,
-    room_id: String,
     session_id: String,
-    hermes_profile: Option<String>,
-    resumed: Option<bool>,
-    on_event: Channel<HermesWorkEvent>,
-    manager: tauri::State<'_, HermesWorkManager>,
-    spawn_env: tauri::State<'_, crate::commands::spawn_env::SpawnEnvState>,
+    hermes_profile: Option<&str>,
+    sink: Box<dyn StreamSink<HermesWorkEvent>>,
 ) -> Result<(), String> {
-    let _ = (room_id, resumed); // Same arguments as hermes_actions_attach.
-    let settings = spawn_env.snapshot();
-    let state_db = crate::resume::profile_db(&settings, hermes_profile.as_deref())
+    let state_db = crate::resume::profile_db(settings, hermes_profile)
         .ok_or_else(|| "no Hermes home or invalid profile".to_string())?;
-    manager.attach(harness_id, session_id, state_db, on_event);
+    manager.attach(harness_id, session_id, state_db, sink);
     Ok(())
-}
-
-/// Stop the poller for `harness_id`. No-op if unknown.
-#[allow(clippy::needless_pass_by_value)]
-#[tauri::command]
-pub(crate) fn hermes_work_detach(harness_id: String, manager: tauri::State<'_, HermesWorkManager>) {
-    manager.detach(&harness_id);
 }
 
 #[cfg(test)]

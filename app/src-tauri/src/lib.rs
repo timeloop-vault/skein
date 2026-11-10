@@ -44,8 +44,10 @@ mod setup;
 mod shared_state;
 mod spawn_env;
 mod spawn_settings;
+mod stream_sink;
 mod tauri_event_sink;
 mod tauri_paths;
+mod tauri_stream_sink;
 mod terminal_paths;
 mod updater_proxy;
 mod watcher;
@@ -103,10 +105,10 @@ pub fn run() {
             commands::app::ping,
             commands::app::window_raise_main,
             commands::app::app_restart,
-            fs::list_dir,
-            fs::read_file_text,
-            fs::write_file_text,
-            fs::read_image_bytes,
+            commands::fs::list_dir,
+            commands::fs::read_file_text,
+            commands::fs::write_file_text,
+            commands::fs::read_image_bytes,
             terminal_paths::resolve_terminal_paths,
             terminal_paths::open_terminal_path,
             commands::pty::pty_spawn,
@@ -130,21 +132,21 @@ pub fn run() {
             commands::rooms::db_save_rooms,
             commands::todos::db_load_global_todos,
             commands::todos::db_save_global_todos,
-            git::git_is_repo,
-            git::git_inspect_folder,
-            git::git_repo_identity,
-            git::git_head_branch,
-            git::git_propose_worktree_path,
-            git::git_add_worktree,
-            git::git_restore_worktree,
-            git::git_status,
-            git::git_watch_start,
-            git::git_watch_stop,
-            git::git_head_watch_start,
+            commands::git::git_is_repo,
+            commands::git::git_inspect_folder,
+            commands::git::git_repo_identity,
+            commands::git::git_head_branch,
+            commands::git::git_propose_worktree_path,
+            commands::git::git_add_worktree,
+            commands::git::git_restore_worktree,
+            commands::git::git_status,
+            commands::git::git_watch_start,
+            commands::git::git_watch_stop,
+            commands::git::git_head_watch_start,
             design::commands::design_preview_base,
             design::commands::design_list_entries,
             design::commands::design_watch_start,
-            git::git_diff,
+            commands::git::git_diff,
             resume::opencode_list_sessions,
             resume::opencode_session_exists,
             resume::claude_session_exists,
@@ -164,8 +166,8 @@ pub fn run() {
             harness_actions_hermes::hermes_actions_attach,
             harness_actions_hermes::hermes_actions_detach,
             harness_actions_hermes::hermes_actions_turn_end,
-            harness_work_hermes::hermes_work_attach,
-            harness_work_hermes::hermes_work_detach,
+            commands::hermes_work::hermes_work_attach,
+            commands::hermes_work::hermes_work_detach,
             commands::pty::pick_free_port,
             commands::harness_log::db_record_harness_event,
             commands::harness_log::db_recent_harness_events_by_harness,

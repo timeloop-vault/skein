@@ -490,7 +490,8 @@ Module table (all under `app/src-tauri/src/` unless stated):
    commands and the `fs.rs:196` `ipc::Response`. Wrappers hold only
    `State` and a call into an `_impl`; the stream is a trait or closure.
    Depends on 1. *Check:* no non-wrapper file imports `tauri::ipc`; PTY
-   spawn and event attach still work.
+   spawn and event attach still work. Done in #578; see
+   skeind-stream-sink.md.
 3. **Path and resource provider.** `setup/state.rs:24,58`,
    `harness_config.rs`, db location, log dir, `spawn_settings`.
    Independent of 1 and 2. *Check:* a test builds the daemon state from
@@ -537,8 +538,10 @@ Module table (all under `app/src-tauri/src/` unless stated):
   `harness_events_claude/supervise.rs` only partly covers it.
 - **Rooms persistence is a wholesale mirror** (`save_all`). Fine for
   one embedded client; wrong for N.
-- **The `_impl` split is not uniform.** `git.rs` and `fs.rs` mix wrappers
-  and logic; `review.rs:797` takes an `AppHandle`.
+- **The `_impl` split is not uniform.** `git.rs` and `fs.rs` are now
+  logic-only, with wrappers in `commands/git.rs` and `commands/fs.rs`
+  (#578); `review.rs` no longer takes an `AppHandle` (#577) but still
+  holds its own wrappers.
 - **Binary framing.** `fs.rs:192` and `review_surface/commands.rs:79`
   return raw bytes; the wire format has to carry them.
 
@@ -725,7 +728,9 @@ Other docs that touch the area:
    per-daemon. Client-local, or a designated home daemon?
 9. **Binary payload framing.** `read_image_bytes` and
    `review_image_bytes` return raw bytes today. Does the wire carry
-   binary frames, or base64 in JSON?
+   binary frames, or base64 in JSON? #578 made both impls return
+   `Vec<u8>`, with the Tauri wrapper building `ipc::Response`; the wire
+   framing is still open and belongs to the transport phase.
 10. **The webview-originated `review-changed` event**
     (`app/src/review/api.ts:260`). With a daemon the emitter must be a
     daemon event, or other clients never see it.

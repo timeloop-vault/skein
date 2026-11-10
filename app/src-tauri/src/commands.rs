@@ -16,6 +16,10 @@
 //!   and opencode's SSE stream (L2c-2).
 //! - `harness_log` — the `harness_events` and `harness_actions` tables:
 //!   record and recent-rows queries.
+//! - `fs` — the Files overlay's list / read / write commands (#185, #409).
+//! - `git` — the git commands: repo inspection, worktrees, status, diff and
+//!   the two watchers.
+//! - `hermes_work` — attach/detach for the Hermes work poller (#628).
 //! - `opencode_sidecar` — start/stop of the per-harness `opencode serve`
 //!   sidecar on opencode v2 (#676).
 //! - `rooms` — `db_load_rooms` / `db_save_rooms`.
@@ -24,8 +28,11 @@
 //!   agent discovery, and the default shell / home / cwd lookups.
 
 pub(crate) mod app;
+pub(crate) mod fs;
+pub(crate) mod git;
 pub(crate) mod harness_events;
 pub(crate) mod harness_log;
+pub(crate) mod hermes_work;
 pub(crate) mod opencode_sidecar;
 pub(crate) mod pty;
 pub(crate) mod rooms;

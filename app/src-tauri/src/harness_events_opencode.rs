@@ -288,6 +288,50 @@ impl OpencodeEventsManager {
     }
 }
 
+/// The arguments of the `opencode_events_attach` command, owned.
+pub(crate) struct OpencodeAttachArgs {
+    pub(crate) harness_id: String,
+    pub(crate) room_id: String,
+    pub(crate) cwd: String,
+    pub(crate) port: u16,
+    pub(crate) session_id: Option<String>,
+    pub(crate) sidecar_generation: Option<u64>,
+}
+
+/// Start the SSE subscription for a harness and stream its events into
+/// `sink`. Must run inside a tokio runtime: the manager spawns the reader
+/// with `tokio::spawn`. Send failures are ignored.
+pub(crate) fn opencode_events_attach_impl(
+    manager: &OpencodeEventsManager,
+    sidecars: &crate::opencode_sidecar::OpencodeSidecarManager,
+    args: OpencodeAttachArgs,
+    sink: impl crate::stream_sink::StreamSink<OpencodeEvent>,
+) -> Result<(), String> {
+    let OpencodeAttachArgs {
+        harness_id,
+        room_id,
+        cwd,
+        port,
+        session_id,
+        sidecar_generation,
+    } = args;
+    // v2 (#677): the sidecar manager, not the caller's `port`, is the source
+    // of truth for where to connect and the password.
+    if let Some(generation) = sidecar_generation {
+        let (port, password) = sidecars
+            .connect_info(&harness_id, generation)
+            .ok_or_else(|| "no live opencode sidecar for this harness".to_owned())?;
+        manager.attach_v2(harness_id, port, password, session_id, move |event| {
+            let _ = sink.send(event);
+        });
+        return Ok(());
+    }
+    manager.attach(harness_id, room_id, cwd, port, session_id, move |event| {
+        let _ = sink.send(event);
+    });
+    Ok(())
+}
+
 #[cfg(test)]
 use connection::{StreamError, emit_connect_events, stream_events};
 #[cfg(test)]

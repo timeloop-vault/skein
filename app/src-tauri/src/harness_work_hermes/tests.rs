@@ -237,3 +237,27 @@ fn pid_exists_knows_this_process_and_not_a_bogus_one() {
     assert!(pid_exists(std::process::id()));
     assert!(!pid_exists(u32::MAX - 1));
 }
+
+struct FailingSink;
+
+impl StreamSink<HermesWorkEvent> for FailingSink {
+    fn send(&self, _item: HermesWorkEvent) -> Result<(), String> {
+        Err("receiver gone".into())
+    }
+}
+
+#[test]
+fn a_failed_send_stops_the_poller() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = fixture(dir.path());
+    let mut poller = Poller {
+        state_db: db,
+        session_id: SID.into(),
+        sink: Box::new(FailingSink),
+        prev: Work::default(),
+        notify: NotifyState::default(),
+        seeded: false,
+        warned: false,
+    };
+    assert!(!poller.step(|pid| pid == 100));
+}
