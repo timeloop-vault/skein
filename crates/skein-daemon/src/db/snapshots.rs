@@ -47,7 +47,7 @@ pub(super) const SNAPSHOT_EXCLUDED: &[&str] = &[
 /// std's rename refuses to overwrite. Callers only pass a complete
 /// file as `from`, so the remove-then-retry window never risks the
 /// last good copy.
-pub(crate) fn replace_file(from: &Path, to: &Path) -> Result<(), String> {
+pub fn replace_file(from: &Path, to: &Path) -> Result<(), String> {
     match std::fs::rename(from, to) {
         Ok(()) => Ok(()),
         // Only when the source still exists: if a concurrent caller

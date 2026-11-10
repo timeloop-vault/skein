@@ -260,3 +260,14 @@ async fn a_shared_path_is_gated_per_method_and_info_is_never_gated() {
         .unwrap();
     assert_eq!(info.status(), 200);
 }
+
+#[test]
+fn every_listed_tool_is_grouped_or_skein_info() {
+    for spec in crate::agent_api::mcp::tool_specs() {
+        let name = spec["name"].as_str().expect("tool has a name");
+        assert!(
+            name == "skein_info" || group_of(name).is_some(),
+            "tool `{name}` is in no ToolGroup; add it to group_of"
+        );
+    }
+}

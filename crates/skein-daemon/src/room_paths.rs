@@ -23,7 +23,7 @@
 /// frontend never sees a verbatim path at all, since only Rust-side
 /// canonicalization produces one. The `UNC` marker is matched
 /// case-insensitively; Windows itself does not care about its case.
-pub(crate) fn strip_verbatim(path: &str) -> std::borrow::Cow<'_, str> {
+pub fn strip_verbatim(path: &str) -> std::borrow::Cow<'_, str> {
     let Some(rest) = path.strip_prefix(r"\\?\") else {
         return std::borrow::Cow::Borrowed(path);
     };
@@ -55,7 +55,7 @@ pub(crate) fn strip_verbatim(path: &str) -> std::borrow::Cow<'_, str> {
 /// reads sqlite JSON, that side reads `Room[]`, and there is no module
 /// to share across the FFI boundary. [`strip_verbatim`] runs first, so a
 /// Windows verbatim path and its plain spelling compare equal (#393).
-pub(crate) fn normalize_path_for_match(path: &str) -> String {
+pub fn normalize_path_for_match(path: &str) -> String {
     let mut s = strip_verbatim(path).replace('\\', "/");
     if s.chars().count() > 1 && s.ends_with('/') {
         s.pop();
@@ -80,7 +80,7 @@ fn is_strictly_under(a: &str, b: &str) -> bool {
 /// strictly under the room's cwd (the query is somewhere inside the
 /// room), `"contains_room"` when the room's cwd sits strictly under the
 /// query (the query is a parent folder of the room), `None` otherwise.
-pub(crate) fn path_match_kind(query_norm: &str, cwd_norm: &str) -> Option<&'static str> {
+pub fn path_match_kind(query_norm: &str, cwd_norm: &str) -> Option<&'static str> {
     if query_norm == cwd_norm {
         Some("cwd")
     } else if is_strictly_under(query_norm, cwd_norm) {

@@ -504,7 +504,10 @@ Module table (all under `app/src-tauri/src/` unless stated):
    into `skein-daemon` (`spawn_blocking` becomes
    `tokio::task::spawn_blocking`) and the 4 wrappers stay in the app and
    call it. They can start in parallel with 1. *Check:* `cargo tree -p skein-daemon` lists
-   no `tauri`.
+   no `tauri`. Done in #580; see skeind-crates.md. By then `resume.rs`
+   held 6 wrappers, not 4; all 6 stayed in the app. `agents.rs` did not
+   move: it needs `harness_config` and `pty::harness_program_lookup`, so it
+   goes with the engines.
 5. **Engine extraction.** `pty/` (incl. `procscan`), `harness_events_*`,
    `harness_actions_*`, `review`, `review_surface`, `design/serve`, and
    the `fs`/`git` implementations. Depends on 1 to 4. *Check:* the

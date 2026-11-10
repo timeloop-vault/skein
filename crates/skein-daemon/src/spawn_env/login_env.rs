@@ -34,7 +34,7 @@ fn rfind_bytes(hay: &[u8], needle: &[u8]) -> Option<usize> {
 /// `=`, have an empty key or are not UTF-8 are skipped individually.
 /// Duplicate keys: last wins. Output is sorted by key.
 #[cfg_attr(target_os = "windows", allow(dead_code))]
-pub(crate) fn extract_probe_env(stdout: &[u8]) -> Option<Vec<(String, String)>> {
+pub fn extract_probe_env(stdout: &[u8]) -> Option<Vec<(String, String)>> {
     let start = find_bytes(stdout, ENV_PROBE_START.as_bytes())? + ENV_PROBE_START.len();
     let rest = &stdout[start..];
     let end = rfind_bytes(rest, ENV_PROBE_END.as_bytes())?;
@@ -84,7 +84,7 @@ pub(crate) fn is_login_env_noise(key: &str) -> bool {
 }
 
 /// The captured environment minus noise keys (and nothing else), in order.
-pub(crate) fn login_env_overlay(captured: &[(String, String)]) -> Vec<(String, String)> {
+pub fn login_env_overlay(captured: &[(String, String)]) -> Vec<(String, String)> {
     captured
         .iter()
         .filter(|(k, _)| !is_login_env_noise(k))
@@ -101,7 +101,7 @@ pub(crate) fn login_env_overlay(captured: &[(String, String)]) -> Vec<(String, S
 /// BOTH names to this value (on Windows env keys are case-insensitive,
 /// so there it sets one). Entries are trimmed, empties dropped, and
 /// duplicates removed case-insensitively, keeping the first spelling.
-pub(crate) fn merge_no_proxy(upper: Option<&str>, lower: Option<&str>) -> String {
+pub fn merge_no_proxy(upper: Option<&str>, lower: Option<&str>) -> String {
     let mut out: Vec<&str> = Vec::new();
     let sources = upper
         .into_iter()

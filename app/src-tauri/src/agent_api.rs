@@ -46,7 +46,7 @@ pub mod auth;
 pub mod commands;
 mod element;
 mod element_source;
-pub mod groups;
+pub use skein_daemon::tool_groups as groups;
 pub mod hermes_event;
 pub mod http;
 pub mod mcp;

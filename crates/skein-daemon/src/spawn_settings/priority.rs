@@ -5,7 +5,7 @@ use super::SpawnSettings;
 
 /// CPU priority a harness PTY child is spawned at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChildPriority {
+pub enum ChildPriority {
     /// Whatever the OS gives a child of Skein.
     Normal,
     /// Below normal (Windows) or nice +10 (macOS/Linux).
@@ -14,7 +14,7 @@ pub(crate) enum ChildPriority {
 
 impl SpawnSettings {
     /// The priority a harness spawned under these settings should get.
-    pub(crate) fn child_priority(&self) -> ChildPriority {
+    pub fn child_priority(&self) -> ChildPriority {
         if self.lower_harness_priority {
             ChildPriority::Lowered
         } else {

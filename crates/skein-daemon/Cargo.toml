@@ -1,0 +1,44 @@
+[package]
+name = "skein-daemon"
+version = "0.1.0"
+description = "The Tauri-free server side of Skein, embedded by app/src-tauri."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+skein-proto = { path = "../skein-proto" }
+skein-harness = { path = "../skein-harness" }
+skein-git = { path = "../skein-git" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite.workspace = true
+parking_lot = "0.12"
+tracing = "0.1"
+dunce = "1.0.5"
+notify-debouncer-mini = "0.7"
+tokio = { version = "1", features = ["rt"] }
+uuid = { version = "1", features = ["v4"] }
+tempfile = { version = "3", optional = true }
+
+[features]
+# Exposes db::test_support to app/src-tauri's tests; never in a normal build.
+test-support = ["dep:tempfile"]
+
+[dev-dependencies]
+tempfile = "3"
+git2.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+too_many_lines = "allow"
+# This is app code moved as-is (#580), its API is consumed only by
+# app/src-tauri, and documenting every fallible function would be churn in
+# a move-only change.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

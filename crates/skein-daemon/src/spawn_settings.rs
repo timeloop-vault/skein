@@ -20,16 +20,16 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent_api::groups::ToolGroups;
+use crate::tool_groups::ToolGroups;
 
-pub(crate) mod env_profile;
+pub mod env_profile;
 pub use env_profile::EnvProfile;
-pub(crate) mod priority;
-pub(crate) use priority::ChildPriority;
+pub mod priority;
+pub use priority::ChildPriority;
 
 /// Lives beside `skein.db` in `Paths::data_dir`, so the three build
 /// profiles stay isolated from each other exactly like the database.
-pub(crate) const SETTINGS_FILE: &str = "settings.json";
+pub const SETTINGS_FILE: &str = "settings.json";
 
 const SCHEMA: u32 = 1;
 
@@ -182,7 +182,7 @@ impl SpawnSettings {
     /// to sqlite and never rewritten, so one keystroke against a typo'd
     /// setting would convert a harness into a permanently broken one
     /// that survives restart. Falling back is the safe direction.
-    pub(crate) fn valid_shell(&self) -> Option<&str> {
+    pub fn valid_shell(&self) -> Option<&str> {
         let shell = self.shell.as_deref()?.trim();
         if shell.is_empty() {
             return None;
@@ -227,7 +227,7 @@ fn is_runnable(path: &Path) -> bool {
 /// case, and an unparseable one must not stop Skein booting — it takes
 /// the defaults and says so, loudly enough that the user knows their
 /// edits aren't in effect.
-pub(crate) fn load(dir: &Path) -> (SpawnSettings, Option<String>) {
+pub fn load(dir: &Path) -> (SpawnSettings, Option<String>) {
     let path = file_path(dir);
     let raw = match std::fs::read_to_string(&path) {
         Ok(raw) => raw,
@@ -286,7 +286,7 @@ fn migrate_legacy_tool_groups(raw: &str, settings: &mut SpawnSettings) {
 
 /// Write the settings file via a temp file + rename, so an interrupted
 /// save can't leave a half-written file that the next boot refuses.
-pub(crate) fn save(dir: &Path, settings: &SpawnSettings) -> Result<(), String> {
+pub fn save(dir: &Path, settings: &SpawnSettings) -> Result<(), String> {
     let path = file_path(dir);
     let tmp = path.with_extension("json.tmp");
     let body = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
@@ -296,14 +296,14 @@ pub(crate) fn save(dir: &Path, settings: &SpawnSettings) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn file_path(dir: &Path) -> PathBuf {
+pub fn file_path(dir: &Path) -> PathBuf {
     dir.join(SETTINGS_FILE)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_api::groups::ToolGroup;
+    use crate::tool_groups::ToolGroup;
 
     #[test]
     fn defaults_are_what_the_ui_promises() {

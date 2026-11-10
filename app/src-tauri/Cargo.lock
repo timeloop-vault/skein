@@ -4168,6 +4168,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "skein-daemon",
  "skein-git",
  "skein-harness",
  "skein-procprio",
@@ -4196,6 +4197,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "skein-daemon"
+version = "0.1.0"
+dependencies = [
+ "dunce",
+ "notify-debouncer-mini",
+ "parking_lot",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "skein-git",
+ "skein-harness",
+ "skein-proto",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "skein-git"
 version = "0.1.0"
 dependencies = [
@@ -4219,6 +4239,14 @@ version = "0.1.0"
 dependencies = [
  "rustix",
  "windows",
+]
+
+[[package]]
+name = "skein-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -47,8 +47,8 @@ mod rooms;
 mod schema;
 mod snapshots;
 mod sweep;
-#[cfg(test)]
-pub(crate) mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 mod timed_lock;
 mod todos;
 
@@ -61,7 +61,7 @@ pub use mail::HarnessMessageRow;
 pub use review_baselines::NewBaseline;
 pub use review_threads::{ReviewAddressedRow, ReviewCommentRow, ReviewThreadRow};
 pub use rooms::{CreatedBy, Harness, LoadOutcome, RepoIdentity, Room};
-pub(crate) use snapshots::replace_file;
+pub use snapshots::replace_file;
 
 /// Per-room ceiling on the total size of `review_baseline_images` rows
 /// (#409 follow-up). A mirror is a preview convenience, not the review

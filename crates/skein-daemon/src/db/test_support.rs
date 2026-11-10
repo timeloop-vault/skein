@@ -2,13 +2,14 @@ use tempfile::TempDir;
 
 use super::{Database, Harness, Room};
 
-pub(crate) fn fresh_db() -> (TempDir, Database) {
+pub fn fresh_db() -> (TempDir, Database) {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("test.db");
     let db = Database::open(&path).unwrap();
     (dir, db)
 }
 
+#[allow(dead_code)] // used by the db tests only, not by the `test-support` feature
 pub(super) fn room(id: &str) -> Room {
     Room {
         id: id.into(),
@@ -32,6 +33,7 @@ pub(super) fn room(id: &str) -> Room {
     }
 }
 
+#[allow(dead_code)] // used by the db tests only, not by the `test-support` feature
 pub(super) fn harness(id: &str) -> Harness {
     Harness {
         id: id.into(),

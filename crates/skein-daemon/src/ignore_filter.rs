@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::review::relative_key;
+use crate::worktree_key::relative_key;
 
 /// How long a cached ignore decision may be trusted. See the module docs
 /// for the inputs this bounds.
@@ -39,24 +39,25 @@ const CACHE_TTL: Duration = Duration::from_secs(60);
 
 /// The "is this repo-relative path ignored" query. A trailing `/` asks
 /// about a directory. A seam so tests can count and fail queries.
-pub(crate) type IgnoreQuery<'a> = dyn FnMut(&str) -> Result<bool, String> + 'a;
+pub type IgnoreQuery<'a> = dyn FnMut(&str) -> Result<bool, String> + 'a;
 
 /// Directory-level ignore decisions. See the module docs.
-pub(crate) struct IgnoreCache {
-    /// dir relpath -> ignored? (`pub(crate)` so tests can inspect it)
-    pub(crate) dirs: HashMap<String, bool>,
+pub struct IgnoreCache {
+    /// dir relpath -> ignored? (`pub` so tests can inspect it)
+    pub dirs: HashMap<String, bool>,
     born: Instant,
 }
 
 impl IgnoreCache {
-    pub(crate) fn new() -> Self {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
         Self {
             dirs: HashMap::new(),
             born: Instant::now(),
         }
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.dirs.clear();
         self.born = Instant::now();
     }
@@ -70,7 +71,7 @@ impl IgnoreCache {
     /// Call once per batch with its worktree-relative keys, before any
     /// [`is_ignored`](Self::is_ignored): a batch naming a `.gitignore` or
     /// `.git/info/exclude` clears the cache, any other expires it by age.
-    pub(crate) fn note_batch(&mut self, keys: &[String]) {
+    pub fn note_batch(&mut self, keys: &[String]) {
         // Before any `.git` filtering: `.git/info/exclude` is a git path.
         if keys
             .iter()
@@ -85,7 +86,7 @@ impl IgnoreCache {
     /// Is `key` ignored? Ancestors shallowest-first, cached; then the
     /// file itself, uncached (file patterns such as `*.log`). An error
     /// anywhere means "not proven ignored".
-    pub(crate) fn is_ignored(&mut self, key: &str, query: &mut IgnoreQuery<'_>) -> bool {
+    pub fn is_ignored(&mut self, key: &str, query: &mut IgnoreQuery<'_>) -> bool {
         let mut prefix = String::new();
         let mut segs = key.split('/').peekable();
         while let Some(seg) = segs.next() {
@@ -129,14 +130,14 @@ impl IgnoreCache {
 /// Filters absolute watcher paths of one worktree down to the ones git does
 /// not ignore. Owns its repo handle (opened lazily, retried while the
 /// folder is not yet a repo) and its [`IgnoreCache`].
-pub(crate) struct WorktreeIgnore {
+pub struct WorktreeIgnore {
     cwd: String,
     repo: Option<skein_git::Repo>,
     cache: IgnoreCache,
 }
 
 impl WorktreeIgnore {
-    pub(crate) fn new(cwd: &str) -> Self {
+    pub fn new(cwd: &str) -> Self {
         Self {
             cwd: cwd.to_owned(),
             repo: None,
@@ -147,7 +148,7 @@ impl WorktreeIgnore {
     /// `paths` minus the gitignored ones, order kept. Always kept: no repo
     /// (nothing to ask), paths outside the worktree (the #563 admin dir),
     /// anything under a `.git` segment, and anything git errors about.
-    pub(crate) fn retain_unignored(&mut self, paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    pub fn retain_unignored(&mut self, paths: Vec<PathBuf>) -> Vec<PathBuf> {
         if self.repo.is_none() {
             self.repo = skein_git::Repo::open(Path::new(&self.cwd)).ok();
         }
