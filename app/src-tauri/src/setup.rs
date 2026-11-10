@@ -3,10 +3,24 @@
 //! the Windows toast registration right after it, then state, servers,
 //! the window, and the macOS menu last.
 //!
+//! Construction order (#579), after logging and the toast registration:
+//! 1. `Paths` (app data + resource dir, `tauri_paths.rs`)
+//! 2. spawn env, then the login-shell probe
+//! 3. updater proxy init (reads `paths.data_dir`)
+//! 4. harness config (from `paths.resource_dir`)
+//! 5. database, then the managers on it and the event sink
+//! 6. agent API server (`AgentApiState` needs the db; manages its endpoint)
+//! 7. design preview (`PreviewState` needs the db; manages its endpoint)
+//! 8. manage the db
+//! 9. window, 10. open request, 11. menu, 12. perf
+//!
+//! Steps 2, 4 and 5 are Tauri-free (`shared_state.rs`). `servers` still
+//! takes `app`, because `AgentApiState` holds an `AppHandle` (#580, #582).
+//!
 //! Where things are:
 //! - `logging` — the daily-rotating file log plus stderr, and `LogGuard`
-//! - `state` — app data dir, spawn env, harness config, the database and
-//!   the managers that hang off it
+//! - `state` — feeds `Paths` and the event sink to `shared_state` and
+//!   manages the result
 //! - `servers` — the agent API (#213) and design preview (#433) listeners
 //! - `window` — product name and window chrome
 //! - `menu` — the macOS app menu and its `on_menu_event` handler
@@ -51,11 +65,10 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
     // startup.
     crate::os_notify::init(app.handle());
 
-    let data_dir = state::spawn_env(app)?;
+    let paths = state::spawn_env(app)?;
     // #614: the updater plugin's client hook reads this global.
-    crate::updater_proxy::init(&data_dir);
-    state::harness_config(app);
-    let db = state::open_database(app, &data_dir)?;
+    crate::updater_proxy::init(&paths.data_dir);
+    let db = state::open_database(app, &paths)?;
     servers::agent_api(app, &db);
     servers::design_preview(app, &db);
 
