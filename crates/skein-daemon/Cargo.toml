@@ -23,6 +23,8 @@ futures-util = { version = "0.3", default-features = false }
 # The design preview server (#433, moved here by #581).
 axum = "0.8"
 uuid = { version = "1", features = ["v4"] }
+# PNG bytes into the agent API's MCP image block / JSON mirror (#582).
+base64 = "0.22"
 # Reqwest 0.13 + rustls 0.23 need a crypto provider installed explicitly at
 # startup (see `tls::install_rustls_provider`); ring is already in the lockfile.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
@@ -38,7 +40,6 @@ tempfile = { version = "3", optional = true }
 test-support = ["dep:tempfile"]
 
 [dev-dependencies]
-base64 = "0.22"
 tempfile = "3"
 git2.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }

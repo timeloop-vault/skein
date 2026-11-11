@@ -21,15 +21,7 @@ pub fn commit() -> Option<&'static str> {
     }
 }
 
-/// Which build profile a bundle identifier belongs to.
-pub fn profile_for_identifier(id: &str) -> &'static str {
-    match id {
-        "com.timeloop-vault.skein" => "release",
-        "com.timeloop-vault.skein.local" => "local",
-        "com.timeloop-vault.skein.dev" => "dev",
-        _ => "unknown",
-    }
-}
+pub use skein_daemon::build_info::profile_for_identifier;
 
 #[cfg(test)]
 mod tests {

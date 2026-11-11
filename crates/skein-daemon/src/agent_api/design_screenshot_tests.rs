@@ -2,8 +2,8 @@
 //! the not-visible refusal, the guards, and the MCP image block. The
 //! native capture itself needs a window and is not exercised here.
 
+use crate::agent_api::client::{Rect, Shot};
 use serde_json::{Value, json};
-use skein_webshot::{Rect, Shot};
 
 use super::design_tests::{design_room, folder, is_refused, recording};
 use super::mcp;

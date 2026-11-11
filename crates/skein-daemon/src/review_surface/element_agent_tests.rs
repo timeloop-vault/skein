@@ -1,15 +1,15 @@
 //! The agent API reads an element thread's state through the same rule
-//! the pane does. This test touches `agent_api`, which stays in the app,
-//! so it moved here from `skein_daemon::review_surface::element::tests`
-//! (#581) with a minimal copy of that module's fixture.
+//! the pane does. This test touches `agent_api`, so it lives beside it rather
+//! than in `review_surface::element::tests` (#581, #582), with a minimal
+//! copy of that module's fixture.
 
 use std::collections::{BTreeMap, HashMap};
 
-use skein_daemon::review_surface::dto::NewThread;
-use skein_daemon::review_surface::element::{
+use crate::review_surface::dto::NewThread;
+use crate::review_surface::element::{
     ElementAnchor, ElementRect, ElementSource, SeenInput, seen_impl,
 };
-use skein_daemon::review_surface::write::add_thread_impl;
+use crate::review_surface::write::add_thread_impl;
 
 use crate::agent_api::auth::Caller;
 use crate::agent_api::verbs::{GetCommentArgs, ListArgs, get_comment, list_comments};

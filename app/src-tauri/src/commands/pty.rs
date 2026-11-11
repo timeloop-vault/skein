@@ -50,7 +50,7 @@ pub(crate) async fn pty_spawn(
 ) -> Result<PtySpawnResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let manager = app.state::<PtyManager>();
-        let spawn_env = app.state::<SpawnEnvState>();
+        let spawn_env = app.state::<Arc<SpawnEnvState>>();
         let db = app.state::<Arc<Database>>();
         let endpoint = app.state::<crate::agent_api::state::AgentApiEndpoint>();
         let harness_config = app.state::<crate::harness_config::HarnessConfig>();

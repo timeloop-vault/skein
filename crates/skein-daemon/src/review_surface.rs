@@ -51,6 +51,8 @@ pub mod anchoring;
 pub mod changes;
 pub mod dto;
 pub mod element;
+#[cfg(test)]
+mod element_agent_tests;
 pub mod git;
 pub mod image;
 pub mod proposal;

@@ -11,9 +11,9 @@
 
 use std::sync::Arc;
 
-use super::state::{AgentApiEndpoint, AgentApiState, AgentApiStatus};
-use super::verbs::{self, MailUnread};
 use crate::db::Database;
+use skein_daemon::agent_api::state::{AgentApiEndpoint, AgentApiState, AgentApiStatus};
+use skein_daemon::agent_api::verbs::{self, MailUnread};
 
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
@@ -32,21 +32,10 @@ pub async fn mail_unread(
 ) -> Result<MailUnread, String> {
     let db = Arc::clone(&db);
     tauri::async_runtime::spawn_blocking(move || {
-        let messages = db.unread_harness_messages(&room_id, &harness_id)?;
-        let rooms = db.all_rooms()?;
-        Ok(verbs::unread_mail(&messages, &rooms))
+        verbs::unread_mail_impl(&db, &room_id, &harness_id)
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-/// A room's newest `status:` mail (#492): what the Control Center shows.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LastStatusDto {
-    pub room_id: String,
-    pub body: String,
-    pub created_ms: i64,
 }
 
 /// The newest `status:` message each room has sent, one entry per room
@@ -55,21 +44,11 @@ pub struct LastStatusDto {
 #[tauri::command]
 pub async fn mail_last_status_by_room(
     db: tauri::State<'_, Arc<Database>>,
-) -> Result<Vec<LastStatusDto>, String> {
+) -> Result<Vec<verbs::LastStatusDto>, String> {
     let db = Arc::clone(&db);
-    tauri::async_runtime::spawn_blocking(move || {
-        Ok(db
-            .latest_status_by_room()?
-            .into_iter()
-            .map(|(room_id, body, created_ms)| LastStatusDto {
-                room_id,
-                body,
-                created_ms,
-            })
-            .collect())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || verbs::last_status_by_room_impl(&db))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// The frontend's answer to a `skein://agent-request` it received

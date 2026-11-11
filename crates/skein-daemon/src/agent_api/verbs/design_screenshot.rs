@@ -3,7 +3,7 @@
 //!
 //! The preview is a cross-origin iframe, so only the webview itself can
 //! read its pixels. The frontend knows where the preview sits and whether
-//! it is on screen; Rust owns the native capture (`skein-webshot`).
+//! it is on screen; Rust owns the native capture (the `WebviewCapture` seam).
 //!
 //! | kind | args | answer |
 //! |---|---|---|
@@ -23,12 +23,11 @@ use std::time::Duration;
 use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use skein_webshot::{Rect, Shot};
-use tauri::Manager as _;
 
 use super::design::{ask, caller_room, guard_write, pick_harness, with_harness_id};
 use super::{DesignTargetArgs, VerbError, VerbResult};
 use crate::agent_api::auth::Caller;
+use crate::agent_api::client::{Rect, Shot};
 use crate::agent_api::state::AgentApiState;
 
 const CAPTURE_TARGET_TIMEOUT: Duration = Duration::from_secs(5);
@@ -167,44 +166,21 @@ pub fn build_output(
     }))
 }
 
-/// Start the platform capture. Must run on the main thread (inside
-/// `with_webview`).
-#[allow(clippy::needless_pass_by_value)] // consumed on macOS and Windows only
-fn start_capture(
-    pw: tauri::webview::PlatformWebview,
-    rect: Rect,
-    scale: f64,
-    done: impl FnOnce(Result<Shot, String>) + Send + 'static,
-) {
-    #[cfg(windows)]
-    skein_webshot::capture(&pw.controller(), rect, scale, done);
-    #[cfg(target_os = "macos")]
-    skein_webshot::capture(pw.inner(), rect, scale, done);
-    #[cfg(not(any(windows, target_os = "macos")))]
-    {
-        let _ = &pw;
-        skein_webshot::capture(std::ptr::null_mut(), rect, scale, done);
-    }
-}
-
-/// Capture `rect` of the main webview: hop to the main thread, wait for
+/// Capture `rect` of the main webview: start it through the seam, wait for
 /// the result on a oneshot, give up after [`CAPTURE_TIMEOUT`].
 async fn grab(state: &AgentApiState, rect: Rect, scale: f64) -> Result<Shot, String> {
-    let app = state
-        .app
+    let capture = state
+        .capture
         .clone()
         .ok_or_else(|| "no window is available".to_owned())?;
-    let window = app
-        .get_webview_window(crate::setup::MAIN_LABEL)
-        .ok_or_else(|| "the main window is gone".to_owned())?;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    window
-        .with_webview(move |pw| {
-            start_capture(pw, rect, scale, move |result| {
-                let _ = tx.send(result);
-            });
-        })
-        .map_err(|e| format!("could not reach the webview: {e}"))?;
+    capture.capture(
+        rect,
+        scale,
+        Box::new(move |result| {
+            let _ = tx.send(result);
+        }),
+    )?;
     match tokio::time::timeout(CAPTURE_TIMEOUT, rx).await {
         Ok(Ok(result)) => result,
         Ok(Err(_)) => Err("the capture was dropped".into()),

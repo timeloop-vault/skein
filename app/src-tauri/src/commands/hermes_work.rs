@@ -2,6 +2,8 @@
 //! itself lives in `harness_work_hermes`; this file only turns the
 //! frontend's channel into a sink.
 
+use std::sync::Arc;
+
 use crate::commands::spawn_env::SpawnEnvState;
 use crate::harness_work_hermes::{HermesWorkEvent, HermesWorkManager, hermes_work_attach_impl};
 use crate::tauri_stream_sink::TauriChannelSink;
@@ -18,7 +20,7 @@ pub(crate) async fn hermes_work_attach(
     resumed: Option<bool>,
     on_event: tauri::ipc::Channel<HermesWorkEvent>,
     manager: tauri::State<'_, HermesWorkManager>,
-    spawn_env: tauri::State<'_, SpawnEnvState>,
+    spawn_env: tauri::State<'_, Arc<SpawnEnvState>>,
 ) -> Result<(), String> {
     let _ = (room_id, resumed); // Same arguments as hermes_actions_attach.
     hermes_work_attach_impl(

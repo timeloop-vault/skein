@@ -590,3 +590,38 @@ pub fn unread_mail(messages: &[HarnessMessageRow], rooms: &[Room]) -> MailUnread
         from_room_names,
     }
 }
+
+/// A room's newest `status:` mail (#492): what the Control Center shows.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastStatusDto {
+    pub room_id: String,
+    pub body: String,
+    pub created_ms: i64,
+}
+
+/// The newest `status:` message each room has sent, one entry per room
+/// that has sent any (backs the `mail_last_status_by_room` command).
+pub fn last_status_by_room_impl(db: &Database) -> Result<Vec<LastStatusDto>, String> {
+    Ok(db
+        .latest_status_by_room()?
+        .into_iter()
+        .map(|(room_id, body, created_ms)| LastStatusDto {
+            room_id,
+            body,
+            created_ms,
+        })
+        .collect())
+}
+
+/// How much unread mail a harness has (backs the `mail_unread` command):
+/// fetches the two row sets, then derives via [`unread_mail`].
+pub fn unread_mail_impl(
+    db: &Database,
+    room_id: &str,
+    harness_id: &str,
+) -> Result<MailUnread, String> {
+    let messages = db.unread_harness_messages(room_id, harness_id)?;
+    let rooms = db.all_rooms()?;
+    Ok(unread_mail(&messages, &rooms))
+}

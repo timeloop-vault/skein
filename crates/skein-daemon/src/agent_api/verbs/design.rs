@@ -36,7 +36,7 @@ use super::{VerbError, VerbResult, internal};
 use crate::agent_api::auth::Caller;
 use crate::agent_api::state::AgentApiState;
 use crate::db::{Harness, Room};
-use crate::design::commands::list_entries_for_room;
+use crate::design::entries::list_entries_for_room;
 
 /// Rate cap for the two write verbs, combined, per calling room. Same
 /// numbers as `open_harness`/`close_harness`, its own bucket: driving a

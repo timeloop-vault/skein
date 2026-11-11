@@ -5,10 +5,12 @@ moved the Tauri-free leaf modules out of `app/src-tauri` into two new
 workspace crates. Phase 1e part 1 (#581) moved the next layer: files, git,
 the room load, perf, the design server and the review surface. Part 2 of
 #581 moved the engines: the PTY manager and the harness event and action
-adapters. Behaviour is unchanged: the app re-exports every moved module at
-its old path where it still imports it, so no importer changed.
+adapters. #582 moved the last large piece, the agent API, and added the
+in-process transport that lets the daemon talk back to the client. Behaviour
+is unchanged: the app re-exports every moved module at its old path where it
+still imports it, so no importer changed.
 
-Figure: crate layout after #581 part 2, arrows pointing from a crate to
+Figure: crate layout at the end of phase 1 (#582), arrows pointing from a crate to
 what it depends on, with what each of the two sides holds. Renders the
 `[dependencies]` path entries of each `Cargo.toml` and the module lists
 below; non-normative, the manifests and the text are authoritative.
@@ -17,14 +19,15 @@ below; non-normative, the manifests and the text are authoritative.
 flowchart TD
     subgraph OUT["Outside the workspace"]
         APP["app/src-tauri"]
-        STAYS["Stays in the app: agent_api for #582, opencode_sidecar/exit_guard, terminal_paths, build_info, the seam impls, shared_state, client-only files"]
-        WRAP["Tauri wrappers: commands/*, resume, design/commands, review/commands, review_surface/commands, hermes_profile/commands, harness_actions_hermes"]
+        STAYS["Stays in the app: opencode_sidecar/exit_guard, terminal_paths, build_info, the tauri_* seam impls, setup/embed, client-only files"]
+        WRAP["Tauri wrappers: commands/*, resume, agent_api/commands, design/commands, review/commands, review_surface/commands, hermes_profile/commands, harness_actions_hermes"]
     end
     subgraph WS["Cargo workspace"]
         DAEMON["skein-daemon"]
         MOVED1["Moved in #580: db, spawn_env, spawn_settings, watcher, resume probes, seams"]
         MOVED2["Moved in #581 part 1: fs, git, rooms, perf_hist, perf_spans, design, review, review_surface"]
         MOVED3["Moved in #581 part 2: pty, harness_config, agents, harness_events, harness_actions, harness_work_hermes, hermes_profile, opencode_sidecar"]
+        MOVED4["Moved in #582: agent_api, daemon, transport"]
         PROTO["skein-proto"]
         GIT["skein-git"]
         HARNESS["skein-harness"]
@@ -50,6 +53,7 @@ flowchart TD
     DAEMON --- MOVED1
     DAEMON --- MOVED2
     DAEMON --- MOVED3
+    DAEMON --- MOVED4
     APP --- WRAP
     APP --- STAYS
 ```
@@ -101,8 +105,8 @@ seams from phases 1a to 1c: `event_sink`, `stream_sink` and `paths`.
   keeps `review.rs` and `review/commands.rs` (4 Tauri wrappers).
 - `review_surface` (the root is `review_surface.rs`) and everything under
   it except `commands.rs`. The app keeps `review_surface.rs` (a glob
-  re-export), `review_surface/commands.rs` (15 Tauri commands) and
-  `element_agent_tests.rs`, a test that needs `agent_api`.
+  re-export), `review_surface/commands.rs` (15 Tauri commands).
+  `element_agent_tests.rs` stayed behind until #582, when it moved too.
 
 ### Added by #581 part 2
 
@@ -130,21 +134,97 @@ seams from phases 1a to 1c: `event_sink`, `stream_sink` and `paths`.
 - `perf_spans` gained `PTY_WRITE` and `PTY_CHUNK_SEND`; `resume` gained
   `profile_db`.
 
+### Added by #582
+
+- `agent_api/`: the axum server, `state`, `auth`, `verbs/`, `mcp`, `http/`
+  and all its tests (`review_surface/element_agent_tests.rs` moved with
+  it). The mail logic that used to sit in the Tauri wrappers is now
+  `verbs/mail.rs` (`unread_mail_impl`, `last_status_by_room_impl`).
+- `agent_api/client.rs`: the three seams that replaced
+  `AgentApiState.app` (the `AppHandle`). Spawn settings are read from a
+  shared `Arc<SpawnEnvState>`; `ClientRequests` sits behind
+  `request_frontend` (the daemon asks the client something and waits for
+  the answer); `WebviewCapture` takes the design screenshot, with the
+  daemon's own `Rect` and `Shot` types.
+- `daemon.rs`: `spawn_env` (step one) and `Daemon::build` (step two).
+  `build` makes the harness config, database, managers and agent API and
+  design preview state, and returns the two server futures instead of
+  spawning them, since the daemon has no runtime of its own.
+- `transport.rs`: `InProcessTransport { events, client, capture }`, the
+  daemon-to-client half. There is no transport trait: in-process is the
+  only transport until sockets (#585).
+- `build_info` gained `set_commit`/`commit` and `profile_for_identifier`.
+
 ## What stayed in the app, and why
 
 - Every `#[tauri::command]` wrapper: `commands/*`, `resume.rs`,
+  `agent_api/commands.rs` (4 commands, including `agent_request_complete`),
   `review/commands.rs`, `review_surface/commands.rs`, `design/commands.rs`,
   `hermes_profile/commands.rs` and `harness_actions_hermes.rs`.
-- `agent_api/`, which moves with the transport in #582.
+- `agent_api.rs`, a re-export of the daemon's module plus `pub mod
+  commands`.
 - `opencode_sidecar/exit_guard.rs`, which implements `tauri::Resource`.
 - `terminal_paths.rs` and `build_info.rs` (the app side of the version
-  hand-off).
-- Client-only files: `open_request`, `os_notify`, `cli_shim`, `setup/*`,
-  `updater_proxy`, `perf_cmds` and the other perf files.
+  and commit hand-off).
+- Client-only files: `open_request`, `os_notify`, `cli_shim`,
+  `setup/{logging,window,menu}`, `updater_proxy`, `perf_cmds` and the other
+  perf files.
 - The Tauri impls of the seams: `tauri_event_sink.rs`,
-  `tauri_stream_sink.rs`, `tauri_paths.rs`.
-- `shared_state.rs`, which builds the state from a `Paths` and an event
-  sink.
+  `tauri_stream_sink.rs`, `tauri_paths.rs` and `tauri_client.rs`
+  (`TauriClientRequests` and `TauriWebviewCapture`; the only caller of
+  skein-webshot).
+- `setup/embed.rs`, the embed itself (next section). It replaced
+  `shared_state.rs`, `setup/state.rs` and `setup/servers.rs`.
+
+The app no longer depends on axum, base64 or futures-util.
+
+## The embed (#582)
+
+The app is a client of a daemon that happens to live in its process. The
+client-to-daemon direction is direct calls: a Tauri command wrapper takes
+the daemon's managed state and calls into it. The daemon-to-client
+direction goes through the three seams in `InProcessTransport`, each
+implemented in the app over the `AppHandle`. Harnesses are separate
+processes and reach the daemon's axum listener over localhost HTTP, on
+`/mcp` and `/api/*`.
+
+Figure: how the webview, the app and the daemon connect. Renders
+`setup/embed.rs`, `tauri_client.rs`, `tauri_event_sink.rs` and
+`agent_api/commands.rs` in the app and `daemon.rs`, `transport.rs` and
+`agent_api/client.rs` in skein-daemon; non-normative, the text and the code
+are authoritative.
+
+```mermaid
+flowchart LR
+    WV["Webview (React)"]
+    CMD["App command wrappers"]
+    subgraph DAEMON["skein-daemon, in the same process"]
+        STATE["Daemon state: db, managers, AgentApiState"]
+        API["axum listener on 127.0.0.1"]
+    end
+    HAR["Harness CLIs (PTY children)"]
+    WV -->|"1 invoke"| CMD
+    CMD -->|"2 direct calls"| STATE
+    STATE -->|"3 EventSink"| WV
+    STATE -->|"4 ClientRequests"| WV
+    WV -->|"5 agent_request_complete"| CMD
+    STATE -->|"6 WebviewCapture"| WV
+    HAR -->|"7 HTTP /mcp and /api"| API
+    API --> STATE
+```
+
+1. The webview calls a Tauri command.
+2. The wrapper calls the daemon's state directly; there is no wire.
+3. The daemon pushes broadcast events (`skein://review-changed` and the
+   rest) through `EventSink`.
+4. When the agent API needs the webview to act or answer
+   (`request_frontend`, for `create_room` and similar), it goes through
+   `ClientRequests`, which the Tauri impl emits as `skein://agent-request`.
+5. The webview answers through the `agent_request_complete` command, which
+   resolves the pending request in `AgentApiState`.
+6. `get_design_screenshot` asks `WebviewCapture` for a PNG of a rectangle.
+7. A harness calls the daemon's listener over HTTP with its bearer token;
+   the listener calls the same state.
 
 ## Re-export pattern
 
@@ -165,5 +245,6 @@ tests can build databases.
 
 ## Next
 
-- #582: the agent API and the in-process transport. `agent_api/` is the
-  last large piece of server logic still in the app.
+- #582 is done: the agent API and the in-process transport are in
+  skein-daemon. Phase 1 ends here. What follows is a real transport
+  (sockets, #585) and the handshake (#584).

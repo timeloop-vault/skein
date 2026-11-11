@@ -191,7 +191,7 @@ async fn serve_with(db: &Arc<crate::db::Database>, groups: ToolGroups) -> String
 
 #[tokio::test]
 async fn api_routes_refuse_when_their_group_is_off() {
-    crate::install_rustls_provider();
+    crate::tls::install_rustls_provider();
     let f = fixture();
     save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
     let token = f.db.ensure_room_token("r1", 1).unwrap();
@@ -223,7 +223,7 @@ async fn api_routes_refuse_when_their_group_is_off() {
 
 #[tokio::test]
 async fn a_shared_path_is_gated_per_method_and_info_is_never_gated() {
-    crate::install_rustls_provider();
+    crate::tls::install_rustls_provider();
     let f = fixture();
     save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
     let token = f.db.ensure_room_token("r1", 1).unwrap();

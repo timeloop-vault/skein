@@ -19,7 +19,7 @@ pub struct InfoOut {
 /// Reads no database; authentication happens before any verb runs.
 pub fn skein_info(state: &AgentApiState) -> InfoOut {
     InfoOut {
-        version: crate::build_info::VERSION,
+        version: crate::build_info::version(),
         profile: crate::build_info::profile_for_identifier(&state.identifier),
         identifier: state.identifier.clone(),
         commit: crate::build_info::commit(),
