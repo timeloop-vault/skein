@@ -4,14 +4,10 @@
 //! p50/p95 come from a log-linear histogram (`perf_hist`), so they are
 //! upper bounds within 12.5% of the true value, never above the max.
 
-pub(crate) use skein_daemon::perf_spans::{REVIEW_DISCOVERY_BATCH, SpanAgg, SpanSnapshot};
+pub(crate) use skein_daemon::perf_spans::{
+    PTY_CHUNK_SEND, PTY_WRITE, REVIEW_DISCOVERY_BATCH, SpanAgg, SpanSnapshot,
+};
 use std::fmt::Write as _;
-
-/// `pty_write` body (#639): runs on the host UI thread.
-pub(crate) static PTY_WRITE: SpanAgg = SpanAgg::new();
-
-/// `on_event.send` of one PTY data chunk (#639); count = delivered chunks.
-pub(crate) static PTY_CHUNK_SEND: SpanAgg = SpanAgg::new();
 
 /// Wait of a probe posted to the host main thread (#639).
 pub(crate) static HOST_MAIN_LAG: SpanAgg = SpanAgg::new();

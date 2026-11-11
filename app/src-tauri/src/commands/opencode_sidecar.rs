@@ -2,8 +2,6 @@
 //! On opencode v2 the TUI attaches to it with `--server <url>`; the PTY
 //! side of that binding is `pty_spawn`'s `sidecar_generation`.
 
-use std::ffi::OsString;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::{Emitter, Manager};
@@ -11,41 +9,11 @@ use tauri::{Emitter, Manager};
 use super::spawn_env::SpawnEnvState;
 use crate::db::Database;
 use crate::opencode_sidecar::http::{self, READY_POLL, READY_TIMEOUT};
-use crate::opencode_sidecar::{
-    ExitNotice, OpencodeSidecarManager, SidecarInfo, SidecarState, StartRequest,
+use crate::opencode_sidecar::start::{
+    EXIT_EVENT, RETRY_BACKOFF_MS, SidecarExitPayload, SidecarStartDeps, SidecarStartResult,
+    is_retryable,
 };
-
-/// Wire shape of `opencode_sidecar_start`'s return value.
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SidecarStartResult {
-    url: String,
-    port: u16,
-    session_id: String,
-    generation: u64,
-}
-
-/// Payload of the `skein://opencode-sidecar-exit` event: a sidecar that
-/// exited on its own (never sent after a stop).
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SidecarExitPayload {
-    harness_id: String,
-    generation: u64,
-    code: Option<i32>,
-}
-
-impl From<ExitNotice> for SidecarExitPayload {
-    fn from(n: ExitNotice) -> Self {
-        Self {
-            harness_id: n.harness_id,
-            generation: n.generation,
-            code: n.code,
-        }
-    }
-}
-
-const EXIT_EVENT: &str = "skein://opencode-sidecar-exit";
+use crate::opencode_sidecar::{OpencodeSidecarManager, SidecarInfo, SidecarState};
 
 /// Resolve the exe, build the PTY-equivalent env, pick a port and start
 /// the child. Blocks (login-shell probe, process spawn).
@@ -61,33 +29,21 @@ fn start_blocking(
     let endpoint = app.state::<crate::agent_api::state::AgentApiEndpoint>();
     let harness_config = app.state::<crate::harness_config::HarnessConfig>();
     let manager = app.state::<OpencodeSidecarManager>();
-    let settings = spawn_env.snapshot();
-
-    let program = crate::harness_kind::HarnessKind::Opencode
-        .program()
-        .expect("opencode has a program");
-    let (resolved, _path) = crate::pty::harness_program_lookup(program, &settings);
-    let exe = resolved.ok_or_else(|| format!("{program} was not found on PATH"))?;
-
-    let agent = crate::pty::command::harness_identity(&endpoint, &db, room_id, harness_id);
-    let env = crate::pty::sidecar_env(
-        &exe,
-        &settings,
-        agent.as_ref(),
-        Some(&harness_config),
-        env_profile,
-    );
-    let port = super::pty::pick_free_port()?;
 
     let exit_app = app.clone();
-    manager.start(StartRequest {
-        harness_id: harness_id.to_owned(),
-        cwd: PathBuf::from(cwd),
-        env,
-        exe: PathBuf::from(OsString::from(exe)),
-        port,
-        lower_priority: settings.child_priority() == crate::spawn_settings::ChildPriority::Lowered,
-        on_exit: Arc::new(move |notice| {
+    crate::opencode_sidecar::start::start_blocking(
+        SidecarStartDeps {
+            spawn_env: &spawn_env,
+            db: &db,
+            endpoint: &endpoint,
+            harness_config: &harness_config,
+            manager: &manager,
+        },
+        room_id,
+        harness_id,
+        cwd,
+        env_profile,
+        Arc::new(move |notice| {
             tracing::info!(
                 harness = %notice.harness_id,
                 generation = notice.generation,
@@ -106,8 +62,7 @@ fn start_blocking(
                 tracing::info!(harness = %harness_id, generation, ended, "terminated TUI of a dead sidecar");
             }
         }),
-        args_override: None,
-    })
+    )
 }
 
 /// Only one sidecar initialises at a time: concurrent boots share one
@@ -117,15 +72,6 @@ fn start_blocking(
 /// (plus the failed start's tree kill) and delays other harnesses' v2
 /// starts. Accepted: a hung start is rare and loud.
 static START_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-/// The wait before each retry (so at most this many retries).
-const RETRY_BACKOFF_MS: [u64; 2] = [300, 900];
-
-/// A start that died because another opencode held the shared database
-/// lock is worth retrying (on a new port); every other failure is not.
-fn is_retryable(msg: &str) -> bool {
-    msg.starts_with("opencode server exited") && msg.contains("database is locked")
-}
 
 struct Ready {
     info: SidecarInfo,
@@ -315,46 +261,5 @@ pub(crate) fn opencode_sidecar_stop(
             sidecars.stop_if_generation(&harness_id, g);
         }
         None => sidecars.stop(&harness_id),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_a_locked_database_exit_is_retryable() {
-        assert!(is_retryable(
-            "opencode server exited with code 1: SQLiteError: database is locked | at x"
-        ));
-        assert!(!is_retryable("opencode server exited with code 1: boom"));
-        assert!(!is_retryable(
-            "opencode server not ready after 20s: database is locked"
-        ));
-    }
-
-    #[test]
-    fn start_result_and_exit_payload_are_camel_case() {
-        let json = serde_json::to_value(SidecarStartResult {
-            url: "http://127.0.0.1:1".into(),
-            port: 1,
-            session_id: "ses_a".into(),
-            generation: 3,
-        })
-        .unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({"url":"http://127.0.0.1:1","port":1,"sessionId":"ses_a","generation":3})
-        );
-        let json = serde_json::to_value(SidecarExitPayload::from(ExitNotice {
-            harness_id: "h".into(),
-            generation: 2,
-            code: None,
-        }))
-        .unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({"harnessId":"h","generation":2,"code":null})
-        );
     }
 }

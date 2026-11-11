@@ -1,0 +1,443 @@
+//! The agents a harness kind will accept at `--agent` spawn time, as
+//! the frontend sees them. Issue #246 (sub-issue A of #219).
+//!
+//! Thin by design: discovery itself — which paths, which CLI, what the
+//! output looks like — lives in `crates/skein-harness`, where it is
+//! testable without Tauri and shared with any standalone tooling
+//! (#209). This module does three things the crate deliberately cannot:
+//! resolve the program the way a real spawn would, pass #215's
+//! `--plugin-dir` so the list matches what the spawn accepts, and flatten
+//! the result into a shape TypeScript can switch on.
+
+use std::ffi::OsStr;
+use std::path::Path;
+use std::time::Duration;
+
+use serde::Serialize;
+use skein_harness::agents::{AgentDef, AgentSource, allows_mcp_tools, claude, opencode};
+
+use crate::harness_config::HarnessConfig;
+use crate::harness_kind::HarnessKind;
+use crate::spawn_settings::SpawnSettings;
+
+/// One row of the picker.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentDto {
+    /// Exactly what goes after `--agent`, namespace included.
+    pub name: String,
+    pub description: Option<String>,
+    /// `null` = unrestricted, which is not the same as an empty list —
+    /// see `allows_review_tools`.
+    pub tools: Option<Vec<String>>,
+    pub model: Option<String>,
+    /// `builtin` | `user` | `project` | `plugin` | `config`. Flattened
+    /// from the crate's enum, whose struct variant serialises into a
+    /// nested object the UI would have to unwrap.
+    pub source: String,
+    /// The plugin half of a namespaced name, for grouping.
+    pub plugin: Option<String>,
+    /// Whether this agent could see Skein's review MCP tools at all.
+    ///
+    /// False means selecting it silently switches off the review loop
+    /// #52 exists for: the connection is healthy, `tools/list` arrives,
+    /// and the agent's own allowlist filters the tools out before the
+    /// model sees them — no error, nothing in any log (#215). The
+    /// picker warns on this rather than letting it be discovered by its
+    /// absence.
+    pub allows_review_tools: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentListDto {
+    pub agents: Vec<AgentDto>,
+    /// Why the list may be incomplete, or `null` when the CLI answered.
+    /// A picker showing a degraded list must say so — an incomplete list
+    /// pushes the user onto typing a name, and thus onto stale ones.
+    pub degraded: Option<String>,
+    /// True when this kind has no agent concept at all, in which case
+    /// `agents` is empty and that is the whole truth. Distinct from a
+    /// kind that has agents and none were found.
+    pub unsupported: bool,
+}
+
+impl AgentListDto {
+    fn unsupported() -> Self {
+        Self {
+            agents: Vec::new(),
+            degraded: None,
+            unsupported: true,
+        }
+    }
+}
+
+fn to_dto(def: AgentDef) -> AgentDto {
+    let allows_review_tools = allows_mcp_tools(def.tools.as_deref());
+    let (source, plugin) = match def.source {
+        AgentSource::Builtin => ("builtin", None),
+        AgentSource::User => ("user", None),
+        AgentSource::Project => ("project", None),
+        AgentSource::Config => ("config", None),
+        AgentSource::Plugin { plugin } => ("plugin", Some(plugin)),
+    };
+    AgentDto {
+        name: def.name,
+        description: def.description,
+        tools: def.tools,
+        model: def.model,
+        source: source.to_owned(),
+        plugin,
+        allows_review_tools,
+    }
+}
+
+/// List the agents `kind` will accept for a harness spawned in `cwd`.
+///
+/// Never returns an error for "nothing found": a picker needs a list
+/// plus a reason, not a failure, so an unrunnable CLI comes back as a
+/// short list with `degraded` set (#176).
+pub fn list(
+    kind: HarnessKind,
+    cwd: &str,
+    settings: &SpawnSettings,
+    config: Option<&HarnessConfig>,
+) -> AgentListDto {
+    // `takes_agent`, not `program().is_some()`: `copilot` is a managed
+    // program (`gh`) with no agent concept, which is exactly the
+    // distinction those two would collapse.
+    if !kind.takes_agent() {
+        return AgentListDto::unsupported();
+    }
+    let program = kind
+        .program()
+        .expect("every takes_agent() kind has a program");
+    let Some(home) = skein_harness::home_dir() else {
+        return AgentListDto {
+            agents: Vec::new(),
+            degraded: Some("no home directory — cannot find the agent definitions".to_owned()),
+            unsupported: false,
+        };
+    };
+    let (resolved, path) = crate::pty::harness_program_lookup(program, settings);
+    let resolved_is_some = resolved.is_some();
+    // An unresolved program still goes to the crate as a bare name: the
+    // spawn error then names the program the user is missing, which is
+    // more use than a message invented here.
+    let exe = resolved.unwrap_or_else(|| program.to_owned());
+    let cwd_path = Path::new(cwd);
+
+    let list = match kind {
+        HarnessKind::Claude => {
+            let extra = claude_probe_args(settings, config);
+            claude::list(OsStr::new(&exe), &home, cwd_path, &extra)
+        }
+        _ => opencode_list(resolved_is_some, &exe, path.as_os_str(), &home, cwd_path),
+    };
+    AgentListDto {
+        agents: list.agents.into_iter().map(to_dto).collect(),
+        degraded: list.degraded,
+        unsupported: false,
+    }
+}
+
+/// opencode discovery: v2 lists agents through `debug agents`, v1
+/// through `agent list` (#680). Unknown version (or an unresolved
+/// program, which is never probed) is v1, as everywhere (#675).
+fn opencode_list(
+    resolved: bool,
+    exe: &str,
+    path: &OsStr,
+    home: &Path,
+    cwd: &Path,
+) -> skein_harness::agents::AgentList {
+    let major = resolved
+        .then(|| {
+            skein_harness::opencode::version::probe_version(
+                OsStr::new(exe),
+                Duration::from_secs(10),
+                Some(path),
+            )
+        })
+        .flatten()
+        .map(|v| v.major);
+    if use_v2(major) {
+        tracing::debug!(?major, "opencode agent discovery: v2 (debug agents)");
+        opencode::list_v2(OsStr::new(exe), Some(path), home, cwd)
+    } else {
+        tracing::debug!(?major, "opencode agent discovery: v1 (agent list)");
+        opencode::list(OsStr::new(exe), home, cwd)
+    }
+}
+
+/// Whether opencode's v2 agent discovery applies: major >= 2. An
+/// unknown version is v1 (#675).
+fn use_v2(major: Option<u32>) -> bool {
+    major.is_some_and(|m| m >= 2)
+}
+
+/// The extra argv the probe needs so its list matches what the spawn
+/// will accept — today that is only #215's `--plugin-dir`, and only
+/// while the user has that injection switched on.
+fn claude_probe_args(settings: &SpawnSettings, config: Option<&HarnessConfig>) -> Vec<String> {
+    if !settings.inject_claude_plugin {
+        return Vec::new();
+    }
+    config
+        .and_then(HarnessConfig::claude_plugin_dir)
+        .map(|dir| vec!["--plugin-dir".to_owned(), dir.display().to_string()])
+        .unwrap_or_default()
+}
+
+/// Whether the named agent, run as `kind` in `cwd`, would see Skein's
+/// review MCP tools at all — the same question [`allows_mcp_tools`]
+/// answers for the picker, but from a plain disk lookup rather than a
+/// CLI probe (#327's `send_message` needs an answer on every call, not
+/// once per picker open).
+///
+/// Only `claude` and `opencode` have an agent concept; any other kind
+/// answers `true` because there is nothing to hide behind. Likewise, an
+/// agent whose definition cannot be found or read answers `true` — a
+/// degraded lookup must never be the reason a message gets refused.
+pub fn agent_sees_mcp(kind: &str, agent: &str, cwd: &str) -> bool {
+    let Some(home) = skein_harness::home_dir() else {
+        return true;
+    };
+    let cwd_path = Path::new(cwd);
+    let def = match kind {
+        "claude" => skein_harness::agents::claude::find_definition(&home, cwd_path, agent),
+        "opencode" => skein_harness::agents::opencode::find_definition(&home, cwd_path, agent),
+        _ => return true,
+    };
+    match def {
+        Some(def) => allows_mcp_tools(def.tools.as_deref()),
+        None => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v2_discovery_only_for_major_two_and_up() {
+        assert!(!use_v2(None));
+        assert!(!use_v2(Some(1)));
+        assert!(use_v2(Some(2)));
+        assert!(use_v2(Some(3)));
+    }
+
+    fn def(name: &str, tools: Option<Vec<String>>, source: AgentSource) -> AgentDef {
+        AgentDef {
+            name: name.to_owned(),
+            description: None,
+            tools,
+            model: None,
+            source,
+        }
+    }
+
+    #[test]
+    fn kinds_without_agents_are_unsupported() {
+        // Only claude/opencode take `takes_agent()`, so only they reach
+        // past this gate — see `harness_kind`'s agreement test for the
+        // per-kind truth table.
+        let settings = SpawnSettings::default();
+        for kind in [
+            HarnessKind::Copilot,
+            HarnessKind::Byoh,
+            HarnessKind::Files,
+            HarnessKind::Remote,
+            HarnessKind::Hermes,
+        ] {
+            let dto = list(kind, ".", &settings, None);
+            assert!(dto.unsupported, "{kind} must have no agent picker");
+        }
+    }
+
+    #[test]
+    fn a_kind_without_agents_is_unsupported_not_empty() {
+        // The frontend has to tell "this kind has no agents" from "this
+        // kind has agents and we found none", or it would render an
+        // empty picker for a shell.
+        let dto = AgentListDto::unsupported();
+        assert!(dto.unsupported);
+        assert!(dto.agents.is_empty());
+        assert!(dto.degraded.is_none());
+    }
+
+    #[test]
+    fn flattens_a_plugin_source_into_name_plus_plugin() {
+        let dto = to_dto(def(
+            "pr-review-toolkit:code-reviewer",
+            None,
+            AgentSource::Plugin {
+                plugin: "pr-review-toolkit".to_owned(),
+            },
+        ));
+        assert_eq!(dto.source, "plugin");
+        assert_eq!(dto.plugin.as_deref(), Some("pr-review-toolkit"));
+    }
+
+    #[test]
+    fn marks_a_restricted_agent_as_losing_the_review_tools() {
+        let narrow = to_dto(def(
+            "narrow",
+            Some(vec!["Read".to_owned(), "Glob".to_owned()]),
+            AgentSource::User,
+        ));
+        assert!(!narrow.allows_review_tools);
+        // No `tools` key at all is unrestricted, and must not be
+        // reported as a restriction.
+        let open = to_dto(def("open", None, AgentSource::User));
+        assert!(open.allows_review_tools);
+        assert!(open.tools.is_none());
+    }
+
+    #[test]
+    fn agent_sees_mcp_allows_a_kind_with_no_agent_concept() {
+        assert!(agent_sees_mcp("copilot", "anything", "."));
+        assert!(agent_sees_mcp("byoh", "anything", "."));
+        assert!(agent_sees_mcp("files", "anything", "."));
+    }
+
+    #[test]
+    fn agent_sees_mcp_allows_a_name_it_cannot_find() {
+        // Not found — or no home directory to look under — is "cannot
+        // tell", and #327's mailbox treats that as allowed rather than
+        // as a refusal.
+        assert!(agent_sees_mcp("claude", "no-such-agent", "."));
+        assert!(agent_sees_mcp("opencode", "no-such-agent", "."));
+    }
+
+    #[test]
+    fn agent_sees_mcp_reads_a_restricted_allowlist_off_disk() {
+        // The project-local `.claude/agents` dir is relative to `cwd`
+        // alone, so this needs no real `$HOME` to be meaningful — only
+        // that `skein_harness::home_dir()` resolves to *some* path,
+        // which is true on every box this runs on.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cwd = tmp.path();
+        std::fs::create_dir_all(cwd.join(".claude").join("agents")).expect("mkdir");
+        std::fs::write(
+            cwd.join(".claude").join("agents").join("narrow.md"),
+            "---\nname: narrow\ntools: Read, Glob\n---\n",
+        )
+        .expect("write");
+        assert!(!agent_sees_mcp("claude", "narrow", cwd.to_str().unwrap()));
+        // Same directory, no restriction: unrestricted always sees MCP.
+        std::fs::write(
+            cwd.join(".claude").join("agents").join("open.md"),
+            "---\nname: open\n---\n",
+        )
+        .expect("write");
+        assert!(agent_sees_mcp("claude", "open", cwd.to_str().unwrap()));
+    }
+
+    #[test]
+    fn the_plugin_dir_rides_along_only_while_injection_is_on() {
+        let on = SpawnSettings {
+            inject_claude_plugin: true,
+            ..SpawnSettings::default()
+        };
+        // No resolved bundle: nothing to pass, and not a failure.
+        assert_eq!(claude_probe_args(&on, None), Vec::<String>::new());
+        let off = SpawnSettings {
+            inject_claude_plugin: false,
+            ..SpawnSettings::default()
+        };
+        assert_eq!(claude_probe_args(&off, None), Vec::<String>::new());
+    }
+}
+
+/// Discovery against the CLIs actually installed on this machine,
+/// through the same program resolution a real spawn uses.
+///
+/// `#[ignore]` on purpose: these shell out to `claude` and `opencode`,
+/// so they depend on the box rather than on the repository, and the
+/// pre-commit gate must stay hermetic. They catch the one class of
+/// failure no unit test can — an upstream change to Claude's refusal
+/// message, to `opencode agent list` (v1) or to `opencode debug agents`
+/// (v2, #680) — so run them by hand after
+/// upgrading either CLI:
+///
+/// ```text
+/// cargo test --manifest-path app/src-tauri/Cargo.toml -- --ignored --nocapture agents::smoke
+/// ```
+///
+/// They live here rather than in `skein-harness` because resolution is
+/// the caller's job: on Windows `npm i -g` leaves `opencode.ps1`,
+/// `opencode.cmd` and an extensionless `#!/bin/sh` shim, none of which
+/// a bare `Command::new("opencode")` can start (#207). Calling the
+/// crate directly with a bare name reports "program not found" on
+/// Windows and proves nothing about the product.
+#[cfg(test)]
+mod smoke {
+    use super::*;
+
+    fn probe(kind: HarnessKind) -> AgentListDto {
+        let cwd = std::env::current_dir().expect("a cwd");
+        list(
+            kind,
+            &cwd.display().to_string(),
+            &SpawnSettings::default(),
+            None,
+        )
+    }
+
+    #[test]
+    #[ignore = "shells out to the installed CLIs; run by hand"]
+    fn claude_lists_its_agents_on_this_machine() {
+        let dto = probe(HarnessKind::Claude);
+        println!("degraded: {:?}", dto.degraded);
+        for a in &dto.agents {
+            println!(
+                "  {:<42} {:<8} review_tools={}",
+                a.name, a.source, a.allows_review_tools
+            );
+        }
+        assert!(dto.degraded.is_none(), "the probe should have answered");
+        assert!(!dto.unsupported);
+        assert!(
+            dto.agents.iter().any(|a| a.name == "general-purpose"),
+            "builtins must be present"
+        );
+    }
+
+    #[test]
+    #[ignore = "shells out to the installed CLIs; run by hand"]
+    fn opencode_lists_its_primary_agents_on_this_machine() {
+        let dto = probe(HarnessKind::Opencode);
+        println!("degraded: {:?}", dto.degraded);
+        for a in &dto.agents {
+            println!("  {:<20} {}", a.name, a.source);
+        }
+        assert!(dto.degraded.is_none(), "agent list should have answered");
+        assert!(
+            dto.agents.iter().any(|a| a.name == "build"),
+            "opencode always has `build`"
+        );
+        for internal in opencode::INTERNAL {
+            assert!(
+                !dto.agents.iter().any(|a| a.name == *internal),
+                "{internal} is machinery and must not be offered"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "shells out to the installed CLIs; run by hand"]
+    fn a_kind_without_agents_needs_no_cli_at_all() {
+        for kind in [
+            HarnessKind::Copilot,
+            HarnessKind::Byoh,
+            HarnessKind::Files,
+            HarnessKind::Remote,
+            HarnessKind::Hermes,
+        ] {
+            let dto = probe(kind);
+            assert!(dto.unsupported, "{kind} must report unsupported");
+            assert!(dto.agents.is_empty());
+        }
+    }
+}

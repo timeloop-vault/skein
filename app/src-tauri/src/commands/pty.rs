@@ -9,6 +9,7 @@ use tauri::ipc::Channel;
 use super::spawn_env::SpawnEnvState;
 use crate::db::Database;
 use crate::pty::command::{PtySpawnArgs, PtySpawnDeps, PtySpawnResult, pty_spawn_impl};
+use crate::pty::opencode::{OpencodeScanDto, scan_opencode_dto};
 use crate::pty::{PtyEvent, PtyManager};
 use crate::tauri_stream_sink::TauriChannelSink;
 
@@ -139,17 +140,6 @@ fn stop_bound_sidecar(app: &tauri::AppHandle, binding: &crate::pty::SidecarBindi
     }
 }
 
-/// Wire shape for `pty_scan_opencode` (#517).
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct OpencodeScanDto {
-    pid: u32,
-    session_id: Option<String>,
-    port: Option<u16>,
-    port_confirmed: bool,
-    continue_last: bool,
-}
-
 /// Look for an opencode TUI among the descendants of one PTY's child and
 /// report the session id and port from its argv (#517). Unknown PTY, or
 /// none found, is `Ok(None)`. No caching: the frontend decides when to ask.
@@ -161,32 +151,15 @@ pub(crate) async fn pty_scan_opencode(
 ) -> Result<Option<OpencodeScanDto>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let pid = app.state::<PtyManager>().pid(&id)?;
-        crate::pty::procscan::scan_opencode(pid).map(|f| OpencodeScanDto {
-            pid: f.pid,
-            session_id: f.session_id,
-            port: f.port,
-            port_confirmed: f.port_confirmed,
-            continue_last: f.continue_last,
-        })
+        scan_opencode_dto(pid)
     })
     .await
     .map_err(|e| e.to_string())
 }
 
 /// Allocate a free TCP port on `127.0.0.1` for opencode's embedded
-/// HTTP server. Epic #50 L2c-2.
-///
-/// Implementation: bind a `TcpListener` to port 0, read the OS-assigned
-/// port, drop the listener. There's a small race window between drop
-/// and the next process binding it (~microseconds typically), but it
-/// only matters if another process simultaneously asks for a free
-/// port and beats opencode to bind. In practice we've never observed
-/// it; if it ever happens opencode reports the bind error in the PTY
-/// and the user can restart the harness.
+/// HTTP server. Epic #50 L2c-2. See `skein_daemon::pty::opencode`.
 #[tauri::command]
 pub(crate) fn pick_free_port() -> Result<u16, String> {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .and_then(|l| l.local_addr())
-        .map(|a| a.port())
-        .map_err(|e| format!("pick_free_port: {e}"))
+    skein_daemon::pty::opencode::pick_free_port()
 }
