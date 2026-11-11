@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import SRC from "../src-tauri/src/design/frames.js?raw";
+import SRC from "../../crates/skein-daemon/src/design/frames.js?raw";
 
 type Rect = { x: number; y: number; w: number; h: number };
 type D = { selector: string; rect: Rect; frame?: string[] };

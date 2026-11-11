@@ -15,7 +15,7 @@ use super::Scope;
 use crate::db::Database;
 use crate::review::abs_path;
 
-pub(super) fn status_str(kind: StatusKind) -> &'static str {
+pub fn status_str(kind: StatusKind) -> &'static str {
     match kind {
         StatusKind::Added => "added",
         StatusKind::Modified => "modified",
@@ -32,7 +32,7 @@ pub(super) fn status_str(kind: StatusKind) -> &'static str {
 /// The coordinates come from the line numbers rather than from parsing
 /// the `@@` header: the header is git's rendering of them, and reading
 /// them off the lines cannot disagree with the lines themselves.
-pub(super) fn to_review_hunk(h: &skein_git::DiffHunk) -> Hunk {
+pub fn to_review_hunk(h: &skein_git::DiffHunk) -> Hunk {
     let mut lines = Vec::with_capacity(h.lines.len());
     let (mut old_start, mut old_lines) = (0usize, 0usize);
     let (mut new_start, mut new_lines) = (0usize, 0usize);
@@ -72,7 +72,7 @@ pub(super) fn to_review_hunk(h: &skein_git::DiffHunk) -> Hunk {
     }
 }
 
-pub(super) fn additions(f: &FileDiff) -> usize {
+pub fn additions(f: &FileDiff) -> usize {
     f.hunks
         .iter()
         .flat_map(|h| &h.lines)
@@ -80,7 +80,7 @@ pub(super) fn additions(f: &FileDiff) -> usize {
         .count()
 }
 
-pub(super) fn deletions(f: &FileDiff) -> usize {
+pub fn deletions(f: &FileDiff) -> usize {
     f.hunks
         .iter()
         .flat_map(|h| &h.lines)
@@ -90,14 +90,14 @@ pub(super) fn deletions(f: &FileDiff) -> usize {
 
 /// Normalise a git path to the key everything else in the review model
 /// uses: worktree-relative, forward slashes.
-pub(super) fn norm(path: &str) -> String {
+pub fn norm(path: &str) -> String {
     path.replace('\\', "/")
 }
 
 /// What a scope actually covers, once the room's base ref and the
 /// merge base with HEAD have both been resolved.
 #[derive(Clone)]
-pub(super) struct Range {
+pub struct Range {
     pub base_ref: Option<String>,
     pub base_resolved: bool,
     pub base_sha: Option<String>,
@@ -105,7 +105,7 @@ pub(super) struct Range {
     pub head_branch: Option<String>,
 }
 
-pub(super) fn resolve_range(db: &Database, room_id: &str, repo: &Repo) -> Result<Range, String> {
+pub fn resolve_range(db: &Database, room_id: &str, repo: &Repo) -> Result<Range, String> {
     let stored = db.review_base_ref(room_id)?;
     let base_ref = stored.or_else(|| repo.default_base_branch());
     let head_branch = repo.head_branch();
@@ -144,7 +144,7 @@ pub(super) fn resolve_range(db: &Database, room_id: &str, repo: &Repo) -> Result
 /// slice (f)) passes for a whole batch, so an agent-API call that needs
 /// several files' diffs still costs one diff rather than one per file.
 /// `scope_impl` passes `&[]`, for the file list.
-pub(super) fn scope_diffs(
+pub fn scope_diffs(
     repo: &Repo,
     range: &Range,
     scope: Scope,
@@ -170,7 +170,7 @@ pub(super) fn scope_diffs(
 
 /// Digest of a file's new-side content in the given scope — the value a
 /// viewed marker stores.
-pub(super) fn file_hash(
+pub fn file_hash(
     cwd: &str,
     path: &str,
     scope: Scope,

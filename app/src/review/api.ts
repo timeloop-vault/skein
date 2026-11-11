@@ -1,6 +1,6 @@
 // The review surface's data layer (#212, epic #52 D1/D5/D6/D7).
 //
-// Mirrors `app/src-tauri/src/review_surface.rs`. Every type here is the
+// Mirrors `crates/skein-daemon/src/review_surface/dto.rs`. Every type here is the
 // serde shape of a DTO over there; when one changes, both change.
 // (#69 tracks generating these instead of hand-maintaining them.)
 //

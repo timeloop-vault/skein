@@ -63,7 +63,7 @@ pub struct FileTextDto {
 /// persisted rooms' cwds. Canonicalizing both sides resolves
 /// symlinks before the prefix check, so a link inside a room can't
 /// escape it. Room cwds that no longer exist are skipped.
-pub(crate) fn ensure_room_scope(db: &Database, path: &str) -> Result<PathBuf, String> {
+pub fn ensure_room_scope(db: &Database, path: &str) -> Result<PathBuf, String> {
     let canon = std::fs::canonicalize(path).map_err(|e| format!("{path}: {e}"))?;
     for cwd in db.room_cwds()? {
         if let Ok(root) = std::fs::canonicalize(&cwd)
@@ -79,7 +79,7 @@ pub(crate) fn ensure_room_scope(db: &Database, path: &str) -> Result<PathBuf, St
 /// the frontend filters by default but can opt-in. Common build /
 /// dependency dirs are *not* skipped here either; that's a UX call,
 /// not a filesystem call.
-pub(crate) fn list_dir_impl(path: &str, db: &Database) -> Result<Vec<DirEntryDto>, String> {
+pub fn list_dir_impl(path: &str, db: &Database) -> Result<Vec<DirEntryDto>, String> {
     let canon = ensure_room_scope(db, path)?;
     let read = std::fs::read_dir(&canon).map_err(|e| format!("read_dir: {e}"))?;
     let mut out = Vec::new();
@@ -118,7 +118,7 @@ pub(crate) fn list_dir_impl(path: &str, db: &Database) -> Result<Vec<DirEntryDto
 /// `Err("binary")` when the leading sniff window contains a NUL byte
 /// (cheap heuristic — robust enough for "is this a JPEG or a Rust
 /// file" and matches `git diff`'s behaviour).
-pub(crate) fn read_file_text_impl(path: &str, db: &Database) -> Result<FileTextDto, String> {
+pub fn read_file_text_impl(path: &str, db: &Database) -> Result<FileTextDto, String> {
     use std::io::Read;
     let canon = ensure_room_scope(db, path)?;
     let file = std::fs::File::open(&canon).map_err(|e| format!("open: {e}"))?;
@@ -156,11 +156,7 @@ pub(crate) fn read_file_text_impl(path: &str, db: &Database) -> Result<FileTextD
 /// (`Err("notimage")`) and a file over `max_bytes`
 /// (`Err("toolarge:<len>")`), checked from metadata before any bytes are
 /// read.
-pub(crate) fn read_image_bytes_impl(
-    path: &str,
-    db: &Database,
-    max_bytes: u64,
-) -> Result<Vec<u8>, String> {
+pub fn read_image_bytes_impl(path: &str, db: &Database, max_bytes: u64) -> Result<Vec<u8>, String> {
     if !skein_review::is_image_path(path) {
         return Err("notimage".into());
     }
@@ -200,7 +196,7 @@ fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
 /// check and the rename that settles it are not atomic with each other,
 /// so async scheduling could otherwise let two overlapping saves of the
 /// same path both pass the staleness guard before either has written.
-pub(crate) fn write_file_text_impl(
+pub fn write_file_text_impl(
     path: &str,
     content: &str,
     expected_mtime_ms: i64,

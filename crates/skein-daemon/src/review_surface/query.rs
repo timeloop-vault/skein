@@ -33,7 +33,7 @@ use super::{Scope, thread_scope};
 use crate::db::{Database, ReviewElementAnchorRow, ReviewThreadRow};
 use crate::review::{PendingFileDto, pending_impl, relative_key};
 
-pub(crate) fn scope_impl(
+pub fn scope_impl(
     db: &Database,
     room_id: &str,
     cwd: &str,
@@ -47,7 +47,7 @@ pub(crate) fn scope_impl(
 /// caller wanting both the summary and per-file hunks (the agent API's
 /// `get_diff`, #287) builds both from the very same diff rather than two
 /// that a concurrent edit could make disagree.
-pub(crate) struct ScopeDiff {
+pub struct ScopeDiff {
     range: Range,
     diffs: Vec<FileDiff>,
 }
@@ -74,7 +74,7 @@ impl ScopeDiff {
 /// as [`ScopeFiles::load`] does, and so the summary's file list too. Hand
 /// the returned [`ScopeDiff`] to [`scope_snapshot`] so both come from ONE
 /// `scope_diffs` call (#287).
-pub(crate) fn scope_summary(
+pub fn scope_summary(
     db: &Database,
     room_id: &str,
     cwd: &str,
@@ -96,7 +96,7 @@ pub(crate) fn scope_summary(
 }
 
 /// The [`ScopeFiles`] snapshot, reusing the diff [`scope_summary`] computed.
-pub(crate) fn scope_snapshot(
+pub fn scope_snapshot(
     db: &Database,
     room_id: &str,
     cwd: &str,
@@ -110,7 +110,7 @@ pub(crate) fn scope_snapshot(
 
 /// Summary and snapshot in one go, both from one `scope_diffs` call.
 #[cfg(test)]
-pub(crate) fn scope_with_files(
+pub fn scope_with_files(
     db: &Database,
     room_id: &str,
     cwd: &str,
@@ -434,7 +434,7 @@ fn pending_files(
 /// scope-wide anyway, which is what makes [`file_impl`] itself now just
 /// a one-path snapshot: [`ScopeFiles::load`] with a single-element
 /// slice, then [`ScopeFiles::file`].
-pub(crate) struct ScopeFiles {
+pub struct ScopeFiles {
     cwd: String,
     scope: Scope,
     commit_sha: Option<String>,
@@ -478,7 +478,7 @@ impl ScopeFiles {
     /// literal, not a glob; empty means unfiltered, the whole scope's
     /// diff. Either way, [`ScopeFiles::file`] only answers for a key
     /// that was actually loaded — see `requested`.
-    pub(crate) fn load(
+    pub fn load(
         db: &Database,
         room_id: &str,
         cwd: &str,
@@ -586,7 +586,7 @@ impl ScopeFiles {
     /// One file's diff, plus every thread on it re-anchored to right
     /// now — the same shape and the same rules `file_impl` always had,
     /// just sliced out of the snapshot instead of recomputing it.
-    pub(crate) fn file(&self, db: &Database, key: &str) -> Result<FileDetailDto, String> {
+    pub fn file(&self, db: &Database, key: &str) -> Result<FileDetailDto, String> {
         let file_threads = self.threads_by_file.get(key).cloned().unwrap_or_default();
 
         if self.scope == Scope::Pending {
@@ -697,7 +697,7 @@ impl ScopeFiles {
     }
 }
 
-pub(crate) fn file_impl(
+pub fn file_impl(
     db: &Database,
     room_id: &str,
     cwd: &str,

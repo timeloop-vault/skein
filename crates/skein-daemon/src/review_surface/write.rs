@@ -24,7 +24,7 @@ use super::thread_scope;
 use crate::db::{Database, ReviewCommentRow, ReviewElementAnchorRow, ReviewThreadRow};
 use crate::review::{abs_path, now_ms, relative_key};
 
-pub(super) fn add_thread_impl(
+pub fn add_thread_impl(
     db: &Database,
     room_id: &str,
     cwd: &str,

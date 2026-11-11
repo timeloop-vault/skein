@@ -14,7 +14,7 @@
 	const { scanTokens, sameValue } = api.tokens;
 
 	// Keep identical to PROPERTY_ALLOWLIST in app/src/designProposal.ts and in
-	// app/src-tauri/src/review_surface/proposal.rs (a vitest checks all three).
+	// crates/skein-daemon/src/review_surface/proposal.rs (a vitest checks all three).
 	const ALLOWLIST = [
 		"width",
 		"height",

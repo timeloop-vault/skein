@@ -1,0 +1,339 @@
+//! The Tauri-free core of the design surface's commands (#433): the
+//! preview endpoint, the list of previewable entries, and the reload
+//! watcher. The folder always comes from the database by room id, never
+//! from the frontend. The `#[tauri::command]` wrappers live in
+//! `app/src-tauri/src/design/commands.rs`.
+
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
+use std::time::SystemTime;
+
+use super::change_filter::ChangeFilter;
+use crate::db::Database;
+use crate::ignore_filter::WorktreeIgnore;
+use crate::watcher::WatcherManager;
+
+const MAX_DEPTH: usize = 12;
+const MAX_ENTRIES: usize = 500;
+const SKIPPED_DIRS: [&str; 2] = [".git", "node_modules"];
+
+/// Where the preview server listens, or why it does not.
+pub struct PreviewEndpoint(Result<u16, String>);
+
+impl PreviewEndpoint {
+    pub fn bound(port: u16) -> Self {
+        Self(Ok(port))
+    }
+
+    pub fn failed(error: String) -> Self {
+        Self(Err(error))
+    }
+
+    pub fn port(&self) -> Result<u16, String> {
+        self.0
+            .clone()
+            .map_err(|e| format!("design preview server is not running: {e}"))
+    }
+}
+
+pub fn room_root(db: &Database, room_id: &str) -> Result<PathBuf, String> {
+    let room = db
+        .room_by_id(room_id)?
+        .ok_or_else(|| format!("unknown room {room_id}"))?;
+    room.cwd
+        .filter(|c| !c.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("room {room_id} has no folder"))
+}
+
+/// The previewable entries of a room's folder (blocking walk). The
+/// core of `design_list_entries`, shared with the agent API's
+/// design verbs (#512).
+pub fn list_entries_for_room(db: &Database, room_id: &str) -> Result<Vec<String>, String> {
+    let root = room_root(db, room_id)?;
+    Ok(list_html_entries(&root))
+}
+
+/// Wires `ChangeFilter` to a real watcher; `tick` fires per reload-worthy
+/// batch. Split out so tests drive the same code `design_watch_start` runs.
+pub fn start_design_watch<F>(
+    manager: &WatcherManager,
+    id: String,
+    canonical: &Path,
+    tick: F,
+) -> Result<(), crate::watcher::WatcherError>
+where
+    F: Fn() + Send + 'static,
+{
+    // Gitignored paths (build output, caches) are dropped before the
+    // filter sees them, so they neither tick nor fill its `seen` map.
+    let filter = Mutex::new((
+        ChangeFilter::new(canonical.to_path_buf(), SystemTime::now()),
+        WorktreeIgnore::new(&canonical.to_string_lossy()),
+    ));
+    manager.start_with_paths(id, canonical, move |paths| {
+        let (count, changed) = match paths {
+            None => (0, true),
+            Some(p) => {
+                let mut guard = filter.lock().unwrap_or_else(PoisonError::into_inner);
+                let (changes, ignore) = &mut *guard;
+                let kept = ignore.retain_unignored(p);
+                (kept.len(), changes.observe(&kept))
+            }
+        };
+        tracing::debug!(paths = count, ticked = changed, "design watch batch");
+        if changed {
+            tick();
+        }
+    })
+}
+
+/// Whether a debounced batch should reload the preview: anything outside
+/// `.git` and `node_modules` does. Paths that are not under `root` count
+/// as changes, the safe direction.
+pub fn should_reload(root: &Path, paths: &[PathBuf]) -> bool {
+    paths.iter().any(|p| {
+        let rel = p.strip_prefix(root).unwrap_or(p);
+        !rel.components().any(|c| {
+            matches!(c, Component::Normal(n) if SKIPPED_DIRS.iter().any(|s| n == OsStr::new(s)))
+        })
+    })
+}
+
+/// Relative, `/`-separated, sorted paths of the `.html`/`.htm` files
+/// under `root`. Capped in depth and count; symlinked directories are
+/// not followed.
+pub fn list_html_entries(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    walk(root, "", 0, &mut out);
+    out.sort();
+    out
+}
+
+fn walk(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<String>) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        if out.len() >= MAX_ENTRIES {
+            return;
+        }
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let rel = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        if kind.is_dir() {
+            if depth < MAX_DEPTH && !SKIPPED_DIRS.contains(&name.as_str()) {
+                walk(&entry.path(), &rel, depth + 1, out);
+            }
+        } else if kind.is_file() {
+            let is_html = Path::new(&name)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"));
+            if is_html {
+                out.push(rel);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn touch(root: &Path, rel: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "x").unwrap();
+    }
+
+    #[test]
+    fn lists_html_sorted_and_skips_noise() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        touch(r, "b.html");
+        touch(r, "A.HTM");
+        touch(r, "sub/deep/c.html");
+        touch(r, "notes.txt");
+        touch(r, ".git/x.html");
+        touch(r, "node_modules/pkg/y.html");
+        touch(r, "sub/node_modules/z.html");
+        assert_eq!(
+            list_html_entries(r),
+            vec!["A.HTM", "b.html", "sub/deep/c.html"]
+        );
+    }
+
+    #[test]
+    fn caps_depth_and_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        let deep = ["d"; MAX_DEPTH + 2].join("/");
+        touch(r, &format!("{deep}/too-deep.html"));
+        let ok = ["d"; MAX_DEPTH].join("/");
+        touch(r, &format!("{ok}/fine.html"));
+        assert_eq!(list_html_entries(r).len(), 1);
+
+        for i in 0..MAX_ENTRIES + 20 {
+            touch(r, &format!("many/{i}.html"));
+        }
+        assert_eq!(list_html_entries(r).len(), MAX_ENTRIES);
+    }
+
+    #[test]
+    fn missing_root_is_empty() {
+        assert_eq!(
+            list_html_entries(Path::new("/definitely/not/here")),
+            Vec::<String>::new()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn does_not_follow_symlinked_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        touch(outside.path(), "out.html");
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
+        assert_eq!(list_html_entries(dir.path()), Vec::<String>::new());
+    }
+
+    fn reload(root: &str, paths: &[&str]) -> bool {
+        let p: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+        should_reload(Path::new(root), &p)
+    }
+
+    #[test]
+    fn reload_ignores_git_and_node_modules() {
+        assert!(!reload("/r", &["/r/.git"]));
+        assert!(!reload("/r", &["/r/.git/index.lock"]));
+        assert!(!reload("/r", &["/r/a/b/node_modules/x/y.js"]));
+        assert!(!reload("/r", &["/r/.git/HEAD", "/r/node_modules"]));
+    }
+
+    #[test]
+    fn reload_counts_real_changes() {
+        assert!(reload("/r", &["/r/index.html"]));
+        assert!(reload("/r", &["/r/.github/workflows/ci.yml"]));
+        assert!(reload("/r", &["/r/.git/HEAD", "/r/a.css"]));
+        assert!(reload("/r", &["/r/.gitignore"]));
+        assert!(reload("/r", &["/r/my_node_modules/a.js"]));
+    }
+
+    fn rewrite_ticks(watch_root: &Path, file_dir: &Path) -> bool {
+        let p = file_dir.join("proto/x.jsx");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, "one").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let manager = WatcherManager::new();
+        let canonical = dunce::canonicalize(watch_root).unwrap();
+        start_design_watch(&manager, "t".into(), &canonical, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::write(&p, "two, longer").unwrap();
+        rx.recv_timeout(Duration::from_secs(3)).is_ok()
+    }
+
+    #[test]
+    fn real_watcher_ticks_on_jsx_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(rewrite_ticks(dir.path(), dir.path()));
+    }
+
+    #[test]
+    fn real_watcher_ignores_gitignored_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git2::Repository::init(root).unwrap();
+        std::fs::write(root.join(".gitignore"), "dist/\n").unwrap();
+        std::fs::create_dir_all(root.join("dist")).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let manager = WatcherManager::new();
+        let canonical = dunce::canonicalize(root).unwrap();
+        start_design_watch(&manager, "t".into(), &canonical, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::write(root.join("dist/bundle.js"), "one").unwrap();
+        assert!(
+            rx.recv_timeout(Duration::from_millis(1500)).is_err(),
+            "ignored write must not tick"
+        );
+        std::fs::write(root.join("index.html"), "<p>hi</p>").unwrap();
+        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
+    }
+
+    fn moved_in_ticks(build: impl FnOnce(&Path) -> PathBuf, dest: &str) -> bool {
+        let src = tempfile::tempdir().unwrap();
+        let from = build(src.path());
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let manager = WatcherManager::new();
+        let canonical = dunce::canonicalize(dir.path()).unwrap();
+        start_design_watch(&manager, "t".into(), &canonical, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::rename(&from, canonical.join(dest)).unwrap();
+        rx.recv_timeout(Duration::from_secs(3)).is_ok()
+    }
+
+    #[test]
+    fn real_watcher_ticks_when_a_folder_is_moved_in() {
+        assert!(moved_in_ticks(
+            |s| {
+                std::fs::create_dir_all(s.join("moved")).unwrap();
+                std::fs::write(s.join("moved/a.html"), "<p>x</p>").unwrap();
+                s.join("moved")
+            },
+            "moved"
+        ));
+    }
+
+    #[test]
+    fn real_watcher_ticks_when_an_old_html_is_moved_in() {
+        assert!(moved_in_ticks(
+            |s| {
+                let p = s.join("old.html");
+                let f = std::fs::File::create(&p).unwrap();
+                f.set_modified(SystemTime::now() - Duration::from_secs(3600))
+                    .unwrap();
+                p
+            },
+            "old.html"
+        ));
+    }
+
+    #[test]
+    fn real_watcher_ticks_with_mixed_separator_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = dir.path().to_string_lossy().into_owned();
+        let mixed = PathBuf::from(if cfg!(windows) {
+            s.replacen('\\', "/", 1)
+        } else {
+            format!("{s}/./")
+        });
+        assert!(rewrite_ticks(&mixed, dir.path()));
+    }
+
+    #[test]
+    fn reload_handles_windows_paths() {
+        if cfg!(windows) {
+            assert!(!reload(r"C:\r", &[r"C:\r\.git\index"]));
+            assert!(!reload(r"C:\r", &[r"C:\r\a\node_modules\b\c.js"]));
+            assert!(reload(r"C:\r", &[r"C:\r\.github\x.yml"]));
+            assert!(reload(r"C:\r", &[r"C:\r\page.html"]));
+        }
+    }
+}

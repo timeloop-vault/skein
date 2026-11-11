@@ -299,7 +299,7 @@ pub fn validate_anchor(a: ElementAnchor, file_path: &str) -> Result<ElementAncho
 /// and served B before submit, so the line number is read against B. A
 /// wrong capture only ever mirrors to the text it holds, never to a
 /// guessed line.
-pub(super) fn capture_source_line(
+pub fn capture_source_line(
     root: &Path,
     source: &ElementSource,
     served: &HashMap<String, String>,
@@ -345,31 +345,10 @@ pub fn validate_seen(s: &SeenInput) -> Result<Vec<String>, String> {
 
 // ── the content stamp ─────────────────────────────────────────────
 
-/// FNV-1a, 64-bit. A change detector, not a security boundary; the same
-/// family `skein-review` hashes content with.
-struct Fnv(u64);
-
-impl Fnv {
-    fn new() -> Self {
-        Self(0xcbf2_9ce4_8422_2325)
-    }
-
-    fn update(&mut self, bytes: &[u8]) {
-        for b in bytes {
-            self.0 ^= u64::from(*b);
-            self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
-        }
-    }
-}
-
-/// The digest of a file's raw bytes. The preview server records this
-/// for what it serves and the freshness check recomputes it from disk,
-/// so the two must stay the same form.
-pub fn digest_bytes(bytes: &[u8]) -> String {
-    let mut h = Fnv::new();
-    h.update(bytes);
-    format!("{:016x}", h.0)
-}
+// `Fnv` and `digest_bytes` live with the preview server in skein-daemon
+// (#581): the server records the digest and this check recomputes it.
+use crate::design::Fnv;
+pub use crate::design::digest_bytes;
 
 /// One file's digest, or `missing`. Streamed so a large asset is never
 /// held in memory, and never read at all past what the preview would
@@ -475,7 +454,7 @@ pub fn element_dto(
 }
 
 /// Every anchor row in the room, keyed by thread.
-pub(super) fn element_rows_by_thread(
+pub fn element_rows_by_thread(
     db: &Database,
     room_id: &str,
 ) -> Result<HashMap<String, ReviewElementAnchorRow>, String> {
@@ -492,7 +471,7 @@ pub(super) fn element_rows_by_thread(
 ///
 /// Applied after the fact, like [`apply_addressed`], because it reads
 /// the disk and nothing about line placement wants that.
-pub(super) fn apply_element(
+pub fn apply_element(
     threads: &mut [ThreadDto],
     rows: &HashMap<String, ReviewElementAnchorRow>,
     cwd: Option<&str>,
@@ -515,7 +494,7 @@ pub(super) fn apply_element(
 /// Every element thread on `entry`, resolved included, with comments
 /// and the addressed/element blocks — the design pane's fetch. Needs no
 /// git: nothing here touches a repo.
-pub(crate) fn element_threads_impl(
+pub fn element_threads_impl(
     db: &Database,
     room_id: &str,
     root: &Path,
@@ -557,7 +536,7 @@ pub(crate) fn element_threads_impl(
 /// Returns whether the placement materially changed: no previous report,
 /// or a different state, selector, rect or stamp. `seen_ms` alone does
 /// not count, so an identical re-report is quiet.
-pub(crate) fn seen_impl(
+pub fn seen_impl(
     db: &Database,
     room_id: &str,
     root: &Path,

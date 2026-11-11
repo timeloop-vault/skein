@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use super::commands::{list_html_entries, should_reload};
+use super::entries::{list_html_entries, should_reload};
 
 /// Most files `seen` remembers before it is reset.
 pub(super) const MAX_SEEN: usize = 4096;
