@@ -83,9 +83,21 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn smoke_samples_in_range() {
+        // Poll up to a generous deadline rather than sleeping a fixed time:
+        // under the pre-commit hook from a below-normal harness shell (#662)
+        // the sampler thread and PDH setup can be starved for seconds (#719).
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
         let s = Sampler::start(Duration::from_millis(500));
-        std::thread::sleep(Duration::from_millis(2500));
-        let l = s.latest().expect("a sample");
+        let l = loop {
+            if let Some(l) = s.latest() {
+                break l;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no sample within 30 s"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        };
         assert!((0.0..=100.0).contains(&l.cpu_pct));
         assert!((0.0..=100.0).contains(&l.disk_busy_pct));
         assert!(l.disk_queue >= 0.0);
