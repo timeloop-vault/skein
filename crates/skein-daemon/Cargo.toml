@@ -18,10 +18,19 @@ parking_lot = "0.12"
 tracing = "0.1"
 dunce = "1.0.5"
 notify-debouncer-mini = "0.7"
-tokio = { version = "1", features = ["rt", "fs", "net"] }
+tokio = { version = "1", features = ["rt", "fs", "net", "time", "sync", "macros"] }
+futures-util = { version = "0.3", default-features = false }
 # The design preview server (#433, moved here by #581).
 axum = "0.8"
 uuid = { version = "1", features = ["v4"] }
+# Reqwest 0.13 + rustls 0.23 need a crypto provider installed explicitly at
+# startup (see `tls::install_rustls_provider`); ring is already in the lockfile.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+portable-pty = "0.9"
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+listeners = "0.6"
+skein-procprio = { path = "../skein-procprio" }
+reqwest = { version = "0.13", default-features = false, features = ["stream", "json"] }
 tempfile = { version = "3", optional = true }
 
 [features]
@@ -29,11 +38,11 @@ tempfile = { version = "3", optional = true }
 test-support = ["dep:tempfile"]
 
 [dev-dependencies]
+base64 = "0.22"
 tempfile = "3"
 git2.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 reqwest = { version = "0.13", default-features = false, features = ["stream"] }
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [lints.rust]
 unsafe_code = "forbid"

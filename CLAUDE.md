@@ -119,7 +119,17 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   re-exports each at its OLD path (`pub(crate) use
     │                                #   skein_daemon::db;` in lib.rs), so importers are
     │                                #   unchanged. `test-support` feature = db::test_support
-    │                                #   for the app's tests. See docs/skeind-crates.md
+    │                                #   for the app's tests. #581 part 2 added the engines:
+    │                                #   pty/ (PtyManager, procscan, priority, opencode),
+    │                                #   harness_config, agents, harness_action_event,
+    │                                #   harness_actions_{claude,opencode,hermes},
+    │                                #   harness_events_{claude,opencode}, harness_work_hermes,
+    │                                #   hermes_profile/, opencode_sidecar/, plus the small
+    │                                #   agent_endpoint, tls, build_info (version set once by
+    │                                #   the app), harness_log and spawn_env/{state,lookups}.
+    │                                #   New deps: portable-pty, sysinfo, listeners, reqwest,
+    │                                #   rustls, futures-util, skein-procprio, skein-review.
+    │                                #   See docs/skeind-crates.md
     ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
     │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
     │             anchor}.rs         #   (text/binary/toolarge/symlink/unreadable), diff
@@ -319,14 +329,16 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       ├── src/commands.rs +    # The shell's own commands by domain: pty, harness
     │       │   commands/            #   events, hermes work, harness log rows, rooms, fs,
     │       │                        #   git, spawn env, app
-    │       ├── src/pty.rs           # PtyManager (portable-pty); 4 threads per spawn (raw
+    │       ├── (pty/)               # Moved to crates/skein-daemon (#581), re-exported here at
+    │       │                        #   the old path (commands/pty.rs keeps the Tauri wrappers).
+    │       │                        #   PtyManager (portable-pty); 4 threads per spawn (raw
     │       │                        #   reader + coalescer + writer + waiter — the waiter is
     │       │                        #   load-bearing on Windows ConPTY; #171 split the reader
     │       │                        #   in two to batch output and gave stdin its own thread
     │       │                        #   so a wedged child can't block write/resize/kill)
-    │       ├── src/pty/procscan.rs  # Scans a PTY's own process descendants (#517): finds an
+    │       ├── pty/procscan.rs      # (in skein-daemon, #581) Scans a PTY's own process descendants (#517): finds an
     │       │                        #   opencode TUI restarted from the post-exit shell
-    │       ├── src/pty/priority.rs  # Applies `SpawnSettings.lower_harness_priority` right after
+    │       ├── pty/priority.rs      # (in skein-daemon, #581) Applies `SpawnSettings.lower_harness_priority` right after
     │       │                        #   spawn, because portable-pty exposes no creation flags;
     │       │                        #   anything the child starts before the call keeps normal
     │       │                        #   priority
@@ -353,7 +365,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   token for staleness. Paths are scoped to the rooms:
     │       │                        #   `ensure_room_scope` canonicalizes and requires a room
     │       │                        #   cwd as prefix (#174)
-    │       ├── src/harness_config.rs # What Skein injects at spawn so an agent CLI finds the
+    │       ├── src/harness_config.rs # Moved to crates/skein-daemon (#581), re-exported here at
+    │       │                        #   the old path. What Skein injects at spawn so an agent CLI finds the
     │       │                        #   #213 review API (#215): `--plugin-dir` for Claude Code,
     │       │                        #   OPENCODE_CONFIG for opencode, both session-scoped and
     │       │                        #   ADDITIVE — the user's own plugins and config are
@@ -364,12 +377,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │   claude-plugin/       #   resource (see tauri.conf.json `resources`):
     │       │   opencode/            #   .claude-plugin/plugin.json + .mcp.json + a lazily
     │       │                        #   loaded skein-review SKILL.md; opencode.json
-    │       ├── src/agents.rs        # DTO layer over the crate's agent discovery (#246), plus
+    │       ├── src/agents.rs        # Moved to crates/skein-daemon (#581), re-exported here at
+    │       │                        #   the old path. DTO layer over the crate's agent discovery (#246), plus
     │       │                        #   the two things it can't do: resolve the program the way
     │       │                        #   a real spawn does, and pass #215's --plugin-dir so the
     │       │                        #   list matches what the spawn will accept
-    │       ├── src/resume.rs        # The 6 #[tauri::command] wrappers (+ profile_db) over the
+    │       ├── src/resume.rs        # The 6 #[tauri::command] wrappers over the
     │       │                        #   session-existence probes, which live in skein-daemon
+    │       │                        #   (as does profile_db, since #581)
     │       ├── src/open_request.rs  # Opening a folder from outside Skein (#255): argv / link
     │       │                        #   parsing, the pending slot, and path → room resolution
     │       ├── src/cli_shim.rs      # The `skein` sh script Settings installs in ~/.local/bin
@@ -417,7 +432,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   NAME; auth = the per-room bearer token, which IS
     │       │                        #   the scope.
     │       │                        #   See docs/agent-api.md
-    │       ├── src/harness_events_claude.rs    # JSONL tail → ClaudeEvent (L2c-1). Since #276,
+    │       ├── src/harness_events_claude.rs    # Moved to crates/skein-daemon (#581), re-exported
+    │       │                                   #   here at the old path, as are the other
+    │       │                                   #   harness_events_*, harness_actions_*, harness_
+    │       │                                   #   action_event and harness_work_hermes (the
+    │       │                                   #   app keeps harness_actions_hermes.rs, 3 Tauri
+    │       │                                   #   commands). JSONL tail → ClaudeEvent (L2c-1). Since #276,
     │       │                                   #   tails every `subagents/agent-*.jsonl` sidecar
     │       │                                   #   alongside the main file on the same debouncer,
     │       │                                   #   re-deriving the live set from disk on every
@@ -520,7 +540,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   survive room/harness tab switches: all active rooms and all their
   harnesses stay mounted, hidden with `display:none`. PTYs die with
   the Skein process; on boot the hydrate path drops stale sessionIds
-  (`resume.rs` probes the tools' own stores), pre-allocates fresh
+  (`resume.rs`, in skein-daemon, probes the tools' own stores), pre-allocates fresh
   opencode ports, and rewrites each stored cmd to its resume form
   (`resumeCmd`: `claude --resume <sid>`,
   `opencode --port <p> --hostname 127.0.0.1 --session <sid>`).
@@ -551,7 +571,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   `agent-<id>.meta.json` sidecar giving `agentType`/`description`
   (`crates/skein-harness`: every field optional, unknown keys ignored on
   purpose — the shape belongs to Claude Code, not Skein).
-  `harness_events_claude.rs` tails every such file on the same debouncer
+  `harness_events_claude.rs` (in skein-daemon) tails every such file on the same debouncer
   as the main one and re-derives the live set from the transcripts on
   every attach, never from a `SubagentStart`/`SubagentStop` hook pair —
   #276 shipped without the hooks it originally specified, because a
@@ -843,7 +863,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   again, which is why that key is reserved only *while* being injected.
   **Opencode restarted from the post-exit shell (#517)**: that shell now
   gets `OPENCODE_CONFIG` too, and while the pane is in post-exit-shell
-  mode `pty/procscan.rs` scans that PTY's own process descendants (never
+  mode `pty/procscan.rs` (in skein-daemon) scans that PTY's own process descendants (never
   a pane sharing the cwd) on output ticks; `opencodeShellFollow.ts`
   acts on what it finds. `--session <id>` re-binds `Harness.sessionId`;
   `--port <p>`, once that process is confirmed listening, re-points the
@@ -1023,11 +1043,11 @@ the agent API from a shell harness); macOS isn't covered yet.
 - **Tests live with the code that owns them.**
   `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `crates/skein-review` has 45; `crates/skein-daemon` has ~443
+  `crates/skein-review` has 45; `crates/skein-daemon` has ~910
   in-module tests on Windows (db persistence, spawn-env merging, resume
-  probes, …); `crates/skein-proto` has the 4 harness_kind tests;
-  `app/src-tauri` has ~870 in-module unit tests that run on Windows
-  (harness JSONL/SSE parsers, pty, agent API, review); in both, more sit
+  probes, harness JSONL/SSE parsers, pty, …); `crates/skein-proto` has the 4 harness_kind tests;
+  `app/src-tauri` has ~406 in-module unit tests that run on Windows
+  (agent API, review surface, command wrappers); in both, more sit
   in source `cfg`-gated per OS (#202). All run in the hook
   and CI, but **`cargo test --workspace` does NOT reach the tauri
   crate** — it is excluded from the workspace (#168), so the hook runs

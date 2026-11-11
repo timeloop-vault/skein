@@ -6,7 +6,7 @@
 //! writes/resizes/kills are keyed by it. Output streams back over a
 //! per-spawn `tauri::ipc::Channel<PtyEvent>` (tagged data/exit).
 mod agent_api;
-mod agents;
+pub(crate) use skein_daemon::agents;
 mod build_info;
 mod cli_shim;
 mod commands;
@@ -15,15 +15,13 @@ mod design;
 pub(crate) use skein_daemon::event_sink;
 pub(crate) use skein_daemon::fs;
 pub(crate) use skein_daemon::git;
-mod harness_action_event;
-mod harness_actions_claude;
+pub(crate) use skein_daemon::harness_action_event;
 mod harness_actions_hermes;
-mod harness_actions_opencode;
-mod harness_config;
-mod harness_events_claude;
-mod harness_events_opencode;
+pub(crate) use skein_daemon::harness_config;
+pub(crate) use skein_daemon::harness_events_claude;
+pub(crate) use skein_daemon::harness_events_opencode;
 pub(crate) use skein_daemon::harness_kind;
-mod harness_work_hermes;
+pub(crate) use skein_daemon::harness_work_hermes;
 mod hermes_profile;
 mod open_request;
 mod opencode_sidecar;
@@ -33,14 +31,13 @@ mod perf_cmds;
 mod perf_load;
 mod perf_main_lag;
 mod perf_spans;
-mod pty;
+pub(crate) use skein_daemon::pty;
 mod resume;
 mod review;
 mod review_surface;
 pub(crate) use skein_daemon::room_paths;
 mod setup;
 mod shared_state;
-pub(crate) use skein_daemon::spawn_env;
 pub(crate) use skein_daemon::spawn_settings;
 pub(crate) use skein_daemon::stream_sink;
 mod tauri_event_sink;
@@ -62,6 +59,7 @@ pub(crate) use setup::install_rustls_provider;
 /// errors that would prevent the app from ever starting.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    skein_daemon::build_info::set_version(build_info::VERSION);
     install_rustls_provider();
     // The notifications plugin on macOS uses a native Swift bridge
     // (`default-features = false`) which requires the binary to live

@@ -7,9 +7,7 @@
 //! boundary, collapsing errors to `String` and treating "no home dir" /
 //! "no db" as empty.
 
-use std::path::PathBuf;
-
-pub(crate) use skein_daemon::resume::opencode_db_path;
+pub(crate) use skein_daemon::resume::profile_db;
 use skein_daemon::resume::{PendingDto, TranscriptStatDto};
 
 /// IDs of all non-archived opencode sessions whose `directory` matches
@@ -63,19 +61,6 @@ pub async fn hermes_session_exists(
         id,
     )
     .await
-}
-
-/// The `state.db` of the harness's own Hermes profile (`None`: the
-/// default). `None` back when there is no Hermes home or the profile
-/// name is invalid, which callers read as "can't tell".
-pub(crate) fn profile_db(
-    settings: &crate::spawn_settings::SpawnSettings,
-    profile: Option<&str>,
-) -> Option<PathBuf> {
-    skein_daemon::resume::profile_db_in(
-        crate::hermes_profile::effective_root(settings)?.as_path(),
-        profile,
-    )
 }
 
 /// #624: which Hermes session (if any) belongs to `harness_id`? See

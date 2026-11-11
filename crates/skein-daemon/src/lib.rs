@@ -1,16 +1,31 @@
 //! The Tauri-free server side of Skein (epic #575). `app/src-tauri` embeds
 //! it; this crate must never depend on `tauri`.
 
+pub mod agent_endpoint;
+pub mod agents;
+pub mod build_info;
 pub mod db;
 pub mod design;
 pub mod event_sink;
 pub mod fs;
 pub mod git;
+pub mod harness_action_event;
+pub mod harness_actions_claude;
+pub mod harness_actions_hermes;
+pub mod harness_actions_opencode;
+pub mod harness_config;
+pub mod harness_events_claude;
+pub mod harness_events_opencode;
+pub mod harness_log;
+pub mod hermes_profile;
 pub use skein_proto::harness_kind;
+pub mod harness_work_hermes;
 pub mod ignore_filter;
+pub mod opencode_sidecar;
 pub mod paths;
 pub mod perf_hist;
 pub mod perf_spans;
+pub mod pty;
 pub mod resume;
 pub mod review;
 pub mod review_surface;
@@ -19,6 +34,7 @@ pub mod rooms;
 pub mod spawn_env;
 pub mod spawn_settings;
 pub mod stream_sink;
+pub mod tls;
 pub mod tool_groups;
 pub mod watcher;
 pub mod worktree_key;

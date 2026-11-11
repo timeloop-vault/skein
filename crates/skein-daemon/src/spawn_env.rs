@@ -482,6 +482,8 @@ pub fn is_host_terminal_var(key: &str) -> bool {
 }
 
 pub mod login_env;
+pub mod lookups;
+pub mod state;
 
 #[cfg(test)]
 mod tests;

@@ -64,6 +64,12 @@ impl SpanAgg {
 /// One review-discovery watcher batch (`Discovery::discover`).
 pub static REVIEW_DISCOVERY_BATCH: SpanAgg = SpanAgg::new();
 
+/// `pty_write` body (#639): runs on the host UI thread.
+pub static PTY_WRITE: SpanAgg = SpanAgg::new();
+
+/// `on_event.send` of one PTY data chunk (#639); count = delivered chunks.
+pub static PTY_CHUNK_SEND: SpanAgg = SpanAgg::new();
+
 #[cfg(test)]
 mod tests {
     use super::*;
