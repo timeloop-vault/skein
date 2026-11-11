@@ -15,7 +15,7 @@ pub(crate) async fn hermes_actions_attach(
     hermes_profile: Option<String>,
     resumed: Option<bool>,
     manager: tauri::State<'_, HermesActionsManager>,
-    spawn_env: tauri::State<'_, crate::commands::spawn_env::SpawnEnvState>,
+    spawn_env: tauri::State<'_, std::sync::Arc<crate::commands::spawn_env::SpawnEnvState>>,
 ) -> Result<(), String> {
     let settings = spawn_env.snapshot();
     let state_db = crate::resume::profile_db(&settings, hermes_profile.as_deref())

@@ -11,7 +11,7 @@ use super::verbs::MailContext;
 use crate::build_info;
 
 fn assert_info(v: &Value) {
-    assert_eq!(v["version"], build_info::VERSION);
+    assert_eq!(v["version"], build_info::version());
     assert_eq!(v["profile"], "dev");
     assert_eq!(v["identifier"], "com.timeloop-vault.skein.dev");
     match build_info::commit() {

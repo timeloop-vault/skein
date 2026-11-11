@@ -3,40 +3,35 @@
 //! the Windows toast registration right after it, then state, servers,
 //! the window, and the macOS menu last.
 //!
-//! Construction order (#579), after logging and the toast registration:
+//! Construction order (#579, #582), after logging and the toast registration:
 //! 1. `Paths` (app data + resource dir, `tauri_paths.rs`)
 //! 2. spawn env, then the login-shell probe
 //! 3. updater proxy init (reads `paths.data_dir`)
-//! 4. harness config (from `paths.resource_dir`)
-//! 5. database, then the managers on it and the event sink
-//! 6. agent API server (`AgentApiState` needs the db; manages its endpoint)
-//! 7. design preview (`PreviewState` needs the db; manages its endpoint)
-//! 8. manage the db
-//! 9. window, 10. open request, 11. menu, 12. perf
+//! 4. `Daemon::build` over the Tauri side of the in-process transport:
+//!    harness config, database, the managers, then the agent API (#213) and
+//!    design preview (#433) listeners, each bound synchronously
+//! 5. manage every piece of the daemon and spawn its two listener tasks
+//!    (the db last)
+//! 6. window, 7. open request, 8. menu, 9. perf
 //!
-//! Steps 2, 4 and 5 are Tauri-free (`shared_state.rs`). `servers` still
-//! takes `app`, because `AgentApiState` holds an `AppHandle` (#580, #582).
+//! Steps 2 and 4 are Tauri-free (`skein-daemon`'s `daemon.rs`); `embed`
+//! only builds the Tauri client seams (#582) and hands the result to Tauri.
 //!
 //! Where things are:
 //! - `logging` — the daily-rotating file log plus stderr, and `LogGuard`
-//! - `state` — feeds `Paths` and the event sink to `shared_state` and
-//!   manages the result
-//! - `servers` — the agent API (#213) and design preview (#433) listeners
+//! - `embed` — builds the daemon and manages/spawns what it returns
 //! - `window` — product name and window chrome
 //! - `menu` — the macOS app menu and its `on_menu_event` handler
 
+mod embed;
 mod logging;
 mod menu;
-mod servers;
-mod state;
 mod window;
 
 pub(crate) use skein_daemon::tls::install_rustls_provider;
 
 pub(crate) use menu::on_menu_event;
 pub(crate) use window::{MAIN_LABEL, on_window_event, raise_main_window};
-
-use tauri::Manager;
 
 /// The body of `.setup(...)`.
 pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -56,14 +51,10 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
     // startup.
     crate::os_notify::init(app.handle());
 
-    let paths = state::spawn_env(app)?;
+    let paths = embed::spawn_env(app)?;
     // #614: the updater plugin's client hook reads this global.
     crate::updater_proxy::init(&paths.data_dir);
-    let db = state::open_database(app, &paths)?;
-    servers::agent_api(app, &db);
-    servers::design_preview(app, &db);
-
-    app.manage(db);
+    embed::daemon(app, &paths)?;
 
     let product_name = window::product_name(app);
     window::configure(app, &product_name)?;

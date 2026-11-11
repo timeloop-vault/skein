@@ -24,7 +24,7 @@ fn start_blocking(
     cwd: &str,
     env_profile: Option<&str>,
 ) -> Result<SidecarInfo, String> {
-    let spawn_env = app.state::<SpawnEnvState>();
+    let spawn_env = app.state::<Arc<SpawnEnvState>>();
     let db = app.state::<Arc<Database>>();
     let endpoint = app.state::<crate::agent_api::state::AgentApiEndpoint>();
     let harness_config = app.state::<crate::harness_config::HarnessConfig>();

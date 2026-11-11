@@ -215,7 +215,7 @@ fn initialize_result(params: &Value, groups: ToolGroups) -> Value {
         "serverInfo": {
             "name": SERVER_NAME,
             "title": "Skein agent API",
-            "version": crate::build_info::VERSION,
+            "version": crate::build_info::version(),
         },
         "instructions": instructions::instructions(groups),
     })

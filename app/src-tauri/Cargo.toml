@@ -57,9 +57,6 @@ reqwest = { version = "0.13", default-features = false, features = ["stream"] }
 # Already transitive; direct for parsing/redacting the updater proxy (#614).
 url = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
-# Already transitive via reqwest+tauri. Direct dep so we can name
-# StreamExt for the opencode SSE byte stream.
-futures-util = { version = "0.3", default-features = false }
 # Reqwest 0.13 + rustls 0.23 requires the crypto provider to be
 # explicitly installed at startup. Tauri's transitive feature flags
 # leave us with rustls but no default provider installed, so the
@@ -69,13 +66,6 @@ futures-util = { version = "0.3", default-features = false }
 # `install_rustls_provider()`. We pick ring over aws-lc-rs because
 # ring is already in the lockfile via other transitive deps.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-# The agent-facing review API + MCP endpoint (#213). Skein is a
-# long-running desktop app, so the server lives *inside* it and the
-# harnesses reach it over 127.0.0.1 — a stdio MCP server would be a
-# fresh process per harness with no route back to the running app.
-# axum rides the hyper 1 / http 1 / tower stack reqwest already locks,
-# so the real cost is the router, not the transport.
-axum = "0.8"
 skein-daemon = { path = "../../crates/skein-daemon" }
 skein-git = { path = "../../crates/skein-git" }
 skein-harness = { path = "../../crates/skein-harness" }
@@ -86,8 +76,6 @@ skein-webshot = { path = "../../crates/skein-webshot" }
 # Lowers a harness child's CPU priority (#596: builds starving the UI); the
 # unsafe Win32 call lives there, same policy as skein-winnotify/webshot.
 skein-procprio = { path = "../../crates/skein-procprio" }
-# PNG bytes into the MCP image block / JSON mirror; already locked.
-base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"

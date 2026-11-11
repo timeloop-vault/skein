@@ -1,9 +1,11 @@
 //! The Tauri-free server side of Skein (epic #575). `app/src-tauri` embeds
 //! it; this crate must never depend on `tauri`.
 
+pub mod agent_api;
 pub mod agent_endpoint;
 pub mod agents;
 pub mod build_info;
+pub mod daemon;
 pub mod db;
 pub mod design;
 pub mod event_sink;
@@ -36,5 +38,6 @@ pub mod spawn_settings;
 pub mod stream_sink;
 pub mod tls;
 pub mod tool_groups;
+pub mod transport;
 pub mod watcher;
 pub mod worktree_key;

@@ -19,7 +19,7 @@ pub(super) async fn serve_fixture(db: Arc<Database>) -> String {
     // reqwest 0.13 builds a TLS context eagerly even for plain http,
     // and panics without a rustls provider — the same call `run()`
     // makes for the opencode SSE client.
-    crate::install_rustls_provider();
+    crate::tls::install_rustls_provider();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let state = Arc::new(AgentApiState::for_test(db));

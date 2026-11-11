@@ -6,8 +6,9 @@ cannot ask Tauri where the app data or resource directory is. It reads a
 a daemon will build its own. Behaviour is unchanged.
 
 Figure: where each server-side path comes from and who uses it. Renders
-`paths.rs`, `tauri_paths.rs`, `shared_state.rs` and `setup/state.rs` in
-`app/src-tauri/src`; non-normative, the code is authoritative.
+`paths.rs` and `daemon.rs` in `crates/skein-daemon/src`, and
+`tauri_paths.rs` and `setup/embed.rs` in `app/src-tauri/src`;
+non-normative, the code is authoritative.
 
 ```mermaid
 flowchart LR
@@ -24,9 +25,10 @@ flowchart LR
 
 `Paths` carries `data_dir` (fatal if unresolvable) and
 `resource_dir: Result<PathBuf, String>` (never fatal: the error text
-becomes `HarnessConfig::unavailable`). `shared_state.rs` builds the
-state from a `Paths` and an event sink with no Tauri types, so a test
-can do it in a temp dir. The login-shell probe is a `Probe` parameter,
+becomes `HarnessConfig::unavailable`). `Daemon::build` (`daemon.rs` in
+skein-daemon, #582; it replaced the app's `shared_state.rs` and
+`setup/state.rs`) builds the state from a `Paths` and an in-process
+transport with no Tauri types, so a test can do it in a temp dir. The login-shell probe is a `Probe` parameter,
 so tests pass `Probe::Skip`. The log dir is deliberately not in `Paths`:
 logging is a client concern.
 
@@ -38,11 +40,13 @@ logging is a client concern.
 3. Updater proxy init (client side, reads `paths.data_dir`).
 4. Harness config, from `paths.resource_dir`.
 5. Database, then the managers on it and the event sink.
-6. Agent API server (`AgentApiState` needs the database; it still holds an
-   `AppHandle`, which is #580/#582).
+6. Agent API server (`AgentApiState` needs the database; it holds no
+   `AppHandle` since #582).
 7. Design preview (`PreviewState` needs the database).
 8. Manage the database.
 9. Window, open request, menu, perf.
 
-Steps 2, 4 and 5 live in `shared_state.rs`; the order is also written in
-the module doc of `setup.rs`.
+Step 2 is `daemon::spawn_env`; steps 4 to 7 are `Daemon::build`, which
+returns the two server futures instead of spawning them. `setup/embed.rs`
+calls both, manages each piece (the database last) and spawns the
+listeners. The order is also written in the module doc of `setup.rs`.

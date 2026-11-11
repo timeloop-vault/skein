@@ -2,6 +2,8 @@
 //! environment" commands, and the small platform lookups (default
 //! shell, home, cwd) a harness spawn starts from.
 
+use std::sync::Arc;
+
 use tauri::Manager;
 
 use crate::spawn_settings::SpawnSettings;
@@ -17,7 +19,7 @@ pub(crate) use skein_daemon::spawn_env::state::{
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub(crate) fn spawn_settings_load(
-    spawn_env: tauri::State<'_, SpawnEnvState>,
+    spawn_env: tauri::State<'_, Arc<SpawnEnvState>>,
 ) -> SpawnSettingsPayload {
     spawn_settings_payload(&spawn_env)
 }
@@ -35,17 +37,16 @@ pub(crate) fn spawn_settings_load(
 /// when a shell harness is created and persisted from there — so
 /// existing harnesses are never rewritten behind the user's back.
 ///
-/// Async: writes the settings file to disk (#171). `SpawnEnvState`
-/// isn't `Arc`-wrapped, so the blocking closure re-resolves it off an
-/// owned `AppHandle` rather than trying to move the `State` borrow
-/// into a `'static` closure.
+/// Async: writes the settings file to disk (#171). A `State` borrow
+/// can't move into a `'static` closure, so the blocking closure
+/// re-resolves the managed `Arc` off an owned `AppHandle`.
 #[tauri::command]
 pub(crate) async fn spawn_settings_save(
     settings: SpawnSettings,
     app: tauri::AppHandle,
 ) -> Result<SpawnSettingsPayload, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let spawn_env = app.state::<SpawnEnvState>();
+        let spawn_env = app.state::<Arc<SpawnEnvState>>();
         spawn_settings_save_impl(&spawn_env, settings)
     })
     .await
@@ -59,7 +60,7 @@ pub(crate) async fn spawn_settings_save(
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub(crate) fn spawn_env_preview(
-    spawn_env: tauri::State<'_, SpawnEnvState>,
+    spawn_env: tauri::State<'_, Arc<SpawnEnvState>>,
 ) -> crate::pty::EnvPreview {
     crate::pty::env_preview(&spawn_env.snapshot())
 }
@@ -87,7 +88,7 @@ pub(crate) fn spawn_env_preview(
 pub(crate) async fn list_harness_agents(
     kind: crate::harness_kind::HarnessKind,
     cwd: String,
-    spawn_env: tauri::State<'_, SpawnEnvState>,
+    spawn_env: tauri::State<'_, Arc<SpawnEnvState>>,
     harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
 ) -> Result<crate::agents::AgentListDto, String> {
     let settings = spawn_env.snapshot();
@@ -109,7 +110,7 @@ pub(crate) async fn list_harness_agents(
 /// compare, which is not an error worth a toast.
 #[tauri::command]
 pub(crate) async fn claude_cli_version(
-    spawn_env: tauri::State<'_, SpawnEnvState>,
+    spawn_env: tauri::State<'_, Arc<SpawnEnvState>>,
 ) -> Result<Option<String>, String> {
     let settings = spawn_env.snapshot();
     tauri::async_runtime::spawn_blocking(move || claude_cli_version_impl(&settings))
@@ -122,7 +123,7 @@ pub(crate) async fn claude_cli_version(
 /// binary is huge. `Ok(None)` = unknown; the caller treats it as v1.
 #[tauri::command]
 pub(crate) async fn opencode_cli_version(
-    spawn_env: tauri::State<'_, SpawnEnvState>,
+    spawn_env: tauri::State<'_, Arc<SpawnEnvState>>,
 ) -> Result<Option<OpencodeVersionDto>, String> {
     let settings = spawn_env.snapshot();
     tauri::async_runtime::spawn_blocking(move || opencode_cli_version_impl(&settings))
@@ -138,14 +139,14 @@ pub(crate) async fn opencode_cli_version(
 #[tauri::command]
 pub(crate) fn harness_config_status(
     harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
-    spawn_env: tauri::State<'_, SpawnEnvState>,
+    spawn_env: tauri::State<'_, Arc<SpawnEnvState>>,
 ) -> crate::harness_config::HarnessConfigStatus {
     harness_config.status(crate::hermes_profile::effective_root(&spawn_env.snapshot()))
 }
 
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-pub(crate) fn spawn_env_reprobe(spawn_env: tauri::State<'_, SpawnEnvState>) {
+pub(crate) fn spawn_env_reprobe(spawn_env: tauri::State<'_, Arc<SpawnEnvState>>) {
     crate::pty::reprobe(spawn_env.data_dir.clone(), spawn_env.snapshot());
 }
 
@@ -154,7 +155,7 @@ pub(crate) fn spawn_env_reprobe(spawn_env: tauri::State<'_, SpawnEnvState>) {
 /// specific binary in mind. See `skein_daemon::spawn_env::lookups`.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
-pub(crate) fn default_shell(spawn_env: tauri::State<'_, SpawnEnvState>) -> Vec<String> {
+pub(crate) fn default_shell(spawn_env: tauri::State<'_, Arc<SpawnEnvState>>) -> Vec<String> {
     default_shell_impl(&spawn_env)
 }
 

@@ -53,7 +53,7 @@ pub async fn claude_session_exists(id: String) -> Result<bool, String> {
 pub async fn hermes_session_exists(
     id: String,
     profile: Option<String>,
-    spawn_env: tauri::State<'_, crate::commands::spawn_env::SpawnEnvState>,
+    spawn_env: tauri::State<'_, std::sync::Arc<crate::commands::spawn_env::SpawnEnvState>>,
 ) -> Result<bool, String> {
     let settings = spawn_env.snapshot();
     skein_daemon::resume::hermes_session_exists(
@@ -75,7 +75,7 @@ pub async fn hermes_claim_session(
     claimed: Vec<String>,
     local_minus_utc_minutes: i32,
     profile: Option<String>,
-    spawn_env: tauri::State<'_, crate::commands::spawn_env::SpawnEnvState>,
+    spawn_env: tauri::State<'_, std::sync::Arc<crate::commands::spawn_env::SpawnEnvState>>,
 ) -> Result<Option<String>, String> {
     let settings = spawn_env.snapshot();
     skein_daemon::resume::hermes_claim_session(

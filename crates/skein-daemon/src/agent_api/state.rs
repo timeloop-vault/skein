@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use super::client::{ClientRequests, WebviewCapture};
 use crate::db::Database;
 use crate::spawn_settings::SpawnSettings;
 
-pub use skein_daemon::review::{REVIEW_CHANGED_EVENT, ReviewChanged};
+pub use crate::review::{REVIEW_CHANGED_EVENT, ReviewChanged};
 
 /// The event a harness tab listens for to show "permission required" as
 /// its own activity phase (#86), distinct from end-of-turn `waiting`.
@@ -105,23 +106,26 @@ impl Drop for PendingRequestGuard<'_> {
 
 /// Shared by every route.
 ///
-/// `app` and `events` are optional for the same reason they are in the
-/// harness-event managers: a unit test has a `Database` but no Tauri
-/// runtime, and building a real `AppHandle` needs a running app.
+/// `events`, `spawn_env`, `client` and `capture` are optional for the same
+/// reason they are in the harness-event managers: a unit test has a
+/// `Database` but no running app to emit through, read settings from or
+/// capture a window of.
 pub struct AgentApiState {
     pub db: Arc<Database>,
-    /// No longer used for events (use [`Self::events`]). Only two
-    /// non-emit reads remain: `spawn_settings()`
-    /// (`Manager::try_state::<SpawnEnvState>`) and
-    /// `verbs/design_screenshot.rs` (`get_webview_window`). To be removed
-    /// when the agent API moves (#580/#582).
-    pub app: Option<tauri::AppHandle>,
     /// The event sink for every server-to-UI emit from the agent API
     /// (#577). `None` in a unit test.
     pub events: Option<crate::event_sink::SharedEventSink>,
     /// The Tauri bundle identifier, captured at construction so the
     /// `skein_info` verb (#535) needs no live `AppHandle`.
     pub identifier: String,
+    /// The live spawn settings (#327, #534). `None` in a unit test.
+    pub spawn_env: Option<Arc<crate::spawn_env::state::SpawnEnvState>>,
+    /// Delivers a request only the webview can answer (see
+    /// [`Self::request_frontend`]). `None` in a unit test.
+    pub client: Option<Arc<dyn ClientRequests>>,
+    /// Native capture of the main webview (`get_design_screenshot`).
+    /// `None` in a unit test.
+    pub capture: Option<Arc<dyn WebviewCapture>>,
     /// Requests sent to the webview and not yet answered, keyed by a
     /// fresh id per request. Every insertion is matched by exactly one
     /// removal — on completion, on timeout, or immediately if the
@@ -230,15 +234,25 @@ pub struct HarnessSessionEnd {
     pub reason: Option<String>,
 }
 
+/// What [`AgentApiState::new`] is built from.
+pub struct AgentApiStateArgs {
+    pub db: Arc<Database>,
+    pub identifier: String,
+    pub events: crate::event_sink::SharedEventSink,
+    pub spawn_env: Arc<crate::spawn_env::state::SpawnEnvState>,
+    pub client: Arc<dyn ClientRequests>,
+    pub capture: Arc<dyn WebviewCapture>,
+}
+
 impl AgentApiState {
-    pub fn new(db: Arc<Database>, app: tauri::AppHandle) -> Self {
+    pub fn new(args: AgentApiStateArgs) -> Self {
         Self {
-            db,
-            identifier: app.config().identifier.clone(),
-            events: Some(std::sync::Arc::new(
-                crate::tauri_event_sink::TauriEventSink::new(app.clone()),
-            )),
-            app: Some(app),
+            db: args.db,
+            identifier: args.identifier,
+            events: Some(args.events),
+            spawn_env: Some(args.spawn_env),
+            client: Some(args.client),
+            capture: Some(args.capture),
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
             verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),
@@ -251,15 +265,17 @@ impl AgentApiState {
         }
     }
 
-    /// Test constructor — no `AppHandle`, so writes persist and simply
+    /// Test constructor — no app, so writes persist and simply
     /// notify nobody.
     #[cfg(test)]
     pub fn for_test(db: Arc<Database>) -> Self {
         Self {
             db,
             identifier: "com.timeloop-vault.skein.dev".to_owned(),
-            app: None,
             events: None,
+            spawn_env: None,
+            client: None,
+            capture: None,
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
             verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),
@@ -356,14 +372,13 @@ impl AgentApiState {
     /// The live spawn settings, for the mailbox's [`MailPolicy`]
     /// (#327) — read fresh on every request rather than cached, since
     /// the Settings pane can flip the injection or messaging toggles at
-    /// any time. `None` in a unit test (`for_test` has no `AppHandle`,
-    /// so no managed [`crate::SpawnEnvState`] to read) falls back to
+    /// any time. `None` in a unit test (`for_test` has no
+    /// [`crate::spawn_env::state::SpawnEnvState`] to read) falls back to
     /// `SpawnSettings::default()`, whose defaults are exactly as
     /// permissive as `MailPolicy`'s own test default.
     pub fn spawn_settings(&self) -> SpawnSettings {
-        self.app
+        self.spawn_env
             .as_ref()
-            .and_then(tauri::Manager::try_state::<crate::SpawnEnvState>)
             .map(|s| s.snapshot())
             .unwrap_or_default()
     }
@@ -510,19 +525,15 @@ impl AgentApiState {
         if let Some(f) = self.test_frontend.lock().as_ref() {
             return f(kind, &args);
         }
-        let Some(events) = self.events.as_ref() else {
+        let Some(client) = self.client.as_ref() else {
             return Err("no webview is listening for agent requests".to_owned());
         };
         let (id, rx) = self.register();
-        if let Err(e) = crate::event_sink::emit(
-            events.as_ref(),
-            AGENT_REQUEST_EVENT,
-            &AgentRequest {
-                id: id.clone(),
-                kind: kind.to_owned(),
-                args,
-            },
-        ) {
+        if let Err(e) = client.send(&AgentRequest {
+            id: id.clone(),
+            kind: kind.to_owned(),
+            args,
+        }) {
             self.pending_requests.lock().remove(&id);
             return Err(format!("no webview is listening for agent requests: {e}"));
         }
@@ -597,4 +608,4 @@ impl AgentApiState {
     }
 }
 
-pub use skein_daemon::agent_endpoint::{AgentApiEndpoint, AgentApiStatus};
+pub use crate::agent_endpoint::{AgentApiEndpoint, AgentApiStatus};

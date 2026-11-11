@@ -12,7 +12,7 @@ use skein_daemon::hermes_profile::hooks::HookInputs;
 /// Hermes profiles and the state of Skein's MCP entry in each.
 #[tauri::command]
 pub async fn hermes_list_profiles(
-    spawn_env: tauri::State<'_, crate::commands::spawn_env::SpawnEnvState>,
+    spawn_env: tauri::State<'_, std::sync::Arc<crate::commands::spawn_env::SpawnEnvState>>,
     harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
 ) -> Result<ProfileListDto, String> {
     let settings = spawn_env.snapshot();
@@ -34,7 +34,7 @@ pub async fn hermes_list_profiles(
 #[tauri::command]
 pub async fn hermes_profile_entry_preview(
     profile: String,
-    spawn_env: tauri::State<'_, crate::commands::spawn_env::SpawnEnvState>,
+    spawn_env: tauri::State<'_, std::sync::Arc<crate::commands::spawn_env::SpawnEnvState>>,
     harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
 ) -> Result<EntryPreviewDto, String> {
     let settings = spawn_env.snapshot();
@@ -50,7 +50,7 @@ pub async fn hermes_profile_entry_preview(
 #[tauri::command]
 pub async fn hermes_profile_inject(
     profile: String,
-    spawn_env: tauri::State<'_, crate::commands::spawn_env::SpawnEnvState>,
+    spawn_env: tauri::State<'_, std::sync::Arc<crate::commands::spawn_env::SpawnEnvState>>,
     harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
 ) -> Result<&'static str, String> {
     let settings = spawn_env.snapshot();

@@ -18,7 +18,7 @@ const HOOKS_C: &str =
     include_str!("../../../../crates/skein-harness/src/hermes/fixtures/hooks-C.jsonl");
 
 async fn serve(db: Arc<Database>) -> (String, Arc<AgentApiState>) {
-    crate::install_rustls_provider();
+    crate::tls::install_rustls_provider();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let state = Arc::new(AgentApiState::for_test(db));

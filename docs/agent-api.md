@@ -1521,6 +1521,10 @@ nudged; it can still call `read_messages` itself.
 
 ## Where the code is
 
+Since #582 the `agent_api/` and `review_surface/` files below live in
+`crates/skein-daemon/src/`; the app keeps only the Tauri command wrappers
+(`app/src-tauri/src/agent_api/commands.rs`).
+
 | file | what it owns |
 | :-- | :-- |
 | `agent_api/state.rs` | shared state, the `skein://review-changed`, `skein://harness-permission`, `skein://harness-session-start` and `skein://mail-changed` (#327) events, `HarnessIdentity` |

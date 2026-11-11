@@ -8,7 +8,5 @@
 // attribute generates alongside the function, which a `pub use`
 // re-export does not carry.
 pub mod commands;
-#[cfg(test)]
-mod element_agent_tests;
 
 pub use skein_daemon::review_surface::*;

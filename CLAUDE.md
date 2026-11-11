@@ -129,6 +129,15 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   the app), harness_log and spawn_env/{state,lookups}.
     │                                #   New deps: portable-pty, sysinfo, listeners, reqwest,
     │                                #   rustls, futures-util, skein-procprio, skein-review.
+    │                                #   #582 added agent_api/ (the axum server, verbs, MCP,
+    │                                #   all its tests) plus agent_api/client.rs, the seams
+    │                                #   for what it asked the Tauri app for (ClientRequests,
+    │                                #   WebviewCapture; spawn settings are a shared
+    │                                #   Arc<SpawnEnvState>), and daemon.rs (`Daemon::build`
+    │                                #   constructs every piece and returns the two server
+    │                                #   futures) and transport.rs (`InProcessTransport`:
+    │                                #   events + client requests + capture). No `tauri`
+    │                                #   anywhere in it.
     │                                #   See docs/skeind-crates.md
     ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
     │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
@@ -155,8 +164,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   because the design pane's preview is a cross-origin
     │                                #   iframe whose pixels script can't read. Renders even when
     │                                #   the window is covered or minimized, but a CSS-hidden
-    │                                #   element yields a blank image. Called only by the agent
-    │                                #   API's `get_design_screenshot` (agent_api/verbs/
+    │                                #   element yields a blank image. Called only by the app's
+    │                                #   tauri_client.rs (`TauriWebviewCapture`), behind the
+    │                                #   daemon's `get_design_screenshot` (skein-daemon
+    │                                #   agent_api/verbs/
     │                                #   design_screenshot.rs). Allowed `unsafe` on the same
     │                                #   terms as skein-winnotify, below
     ├── crates/skein-winnotify/      # Windows-only OS toasts + COM click activation (#155):
@@ -325,7 +336,11 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   + the one generate_handler! list, grouped by module
     │       ├── src/setup.rs + setup/ # setup() in order: logging (daily-rotating file in
     │       │                        #   app_log_dir() + stderr, RUST_LOG overrides), managed
-    │       │                        #   state, agent-API/design servers, window, macOS menu
+    │       │                        #   state, agent-API/design servers, window, macOS menu.
+    │       │                        #   Since #582 the state and servers are setup/embed.rs:
+    │       │                        #   it builds the InProcessTransport from the app handle,
+    │       │                        #   calls skein-daemon's `Daemon::build`, `app.manage`s
+    │       │                        #   each piece and spawns the two listeners
     │       ├── src/commands.rs +    # The shell's own commands by domain: pty, harness
     │       │   commands/            #   events, hermes work, harness log rows, rooms, fs,
     │       │                        #   git, spawn env, app
@@ -391,14 +406,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       ├── src/review.rs        # Moved to crates/skein-daemon (#581) with review/discovery.rs;
     │       │                        #   the app keeps review.rs (re-export) + review/commands.rs
     │       │                        #   (4 Tauri wrappers). REVIEW_CHANGED_EVENT lives in
-    │       │                        #   skein_daemon::review, re-exported by agent_api/state.rs.
+    │       │                        #   skein_daemon::review, re-exported by the daemon's agent_api/state.rs.
     │       │                        #   Baseline capture + the baseline commands (#211).
     │       │                        #   Captures from the HEAD blob the moment a LIVE patch
     │       │                        #   row lands — never on backfill, where HEAD has moved
     │       ├── src/review_surface.rs # Module root (glob re-export). Everything except
     │       │   + review_surface/    #   commands.rs moved to crates/skein-daemon (#581); the app
-    │       │                        #   keeps commands.rs (15 Tauri commands) and
-    │       │                        #   element_agent_tests.rs (needs agent_api).
+    │       │                        #   keeps commands.rs (15 Tauri commands);
+    │       │                        #   element_agent_tests.rs moved too (#582).
     │       │                        #   The review the user reads (#212): scope (branch /
     │       │   {dto,git,anchoring,  #   commit / pending), per-file diff, and the nine
     │       │    query,write,        #   thread+comment commands. Split by the question a
@@ -411,10 +426,17 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │   + signoff.rs         #   signoff = has the reviewer approved (#214), keyed to
     │       │                        #   the head_sha it approved — a later commit makes it
     │       │                        #   STALE rather than silently covering unread work
-    │       ├── src/agent_api/       # The agent-facing review API (#213, epic #52 D8):
-    │       │   {state,auth,verbs/,  #   an axum server on 127.0.0.1:<ephemeral> inside the
-    │       │    mcp,http/,commands, #   Tauri process, exposed as MCP over HTTP so Claude
-    │       │    *_tests}.rs         #   Code and opencode both consume it. verbs = the nine
+    │       ├── src/agent_api.rs +   # Moved to crates/skein-daemon/src/agent_api/ (#582); the
+    │       │   agent_api/commands.rs #  app keeps a re-export and commands.rs (4 Tauri
+    │       │                        #   wrappers; the mail logic is the daemon's
+    │       │                        #   verbs/mail.rs `unread_mail_impl` /
+    │       │                        #   `last_status_by_room_impl`). Layout below is the
+    │       │                        #   daemon's: {state,auth,verbs/,mcp,http/,client,
+    │       │                        #   *_tests}.rs
+    │       │                        #   The agent-facing review API (#213, epic #52 D8):
+    │       │                        #   an axum server on 127.0.0.1:<ephemeral> inside the
+    │       │                        #   Tauri process, exposed as MCP over HTTP so Claude
+    │       │                        #   Code and opencode both consume it. verbs = the nine
     │       │                        #   agent verbs (list/get_comment/get_diff/reply/
     │       │                        #   mark_addressed/review_status, #327's
     │       │                        #   send_message/read_messages mailbox, and #330's
@@ -449,11 +471,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       ├── src/harness_events_opencode.rs  # SSE client → OpencodeEvent (L2c-2)
     │       ├── src/harness_actions_claude.rs   # JSONL → harness_actions rows (#80)
     │       ├── src/harness_actions_opencode.rs # SSE/opencode.db → harness_actions rows (#80)
-    │       ├── src/tauri_event_sink.rs, tauri_stream_sink.rs, tauri_paths.rs, shared_state.rs
+    │       ├── src/tauri_event_sink.rs, tauri_stream_sink.rs, tauri_paths.rs, tauri_client.rs
     │       │                                   # The Tauri impls of the skein-daemon seams (#577,
     │       │                                   #   #578, #579): EventSink = broadcast events,
     │       │                                   #   StreamSink<T> = a stream one call opens, Paths =
-    │       │                                   #   where state lives. See docs/skeind-event-sink.md,
+    │       │                                   #   where state lives. tauri_client.rs (#582) adds
+    │       │                                   #   TauriClientRequests + TauriWebviewCapture, the
+    │       │                                   #   daemon's ClientRequests / WebviewCapture seams.
+    │       │                                   #   See docs/skeind-event-sink.md,
     │       │                                   #   skeind-stream-sink.md and skeind-paths.md
     │       └── src/harness_action_event.rs     # "harness-action" live broadcast (live rows only)
     ├── docs/
@@ -732,7 +757,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   not that the harness is doing anything in particular.
   That "own gate" claim needed enforcing, and review caught that it
   wasn't: the hook payload carries `agent_id` when it fires inside a
-  subagent, Skein reads it (`agent_api/http/hooks.rs`), ships it on
+  subagent, Skein reads it (`agent_api/http/hooks.rs` in skein-daemon), ships it on
   `skein://harness-permission` as `agentId`, and stores it as
   `permissionAgentId`; `clearPermission(id, source, agentId)` now clears
   only when the stored `permissionAgentId` is `null` **or** equals the
@@ -823,7 +848,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   that opens a whole new room and spawns a real harness in it, in the
   background (`activate: false`, so it never takes over the user's
   screen) — it round-trips twice through #328's Rust→frontend request
-  mechanism (`AgentApiState::request_frontend`, a webview-must-answer
+  mechanism (`AgentApiState::request_frontend` in skein-daemon, which goes through
+  the `ClientRequests` seam since #582; a webview-must-answer
   counterpart to the one-way `notify_*` events elsewhere in this
   module): once to resolve `(kind, agent)` the way `useNewRoomForm.tsx`
   would for a human typing into New Room, once to actually create it,
@@ -1043,11 +1069,11 @@ the agent API from a shell harness); macOS isn't covered yet.
 - **Tests live with the code that owns them.**
   `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `crates/skein-review` has 45; `crates/skein-daemon` has ~910
+  `crates/skein-review` has 45; `crates/skein-daemon` has ~1,250
   in-module tests on Windows (db persistence, spawn-env merging, resume
-  probes, harness JSONL/SSE parsers, pty, …); `crates/skein-proto` has the 4 harness_kind tests;
-  `app/src-tauri` has ~406 in-module unit tests that run on Windows
-  (agent API, review surface, command wrappers); in both, more sit
+  probes, harness JSONL/SSE parsers, pty, the agent API, …); `crates/skein-proto` has the 4 harness_kind tests;
+  `app/src-tauri` has ~70 in-module unit tests that run on Windows
+  (the client-only code: open requests, CLI shim, updater proxy, terminal paths, perf); in both, more sit
   in source `cfg`-gated per OS (#202). All run in the hook
   and CI, but **`cargo test --workspace` does NOT reach the tauri
   crate** — it is excluded from the workspace (#168), so the hook runs
@@ -1059,7 +1085,7 @@ the agent API from a shell harness); macOS isn't covered yet.
   of App.tsx over reaching for jsdom.
 - **Never spawn a bare `git` in a test.** Build fixture repos with
   `git2`, which takes the path as an argument — the way `review.rs`,
-  `review_surface/signoff.rs` and `agent_api/review_tests.rs` all do. **Git
+  `review_surface/signoff.rs` and `agent_api/review_tests.rs` (in skein-daemon) all do. **Git
   exports `GIT_DIR` (and `GIT_INDEX_FILE`) to every hook it runs**, so
   a test spawned from the pre-commit gate inherits them and a
   `Command::new("git")` in a `TempDir` silently operates on *this

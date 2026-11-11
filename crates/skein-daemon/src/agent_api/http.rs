@@ -354,7 +354,7 @@ async fn health() -> Response {
         StatusCode::OK,
         axum::Json(json!({
             "name": mcp::SERVER_NAME,
-            "version": crate::build_info::VERSION,
+            "version": crate::build_info::version(),
             "protocolVersion": mcp::PROTOCOL_VERSION,
             "mcp": "/mcp",
         })),

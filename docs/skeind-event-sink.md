@@ -38,9 +38,13 @@ to a window.
   `skein://agent-request`.
 - `agent_api/hermes_event.rs`: `skein://harness-hermes-hook`.
 
-`setup/state.rs` builds one sink, hands it to the Claude, opencode and
-Hermes managers, and `app.manage`s it for the review commands.
-`AgentApiState` builds its own from the `AppHandle`.
+The `agent_api/` files above are in `crates/skein-daemon` since #582.
+`setup/embed.rs` builds one sink, passes it in the `InProcessTransport`
+to `Daemon::build`, which hands it to the Claude, opencode and Hermes
+managers and to `AgentApiState`, and the app `app.manage`s it for the
+review commands.
 
-Deliberate leftover: `AgentApiState.app` stays, for `spawn_settings()`
-and design screenshots only.
+`AgentApiState.app` is gone (#582): spawn settings come from a shared
+`Arc<SpawnEnvState>`, and the two things that needed the webview are the
+`ClientRequests` and `WebviewCapture` seams (see
+[skeind-crates.md](skeind-crates.md)).

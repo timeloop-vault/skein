@@ -15,7 +15,6 @@ mod design;
 pub(crate) use skein_daemon::event_sink;
 pub(crate) use skein_daemon::fs;
 pub(crate) use skein_daemon::git;
-pub(crate) use skein_daemon::harness_action_event;
 mod harness_actions_hermes;
 pub(crate) use skein_daemon::harness_config;
 pub(crate) use skein_daemon::harness_events_claude;
@@ -37,9 +36,9 @@ mod review;
 mod review_surface;
 pub(crate) use skein_daemon::room_paths;
 mod setup;
-mod shared_state;
 pub(crate) use skein_daemon::spawn_settings;
 pub(crate) use skein_daemon::stream_sink;
+mod tauri_client;
 mod tauri_event_sink;
 mod tauri_paths;
 mod tauri_stream_sink;
@@ -60,6 +59,7 @@ pub(crate) use setup::install_rustls_provider;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     skein_daemon::build_info::set_version(build_info::VERSION);
+    skein_daemon::build_info::set_commit(build_info::commit());
     install_rustls_provider();
     // The notifications plugin on macOS uses a native Swift bridge
     // (`default-features = false`) which requires the binary to live
