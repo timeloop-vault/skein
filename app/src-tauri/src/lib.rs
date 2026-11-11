@@ -13,8 +13,8 @@ mod commands;
 pub(crate) use skein_daemon::db;
 mod design;
 pub(crate) use skein_daemon::event_sink;
-mod fs;
-mod git;
+pub(crate) use skein_daemon::fs;
+pub(crate) use skein_daemon::git;
 mod harness_action_event;
 mod harness_actions_claude;
 mod harness_actions_hermes;
@@ -25,13 +25,11 @@ mod harness_events_opencode;
 pub(crate) use skein_daemon::harness_kind;
 mod harness_work_hermes;
 mod hermes_profile;
-pub(crate) use skein_daemon::ignore_filter;
 mod open_request;
 mod opencode_sidecar;
 mod os_notify;
 pub(crate) use skein_daemon::paths;
 mod perf_cmds;
-mod perf_hist;
 mod perf_load;
 mod perf_main_lag;
 mod perf_spans;
@@ -177,10 +175,10 @@ pub fn run() {
             commands::harness_log::db_recent_harness_actions_by_room,
             commands::harness_log::db_recent_harness_actions_by_room_and_kind,
             commands::harness_log::db_harness_context_sizes,
-            review::review_pending,
-            review::review_accept,
-            review::review_reject,
-            review::review_discovery_start,
+            review::commands::review_pending,
+            review::commands::review_accept,
+            review::commands::review_reject,
+            review::commands::review_discovery_start,
             review_surface::commands::review_scope,
             review_surface::commands::review_file,
             review_surface::commands::review_image_bytes,

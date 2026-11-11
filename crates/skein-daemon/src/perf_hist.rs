@@ -13,14 +13,14 @@ const SUB_BITS: u32 = 3;
 const SUBS: usize = 1 << SUB_BITS;
 const SUBS_U64: u64 = 1 << SUB_BITS;
 /// 16 exact buckets + 8 per power of two for exponents 4..=63.
-pub(crate) const BUCKETS: usize = EXACT + 60 * SUBS;
+pub const BUCKETS: usize = EXACT + 60 * SUBS;
 
-pub(crate) struct Histogram {
+pub struct Histogram {
     buckets: [AtomicU64; BUCKETS],
 }
 
 /// Bucket holding `us`; monotonic non-decreasing in `us`.
-pub(crate) fn bucket_index(us: u64) -> usize {
+pub fn bucket_index(us: u64) -> usize {
     if us < EXACT_U64 {
         return usize::try_from(us).unwrap_or(0);
     }
@@ -30,7 +30,7 @@ pub(crate) fn bucket_index(us: u64) -> usize {
 }
 
 /// Largest value (inclusive) that lands in bucket `idx`.
-pub(crate) fn bucket_upper(idx: usize) -> u64 {
+pub fn bucket_upper(idx: usize) -> u64 {
     if idx < EXACT {
         return u64::try_from(idx).unwrap_or(0);
     }
@@ -42,19 +42,20 @@ pub(crate) fn bucket_upper(idx: usize) -> u64 {
 }
 
 impl Histogram {
-    pub(crate) const fn new() -> Self {
+    #[allow(clippy::new_without_default)]
+    pub const fn new() -> Self {
         Self {
             buckets: [const { AtomicU64::new(0) }; BUCKETS],
         }
     }
 
-    pub(crate) fn record(&self, us: u64) {
+    pub fn record(&self, us: u64) {
         self.buckets[bucket_index(us)].fetch_add(1, Ordering::Relaxed);
     }
 
     /// Swap every bucket to zero and return `(p50, p95)` by nearest rank,
     /// each clamped to `max_us`. `(0, 0)` when empty.
-    pub(crate) fn take_percentiles(&self, max_us: u64) -> (u64, u64) {
+    pub fn take_percentiles(&self, max_us: u64) -> (u64, u64) {
         let counts: Vec<u64> = self
             .buckets
             .iter()

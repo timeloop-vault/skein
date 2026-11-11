@@ -110,7 +110,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   spawn_env (+ login_env), spawn_settings (+ env_profile,
     │                                #   priority), tool_groups, watcher, ignore_filter,
     │                                #   worktree_key, room_paths, resume (the probe logic), and
-    │                                #   the seams event_sink, stream_sink, paths. app/src-tauri
+    │                                #   the seams event_sink, stream_sink, paths. #581 part 1
+    │                                #   added fs, git, rooms (load_rooms logic), perf_hist,
+    │                                #   perf_spans (SpanAgg/SpanSnapshot), design/ (serve,
+    │                                #   rewrite, device, change_filter, entries + the .js
+    │                                #   shims), review + review/discovery, and review_surface
+    │                                #   (all but its Tauri commands). app/src-tauri
     │                                #   re-exports each at its OLD path (`pub(crate) use
     │                                #   skein_daemon::db;` in lib.rs), so importers are
     │                                #   unchanged. `test-support` feature = db::test_support
@@ -325,8 +330,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   spawn, because portable-pty exposes no creation flags;
     │       │                        #   anything the child starts before the call keeps normal
     │       │                        #   priority
-    │       ├── src/git.rs           # DTOs + `_impl` logic over skein-git, Tauri-free since
-    │       │                        #   #578 (commands in commands/git.rs); GitError → String
+    │       ├── src/git.rs           # Moved to crates/skein-daemon (#581), re-exported here at
+    │       │                        #   the old path: DTOs + `_impl` logic over skein-git;
+    │       │                        #   Tauri wrappers stay in commands/git.rs; GitError → String
     │       ├── src/{watcher,db,       # Moved to crates/skein-daemon (#580), re-exported here
     │       │    spawn_env,            #   at the old path. watcher: notify-debouncer-mini, 200 ms,
     │       │    spawn_settings,       #   .git/ deliberately unfiltered. db: rusqlite — rooms
@@ -340,10 +346,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       │                        #   room_paths: the one path → room matcher, shared with the
     │       │                        #   agent API's find_rooms_for_path (#354); String-only,
     │       │                        #   callers that can touch disk canonicalize first
-    │       ├── src/fs.rs            # list_dir + read/write_file_text `_impl`s (commands in
-    │       │                        #   commands/fs.rs, #578) — LIVE, called by
+    │       ├── src/fs.rs            # Moved to crates/skein-daemon (#581), re-exported here at
+    │       │                        #   the old path: list_dir + read/write_file_text `_impl`s
+    │       │                        #   (wrappers in commands/fs.rs) — LIVE, called by
     │       │                        #   FileTree/FilesBody since #185. write returns an mtime
-    │       │                        #   token for staleness. Paths are NOT yet scoped to the room (#174)
+    │       │                        #   token for staleness. Paths are scoped to the rooms:
+    │       │                        #   `ensure_room_scope` canonicalizes and requires a room
+    │       │                        #   cwd as prefix (#174)
     │       ├── src/harness_config.rs # What Skein injects at spawn so an agent CLI finds the
     │       │                        #   #213 review API (#215): `--plugin-dir` for Claude Code,
     │       │                        #   OPENCODE_CONFIG for opencode, both session-scoped and
@@ -364,10 +373,18 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │       ├── src/open_request.rs  # Opening a folder from outside Skein (#255): argv / link
     │       │                        #   parsing, the pending slot, and path → room resolution
     │       ├── src/cli_shim.rs      # The `skein` sh script Settings installs in ~/.local/bin
-    │       ├── src/review.rs        # Baseline capture + the three baseline commands (#211).
+    │       ├── src/review.rs        # Moved to crates/skein-daemon (#581) with review/discovery.rs;
+    │       │                        #   the app keeps review.rs (re-export) + review/commands.rs
+    │       │                        #   (4 Tauri wrappers). REVIEW_CHANGED_EVENT lives in
+    │       │                        #   skein_daemon::review, re-exported by agent_api/state.rs.
+    │       │                        #   Baseline capture + the baseline commands (#211).
     │       │                        #   Captures from the HEAD blob the moment a LIVE patch
     │       │                        #   row lands — never on backfill, where HEAD has moved
-    │       ├── src/review_surface/  # The review the user reads (#212): scope (branch /
+    │       ├── src/review_surface.rs # Module root (glob re-export). Everything except
+    │       │   + review_surface/    #   commands.rs moved to crates/skein-daemon (#581); the app
+    │       │                        #   keeps commands.rs (15 Tauri commands) and
+    │       │                        #   element_agent_tests.rs (needs agent_api).
+    │       │                        #   The review the user reads (#212): scope (branch /
     │       │   {dto,git,anchoring,  #   commit / pending), per-file diff, and the nine
     │       │    query,write,        #   thread+comment commands. Split by the question a
     │       │    commands}.rs        #   reader has, not by layer — dto = what the frontend
@@ -737,7 +754,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   Skein itself was closed; a non-git room has no status to catch up
   from, so it only ever discovers from live watcher ticks. A default set of
   build-output dirs (`target`, `node_modules`, …) and a per-batch cap on new
-  baselines live in `review/discovery.rs`, #658.)
+  baselines live in `crates/skein-daemon/src/review/discovery.rs`, #658.)
 - **The review surface** (#212, epic #52 D1/D5/D6/D7): the right pane's
   second tab. Three scopes over one renderer — **branch**
   (`merge-base(HEAD, base) → working tree`, the default and the only
@@ -908,7 +925,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   only so far: a bundled macOS app is reached through a link via
   `open`, anything else by running the binary detached.
 - **Git ops** go through `crates/skein-git`;
-  `app/src-tauri/src/git.rs` is a thin DTO layer. Anything richer
+  `crates/skein-daemon/src/git.rs` (re-exported at `app/src-tauri/src/git.rs`) is a thin DTO layer. Anything richer
   than DTO glue belongs in the crate, where it's testable.
 
 ## Running it
@@ -1006,10 +1023,10 @@ the agent API from a shell harness); macOS isn't covered yet.
 - **Tests live with the code that owns them.**
   `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `crates/skein-review` has 45; `crates/skein-daemon` has ~225
+  `crates/skein-review` has 45; `crates/skein-daemon` has ~443
   in-module tests on Windows (db persistence, spawn-env merging, resume
   probes, …); `crates/skein-proto` has the 4 harness_kind tests;
-  `app/src-tauri` has ~1,090 in-module unit tests that run on Windows
+  `app/src-tauri` has ~870 in-module unit tests that run on Windows
   (harness JSONL/SSE parsers, pty, agent API, review); in both, more sit
   in source `cfg`-gated per OS (#202). All run in the hook
   and CI, but **`cargo test --workspace` does NOT reach the tauri

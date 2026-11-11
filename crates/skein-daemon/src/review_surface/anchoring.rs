@@ -38,12 +38,12 @@ fn placement_str(p: Placement) -> &'static str {
     }
 }
 
-pub(super) fn parse_anchor_lines(raw: Option<&str>) -> Vec<String> {
+pub fn parse_anchor_lines(raw: Option<&str>) -> Vec<String> {
     raw.and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
         .unwrap_or_default()
 }
 
-pub(super) fn side_of(raw: Option<&str>) -> Side {
+pub fn side_of(raw: Option<&str>) -> Side {
     match raw {
         Some("old") => Side::Old,
         _ => Side::New,
@@ -51,7 +51,7 @@ pub(super) fn side_of(raw: Option<&str>) -> Side {
 }
 
 /// Everything a placement pass needs to know about the view it runs in.
-pub(super) struct PlaceCtx<'a> {
+pub struct PlaceCtx<'a> {
     repo: Option<&'a Repo>,
     cwd: &'a str,
     /// The review range's merge base — the old side of `Scope::Branch`.
@@ -63,7 +63,7 @@ pub(super) struct PlaceCtx<'a> {
 }
 
 impl<'a> PlaceCtx<'a> {
-    pub(super) fn new(
+    pub fn new(
         repo: Option<&'a Repo>,
         cwd: &'a str,
         base_sha: Option<&'a str>,
@@ -90,7 +90,7 @@ impl<'a> PlaceCtx<'a> {
     /// deleted line lives in the old text and would be permanently
     /// outdated if searched for in the new. Keeping the side is what
     /// makes such a thread anchorable at all.
-    pub(super) fn anchor_text(&self, side: Side, path: &str) -> String {
+    pub fn anchor_text(&self, side: Side, path: &str) -> String {
         match (side, self.scope) {
             (Side::New, Scope::Commit) => self.blob_text(self.commit_sha, path),
             (Side::Old, Scope::Commit) => self.blob_text(self.parent_sha.as_deref(), path),
@@ -122,7 +122,7 @@ impl<'a> PlaceCtx<'a> {
 /// actually asks for them: a file with twenty threads costs two index
 /// builds, not twenty, and the common file with only new-side threads
 /// never reads its old blob at all.
-pub(super) fn place_threads(
+pub fn place_threads(
     db: &Database,
     ctx: &PlaceCtx<'_>,
     path: &str,
@@ -178,7 +178,7 @@ pub(super) fn place_threads(
     out
 }
 
-pub(super) fn to_thread_dto(
+pub fn to_thread_dto(
     t: ReviewThreadRow,
     anchor_lines: Vec<String>,
     placement: Placement,
@@ -238,7 +238,7 @@ pub(super) fn to_thread_dto(
 }
 
 /// Every comment in the room, grouped by thread and already in DTO form.
-pub(super) fn comments_by_thread(
+pub fn comments_by_thread(
     db: &Database,
     room_id: &str,
 ) -> Result<HashMap<String, Vec<CommentDto>>, String> {
@@ -275,7 +275,7 @@ fn harness_labels(db: &Database, room_id: &str) -> Result<HashMap<String, String
 }
 
 /// Every standing "addressed" claim in the room, keyed by thread.
-pub(super) fn addressed_by_thread(
+pub fn addressed_by_thread(
     db: &Database,
     room_id: &str,
 ) -> Result<HashMap<String, AddressedDto>, String> {
@@ -306,10 +306,7 @@ pub(super) fn addressed_by_thread(
 /// [`to_thread_dto`]: whether a thread is addressed has nothing to do
 /// with where it sits, and mixing the two would put a database read in
 /// the middle of the anchoring path.
-pub(super) fn apply_addressed(
-    threads: &mut [ThreadDto],
-    addressed: &HashMap<String, AddressedDto>,
-) {
+pub fn apply_addressed(threads: &mut [ThreadDto], addressed: &HashMap<String, AddressedDto>) {
     for t in threads.iter_mut() {
         t.addressed = addressed.get(&t.id).cloned();
     }

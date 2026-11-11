@@ -177,7 +177,7 @@ fn pending_old(
 /// `max_bytes` is [`skein_review::MAX_IMAGE_BYTES`] at the command
 /// boundary; a parameter here so tests can exercise the cap cheaply.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn image_bytes_impl(
+pub fn image_bytes_impl(
     db: &Database,
     room_id: &str,
     cwd: &str,

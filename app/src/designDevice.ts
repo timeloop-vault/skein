@@ -173,7 +173,7 @@ export const fitScale = (
 };
 
 /** Query parameters the preview server reads to inject shims at load.
- *  `dpr`, which `app/src-tauri/src/design/serve.rs` accepts in [0.5, 4] and
+ *  `dpr`, which `crates/skein-daemon/src/design/serve.rs` accepts in [0.5, 4] and
  *  turns into a `window.devicePixelRatio` getter override; and `touch=1`,
  *  which injects the touch-gesture and hover/pointer media shims. */
 export const deviceParams = (device: DesignDevice | undefined): [string, string][] => {

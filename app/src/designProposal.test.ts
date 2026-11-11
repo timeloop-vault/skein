@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import editorJs from "../src-tauri/src/design/editor.js?raw";
-import proposalRs from "../src-tauri/src/review_surface/proposal.rs?raw";
+import editorJs from "../../crates/skein-daemon/src/design/editor.js?raw";
+import proposalRs from "../../crates/skein-daemon/src/review_surface/proposal.rs?raw";
 import { hostMessage, parseBeacon } from "./designPreview.ts";
 import { changeLine, MAX_TOKENS, PROPERTY_ALLOWLIST } from "./designProposal.ts";
 

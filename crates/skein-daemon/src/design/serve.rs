@@ -212,11 +212,7 @@ async fn serve_file(
     // Recorded from the raw bytes, before any rewrite: the freshness
     // check recomputes the same digest from the file on disk.
     if let Some(rel) = state.root_for(&token).and_then(|r| relative_to(&r, &full)) {
-        state.record_served(
-            &token,
-            &rel,
-            crate::review_surface::element::digest_bytes(&bytes),
-        );
+        state.record_served(&token, &rel, super::digest_bytes(&bytes));
     }
     let ctype = content_type(&full);
     let body = if ctype.starts_with("text/html") {
@@ -358,7 +354,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_preview_url_for_room_a_cannot_read_a_file_of_room_b() {
-        crate::install_rustls_provider();
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let a = dir_with(&[
             ("a.txt", "AAA"),
             (
@@ -398,7 +394,7 @@ mod tests {
         // relative path (#434), and only for that room.
         assert_eq!(
             state.served_digests("ra")["a.txt"],
-            crate::review_surface::element::digest_bytes(b"AAA")
+            crate::design::digest_bytes(b"AAA")
         );
         assert!(state.served_digests("rb").is_empty());
 

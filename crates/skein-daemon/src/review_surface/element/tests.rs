@@ -539,46 +539,6 @@ fn element_threads_are_scoped_to_the_entry_and_include_resolved() {
 }
 
 #[test]
-fn the_agent_is_told_the_state_and_never_unmoved() {
-    use crate::agent_api::auth::Caller;
-    use crate::agent_api::verbs::{GetCommentArgs, ListArgs, get_comment, list_comments};
-
-    let f = Fixture::new();
-    let id = f.add_element().id;
-    let caller = Caller {
-        room_id: "r1".into(),
-        cwd: Some(f.cwd().to_owned()),
-        harness_id: None,
-        harness_label: None,
-    };
-    let list = |f: &Fixture| {
-        list_comments(&f.db, &caller, &ListArgs::default())
-            .unwrap()
-            .threads
-            .remove(0)
-    };
-
-    let t = list(&f);
-    assert_eq!(t.placement, Some("element"));
-    assert!(t.outdated, "never seen, so unknown, so a guess");
-    assert_eq!((t.line_start, t.line_end), (None, None));
-    assert_eq!(t.element.as_ref().unwrap()["state"], "unknown");
-
-    seen_impl(&f.db, "r1", f.tmp.path(), &id, &seen("anchored", &[])).unwrap();
-    let t = list(&f);
-    assert!(!t.outdated);
-    assert_eq!(t.element.as_ref().unwrap()["state"], "anchored");
-    assert_eq!(t.element.as_ref().unwrap()["anchor"]["tag"], "button");
-
-    let detail = get_comment(&f.db, &caller, &GetCommentArgs { thread_id: id }).unwrap();
-    assert_eq!(detail.thread.placement, Some("element"));
-    assert!(detail.diff_context.is_none() && detail.current_context.is_none());
-
-    std::fs::write(f.tmp.path().join("proto/index.html"), "<p>two</p>").unwrap();
-    assert!(list(&f).outdated);
-}
-
-#[test]
 fn deleting_a_thread_deletes_its_anchor() {
     let f = Fixture::new();
     let id = f.add_element().id;

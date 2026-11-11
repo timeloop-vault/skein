@@ -13,8 +13,8 @@ export type Change =
 
 export type Proposal = { changes: Change[] };
 
-/** Keep identical to PROPERTY_ALLOWLIST in src-tauri/src/review_surface/proposal.rs
- *  and ALLOWLIST in src-tauri/src/design/editor.js (a test checks all three). */
+/** Keep identical to PROPERTY_ALLOWLIST in crates/skein-daemon/src/review_surface/proposal.rs
+ *  and ALLOWLIST in crates/skein-daemon/src/design/editor.js (a test checks all three). */
 export const PROPERTY_ALLOWLIST: readonly string[] = [
 	"width",
 	"height",

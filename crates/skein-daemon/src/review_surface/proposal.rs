@@ -25,7 +25,7 @@ const MAX_OFFSET_ABS: f64 = 100_000.0;
 
 /// The CSS properties a proposal may touch. Keep identical to the
 /// allowlists in `app/src/designProposal.ts` (TS) and
-/// `app/src-tauri/src/design/editor.js` — three copies, one list.
+/// `crates/skein-daemon/src/design/editor.js` — three copies, one list.
 pub const PROPERTY_ALLOWLIST: &[&str] = &[
     "width",
     "height",
@@ -192,7 +192,7 @@ pub fn validate_proposal(p: &Proposal) -> Result<(), String> {
 
 /// Every stored proposal in the room, keyed by thread. A row that no
 /// longer parses is logged and left out — the thread still renders.
-pub(super) fn proposals_by_thread(
+pub fn proposals_by_thread(
     db: &Database,
     room_id: &str,
 ) -> Result<HashMap<String, Proposal>, String> {
@@ -209,7 +209,7 @@ pub(super) fn proposals_by_thread(
 }
 
 /// Stamp the proposal onto element threads that have one.
-pub(super) fn apply_proposals(threads: &mut [ThreadDto], proposals: &HashMap<String, Proposal>) {
+pub fn apply_proposals(threads: &mut [ThreadDto], proposals: &HashMap<String, Proposal>) {
     for t in threads.iter_mut() {
         t.proposal = proposals.get(&t.id).cloned();
     }

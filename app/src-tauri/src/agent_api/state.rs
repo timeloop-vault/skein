@@ -10,13 +10,7 @@ use serde::Serialize;
 use crate::db::Database;
 use crate::spawn_settings::SpawnSettings;
 
-/// The event the review pane listens for.
-///
-/// An agent reply touches sqlite and nothing else — no file changes, so
-/// the worktree watcher that drives every other refresh never fires.
-/// Without this the user would be looking at a pane that is quietly out
-/// of date, which is worse than one that is obviously empty.
-pub const REVIEW_CHANGED_EVENT: &str = "skein://review-changed";
+pub use skein_daemon::review::{REVIEW_CHANGED_EVENT, ReviewChanged};
 
 /// The event a harness tab listens for to show "permission required" as
 /// its own activity phase (#86), distinct from end-of-turn `waiting`.
@@ -172,13 +166,6 @@ pub struct AgentApiState {
 #[cfg(test)]
 type TestFrontend =
     Box<dyn Fn(&str, &serde_json::Value) -> Result<serde_json::Value, String> + Send + Sync>;
-
-/// Payload of [`REVIEW_CHANGED_EVENT`].
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReviewChanged {
-    pub room_id: String,
-}
 
 /// Payload of [`HARNESS_PERMISSION_EVENT`]. Frontend contract — do not
 /// rename a field without checking `app/src/` for the listener.

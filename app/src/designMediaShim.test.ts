@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import SRC from "../src-tauri/src/design/media.js?raw";
+import SRC from "../../crates/skein-daemon/src/design/media.js?raw";
 
 type Sheet = {
 	media: { mediaText: string };

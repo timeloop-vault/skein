@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import SRC from "../src-tauri/src/design/hit.js?raw";
+import SRC from "../../crates/skein-daemon/src/design/hit.js?raw";
 
 type Cand = {
 	rect: { left: number; top: number; width: number; height: number };

@@ -4200,6 +4200,7 @@ dependencies = [
 name = "skein-daemon"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "dunce",
  "notify-debouncer-mini",
  "parking_lot",
@@ -4209,6 +4210,7 @@ dependencies = [
  "skein-git",
  "skein-harness",
  "skein-proto",
+ "skein-review",
  "tempfile",
  "tokio",
  "tracing",

@@ -18,12 +18,12 @@ use super::image::image_bytes_impl;
 use super::query::{file_impl, scope_impl};
 use super::signoff::{self, SignoffStatus};
 use super::write::add_thread_impl;
-use crate::agent_api::state::{REVIEW_CHANGED_EVENT, ReviewChanged};
 use crate::db::{Database, ReviewCommentRow};
 use crate::design::PreviewState;
 use crate::design::commands::room_root;
 use crate::event_sink::SharedEventSink;
 use crate::review::now_ms;
+use skein_daemon::review::{REVIEW_CHANGED_EVENT, ReviewChanged};
 
 /// The review header, commit list and file list for one scope.
 #[tauri::command]

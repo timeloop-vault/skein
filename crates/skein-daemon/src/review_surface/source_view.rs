@@ -31,18 +31,18 @@ use super::thread_scope;
 use crate::db::{ReviewElementAnchorRow, ReviewThreadRow};
 
 /// One element thread and where its anchor says it was written.
-pub(super) struct Mirror {
+pub struct Mirror {
     row: ReviewThreadRow,
     source: ElementSource,
 }
 
 /// Mirrors keyed by the normalised source file they appear in.
-pub(super) type SourceIndex = HashMap<String, Vec<Mirror>>;
+pub type SourceIndex = HashMap<String, Vec<Mirror>>;
 
 /// Index the room's element threads by their anchor's source file. A
 /// thread whose source is its own entry, or whose anchor cannot be
 /// parsed, has no mirror.
-pub(super) fn index_sources(
+pub fn index_sources(
     threads: &[ReviewThreadRow],
     elements: &HashMap<String, ReviewElementAnchorRow>,
 ) -> SourceIndex {
@@ -74,7 +74,7 @@ pub(super) fn index_sources(
 }
 
 /// Per source file: (all mirrors, unresolved mirrors).
-pub(super) fn source_counts(index: &SourceIndex) -> HashMap<String, (usize, usize)> {
+pub fn source_counts(index: &SourceIndex) -> HashMap<String, (usize, usize)> {
     index
         .iter()
         .map(|(file, ms)| {
@@ -85,10 +85,7 @@ pub(super) fn source_counts(index: &SourceIndex) -> HashMap<String, (usize, usiz
 }
 
 /// Stamp the source counts onto every listed file.
-pub(super) fn apply_source_counts(
-    files: &mut [ReviewFileDto],
-    counts: &HashMap<String, (usize, usize)>,
-) {
+pub fn apply_source_counts(files: &mut [ReviewFileDto], counts: &HashMap<String, (usize, usize)>) {
     for f in files {
         let (all, open) = counts.get(&f.path).copied().unwrap_or((0, 0));
         f.source_thread_count = all;
@@ -100,7 +97,7 @@ pub(super) fn apply_source_counts(
 /// row yet, as `unchanged` with zero diff counts — the sibling of
 /// `push_element_only_files`, for the same reason: sign-off counts the
 /// thread, so the reviewer must be able to open the file it points into.
-pub(super) fn push_source_only_files(
+pub fn push_source_only_files(
     files: &mut Vec<ReviewFileDto>,
     index: &SourceIndex,
     per_file: &HashMap<String, (usize, usize)>,
@@ -143,7 +140,7 @@ pub(super) fn push_source_only_files(
 /// The mirrors that belong in `key`'s view, placed against the file as
 /// `ctx`'s scope sees it. Resolved ones are included, like any thread.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn mirror_threads(
+pub fn mirror_threads(
     index: &SourceIndex,
     key: &str,
     ctx: &PlaceCtx<'_>,

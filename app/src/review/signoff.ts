@@ -1,6 +1,6 @@
 // The reviewer's sign-off (#214, epic #52 D9 as corrected).
 //
-// Mirrors `app/src-tauri/src/review_surface/signoff.rs`. Every type here
+// Mirrors `crates/skein-daemon/src/review_surface/signoff.rs`. Every type here
 // is the serde shape of a DTO over there; when one changes, both change.
 // (#69 tracks generating these instead of hand-maintaining them.)
 //

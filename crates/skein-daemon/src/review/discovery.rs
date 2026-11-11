@@ -78,7 +78,7 @@ fn under_default_ignored_dir(key: &str) -> bool {
 
 /// What [`filter_batch`] kept and how many it dropped for each reason.
 #[derive(Debug, Default)]
-pub(crate) struct Filtered {
+pub struct Filtered {
     pub survivors: Vec<String>,
     /// Paths inside the worktree's `.git`.
     pub under_git: usize,
@@ -89,7 +89,7 @@ pub(crate) struct Filtered {
 
 /// The pre-DB half of a batch. `is_ignored` is `None` to skip ignore
 /// checking (no repo, or `catch_up`, whose paths came from `git status`).
-pub(crate) fn filter_batch(
+pub fn filter_batch(
     cwd: &str,
     reported: impl IntoIterator<Item = String>,
     cache: &mut IgnoreCache,
@@ -132,7 +132,7 @@ pub(crate) fn filter_batch(
 
 /// Per-batch counters for the one debug line.
 #[derive(Debug, Default)]
-pub(crate) struct Outcome {
+pub struct Outcome {
     pub inserted: usize,
     /// New paths skipped because baseline == disk (nothing pending).
     pub unchanged: usize,
@@ -143,7 +143,7 @@ pub(crate) struct Outcome {
 
 /// One room's discovery state, owned by its watcher closure behind a
 /// `Mutex` (a git2 `Repository` is `Send` but not `Sync`).
-pub(crate) struct Discovery {
+pub struct Discovery {
     room_id: String,
     cwd: String,
     /// Opened once. If the open failed (a non-git room, or a repo that
@@ -155,7 +155,7 @@ pub(crate) struct Discovery {
 }
 
 impl Discovery {
-    pub(crate) fn new(room_id: &str, cwd: &str) -> Self {
+    pub fn new(room_id: &str, cwd: &str) -> Self {
         Self {
             room_id: room_id.to_owned(),
             cwd: cwd.to_owned(),
@@ -171,11 +171,7 @@ impl Discovery {
     }
 
     /// A batch of watcher-reported paths. Returns baselines captured.
-    pub(crate) fn discover(
-        &mut self,
-        db: &Database,
-        reported: impl IntoIterator<Item = String>,
-    ) -> usize {
+    pub fn discover(&mut self, db: &Database, reported: impl IntoIterator<Item = String>) -> usize {
         if self.cwd.is_empty() {
             return 0;
         }
@@ -192,7 +188,7 @@ impl Discovery {
 
     /// The `git status` sweep. Also the reaction to a notify error
     /// (dropped events), so it forgets cached ignore decisions.
-    pub(crate) fn catch_up(&mut self, db: &Database) -> usize {
+    pub fn catch_up(&mut self, db: &Database) -> usize {
         if self.cwd.is_empty() {
             return 0;
         }

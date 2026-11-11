@@ -15,14 +15,14 @@ use crate::db::Database;
 use crate::review::pending_impl;
 
 /// At most this many files go to the frontend.
-pub(crate) const MAX_CHANGED_FILES: usize = 300;
+pub const MAX_CHANGED_FILES: usize = 300;
 /// At most this many line numbers, over all files.
-pub(crate) const MAX_CHANGED_LINES: usize = 20_000;
+pub const MAX_CHANGED_LINES: usize = 20_000;
 
 /// One changed file: worktree-relative forward-slash path, the sorted
 /// unique new-side lines that changed, and whether the file is gone.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChangedFile {
+pub struct ChangedFile {
     pub path: String,
     pub lines: Vec<usize>,
     pub deleted: bool,
@@ -32,7 +32,7 @@ pub(crate) struct ChangedFile {
 /// for each run of deleted lines — the first line after the run (or the
 /// last one before it, when the run ends the hunk), so a deleted
 /// attribute line still touches the tag it sat in. Sorted, unique.
-pub(crate) fn changed_lines(hunks: &[Hunk]) -> Vec<usize> {
+pub fn changed_lines(hunks: &[Hunk]) -> Vec<usize> {
     let mut out = Vec::new();
     for h in hunks {
         let mut in_run = false;
@@ -65,7 +65,7 @@ pub(crate) fn changed_lines(hunks: &[Hunk]) -> Vec<usize> {
 }
 
 /// Apply the file and line caps, in order. `true` when anything was cut.
-pub(crate) fn cap(
+pub fn cap(
     mut files: Vec<ChangedFile>,
     max_files: usize,
     max_lines: usize,
@@ -91,7 +91,7 @@ pub(crate) fn cap(
 
 /// The changed files of a scope, as the room's worktree sees them. A
 /// file with nothing to say (binary, or an empty diff) is left out.
-pub(crate) fn scope_changes(
+pub fn scope_changes(
     db: &Database,
     room_id: &str,
     cwd: &str,

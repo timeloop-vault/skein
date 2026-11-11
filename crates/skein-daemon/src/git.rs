@@ -72,7 +72,7 @@ impl From<WorktreeInfo> for WorktreeDto {
 }
 
 /// Returns true iff `path` is a git repository (per libgit2).
-pub(crate) fn git_is_repo_impl(path: &str) -> bool {
+pub fn git_is_repo_impl(path: &str) -> bool {
     Repo::is_repo(Path::new(path))
 }
 
@@ -119,7 +119,7 @@ pub struct FolderInfoDto {
 /// same resolution below, so the two can't drift (issue #375's
 /// per-repository-group room cap needs this outside the New Room
 /// dialog's own round trip).
-pub(crate) fn repo_root_for_path(path: &Path) -> Option<String> {
+pub fn repo_root_for_path(path: &Path) -> Option<String> {
     let repo = Repo::open(path).ok()?;
     let root = repo.main_repo_root();
     if repo.is_worktree() && root != *repo.workdir() {
@@ -131,7 +131,7 @@ pub(crate) fn repo_root_for_path(path: &Path) -> Option<String> {
 
 /// Inspect a folder for the New Room dialog: existence, repo-ness,
 /// worktree resolution and the branch list, in a single call.
-pub(crate) fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
+pub fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
     let picked = Path::new(path);
     let exists = picked.is_dir();
     let mut info = FolderInfoDto {
@@ -270,7 +270,7 @@ pub fn check_identity(stored: Option<&RepoIdentity>, path: &Path) -> IdentityChe
     }
 }
 
-pub(crate) fn repo_identity_impl(path: &str) -> Result<Option<RepoIdentityDto>, String> {
+pub fn repo_identity_impl(path: &str) -> Result<Option<RepoIdentityDto>, String> {
     let Ok(repo) = Repo::open(Path::new(path)) else {
         return Ok(None);
     };
@@ -286,13 +286,13 @@ pub(crate) fn repo_identity_impl(path: &str) -> Result<Option<RepoIdentityDto>, 
 /// non-repo path. Used by the bottom status bar to track checkouts that
 /// happen inside a harness — `room.branch` is captured at room creation
 /// and doesn't follow `git checkout`.
-pub(crate) fn git_head_branch_impl(path: &str) -> Option<String> {
+pub fn git_head_branch_impl(path: &str) -> Option<String> {
     Repo::open(Path::new(path)).ok()?.head_branch()
 }
 
 /// Default path proposal for a worktree under `repo_path` named after
 /// `task_slug`. Pure function; no filesystem access.
-pub(crate) fn git_propose_worktree_path_impl(repo_path: &str, task_slug: &str) -> String {
+pub fn git_propose_worktree_path_impl(repo_path: &str, task_slug: &str) -> String {
     propose_worktree_path(Path::new(repo_path), task_slug)
         .to_string_lossy()
         .into_owned()
@@ -307,7 +307,7 @@ pub(crate) fn git_propose_worktree_path_impl(repo_path: &str, task_slug: &str) -
 /// open-then-add-worktree sequence it protects rather than living only
 /// in the command closure, where an extracted-fn test could bypass it
 /// unnoticed.
-pub(crate) fn git_add_worktree_impl(
+pub fn git_add_worktree_impl(
     repo_path: &str,
     branch: &str,
     base_branch: &str,
@@ -327,7 +327,7 @@ pub(crate) fn git_add_worktree_impl(
 ///
 /// Guarded by `ADD_WORKTREE_LOCK` for its whole body — see
 /// `git_add_worktree_impl`'s doc comment, same reasoning applies here.
-pub(crate) fn git_restore_worktree_impl(
+pub fn git_restore_worktree_impl(
     repo_path: &str,
     branch: &str,
     worktree_path: &str,
@@ -363,7 +363,7 @@ impl From<StatusEntry> for StatusDto {
 /// Snapshot of the worktree's status — every changed file relative to
 /// HEAD, sorted by path. The frontend re-fetches on demand (Phase 5a)
 /// and via the file watcher (Phase 5b).
-pub(crate) fn git_status_impl(path: &str) -> Result<Vec<StatusDto>, String> {
+pub fn git_status_impl(path: &str) -> Result<Vec<StatusDto>, String> {
     let repo = Repo::open(Path::new(path)).map_err(|e| e.to_string())?;
     let entries = repo.status().map_err(|e| e.to_string())?;
     Ok(entries.into_iter().map(StatusDto::from).collect())
@@ -384,7 +384,7 @@ pub(crate) fn git_status_impl(path: &str) -> Result<Vec<StatusDto>, String> {
 /// worktree paths (#637), for the review pane. `.git/` stays unfiltered.
 /// The file tree watches arbitrary subdirectories, possibly inside ignored
 /// ones, so it leaves this off.
-pub(crate) fn git_watch_start_impl(
+pub fn git_watch_start_impl(
     manager: &WatcherManager,
     path: &str,
     sink: impl StreamSink<()>,
@@ -415,7 +415,7 @@ pub(crate) fn git_watch_start_impl(
 /// detached commit or rebase. A build in the worktree never ticks.
 /// `None` when `path` is not a repo (nothing watched). Stop it with
 /// `git_watch_stop`.
-pub(crate) fn git_head_watch_start_impl(
+pub fn git_head_watch_start_impl(
     manager: &WatcherManager,
     path: &str,
     sink: impl StreamSink<()>,
@@ -509,7 +509,7 @@ const fn status_kind_str(k: StatusKind) -> &'static str {
 
 /// Structured diff of every changed file in the worktree against HEAD.
 /// One entry per file; binary files have `binary: true` and empty hunks.
-pub(crate) fn git_diff_impl(path: &str) -> Result<Vec<FileDiffDto>, String> {
+pub fn git_diff_impl(path: &str) -> Result<Vec<FileDiffDto>, String> {
     let repo = Repo::open(Path::new(path)).map_err(|e| e.to_string())?;
     let files = repo.diff_workdir().map_err(|e| e.to_string())?;
     Ok(files.into_iter().map(FileDiffDto::from).collect())
