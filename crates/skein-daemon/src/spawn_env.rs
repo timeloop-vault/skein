@@ -412,9 +412,18 @@ pub(crate) const HOST_TERMINAL_ENV_VARS: &[&str] = &[
     // `claude` started with it is excluded from `--resume`/`--continue`,
     // which breaks Skein's `claude --resume <sid>`. `CLAUDE_CODE_SESSION_ID`
     // is the outer session's id, set in the same subprocesses.
+    // `CLAUDE_CODE_BRIDGE_SESSION_ID` is the outer session's Remote Control
+    // id (Bash-tool and hook subprocesses). `CLAUDE_CODE_MESSAGING_SOCKET`
+    // and `_TOKEN` are the outer session's inbox socket path and per-session
+    // token, exported to hooks and Bash commands (settings `env` cannot set
+    // them); a nested harness must neither address that inbox nor carry the
+    // token.
     "CLAUDECODE",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
     "CLAUDE_CODE_CHILD_SESSION",
     "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_CODE_SSE_PORT",
     // Windows / MSYS shell identity.

@@ -747,6 +747,10 @@ fn claude_code_session_markers_are_stripped() {
         "CLAUDE_CODE_SSE_PORT",
         "CLAUDE_CODE_CHILD_SESSION",
         "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_BRIDGE_SESSION_ID",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "claude_code_child_session",
     ] {
         assert!(is_host_terminal_var(key), "{key} should be stripped");
     }
