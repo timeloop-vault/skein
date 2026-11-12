@@ -47,6 +47,8 @@ impl AgentApiState {
     pub fn notify_harness_hermes_hook(&self, payload: HarnessHermesHook) {
         #[cfg(test)]
         self.test_hermes_events.lock().push(payload.clone());
+        // Every Hermes hook route ends here, so one tap covers them all.
+        self.phase_hermes_hook(&payload);
         let Some(events) = self.events.as_ref() else {
             return;
         };

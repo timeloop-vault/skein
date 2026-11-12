@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::opencode_prepare::{Prepared, prepare_opencode_spawn};
-use super::{PtyEvent, PtyManager, SidecarBinding, SpawnRequest};
+use super::{PtyEvent, PtyManager, PtyObserver, SidecarBinding, SpawnRequest};
 use crate::agent_endpoint::{AgentApiEndpoint, HarnessIdentity};
 use crate::db::Database;
 use crate::harness_config::HarnessConfig;
@@ -114,17 +114,20 @@ pub fn pty_spawn_impl(
         Some(Box::new(sink)),
         stop_sidecar,
         sidecar_on_exit,
+        None,
     )
 }
 
 /// [`pty_spawn_impl`] where the view is optional: with `None` the child runs
 /// unattended, its output kept for the first `PtyManager::attach` (#731).
+/// `observer` (#732) hears the process whether or not a view is attached.
 pub fn pty_spawn_with_sink(
     deps: PtySpawnDeps<'_>,
     args: PtySpawnArgs,
     sink: Option<Box<dyn StreamSink<PtyEvent>>>,
     stop_sidecar: impl Fn(&SidecarBinding) + Send + Sync + 'static,
     sidecar_on_exit: &OnExit,
+    observer: Option<Arc<dyn PtyObserver>>,
 ) -> Result<PtySpawnResult, String> {
     let PtySpawnArgs {
         cmd,
@@ -228,6 +231,7 @@ pub fn pty_spawn_with_sink(
                     exit_stop(binding);
                 }
             })),
+            observer,
         )
         .map_err(|e| {
             // The spawn failed: nothing will ever attach to the sidecar.

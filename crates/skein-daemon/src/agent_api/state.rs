@@ -126,6 +126,9 @@ pub struct AgentApiState {
     /// Native capture of the main webview (`get_design_screenshot`).
     /// `None` in a unit test.
     pub capture: Option<Arc<dyn WebviewCapture>>,
+    /// Where the Claude permission and Hermes hooks are also fed to the
+    /// daemon's shadow phase machine (#732). `None` in a unit test.
+    pub(crate) phase_tap: Option<super::phase_tap::PhaseTap>,
     /// Requests sent to the webview and not yet answered, keyed by a
     /// fresh id per request. Every insertion is matched by exactly one
     /// removal — on completion, on timeout, or immediately if the
@@ -242,6 +245,7 @@ pub struct AgentApiStateArgs {
     pub spawn_env: Arc<crate::spawn_env::state::SpawnEnvState>,
     pub client: Arc<dyn ClientRequests>,
     pub capture: Arc<dyn WebviewCapture>,
+    pub phase_tap: super::phase_tap::PhaseTap,
 }
 
 impl AgentApiState {
@@ -253,6 +257,7 @@ impl AgentApiState {
             spawn_env: Some(args.spawn_env),
             client: Some(args.client),
             capture: Some(args.capture),
+            phase_tap: Some(args.phase_tap),
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
             verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),
@@ -276,6 +281,7 @@ impl AgentApiState {
             spawn_env: None,
             client: None,
             capture: None,
+            phase_tap: None,
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
             verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),

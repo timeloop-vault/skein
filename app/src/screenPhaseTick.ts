@@ -6,6 +6,7 @@
 
 import type { ActivityPhase, HarnessActivity, TransitionSource } from "./harnessActivityTypes.ts";
 import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
+import { type PhaseInput, sendPhaseInput } from "./phaseInput.ts";
 import type { ScreenPhase } from "./screenPhase.ts";
 
 type SetPhase = (id: string, phase: ActivityPhase, source: TransitionSource) => void;
@@ -55,7 +56,26 @@ export function clearScreenOwnership(id: string): void {
 	unknownTicks.delete(id);
 }
 
-export const forgetScreenPhase = clearScreenOwnership;
+/// The harness is gone: also tell the daemon's shadow machine to drop its
+/// reading, so it never keeps a stale one (#732).
+export function forgetScreenPhase(id: string): void {
+	clearScreenOwnership(id);
+	forwardScreenReading(id, null);
+}
+
+/// #732: last reading forwarded to the daemon, per harness.
+const forwardedReading = new Map<string, ScreenReading>();
+type ScreenReading = Extract<PhaseInput, { kind: "screenReading" }>["reading"];
+
+function forwardScreenReading(id: string, reading: ScreenReading): void {
+	if (reading === null) {
+		if (!forwardedReading.delete(id)) return;
+	} else {
+		if (forwardedReading.get(id) === reading) return;
+		forwardedReading.set(id, reading);
+	}
+	sendPhaseInput(id, { kind: "screenReading", reading });
+}
 
 /// One non-authoritative harness's tick. Returns true when the screen gave
 /// a positive reading and the caller should skip L2a/L2b for this tick.
@@ -77,6 +97,7 @@ export function tickScreenPhase(
 	} catch {
 		reading = "unknown";
 	}
+	forwardScreenReading(id, reading);
 	if (reading === "unknown") {
 		debounce.delete(id);
 		if (!screenOwnsWaiting) return false;

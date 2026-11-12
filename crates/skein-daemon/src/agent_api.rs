@@ -50,6 +50,7 @@ pub use crate::tool_groups as groups;
 pub mod hermes_event;
 pub mod http;
 pub mod mcp;
+pub mod phase_tap;
 mod render;
 pub mod state;
 pub mod verbs;

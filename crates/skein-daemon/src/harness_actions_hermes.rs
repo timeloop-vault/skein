@@ -493,6 +493,11 @@ impl HermesActionsManager {
         self.inner.lock().remove(harness_id);
     }
 
+    /// Whether a tail is attached for `harness_id` (#732).
+    pub fn is_attached(&self, harness_id: &str) -> bool {
+        self.inner.lock().contains_key(harness_id)
+    }
+
     pub fn tail(&self, harness_id: &str) -> Option<Arc<Tail>> {
         self.inner
             .lock()

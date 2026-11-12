@@ -19,7 +19,9 @@
 //! `ensure_running` repairs itself by re-checking the records afterwards.
 
 mod adapters;
+mod events;
 mod gates;
+mod phase_tap;
 mod record;
 
 use std::collections::HashMap;
@@ -31,6 +33,7 @@ use skein_proto::rooms::Room;
 use self::adapters::{Adapters, AttachSpec};
 pub use self::gates::{EnsureError, Refusal};
 use self::gates::{SpawnPlan, lookup, wanted};
+use self::phase_tap::RunnerObserver;
 use crate::agent_endpoint::AgentApiEndpoint;
 use crate::boot_resume::opencode_port_from_cmd;
 use crate::db::Database;
@@ -40,10 +43,11 @@ use crate::harness_config::HarnessConfig;
 use crate::harness_events_claude::ClaudeEventsManager;
 use crate::harness_events_opencode::OpencodeEventsManager;
 use crate::harness_kind::HarnessKind;
+use crate::harness_phase::PhaseService;
 use crate::opencode_sidecar::start::{EXIT_EVENT, SidecarExitPayload};
 use crate::opencode_sidecar::{OnExit, OpencodeSidecarManager};
 use crate::pty::command::{PtySpawnArgs, PtySpawnDeps, PtySpawnResult, pty_spawn_with_sink};
-use crate::pty::{AttachOutcome, ExitRecord, PtyEvent, PtyManager};
+use crate::pty::{AttachOutcome, ExitRecord, PtyEvent, PtyManager, PtyObserver};
 use crate::room_store::RoomStore;
 use crate::spawn_env::state::SpawnEnvState;
 use crate::stream_sink::StreamSink;
@@ -72,6 +76,8 @@ pub struct RunnerDeps {
     pub endpoint: AgentApiEndpoint,
     pub harness_config: HarnessConfig,
     pub events: SharedEventSink,
+    /// The shadow phase machine (#732); the runner feeds it.
+    pub phase: Arc<PhaseService>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +120,8 @@ struct Running {
     program: Option<String>,
     hermes_profile: Option<String>,
     opencode_port: Option<u16>,
+    /// Retired when this process is stopped or replaced (#732).
+    observer: Arc<RunnerObserver>,
 }
 
 pub struct HarnessRunner {
@@ -126,6 +134,7 @@ pub struct HarnessRunner {
     harness_config: HarnessConfig,
     sidecar_exit: OnExit,
     adapters: Adapters,
+    phase: Arc<PhaseService>,
     entries: Mutex<HashMap<String, Running>>,
     spawns: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Test-only pause points: name -> a closure run when the code reaches it.
@@ -175,6 +184,7 @@ impl HarnessRunner {
             endpoint,
             harness_config,
             events,
+            phase,
         } = deps;
         Self {
             store,
@@ -188,7 +198,9 @@ impl HarnessRunner {
                 hermes: hermes_actions,
                 sidecars,
                 spawn_env: Arc::clone(&spawn_env),
+                phase: Arc::clone(&phase),
             },
+            phase,
             spawn_env,
             endpoint,
             harness_config,
@@ -266,12 +278,20 @@ impl HarnessRunner {
                 });
             }
             // A restart, or a process someone killed behind our back. The
-            // gate is already ours.
-            self.stop_unlocked(&req.harness_id);
+            // gate is already ours. The phase record is kept for the
+            // respawn to replace (it keeps its place in the tick order).
+            self.stop_process(&req.harness_id, false);
         }
 
-        let plan = SpawnPlan::from_record(room, harness, kind, req.env_profile.as_deref())
-            .map_err(EnsureError::Refused)?;
+        let plan = match SpawnPlan::from_record(room, harness, kind, req.env_profile.as_deref()) {
+            Ok(plan) => plan,
+            Err(refusal) => {
+                // The old process (if any) is already stopped, and its phase
+                // record was kept for a respawn that is not coming.
+                self.phase.forget(&req.harness_id);
+                return Err(EnsureError::Refused(refusal));
+            }
+        };
         let (room_id, session_before, version_before) = (
             room.id.clone(),
             harness.session_id.clone(),
@@ -279,7 +299,17 @@ impl HarnessRunner {
         );
         let has_sink = sink.is_some();
         self.pause_point("before_spawn");
-        let spawn = self.spawn(req, &room_id, &plan, sink)?;
+        // `spawned` is called from inside the spawn, before the child's
+        // threads start (see `RunnerObserver`).
+        let observer = RunnerObserver::new(Arc::clone(&self.phase), &req.harness_id, &room_id);
+        let spawn = match self.spawn(req, &room_id, &plan, sink, &observer) {
+            Ok(spawn) => spawn,
+            Err(e) => {
+                // A restart that failed leaves no process for the record.
+                self.phase.forget(&req.harness_id);
+                return Err(e);
+            }
+        };
 
         let program = plan.cmd.first().cloned();
         let run = Running {
@@ -291,6 +321,7 @@ impl HarnessRunner {
             program,
             hermes_profile: plan.hermes_profile.clone(),
             opencode_port: opencode_port_from_cmd(&plan.cmd),
+            observer,
         };
         self.entries
             .lock()
@@ -345,15 +376,34 @@ impl HarnessRunner {
     /// [`stop_harness`](Self::stop_harness) for callers that hold the gate or
     /// must not wait for it (`reconcile`).
     fn stop_unlocked(&self, harness_id: &str) -> bool {
+        self.stop_process(harness_id, true)
+    }
+
+    /// Kill and detach; `forget_phase` also drops the harness's phase record.
+    /// False only on the restart path, where the respawn replaces it.
+    fn stop_process(&self, harness_id: &str, forget_phase: bool) -> bool {
         let removed = self.entries.lock().remove(harness_id);
-        if let Some(run) = &removed
-            && let Some((sidecar_harness, generation)) = self.pty.kill(&run.pty_id)
-        {
-            self.sidecars
-                .stop_if_generation(&sidecar_harness, generation);
+        if let Some(run) = &removed {
+            // Before the kill: the dying process's exit must not reach the
+            // phase record (a restart is about to replace it).
+            run.observer.retire();
+            if let Some((sidecar_harness, generation)) = self.pty.kill(&run.pty_id) {
+                self.sidecars
+                    .stop_if_generation(&sidecar_harness, generation);
+            }
         }
         self.adapters.detach(harness_id);
+        if forget_phase {
+            // Takes the translators with it, so no separate `*_detached`.
+            self.phase.forget(harness_id);
+        }
         removed.is_some()
+    }
+
+    /// The shadow phase service this runner feeds (#732).
+    #[must_use]
+    pub fn phase(&self) -> &Arc<PhaseService> {
+        &self.phase
     }
 
     /// A view went away: clear the PTY's sink and nothing else. Never kills.
@@ -373,49 +423,6 @@ impl HarnessRunner {
             return false;
         };
         self.pty.detach_if(&pty_id, attach_id)
-    }
-
-    /// A client that attached its own event channel through
-    /// `claude_events_attach` / `opencode_events_attach` is going away. If the
-    /// runner still has the harness its own no-op adapter replaces the
-    /// client's, so action rows keep being written; otherwise the adapters
-    /// are detached. Blocking, like `ensure_running`.
-    pub fn release_events(&self, harness_id: &str) {
-        // Under the gate, so a stop sent with the client's detach cannot
-        // land between the entry check and the attach.
-        let gate = self.spawn_gate(harness_id);
-        {
-            let _one_at_a_time = gate.lock();
-            self.release_events_locked(harness_id);
-        }
-        self.prune_gate(harness_id, &gate);
-    }
-
-    fn release_events_locked(&self, harness_id: &str) {
-        let Some(run) = self.entries.lock().get(harness_id).cloned() else {
-            self.adapters.detach(harness_id);
-            return;
-        };
-        // An exited process has nothing to tail.
-        if !self.pty.is_alive(&run.pty_id) {
-            self.adapters.detach(harness_id);
-            return;
-        }
-        self.pause_point("release_events");
-        let rooms = self.store.rooms();
-        let session = lookup(&rooms, &run.room_id, harness_id)
-            .ok()
-            .and_then(|(_, h, _)| h.session_id.clone());
-        // Known limit: a v1 opencode uses the port of the spawn-time argv. If
-        // the client re-pointed its adapter after an opencode restarted from
-        // the post-exit shell (#517), the runner never learns the new port and
-        // this re-attach tails the old one; the client re-points again on its
-        // next attach.
-        self.attach_adapters(harness_id, &run, session.as_deref(), false);
-        // `reconcile` takes no gate and may have stopped it meanwhile.
-        if !self.entries.lock().contains_key(harness_id) {
-            self.adapters.detach(harness_id);
-        }
     }
 
     /// Stop every harness the records no longer want: removed, or in an
@@ -458,6 +465,7 @@ impl HarnessRunner {
         room_id: &str,
         plan: &SpawnPlan,
         sink: Option<Box<dyn StreamSink<PtyEvent>>>,
+        observer: &Arc<RunnerObserver>,
     ) -> Result<PtySpawnResult, EnsureError> {
         let sidecars = self.sidecars.clone();
         pty_spawn_with_sink(
@@ -494,6 +502,7 @@ impl HarnessRunner {
                 sidecars.stop_if_generation(harness_id, *generation);
             },
             &self.sidecar_exit,
+            Some(Arc::clone(observer) as Arc<dyn PtyObserver>),
         )
         .map_err(EnsureError::SpawnFailed)
     }

@@ -85,6 +85,7 @@ fn a_pty_spawned_without_a_sink_works_once_a_view_attaches() {
             },
             None,
             None,
+            None,
         )
         .expect("spawn without a sink");
     let pid = manager.pid(id).expect("child pid");

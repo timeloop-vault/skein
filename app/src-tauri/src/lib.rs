@@ -167,6 +167,7 @@ pub fn run() {
             harness_actions_hermes::hermes_actions_turn_end,
             commands::hermes_work::hermes_work_attach,
             commands::hermes_work::hermes_work_detach,
+            commands::harness_phase::harness_phase_input,
             commands::harness_argv::harness_fresh_cmd,
             commands::harness_argv::harness_resume_cmd,
             commands::harness_argv::rooms_resume_cmds,

@@ -5,8 +5,10 @@
 use std::sync::Arc;
 
 use crate::commands::spawn_env::SpawnEnvState;
+use crate::harness_runner::HarnessRunner;
 use crate::harness_work_hermes::{HermesWorkEvent, HermesWorkManager, hermes_work_attach_impl};
 use crate::tauri_stream_sink::TauriChannelSink;
+use skein_daemon::harness_phase::sinks::Tee;
 
 /// Start (or replace) the work poller for a Hermes harness; the attach
 /// snapshot arrives as `initial: true` starts on the first tick.
@@ -21,15 +23,19 @@ pub(crate) async fn hermes_work_attach(
     on_event: tauri::ipc::Channel<HermesWorkEvent>,
     manager: tauri::State<'_, HermesWorkManager>,
     spawn_env: tauri::State<'_, Arc<SpawnEnvState>>,
+    runner: tauri::State<'_, Arc<HarnessRunner>>,
 ) -> Result<(), String> {
     let _ = (room_id, resumed); // Same arguments as hermes_actions_attach.
+    // #732 shadow: `Tee` returns the client sink's result, so a dead client
+    // still stops the poller.
+    let phase_sink = runner.hermes_work_phase_sink(&harness_id);
     hermes_work_attach_impl(
         &manager,
         &spawn_env.snapshot(),
         harness_id,
         session_id,
         hermes_profile.as_deref(),
-        Box::new(TauriChannelSink::new(on_event)),
+        Box::new(Tee::new(TauriChannelSink::new(on_event), phase_sink)),
     )
 }
 

@@ -14,9 +14,12 @@
 //! detached PTY is not wedged at spawn. It never answers while a sink is
 //! attached, or the child would see a stray second report as input.
 
+use std::sync::Arc;
+
 use parking_lot::Mutex;
 
 use super::PtyEvent;
+use super::observer::PtyObserver;
 use crate::stream_sink::StreamSink;
 
 /// The cursor-position query `ConPTY` sends at start-up.
@@ -54,6 +57,8 @@ struct State {
 pub struct SinkSlot {
     state: Mutex<State>,
     reply: Box<dyn Fn(Vec<u8>) + Send + Sync>,
+    /// Hears every chunk and the exit, whatever the sink (#732).
+    observer: Option<Arc<dyn PtyObserver>>,
 }
 
 impl SinkSlot {
@@ -71,7 +76,17 @@ impl SinkSlot {
                 query_carry: Vec::new(),
             }),
             reply: Box::new(reply),
+            observer: None,
         }
+    }
+
+    /// Tap this slot (#732). The observer is called from `data` and `exit`
+    /// before the slot's lock is taken, and never from `attach`, so a view
+    /// attaching to an exited process does not repeat the exit.
+    #[must_use]
+    pub fn with_observer(mut self, observer: Arc<dyn PtyObserver>) -> Self {
+        self.observer = Some(observer);
+        self
     }
 
     /// Output from the PTY. A failed send stays non-fatal: no kill, no
@@ -79,6 +94,9 @@ impl SinkSlot {
     /// never detached) cannot answer a cursor query, so for that purpose it
     /// counts as absent and the slot answers.
     pub fn data(&self, chunk: String) {
+        if let Some(observer) = &self.observer {
+            observer.output(&chunk);
+        }
         let mut st = self.state.lock();
         let queries = if let Some(sink) = st.sink.as_ref() {
             // Keep a copy only when a query could be in it: the chunk has
@@ -104,10 +122,18 @@ impl SinkSlot {
 
     /// The child exited: record it, and tell the sink if there is one.
     pub fn exit(&self, code: Option<u32>) {
-        let mut st = self.state.lock();
-        st.exited = Some(ExitRecord { code });
-        if let Some(sink) = st.sink.as_ref() {
-            let _ = sink.send(PtyEvent::Exit { code });
+        let first = {
+            let mut st = self.state.lock();
+            let first = st.exited.is_none();
+            st.exited = Some(ExitRecord { code });
+            if let Some(sink) = st.sink.as_ref() {
+                let _ = sink.send(PtyEvent::Exit { code });
+            }
+            first
+        };
+        // Outside the lock, and only for the first exit.
+        if first && let Some(observer) = &self.observer {
+            observer.exited(code);
         }
     }
 

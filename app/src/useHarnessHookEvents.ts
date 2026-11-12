@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { outstandingWork } from "./deferral.ts";
 import { logBoth } from "./frontendLog.ts";
 import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
+import { sendPhaseInput } from "./phaseInput.ts";
 import { followedSession } from "./sessionTracking.ts";
 import { releasePersists, shellClaim, shouldReplaceClaim } from "./shellClaim.ts";
 import { startupAdoption, startupCandidate } from "./startupAdoption.ts";
@@ -104,16 +105,16 @@ export function useHarnessHookEvents(
 			return;
 		}
 		harnessActivity.noteLaunchSignal(harnessId);
+		sendPhaseInput(harnessId, { kind: "launchSignal" });
 		// #520: persist the claim (and the id, in one update) so a restart
 		// can resume it; also covers `repoint: false` (same id).
 		if (d.claim) setHarnessShellClaim(roomId, harnessId, d.sessionId);
 		if (d.repoint) {
 			if (!d.claim) replaceHarnessSessionId(roomId, harnessId, d.sessionId);
 			// `startup` has no phase source of its own; it reads like a resume.
-			harnessActivity.sessionSwitched(
-				harnessId,
-				d.source === "clear" || d.source === "fork" ? d.source : "resume",
-			);
+			const switched = d.source === "clear" || d.source === "fork" ? d.source : "resume";
+			harnessActivity.sessionSwitched(harnessId, switched);
+			sendPhaseInput(harnessId, { kind: "sessionSwitched", switch: switched });
 		} else {
 			// Same id: the tail is already on this file; just drop the one-shot flag.
 			shellClaim.consumeFreshProcess(harnessId);
@@ -137,6 +138,7 @@ export function useHarnessHookEvents(
 					?.harnesses.find((x) => x.id === harnessId)?.sessionId;
 				replaceHarnessSessionId(roomId, harnessId, sessionId);
 				harnessActivity.sessionSwitched(harnessId, "startup");
+				sendPhaseInput(harnessId, { kind: "sessionSwitched", switch: "startup" });
 				logBoth(
 					"info",
 					"skein::session",
@@ -198,11 +200,13 @@ export function useHarnessHookEvents(
 				return;
 			}
 			harnessActivity.noteLaunchSignal(harnessId);
+			sendPhaseInput(harnessId, { kind: "launchSignal" });
 			if (h?.kind !== "claude") return;
 			const next = followedSession(h.sessionId, event.payload);
 			if (next !== null) {
 				replaceHarnessSessionId(roomId, harnessId, next.sessionId);
 				harnessActivity.sessionSwitched(harnessId, next.source);
+				sendPhaseInput(harnessId, { kind: "sessionSwitched", switch: next.source });
 				return;
 			}
 			// #539: a different-id `startup` is not followed from the ping

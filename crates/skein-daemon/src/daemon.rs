@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::agent_api::AgentApiState;
+use crate::agent_api::phase_tap::PhaseTap;
 use crate::agent_api::state::{AgentApiEndpoint, AgentApiStateArgs};
 use crate::boot_resume::BootResume;
 use crate::db::Database;
@@ -23,6 +24,7 @@ use crate::harness_actions_hermes::HermesActionsManager;
 use crate::harness_config::HarnessConfig;
 use crate::harness_events_claude::ClaudeEventsManager;
 use crate::harness_events_opencode::OpencodeEventsManager;
+use crate::harness_phase::{HarnessFacts, PhaseService, SupervisorFacts};
 use crate::harness_runner::{HarnessRunner, RunnerDeps};
 use crate::harness_work_hermes::HermesWorkManager;
 use crate::opencode_sidecar::OpencodeSidecarManager;
@@ -154,6 +156,10 @@ pub struct Daemon {
     pub boot_resume: Arc<BootResume>,
     /// Starts and stops harnesses from their records (#731).
     pub harness_runner: Arc<HarnessRunner>,
+    /// The harness phase machine, in shadow beside the webview's (#732). The
+    /// same `Arc` the runner and the hook routes feed; manage it so commands
+    /// can reach it.
+    pub phase: Arc<PhaseService>,
     pub pty: PtyManager,
     pub sidecars: OpencodeSidecarManager,
     pub watcher: WatcherManager,
@@ -171,6 +177,44 @@ pub struct Daemon {
     pub agent_api_server: Option<ServerFuture>,
     /// The design preview's serve loop; `None` when the bind failed.
     pub preview_server: Option<ServerFuture>,
+}
+
+/// Start the phase service's tick thread (#732). The facts closure answers
+/// `live_attach` from the three adapter registries, which the client's own
+/// attach replaces in place (same key), so one answer covers both.
+///
+/// FLIP(#732): `mail` (moves in #733) and `transcript` (the sampler is added
+/// in the flip PR) stay absent, so the invariants that need them cannot fire.
+///
+/// The closure holds only a `Weak`: the ticker thread must not keep the
+/// service alive.
+fn start_phase_ticker(phase: &Arc<PhaseService>, state: &SharedState) {
+    let weak = Arc::downgrade(phase);
+    let (claude, opencode, hermes) = (
+        state.claude.clone(),
+        state.opencode.clone(),
+        state.hermes_actions.clone(),
+    );
+    let facts = Arc::new(move || {
+        let mut facts = SupervisorFacts::default();
+        let Some(phase) = weak.upgrade() else {
+            return facts;
+        };
+        for id in phase.phase_snapshot().into_keys() {
+            let live =
+                claude.is_attached(&id) || opencode.is_attached(&id) || hermes.is_attached(&id);
+            facts.harnesses.insert(
+                id,
+                HarnessFacts {
+                    live_attach: Some(live),
+                    ..HarnessFacts::default()
+                },
+            );
+        }
+        facts
+    });
+    // The handle is dropped: the thread ends on its own when the service does.
+    drop(phase.start_ticker(facts));
 }
 
 /// Binds 127.0.0.1 on an ephemeral port, non-blocking, with the std
@@ -203,6 +247,10 @@ impl Daemon {
         } = transport;
         let state = SharedState::build(paths, events.clone())?;
         let boot_env = Arc::clone(&spawn_env);
+        let rooms = RoomStore::new(Arc::clone(&state.db), state.events.clone());
+        // #732: the shadow phase machine, fed by the runner and the hooks.
+        let phase = PhaseService::new();
+        start_phase_ticker(&phase, &state);
 
         // Bound with the std listener so a failure is known *here*,
         // synchronously, and can be recorded: an async bind inside the
@@ -221,6 +269,10 @@ impl Daemon {
                     spawn_env,
                     client,
                     capture,
+                    phase_tap: PhaseTap {
+                        service: Arc::clone(&phase),
+                        rooms: Arc::clone(&rooms),
+                    },
                 }));
                 let serving = Arc::clone(&api);
                 let server: ServerFuture = Box::pin(async move {
@@ -266,7 +318,6 @@ impl Daemon {
         };
 
         let boot_resume = Arc::new(BootResume::new(Arc::clone(&boot_env)));
-        let rooms = RoomStore::new(Arc::clone(&state.db), state.events.clone());
         // #731: the runner drives the same managers the app manages (clones
         // share their registries) and hears of every applied room batch.
         let harness_runner = Arc::new(HarnessRunner::new(RunnerDeps {
@@ -281,9 +332,11 @@ impl Daemon {
             endpoint: agent_endpoint.clone(),
             harness_config: state.harness_config.clone(),
             events: state.events.clone(),
+            phase: Arc::clone(&phase),
         }));
         harness_runner.observe_store();
         Ok(Self {
+            phase,
             harness_config: state.harness_config,
             rooms,
             harness_runner,
