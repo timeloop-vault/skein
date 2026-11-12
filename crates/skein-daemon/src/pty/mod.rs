@@ -41,6 +41,7 @@
 pub mod command;
 pub mod env;
 pub mod opencode;
+pub mod opencode_prepare;
 mod output;
 mod preview;
 mod priority;

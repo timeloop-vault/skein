@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createSidecarDeathRecord, sidecarStoppedLine } from "./opencodeSidecarExit.ts";
+import {
+	createSidecarDeathRecord,
+	matchSidecarExit,
+	sidecarStoppedLine,
+} from "./opencodeSidecarExit.ts";
 
 function record() {
 	const writes: string[] = [];
@@ -34,5 +38,16 @@ describe("createSidecarDeathRecord", () => {
 		const { r } = record();
 		r.note(null);
 		expect(r.take()).toContain("(exit ?)");
+	});
+});
+
+describe("matchSidecarExit", () => {
+	const p = { harnessId: "h1", generation: 3, code: 1 };
+	it("matches this harness's current generation only", () => {
+		expect(matchSidecarExit(p, "h1", 3)).toEqual({ code: 1 });
+		expect(matchSidecarExit(p, "h2", 3)).toBeUndefined();
+		expect(matchSidecarExit(p, "h1", 4)).toBeUndefined();
+		expect(matchSidecarExit(p, "h1", undefined)).toBeUndefined();
+		expect(matchSidecarExit({ ...p, code: null }, "h1", 3)).toEqual({ code: null });
 	});
 });

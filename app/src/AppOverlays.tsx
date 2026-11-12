@@ -5,6 +5,7 @@
 
 import { CommandPalette, type PaletteItem } from "./CommandPalette.tsx";
 import { ConfirmDialogHost } from "./ConfirmDialog.tsx";
+import type { CreationOutcome } from "./creationOutcome.ts";
 import { NewRoomDialog } from "./NewRoomDialog.tsx";
 import type { CreateRoomArgs } from "./NewRoomDialogTypes.ts";
 import { Toast, type ToastEntry } from "./notifications.tsx";
@@ -56,7 +57,7 @@ export const AppOverlays = ({
 	branchTemplate: string;
 	recentRoomFolders: RecentFolder[];
 	rememberRoomFolder: (folder: string, defaults: Omit<FolderDefaults, "lastUsed">) => void;
-	createRoom: (args: CreateRoomArgs) => void;
+	createRoom: (args: CreateRoomArgs) => Promise<CreationOutcome>;
 	setShowNewRoom: (show: boolean) => void;
 	showPalette: boolean;
 	paletteItems: PaletteItem[];

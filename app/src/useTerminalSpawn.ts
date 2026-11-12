@@ -15,10 +15,10 @@ import { harnessInput } from "./harnessInput.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
 import { createSidecarDeathRecord, watchSidecarExit } from "./opencodeSidecarExit.ts";
-import { prepareOpencodeSpawn, realPrepareDeps } from "./opencodeV2Spawn.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
 import { forget as forgetLatency, recordEcho } from "./ptyLatency.ts";
 import { type PtyEvent, ptySpawn } from "./ptySpawnCall.ts";
+import { spawnOutcome } from "./ptySpawnOutcome.ts";
 import { shellClaim } from "./shellClaim.ts";
 import { forgetSpawnedProfile, recordSpawnedProfile } from "./spawnedEnvProfile.ts";
 import { startupAdoption } from "./startupAdoption.ts";
@@ -253,34 +253,11 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			// post-exit shell is invisible to Rust and not covered.
 			linkPolicy.mouseClicksDisabled = false;
 			try {
-				// #675/#676: probes the version, and for v2 starts the sidecar.
-				const prep = await prepareOpencodeSpawn({
-					kind: harnessKind,
+				// #730: no prepare step. The daemon probes the opencode CLI and, on a
+				// v2 CLI, starts the sidecar and swaps the argv itself; a failed
+				// sidecar start comes back as this call's rejection (the catch below).
+				const result = await ptySpawn({
 					cmd: cmdToSpawn,
-					roomId,
-					harnessId,
-					cwd,
-					sessionId,
-					agent,
-					envProfile,
-					setOpencodeVersion: opencodeClaim?.setOpencodeVersion,
-					setSessionId: onSessionCaptured,
-					isCancelled: () => cancelled,
-				});
-				if (!prep) {
-					early.dispose();
-					return;
-				}
-				sidecarGeneration = prep.sidecarGeneration;
-				const port = prep.v2 ? undefined : opencodePort; // #677: v2 attaches by sidecar generation
-				const {
-					id,
-					injected,
-					hermesHooks,
-					mouseClicksDisabled,
-					envProfile: appliedProfile,
-				} = await ptySpawn({
-					cmd: prep.argv,
 					cwd,
 					rows: term.rows,
 					cols: term.cols,
@@ -289,13 +266,24 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					kind: harnessKind,
 					envProfile,
 					onEvent: channel,
-					sidecarGeneration,
+					agent,
+					sessionId,
 				});
+				const { id, injected, hermesHooks, mouseClicksDisabled } = result;
+				const appliedProfile = result.envProfile;
 				if (cancelled) {
 					early.dispose();
+					// pty_kill also stops the sidecar the daemon bound to this PTY.
 					void invoke("pty_kill", { id });
 					return;
 				}
+				const outcome = spawnOutcome(result, harnessKind, { sessionId, opencodePort });
+				sidecarGeneration = outcome.sidecarGeneration;
+				const port = outcome.port; // #677: v2 attaches by sidecar generation
+				if (outcome.opencodeVersion !== undefined) {
+					opencodeClaim?.setOpencodeVersion?.(outcome.opencodeVersion);
+				}
+				if (outcome.capturedSessionId) onSessionCaptured?.(outcome.capturedSessionId);
 				ptyIdRef.current = id;
 				linkPolicy.mouseClicksDisabled = mouseClicksDisabled;
 				recordSpawnedProfile(harnessId, appliedProfile ?? null);
@@ -346,9 +334,6 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				if (!resizeObserver) resizeObserver = observeResize(term, fit, host, ptyIdRef, gate);
 			} catch (err: unknown) {
 				early.dispose();
-				if (sidecarGeneration !== undefined && !cancelled) {
-					void realPrepareDeps.stop(harnessId, sidecarGeneration).catch(() => {});
-				}
 				const msg = err instanceof Error ? err.message : String(err);
 				gate.write(`\r\n\x1b[31m[skein] pty_spawn failed: ${msg}\x1b[0m\r\n`);
 				// Reprompt — else the user can't tell Enter opens a shell.

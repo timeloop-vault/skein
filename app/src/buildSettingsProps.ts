@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 import type { VersionNoticeMode } from "./claudeVersion.ts";
-import { versionNoticeModeFor, withDefaultAgent, withVersionNoticeMode } from "./prefs.ts";
+import { versionNoticeModeFor, withVersionNoticeMode } from "./prefs.ts";
 import type { SettingsModal } from "./SettingsModal.tsx";
 import type { HarnessKind, SpawnSettingsPayload } from "./types.ts";
 import {
@@ -51,7 +51,7 @@ export function buildSettingsProps(
 		onSpawnSettings: saveSpawnSettings,
 		defaultAgents: s.defaultAgents,
 		onDefaultAgent: (kind: HarnessKind, agent: string | undefined) =>
-			s.setDefaultAgents((prev) => withDefaultAgent(prev, kind, agent)),
+			s.setDefaultAgent(kind, agent),
 		versionNoticeMode: versionNoticeModeFor(s.versionNoticeModes, "claude"),
 		onVersionNoticeMode: (mode: VersionNoticeMode) =>
 			s.setVersionNoticeModes((prev) => withVersionNoticeMode(prev, "claude", mode)),

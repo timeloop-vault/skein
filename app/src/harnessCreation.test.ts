@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { withResumeCmds } from "./harnessCmd.ts";
 import {
 	buildHarness,
 	buildRoom,
@@ -165,19 +164,6 @@ describe("shell claim helpers (#520)", () => {
 		const keep = withRespawnedCmd(claimed, "s1", "h1", SHELL);
 		expect(h0(keep)?.sessionId).toBe("new");
 		expect(h0(keep)?.spawnGen).toBe(1);
-	});
-
-	it("claim -> restart rebuild resumes claude; claim -> release keeps the shell", () => {
-		const claimed = withShellClaim([shellRoom("old")], "s1", "h1", "sid-1");
-		const [claimedRoom] = claimed;
-		const [releasedRoom] = withoutShellClaim(claimed, "s1", "h1");
-		if (!claimedRoom || !releasedRoom) throw new Error("room missing");
-		expect(h0([withResumeCmds(claimedRoom, new Map())])?.cmd).toEqual([
-			"claude",
-			"--resume",
-			"sid-1",
-		]);
-		expect(h0([withResumeCmds(releasedRoom, new Map())])?.cmd).toEqual(SHELL);
 	});
 });
 

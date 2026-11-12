@@ -21,9 +21,9 @@ no client attached. Surviving the restart is #584.
 
 | Concern | Owner today | Where |
 | --- | --- | --- |
-| Argv per kind, resume argv | Frontend | `harnessCmd.ts`, `remoteCmd.ts`, `agents.ts` |
-| Spawn defaults (shell, cwd, agent) | Frontend and host | `prefs.ts` `defaultAgents` (localStorage), `default_shell`, `default_cwd` |
-| opencode port, sidecar | Frontend | `pick_free_port` from several call sites, `opencodeV2Spawn.ts` |
+| Argv per kind, resume argv | Daemon since slice 2 (#730); before it, the frontend | `harness_argv/`; the app calls `harness_fresh_cmd`, `harness_resume_cmd`, `rooms_resume_cmds`. `harnessCmd.ts` keeps only `isOpencodeV2` and the Hermes profile constant |
+| Spawn defaults (shell, cwd, agent) | Daemon since slice 2 (#730); before it, the frontend held the agent | `default_agents` in the daemon's `settings.json`; `default_shell_impl`, `default_cwd_impl`. `prefs.ts` `defaultAgents` survives only as the legacy import source |
+| opencode port, sidecar | Daemon since slice 2 (#730); before it, the frontend | The port is allocated inside the argv commands; `pty_spawn` probes the version and starts the sidecar. `opencodeV2Spawn.ts` is gone |
 | Spawn and kill of the PTY | Frontend | `useTerminalSpawn.ts`: spawn in a mount effect, `pty_kill` on unmount |
 | PTY output | Per-spawn channel | No ring buffer in the daemon; a dead channel drops output |
 | Room and harness records | Daemon since slice 1 (#729); before it, the frontend saved wholesale | `RoomStore` (`room_store/`); clients send mutations through `rooms_apply`. `db_save_rooms` and `roomsSaveScheduler.ts` are gone |
@@ -475,6 +475,168 @@ its own, and a remote change never overwrites it.
   (`beginHydrate` / `finishHydrate` in `roomsSync.ts`), so none is
   merged against an empty list. An event emitted before the listener
   has registered is not seen; the load that follows reflects it.
+
+## Slice 2 as built (#730)
+
+The daemon now builds every harness argv and allocates the opencode
+port. The app asks for the argv, records the result and spawns what it
+was given. The builders are a pure Rust port of the old frontend ones,
+in `crates/skein-daemon/src/harness_argv/`:
+
+- `mod.rs`: `cmd_for_kind`, `resolve_hermes_profile`.
+- `resume.rs`: `resume_harness`, `with_resume_cmds`,
+  `unarchive_room_transform`.
+- `remote.rs`: `remote_argv`, `validate_remote_host`.
+- `agent_check.rs`: `validate_agent`, `with_verdict`.
+- `opencode_v2.rs`: `opencode_v2_argv`, `opencode_spawn_plan`,
+  `is_opencode_v2`.
+- `plan.rs`: `fresh_cmd`, `resume_one`, `resume_rooms`. These wrap the
+  builders with port allocation and session id minting.
+
+| Command | The app calls it | The daemon |
+| --- | --- | --- |
+| `harness_fresh_cmd` | A new harness, and repoint | Builds the first argv for the kind, allocates the opencode port, mints a Claude session id, takes the shell for a byoh harness from its own default |
+| `harness_resume_cmd` | Restart of one harness | Rebuilds the argv from the record in resume form, with a fresh opencode port |
+| `rooms_resume_cmds` | Boot, and unarchive | Does the same for every harness of the given rooms; unarchive also clears `archived`, `retired` and `closedBy` |
+
+`pty_spawn` changed too. It takes `agent` and `sessionId` from the
+record. For an opencode harness on a v2 CLI it probes the version,
+starts the sidecar, swaps in `opencode --server <url> --session <id>`
+and binds the sidecar to the PTY. The result carries
+`sidecarGeneration`, `opencodeVersion` and `sessionId`. The old
+`opencodeV2Spawn.ts` is gone, and so are the `pick_free_port` and
+`opencode_sidecar_start` and `opencode_sidecar_stop` commands.
+
+The agent verdict moved as well. `list_harness_agents` takes an optional
+`check` name and returns `verdict` (`ok`, `unknown` or `unverified`)
+from the same enumeration. The TS `validateAgent` is gone. The spawn
+gate, `create_room` resolution and the harness picker read the daemon's
+verdict.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant D as Daemon
+    participant O as opencode
+    C->>D: 1 harness_fresh_cmd
+    D->>D: 2 allocate port, build argv
+    D-->>C: 3 cmd and port
+    C->>D: 4 rooms_apply putHarness
+    C->>D: 5 pty_spawn with agent
+    D->>D: 6 probe version, v1 keeps argv
+    D->>D: 7 spawn PTY
+    D-->>C: 8 spawn result
+    C->>D: 9 opencode_events_attach
+    D->>O: 10 connect to event stream on the port
+```
+
+Figure 5: a fresh opencode harness on a v1 CLI, from asking for argv to
+a running PTY with SSE attached. The v2 differences are in step 6 to 10
+below. Renders section "Slice 2 as built" and
+crates/skein-daemon/src/harness_argv/; the text is authoritative
+(non-normative).
+
+1. The client sends `harness_fresh_cmd` the kind, an optional session
+   id, the agent, the remote spec and the Hermes profile (no room),
+   plus `newHarness`. It is true for a brand-new harness, where the
+   daemon mints a Claude session id when none is given and defaults the
+   Hermes profile; it is false for a repoint, where both pass through
+   as given.
+2. The daemon binds a free port on `127.0.0.1` and builds the argv with
+   `cmd_for_kind`.
+3. It returns the argv and the port. The client keeps the port to attach
+   the SSE adapter later (v1 only).
+4. The client records the harness through `rooms_apply`, as in slice 1.
+5. The client calls `pty_spawn` with the argv, the `agent` and the
+   `sessionId` of the record.
+6. The daemon probes the opencode version. On an older (v1) CLI the argv
+   from step 3 is used as is.
+7. It spawns the PTY.
+8. The result carries `sidecarGeneration`, `opencodeVersion` and
+   `sessionId`. The client writes the session id back to the record
+   only when one is set and differs from the stored one (the v2 path).
+9. The client asks the daemon to attach the SSE adapter
+   (`opencode_events_attach`).
+10. The daemon connects to opencode's event stream on the port from
+    step 3.
+
+Steps 4 and 5 may happen in either order in the code; the figure shows
+the usual one.
+
+On a v2 CLI, step 6 also starts a sidecar for the agent and session
+inside `pty_spawn`, swaps in `opencode --server <url> --session <id>`
+and binds the sidecar to the PTY. The result's `sidecarGeneration` is
+set, and steps 9 and 10 attach by sidecar generation with no port
+(`ptySpawnOutcome.ts`); the port from step 2 goes unused. The live check
+exercised the v1 path.
+
+### The merge rule
+
+The results of `harness_resume_cmd` and `rooms_resume_cmds` are merged
+into the client's rooms by id (`harnessArgvApply.ts`). Only `cmd`,
+`sessionId` and `shellClaim` are taken. On unarchive `archived`,
+`retired` and `closedBy` are dropped as well. The reason is that the
+Rust `Room` and `Harness` structs have no catch-all, so they do not
+carry frontend-only fields. Replacing the room wholesale with the
+daemon's copy would lose those fields. Merging by id also keeps a room
+the user edited while the call was in flight.
+
+### Defaults and the one-time import
+
+`defaultAgents` lives in the daemon's `settings.json`
+(`SpawnSettings.default_agents`; logic in
+`spawn_env/default_agents.rs`). `None` means the daemon has never owned
+a value.
+
+- `default_agents_import` stores the client's legacy localStorage map
+  only if the daemon has never owned one. The check and the write happen
+  under the settings lock. Later calls change nothing and return what is
+  stored. Blank names and keys that are not a harness kind are dropped.
+- `default_agent_set` edits one kind. A blank name removes it.
+- A whole-settings save never changes `defaultAgents`; only
+  `default_agents_import` and `default_agent_set` write it.
+- While `settings.json` is unreadable (the daemon runs on defaults in
+  its degraded state), the import and the setter refuse and write
+  nothing, so a corrupt file is never replaced by the automatic boot
+  import.
+- The client calls the import on every boot and never deletes the legacy
+  key (`defaultAgentsStore.ts`, `useAppSettings.ts`).
+
+The default shell and the default cwd were already computed by the
+daemon for its own host (`default_shell_impl`, `default_cwd_impl` in
+`spawn_env/lookups.rs`; `SpawnSettings.shell` is the user override). The
+byoh argv now takes the shell from there, inside the daemon, instead of
+receiving it from the client. Nothing for shell or cwd was ever in
+localStorage, so nothing is imported for them.
+
+### What stays with the client until slice 3
+
+Slice 3 (#731) moves these:
+
+- Deciding when to spawn and when to stop.
+- The stale-session probes that run before the client asks for resume
+  argv.
+- Building the remote spec (`buildRemoteSpec`).
+- Passing the argv it was given back into `pty_spawn`.
+
+A failed daemon argv call at boot shows the same retry card as a failed
+rooms load. In creation, reopen and repoint it shows a message and
+changes nothing.
+
+### Known limits
+
+- New Room creates the worktree before it asks for the argv. If
+  `harness_fresh_cmd` then fails, no room is created but the worktree
+  and its branch stay behind, and have to be removed by hand before the
+  same branch name can be used again. Skein performs no git mutations
+  beyond adding the worktree, so it does not clean this up.
+- The import marker is the presence of the key. A daemon whose
+  `settings.json` was written by hand with an empty map counts as
+  having imported.
+- Other clients are not told when a default agent changes. They see the
+  new value at their next boot or settings read.
+- The argv still round-trips through the client until #731: the daemon
+  builds it, the client holds it, and `pty_spawn` receives it back.
 
 ## What #583 assumes of #584 and #585
 

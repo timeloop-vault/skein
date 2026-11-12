@@ -12,7 +12,7 @@ use crate::db::Database;
 use crate::harness_config::HarnessConfig;
 use crate::spawn_env::state::SpawnEnvState;
 
-/// Wire shape of `opencode_sidecar_start`'s return value.
+/// What a sidecar start returns.
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SidecarStartResult {

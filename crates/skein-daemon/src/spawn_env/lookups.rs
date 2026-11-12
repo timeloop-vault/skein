@@ -4,6 +4,28 @@
 use super::state::{SpawnEnvState, SpawnSettingsPayload, home_dir, spawn_settings_payload};
 use crate::spawn_settings::SpawnSettings;
 
+/// Persist `settings` and make them live, without the re-probe. Split
+/// out so the merge rule is testable without a login-shell probe.
+///
+/// `default_agents` is owned by `default_agents_import_impl` and
+/// `default_agent_set_impl` alone, so the stored value always wins: the
+/// Settings panel sends back the whole object it loaded earlier, and its
+/// copy of the map may be stale. The write lock is held across the file
+/// write so a concurrent default-agents import cannot interleave.
+///
+/// # Errors
+/// The settings file could not be written.
+pub fn spawn_settings_store(
+    spawn_env: &SpawnEnvState,
+    mut settings: SpawnSettings,
+) -> Result<SpawnSettings, String> {
+    let mut stored = spawn_env.settings.write();
+    settings.default_agents.clone_from(&stored.default_agents);
+    crate::spawn_settings::save(&spawn_env.data_dir, &settings)?;
+    *stored = settings.clone();
+    Ok(settings)
+}
+
 /// Persist the environment settings and immediately re-probe. Blocks on
 /// the settings file write.
 ///
@@ -13,8 +35,7 @@ pub fn spawn_settings_save_impl(
     spawn_env: &SpawnEnvState,
     settings: SpawnSettings,
 ) -> Result<SpawnSettingsPayload, String> {
-    crate::spawn_settings::save(&spawn_env.data_dir, &settings)?;
-    *spawn_env.settings.write() = settings.clone();
+    let settings = spawn_settings_store(spawn_env, settings)?;
     // A successful save replaces whatever was unreadable before.
     *spawn_env.degraded.write() = None;
     crate::pty::reprobe(spawn_env.data_dir.clone(), settings);
@@ -78,7 +99,7 @@ pub fn opencode_cli_version_impl(settings: &SpawnSettings) -> Option<OpencodeVer
 }
 
 /// Wire shape of `opencode_cli_version`.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpencodeVersionDto {
     pub major: u32,

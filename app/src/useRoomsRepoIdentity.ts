@@ -4,6 +4,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { type Dispatch, type MutableRefObject, type SetStateAction, useCallback } from "react";
+import { reportArgvFailure } from "./argvFailure.ts";
+import { harnessFreshCmd } from "./harnessArgvApi.ts";
 import { repointRoom } from "./missingFolder.ts";
 import type { FolderInfoDto } from "./NewRoomDialog.tsx";
 import type { RenameTarget } from "./RoomStrip.tsx";
@@ -13,7 +15,6 @@ import { checkProbe, probeFolder } from "./roomsStoreProbe.ts";
 import type { RepoIdentity, Room } from "./types.ts";
 
 export interface RoomsRepoIdentityDeps {
-	defaultShell: string[];
 	activeRooms: Room[];
 	roomsRef: MutableRefObject<Room[]>;
 	activeRoomIdRef: MutableRefObject<string>;
@@ -27,12 +28,11 @@ export interface RoomsRepoIdentityDeps {
 	setMissingFolders: Dispatch<SetStateAction<Set<string>>>;
 	setMismatch: (id: string, on: boolean) => void;
 	syncRepoMeta: (targets: Room[]) => void;
-	allocateOpencodePorts: (room: Room | undefined) => Promise<Map<string, number>>;
+	setOpencodePorts: Dispatch<SetStateAction<Map<string, number>>>;
 }
 
 export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 	const {
-		defaultShell,
 		activeRooms,
 		roomsRef,
 		activeRoomIdRef,
@@ -46,7 +46,7 @@ export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 		setMissingFolders,
 		setMismatch,
 		syncRepoMeta,
-		allocateOpencodePorts,
+		setOpencodePorts,
 	} = d;
 
 	// #164: "Recreate worktree" on a MissingFolderCard. Only ever called
@@ -93,7 +93,6 @@ export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 	// allocation unarchive already does for opencode harnesses.
 	const pickMissingFolder = useCallback(
 		async (room: Room, newCwd: string) => {
-			const portMap = await allocateOpencodePorts(room);
 			// The picked folder may belong to a different repo (or none at
 			// all) — inspect it before committing the repoint rather than
 			// clearing `repoRoot` and relying on backfill: a repo gets its
@@ -115,10 +114,18 @@ export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 				identityCheck = checkProbe(room.repoIdentity, probe);
 				if (!room.repoIdentity && isStorable(probe.identity)) adopted = probe.identity;
 			}
-			const base = repointRoom(room, newCwd, {
-				fallbackShell: defaultShell,
-				opencodePorts: portMap,
-			});
+			// #730: the daemon builds each moved harness's fresh argv and
+			// allocates its port, before anything below changes state.
+			// A rejection leaves the room (and its missing-folder card) as it was.
+			let repointedRoom: Awaited<ReturnType<typeof repointRoom>>;
+			try {
+				repointedRoom = await repointRoom(room, newCwd, harnessFreshCmd);
+			} catch (err) {
+				reportArgvFailure("move the room to that folder", err, room);
+				return;
+			}
+			const { room: base, ports } = repointedRoom;
+			if (ports.size > 0) setOpencodePorts((prev) => new Map([...prev, ...ports]));
 			// `exactOptionalPropertyTypes` forbids `repoRoot: undefined` —
 			// a plain (non-repo) folder, or one with no known root, must
 			// drop the key entirely rather than set it to undefined.
@@ -142,8 +149,7 @@ export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 			});
 		},
 		[
-			allocateOpencodePorts,
-			defaultShell,
+			setOpencodePorts,
 			setMismatch,
 			identityTriedRef,
 			mismatchedRef,

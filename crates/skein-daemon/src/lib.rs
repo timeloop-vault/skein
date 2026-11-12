@@ -15,6 +15,7 @@ pub mod harness_action_event;
 pub mod harness_actions_claude;
 pub mod harness_actions_hermes;
 pub mod harness_actions_opencode;
+pub mod harness_argv;
 pub mod harness_config;
 pub mod harness_events_claude;
 pub mod harness_events_opencode;

@@ -12,7 +12,9 @@ import {
 	useCallback,
 	useEffect,
 } from "react";
-import { withResumeCmds } from "./harnessCmd.ts";
+import { roomsResumeCmds } from "./harnessArgvApi.ts";
+import { applyResumedRooms } from "./harnessArgvApply.ts";
+import { hydrateFailure, ResumePrepareError } from "./hydrateFailure.ts";
 import { isStorable, nextRepoRoot } from "./repoIdentity.ts";
 import {
 	checkProbe,
@@ -149,37 +151,24 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 							),
 						})),
 					);
-					// Epic #50 L2c-2: pre-allocate fresh embedded-server
-					// ports for every resumed opencode harness. The
-					// previous Skein run released its ports on exit;
-					// resumeCmd needs the new ones to bake into the
-					// argv. Awaiting in parallel keeps boot fast even
-					// with many opencode rooms.
-					const opencodeHarnesses = verified.flatMap((r) =>
-						r.harnesses.filter((h) => h.kind === "opencode" && h.cmd),
-					);
-					const allocations = await Promise.all(
-						opencodeHarnesses.map(async (h) => {
-							try {
-								const port = await invoke<number>("pick_free_port");
-								return [h.id, port] as const;
-							} catch (err) {
-								console.warn(
-									`[skein] pick_free_port failed for ${h.id}; L2c-2 adapter disabled for this harness`,
-									err,
-								);
-								return null;
-							}
-						}),
-					);
-					const portMap = new Map<string, number>(
-						allocations.filter((a): a is readonly [string, number] => a !== null),
-					);
-					setOpencodePorts(portMap);
-					// Rewrite each harness's cmd to its resume form before
-					// mounting, so the PTY spawn re-attaches to the prior
-					// conversation instead of starting fresh.
-					const withResume = verified.map((r) => withResumeCmds(r, portMap));
+					// #730: the daemon rewrites each harness's cmd to its resume
+					// form (so the PTY spawn re-attaches to the prior conversation
+					// instead of starting fresh) and pre-allocates fresh
+					// embedded-server ports for every resumed opencode harness
+					// (Epic #50 L2c-2; the previous run released its ports on
+					// exit). Stale sessionIds were dropped above, before this
+					// call. Only the daemon-owned fields merge back by id, since
+					// the Rust structs would drop any field they don't know. A
+					// harness whose port allocation failed just resumes without
+					// --port and its SSE adapter doesn't attach.
+					// A rejection throws ResumePrepareError before anything is
+					// applied (no ports, rooms or loaded flag) and reaches the
+					// retry card via the catch below.
+					const resumed = await roomsResumeCmds(verified).catch((err: unknown) => {
+						throw new ResumePrepareError(err);
+					});
+					setOpencodePorts(new Map(Object.entries(resumed.ports)));
+					const withResume = applyResumedRooms(verified, resumed.rooms);
 					// #164: check every active room's folder in parallel and
 					// have the full missing-set ready BEFORE rooms mount, so
 					// a vanished folder never gets even one spawn attempt.
@@ -228,16 +217,20 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 				}
 				loadedRef.current = true;
 				setLoaded(true);
+				// A sibling's failure card may have landed while we were
+				// resuming; success wins, or it would park the autosave.
+				setLoadFailed(null);
 			})
 			.catch((err: unknown) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				console.error("[skein] db_load_rooms failed:", msg);
-				if (hydratedOnceRef.current) return;
+				console.error("[skein] hydrate failed:", err);
+				const failure = hydrateFailure(err, loadedRef.current, hydratedOnceRef.current);
+				hydratedOnceRef.current = failure.hydratedOnce;
+				if (failure.message === null) return;
 				// #167: deliberately NOT setLoaded(true) here. Flipping
 				// `loaded` with the initial [] still in state arms the
 				// autosave, whose next write is DELETE FROM sessions —
 				// the boot-wipe chain this issue exists to break.
-				setLoadFailed(msg);
+				setLoadFailed(failure.message);
 			});
 	}, [
 		syncRepoMeta,

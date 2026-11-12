@@ -6,7 +6,7 @@
 // to persist) and MissingFolderCard.tsx owns the chrome.
 
 import { HARNESS_KINDS } from "./data.tsx";
-import { cmdForKind } from "./harnessCmd.ts";
+import type { FreshCmdFn } from "./harnessArgvApi.ts";
 import type { Harness, Room } from "./types.ts";
 
 /** The slice of `FolderInfoDto` (git.rs / App.tsx) that `recoveryOptions`
@@ -68,46 +68,58 @@ export function recoveryOptions(room: Room, repoInfo: RepoRootInfo | undefined):
 }
 
 /** Move a room to a newly picked folder. Every harness whose `cwd`
- *  equalled the room's old `cwd` moves with it — which today is every
+ *  equalled the room's old `cwd` moves with it - which today is every
  *  harness, since `createHarnessInRoom` always stamps the room's cwd,
  *  but the field is per-harness so this only touches the ones that
  *  actually pointed at the folder that went missing.
  *
- *  A resumed conversation is keyed to the OLD folder — Claude's own
- *  store is keyed by cwd — so a moved harness that can resume
+ *  A resumed conversation is keyed to the OLD folder - Claude's own
+ *  store is keyed by cwd - so a moved harness that can resume
  *  (`capabilities.resume`) can't resume into the new one: drop
- *  `sessionId` and rebuild a fresh spawn argv via `cmdForKind`, never
- *  by pattern-matching the old argv (see harnessCmd.ts's header
- *  comment on exactly that trap). A harness that can't resume anyway
- *  (copilot, a shell that may carry a user-swapped command) just
- *  moves — there's no conversation to lose, and rebuilding its argv
- *  from scratch would discard that customization. `spawnGen` is
- *  bumped either way so LiveTerminal remounts even when the argv is
- *  unchanged. */
-export function repointRoom(
+ *  `sessionId` and ask the daemon for a fresh spawn argv (#730,
+ *  `freshCmd`; crates/skein-daemon/src/harness_argv/), never by
+ *  pattern-matching the old argv. The daemon allocates opencode's port,
+ *  which comes back; Claude gets no new session id (a bare `claude`).
+ *  A harness that can't resume anyway (copilot, a shell that may carry a
+ *  user-swapped command) just moves - there's no conversation to lose,
+ *  and rebuilding its argv from scratch would discard that
+ *  customization. `spawnGen` is bumped either way so LiveTerminal
+ *  remounts even when the argv is unchanged.
+ *
+ *  Returns the ports the daemon allocated (opencode harnesses only; a
+ *  failed allocation is simply absent, as the argv is then port-less). */
+export async function repointRoom(
 	room: Room,
 	newCwd: string,
-	opts: { fallbackShell?: string[]; opencodePorts?: ReadonlyMap<string, number> } = {},
-): Room {
-	const { fallbackShell = [], opencodePorts = new Map() } = opts;
+	freshCmd: FreshCmdFn,
+): Promise<{ room: Room; ports: Map<string, number> }> {
 	const oldCwd = room.cwd;
-	const harnesses = room.harnesses.map((h): Harness => {
-		if (h.cwd !== oldCwd) return h;
-		if (!h.cmd) return { ...h, cwd: newCwd };
-		if (!HARNESS_KINDS[h.kind].capabilities.resume) {
-			return { ...h, cwd: newCwd, spawnGen: (h.spawnGen ?? 0) + 1 };
-		}
-		const { sessionId, ...rest } = h;
-		const cmd = cmdForKind(
-			h.kind,
-			fallbackShell,
-			undefined,
-			opencodePorts.get(h.id),
-			h.agent,
-			h.remote,
-			h.hermesProfile,
-		);
-		return { ...rest, cwd: newCwd, cmd, spawnGen: (h.spawnGen ?? 0) + 1 };
-	});
-	return { ...room, cwd: newCwd, harnesses };
+	const ports = new Map<string, number>();
+	const harnesses = await Promise.all(
+		room.harnesses.map(async (h): Promise<Harness> => {
+			if (h.cwd !== oldCwd) return h;
+			if (!h.cmd) return { ...h, cwd: newCwd };
+			if (!HARNESS_KINDS[h.kind].capabilities.resume) {
+				return { ...h, cwd: newCwd, spawnGen: (h.spawnGen ?? 0) + 1 };
+			}
+			const { sessionId: _old, ...rest } = h;
+			// No `newHarness`: a moved Claude starts a bare `claude`, as it
+			// always did, and the record keeps no session id, and a Hermes
+			// record's own profile (if any) is passed through unchanged.
+			const fresh = await freshCmd({
+				kind: h.kind,
+				...(h.agent ? { agent: h.agent } : {}),
+				...(h.remote ? { remote: h.remote } : {}),
+				...(h.hermesProfile ? { hermesProfile: h.hermesProfile } : {}),
+			});
+			if (fresh.opencodePort !== null) ports.set(h.id, fresh.opencodePort);
+			return {
+				...rest,
+				cwd: newCwd,
+				cmd: fresh.cmd,
+				spawnGen: (h.spawnGen ?? 0) + 1,
+			};
+		}),
+	);
+	return { room: { ...room, cwd: newCwd, harnesses }, ports };
 }

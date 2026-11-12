@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 const invokeMock = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
-import { unarchiveRoomTransform } from "./harnessCmd.ts";
 import { dropUnwrittenSessions, stillExists } from "./roomsStoreProbe.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
 
@@ -62,31 +61,10 @@ describe("dropUnwrittenSessions", () => {
 		expect(out.harnesses[0]).toBe(h);
 	});
 
-	it("makes reopen start fresh with --session-id, not --resume", async () => {
+	it("drops the id so the daemon's reopen starts fresh, not --resume (#730)", async () => {
 		const h = harness("claude", { cmd: ["claude", "--session-id", SID], sessionId: SID });
 		const probed = await dropUnwrittenSessions(room([h]), async () => false);
-		const cmd = unarchiveRoomTransform(probed, new Map()).harnesses[0]?.cmd;
-		expect(cmd).not.toContain("--resume");
-		expect(cmd?.[1]).toBe("--session-id");
-		expect(cmd?.[2]).not.toBe(SID);
-	});
-
-	it("resumes a claimed shell harness only while its transcript exists (#520)", async () => {
-		const h = harness("claude", {
-			cmd: ["/bin/zsh", "-l"],
-			sessionId: SID,
-			shellClaim: { sessionId: SID },
-		});
-		const live = await dropUnwrittenSessions(room([h]), async () => true);
-		expect(unarchiveRoomTransform(live, new Map()).harnesses[0]?.cmd).toEqual([
-			"claude",
-			"--resume",
-			SID,
-		]);
-		const gone = await dropUnwrittenSessions(room([h]), async () => false);
-		const out = unarchiveRoomTransform(gone, new Map()).harnesses[0];
-		expect(out?.cmd).toEqual(["/bin/zsh", "-l"]);
-		expect(out).not.toHaveProperty("shellClaim");
+		expect(probed.harnesses[0]).not.toHaveProperty("sessionId");
 	});
 });
 

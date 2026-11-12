@@ -3,9 +3,8 @@
 // #246's, in `crates/skein-harness` behind `list_harness_agents`.
 //
 // DTO mirror of `app/src-tauri/src/agents.rs` plus the two rules the
-// frontend applies to that data: what a stored name means when the
-// list no longer contains it (`validateAgent`), and what a row is
-// allowed to claim about the review loop.
+// frontend applies to that data: the daemon's verdict on a stored name
+// (`checkAgent`), and what a row is allowed to claim about the review loop.
 
 import { invoke } from "@tauri-apps/api/core";
 import { HARNESS_KINDS } from "./data.tsx";
@@ -38,7 +37,7 @@ export interface AgentListing {
 	agents: AgentInfo[];
 	/** Why the list may be incomplete — the CLI was missing, failed, or
 	 *  printed something unparseable. Non-null means "cannot prove a
-	 *  name is absent", which is what `validateAgent` keys off. */
+	 *  name is absent", which the daemon's verdict keys off. */
 	degraded: string | null;
 	/** True when the kind has no agent concept at all. */
 	unsupported: boolean;
@@ -65,14 +64,38 @@ export const kindHasAgents = (kind: HarnessKind): boolean =>
  *  gone, the webview lost its bridge — still comes back as a degraded
  *  listing, because the caller's only other option is to pretend the
  *  agent does not exist. */
-export const listHarnessAgents = async (kind: HarnessKind, cwd: string): Promise<AgentListing> => {
+export const listHarnessAgents = async (
+	kind: HarnessKind,
+	cwd: string,
+	check?: string,
+): Promise<AgentListing & { verdict?: AgentVerdict }> => {
 	if (!kindHasAgents(kind)) return NO_AGENTS;
 	try {
-		return await invoke<AgentListing>("list_harness_agents", { kind, cwd });
+		// `check` makes the daemon judge that name against this very call's
+		// listing (one enumeration, #730); no `check`, no `verdict` key.
+		return await invoke<AgentListing & { verdict?: AgentVerdict }>("list_harness_agents", {
+			kind,
+			cwd,
+			...(check?.trim() ? { check } : {}),
+		});
 	} catch (err: unknown) {
 		const msg = err instanceof Error ? err.message : String(err);
 		return { agents: [], degraded: `could not ask ${kind}: ${msg}`, unsupported: false };
 	}
+};
+
+/** The daemon's verdict on `agent` for `kind` in `cwd`. No name = `ok`
+ *  with no CLI probe. A listing that arrives without a verdict (a kind
+ *  with no agents, a failed invoke) is `unverified`, never `unknown`:
+ *  absence of an answer proves nothing. */
+export const checkAgent = async (
+	kind: HarnessKind,
+	cwd: string,
+	agent: string | undefined,
+): Promise<AgentVerdict> => {
+	if (!agent?.trim()) return { kind: "ok" };
+	const l = await listHarnessAgents(kind, cwd, agent);
+	return l.verdict ?? { kind: "unverified", agent, why: l.degraded ?? "no verdict returned" };
 };
 
 /** What a named agent is, measured against a listing.
@@ -90,14 +113,8 @@ export type AgentVerdict =
 	| { kind: "unknown"; agent: string }
 	| { kind: "unverified"; agent: string; why: string };
 
-export const validateAgent = (agent: string | undefined, listing: AgentListing): AgentVerdict => {
-	if (!agent?.trim()) return { kind: "ok" };
-	if (listing.degraded !== null) {
-		return { kind: "unverified", agent, why: listing.degraded };
-	}
-	if (listing.agents.some((a) => a.name === agent)) return { kind: "ok" };
-	return { kind: "unknown", agent };
-};
+/** The verdict itself is computed by the daemon (`list_harness_agents`
+ *  with `check`); see `checkAgent`. */
 
 /** The message a harness shows instead of spawning with a name the CLI
  *  no longer knows.

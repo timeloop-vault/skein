@@ -30,12 +30,15 @@ import { HARNESS_KINDS } from "./data.tsx";
 import type { DesignDevice } from "./designDevice.ts";
 import { filesRegistry } from "./filesRegistry.ts";
 import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
+import { harnessResumeCmd } from "./harnessArgvApi.ts";
+import { applyResumedHarness } from "./harnessArgvApply.ts";
 import { withRespawnedCmd } from "./harnessCreation.ts";
 import { harnessInput } from "./harnessInput.ts";
 import type { GateResult } from "./harnessInputGate.ts";
-import { canRestart, exitedRestartable, restartedHarness } from "./harnessRestart.ts";
+import { canRestart, exitedRestartable } from "./harnessRestart.ts";
 import { mailHold } from "./mailHold.ts";
 import type { RenameTarget } from "./RoomStrip.tsx";
+import { prepareRestart } from "./restartResume.ts";
 import { stillExists } from "./roomsStoreProbe.ts";
 import { pickerAfterHarnessSelect } from "./tempView.ts";
 import type { Room } from "./types.ts";
@@ -282,43 +285,34 @@ export function useHarnessActions(
 		// harnesses in a room share, so it could attach a sibling's.
 		// Claude never refuses for session reasons: with no id, or a
 		// transcript that's gone (the boot path's rule, useRoomsHydrate),
-		// resumeHarness mints a fresh session instead.
+		// the daemon mints a fresh session instead.
 		const gone = !h.sessionId || !(await stillExists(h));
 		if (gone && h.kind === "opencode") {
 			return { ok: false, reason: "no conversation to resume yet" };
 		}
-		// A fresh embedded-server port: the old one dies with the process.
-		// The opencode SSE adapter reads its port from the `opencodePorts`
-		// map (HarnessColumn -> LiveTerminal prop), not from the argv.
-		let port: number | undefined;
-		if (h.kind === "opencode") {
-			try {
-				port = await invoke<number>("pick_free_port");
-			} catch (err) {
-				console.warn("[skein] pick_free_port failed; not restarting:", err);
-				return { ok: false, reason: "couldn't allocate a port for the restarted harness" };
-			}
-		}
+		// Re-read: sessionId may have changed (/clear, /resume) during the awaits.
+		const pre = findHarness(roomId, harnessId);
+		if (!pre) return { ok: false, reason: "that harness no longer exists" };
+		// #730: the daemon builds the resume argv (see restartResume.ts).
+		const prep = await prepareRestart(pre, gone && pre.sessionId === h.sessionId, harnessResumeCmd);
+		if (!prep.ok) return prep;
+		const { resumed, port } = prep;
 		const second = gate();
 		if (!second.ok) return second;
-		// Re-read: sessionId may have changed (/clear, /resume) during the awaits.
 		const fresh = findHarness(roomId, harnessId);
 		if (!fresh) return { ok: false, reason: "that harness no longer exists" };
+		if (fresh.sessionId !== pre.sessionId) {
+			return { ok: false, reason: "its conversation changed while restarting - try again" };
+		}
 		const activity = harnessActivity.get(harnessId);
 		const fromPhase = activity?.phase ?? "unknown";
 		// Both updates below must land in the same render (React batches
 		// them in this tick); otherwise LiveTerminal remounts on the
 		// spawnGen bump with the OLD port.
-		if (port !== undefined) {
-			const p = port;
-			setOpencodePorts((prev) => new Map(prev).set(harnessId, p));
+		if (port !== null) {
+			setOpencodePorts((prev) => new Map(prev).set(harnessId, port));
 		}
-		// Drop a vanished Claude id (unless /clear etc. changed it meanwhile)
-		// so resumeHarness mints a fresh one; cmd and sessionId persist
-		// together so the telemetry tail follows the new id.
-		const { sessionId: _stale, ...noId } = fresh;
-		const base = gone && fresh.sessionId === h.sessionId ? noId : fresh;
-		const next = restartedHarness(base, port);
+		const next = applyResumedHarness(fresh, resumed.harness);
 		updateHarnessCmd(roomId, harnessId, next.cmd ?? [], next.sessionId);
 		// Source "user-restart" marks a user-initiated respawn: the new
 		// process starts out `spawning`.

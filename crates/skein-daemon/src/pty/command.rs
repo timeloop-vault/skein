@@ -5,12 +5,16 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use super::opencode_prepare::{Prepared, prepare_opencode_spawn};
 use super::{PtyEvent, PtyManager, SidecarBinding, SpawnRequest};
 use crate::agent_endpoint::{AgentApiEndpoint, HarnessIdentity};
 use crate::db::Database;
 use crate::harness_config::HarnessConfig;
 use crate::harness_kind::HarnessKind;
-use crate::opencode_sidecar::OpencodeSidecarManager;
+use crate::opencode_sidecar::launch::{SidecarStartInput, start_sidecar_blocking};
+use crate::opencode_sidecar::start::SidecarStartDeps;
+use crate::opencode_sidecar::{OnExit, OpencodeSidecarManager};
+use crate::spawn_env::lookups::{OpencodeVersionDto, opencode_cli_version_impl};
 use crate::spawn_env::state::SpawnEnvState;
 use crate::stream_sink::StreamSink;
 
@@ -38,6 +42,13 @@ pub struct PtySpawnResult {
     /// The env profile applied to this spawn (#615), so the frontend can
     /// record which profile a running harness started with.
     pub env_profile: Option<String>,
+    /// The sidecar generation the PTY is bound to: the one the daemon
+    /// started for an opencode v2 spawn (#730).
+    pub sidecar_generation: Option<u64>,
+    /// The opencode CLI version, whenever this spawn probed it (v1 too).
+    pub opencode_version: Option<OpencodeVersionDto>,
+    /// Set when the daemon-started sidecar created or confirmed the session.
+    pub session_id: Option<String>,
 }
 
 /// The managed state a spawn reads, borrowed from wherever it is stored.
@@ -61,7 +72,11 @@ pub struct PtySpawnArgs {
     pub harness_id: String,
     pub kind: HarnessKind,
     pub env_profile: Option<String>,
-    pub sidecar_generation: Option<u64>,
+    /// The harness record's agent and opencode session id (#730), never
+    /// parsed from `cmd`. Read only when the daemon prepares an opencode v2
+    /// spawn.
+    pub agent: Option<String>,
+    pub session_id: Option<String>,
 }
 
 /// Spawn a child on a fresh PTY and stream its events into `sink`.
@@ -75,6 +90,7 @@ pub fn pty_spawn_impl(
     args: PtySpawnArgs,
     sink: impl StreamSink<PtyEvent>,
     stop_sidecar: impl Fn(&SidecarBinding) + Send + Sync + 'static,
+    sidecar_on_exit: &OnExit,
 ) -> Result<PtySpawnResult, String> {
     let PtySpawnArgs {
         cmd,
@@ -85,10 +101,50 @@ pub fn pty_spawn_impl(
         harness_id,
         kind,
         env_profile,
-        sidecar_generation,
+        agent: record_agent,
+        session_id: record_session,
     } = args;
     let id = uuid::Uuid::new_v4().to_string();
     let settings = deps.spawn_env.snapshot();
+    // #730: an opencode harness is probed, and
+    // on v2 gets its sidecar and `--server` argv here.
+    let prepared = prepare_opencode_spawn(
+        cmd,
+        kind,
+        record_agent.as_deref(),
+        record_session.as_deref(),
+        || opencode_cli_version_impl(&settings),
+        |agent, session_id| {
+            let handle = tokio::runtime::Handle::try_current()
+                .map_err(|e| format!("no async runtime to start the opencode server: {e}"))?;
+            start_sidecar_blocking(
+                &handle,
+                SidecarStartDeps {
+                    spawn_env: deps.spawn_env,
+                    db: deps.db,
+                    endpoint: deps.endpoint,
+                    harness_config: deps.harness_config,
+                    manager: deps.sidecars,
+                },
+                sidecar_on_exit,
+                SidecarStartInput {
+                    room_id: &room_id,
+                    harness_id: &harness_id,
+                    cwd: &cwd,
+                    agent,
+                    session_id,
+                    env_profile: env_profile.as_deref(),
+                },
+            )
+        },
+    )?;
+    let Prepared {
+        cmd,
+        generation: sidecar_generation,
+        version: opencode_version,
+        session_id: sidecar_session_id,
+        started_here,
+    } = prepared;
     // #213: mint (or reuse) the room's review token and hand the
     // harness its endpoint. A failure here is not a reason to
     // refuse the spawn — the terminal still works, the agent
@@ -101,6 +157,9 @@ pub fn pty_spawn_impl(
         None => Vec::new(),
         Some(generation) => {
             let Some(password) = deps.sidecars.password_for(&harness_id, generation) else {
+                if started_here {
+                    deps.sidecars.stop_if_generation(&harness_id, generation);
+                }
                 return Err("opencode server for this harness is gone".to_owned());
             };
             vec![("OPENCODE_PASSWORD".to_owned(), password)]
@@ -157,6 +216,9 @@ pub fn pty_spawn_impl(
         hermes_hooks: outcome.hermes_hooks,
         mouse_clicks_disabled: outcome.mouse_clicks_disabled,
         env_profile: outcome.env_profile,
+        sidecar_generation,
+        opencode_version,
+        session_id: sidecar_session_id,
     })
 }
 
@@ -201,6 +263,12 @@ mod tests {
             hermes_hooks: true,
             mouse_clicks_disabled: true,
             env_profile: Some("proxy".to_owned()),
+            sidecar_generation: Some(4),
+            opencode_version: Some(super::OpencodeVersionDto {
+                major: 2,
+                version: "2.2.0".to_owned(),
+            }),
+            session_id: None,
         })
         .expect("serialize");
         assert_eq!(
@@ -210,7 +278,10 @@ mod tests {
                 "injected": true,
                 "hermesHooks": true,
                 "mouseClicksDisabled": true,
-                "envProfile": "proxy"
+                "envProfile": "proxy",
+                "sidecarGeneration": 4,
+                "opencodeVersion": {"major": 2, "version": "2.2.0"},
+                "sessionId": null
             })
         );
     }

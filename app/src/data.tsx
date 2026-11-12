@@ -10,7 +10,7 @@ export interface HarnessCapabilities {
 	/// rewrite, no ports, no exit handling.
 	pty: boolean;
 	/// The underlying tool can resume its conversation across Skein
-	/// restarts (drives the boot/reopen resumeCmd rewrite).
+	/// restarts (drives the daemon's boot/reopen resume rewrite, harness_argv/).
 	resume: boolean;
 	/// Transitions may raise badges/toasts/OS notifications. Shells
 	/// aren't agents — an idle prompt isn't "your turn" (#127); a

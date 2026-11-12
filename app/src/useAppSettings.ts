@@ -14,8 +14,13 @@
 // App.tsx but depends on none of this state, so it stays in App,
 // called right after this hook.
 
-import { useCallback, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useState } from "react";
 import { DEFAULT_BRANCH_TEMPLATE } from "./branchName.ts";
+import {
+	loadDefaultAgents,
+	setDefaultAgent as setDefaultAgentRemote,
+} from "./defaultAgentsStore.ts";
 import { type DesignPicks, type DockedDesign, withDocked } from "./designDock.ts";
 import {
 	type DefaultAgents,
@@ -25,7 +30,12 @@ import {
 	type VersionNoticeModes,
 } from "./prefs.ts";
 import type { RightPaneTab } from "./RightPane.tsx";
-import type { Density, Theme } from "./types.ts";
+import type { Density, HarnessKind, Theme } from "./types.ts";
+
+const tauriDeps = () => ({
+	invoke: invoke as <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>,
+	readStorage: (key: string) => localStorage.getItem(key),
+});
 
 // xterm font size range. Outside this band the terminal looks either
 // unreadable (sub-12) or comically large (above 18) on a 1320x820 window.
@@ -71,7 +81,35 @@ export function useAppSettings() {
 	);
 	// #248: default agent per harness kind, set in Settings. Read by the
 	// `+ harness` picker (preselected) and New room (prefilled).
-	const [defaultAgents, setDefaultAgents] = usePersistedState<DefaultAgents>("defaultAgents", {});
+	// Daemon-owned since #730: `{}` (no default) until the one-time
+	// hydrate resolves; a failed daemon call keeps the previous value.
+	const [defaultAgents, setDefaultAgents] = useState<DefaultAgents>({});
+	useEffect(() => {
+		let live = true;
+		loadDefaultAgents(tauriDeps())
+			.then((map) => {
+				if (live) setDefaultAgents(map);
+			})
+			.catch((err: unknown) => {
+				console.warn("[skein] default agents load failed:", err);
+			});
+		return () => {
+			live = false;
+		};
+	}, []);
+	// Resolves to null on success, else the message Settings shows (#730).
+	const setDefaultAgent = useCallback(
+		async (kind: HarnessKind, agent: string | undefined): Promise<string | null> => {
+			try {
+				setDefaultAgents(await setDefaultAgentRemote(tauriDeps(), kind, agent));
+				return null;
+			} catch (err) {
+				console.warn("[skein] default agent save failed:", err);
+				return err instanceof Error ? err.message : String(err);
+			}
+		},
+		[],
+	);
 	// #491: Claude Code update notice mode, set in Settings.
 	const [versionNoticeModes, setVersionNoticeModes] = usePersistedState<VersionNoticeModes>(
 		"versionNoticeModes",
@@ -166,7 +204,7 @@ export function useAppSettings() {
 		setGlobalCcShortcut,
 		handleToggleTurnCosts,
 		defaultAgents,
-		setDefaultAgents,
+		setDefaultAgent,
 		versionNoticeModes,
 		setVersionNoticeModes,
 		branchTemplate,

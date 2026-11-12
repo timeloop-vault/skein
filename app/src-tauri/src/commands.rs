@@ -11,7 +11,7 @@
 //! # Where things are
 //!
 //! - `app` — `ping` and `frontend_log` (#362).
-//! - `pty` — spawn / write / resize / kill, and `pick_free_port`.
+//! - `pty` — spawn / write / resize / kill.
 //! - `harness_events` — attach/detach for Claude's JSONL tail (#50 L2c-1)
 //!   and opencode's SSE stream (L2c-2).
 //! - `harness_log` — the `harness_events` and `harness_actions` tables:
@@ -30,6 +30,7 @@
 pub(crate) mod app;
 pub(crate) mod fs;
 pub(crate) mod git;
+pub(crate) mod harness_argv;
 pub(crate) mod harness_events;
 pub(crate) mod harness_log;
 pub(crate) mod hermes_work;

@@ -140,7 +140,11 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   events + client requests + capture). No `tauri`
     │                                #   anywhere in it. #729 added room_store/ (the
     │                                #   in-memory authoritative RoomStore: apply, structural,
-    │                                #   persist) and db/room_rows (per-row writes)
+    │                                #   persist) and db/room_rows (per-row writes).
+    │                                #   #730 added harness_argv/ (cmd_for_kind, resume,
+    │                                #   remote, agent_check, opencode_v2, plan: the argv
+    │                                #   builders ported from the frontend, plus opencode
+    │                                #   port allocation) and spawn_env/default_agents
     │                                #   See docs/skeind-crates.md
     ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
     │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
@@ -236,14 +240,21 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   replay never looks like a second start. `workingCount`
     │   │   │                        #   (excludes attach-time orphans) and `presumeGone` back
     │   │   │                        #   #277's end-of-turn deferral in harnessActivity.ts
-    │   │   ├── harnessCmd.ts        # Harness argv: cmdForKind (fresh spawn) + resumeCmd /
-    │   │   │                        #   withResumeCmds / unarchiveRoomTransform. Rebuilt from
-    │   │   │                        #   the harness RECORD, never by matching the previous
-    │   │   │                        #   argv — that pattern-matching was #153/#170. Add a
-    │   │   │                        #   spawn flag here and resume keeps working (#247's
-    │   │   │                        #   `--agent` is the proof: one `withAgent` per arm)
+    │   │   ├── harnessCmd.ts        # Only `isOpencodeV2` and the Hermes profile constant
+    │   │   │                        #   since #730. Harness argv is the daemon's
+    │   │   │                        #   `harness_argv/` (cmd_for_kind, resume_harness,
+    │   │   │                        #   with_resume_cmds, unarchive_room_transform), reached
+    │   │   │                        #   through harnessArgvApi.ts / harnessArgvApply.ts.
+    │   │   │                        #   Rebuilt from the harness RECORD, never by matching
+    │   │   │                        #   the previous argv — that pattern-matching was
+    │   │   │                        #   #153/#170. Add a spawn flag there and resume keeps
+    │   │   │                        #   working (#247's `--agent` is the proof: one
+    │   │   │                        #   `with_agent` per arm)
     │   │   ├── agents.ts            # Which agents a kind accepts at `--agent` (#247): DTO
-    │   │   │                        #   mirror of agents.rs + validateAgent. A stored name
+    │   │   │                        #   mirror of agents.rs; since #730 the verdict
+    │   │   │                        #   (ok/unknown/unverified) comes from the daemon's
+    │   │   │                        #   `list_harness_agents` `check`, no TS validateAgent.
+    │   │   │                        #   A stored name
     │   │   │                        #   is re-checked at EVERY spawn, not only at pick time —
     │   │   │                        #   only a fresh `claude --agent X` fails loudly; resume
     │   │   │                        #   and opencode fall back silently
@@ -491,7 +502,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │                            #   how #215 gets it in front of each harness
     │   ├── backlog.md               # Parked ideas (read before adding to any plan)
     │   ├── remote-harness.md        # The `remote` harness kind (#568): ssh + tmux, no daemon;
-    │   │                            #   what works, what is lost. Argv builder: app/src/remoteCmd.ts
+    │   │                            #   what works, what is lost. Argv builder: harness_argv/remote.rs in skein-daemon (#730)
     │   ├── grok-build-recon-*.md    # Recon of grok-build: reference designs for the review
     │   │                            #   surface (§3 xai-hunk-tracker) + git writes (§6)
     │   ├── files-pillar-design-brief.md  # Design brief behind #49 / #184 / #185
@@ -578,10 +589,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   survive room/harness tab switches: all active rooms and all their
   harnesses stay mounted, hidden with `display:none`. PTYs die with
   the Skein process; on boot the hydrate path drops stale sessionIds
-  (`resume.rs`, in skein-daemon, probes the tools' own stores), pre-allocates fresh
-  opencode ports, and rewrites each stored cmd to its resume form
-  (`resumeCmd`: `claude --resume <sid>`,
-  `opencode --port <p> --hostname 127.0.0.1 --session <sid>`).
+  (`resume.rs`, in skein-daemon, probes the tools' own stores), and asks
+  the daemon (`rooms_resume_cmds`, #730) to pre-allocate fresh opencode
+  ports and rewrite each stored cmd to its resume form (`resume_harness`
+  in `harness_argv/`: `claude --resume <sid>`,
+  `opencode --port <p> --hostname 127.0.0.1 --session <sid>`); the
+  result merges back by id (`harnessArgvApply.ts`).
   Reopening an archived room runs the same rewrite (#153).
 - **Watchers** (`WatcherManager`, notify-debouncer-mini, 200 ms,
   `.git/` deliberately unfiltered) push `()` over a Channel; the
@@ -935,8 +948,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   `--agent` at launch and Claude cannot change it afterwards, so the
   choice is made *before* the process starts — a second step in the `+
   harness` picker, and a field in New room remembered per folder.
-  `Harness.agent` is the authority, not the argv: `cmdForKind` and
-  `resumeCmd` both re-pass it, because `claude --resume` with no flag
+  `Harness.agent` is the authority, not the argv: the daemon's
+  `cmd_for_kind` and `resume_harness` both re-pass it, because `claude --resume` with no flag
   restores whatever agent the *conversation* started as. Every call
   site gates on `capabilities.agents`, never on a kind comparison.
   Two failures the UI has to name because nothing else will: an
@@ -947,8 +960,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   `claude --agent X` fails loudly while resume and both opencode paths
   fall back silently. A degraded list never blocks a spawn: it cannot
   prove a name is gone.
-  **#248** adds a per-kind default in Settings (`prefs.ts`
-  `defaultAgents` — localStorage, because the frontend builds the argv),
+  **#248** adds a per-kind default in Settings (`defaultAgents` in the
+  daemon's `settings.json` since #730, `SpawnSettings.default_agents`;
+  `None` = never imported, and the legacy localStorage map in `prefs.ts`
+  is imported once, non-overwriting, via `default_agents_import`; a
+  whole-settings save never changes it, only the import and
+  `default_agent_set` write it, and both refuse while `settings.json` is
+  unreadable),
   preselected in the picker and prefilled in New room, where a folder's
   own remembered agent still wins. No default is an absent key, never a
   name. The agent shows in the status bar and the harness-tab popover,

@@ -98,6 +98,16 @@ impl HarnessKind {
     pub fn takes_agent(self) -> bool {
         matches!(self, Self::Claude | Self::Opencode)
     }
+
+    /// Whether the underlying tool can resume its conversation across
+    /// Skein restarts (drives the boot/reopen argv rewrite). Mirrors
+    /// `HARNESS_KINDS[kind].capabilities.resume` in `app/src/data.tsx`.
+    pub fn resumes(self) -> bool {
+        matches!(
+            self,
+            Self::Claude | Self::Opencode | Self::Hermes | Self::Remote
+        )
+    }
 }
 
 impl fmt::Display for HarnessKind {
@@ -130,6 +140,27 @@ mod tests {
         assert_eq!(HarnessKind::from_name("something-new"), None);
     }
 
+    /// Pinned by hand as well as by the TS agreement test below, so the
+    /// daemon's argv builders have a fixed table to lean on.
+    #[test]
+    fn program_and_resumes_per_kind() {
+        let table = [
+            (HarnessKind::Claude, Some("claude"), true),
+            (HarnessKind::Opencode, Some("opencode"), true),
+            (HarnessKind::Copilot, Some("gh"), false),
+            (HarnessKind::Byoh, None, false),
+            (HarnessKind::Files, None, false),
+            (HarnessKind::Design, None, false),
+            (HarnessKind::Remote, Some("ssh"), true),
+            (HarnessKind::Hermes, Some("hermes"), true),
+        ];
+        assert_eq!(table.len(), ALL.len());
+        for (kind, program, resumes) in table {
+            assert_eq!(kind.program(), program, "{kind} program");
+            assert_eq!(kind.resumes(), resumes, "{kind} resumes");
+        }
+    }
+
     #[test]
     fn an_unknown_kind_string_fails_to_deserialize() {
         let result: Result<HarnessKind, _> = serde_json::from_str("\"something-new\"");
@@ -157,7 +188,7 @@ mod tests {
         );
 
         for kind in ALL {
-            let (program, agents) = parse_data_tsx_entry(data_tsx, kind.as_str())
+            let (program, agents, resume) = parse_data_tsx_entry(data_tsx, kind.as_str())
                 .unwrap_or_else(|| panic!("data.tsx: no HARNESS_KINDS entry for {kind}"));
             assert_eq!(
                 program,
@@ -168,6 +199,11 @@ mod tests {
                 agents,
                 kind.takes_agent(),
                 "data.tsx `capabilities.agents` for {kind} disagrees with HarnessKind::takes_agent()"
+            );
+            assert_eq!(
+                resume,
+                kind.resumes(),
+                "data.tsx `capabilities.resume` for {kind} disagrees with HarnessKind::resumes()"
             );
         }
     }
@@ -197,7 +233,7 @@ mod tests {
     /// Small and string-based on purpose (#116): a kind whose value the
     /// parser can't find panics with the kind's name rather than
     /// silently passing.
-    fn parse_data_tsx_entry(src: &str, kind: &str) -> Option<(Option<String>, bool)> {
+    fn parse_data_tsx_entry(src: &str, kind: &str) -> Option<(Option<String>, bool, bool)> {
         let marker = format!("id: \"{kind}\"");
         let entry_start = src.find(&marker)?;
         let rest = &src[entry_start + marker.len()..];
@@ -224,6 +260,14 @@ mod tests {
             panic!("data.tsx: {kind} entry has no `agents` field");
         };
 
-        Some((program, agents))
+        let resume = if entry.contains("resume: true") {
+            true
+        } else if entry.contains("resume: false") {
+            false
+        } else {
+            panic!("data.tsx: {kind} entry has no `resume` field");
+        };
+
+        Some((program, agents, resume))
     }
 }

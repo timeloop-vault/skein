@@ -13,11 +13,12 @@
 // file is the React wiring around them. The post-spawn write-backs
 // (setHarnessSessionId and friends) live in useHarnessWriteBacks.ts.
 
-import { invoke } from "@tauri-apps/api/core";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { useRef } from "react";
+import { ArgvPrepareError, prepareOrThrow, reportArgvFailure } from "./argvFailure.ts";
+import { type CreationOutcome, runUserCreation } from "./creationOutcome.ts";
 import { HARNESS_KINDS } from "./data.tsx";
-import { cmdForKind, resolveHermesProfile } from "./harnessCmd.ts";
+import { harnessFreshCmd } from "./harnessArgvApi.ts";
 import {
 	buildHarness,
 	buildRoom,
@@ -43,7 +44,6 @@ export function useHarnessCreation(
 	setOpencodePorts: Dispatch<SetStateAction<Map<string, number>>>,
 	setActiveRoomId: Dispatch<SetStateAction<string>>,
 	activeRoomIdRef: MutableRefObject<string>,
-	defaultShell: string[],
 	defaultCwd: string,
 	showPicker: string | null,
 	setShowPicker: Dispatch<SetStateAction<string | null>>,
@@ -58,6 +58,18 @@ export function useHarnessCreation(
 	const lastPtyHarnessRef = useRef(new Map<string, string>());
 	// Rooms with a files-harness creation in flight (Mod+E latch).
 	const creatingFilesRef = useRef(new Set<string>());
+
+	// A rejected daemon argv call on a user-driven creation: a toast, and
+	// nothing was created (the throw comes before any state change). Agent
+	// callers use the throwing versions and answer their request with it.
+	const reportCreationFailure = (action: string, err: unknown, roomId?: string) => {
+		if (!(err instanceof ArgvPrepareError)) throw err;
+		const owner = roomsRef.current.find((r) => r.id === (roomId ?? activeRoomIdRef.current));
+		reportArgvFailure(action, err, owner);
+	};
+
+	const rememberPort = (harnessId: string, port: number) =>
+		setOpencodePorts((prev) => new Map(prev).set(harnessId, port));
 
 	// All session ids any harness has already captured. captureOpencode
 	// excludes these so a fresh capture can't claim someone else's id
@@ -92,8 +104,6 @@ export function useHarnessCreation(
 		if (!targetRoom) return undefined;
 		const caps = HARNESS_KINDS[kind].capabilities;
 		const agentName = resolveAgentName(kind, agent);
-		// #627: new Hermes harnesses run in Skein's own profile unless told otherwise.
-		const hermesProfile = resolveHermesProfile(kind, opts?.hermesProfile);
 		const id = newId("h");
 		// #568: the session name is minted from this same id, so the
 		// record and its argv agree. A remote harness without a host is
@@ -105,30 +115,33 @@ export function useHarnessCreation(
 		// inside the `setRooms` updater below, so the same value can be
 		// returned to the caller — `open_harness` reports it back.
 		const name = harnessDisplayName(kind, targetRoom.harnesses.length);
-		// Phase 2a: pre-allocate Claude's conversation id so the harness
-		// resumes to *this* conversation on Skein restart — no picker.
-		const sessionId = kind === "claude" ? crypto.randomUUID() : undefined;
-		// Epic #50 L2c-2: allocate the opencode embedded-server port
-		// *before* we set the cmd into state — LiveTerminal mounts the
-		// PTY synchronously off the new harness record, so the port has
-		// to be baked into the argv at that moment.
-		let opencodePort: number | undefined;
-		if (kind === "opencode") {
-			try {
-				opencodePort = await invoke<number>("pick_free_port");
-				setOpencodePorts((prev) => {
-					const m = new Map(prev);
-					m.set(id, opencodePort as number);
-					return m;
-				});
-			} catch (err) {
-				console.warn("[skein] pick_free_port failed; falling back to L2a:", err);
-			}
+		// #730: the daemon builds the argv. It mints Claude's conversation id
+		// (so the harness resumes to *this* conversation on restart),
+		// allocates opencode's embedded-server port and resolves the Hermes
+		// profile (new Hermes harnesses run in Skein's own unless told
+		// otherwise). All of it lands *before* the cmd goes into state -
+		// LiveTerminal mounts the PTY synchronously off the new record.
+		let cmd: string[] | undefined;
+		let sessionId: string | undefined;
+		let hermesProfile: string | undefined;
+		if (caps.pty) {
+			const fresh = await prepareOrThrow("harness_fresh_cmd", () =>
+				harnessFreshCmd({
+					kind,
+					newHarness: true,
+					...(agentName ? { agent: agentName } : {}),
+					...(remote ? { remote } : {}),
+					...(opts?.hermesProfile ? { hermesProfile: opts.hermesProfile } : {}),
+				}),
+			);
+			if (kind === "remote" && fresh.cmd.length === 0) return undefined;
+			cmd = fresh.cmd;
+			sessionId = fresh.sessionId ?? undefined;
+			hermesProfile = fresh.hermesProfile ?? undefined;
+			// A failed port allocation comes back null with a bare argv: the
+			// L2c-2 adapter just doesn't attach (the pre-#730 fallback).
+			if (fresh.opencodePort !== null) rememberPort(id, fresh.opencodePort);
 		}
-		const cmd = caps.pty
-			? cmdForKind(kind, defaultShell, sessionId, opencodePort, agentName, remote, hermesProfile)
-			: undefined;
-		if (kind === "remote" && cmd?.length === 0) return undefined;
 		setRooms((prev) =>
 			prev.map((r) => {
 				if (r.id !== targetRoomId) return r;
@@ -183,7 +196,7 @@ export function useHarnessCreation(
 		void createHarnessInRoom(targetRoomId, kind, agent, {
 			...(remote ? { remote } : {}),
 			...(hermesProfile ? { hermesProfile } : {}),
-		});
+		}).catch((err: unknown) => reportCreationFailure("add the harness", err, targetRoomId));
 	};
 
 	// #49 phase A: Mod+E = jump to the room's Files harness (creating
@@ -254,23 +267,6 @@ export function useHarnessCreation(
 		const activate = opts?.activate ?? true;
 		const sid = newId("s");
 		const hid = newId("h");
-		// Phase 2a: pre-allocate Claude's conversation id (see pickHarness).
-		const sessionId = harness === "claude" ? crypto.randomUUID() : undefined;
-		// Epic #50 L2c-2: pre-allocate opencode's embedded-server port
-		// before we bake the cmd into the harness record.
-		let opencodePort: number | undefined;
-		if (harness === "opencode") {
-			try {
-				opencodePort = await invoke<number>("pick_free_port");
-				setOpencodePorts((prev) => {
-					const m = new Map(prev);
-					m.set(hid, opencodePort as number);
-					return m;
-				});
-			} catch (err) {
-				console.warn("[skein] pick_free_port failed; falling back to L2a:", err);
-			}
-		}
 		// Display name from the trailing path component — `D:\code\skein`
 		// → `skein`. Cosmetic; the actual cwd is what spawns use. #241:
 		// also the room's initial `name` (no "local · " prefix) — the user
@@ -283,7 +279,21 @@ export function useHarnessCreation(
 		// Same gate as `createHarnessInRoom`: a kind that does not take
 		// `--agent` never carries a name onto its record.
 		const agentName = resolveAgentName(harness, agent);
-		const hermesProfile = resolveHermesProfile(harness, profileArg);
+		// #730: argv, Claude's session id, opencode's port and the Hermes
+		// profile all come from the daemon, before the record exists.
+		const fresh = startCaps.pty
+			? await prepareOrThrow("harness_fresh_cmd", () =>
+					harnessFreshCmd({
+						kind: harness,
+						newHarness: true,
+						...(agentName ? { agent: agentName } : {}),
+						...(profileArg ? { hermesProfile: profileArg } : {}),
+					}),
+				)
+			: undefined;
+		if (fresh && fresh.opencodePort !== null) rememberPort(hid, fresh.opencodePort);
+		const sessionId = fresh?.sessionId ?? undefined;
+		const hermesProfile = fresh?.hermesProfile ?? undefined;
 		const newRoom: Room = buildRoom({
 			roomId: sid,
 			harness: buildHarness({
@@ -291,17 +301,7 @@ export function useHarnessCreation(
 				kind: harness,
 				name: "main",
 				cwd,
-				cmd: startCaps.pty
-					? cmdForKind(
-							harness,
-							defaultShell,
-							sessionId,
-							opencodePort,
-							agentName,
-							undefined,
-							hermesProfile,
-						)
-					: undefined,
+				cmd: fresh?.cmd,
 				sessionId,
 				agentName,
 				hermesProfile,
@@ -342,6 +342,16 @@ export function useHarnessCreation(
 		};
 	};
 
+	// The New Room dialog awaits the outcome to clear its busy flag.
+	const createRoomForUser = (
+		args: CreateRoomArgs,
+		opts?: { activate?: boolean },
+	): Promise<CreationOutcome> =>
+		runUserCreation(
+			() => createRoom(args, opts),
+			(err) => reportCreationFailure("create the room", err),
+		);
+
 	return {
 		claimedSessionIds,
 		writeBacks,
@@ -349,5 +359,6 @@ export function useHarnessCreation(
 		pickHarness,
 		toggleFilesHarness,
 		createRoom,
+		createRoomForUser,
 	};
 }

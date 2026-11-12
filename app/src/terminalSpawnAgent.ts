@@ -1,6 +1,6 @@
 // The #247 pre-spawn agent check, split out of useTerminalSpawn.ts (#459).
 
-import { listHarnessAgents, unknownAgentMessage, validateAgent } from "./agents.ts";
+import { type AgentVerdict, checkAgent, unknownAgentMessage } from "./agents.ts";
 import { harnessActivity } from "./harnessActivity.ts";
 import type { HarnessKind } from "./types.ts";
 
@@ -16,6 +16,9 @@ export interface AgentCheck {
 	/** Called when the spawn is refused, before the activity store is
 	 *  told the harness exited — flips the effect's own `phase`. */
 	onRefused: () => void;
+	/** The daemon's verdict (one `list_harness_agents` call with `check`);
+	 *  injectable for tests. */
+	check?: (kind: HarnessKind, cwd: string, agent: string) => Promise<AgentVerdict>;
 }
 
 /** Refuse the spawn when the harness names an agent the CLI no
@@ -43,7 +46,7 @@ export interface AgentCheck {
 export async function agentResolves(c: AgentCheck): Promise<boolean> {
 	const { agent, cmdToSpawn, harnessKind, harnessId, cwd, out } = c;
 	if (!agent || !cmdToSpawn.includes("--agent")) return true;
-	const verdict = validateAgent(agent, await listHarnessAgents(harnessKind, cwd));
+	const verdict = await (c.check ?? checkAgent)(harnessKind, cwd, agent);
 	if (c.isCancelled()) return false;
 	if (verdict.kind === "unverified") {
 		console.warn(`[skein] could not verify agent "${agent}": ${verdict.why}`);

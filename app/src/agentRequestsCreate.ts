@@ -1,7 +1,7 @@
 // #330: argument parsing, default resolution and response shaping for
 // the two `skein://agent-request` kinds the `create_room` agent verb
 // sends — `create_room.resolve` and `create_room` — plus the two
-// existing pieces they lean on (#247's agent validation, #227's branch
+// existing pieces they lean on (#247's agent validation, now the daemon's, #227's branch
 // template). Pure and DOM-free so vitest can cover it without a Tauri
 // bridge; `useAgentRequests.ts` is the only place that actually invokes
 // anything or touches `rooms` state, and it's a thin dispatcher over
@@ -21,7 +21,7 @@ import {
 	type RequestResult,
 	remoteRefusal,
 } from "./agentRequestsShared.ts";
-import { type AgentListing, unknownAgentMessage, validateAgent } from "./agents.ts";
+import { type AgentVerdict, unknownAgentMessage } from "./agents.ts";
 import { type DefaultAgents, type FolderDefaults, startingAgent } from "./prefs.ts";
 import type { HarnessKind } from "./types.ts";
 import type { CreateRoomSpec } from "./worktreeRoom.ts";
@@ -77,23 +77,26 @@ export function resolveKind(
  *  as a name typed into the picker overrides what it was prefilled
  *  with. `unknown` is the only verdict that blocks — a degraded listing
  *  (`unverified`) never does, matching every other agent-picking call
- *  site in the app (`validateAgent`'s own doc explains why: refusing on
- *  a CLI that's briefly unavailable would strand every harness). The
- *  resolved name comes back as `string | null`, never `undefined` — the
- *  wire shape `create_room.resolve` answers with. */
-export function resolveAgent(
+ *  site in the app (refusing on a CLI that's briefly unavailable would
+ *  strand every harness). The verdict is the daemon's (#730): `check`
+ *  asks `list_harness_agents` with the candidate name, one enumeration,
+ *  and is not called when there is no candidate. The resolved name comes
+ *  back as `string | null`, never `undefined` — the wire shape
+ *  `create_room.resolve` answers with. */
+export async function resolveAgent(
 	requested: string | undefined,
 	kind: HarnessKind,
 	folderDefaults: FolderDefaults | undefined,
 	defaultAgents: DefaultAgents,
-	listing: AgentListing,
-): RequestResult<string | null> {
+	check: (agent: string) => Promise<AgentVerdict>,
+): Promise<RequestResult<string | null>> {
 	const candidate = requested ?? startingAgent(folderDefaults, kind, defaultAgents);
-	const verdict = validateAgent(candidate, listing);
+	if (!candidate?.trim()) return { ok: true, value: null };
+	const verdict = await check(candidate);
 	if (verdict.kind === "unknown") {
 		return { ok: false, error: unknownAgentMessage(verdict.agent, kind) };
 	}
-	return { ok: true, value: candidate?.trim() ? candidate : null };
+	return { ok: true, value: candidate };
 }
 
 // ── create_room ───────────────────────────────────────────────────────

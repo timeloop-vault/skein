@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	decideCloseHarness,
 	decideCloseRoom,
@@ -14,8 +14,7 @@ import {
 	resolveKind,
 	specFromCreateArgs,
 } from "./agentRequests.ts";
-import type { AgentListing } from "./agents.ts";
-import { NO_AGENTS } from "./agents.ts";
+import type { AgentVerdict } from "./agents.ts";
 import type { DefaultAgents, FolderDefaults } from "./prefs.ts";
 import type { Room } from "./types.ts";
 
@@ -24,23 +23,6 @@ const folderDefaults = (over: Partial<FolderDefaults> = {}): FolderDefaults => (
 	harness: "opencode",
 	branchMode: "worktree",
 	lastUsed: 0,
-	...over,
-});
-
-const listing = (over: Partial<AgentListing> = {}): AgentListing => ({
-	agents: [
-		{
-			name: "reviewer",
-			description: null,
-			tools: null,
-			model: null,
-			source: "project",
-			plugin: null,
-			allowsReviewTools: true,
-		},
-	],
-	degraded: null,
-	unsupported: false,
 	...over,
 });
 
@@ -118,43 +100,58 @@ describe("resolveKind", () => {
 
 describe("resolveAgent", () => {
 	const defaults: DefaultAgents = {};
+	const verdict = (v: AgentVerdict) => vi.fn(async (_a: string) => v);
 
-	it("no agent requested, no folder/default memory: ok with null", () => {
-		expect(resolveAgent(undefined, "claude", undefined, defaults, NO_AGENTS)).toEqual({
+	it("no agent requested, no folder/default memory: ok with null, no check", async () => {
+		const check = verdict({ kind: "ok" });
+		expect(await resolveAgent(undefined, "claude", undefined, defaults, check)).toEqual({
 			ok: true,
 			value: null,
 		});
+		expect(check).not.toHaveBeenCalled();
 	});
 
-	it("a requested agent the listing vouches for: ok with the name", () => {
-		expect(resolveAgent("reviewer", "claude", undefined, defaults, listing())).toEqual({
+	it("a requested agent the daemon vouches for: ok with the name", async () => {
+		const check = verdict({ kind: "ok" });
+		expect(await resolveAgent("reviewer", "claude", undefined, defaults, check)).toEqual({
 			ok: true,
 			value: "reviewer",
 		});
+		expect(check).toHaveBeenCalledWith("reviewer");
 	});
 
-	it("a requested agent absent from an authoritative listing: unknown, blocks", () => {
-		const result = resolveAgent("ghost", "claude", undefined, defaults, listing());
+	it("an unknown verdict blocks", async () => {
+		const result = await resolveAgent(
+			"ghost",
+			"claude",
+			undefined,
+			defaults,
+			verdict({ kind: "unknown", agent: "ghost" }),
+		);
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.error).toContain('agent "ghost"');
 	});
 
-	it("a requested agent against a degraded listing: unverified, never blocks", () => {
+	it("an unverified verdict never blocks", async () => {
 		expect(
-			resolveAgent("ghost", "claude", undefined, defaults, {
-				agents: [],
-				degraded: "claude is not on PATH",
-				unsupported: false,
-			}),
+			await resolveAgent(
+				"ghost",
+				"claude",
+				undefined,
+				defaults,
+				verdict({ kind: "unverified", agent: "ghost", why: "claude is not on PATH" }),
+			),
 		).toEqual({ ok: true, value: "ghost" });
 	});
 
-	it("falls back through the folder's own remembered agent for the same kind", () => {
+	it("falls back through the folder's own remembered agent for the same kind", async () => {
 		const folder = folderDefaults({ harness: "claude", agent: "reviewer" });
-		expect(resolveAgent(undefined, "claude", folder, defaults, listing())).toEqual({
+		const check = verdict({ kind: "ok" });
+		expect(await resolveAgent(undefined, "claude", folder, defaults, check)).toEqual({
 			ok: true,
 			value: "reviewer",
 		});
+		expect(check).toHaveBeenCalledWith("reviewer");
 	});
 });
 

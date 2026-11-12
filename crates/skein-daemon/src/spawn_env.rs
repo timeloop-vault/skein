@@ -481,6 +481,7 @@ pub fn is_host_terminal_var(key: &str) -> bool {
         .any(|p| upper.starts_with(p))
 }
 
+pub mod default_agents;
 pub mod login_env;
 pub mod lookups;
 pub mod state;

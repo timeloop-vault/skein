@@ -24,7 +24,7 @@ interface HarnessBodyProps {
 	roomId: string;
 	// Epic #50 L2c-2: opencode embedded-server port allocated by App.
 	// `undefined` for non-opencode harnesses and for opencode harnesses
-	// where pick_free_port failed — in the latter case the adapter
+	// where the daemon's port allocation failed — in the latter case the adapter
 	// can't attach and the harness falls back to L2a.
 	opencodePort: number | undefined;
 	// SSE-capture callback: L2c-2 captures opencode's auto-allocated

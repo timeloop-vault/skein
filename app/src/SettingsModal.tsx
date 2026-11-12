@@ -64,7 +64,7 @@ interface SettingsModalProps {
 	// #248: default agent per kind. localStorage (see prefs.ts), because
 	// the frontend builds the argv the agent goes into.
 	defaultAgents: DefaultAgents;
-	onDefaultAgent: (kind: HarnessKind, agent: string | undefined) => void;
+	onDefaultAgent: (kind: HarnessKind, agent: string | undefined) => Promise<string | null>;
 	// #491: Claude Code update notice mode.
 	versionNoticeMode: VersionNoticeMode;
 	onVersionNoticeMode: (mode: VersionNoticeMode) => void;

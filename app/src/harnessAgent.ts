@@ -15,7 +15,7 @@
 //   message is invisible to it. The label says which of the two it is.
 //
 // The observation is deliberately not written back to the record. The
-// record is what `resumeCmd` re-passes as `--agent`, and a session the
+// record is what the daemon's resume argv re-passes as `--agent`, and a session the
 // user switched to `plan` for one question should not come back as
 // `plan` after a restart.
 
