@@ -31,14 +31,19 @@ pub(crate) async fn hermes_actions_attach(
         .await
 }
 
-/// Stop the tail for `harness_id`. No-op if unknown.
+/// Stop the tail for `harness_id`. No-op if unknown, and while the runner
+/// has the harness: the tail is then the daemon's own and outlives the
+/// client's view (#731).
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 pub(crate) fn hermes_actions_detach(
     harness_id: String,
     manager: tauri::State<'_, HermesActionsManager>,
+    runner: tauri::State<'_, std::sync::Arc<crate::harness_runner::HarnessRunner>>,
 ) {
-    manager.detach(&harness_id);
+    if runner.pty_id(&harness_id).is_none() {
+        manager.detach(&harness_id);
+    }
 }
 
 /// A real end of turn: record the turn's cost. `true` when a `turn_cost`

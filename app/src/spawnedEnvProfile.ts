@@ -1,5 +1,5 @@
 // Which env profile each harness's live PTY was actually spawned with
-// (#615). The value comes from `pty_spawn`'s result, so it is what Rust
+// (#615). The value comes from `harness_ensure_running`'s result, so it is what Rust
 // really applied, not what the UI believes. Compared against the profile
 // that WOULD apply now to tell the user a restart is needed.
 //

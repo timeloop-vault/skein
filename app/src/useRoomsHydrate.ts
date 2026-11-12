@@ -12,16 +12,14 @@ import {
 	useCallback,
 	useEffect,
 } from "react";
-import { roomsResumeCmds } from "./harnessArgvApi.ts";
-import { applyResumedRooms } from "./harnessArgvApply.ts";
-import { hydrateFailure, ResumePrepareError } from "./hydrateFailure.ts";
+import { hydrateFailure } from "./hydrateFailure.ts";
+import { opencodePortsFromRooms } from "./opencodePort.ts";
 import { isStorable, nextRepoRoot } from "./repoIdentity.ts";
 import {
 	checkProbe,
 	type DbLoadOutcome,
 	inspectFolderMissing,
 	probeFolder,
-	stillExists,
 } from "./roomsStoreProbe.ts";
 import type { Room } from "./types.ts";
 import { useRoomsSync } from "./useRoomsSync.ts";
@@ -136,39 +134,12 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 					setBackupRoomCount(backupRooms);
 				}
 				if (rows.length > 0) {
-					const verified = await Promise.all(
-						rows.map(async (s) => ({
-							...s,
-							harnesses: await Promise.all(
-								s.harnesses.map(async (h) => {
-									if (await stillExists(h)) return h;
-									console.info(
-										`[skein] dropping stale ${h.kind} sessionId ${h.sessionId} on harness ${h.id}`,
-									);
-									const { sessionId, ...rest } = h;
-									return rest;
-								}),
-							),
-						})),
-					);
-					// #730: the daemon rewrites each harness's cmd to its resume
-					// form (so the PTY spawn re-attaches to the prior conversation
-					// instead of starting fresh) and pre-allocates fresh
-					// embedded-server ports for every resumed opencode harness
-					// (Epic #50 L2c-2; the previous run released its ports on
-					// exit). Stale sessionIds were dropped above, before this
-					// call. Only the daemon-owned fields merge back by id, since
-					// the Rust structs would drop any field they don't know. A
-					// harness whose port allocation failed just resumes without
-					// --port and its SSE adapter doesn't attach.
-					// A rejection throws ResumePrepareError before anything is
-					// applied (no ports, rooms or loaded flag) and reaches the
-					// retry card via the catch below.
-					const resumed = await roomsResumeCmds(verified).catch((err: unknown) => {
-						throw new ResumePrepareError(err);
-					});
-					setOpencodePorts(new Map(Object.entries(resumed.ports)));
-					const withResume = applyResumedRooms(verified, resumed.rooms);
+					// #731: the daemon already probed the stored sessions and rewrote
+					// every cmd to its resume form (fresh opencode port included) in
+					// this load, so the rows are mounted as they are. The ports the
+					// SSE attach reads come from those cmds.
+					const withResume = rows;
+					setOpencodePorts(opencodePortsFromRooms(rows));
 					// #164: check every active room's folder in parallel and
 					// have the full missing-set ready BEFORE rooms mount, so
 					// a vanished folder never gets even one spawn attempt.

@@ -20,6 +20,16 @@ pub struct AgentApiEndpoint {
     pub status: parking_lot::RwLock<AgentApiStatus>,
 }
 
+/// A copy of the status as it is now. It is set once at build and never
+/// changes, so a copy (the harness runner's, #731) cannot go stale.
+impl Clone for AgentApiEndpoint {
+    fn clone(&self) -> Self {
+        Self {
+            status: parking_lot::RwLock::new(self.snapshot()),
+        }
+    }
+}
+
 impl AgentApiEndpoint {
     pub fn bound(port: u16) -> Self {
         Self {

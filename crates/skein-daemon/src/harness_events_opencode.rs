@@ -157,8 +157,10 @@ impl Drop for Adapter {
     }
 }
 
+/// Cloning shares the same adapters (#731: the harness runner holds a clone).
+#[derive(Clone)]
 pub struct OpencodeEventsManager {
-    inner: Mutex<HashMap<String, Adapter>>,
+    inner: Arc<Mutex<HashMap<String, Adapter>>>,
     db: Arc<Database>,
     /// Frontend emitter for live action rows. `None` in tests.
     /// Issue #80 D1.
@@ -168,7 +170,7 @@ pub struct OpencodeEventsManager {
 impl OpencodeEventsManager {
     pub fn new(db: Arc<Database>, events: crate::event_sink::SharedEventSink) -> Self {
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner: Arc::new(Mutex::new(HashMap::new())),
             db,
             events: Some(events),
         }

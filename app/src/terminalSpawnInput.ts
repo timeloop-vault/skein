@@ -242,3 +242,18 @@ export function observeResize(
 	resizeObserver.observe(host);
 	return resizeObserver;
 }
+
+/** #383 follow-up: xterm's IME composition (CJK, an emoji picker, possibly a
+ *  dead-key accent) calls `_finalizeComposition` straight into `onData`,
+ *  never `onKey` — the only place the draft store sees it. Start and end fold
+ *  to `userPaste` (→ `unknown`), not a guess at what was composed: fails
+ *  safe. Returns the detach. */
+export function attachCompositionNote(term: Terminal, harnessId: string): () => void {
+	const note = () => harnessInput.noteDraftEvent(harnessId, { type: "userPaste" });
+	term.textarea?.addEventListener("compositionstart", note);
+	term.textarea?.addEventListener("compositionend", note);
+	return () => {
+		term.textarea?.removeEventListener("compositionstart", note);
+		term.textarea?.removeEventListener("compositionend", note);
+	};
+}

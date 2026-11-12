@@ -14,8 +14,12 @@ use std::path::{Path, PathBuf};
 /// that), and tailing the computed path would watch a directory Claude
 /// never writes to. `None` when the home dir can't be resolved (exotic
 /// environments) so the caller can no-op cleanly.
-pub(super) fn session_jsonl_path(cwd: &str, session_id: &str) -> Option<PathBuf> {
-    let home = crate::spawn_env::state::home_dir()?;
+pub(super) fn session_jsonl_path(
+    home_override: Option<PathBuf>,
+    cwd: &str,
+    session_id: &str,
+) -> Option<PathBuf> {
+    let home = home_override.or_else(crate::spawn_env::state::home_dir)?;
     let computed = skein_harness::claude::session_jsonl_path(&home, cwd, session_id);
     if computed.is_file() {
         return Some(computed);

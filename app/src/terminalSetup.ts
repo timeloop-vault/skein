@@ -17,7 +17,7 @@ import { shouldHostOpenLink, URI_REGEX } from "./terminalLinks.ts";
 import { pathLinkProvider } from "./terminalPathLinks.ts";
 import { attachWheelReports } from "./terminalWheel.ts";
 
-/** Click-time link policy, mutated by the caller once `pty_spawn` resolves (#401). */
+/** Click-time link policy, mutated by the caller once `harness_ensure_running` resolves (#401). */
 export interface LinkPolicy {
 	mouseClicksDisabled: boolean;
 }
@@ -31,7 +31,7 @@ export interface LinkPolicy {
  *  fullscreen renderer opens a Cmd/Ctrl-clicked URL itself once mouse
  *  tracking is on.
  *
- *  `linkPolicy` is mutated by the caller once `pty_spawn` resolves
+ *  `linkPolicy` is mutated by the caller once `harness_ensure_running` resolves
  *  (#401: `mouseClicksDisabled`) and read at click time.
  *
  *  With `caps.localPaths`, file paths in the output are Cmd/Ctrl-

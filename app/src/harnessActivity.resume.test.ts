@@ -91,6 +91,7 @@ describe("resume onto a transcript that ends mid tool call (#336)", () => {
 			harnessKind: "claude",
 			program: "claude",
 			sessionId: "sid",
+			freshProcess: true,
 			opencodePort: undefined,
 			onSessionCaptured: undefined,
 			onSessionFollowed: undefined,

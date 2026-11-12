@@ -144,7 +144,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   #730 added harness_argv/ (cmd_for_kind, resume,
     │                                #   remote, agent_check, opencode_v2, plan: the argv
     │                                #   builders ported from the frontend, plus opencode
-    │                                #   port allocation) and spawn_env/default_agents
+    │                                #   port allocation) and spawn_env/default_agents.
+    │                                #   #731 added harness_runner/ (HarnessRunner:
+    │                                #   ensure_running spawns from the stored record and
+    │                                #   attaches the adapters, stop_harness, detach_view,
+    │                                #   reconcile on RoomStore::observe), boot_resume (the
+    │                                #   once-per-process resume preparation; spawns nothing)
+    │                                #   and pty/sink_slot (the replaceable output sink)
     │                                #   See docs/skeind-crates.md
     ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
     │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
@@ -215,10 +221,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   useNewRoomForm.tsx), HarnessColumn.tsx,
     │   │   │                        #   StatusBar.tsx, AppOverlays.tsx,
     │   │   │                        #   AppChrome.tsx, notifications.tsx
-    │   │   ├── LiveTerminal.tsx     # xterm.js ↔ PTY binding; spawns/kills on (cmd, spawnGen)
-    │   │   │                        #   mountKey; attaches the L2c event adapters. Split (#19)
+    │   │   ├── LiveTerminal.tsx     # xterm.js ↔ PTY binding; asks the daemon to ensure the
+    │   │   │                        #   harness runs on (cmd, spawnGen) mountKey and detaches on
+    │   │   │                        #   unmount (#731, never kills); attaches the L2c event
+    │   │   │                        #   adapters. Split (#19)
     │   │   │                        #   into useTerminalSpawn.ts (the mount effect — PTY
-    │   │   │                        #   lifecycle + L2c adapter attach), terminalInteractions.ts
+    │   │   │                        #   attach + L2c adapter attach; harnessEnsure.ts,
+    │   │   │                        #   harnessMounts.ts, terminalRepaint.ts), terminalInteractions.ts
     │   │   │                        #   (keys/clipboard/post-exit shell gate), terminalSetup.ts
     │   │   │                        #   (xterm.js Terminal + addon construction)
     │   │   ├── opencodeShellFollow.ts # Follows an opencode restarted from the post-exit
@@ -583,19 +592,31 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   through a history rewrite can read as a mismatch, which is exactly what
   "It's the same repo" resolves; a room created in a folder that isn't a
   repo yet gets its identity at the next launch.
-- **PTYs** live in `PtyManager`. `pty_spawn` returns an opaque id;
-  output streams over a per-spawn `tauri::ipc::Channel<PtyEvent>` — a
-  tagged enum `{kind:"data",chunk}` / `{kind:"exit",code}`. PTYs
-  survive room/harness tab switches: all active rooms and all their
-  harnesses stay mounted, hidden with `display:none`. PTYs die with
-  the Skein process; on boot the hydrate path drops stale sessionIds
-  (`resume.rs`, in skein-daemon, probes the tools' own stores), and asks
-  the daemon (`rooms_resume_cmds`, #730) to pre-allocate fresh opencode
-  ports and rewrite each stored cmd to its resume form (`resume_harness`
-  in `harness_argv/`: `claude --resume <sid>`,
-  `opencode --port <p> --hostname 127.0.0.1 --session <sid>`); the
-  result merges back by id (`harnessArgvApply.ts`).
-  Reopening an archived room runs the same rewrite (#153).
+- **PTYs** live in `PtyManager`, and since #731 the daemon's
+  `HarnessRunner` starts and stops them. A view calls
+  `harness_ensure_running`, which spawns from the stored record (or
+  reuses the running process) and returns the spawn result; output
+  streams over a per-attach `tauri::ipc::Channel<PtyEvent>` — a tagged
+  enum `{kind:"data",chunk}` / `{kind:"exit",code}` — that is the PTY's
+  replaceable sink. Unmounting a view calls `harness_detach` and never
+  kills; a harness stops when its record is removed or its room is
+  archived (or `harness_stop`). With no view attached output is dropped
+  (no ring buffer until #584) and the daemon answers ConPTY's cursor
+  query itself; a re-attached terminal starts blank and forces a repaint
+  with a one-row resize (`terminalRepaint.ts`). PTYs survive room/harness
+  tab switches: all active rooms and all their harnesses stay mounted,
+  hidden with `display:none`. PTYs die with the Skein process. Boot resume
+  is the daemon's too (`boot_resume.rs`): at the first successful rooms
+  load of the process it drops stale sessionIds (`resume.rs`, probes the
+  tools' own stores) and rewrites each stored cmd to its resume form with
+  a fresh opencode port (`resume_harness` in `harness_argv/`:
+  `claude --resume <sid>`,
+  `opencode --port <p> --hostname 127.0.0.1 --session <sid>`), saved
+  under origin `daemon-boot`; it spawns nothing — a harness starts on
+  its first request. The frontend reads the ports back from the cmds
+  (`opencodePort.ts`). Reopening an archived room runs the same rewrite
+  (#153) through `rooms_resume_cmds` (#730), merged back by id
+  (`harnessArgvApply.ts`). See docs/skeind-p2-design.md, "Slice 3".
 - **Watchers** (`WatcherManager`, notify-debouncer-mini, 200 ms,
   `.git/` deliberately unfiltered) push `()` over a Channel; the
   active room's Live Context re-fetches `git_diff` and the status-bar
@@ -847,7 +868,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
 - **The agent API** (#213, epic #52 D8): an axum server bound to
   `127.0.0.1:0` in `setup()`, serving `/mcp` (MCP streamable HTTP —
   what the harnesses talk to) and a plain-JSON `/api/*` mirror of the
-  same verbs. `pty_spawn` mints (or reuses) the room's bearer token and
+  same verbs. The spawn (`ensure_running`, #731) mints (or reuses) the room's bearer token and
   puts `SKEIN_REVIEW_URL` / `SKEIN_REVIEW_TOKEN` / `SKEIN_ROOM_ID` /
   `SKEIN_HARNESS_ID` into every harness's environment; both harnesses
   expand `${VAR}` in their MCP config, so the ephemeral port never has
@@ -900,7 +921,7 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   harnesses. Full contract: `docs/agent-api.md`.
 - **Harness config injection** (#215, epic #52 E): the variables above
   are useless until the CLI knows there is a server at that address, so
-  `pty_spawn` also appends `--plugin-dir <resources>/harness-config/`
+  the spawn (`ensure_running`, #731) also appends `--plugin-dir <resources>/harness-config/`
   `claude-plugin` for Claude Code and sets `OPENCODE_CONFIG` for
   opencode. Both are **session-scoped and additive** — installed plugins
   and the user's own config still load, and a repo's `opencode.json`

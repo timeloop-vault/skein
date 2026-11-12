@@ -1,7 +1,7 @@
 // Harness argv helpers still living in the frontend. The argv for creation,
 // repoint, restart, boot and unarchive is built by the daemon (#730,
 // crates/skein-daemon/src/harness_argv/), reached through harnessArgvApi.ts.
-// The opencode v2 decision and argv are the daemon's too (#730, pty_spawn).
+// The opencode v2 decision and argv are the daemon's too (#730, harness_ensure_running).
 // What remains here is `isOpencodeV2` (non-argv decisions) and the Hermes
 // default profile name.
 

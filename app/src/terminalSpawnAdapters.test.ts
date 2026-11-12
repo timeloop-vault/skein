@@ -23,6 +23,7 @@ const attach = (over: Partial<AdapterAttach>): AdapterAttach => ({
 	harnessKind: "hermes",
 	program: "hermes",
 	sessionId: undefined,
+	freshProcess: true,
 	opencodePort: undefined,
 	onSessionCaptured: undefined,
 	onSessionFollowed: undefined,
@@ -34,7 +35,7 @@ const attach = (over: Partial<AdapterAttach>): AdapterAttach => ({
 describe("attachAdapters for Hermes", () => {
 	beforeEach(() => attachHermesEvents.mockClear());
 
-	it("attaches the hook binding when pty_spawn reported working hooks", () => {
+	it("attaches the hook binding when harness_ensure_running reported working hooks", () => {
 		attachAdapters(attach({ hermesHooks: true, hermesProfile: "p" }));
 		expect(attachHermesEvents).toHaveBeenCalledOnce();
 		expect(attachHermesEvents).toHaveBeenCalledWith(

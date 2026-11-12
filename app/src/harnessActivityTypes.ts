@@ -109,9 +109,9 @@ export interface HarnessActivity {
 	/// two facts, two fields. Reset to `null` on every spawn.
 	launchSignalAt: number | null;
 	/// Did #215's config injection actually happen for this spawn (a
-	/// non-empty `Injection`, per `pty_spawn`'s resolved `injected`
+	/// non-empty `Injection`, per `harness_ensure_running`'s resolved `injected`
 	/// field)? Reset to `false` on every spawn and set once
-	/// `pty_spawn` resolves — the window between the two is "we don't
+	/// `harness_ensure_running` resolves — the window between the two is "we don't
 	/// know yet," which the #238 nudge gate treats the same as "no."
 	/// Without #215 there is no proof the harness's CLI even has the
 	/// review MCP tools wired up, let alone that a pasted nudge will
@@ -236,6 +236,8 @@ export const TRANSITION_SOURCE = {
 	// PTY-driven (L1 substrate).
 	PtyOutput: "pty-output",
 	PtyExit: "pty-exit",
+	// #731: a view re-attached to a process that was already running; not news.
+	Reattached: "reattached",
 	// L2a — idle heuristic on the worktree-watcher tick.
 	L2aIdle: "l2a-idle",
 	// L2b — generic prompt-pattern fallback.

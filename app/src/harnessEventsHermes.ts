@@ -1,7 +1,7 @@
 // #625: the binding between Hermes shell hooks and the activity store
 // (L2c-3). The decisions live in `hermesHookAdapter.ts`; this file applies
 // its effects, owns the Rust action-extraction attach, and runs the
-// launch stand-in (see `LAUNCH_POLL_MS`). Attached only when `pty_spawn`
+// launch stand-in (see `LAUNCH_POLL_MS`). Attached only when `harness_ensure_running`
 // reported `hermesHooks: true`.
 
 import { Channel, invoke } from "@tauri-apps/api/core";

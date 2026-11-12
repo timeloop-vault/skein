@@ -18,7 +18,7 @@ import { forgetScreenPhase } from "./screenPhaseTick.ts";
 import { subagents } from "./subagents.ts";
 
 export const lifecycleMethods = {
-	/// Record a fresh spawn. Call from LiveTerminal once `pty_spawn`
+	/// Record a fresh spawn. Call from LiveTerminal once `harness_ensure_running`
 	/// resolves successfully.
 	spawned(id: string): void {
 		const now = Date.now();
@@ -56,8 +56,20 @@ export const lifecycleMethods = {
 		emit(id);
 	},
 
+	/// #731: the view attached to a process that was already running, so the
+	/// fresh `spawning` record is a lie. Call after the adapters attached: a
+	/// harness with an authoritative adapter is left to it; any other kind
+	/// (shell, copilot) moves to `idle`, what a quiet running process reads as.
+	/// Never notifies (`isNotifiable`). A pending permission state is not
+	/// carried across a re-attach; it moves with the phase machine (#732).
+	reattached(id: string): void {
+		const cur = store.get(id);
+		if (!cur || cur.authoritative || cur.phase !== "spawning") return;
+		setPhase(id, "idle", TRANSITION_SOURCE.Reattached);
+	},
+
 	/// Record whether #215's config injection happened for this spawn.
-	/// Call once `pty_spawn` resolves — LiveTerminal is the only
+	/// Call once `harness_ensure_running` resolves — LiveTerminal is the only
 	/// caller, and only for the spawn that just succeeded. No-op for a
 	/// harness we've already forgotten (a cancelled spawn racing
 	/// unmount).

@@ -19,9 +19,12 @@ export interface AdapterAttach {
 	program: string | undefined;
 	/** #627: the harness's Hermes profile (`undefined` = no `-p`). */
 	hermesProfile?: string | undefined;
-	/** #625: `pty_spawn` reported working Hermes status hooks. */
+	/** #625: `harness_ensure_running` reported working Hermes status hooks. */
 	hermesHooks?: boolean;
 	sessionId: string | undefined;
+	/** #731: the daemon started the process for this mount (`started`); false
+	 *  = re-attached to a running one, which may genuinely be mid-turn (#336). */
+	freshProcess: boolean;
 	opencodePort: number | undefined;
 	/** #677: opencode v2 sidecar generation; set = v2 SSE adapter. */
 	opencodeSidecarGeneration?: number | undefined;
@@ -46,8 +49,8 @@ export function attachAdapters(a: AdapterAttach): (() => void) | null {
 	if (hasClaudeTranscriptTail(harnessKind, a.sessionIdRef.current)) {
 		const attachedSessionId = a.sessionIdRef.current;
 		a.claudeAdapterRef.current = {
-			// #336: the process was just spawned, so it cannot be mid-turn.
-			detach: attachClaudeEvents(harnessId, roomId, attachedSessionId, cwd, true),
+			// #336: a process just spawned cannot be mid-turn; a re-attached one can.
+			detach: attachClaudeEvents(harnessId, roomId, attachedSessionId, cwd, a.freshProcess),
 			sessionId: attachedSessionId,
 		};
 	}

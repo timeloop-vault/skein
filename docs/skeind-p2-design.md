@@ -1,7 +1,7 @@
 # skeind P2a: the daemon owns the harness lifecycle (#583)
 
-Status: design decided 2026-11-12. Slice 1 implemented (#729);
-slices 2 to 6 not yet.
+Status: design decided 2026-11-12. Slices 1 to 3 implemented (#729,
+#730, #731); slices 4 to 6 not yet.
 Epic: #575. Design: docs/skeind-design.md. Recon:
 docs/skeind-recon.md (section 2 rows 6, 14-18, 28-30, 37, 45, 46, and
 section 8).
@@ -23,13 +23,13 @@ no client attached. Surviving the restart is #584.
 | --- | --- | --- |
 | Argv per kind, resume argv | Daemon since slice 2 (#730); before it, the frontend | `harness_argv/`; the app calls `harness_fresh_cmd`, `harness_resume_cmd`, `rooms_resume_cmds`. `harnessCmd.ts` keeps only `isOpencodeV2` and the Hermes profile constant |
 | Spawn defaults (shell, cwd, agent) | Daemon since slice 2 (#730); before it, the frontend held the agent | `default_agents` in the daemon's `settings.json`; `default_shell_impl`, `default_cwd_impl`. `prefs.ts` `defaultAgents` survives only as the legacy import source |
-| opencode port, sidecar | Daemon since slice 2 (#730); before it, the frontend | The port is allocated inside the argv commands; `pty_spawn` probes the version and starts the sidecar. `opencodeV2Spawn.ts` is gone |
-| Spawn and kill of the PTY | Frontend | `useTerminalSpawn.ts`: spawn in a mount effect, `pty_kill` on unmount |
-| PTY output | Per-spawn channel | No ring buffer in the daemon; a dead channel drops output |
+| opencode port, sidecar | Daemon since slice 2 (#730); before it, the frontend | The port is allocated inside the argv commands; the spawn (`ensure_running` since slice 3, `pty_spawn` before) probes the version and starts the sidecar. `opencodeV2Spawn.ts` is gone |
+| Spawn and kill of the PTY | Daemon since slice 3 (#731); before it, the frontend | `harness_runner/`: spawns from the stored record on first request, stops when the record goes. `useTerminalSpawn.ts` asks, attaches and detaches |
+| PTY output | Replaceable sink per PTY | `pty/sink_slot.rs`. No ring buffer in the daemon (#584); with no sink attached output is dropped |
 | Room and harness records | Daemon since slice 1 (#729); before it, the frontend saved wholesale | `RoomStore` (`room_store/`); clients send mutations through `rooms_apply`. `db_save_rooms` and `roomsSaveScheduler.ts` are gone |
-| Boot resume | Frontend | `useRoomsHydrate.ts`: probes, stale sessionIds, `withResumeCmds`, identity gate |
-| Adapters (Claude JSONL, opencode SSE, Hermes) | Engines in daemon, attached from the webview | `terminalSpawnAdapters.ts` |
-| Transition log (`harness_events`), action rows (`harness_actions`) | Webview calls the daemon; transitions follow the phase machine | `useTransitionLog.ts`, `useHarnessActions.ts` |
+| Boot resume | Daemon since slice 3 (#731); before it, the frontend | `boot_resume.rs`: probes, stale session ids, resume cmds, saved under origin `daemon-boot`. `useRoomsHydrate.ts` keeps the folder and identity gates |
+| Adapters (Claude JSONL, opencode SSE, Hermes) | Daemon attaches them after a spawn (slice 3); the client also attaches its own event channels for the phase machine | `harness_runner/adapters.rs`, `terminalSpawnAdapters.ts` |
+| Transition log (`harness_events`), action rows (`harness_actions`) | Action rows: written by the daemon's adapters since slice 3. Transition log: the client, which calls the daemon, until slice 4 | `useTransitionLog.ts`, `useHarnessActions.ts` |
 | Phase machine | Frontend | `harnessActivity*.ts`, `deferral.ts`, `subagents.ts`, `backgroundTasks.ts`, `harnessEvents*.ts` |
 | Mail and nudge delivery | Frontend | `useMailDelivery.ts`, `harnessInput*.ts`, xterm `term.paste()` |
 | Agent API verbs | Daemon, some ask the webview | `request_frontend`, 3 to 60 s timeouts |
@@ -611,13 +611,15 @@ localStorage, so nothing is imported for them.
 
 ### What stays with the client until slice 3
 
-Slice 3 (#731) moves these:
+Slice 3 (#731) moved these (see "Slice 3 as built"):
 
 - Deciding when to spawn and when to stop.
 - The stale-session probes that run before the client asks for resume
   argv.
-- Building the remote spec (`buildRemoteSpec`).
 - Passing the argv it was given back into `pty_spawn`.
+
+`buildRemoteSpec` is not in that list: the client still builds the
+remote spec when it creates a `remote` harness.
 
 A failed daemon argv call at boot shows the same retry card as a failed
 rooms load. In creation, reopen and repoint it shows a message and
@@ -635,8 +637,276 @@ changes nothing.
   having imported.
 - Other clients are not told when a default agent changes. They see the
   new value at their next boot or settings read.
-- The argv still round-trips through the client until #731: the daemon
-  builds it, the client holds it, and `pty_spawn` receives it back.
+- The argv round trip ended in slice 3: `pty_spawn` is gone and the
+  daemon spawns from the stored record. The client's copy of the argv is
+  now only an expectation (`expectCmd`).
+
+## Slice 3 as built (#731)
+
+The daemon now starts and stops harnesses itself. A view no longer
+spawns or kills anything. It asks the daemon to make sure a harness is
+running, attaches its terminal, and detaches when it goes away. The code
+is `crates/skein-daemon/src/harness_runner/`:
+
+- `mod.rs`: `HarnessRunner` with `ensure_running`, `stop_harness`,
+  `detach_view`, `detach_view_if`, `release_events` and `reconcile`.
+- `gates.rs`: the refusals and `SpawnPlan::from_record`.
+- `adapters.rs`: attaches the Claude, opencode and Hermes adapters.
+- `record.rs`: writes the spawn result back to the record.
+
+Three more pieces: `boot_resume.rs` (boot resume), `pty/sink_slot.rs`
+(the replaceable output sink) and, in the app,
+`commands/harness_runner.rs` (the three Tauri commands).
+
+### Decisions made on 2026-11-12
+
+- **Exit policy.** A harness that exits stays exited. The daemon starts
+  nothing in its place. The post-exit shell starts only when a client
+  asks: Enter changes the record's `cmd` to the shell, and the view then
+  asks again with `restart`. Rejected: the daemon starts the shell, and
+  the daemon restarts the harness.
+- **Re-attach with no ring buffer.** The terminal starts blank, and the
+  view forces a repaint by resizing the PTY one row down and back
+  (`app/src/terminalRepaint.ts`). A plain shell stays blank until its
+  next output. Rejected: an interim raw tail buffer in the daemon, and
+  staying blank until new output arrives.
+- **Spawn on first request.** The daemon prepares at start and spawns a
+  harness when a view or a verb first asks for it. A daemon with no
+  client resumes nothing by itself. Rejected: spawn everything at daemon
+  start. Startup output would be lost until #584 and the size would be a
+  guessed 80x24.
+
+### The commands
+
+| Command | Effect |
+| --- | --- |
+| `harness_ensure_running` | Spawns the harness from its record, or reuses its process, and attaches this view's channel as the output sink. Returns the spawn result, `started`, `exited`, `exitCode` and an `attachId` |
+| `harness_detach` | Clears the output sink. With an `attachId` only if that attachment is still current. Never kills |
+| `harness_stop` | Kills the process and its sidecar, detaches the adapters and forgets the harness. Idempotent. No client calls it yet |
+
+`pty_spawn`, `pty_kill` and the never-called `db_record_harness_action`
+are removed.
+
+`ensure_running` takes `{roomId, harnessId, rows, cols, envProfile,
+restart, expectCmd}`. Argv, folder, kind, agent and session id come from
+the stored record, never from the caller. It refuses with one of these
+codes:
+
+| Code | When |
+| --- | --- |
+| `unknown_harness` | No such harness in that room |
+| `room_archived` | The room is archived |
+| `no_pty` | The kind has no terminal (`files`, `design`) or is unknown |
+| `no_cmd` | The record has no argv |
+| `folder_missing` | The harness's folder, else the room's, is not a directory |
+| `repo_mismatch` | The #418 identity check (`check_identity`) says the folder holds another repository. An unknown identity passes |
+| `stale_record` | `expectCmd` is set and differs from the record's `cmd`. Checked before anything is touched |
+| `spawn_failed` | The spawn itself failed |
+
+An existing process is reused (`started: false`) unless `restart` is
+true. A reused process that already exited delivers its `exit` event to
+the new sink through the attach.
+
+```mermaid
+sequenceDiagram
+    participant V as View
+    participant D as Daemon
+    participant H as Harness
+    D->>D: 1 boot resume prepares records
+    V->>D: 2 ensure_running
+    D->>H: 3 spawn from the record
+    D->>D: 4 attach adapters
+    D-->>V: 5 started, output flows
+    V->>D: 6 detach
+    H-->>D: 7 output, dropped
+    D->>D: 8 adapters write rows
+    V->>D: 9 ensure_running again
+    D-->>V: 10 started false, sink attached
+    V->>D: 11 resize one row down, then back
+    H-->>V: 12 redraw
+    D->>D: 13 record removed or room archived
+    D->>H: 14 stop
+```
+
+Figure 6: the harness lifecycle across a spawn, a detach, a re-attach and
+a stop. Renders section "Slice 3 as built" and
+crates/skein-daemon/src/harness_runner/; the text is authoritative
+(non-normative).
+
+1. At the first successful rooms load of the daemon process, boot resume
+   probes the stored sessions, clears stale ids and rewrites every `cmd`
+   to resume form. It spawns nothing.
+2. A view asks for the harness with `harness_ensure_running`. Before it
+   does, the client drains its pending room mutations so the record is
+   at the daemon.
+3. The daemon checks the gates and spawns the process from the record.
+4. It attaches the adapters itself (Claude JSONL tail, opencode SSE,
+   Hermes actions tail).
+5. The call returns with `started: true`. Output flows to the view's
+   sink.
+6. The view goes away and calls `harness_detach`. The process keeps
+   running.
+7. With no sink, output is dropped. The daemon answers a ConPTY cursor
+   query itself.
+8. The adapters keep writing `harness_actions` rows.
+9. A new view calls `harness_ensure_running` with `restart` false.
+10. The daemon finds the process and attaches the sink. The result has
+    `started: false`.
+11. The view resizes the PTY one row down, then back after 80 ms.
+12. The tool redraws and the new view fills.
+13. A record change removes the harness or archives its room. The room
+    store tells the runner after each applied batch.
+14. `reconcile` stops it without taking the spawn gate: it kills the
+    process and its sidecar and detaches the adapters. An explicit
+    `harness_stop` does the same, after waiting for the gate.
+
+### Boot resume
+
+`BootResume::load_rooms` (`boot_resume.rs`) wraps the rooms load. At the
+first successful load with at least one room in this daemon process it:
+
+- probes each stored session id (Claude, opencode, Hermes) and clears the
+  stale ones. A probe error keeps the id. An opencode v2 id is trusted
+  and not probed;
+- rewrites each `cmd` to resume form with a fresh opencode port, using
+  the slice 2 builders;
+- saves the changed harnesses through `RoomStore::apply` under origin
+  `daemon-boot`, then flushes. A failed flush is logged, and the
+  prepared rooms are still what the client receives.
+
+The preparation writes one info log line with the counts (rooms, `cmd`s
+changed, stale sessions dropped).
+
+A later load in the same process (a retry or a webview reload) returns
+the store untouched. A failed preparation is logged, the unprepared rooms
+are returned and it is not retried. The frontend no longer probes at boot
+and no longer calls `rooms_resume_cmds` at boot. It takes the opencode
+ports from the stored `cmd` (`opencodePort.ts`). `rooms_resume_cmds`
+remains for unarchive.
+
+### The output sink
+
+`PtyManager::spawn_with_sink` takes an optional sink. `attach`,
+`detach`, `is_alive` and `exit_code` work on a running PTY. The reader
+and waiter threads write through a `SinkSlot` (`pty/sink_slot.rs`)
+and never hold a sink themselves.
+
+- Detach never kills.
+- With no sink, output is dropped. The ring buffer and snapshots are
+  #584.
+- An exit with no sink is recorded. The next attach receives it at once.
+- Each attach gets an id. `detach_if(attach_id)` clears the sink only if
+  that attachment is still current, so a late detach from an old view
+  cannot blank a newer one.
+
+ConPTY withholds all child output until the host answers its `ESC[6n`
+cursor query (#484). While a view is attached its xterm answers, and
+`ptyInputBuffer.ts` is unchanged. While none is attached the slot
+answers `ESC[1;1R` itself, and never while a live sink is attached, or
+the child would see a second report as input. A sink whose channel is
+dead (a view that vanished without detaching) stays attached, but it
+cannot answer, so the slot answers and ConPTY output is not withheld. A
+query split across two chunks is handled. `pty/sink_pty_tests.rs` spawns a real child with no
+sink on Windows and shows that its output arrives once a view attaches.
+The same test timed out after 20 s with no output when the answer was
+disabled; that check was run by hand and is not an automated assertion.
+
+### Adapters and rows
+
+After a spawn the daemon attaches the adapters itself, with a consumer
+that drops every event. They write the `harness_actions` rows. opencode
+attaches by the `--port` in the stored `cmd`, or by sidecar generation on
+v2. The client still attaches its own event channels for its phase
+machine, which stays in TypeScript until slice 4. Its attach replaces the
+daemon's. When the client detaches (`claude_events_detach` and the
+opencode one), the app calls `release_events`: the runner puts its own
+adapter back if it still has the harness and the process is alive, and
+detaches otherwise (also when the process has exited). The
+transition log `harness_events` is still written by the client.
+
+### Stops
+
+Stops follow the records. `RoomStore::observe` calls
+`HarnessRunner::reconcile` after every applied batch, with the store lock
+released. A harness whose record is gone, or whose room is archived, is
+stopped. `harness_stop` is the explicit way. An unmount stops nothing.
+
+`ensure_running`, the public `stop_harness` and `release_events` take one
+gate per harness, so calls for the same harness run one at a time. A stop
+that arrives while the harness is still starting waits, then stops what
+was started. `reconcile` takes no gate, because a spawn's own record
+write-back re-enters the observer on the thread that holds it, and the
+observer must not wait for a spawn. It reads the current records
+(`store.rooms()`), not the batch it was handed, so observers that run out
+of order reach the same answer. After a spawn, `ensure_running` looks the
+record up again and stops the process if the harness was removed or
+archived meanwhile, which covers what `reconcile` could not see yet.
+
+### Client side
+
+- `harnessEnsure.ts` drains the pending room mutations, calls
+  `harness_ensure_running` with `expectCmd`, and retries a bounded number
+  of times (4 attempts) on `stale_record` and `unknown_harness`.
+- `harnessMounts.ts` sets `restart` only when the mount key changed in
+  this webview: Restart harness, Enter for shell and repoint. The key is
+  read with `restartFor` and recorded with `commitMount` only when the
+  ensure call is actually dispatched (`harnessEnsure.ts`), so a React
+  StrictMode double mount cannot swallow a restart.
+- `useTerminalSpawn.ts` detaches on unmount. For a re-attached harness
+  with no authoritative adapter it calls `harnessActivity.reattached`,
+  which moves `spawning` to `idle` with a non-notifying source
+  (`harnessActivityLifecycle.ts`).
+- `terminalRepaint.ts`: a cancelled repaint sends the restoring resize at
+  once, so the PTY is never left one row short.
+- `useRoomsHydrate.ts` mounts the rows as the daemon returns them.
+
+### Known limits
+
+- The agent verdict check before a spawn is still client-side
+  (`terminalSpawnAgent.ts`, calling `list_harness_agents`).
+- The phase machine and `harness_events` are client-side until slice 4.
+  Events emitted while no client is attached never reach the phase
+  machine.
+- Output written while no view is attached is lost until #584.
+- An unbound Hermes session capture and `hermes_work` stay client-side.
+  The daemon tails Hermes only when the session id is already bound and
+  the status hooks work.
+- No agent API verb reaches `ensure_running` yet (slice 6).
+- `release_events` re-attaches an opencode v1 adapter with the port of
+  the spawn-time argv. After an opencode restarted from the post-exit
+  shell (#517) was re-pointed by the client, a client letting go leaves
+  the daemon's adapter on the old port until the next attach.
+- A pending permission state is not carried across a re-attach. It moves
+  with the phase machine (#732).
+
+### What stays with the client
+
+- `buildRemoteSpec`, when a `remote` harness is created.
+- The agent verdict check before a spawn.
+- The phase machine and `harness_events` (#732).
+- The Hermes work poller and unbound Hermes session capture.
+
+### Live verification
+
+On 2026-11-12 an isolated dev instance on Windows was driven over CDP.
+These passed:
+
+- spawn of claude (with and without `--agent`), opencode, shell and
+  files harnesses;
+- tab and room switches with unchanged child PIDs;
+- a webview reload re-attaching to the same PIDs (a plain shell also
+  showed its earlier screen, because ConPTY redraws on the resize);
+- closing a tab;
+- Restart harness with `claude --resume`;
+- the post-exit shell: nothing started for more than 10 s, Enter started
+  a shell;
+- archive and reopen;
+- app restart with resume of the same session ids.
+
+Not covered: macOS and Linux, Hermes, opencode v2, remote harnesses.
+
+Observed, not a result of this slice: the Activity card read "0 events"
+after a restart while `harness_actions` held rows (#740).
 
 ## What #583 assumes of #584 and #585
 
@@ -660,9 +930,11 @@ Not designed here. #583 assumes:
 - **Phase-machine port drift.** Two implementations can disagree.
   Mitigation: ported vitest tables as the spec, then a shadow run that
   logs every divergence before the flip.
-- **ConPTY cursor-query with no terminal.** Spawn today depends on an
-  xterm answering the cursor query (#484, `bufferPtyInput`). A
-  daemon-side answer when no terminal is attached is unproven.
+- **ConPTY cursor-query with no terminal.** Resolved in slice 3. While
+  no view is attached the daemon answers `ESC[6n` with `ESC[1;1R`
+  itself (`pty/sink_slot.rs`); a test with a real child on Windows
+  (`pty/sink_pty_tests.rs`) shows output arriving once a view attaches.
+  See "Slice 3 as built".
 - **Hermes screen phase.** Without a client it reads `unknown` until
   #584's headless emulator exists. A known limit.
 - **localStorage defaults migration.** `defaultAgents` moves to
@@ -672,10 +944,10 @@ Not designed here. #583 assumes:
   `db_save_rooms` is removed, so the client cannot write rows. Every
   write goes through the daemon's `RoomStore`, which writes per row.
   `Database::save_all` is left for migration and tests only.
-- **Post-exit shell unattended.** The post-exit shell and
-  `opencodeShellFollow.ts` are keystroke-driven in xterm. What a
-  daemon-run harness does on exit with no terminal is a policy to set
-  in slice 3.
+- **Post-exit shell unattended.** Resolved in slice 3 by policy (D5a
+  below): a harness that exits stays exited and the daemon starts
+  nothing. The post-exit shell starts only when a view asks, so
+  `opencodeShellFollow.ts` stays a client concern.
 - **File-size limits.** New Rust files aim for 600 lines or fewer
   (CLAUDE.md). The phase machine port must be split by concern across
   several files and a sibling `tests.rs`.
@@ -686,7 +958,7 @@ Not designed here. #583 assumes:
 | --- | --- |
 | Attached mode: the app no longer builds argv or allocates ports | Slice 2 |
 | Attached mode: the app no longer writes `harness_events` rows (the daemon does; `harness_actions` rows move in slice 3) | Slice 4 (with slice 3 for actions) |
-| A no-client test creates a room, spawns a harness through the daemon API, and the phase and `harness_events` rows update | Slices 3 and 4 together (slice 3: `harness_actions` rows; slice 4: phase and transition log; room creation: slice 1; verbs: slice 6) |
+| A no-client test creates a room, spawns a harness through the daemon API, and the phase and `harness_events` rows update | Slices 3 and 4 together (slice 3: `harness_actions` rows, tested by `harness_runner/tests/acceptance.rs`; slice 4: phase and transition log; room creation: slice 1; verbs: slice 6) |
 | Two simulated clients write different rooms without erasing each other | Slice 1 |
 | `cargo test --workspace`, `cargo test --manifest-path app/src-tauri/Cargo.toml`, `cd app && npm test` pass | Every slice |
 | No change in what the user sees in attached mode | Every slice; slice 4's shadow run guards the flip |

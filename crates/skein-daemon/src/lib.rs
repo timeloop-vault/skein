@@ -4,6 +4,7 @@
 pub mod agent_api;
 pub mod agent_endpoint;
 pub mod agents;
+pub mod boot_resume;
 pub mod build_info;
 pub mod daemon;
 pub mod db;
@@ -20,6 +21,7 @@ pub mod harness_config;
 pub mod harness_events_claude;
 pub mod harness_events_opencode;
 pub mod harness_log;
+pub mod harness_runner;
 pub mod hermes_profile;
 pub use skein_proto::harness_kind;
 pub mod harness_work_hermes;

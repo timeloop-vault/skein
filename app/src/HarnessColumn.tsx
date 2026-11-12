@@ -289,8 +289,8 @@ const HarnessColumnImpl = ({
 			 *
 			 * Issue #25: when the picker is up we *also* hide every
 			 * harness pane rather than unmounting them — unmounting
-			 * fires LiveTerminal's cleanup, which pty_kills the PTY,
-			 * which kills the live Claude conversation we're trying
+			 * fires LiveTerminal's cleanup, which detaches the view and
+			 * drops the live Claude conversation's screen state we're trying
 			 * to add a sibling to. The picker takes the flex space
 			 * while present; harness panes survive untouched.
 			 */}

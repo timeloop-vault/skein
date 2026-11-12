@@ -1,6 +1,8 @@
 //! The harness telemetry attach/detach commands: Claude's JSONL tail
 //! and opencode's SSE subscription.
 
+use std::sync::Arc;
+
 use tauri::Manager;
 use tauri::ipc::Channel;
 
@@ -10,6 +12,7 @@ use crate::harness_events_claude::{
 use crate::harness_events_opencode::{
     OpencodeAttachArgs, OpencodeEvent, OpencodeEventsManager, opencode_events_attach_impl,
 };
+use crate::harness_runner::HarnessRunner;
 use crate::opencode_sidecar::OpencodeSidecarManager;
 use crate::tauri_stream_sink::TauriChannelSink;
 
@@ -68,14 +71,18 @@ pub(crate) async fn claude_events_attach(
     })
 }
 
-/// Stop tailing the JSONL for `harness_id`. No-op if unknown.
-#[allow(clippy::needless_pass_by_value)]
+/// The client's tail channel is going away. The runner swaps in its own
+/// row-writing adapter when it still has the harness (#731), otherwise the
+/// tail is stopped. Async: the swap re-attaches (reads the transcript).
 #[tauri::command]
-pub(crate) fn claude_events_detach(
+pub(crate) async fn claude_events_detach(
     harness_id: String,
-    manager: tauri::State<'_, ClaudeEventsManager>,
-) {
-    manager.detach(&harness_id);
+    runner: tauri::State<'_, Arc<HarnessRunner>>,
+) -> Result<(), String> {
+    let runner = Arc::clone(&runner);
+    tauri::async_runtime::spawn_blocking(move || runner.release_events(&harness_id))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Manually trigger the #410 dead-tail recovery check for `harness_id`
@@ -176,12 +183,15 @@ pub(crate) async fn opencode_events_attach(
     )
 }
 
-/// Stop the SSE subscription for `harness_id`. No-op if unknown.
-#[allow(clippy::needless_pass_by_value)]
+/// The client's SSE channel is going away; same handling as
+/// `claude_events_detach` (#731).
 #[tauri::command]
-pub(crate) fn opencode_events_detach(
+pub(crate) async fn opencode_events_detach(
     harness_id: String,
-    manager: tauri::State<'_, OpencodeEventsManager>,
-) {
-    manager.detach(&harness_id);
+    runner: tauri::State<'_, Arc<HarnessRunner>>,
+) -> Result<(), String> {
+    let runner = Arc::clone(&runner);
+    tauri::async_runtime::spawn_blocking(move || runner.release_events(&harness_id))
+        .await
+        .map_err(|e| e.to_string())
 }

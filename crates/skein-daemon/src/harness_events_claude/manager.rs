@@ -33,6 +33,9 @@ use std::sync::Arc;
 /// `Arc`-wrapped (#362) so the background supervisor thread spawned by
 /// `new` can hold a `Weak` to it — it must never be the reason this
 /// manager (and everything it tails) outlives the app.
+///
+/// Cloning shares the same registry (#731: the harness runner holds a clone).
+#[derive(Clone)]
 pub struct ClaudeEventsManager {
     inner: Arc<Mutex<Registry>>,
     /// Shared with the per-attach persistence sink so each adapter
@@ -42,6 +45,10 @@ pub struct ClaudeEventsManager {
     /// Cloned into each attach's `ActionPersistence` so the live tail
     /// can broadcast new rows. `None` in tests. Issue #80 D1.
     events: Option<crate::event_sink::SharedEventSink>,
+    /// Where transcripts are looked for instead of the user's home. Set
+    /// only by tests (#731), so a test never reads or writes the real
+    /// `~/.claude`; shared by clones like the registry.
+    home_override: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl ClaudeEventsManager {
@@ -52,7 +59,15 @@ impl ClaudeEventsManager {
             inner,
             db,
             events: Some(events),
+            home_override: Arc::default(),
         }
+    }
+
+    /// Test-only: resolve transcripts under `home` rather than the user's
+    /// home directory, for this manager and every clone of it.
+    #[cfg(test)]
+    pub(crate) fn set_home_for_test(&self, home: PathBuf) {
+        *self.home_override.lock() = Some(home);
     }
 
     /// Test constructor — no event sink, so the live tail persists
@@ -67,6 +82,7 @@ impl ClaudeEventsManager {
             inner: Arc::new(Mutex::new(Registry::default())),
             db,
             events: None,
+            home_override: Arc::default(),
         }
     }
 
@@ -174,7 +190,8 @@ impl ClaudeEventsManager {
     where
         F: Fn(ClaudeEvent) + Send + Sync + 'static,
     {
-        let Some(path) = session_jsonl_path(cwd, session_id) else {
+        let Some(path) = session_jsonl_path(self.home_override.lock().clone(), cwd, session_id)
+        else {
             return Err(ClaudeEventsError("claude_events attach: HOME unset".into()));
         };
         let persistence = Some(ActionPersistence {
