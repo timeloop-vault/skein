@@ -146,13 +146,31 @@ mod tests {
 
     #[test]
     fn measures_wait() {
-        let m = Arc::new(TimedMutex::new(()));
-        let g = m.lock();
-        let m2 = Arc::clone(&m);
-        let h = std::thread::spawn(move || m2.lock().waited());
-        std::thread::sleep(Duration::from_millis(30));
-        drop(g);
-        assert!(h.join().unwrap() >= Duration::from_millis(20));
+        // The waiter signals just before it calls `lock()`, which removes the
+        // thread-start race. The tiny gap between that signal and `lock()`'s
+        // own start `Instant` can still be starved, hence the retry. The
+        // property proved is unchanged: a contended lock reports roughly the
+        // time it was blocked.
+        let mut last = Duration::ZERO;
+        for _ in 0..10 {
+            let m = Arc::new(TimedMutex::new(()));
+            let g = m.lock();
+            let m2 = Arc::clone(&m);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let h = std::thread::spawn(move || {
+                tx.send(()).expect("holder is listening");
+                m2.lock().waited()
+            });
+            rx.recv_timeout(Duration::from_secs(30))
+                .expect("waiter never reached the lock");
+            std::thread::sleep(Duration::from_millis(30));
+            drop(g);
+            last = h.join().unwrap();
+            if last >= Duration::from_millis(20) {
+                return;
+            }
+        }
+        panic!("contended lock never reported a wait >= 20 ms; last measured {last:?}");
     }
 
     #[test]
