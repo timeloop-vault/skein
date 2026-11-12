@@ -352,9 +352,10 @@ this room, or a room named by its id. A room id is resolved **at send
 time** to that room's **lead harness** — the first harness in the
 room's order that can read mail (see below) — so the stored row names a
 concrete recipient rather than a room whose lead harness might change
-before anyone reads it. Returns `message_id`, the resolved
-`to_room_id`/`to_harness_id`, and `to_room_name`/`to_harness_name` for a
-readable confirmation.
+before anyone reads it. Returns `messageId`, the resolved
+`toRoomId`/`toHarnessId`, and `toRoomName`/`toHarnessName` for a
+readable confirmation. Like every mail verb, the arguments are
+snake_case and the response keys camelCase.
 
 Refused, with the exact reason as text:
 
@@ -398,11 +399,17 @@ harness is asking"`). Pass `include_read: true` to get the whole
 history instead of only the unread tail — still-unread rows in that set
 are marked read the same as a normal call.
 
-Each message carries `from_room_id`/`from_harness_id` and, when the
-sender still exists, `from_room_name`/`from_harness_name`; a `null`
-harness fields means the sender's own request carried no
-`X-Skein-Harness`, or that harness or its room is gone since. Refused
-the same way as `send_message` when messaging is off in Settings.
+Returns `{ messages, newlyMarkedRead }` — `newlyMarkedRead` counts the
+messages in this reply that were unread until this call. Each message:
+`id`, `fromRoomId`, `fromRoomName?`, `fromHarnessId?`,
+`fromHarnessName?`, `body`, `createdMs`, and `readMs` — always present:
+when the message was read, or the time of this call if this call just
+marked it. A `?` key is left out rather than sent as `null`:
+`fromRoomName` is missing when the sending room no longer exists;
+`fromHarnessId` when the sender's own request carried no
+`X-Skein-Harness`; `fromHarnessName` in that case too, or when that
+harness or its room is gone since. Refused the same way as `send_message` when
+messaging is off in Settings.
 
 A call that actually marks something read emits `skein://mail-changed
 { roomId, harnessId }` for the **caller's own** mailbox; a poll that
@@ -420,7 +427,8 @@ nudge or badge, needs its own verb.
 
 - `with` — a room id or harness id. Given, only mail exchanged with
   that counterpart, both directions; omitted, everything in scope.
-- `since` — a number is `created_ms`, exclusive; a string is a message
+- `since` — a number is a millisecond timestamp compared against
+  `createdMs`, exclusive; a string is a message
   id, meaning strictly after that message. The id must be one the
   caller can already see, or the call is refused rather than silently
   starting from the beginning.
@@ -437,11 +445,11 @@ inbound, never twice.
 Returns `{ messages, hasMore }`, oldest first, the first `limit`
 messages after `since` — page forward by passing the last message's
 `id` as the next call's `since`. Each message: `id`, `direction`
-(`"inbound"` | `"outbound"`), `from_room_id`, `from_room_name?`,
-`from_harness_id?`, `from_harness_name?`, `to_room_id`,
-`to_room_name?`, `to_harness_id`, `to_harness_name?`, `body`,
-`created_ms`, and `read_ms?` — on an **outbound** row, `read_ms` says
-whether the recipient has read it yet.
+(`"inbound"` | `"outbound"`), `fromRoomId`, `fromRoomName?`,
+`fromHarnessId?`, `fromHarnessName?`, `toRoomId`,
+`toRoomName?`, `toHarnessId`, `toHarnessName?`, `body`,
+`createdMs`, and `readMs?` (a `?` key is left out, not `null`) — on an
+**outbound** row, `readMs` says whether the recipient has read it yet.
 
 Refused the same way as `read_messages` when messaging is off in
 Settings. Never marks anything read, and emits no
