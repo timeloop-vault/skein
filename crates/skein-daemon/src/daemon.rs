@@ -26,6 +26,7 @@ use crate::harness_work_hermes::HermesWorkManager;
 use crate::opencode_sidecar::OpencodeSidecarManager;
 use crate::paths::Paths;
 use crate::pty::PtyManager;
+use crate::room_store::RoomStore;
 use crate::spawn_env::state::SpawnEnvState;
 use crate::transport::InProcessTransport;
 use crate::watcher::WatcherManager;
@@ -145,6 +146,8 @@ impl SharedState {
 pub struct Daemon {
     pub harness_config: HarnessConfig,
     pub db: Arc<Database>,
+    /// The authoritative in-memory rooms (#729), filled by `rooms::load_rooms`.
+    pub rooms: Arc<RoomStore>,
     pub pty: PtyManager,
     pub sidecars: OpencodeSidecarManager,
     pub watcher: WatcherManager,
@@ -255,8 +258,10 @@ impl Daemon {
             }
         };
 
+        let rooms = RoomStore::new(Arc::clone(&state.db), state.events.clone());
         Ok(Self {
             harness_config: state.harness_config,
+            rooms,
             db: state.db,
             pty: state.pty,
             sidecars: state.sidecars,

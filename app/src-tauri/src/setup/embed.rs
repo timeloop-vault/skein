@@ -37,6 +37,7 @@ pub(super) fn daemon(
     let d = Daemon::build(paths, spawn_env, app.config().identifier.clone(), transport)?;
 
     app.manage(d.harness_config);
+    app.manage(d.rooms);
     app.manage(d.pty);
     // #698: the Windows updater exits without RunEvent::Exit; this guard's
     // Drop (via cleanup_before_exit) stops the sidecars on that path.

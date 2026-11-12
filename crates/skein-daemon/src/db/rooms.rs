@@ -125,6 +125,8 @@ impl Database {
         Ok(out)
     }
 
+    /// Wipe and re-insert every row. Migration/test-only since #729: clients
+    /// write through per-room mutations (`write_room_rows`), which never wipe.
     pub fn save_all(&self, rooms: &[Room]) -> Result<(), String> {
         let mut conn = self.conn.lock();
         // #167: an empty save before any successful load in this
@@ -161,37 +163,6 @@ impl Database {
             .map_err(|e| e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    /// Seq-aware wrapper around `save_all` (#171). `db_save_rooms` is
-    /// async now, and the frontend fires it un-debounced on every
-    /// `rooms` change without awaiting the previous call — so a save
-    /// minted *before* another can still reach this lock *after* it,
-    /// and a plain `save_all` would let the older, stale room list
-    /// silently overwrite the newer one that already committed.
-    ///
-    /// `seq` is a ticket from `next_save_seq`, minted by the command
-    /// before its blocking work starts. Holding `last_saved_seq` for
-    /// the whole check-then-write serializes every seq-aware save
-    /// against every other one, so a save whose ticket is older than
-    /// the last one committed is dropped — the newer room list wins
-    /// and the #167 empty-save refusal inside `save_all` still applies
-    /// unchanged. This reliably fixes *completion*-order inversion —
-    /// two overlapping saves where the older one's blocking work
-    /// finishes last, which is the realistic case a work-stealing
-    /// runtime produces. It does not guarantee *mint*-order matches
-    /// dispatch order (see `next_save_seq`); that residual window is a
-    /// few instructions wide and accepted.
-    pub fn save_all_seq(&self, rooms: &[Room], seq: u64) -> Result<(), String> {
-        let mut last_seq = self.last_saved_seq.lock();
-        if seq < *last_seq {
-            // A newer save already committed; applying this one would
-            // silently revert it.
-            return Ok(());
-        }
-        self.save_all(rooms)?;
-        *last_seq = seq;
         Ok(())
     }
 

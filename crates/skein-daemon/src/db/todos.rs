@@ -74,9 +74,9 @@ impl Database {
         tx.commit().map_err(|e| e.to_string())
     }
 
-    /// Seq-aware save, same reasoning as `save_all_seq` (#171): the
-    /// frontend fires saves un-awaited, so a stale one that reaches the
-    /// lock after a newer one committed is dropped.
+    /// Seq-aware save (#171, #335): the frontend fires saves un-awaited,
+    /// so a stale one that reaches the lock after a newer one committed
+    /// is dropped.
     pub fn save_global_todos_seq(&self, todos: &[Value], seq: u64) -> Result<(), String> {
         let mut last = self.last_saved_todos_seq.lock();
         if seq < *last {

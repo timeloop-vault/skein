@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::db::{Database, LoadOutcome};
+use crate::room_store::RoomStore;
 
 /// Returns every room currently in the DB, plus any rows that failed
 /// to parse and were quarantined (#167). The frontend calls this once
@@ -12,11 +13,14 @@ use crate::db::{Database, LoadOutcome};
 /// last-known-good snapshot — on a helper thread so boot isn't taxed.
 /// Empty or quarantine-marred loads leave the previous snapshot alone.
 ///
+/// A successful load also fills the daemon's [`RoomStore`] with the loaded
+/// rooms (#729); a fill error fails the load.
+///
 /// Blocking: `load_all` walks every row in `sessions` and parses each
 /// blob — sqlite I/O plus JSON parsing; callers run it off the main
 /// thread (#171).
-pub fn load_rooms(db: &Arc<Database>) -> Result<LoadOutcome, String> {
-    let mut outcome = db.load_all()?;
+pub fn load_rooms(db: &Arc<Database>, store: &RoomStore) -> Result<LoadOutcome, String> {
+    let mut outcome = store.load_with(|| db.load_all())?;
     for s in &outcome.skipped {
         tracing::warn!(
             id = %s.id,

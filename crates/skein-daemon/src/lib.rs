@@ -32,6 +32,7 @@ pub mod resume;
 pub mod review;
 pub mod review_surface;
 pub mod room_paths;
+pub mod room_store;
 pub mod rooms;
 pub mod spawn_env;
 pub mod spawn_settings;

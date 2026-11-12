@@ -1,8 +1,11 @@
-//! Room persistence: the boot-time load and the wholesale save.
+//! Room persistence: the boot-time load (`db_load_rooms`), the mutation
+//! path (`rooms_apply`) and the shutdown flush (`rooms_flush`).
 
 use std::sync::Arc;
 
-use crate::db::{Database, LoadOutcome, Room};
+use crate::db::{Database, LoadOutcome};
+use skein_daemon::room_store::RoomStore;
+use skein_proto::room_mutations::{RoomMutation, RoomsApplyOutcome};
 
 /// Returns every room currently in the DB, plus any rows that failed
 /// to parse and were quarantined (#167). The frontend calls this once
@@ -17,32 +20,41 @@ use crate::db::{Database, LoadOutcome, Room};
 #[tauri::command]
 pub(crate) async fn db_load_rooms(
     db: tauri::State<'_, Arc<Database>>,
+    store: tauri::State<'_, Arc<RoomStore>>,
 ) -> Result<LoadOutcome, String> {
     let db = Arc::clone(&db);
-    tauri::async_runtime::spawn_blocking(move || skein_daemon::rooms::load_rooms(&db))
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || skein_daemon::rooms::load_rooms(&db, &store))
         .await
         .map_err(|e| e.to_string())?
 }
 
-/// Replaces the DB's room list wholesale. Called whenever the
-/// frontend's rooms state changes — wipe-and-insert is fine at
-/// prototype scale and avoids the bookkeeping of granular upserts.
+/// Applies a batch of room mutations through the daemon's `RoomStore`
+/// (#729). Async: the store writes sqlite, so the work runs on the
+/// blocking pool, off the runtime's core threads (#171).
 ///
-/// Async: `save_all` is a wipe + re-insert in one transaction — sqlite
-/// fsync, off the main thread (#171). The frontend fires this
-/// un-debounced on every `rooms` change without awaiting the previous
-/// call, so async scheduling can let two saves commit out of order;
-/// the seq ticket, minted here before the blocking work starts, makes
-/// `save_all_seq` drop a save that lands after a newer one already
-/// committed instead of silently reverting it.
+/// Ordering: blocking-pool tasks can overtake each other, so two
+/// overlapping calls could apply out of order. The frontend sends
+/// serially (it awaits each call before the next), so each call is
+/// finished before the next one is spawned; that is the guarantee.
 #[tauri::command]
-pub(crate) async fn db_save_rooms(
-    rooms: Vec<Room>,
-    db: tauri::State<'_, Arc<Database>>,
-) -> Result<(), String> {
-    let db = Arc::clone(&db);
-    let seq = db.next_save_seq();
-    tauri::async_runtime::spawn_blocking(move || db.save_all_seq(&rooms, seq))
+pub(crate) async fn rooms_apply(
+    client_id: String,
+    mutations: Vec<RoomMutation>,
+    store: tauri::State<'_, Arc<RoomStore>>,
+) -> Result<RoomsApplyOutcome, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.apply(&client_id, mutations))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Writes out any coalesced room changes the store still holds (window
+/// close, update install, page hide). Blocking pool, like `rooms_apply`.
+#[tauri::command]
+pub(crate) async fn rooms_flush(store: tauri::State<'_, Arc<RoomStore>>) -> Result<(), String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.flush())
         .await
         .map_err(|e| e.to_string())?
 }

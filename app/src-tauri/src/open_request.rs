@@ -19,8 +19,8 @@
 //! room may have been created through a different one.
 //!
 //! **Single instance is the prerequisite**, and not only for this. A
-//! second Skein on the same `skein.db` would erase the first one's rooms
-//! on its next autosave (`Database::save_all` replaces every row) and
+//! second Skein on the same `skein.db` would hold its own room store and
+//! overwrite the first one's rows without seeing its changes, and
 //! revoke every agent-API token at boot. `tauri-plugin-single-instance`
 //! turns a second launch into a call to [`from_second_instance`] in the
 //! running process and exits the new one before it opens anything.

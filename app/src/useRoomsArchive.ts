@@ -239,9 +239,9 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 	const unarchiveRoomRef = useRef(unarchiveRoom);
 	unarchiveRoomRef.current = unarchiveRoom;
 
-	// #89: permanently drop an archived room. `db_save_rooms` is a full
-	// DELETE + re-insert of the current `rooms` array, so removing it
-	// from state *is* the delete — the autosave effect mirrors it out.
+	// #89: permanently drop an archived room. The rooms sync diffs the
+	// state against what the daemon holds, so removing it from state *is*
+	// the delete — it goes out as a `removeRoom` mutation.
 	// (Orphaned `harness_actions`/`harness_events` rows for the room are
 	// harmless activity-log leftovers; a later pass can vacuum them.)
 	const deleteRoomForever = (id: string) => {

@@ -68,6 +68,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 skein-daemon = { path = "../../crates/skein-daemon" }
 skein-git = { path = "../../crates/skein-git" }
+skein-proto = { path = "../../crates/skein-proto" }
 skein-harness = { path = "../../crates/skein-harness" }
 skein-review = { path = "../../crates/skein-review" }
 skein-sysload = { path = "../../crates/skein-sysload" }

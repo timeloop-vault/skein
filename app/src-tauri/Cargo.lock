@@ -4169,6 +4169,7 @@ dependencies = [
  "skein-git",
  "skein-harness",
  "skein-procprio",
+ "skein-proto",
  "skein-review",
  "skein-sysload",
  "skein-webshot",
