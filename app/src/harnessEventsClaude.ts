@@ -165,7 +165,7 @@ export function attachClaudeEvents(
 
 	// Mark authoritative *synchronously*, not on `.then()`. By the
 	// time attachClaudeEvents is called, the PTY has been streaming
-	// chunks for some time (LiveTerminal calls us after pty_spawn
+	// chunks for some time (LiveTerminal calls us after harness_ensure_running
 	// resolves). If we wait for the rust attach to round-trip
 	// before flipping authoritative, those in-flight chunks call
 	// recordOutput → setPhase("running") and override whatever the

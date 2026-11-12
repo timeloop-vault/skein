@@ -12,7 +12,7 @@ import {
 	type RoomsApplyOutcome,
 	type RoomsChanged,
 } from "./roomMutations.ts";
-import { registerRoomsFlusher } from "./roomsFlush.ts";
+import { registerRoomsDrainer, registerRoomsFlusher } from "./roomsFlush.ts";
 import { createRoomsSync, type RoomsSync } from "./roomsSync.ts";
 import type { Room } from "./types.ts";
 
@@ -100,6 +100,7 @@ export function useRoomsSync(d: RoomsSyncDeps) {
 	// Best-effort too: the page is going away (reload, webview teardown).
 	useEffect(() => {
 		registerRoomsFlusher(flushRoomsSave);
+		registerRoomsDrainer(() => syncRef.current?.drain() ?? Promise.resolve());
 		const onHide = () => {
 			if (document.visibilityState === "hidden") void flushRoomsSave();
 		};
@@ -108,6 +109,7 @@ export function useRoomsSync(d: RoomsSyncDeps) {
 		window.addEventListener("pagehide", onPageHide);
 		return () => {
 			registerRoomsFlusher(null);
+			registerRoomsDrainer(null);
 			document.removeEventListener("visibilitychange", onHide);
 			window.removeEventListener("pagehide", onPageHide);
 		};

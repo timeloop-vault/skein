@@ -56,7 +56,7 @@ export interface HarnessCapabilities {
 	/// never stands aside, since xterm's mouse protocol has no Cmd bit so
 	/// Claude sees a plain click and opens nothing (#571); and with
 	/// `CLAUDE_CODE_DISABLE_MOUSE_CLICKS` truthy in the harness env Claude
-	/// ignores clicks, so Skein opens them (#401, reported by `pty_spawn`
+	/// ignores clicks, so Skein opens them (#401, reported by `harness_ensure_running`
 	/// as `mouseClicksDisabled`). True only for `claude`; every other kind
 	/// leaves link-opening to Skein.
 	opensClickedLinks: boolean;

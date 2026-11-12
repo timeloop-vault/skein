@@ -20,6 +20,7 @@ pub(crate) use skein_daemon::harness_config;
 pub(crate) use skein_daemon::harness_events_claude;
 pub(crate) use skein_daemon::harness_events_opencode;
 pub(crate) use skein_daemon::harness_kind;
+pub(crate) use skein_daemon::harness_runner;
 pub(crate) use skein_daemon::harness_work_hermes;
 mod hermes_profile;
 mod open_request;
@@ -107,10 +108,11 @@ pub fn run() {
             commands::fs::read_image_bytes,
             terminal_paths::resolve_terminal_paths,
             terminal_paths::open_terminal_path,
-            commands::pty::pty_spawn,
+            commands::harness_runner::harness_ensure_running,
+            commands::harness_runner::harness_stop,
+            commands::harness_runner::harness_detach,
             commands::pty::pty_write,
             commands::pty::pty_resize,
-            commands::pty::pty_kill,
             commands::pty::pty_scan_opencode,
             commands::spawn_env::default_shell,
             commands::spawn_env::spawn_settings_load,
@@ -171,7 +173,6 @@ pub fn run() {
             commands::harness_log::db_record_harness_event,
             commands::harness_log::db_recent_harness_events_by_harness,
             commands::harness_log::db_recent_harness_events_by_room,
-            commands::harness_log::db_record_harness_action,
             commands::harness_log::db_recent_harness_actions_by_harness,
             commands::harness_log::db_recent_harness_actions_by_room,
             commands::harness_log::db_recent_harness_actions_by_room_and_kind,

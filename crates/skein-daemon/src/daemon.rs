@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use crate::agent_api::AgentApiState;
 use crate::agent_api::state::{AgentApiEndpoint, AgentApiStateArgs};
+use crate::boot_resume::BootResume;
 use crate::db::Database;
 use crate::design::PreviewState;
 use crate::design::entries::PreviewEndpoint;
@@ -22,6 +23,7 @@ use crate::harness_actions_hermes::HermesActionsManager;
 use crate::harness_config::HarnessConfig;
 use crate::harness_events_claude::ClaudeEventsManager;
 use crate::harness_events_opencode::OpencodeEventsManager;
+use crate::harness_runner::{HarnessRunner, RunnerDeps};
 use crate::harness_work_hermes::HermesWorkManager;
 use crate::opencode_sidecar::OpencodeSidecarManager;
 use crate::paths::Paths;
@@ -148,6 +150,10 @@ pub struct Daemon {
     pub db: Arc<Database>,
     /// The authoritative in-memory rooms (#729), filled by `rooms::load_rooms`.
     pub rooms: Arc<RoomStore>,
+    /// Once-per-process boot preparation of the rooms (#731); load through it.
+    pub boot_resume: Arc<BootResume>,
+    /// Starts and stops harnesses from their records (#731).
+    pub harness_runner: Arc<HarnessRunner>,
     pub pty: PtyManager,
     pub sidecars: OpencodeSidecarManager,
     pub watcher: WatcherManager,
@@ -196,6 +202,7 @@ impl Daemon {
             capture,
         } = transport;
         let state = SharedState::build(paths, events.clone())?;
+        let boot_env = Arc::clone(&spawn_env);
 
         // Bound with the std listener so a failure is known *here*,
         // synchronously, and can be recorded: an async bind inside the
@@ -258,10 +265,29 @@ impl Daemon {
             }
         };
 
+        let boot_resume = Arc::new(BootResume::new(Arc::clone(&boot_env)));
         let rooms = RoomStore::new(Arc::clone(&state.db), state.events.clone());
+        // #731: the runner drives the same managers the app manages (clones
+        // share their registries) and hears of every applied room batch.
+        let harness_runner = Arc::new(HarnessRunner::new(RunnerDeps {
+            store: Arc::clone(&rooms),
+            db: Arc::clone(&state.db),
+            pty: state.pty.clone(),
+            sidecars: state.sidecars.clone(),
+            claude: state.claude.clone(),
+            opencode: state.opencode.clone(),
+            hermes_actions: state.hermes_actions.clone(),
+            spawn_env: boot_env,
+            endpoint: agent_endpoint.clone(),
+            harness_config: state.harness_config.clone(),
+            events: state.events.clone(),
+        }));
+        harness_runner.observe_store();
         Ok(Self {
             harness_config: state.harness_config,
             rooms,
+            harness_runner,
+            boot_resume,
             db: state.db,
             pty: state.pty,
             sidecars: state.sidecars,

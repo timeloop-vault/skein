@@ -30,7 +30,7 @@ flowchart LR
 
 | Command | Item | Wrapper | Impl | A failed send |
 | --- | --- | --- | --- | --- |
-| `pty_spawn` | `PtyEvent` | `commands/pty.rs` | `pty_spawn_impl` | ignored |
+| `harness_ensure_running` (was `pty_spawn`, #731) | `PtyEvent` | `commands/harness_runner.rs` | `HarnessRunner::ensure_running` over `pty_spawn_with_sink` | ignored; the sink is replaceable and detach never kills |
 | `claude_events_attach` | `ClaudeEvent` | `commands/harness_events.rs` | `claude_events_attach_impl` | one warn per attach, keeps sending |
 | `opencode_events_attach` | `OpencodeEvent` | `commands/harness_events.rs` | `opencode_events_attach_impl` | ignored |
 | `hermes_work_attach` | `HermesWorkEvent` | `commands/hermes_work.rs` | `hermes_work_attach_impl` | stops the `Poller` |
@@ -49,10 +49,11 @@ to be decided with the transport (#580 onward).
 
 ## Deliberate leftovers
 
-- `pty_spawn_impl` takes a `stop_sidecar` closure built by the wrapper
-  from the `AppHandle`: managed state is not `Arc`-wrapped and the exit
-  callback must be `'static`. `OpencodeSidecarManager` is already a
-  cheap shared clone, so a later phase can pass it directly.
+- `pty_spawn_impl` takes a `stop_sidecar` closure: managed state is not
+  `Arc`-wrapped and the exit callback must be `'static`.
+  `OpencodeSidecarManager` is already a cheap shared clone, so a later
+  phase can pass it directly. Since #731 the closure is built by
+  `HarnessRunner` (from its own manager clone), not by a Tauri wrapper.
 - Engines keep their `Fn(T)` closure seams; the `_impl` adapts the sink.
 - `review.rs`, `design/commands.rs` and `review_surface/commands.rs`
   still mix wrappers and logic in one file (no `tauri::ipc` in their

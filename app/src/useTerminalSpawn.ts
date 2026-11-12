@@ -1,34 +1,37 @@
 // useTerminalSpawn — the xterm.js ↔ PTY binding at the heart of
-// LiveTerminal: spawns/kills the child on the mountKey, attaches the
-// L2c event adapters, and registers the #238 nudge seam. Split out of
+// LiveTerminal: on each mountKey it asks the daemon to start the harness or
+// attach to its running process, attaches the L2c event adapters, and
+// registers the #238 nudge seam; unmount only detaches (#731). Split out of
 // LiveTerminal.tsx (#19); see its header for the PTY↔terminal flows.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { useEffect } from "react";
-import { backgroundTasks } from "./backgroundTasks.ts";
-import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
-import { harnessInput } from "./harnessInput.ts";
+import { defaultEnsureDeps, detachHarness, ensureRunning, type PtyEvent } from "./harnessEnsure.ts";
+import { restartFor } from "./harnessMounts.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
 import { createSidecarDeathRecord, watchSidecarExit } from "./opencodeSidecarExit.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
 import { forget as forgetLatency, recordEcho } from "./ptyLatency.ts";
-import { type PtyEvent, ptySpawn } from "./ptySpawnCall.ts";
-import { spawnOutcome } from "./ptySpawnOutcome.ts";
 import { shellClaim } from "./shellClaim.ts";
-import { forgetSpawnedProfile, recordSpawnedProfile } from "./spawnedEnvProfile.ts";
-import { startupAdoption } from "./startupAdoption.ts";
-import { subagents } from "./subagents.ts";
+import { exitedBanner, startFailedBanner } from "./terminalBanners.ts";
+import { applyEnsureResult, forgetViewState } from "./terminalEnsureApply.ts";
 import { attachTerminalInteractions } from "./terminalInteractions.ts";
 import { attachOutputGate } from "./terminalOutputVisibility.ts";
+import { repaintPty } from "./terminalRepaint.ts";
 import { createXterm, type LinkPolicy } from "./terminalSetup.ts";
 import { attachAdapters } from "./terminalSpawnAdapters.ts";
 import { agentResolves } from "./terminalSpawnAgent.ts";
-import { attachPtyInput, observeResize, registerInputTarget } from "./terminalSpawnInput.ts";
+import {
+	attachCompositionNote,
+	attachPtyInput,
+	observeResize,
+	registerInputTarget,
+} from "./terminalSpawnInput.ts";
 import type { HarnessKind } from "./types.ts";
 import { useClaudeRepoint } from "./useClaudeRepoint.ts";
 
@@ -66,8 +69,8 @@ export interface UseTerminalSpawnParams {
 	setHint: (hint: string | null) => void;
 }
 
-/** Spawns the PTY for a (cmd, mountKey) and tears it down on unmount /
- *  mountKey change; also re-points the L2c-1 Claude adapter when
+/** Asks the daemon to start (or attach to) the harness for a (cmd, mountKey)
+ *  and detaches from it on unmount / mountKey change, never killing it; also re-points the L2c-1 Claude adapter when
  *  `sessionId` moves under an already-running PTY (#116). Call at the
  *  position `LiveTerminal`'s own mount effect used to sit — the two
  *  `useEffect`s below preserve that original declaration order (the
@@ -103,11 +106,9 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		setHint,
 	} = params;
 
-	// Run only on mountKey changes. cmd / cwd / fontSize are consumed
-	// once at first mount (fontSize has its own retune effect). Listing
-	// them made every App render's fresh cmd array tear down the live PTY
-	// and respawn with the same `--session-id <uuid>`, which Claude
-	// refuses ("Session ID is already in use."). Suppress the lint instead.
+	// Run only on mountKey changes. cmd / cwd / fontSize are consumed once at
+	// first mount (fontSize has its own retune effect); listing them re-ran the
+	// effect on every App render's fresh cmd array. Suppress the lint instead.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: see comment.
 	useEffect(() => {
 		const host = containerRef.current;
@@ -124,18 +125,10 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		// Created before any other host observer so the reveal flush runs
 		// before the refit.
 		const { gate, detach: detachGate } = attachOutputGate(term, host);
-		// #383 follow-up: xterm's IME composition (CJK, an emoji picker,
-		// possibly a dead-key accent) calls `_finalizeComposition`
-		// straight into `onData`, never `onKey` — the only place this
-		// store sees it. Start and end fold to `userPaste` (→ `unknown`),
-		// not a guess at what was composed: fails safe.
-		const noteComposition = () => harnessInput.noteDraftEvent(harnessId, { type: "userPaste" });
-		term.textarea?.addEventListener("compositionstart", noteComposition);
-		term.textarea?.addEventListener("compositionend", noteComposition);
+		const detachComposition = attachCompositionNote(term, harnessId); // #383
 		// Initial focus: the `visible` effect in LiveTerminal.tsx.
 
-		// Track whether we're showing the post-exit prompt, plus the
-		// program name for the "[skein] x exited (N)" line.
+		// Post-exit prompt state, and the program name for the exit line.
 		let phase: "running" | "exited" = "running";
 		let programName = cmd[0] ?? "child";
 
@@ -179,17 +172,20 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		let cancelled = false;
 		let dataDisposable: { dispose(): void } | null = null;
 		let resizeObserver: ResizeObserver | null = null;
-		// L2c-1: a Claude harness with a pre-allocated sessionId gets the
-		// JSONL adapter (see attachAdapters); it lives in `claudeAdapterRef`
-		// so the #116 re-point effect can swap it without a respawn.
-		// L2c-2: opencode's SSE adapter subscribes on the pre-allocated port
-		// and captures the sessionID from `session.created`.
+		// L2c adapters: see attachAdapters (Claude's lives in `claudeAdapterRef`
+		// so the #116 re-point effect can swap it).
 		const opencodeAdapter: { current: OpencodeAdapter | null } = { current: null };
 		let shellFollow: ReturnType<typeof followOpencodeShell> | null = null;
 		// #238: this harness's `harnessInput` entry; live PTY only, never a dead one.
 		let detachInputTarget: (() => void) | null = null;
 		let stopOtherAdapter: (() => void) | null = null; // Hermes capture (#624) + opencode v2 SSE (#677), not #517's v1 opencodeAdapter; unmount only
 		let sidecarGeneration: number | undefined; // #676
+		// #731: this mount's attachment (detached on cleanup) and pending repaint.
+		// `restart` is read now, before any await; the key is recorded only when
+		// the ensure call is dispatched, so a cancelled StrictMode run keeps it.
+		let attached: { attachId: number | null | undefined } | null = null;
+		let cancelRepaint: (() => void) | null = null;
+		const restart = restartFor(harnessId, mountKey);
 		const sidecarDied = createSidecarDeathRecord((s) => gate.write(s));
 		const stopSidecarWatch =
 			harnessKind === "opencode"
@@ -204,23 +200,19 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			harnessActivity.exited(harnessId, code);
 			detachInputTarget?.();
 			detachInputTarget = null;
-			// Stop forwarding keystrokes — the writer is gone, and we
-			// want Enter to flow through the custom handler instead.
+			// The writer is gone: stop forwarding keys so Enter reaches our handler.
 			dataDisposable?.dispose();
 			dataDisposable = null;
-			// Note: deliberately keep ptyIdRef pointing at the dead
-			// manager entry. respawn pty_kills it before spawning a
-			// fresh one, which evicts the leaked Windows reader thread.
-			// Unmount cleanup also calls pty_kill so it doesn't leak.
-			const codeStr = code === null ? "?" : String(code);
-			// \x1b[2m = dim, \x1b[1m = bold, \x1b[0m = reset.
-			gate.write(`\r\n\x1b[2m[skein] ${programName} exited (${codeStr})\x1b[0m\r\n`);
-			gate.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
+			// Keep ptyIdRef on the dead entry; the next ensure replaces it.
+			gate.write(exitedBanner(programName, code));
 			gate.write(sidecarDied.take()); // #676: "" unless the sidecar died
 		};
 
-		const agentResolvesFor = (cmdToSpawn: string[]) =>
-			agentResolves({
+		const startPty = async (cmdToSpawn: string[]) => {
+			if (cancelled) return;
+			programName = cmdToSpawn[0] ?? "child";
+			shellClaim.noteSpawn(harnessId, harnessKind, cmdToSpawn[0]); // #318
+			const resolved = await agentResolves({
 				agent,
 				cmdToSpawn,
 				harnessKind,
@@ -232,62 +224,65 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					phase = "exited";
 				},
 			});
-
-		const startPty = async (cmdToSpawn: string[]) => {
-			if (cancelled) return;
-			programName = cmdToSpawn[0] ?? "child";
-			shellClaim.noteSpawn(harnessId, harnessKind, cmdToSpawn[0]); // #318
-			startupAdoption.forget(harnessId); // #539: a new process voids the old one's candidates
-			if (!(await agentResolvesFor(cmdToSpawn)) || cancelled) return;
+			if (!resolved || cancelled) return;
 			phase = "running";
-			// Record the spawn before we await: a deterministic `spawning`
-			// window; the first output chunk flips it to `running`. Epic #50.
+			// The activity record must exist for the exit/output paths (it is dropped
+			// on every unmount, so a re-attach needs it too); the first output chunk
+			// flips `spawning` to `running`. Epic #50.
+			const spawnStartedAt = Date.now();
 			harnessActivity.spawned(harnessId);
-			// #491: transcript rows older than this process say nothing about it.
-			claudeVersionStore.markSpawned(harnessId, Date.now());
 			// #484: catch xterm's reply to ConPTY's cursor query (portable-pty
-			// 0.9 waits for it), which can arrive before pty_spawn resolves. If
-			// unmounted meanwhile, the settle paths below dispose it.
+			// 0.9 waits for it), which can arrive before the ensure call resolves.
+			// If unmounted meanwhile, the settle paths below dispose it.
 			const early = bufferPtyInput(term);
-			// #401: re-learned from each spawn. A var the user exports inside the
+			// #401: re-learned from each attach. A var the user exports inside the
 			// post-exit shell is invisible to Rust and not covered.
 			linkPolicy.mouseClicksDisabled = false;
 			try {
-				// #730: no prepare step. The daemon probes the opencode CLI and, on a
-				// v2 CLI, starts the sidecar and swaps the argv itself; a failed
-				// sidecar start comes back as this call's rejection (the catch below).
-				const result = await ptySpawn({
-					cmd: cmdToSpawn,
-					cwd,
-					rows: term.rows,
-					cols: term.cols,
-					roomId,
-					harnessId,
-					kind: harnessKind,
-					envProfile,
-					onEvent: channel,
-					agent,
-					sessionId,
-				});
-				const { id, injected, hermesHooks, mouseClicksDisabled } = result;
-				const appliedProfile = result.envProfile;
-				if (cancelled) {
+				// #731: the daemon spawns from the stored record (or reuses the running
+				// process); #730: it probes the opencode CLI, starts the sidecar and
+				// swaps the argv itself. A failure comes back as this call's rejection.
+				const result = await ensureRunning(
+					{
+						roomId,
+						harnessId,
+						rows: term.rows,
+						cols: term.cols,
+						envProfile,
+						restart,
+						mountKey,
+						expectCmd: cmdToSpawn,
+						onEvent: channel,
+					},
+					defaultEnsureDeps(() => cancelled),
+				);
+				if (!result || cancelled) {
 					early.dispose();
-					// pty_kill also stops the sidecar the daemon bound to this PTY.
-					void invoke("pty_kill", { id });
+					// Detach, never kill: the daemon decides when the process stops.
+					if (result) detachHarness(harnessId, result.attachId);
 					return;
 				}
-				const outcome = spawnOutcome(result, harnessKind, { sessionId, opencodePort });
-				sidecarGeneration = outcome.sidecarGeneration;
-				const port = outcome.port; // #677: v2 attaches by sidecar generation
-				if (outcome.opencodeVersion !== undefined) {
-					opencodeClaim?.setOpencodeVersion?.(outcome.opencodeVersion);
-				}
-				if (outcome.capturedSessionId) onSessionCaptured?.(outcome.capturedSessionId);
+				const { id, hermesHooks, mouseClicksDisabled, started } = result;
+				attached = { attachId: result.attachId };
 				ptyIdRef.current = id;
+				if (result.exited) {
+					// The `exit` event comes through the channel (exit line + shell
+					// prompt); nothing live to feed, so register no input/adapter/repaint.
+					early.dispose();
+					return;
+				}
+				const { sidecarGeneration: generation, port } = applyEnsureResult({
+					result,
+					harnessId,
+					harnessKind,
+					sessionId,
+					opencodePort,
+					spawnStartedAt,
+					opencodeClaim,
+					onSessionCaptured,
+				});
+				sidecarGeneration = generation;
 				linkPolicy.mouseClicksDisabled = mouseClicksDisabled;
-				recordSpawnedProfile(harnessId, appliedProfile ?? null);
-				harnessActivity.setInjected(harnessId, injected);
 				// #238: publish this harness to the `harnessInput` seam now
 				// that its PTY is live.
 				detachInputTarget = registerInputTarget(term, harnessId, harnessKind, id, gate);
@@ -301,6 +296,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					hermesProfile,
 					hermesHooks,
 					sessionId,
+					freshProcess: started, // #336: a re-attached process may be mid-turn
 					opencodePort: port,
 					opencodeSidecarGeneration: sidecarGeneration,
 					onSessionCaptured,
@@ -312,6 +308,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					opencodeAdapter.current = { detach, port };
 				} else if (detach && (harnessKind === "hermes" || harnessKind === "opencode"))
 					stopOtherAdapter = detach;
+				// #731: a re-attached shell/copilot has no adapter to leave `spawning`.
+				if (!started) harnessActivity.reattached(harnessId);
 				shellFollow?.dispose();
 				shellFollow = followOpencodeShell(harnessKind, cmdToSpawn[0], {
 					harnessId,
@@ -330,16 +328,19 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				// listener, so no reply is lost or sent twice.
 				const buffered = early.takeAndDispose();
 				dataDisposable = attachPtyInput(term, harnessId, id);
-				if (buffered.length > 0) void invoke("pty_write", { id, data: buffered.join("") });
+				// On a re-attach the buffered cursor reply is not for the running process.
+				if (started && buffered.length > 0) {
+					void invoke("pty_write", { id, data: buffered.join("") });
+				}
 				if (!resizeObserver) resizeObserver = observeResize(term, fit, host, ptyIdRef, gate);
+				// #731: a re-attach starts blank; a one-row resize and back repaints.
+				if (!started) cancelRepaint = repaintPty(term, id);
 			} catch (err: unknown) {
 				early.dispose();
-				const msg = err instanceof Error ? err.message : String(err);
-				gate.write(`\r\n\x1b[31m[skein] pty_spawn failed: ${msg}\x1b[0m\r\n`);
-				// Reprompt — else the user can't tell Enter opens a shell.
-				gate.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
+				if (cancelled) return;
+				gate.write(startFailedBanner(err));
 				phase = "exited";
-				// pty_spawn never produced a child; treat as exited
+				// The daemon produced no child; treat as exited
 				// so the status bar / tab dot don't sit on spawning.
 				harnessActivity.exited(harnessId, null);
 			}
@@ -349,13 +350,12 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 
 		return () => {
 			cancelled = true;
-			term.textarea?.removeEventListener("compositionstart", noteComposition);
-			term.textarea?.removeEventListener("compositionend", noteComposition);
+			cancelRepaint?.();
+			detachComposition();
 			dataDisposable?.dispose();
 			resizeObserver?.disconnect();
-			// L2c-1: detach before pty_kill so the adapter stops
-			// reading the JSONL — Claude itself will flush a final
-			// system row on exit and we don't need to react to it.
+			// L2c-1: detach the adapter first so it stops reading the JSONL;
+			// the process itself keeps running (#731) and a later mount re-attaches.
 			claudeAdapterRef.current?.detach();
 			claudeAdapterRef.current = null;
 			shellFollow?.dispose();
@@ -368,22 +368,16 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			detachInteractions();
 			const id = ptyIdRef.current;
 			if (id) forgetLatency(id); // #639
-			if (id) void invoke("pty_kill", { id });
+			// Detach, never kill (#731): the daemon stops a harness when its record
+			// goes away or its room is archived; restart is the next mount's flag.
+			if (attached) detachHarness(harnessId, attached.attachId);
 			detachGate();
 			term.dispose();
 			termRef.current = null;
 			fitRef.current = null;
 			spawnedRef.current = null;
 			ptyIdRef.current = null;
-			// Drop the activity record; a respawn re-records via spawned().
-			harnessActivity.forget(harnessId);
-			// #298: same lifetime — Rust rediscovers live subagents on the
-			// next attach, so dropping the cache loses nothing.
-			subagents.forget(harnessId);
-			backgroundTasks.forget(harnessId);
-			shellClaim.forget(harnessId);
-			startupAdoption.forget(harnessId); // #539
-			forgetSpawnedProfile(harnessId); // #615
+			forgetViewState(harnessId);
 		};
 	}, [mountKey]);
 	// #116 re-point effect: see useClaudeRepoint.ts.

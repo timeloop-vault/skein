@@ -1,11 +1,11 @@
 // LiveTerminal — xterm.js bound to a Tauri-side PTY.
 //
-// Mounting spawns the child via `pty_spawn` and wires three flows:
+// Mounting asks the daemon to run the harness (`harness_ensure_running`: spawn, or attach to the running one) and wires three flows:
 //   - PTY → terminal (Channel<PtyEvent> from Rust → term.write / exit handler)
 //   - terminal → PTY (term.onData → invoke "pty_write")
 //   - resize → PTY (ResizeObserver → fit → invoke "pty_resize")
 //
-// Unmount kills the child. Hidden panes (display:none) keep their PTY
+// Unmount detaches (`harness_detach`); the daemon owns the child. Hidden panes (display:none) keep their PTY
 // alive — the resize/fit path is guarded against zero-size hosts so we
 // never tell xterm or the child that the terminal shrank to 1×1.
 //

@@ -1,5 +1,5 @@
 // Holds xterm's `onData` output for the window between creating the
-// terminal channel and `pty_spawn` resolving, when the real input
+// terminal channel and `harness_ensure_running` resolving, when the real input
 // listener cannot be attached yet (#484).
 //
 // Under portable-pty 0.9 ConPTY inherits the cursor: conhost sends

@@ -126,7 +126,8 @@ seams from phases 1a to 1c: `event_sink`, `stream_sink` and `paths`.
   `start_attempt`, `StartGuard` and `Ready` hold an `AppHandle`.
 - Since #730 the command loop and `pick_free_port` are gone from the app: the
   daemon allocates the opencode port inside the argv commands and starts the
-  sidecar from `pty_spawn` (`pty/opencode_prepare.rs`,
+  sidecar from the spawn (`pty_spawn`, since #731 reached through
+  `HarnessRunner::ensure_running`; `pty/opencode_prepare.rs`,
   `opencode_sidecar/launch.rs`). The argv builders live in `harness_argv/`.
 - Small new modules: `agent_endpoint` (`HarnessIdentity`,
   `AgentApiEndpoint`, `AgentApiStatus`; `agent_api/state.rs` re-exports

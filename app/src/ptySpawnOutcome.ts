@@ -1,9 +1,9 @@
-// What the spawn path does with the daemon's `pty_spawn` result about
+// What the spawn path does with the daemon's `harness_ensure_running` result about
 // opencode (#730). The daemon decides v1/v2, starts the sidecar and swaps
 // the argv (spawn-time, not stored); the frontend only reads back what
 // happened. Pure so it is testable without a DOM or Tauri.
 
-import type { PtySpawnResult } from "./ptySpawnResult.ts";
+import type { EnsureResult } from "./harnessEnsure.ts";
 import type { HarnessKind, OpencodeVersion } from "./types.ts";
 
 export interface SpawnOutcome {
@@ -24,7 +24,7 @@ export interface SpawnOutcome {
 }
 
 export function spawnOutcome(
-	result: Pick<PtySpawnResult, "sidecarGeneration" | "opencodeVersion" | "sessionId">,
+	result: Pick<EnsureResult, "sidecarGeneration" | "opencodeVersion" | "sessionId">,
 	kind: HarnessKind,
 	record: { sessionId: string | undefined; opencodePort: number | undefined },
 ): SpawnOutcome {

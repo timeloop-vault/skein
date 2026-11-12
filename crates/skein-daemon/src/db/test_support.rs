@@ -9,6 +9,15 @@ pub fn fresh_db() -> (TempDir, Database) {
     (dir, db)
 }
 
+/// Make every later room write fail: drops the table the rows live in.
+#[allow(dead_code)] // used by the boot-resume tests only
+pub fn break_room_writes(db: &Database) {
+    db.conn
+        .lock()
+        .execute_batch("DROP TABLE IF EXISTS sessions")
+        .unwrap();
+}
+
 #[allow(dead_code)] // used by the db tests only, not by the `test-support` feature
 pub(super) fn room(id: &str) -> Room {
     Room {

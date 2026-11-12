@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use crate::db::{Database, LoadOutcome};
+use skein_daemon::boot_resume::BootResume;
 use skein_daemon::room_store::RoomStore;
 use skein_proto::room_mutations::{RoomMutation, RoomsApplyOutcome};
 
@@ -17,14 +18,19 @@ use skein_proto::room_mutations::{RoomMutation, RoomsApplyOutcome};
 ///
 /// Async: `load_all` walks every row in `sessions` and parses each
 /// blob — sqlite I/O plus JSON parsing, off the main thread (#171).
+///
+/// #731: the first successful load of the process also prepares the rooms
+/// for resume (stale ids dropped, cmds rewritten); see `BootResume`.
 #[tauri::command]
 pub(crate) async fn db_load_rooms(
     db: tauri::State<'_, Arc<Database>>,
     store: tauri::State<'_, Arc<RoomStore>>,
+    boot: tauri::State<'_, Arc<BootResume>>,
 ) -> Result<LoadOutcome, String> {
     let db = Arc::clone(&db);
     let store = Arc::clone(&store);
-    tauri::async_runtime::spawn_blocking(move || skein_daemon::rooms::load_rooms(&db, &store))
+    let boot = Arc::clone(&boot);
+    tauri::async_runtime::spawn_blocking(move || boot.load_rooms(&db, &store))
         .await
         .map_err(|e| e.to_string())?
 }

@@ -48,17 +48,20 @@ mod priority;
 mod probe;
 pub mod procscan;
 mod sidecar;
+mod sink_slot;
 
 use env::apply_env;
 use output::{COALESCE_BYTE_CAP, COALESCE_WINDOW, run_coalescer, spawn_pty_writer};
 use preview::windows_resolved_program;
 use probe::probe_result;
+use sink_slot::SinkSlot;
 
 pub use preview::{EnvPreview, env_preview, harness_program_lookup};
 #[cfg(not(target_os = "windows"))]
 pub use probe::probe_shell;
 pub use probe::{login_shell_path, prewarm_probe, reprobe};
 pub use sidecar::sidecar_env;
+pub use sink_slot::{AttachOutcome, ExitRecord};
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -75,6 +78,7 @@ use crate::agent_endpoint::HarnessIdentity;
 use crate::harness_config::HarnessConfig;
 use crate::harness_kind::HarnessKind;
 use crate::spawn_settings::SpawnSettings;
+use crate::stream_sink::StreamSink;
 
 /// Events the PTY reader thread streams to the frontend. Tagged so the
 /// JS side can branch on `kind`: `data` chunks become terminal output,
@@ -122,6 +126,21 @@ struct Pty {
     /// The opencode sidecar (#676) this PTY's TUI is attached to; killing
     /// the PTY ends that generation too.
     sidecar: Option<SidecarBinding>,
+    /// Where this PTY's events go (#731); swappable.
+    slot: Arc<SinkSlot>,
+}
+
+/// Runs on the waiter thread with the child's exit code.
+pub type ExitHook = Box<dyn FnOnce(Option<u32>) + Send>;
+
+/// Adapts a closure to the sink trait for [`PtyManager::spawn`].
+struct FnSink<F>(F);
+
+impl<F: Fn(PtyEvent) + Send + Sync + 'static> StreamSink<PtyEvent> for FnSink<F> {
+    fn send(&self, item: PtyEvent) -> Result<(), String> {
+        (self.0)(item);
+        Ok(())
+    }
 }
 
 /// `(harness id, generation)` of an opencode sidecar a PTY is bound to.
@@ -211,9 +230,11 @@ fn check_cwd(cwd: &Path) -> Result<(), PtyError> {
     }
 }
 
-#[derive(Default)]
+/// Cloning shares the same PTYs (it clones the `Arc`), so the harness runner
+/// (#731) and the managed state drive one set.
+#[derive(Default, Clone)]
 pub struct PtyManager {
-    inner: Mutex<HashMap<String, Pty>>,
+    inner: Arc<Mutex<HashMap<String, Pty>>>,
 }
 
 impl PtyManager {
@@ -241,6 +262,19 @@ impl PtyManager {
     where
         F: Fn(PtyEvent) + Send + Sync + 'static,
     {
+        self.spawn_with_sink(req, Some(Box::new(FnSink(on_event))), None)
+    }
+
+    /// [`spawn`](Self::spawn) with a replaceable sink (#731). `sink` is
+    /// the first attached sink, or `None` to start unattended; `on_exit`
+    /// runs on the waiter thread when the child exits, before the sink is
+    /// told and whether or not one is attached.
+    pub fn spawn_with_sink(
+        &self,
+        req: SpawnRequest<'_>,
+        sink: Option<Box<dyn StreamSink<PtyEvent>>>,
+        on_exit: Option<ExitHook>,
+    ) -> Result<SpawnOutcome, PtyError> {
         let SpawnRequest {
             id,
             cmd,
@@ -417,9 +451,19 @@ impl PtyManager {
         let mut reader = pair.master.try_clone_reader().map_err(PtyError::from_err)?;
         let writer = pair.master.take_writer().map_err(PtyError::from_err)?;
 
-        let on_event = Arc::new(on_event);
-        let on_event_reader = Arc::clone(&on_event);
-        let on_event_waiter = on_event;
+        // #171d: the writer thread owns `writer` from here on; `write`
+        // only ever sends on this channel, never touches the PTY's I/O.
+        let writer_tx = spawn_pty_writer(id.clone(), writer);
+
+        // #731: every event goes through the slot, attached before the
+        // reader starts so no output is lost. Its unattended `ConPTY`
+        // cursor answer goes out through the same writer channel.
+        let reply_tx = writer_tx.clone();
+        let slot = Arc::new(SinkSlot::new(sink, move |bytes| {
+            let _ = reply_tx.send(bytes);
+        }));
+        let slot_reader = Arc::clone(&slot);
+        let slot_waiter = Arc::clone(&slot);
 
         // #171b: the raw reader only moves bytes off the PTY as fast as
         // the OS delivers them; it never calls `on_event` itself. The
@@ -474,9 +518,7 @@ impl PtyManager {
                 carry.extend_from_slice(&chunk);
                 match std::str::from_utf8(&carry) {
                     Ok(s) => {
-                        on_event_reader(PtyEvent::Data {
-                            chunk: s.to_owned(),
-                        });
+                        slot_reader.data(s.to_owned());
                         carry.clear();
                     }
                     Err(e) => {
@@ -485,9 +527,7 @@ impl PtyManager {
                             // Safe by construction: bytes [..valid_up_to]
                             // are valid UTF-8.
                             let valid = std::str::from_utf8(&carry[..valid_up_to]).unwrap_or("");
-                            on_event_reader(PtyEvent::Data {
-                                chunk: valid.to_owned(),
-                            });
+                            slot_reader.data(valid.to_owned());
                         }
                         if let Some(invalid_len) = e.error_len() {
                             // Definitely-malformed bytes — drop them
@@ -504,10 +544,6 @@ impl PtyManager {
             });
             tracing::info!(id = %coalescer_id, "pty coalescer exit");
         });
-
-        // #171d: the writer thread owns `writer` from here on; `write`
-        // only ever sends on this channel, never touches the PTY's I/O.
-        let writer_tx = spawn_pty_writer(id.clone(), writer);
 
         let exit_id = id.clone();
         thread::spawn(move || {
@@ -544,7 +580,11 @@ impl PtyManager {
                     );
                 }
             }
-            on_event_waiter(PtyEvent::Exit { code });
+            // The hook runs whether or not a sink is attached.
+            if let Some(hook) = on_exit {
+                hook(code);
+            }
+            slot_waiter.exit(code);
         });
 
         let pty = Pty {
@@ -553,6 +593,7 @@ impl PtyManager {
             killer,
             pid,
             sidecar,
+            slot,
         };
         self.inner.lock().insert(id, pty);
         Ok(SpawnOutcome {
@@ -613,6 +654,68 @@ impl PtyManager {
         n
     }
 
+    /// Install `sink` as the PTY's output, replacing any current one. If
+    /// the child has already exited the sink is sent `Exit` at once.
+    pub fn attach(
+        &self,
+        id: &str,
+        sink: Box<dyn StreamSink<PtyEvent>>,
+    ) -> Result<AttachOutcome, PtyError> {
+        let slot = self.slot(id, "pty_attach")?;
+        Ok(slot.attach(sink))
+    }
+
+    /// [`attach`](Self::attach), also returning the attachment's id.
+    pub fn attach_tracked(
+        &self,
+        id: &str,
+        sink: Box<dyn StreamSink<PtyEvent>>,
+    ) -> Result<(AttachOutcome, u64), PtyError> {
+        let slot = self.slot(id, "pty_attach")?;
+        Ok(slot.attach_tracked(sink))
+    }
+
+    /// The id of the PTY's current attachment (`None`: no sink or no PTY).
+    pub fn attach_id(&self, id: &str) -> Option<u64> {
+        self.slot(id, "pty_attach_id").ok()?.attach_id()
+    }
+
+    /// Clear the PTY's sink only if `attach_id` is still the current
+    /// attachment. Returns whether it was cleared.
+    pub fn detach_if(&self, id: &str, attach_id: u64) -> bool {
+        self.slot(id, "pty_detach")
+            .is_ok_and(|s| s.detach_if(attach_id))
+    }
+
+    /// Clear the PTY's sink. The child, its threads and the entry are
+    /// untouched. Returns whether a sink was attached (false too for an
+    /// unknown id).
+    pub fn detach(&self, id: &str) -> bool {
+        self.slot(id, "pty_detach").is_ok_and(|s| s.detach())
+    }
+
+    /// The entry exists and the child has not exited.
+    pub fn is_alive(&self, id: &str) -> bool {
+        self.inner
+            .lock()
+            .get(id)
+            .is_some_and(|p| p.slot.exited().is_none())
+    }
+
+    /// `Some(code)` once the child has exited; `None` while it runs or
+    /// when there is no such PTY.
+    pub fn exit_code(&self, id: &str) -> Option<ExitRecord> {
+        self.inner.lock().get(id).and_then(|p| p.slot.exited())
+    }
+
+    fn slot(&self, id: &str, what: &str) -> Result<Arc<SinkSlot>, PtyError> {
+        self.inner
+            .lock()
+            .get(id)
+            .map(|p| Arc::clone(&p.slot))
+            .ok_or_else(|| PtyError(format!("{what}: no pty with id {id}")))
+    }
+
     /// Best-effort: if the child has already exited, this is a no-op.
     ///
     /// Removing the `Pty` drops `writer_tx`, which is the writer
@@ -636,6 +739,9 @@ mod cwd_tests;
 
 #[cfg(test)]
 mod thread_tests;
+
+#[cfg(test)]
+mod sink_pty_tests;
 
 #[cfg(all(test, unix))]
 mod tests;

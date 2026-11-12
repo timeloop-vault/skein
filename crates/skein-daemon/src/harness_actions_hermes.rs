@@ -417,8 +417,10 @@ impl Drop for Entry {
 }
 
 /// The tails, keyed by harness id.
+/// Cloning shares the same tails (#731: the harness runner holds a clone).
+#[derive(Clone)]
 pub struct HermesActionsManager {
-    inner: Mutex<HashMap<String, Entry>>,
+    inner: Arc<Mutex<HashMap<String, Entry>>>,
     db: Arc<Database>,
     events: SharedEventSink,
 }
@@ -426,7 +428,7 @@ pub struct HermesActionsManager {
 impl HermesActionsManager {
     pub fn new(db: Arc<Database>, events: SharedEventSink) -> Self {
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner: Arc::new(Mutex::new(HashMap::new())),
             db,
             events,
         }

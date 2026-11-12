@@ -39,6 +39,9 @@ export interface RoomsSync {
 	 * as a setState updater (same reference back when nothing changes).
 	 */
 	remote(payload: RoomsChanged): ((local: readonly Room[]) => Room[]) | null;
+	/** Wait for the in-flight call and send the latest diff, without asking the
+	 *  daemon to flush to disk (#731: the record must be there, not on disk). */
+	drain(): Promise<void>;
 	/** Drain the chain, send the latest diff, then flush the daemon. Never rejects. */
 	flush(): Promise<void>;
 	dispose(): void;
@@ -161,6 +164,13 @@ export function createRoomsSync(opts: RoomsSyncOptions): RoomsSync {
 			baseline = applyRoomChanges(oldBaseline, changes);
 			if (running) flightRemote.push(...changes);
 			return (local) => rebaseRemote(oldBaseline, local, changes).local;
+		},
+		async drain() {
+			// One tick first: a child effect (a terminal mount) asks before the
+			// parent effect that reports the new rooms (`update`) has run.
+			await Promise.resolve();
+			while (running) await chain;
+			await pump();
 		},
 		async flush() {
 			while (running) await chain;

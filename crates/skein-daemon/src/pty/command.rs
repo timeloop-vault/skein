@@ -30,7 +30,7 @@ use crate::stream_sink::StreamSink;
 /// is truthy in the final spawn environment. Only Rust sees that env
 /// (login shell, inherited, user extras): the frontend's link-click
 /// deferral (#269) must not stand aside when Claude ignores clicks (#401).
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PtySpawnResult {
     pub id: String,
@@ -79,6 +79,22 @@ pub struct PtySpawnArgs {
     pub session_id: Option<String>,
 }
 
+/// Records how long each `Data` send takes. A failed send is ignored: it
+/// only means the frontend dropped its end.
+struct TimedSink(Box<dyn StreamSink<PtyEvent>>);
+
+impl StreamSink<PtyEvent> for TimedSink {
+    fn send(&self, event: PtyEvent) -> Result<(), String> {
+        let is_data = matches!(event, PtyEvent::Data { .. });
+        let t0 = std::time::Instant::now();
+        let r = self.0.send(event);
+        if is_data {
+            crate::perf_spans::PTY_CHUNK_SEND.record(t0.elapsed());
+        }
+        r
+    }
+}
+
 /// Spawn a child on a fresh PTY and stream its events into `sink`.
 ///
 /// `stop_sidecar` ends the sidecar generation a PTY was bound to (#676); it
@@ -89,6 +105,24 @@ pub fn pty_spawn_impl(
     deps: PtySpawnDeps<'_>,
     args: PtySpawnArgs,
     sink: impl StreamSink<PtyEvent>,
+    stop_sidecar: impl Fn(&SidecarBinding) + Send + Sync + 'static,
+    sidecar_on_exit: &OnExit,
+) -> Result<PtySpawnResult, String> {
+    pty_spawn_with_sink(
+        deps,
+        args,
+        Some(Box::new(sink)),
+        stop_sidecar,
+        sidecar_on_exit,
+    )
+}
+
+/// [`pty_spawn_impl`] where the view is optional: with `None` the child runs
+/// unattended, its output kept for the first `PtyManager::attach` (#731).
+pub fn pty_spawn_with_sink(
+    deps: PtySpawnDeps<'_>,
+    args: PtySpawnArgs,
+    sink: Option<Box<dyn StreamSink<PtyEvent>>>,
     stop_sidecar: impl Fn(&SidecarBinding) + Send + Sync + 'static,
     sidecar_on_exit: &OnExit,
 ) -> Result<PtySpawnResult, String> {
@@ -172,7 +206,7 @@ pub fn pty_spawn_impl(
     let bound_for_failure = binding.clone();
     let outcome = deps
         .manager
-        .spawn(
+        .spawn_with_sink(
             SpawnRequest {
                 id: id.clone(),
                 cmd: &cmd,
@@ -187,21 +221,13 @@ pub fn pty_spawn_impl(
                 secret_env,
                 sidecar: binding,
             },
-            move |event| {
-                // A send only fails if the frontend dropped its end;
-                // nothing useful we can do at that point.
-                let is_data = matches!(event, PtyEvent::Data { .. });
-                if matches!(event, PtyEvent::Exit { .. })
-                    && let Some(binding) = exit_binding.as_ref()
-                {
+            sink.map(|s| Box::new(TimedSink(s)) as Box<dyn StreamSink<PtyEvent>>),
+            // Runs whether or not a view is attached (#731).
+            Some(Box::new(move |_code| {
+                if let Some(binding) = exit_binding.as_ref() {
                     exit_stop(binding);
                 }
-                let t0 = std::time::Instant::now();
-                let _ = sink.send(event);
-                if is_data {
-                    crate::perf_spans::PTY_CHUNK_SEND.record(t0.elapsed());
-                }
-            },
+            })),
         )
         .map_err(|e| {
             // The spawn failed: nothing will ever attach to the sidecar.

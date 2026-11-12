@@ -28,8 +28,13 @@ use crate::event_sink::{self, SharedEventSink};
 pub use persist::{ROOMS_PERSIST_DELAY, ROOMS_PERSIST_MAX_WAIT, persist_deadline};
 use persist::{Shared, spawn_driver};
 
+/// Called after a batch that changed something, with the rooms as that batch
+/// left them, and never under the store lock (see [`RoomStore::observe`]).
+type Observer = Box<dyn Fn(&[Room]) + Send + Sync>;
+
 pub struct RoomStore {
     shared: Arc<Shared>,
+    observers: parking_lot::RwLock<Vec<Observer>>,
 }
 
 impl RoomStore {
@@ -56,7 +61,22 @@ impl RoomStore {
             max_wait,
         });
         spawn_driver(Arc::clone(&shared));
-        Arc::new(Self { shared })
+        Arc::new(Self {
+            shared,
+            observers: parking_lot::RwLock::new(Vec::new()),
+        })
+    }
+
+    /// Register a callback run after every `apply` that changed something
+    /// (#731: the harness runner stops what the records no longer want).
+    ///
+    /// It runs on the applying thread, after the store lock is released, so
+    /// it may call `rooms()` or do slow work, and may even call `apply`
+    /// itself (observers then run again, so it must converge). It sees the
+    /// snapshot taken under the lock, not a re-read. Two concurrent applies
+    /// can run their observers in either order.
+    pub fn observe(&self, f: impl Fn(&[Room]) + Send + Sync + 'static) {
+        self.observers.write().push(Box::new(f));
     }
 
     /// Persist anything dirty, then run `load` and install its rooms, all
@@ -100,6 +120,24 @@ impl RoomStore {
         origin: &str,
         mutations: Vec<RoomMutation>,
     ) -> Result<RoomsApplyOutcome, String> {
+        let (outcome, snapshot) = self.apply_locked(origin, mutations)?;
+        // The store lock is gone by here: an observer may block or re-enter.
+        if let Some(rooms) = snapshot {
+            for observer in self.observers.read().iter() {
+                observer(&rooms);
+            }
+        }
+        Ok(outcome)
+    }
+
+    /// The body of [`Self::apply`], returning also the rooms to show the
+    /// observers (taken under the lock, only when there is an observer and
+    /// the batch changed something).
+    fn apply_locked(
+        &self,
+        origin: &str,
+        mutations: Vec<RoomMutation>,
+    ) -> Result<(RoomsApplyOutcome, Option<Vec<Room>>), String> {
         let mut st = self.shared.lock();
         if !st.loaded {
             return Err("rooms store not ready: no rooms load has succeeded yet".into());
@@ -160,9 +198,10 @@ impl RoomStore {
             if st.is_dirty() {
                 self.shared.persist_or_rearm(&mut st)?;
             }
-            return Ok(outcome);
+            return Ok((outcome, None));
         }
         st.mark_dirty(now);
+        let snapshot = (!self.observers.read().is_empty()).then(|| st.rooms.clone());
         let payload = RoomsChanged {
             origin: origin.to_owned(),
             changes,
@@ -176,7 +215,7 @@ impl RoomStore {
         } else {
             self.shared.wake.notify_all();
         }
-        Ok(outcome)
+        Ok((outcome, snapshot))
     }
 
     /// Persist everything dirty now.

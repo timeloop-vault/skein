@@ -53,6 +53,7 @@ export function classifyTransition(from: ActivityPhase, to: ActivityPhase): Tran
 // #175: an opencode reconnect baseline is a guess at idle, never news.
 export function isNotifiable(c: TransitionClass, source?: TransitionSource): boolean {
 	if (source === TRANSITION_SOURCE.L2c2OpencodeBaseline) return false;
+	if (source === TRANSITION_SOURCE.Reattached) return false; // #731
 	return c.becameWaiting || c.becamePermission || (c.wasWorking && c.becamePassive);
 }
 

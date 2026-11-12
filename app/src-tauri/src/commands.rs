@@ -11,7 +11,9 @@
 //! # Where things are
 //!
 //! - `app` — `ping` and `frontend_log` (#362).
-//! - `pty` — spawn / write / resize / kill.
+//! - `pty` — write / resize / opencode scan.
+//! - `harness_runner` — ensure-running / stop / detach over the daemon's
+//!   `HarnessRunner` (#731).
 //! - `harness_events` — attach/detach for Claude's JSONL tail (#50 L2c-1)
 //!   and opencode's SSE stream (L2c-2).
 //! - `harness_log` — the `harness_events` and `harness_actions` tables:
@@ -20,8 +22,6 @@
 //! - `git` — the git commands: repo inspection, worktrees, status, diff and
 //!   the two watchers.
 //! - `hermes_work` — attach/detach for the Hermes work poller (#628).
-//! - `opencode_sidecar` — start/stop of the per-harness `opencode serve`
-//!   sidecar on opencode v2 (#676).
 //! - `rooms` — `db_load_rooms` / `rooms_apply` / `rooms_flush`.
 //! - `todos` — `db_load_global_todos` / `db_save_global_todos` (#335).
 //! - `spawn_env` — `SpawnEnvState`, the Settings environment commands,
@@ -33,8 +33,8 @@ pub(crate) mod git;
 pub(crate) mod harness_argv;
 pub(crate) mod harness_events;
 pub(crate) mod harness_log;
+pub(crate) mod harness_runner;
 pub(crate) mod hermes_work;
-pub(crate) mod opencode_sidecar;
 pub(crate) mod pty;
 pub(crate) mod rooms;
 pub(crate) mod spawn_env;
