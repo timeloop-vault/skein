@@ -70,7 +70,7 @@ export interface Harness {
 	// selects. Optional per the post-v0.2.5 field policy: a required
 	// field makes every stored room blob unparseable.
 	//
-	// The record is authoritative, so `resumeCmd` re-passes it. Claude's
+	// The record is authoritative, so the daemon (crates/skein-daemon/src/harness_argv/) re-passes it. Claude's
 	// `--resume` restores the session's *own* agent when no flag is
 	// given (measured on #219), so omitting it here would silently
 	// resurrect whatever the conversation started as.
@@ -125,7 +125,7 @@ export interface Harness {
 	// #520: the session a post-exit shell's re-bound CLI is running
 	// (#318). Kind-agnostic; `port` is reserved for opencode (#517).
 	// Absent = no live claim. Resume honours it only while it still
-	// equals `sessionId` (see `resumeHarness`).
+	// equals `sessionId` (see the daemon's harness_argv resume).
 	shellClaim?: ShellClaim;
 	// #675 (epic #674): the opencode version seen at the last spawn. Absent =
 	// unknown / never probed, which means v1. Resume needs it because v1 and
@@ -222,7 +222,7 @@ export type Density = "compact" | "regular" | "comfy";
 
 // ── Spawn environment (issues #72, #3, #1) ─────────────────────────
 //
-// Mirrors `app/src-tauri/src/spawn_settings.rs`. Unlike every other
+// Mirrors `crates/skein-daemon/src/spawn_settings.rs`. Unlike every other
 // Skein setting these do NOT live in localStorage: Rust reads them at
 // spawn time and kicks off the shell probe during setup(), before a
 // webview exists to be asked. See the module doc comment for why.
@@ -259,6 +259,9 @@ export interface ToolGroups {
 
 export interface SpawnSettings {
 	schema: number;
+	/** Default `--agent` per harness kind (#248, daemon-owned since #730).
+	 *  Absent until the daemon owns it. */
+	defaultAgents?: Record<string, string>;
 	/** Named env profiles. Absent in old persisted payloads. */
 	envProfiles?: EnvProfile[];
 	/** The one profile applied at spawn; `null`/absent = none. */

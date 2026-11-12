@@ -1,11 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const invokeMock = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+
 import {
 	type AgentInfo,
 	type AgentListing,
+	checkAgent,
 	kindHasAgents,
-	NO_AGENTS,
+	listHarnessAgents,
 	unknownAgentMessage,
-	validateAgent,
 } from "./agents.ts";
 
 const agent = (name: string, over: Partial<AgentInfo> = {}): AgentInfo => ({
@@ -37,62 +41,46 @@ describe("kindHasAgents", () => {
 	});
 });
 
-describe("validateAgent", () => {
-	it("accepts no agent at all — the tool's own default is a choice", () => {
-		expect(validateAgent(undefined, listing(["reviewer"]))).toEqual({ kind: "ok" });
-		expect(validateAgent("", listing(["reviewer"]))).toEqual({ kind: "ok" });
-		expect(validateAgent("  ", listing(["reviewer"]))).toEqual({ kind: "ok" });
+describe("checkAgent (daemon verdict)", () => {
+	beforeEach(() => {
+		invokeMock.mockReset();
 	});
 
-	it("accepts a name the CLI vouched for", () => {
-		expect(validateAgent("reviewer", listing(["coder", "reviewer"]))).toEqual({ kind: "ok" });
+	it("no name: ok, and the CLI is not asked", async () => {
+		expect(await checkAgent("claude", "/w", undefined)).toEqual({ kind: "ok" });
+		expect(await checkAgent("claude", "/w", "  ")).toEqual({ kind: "ok" });
+		expect(invokeMock).not.toHaveBeenCalled();
 	});
 
-	it("rejects a name an authoritative list does not have", () => {
-		expect(validateAgent("reviewer", listing(["coder"]))).toEqual({
-			kind: "unknown",
-			agent: "reviewer",
+	it("passes the name as `check` on one list_harness_agents call", async () => {
+		invokeMock.mockResolvedValue({ ...listing(["a"]), verdict: { kind: "ok" } });
+		expect(await checkAgent("claude", "/w", "a")).toEqual({ kind: "ok" });
+		expect(invokeMock).toHaveBeenCalledTimes(1);
+		expect(invokeMock).toHaveBeenCalledWith("list_harness_agents", {
+			kind: "claude",
+			cwd: "/w",
+			check: "a",
 		});
 	});
 
-	it("matches exactly — namespaced names are not the same agent", () => {
-		// `pr-review-toolkit:code-reviewer` and `code-reviewer` are two
-		// different things to the CLI, and `--agent` takes the full name.
-		expect(validateAgent("code-reviewer", listing(["pr-review-toolkit:code-reviewer"]))).toEqual({
-			kind: "unknown",
-			agent: "code-reviewer",
-		});
+	it("relays the daemon's unknown and unverified verdicts", async () => {
+		invokeMock.mockResolvedValue({ ...listing(["a"]), verdict: { kind: "unknown", agent: "b" } });
+		expect((await checkAgent("claude", "/w", "b")).kind).toBe("unknown");
+		const v = { kind: "unverified", agent: "b", why: "x" };
+		invokeMock.mockResolvedValue({ ...listing([], "x"), verdict: v });
+		expect(await checkAgent("claude", "/w", "b")).toEqual(v);
 	});
 
-	it("is case-sensitive, because the CLI is", () => {
-		// This box has both `Explore` and `explore`, with different tools.
-		expect(validateAgent("explore", listing(["Explore"]))).toEqual({
-			kind: "unknown",
-			agent: "explore",
-		});
+	it("a failed invoke or a kind without agents is unverified, never unknown", async () => {
+		invokeMock.mockImplementation(() => Promise.reject(new Error("bridge gone")));
+		expect((await checkAgent("claude", "/w", "b")).kind).toBe("unverified");
+		expect((await checkAgent("copilot", "/w", "b")).kind).toBe("unverified");
 	});
 
-	it("never rejects on a degraded list — absence proves nothing there", () => {
-		// The whole point: an unrunnable CLI must not strand every harness
-		// that names an agent. The spawn itself still fails loudly if the
-		// name really is gone.
-		expect(validateAgent("reviewer", listing([], "claude: program not found"))).toEqual({
-			kind: "unverified",
-			agent: "reviewer",
-			why: "claude: program not found",
-		});
-		expect(validateAgent("reviewer", listing(["coder"], "output unparseable"))).toEqual({
-			kind: "unverified",
-			agent: "reviewer",
-			why: "output unparseable",
-		});
-	});
-
-	it("treats a listing nobody fetched as unverified, not as empty", () => {
-		// NO_AGENTS is what a kind without agents gets, and what a caller
-		// holds before the first fetch lands. Reading it as "the list is
-		// empty, so the name is gone" would block every spawn.
-		expect(validateAgent("reviewer", NO_AGENTS).kind).toBe("unverified");
+	it("listHarnessAgents without check sends no check key", async () => {
+		invokeMock.mockResolvedValue(listing([]));
+		await listHarnessAgents("claude", "/w");
+		expect(invokeMock).toHaveBeenCalledWith("list_harness_agents", { kind: "claude", cwd: "/w" });
 	});
 });
 

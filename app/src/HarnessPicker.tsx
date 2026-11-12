@@ -6,9 +6,9 @@ import { groupAgents } from "./agentGroups.ts";
 import {
 	type AgentInfo,
 	type AgentListing,
+	type AgentVerdict,
 	kindHasAgents,
 	listHarnessAgents,
-	validateAgent,
 } from "./agents.ts";
 import { HChip } from "./components.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
@@ -44,8 +44,8 @@ export const NoReviewToolsBadge = () => (
  *  whole point of asking the CLI is that the answer moves — an agent
  *  file added while Skein was open must show up on the next open of
  *  the picker, not on the next restart. */
-export const useAgentListing = (kind: HarnessKind | null, cwd: string) => {
-	const [listing, setListing] = useState<AgentListing | null>(null);
+export const useAgentListing = (kind: HarnessKind | null, cwd: string, check?: string) => {
+	const [listing, setListing] = useState<(AgentListing & { verdict?: AgentVerdict }) | null>(null);
 	useEffect(() => {
 		if (!kind || !kindHasAgents(kind)) {
 			setListing(null);
@@ -65,13 +65,15 @@ export const useAgentListing = (kind: HarnessKind | null, cwd: string) => {
 
 		let cancelled = false;
 		setListing(null);
-		void listHarnessAgents(kind, cwd).then((l) => {
+		// `check` rides the same call, so the daemon judges the name against
+		// this one enumeration (#730).
+		void listHarnessAgents(kind, cwd, check).then((l) => {
 			if (!cancelled) setListing(l);
 		});
 		return () => {
 			cancelled = true;
 		};
-	}, [kind, cwd]);
+	}, [kind, cwd, check]);
 	return listing;
 };
 
@@ -98,7 +100,7 @@ const AgentStep = ({
 	onBack,
 }: {
 	kind: HarnessKind;
-	listing: AgentListing | null;
+	listing: (AgentListing & { verdict?: AgentVerdict }) | null;
 	/** The kind's default from Settings, if any. */
 	preferred: string | undefined;
 	/** Whether this picker's room is the one on screen. */
@@ -109,7 +111,7 @@ const AgentStep = ({
 	const tool = HARNESS_KINDS[kind].name;
 	// Before the list arrives the default cannot be disproved, so it is
 	// preselected; the spawn re-checks the name anyway (#247).
-	const gone = listing !== null && validateAgent(preferred, listing).kind === "unknown";
+	const gone = listing?.verdict?.kind === "unknown";
 	const selected = gone ? undefined : preferred;
 
 	// Enter *spawns*, so the listener is held to the one picker the user
@@ -262,7 +264,11 @@ export const HarnessPicker = ({
 	// Fetched as soon as the kind is chosen, not on hover or on mount:
 	// the probe runs the harness CLI, and a grid that shells out five
 	// times just to be looked at would be a poor trade for a subtitle.
-	const listing = useAgentListing(step, cwd);
+	const listing = useAgentListing(
+		step,
+		cwd,
+		step ? defaultAgentFor(defaultAgents, step) : undefined,
+	);
 	return (
 		<div className="sk-empty-harness">
 			{/* #189: the picker needs a way out that isn't picking. Esc still

@@ -2,7 +2,6 @@
 // split of #19). State and refs are owned by useRoomsStore and passed
 // in, so hook order there is unchanged.
 
-import { invoke } from "@tauri-apps/api/core";
 import {
 	type Dispatch,
 	type MutableRefObject,
@@ -11,10 +10,12 @@ import {
 	useRef,
 } from "react";
 import { type CloseRoomAttribution, decideCloseRoom, type RequestResult } from "./agentRequests.ts";
+import { reportArgvFailure } from "./argvFailure.ts";
 import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { confirmDialog } from "./confirmDialog.ts";
 import { filesRegistry } from "./filesRegistry.ts";
-import { unarchiveRoomTransform } from "./harnessCmd.ts";
+import { roomsResumeCmds } from "./harnessArgvApi.ts";
+import { applyResumedRoom } from "./harnessArgvApply.ts";
 import type { RenameTarget } from "./RoomStrip.tsx";
 import {
 	retireRooms as retireRoomsPure,
@@ -138,35 +139,6 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 		return { ok: true, value: { roomId, archived: stamped.at } };
 	};
 
-	// Fresh embedded-server ports for every opencode harness in a room
-	// about to be (re)mounted. The ports from sqlite are dead — the run
-	// that bound them released them on exit — and resumeCmd needs the
-	// new ones to bake into the argv. Allocation failure is survivable:
-	// that harness resumes without --port and its L2c-2 SSE adapter
-	// simply doesn't attach.
-	const allocateOpencodePorts = useCallback(
-		async (room: Room | undefined) => {
-			const portMap = new Map<string, number>();
-			if (!room) return portMap;
-			await Promise.all(
-				room.harnesses
-					.filter((h) => h.kind === "opencode" && h.cmd)
-					.map(async (h) => {
-						try {
-							portMap.set(h.id, await invoke<number>("pick_free_port"));
-						} catch (err) {
-							console.warn(`[skein] pick_free_port failed for ${h.id} on unarchive`, err);
-						}
-					}),
-			);
-			if (portMap.size > 0) {
-				setOpencodePorts((prev) => new Map([...prev, ...portMap]));
-			}
-			return portMap;
-		},
-		[setOpencodePorts],
-	);
-
 	// #153 / #170: un-archiving a room re-mounts it, which re-spawns
 	// every harness, so their cmds must be in resume form *before* the
 	// state change lands. A harness created this session still carries
@@ -192,9 +164,22 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 				setActiveRoomId(id);
 				return;
 			}
-			const portMap = await allocateOpencodePorts(room);
 			const probed = await dropUnwrittenSessions(room, stillExists);
-			const transformed = unarchiveRoomTransform(probed, portMap);
+			// #730: the daemon puts every harness's cmd in resume form, clears
+			// archived/retired/closedBy and allocates fresh opencode ports (the
+			// ones in sqlite are dead; a failed allocation resumes port-less).
+			// The result merges into the CURRENT record by id below - never
+			// installed wholesale, since the Rust structs drop unknown fields.
+			// A rejection leaves the room archived and changes nothing.
+			let resumed: Awaited<ReturnType<typeof roomsResumeCmds>>;
+			try {
+				resumed = await roomsResumeCmds([probed], true);
+			} catch (err) {
+				reportArgvFailure("reopen the room", err, room);
+				return;
+			}
+			const returned = resumed.rooms.find((r) => r.id === id);
+			const transformed = applyResumedRoom(probed, returned, { unarchive: true });
 			// #418: decide identity BEFORE the remount so a room whose
 			// folder now holds another repo opens on the card, resuming
 			// nothing. React batches this with the setRooms below.
@@ -213,7 +198,11 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 				setActiveRoomId(id);
 				return;
 			}
-			setRooms((prev) => prev.map((r) => (r.id === id ? transformed : r)));
+			const ports = new Map(Object.entries(resumed.ports));
+			if (ports.size > 0) setOpencodePorts((prev) => new Map([...prev, ...ports]));
+			setRooms((prev) =>
+				prev.map((r) => (r.id === id ? applyResumedRoom(r, returned, { unarchive: true }) : r)),
+			);
 			setActiveRoomId(id);
 			// #76 / #418: repoRoot + identity backfill, as hydrate does.
 			syncRepoMeta([room]);
@@ -223,7 +212,7 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 			void checkRoomFolder(transformed);
 		},
 		[
-			allocateOpencodePorts,
+			setOpencodePorts,
 			syncRepoMeta,
 			setMismatch,
 			checkRoomFolder,
@@ -281,7 +270,6 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 	return {
 		closeRoom,
 		closeRoomForAgent,
-		allocateOpencodePorts,
 		unarchiveRoom,
 		unarchiveRoomRef,
 		deleteRoomForever,

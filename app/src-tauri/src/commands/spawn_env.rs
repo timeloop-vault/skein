@@ -7,6 +7,9 @@ use std::sync::Arc;
 use tauri::Manager;
 
 use crate::spawn_settings::SpawnSettings;
+use skein_daemon::spawn_env::default_agents::{
+    DefaultAgentsImport, default_agent_set_impl, default_agents_import_impl,
+};
 use skein_daemon::spawn_env::lookups::{
     OpencodeVersionDto, claude_cli_version_impl, default_cwd_impl, default_shell_impl,
     opencode_cli_version_impl, spawn_settings_save_impl,
@@ -53,6 +56,37 @@ pub(crate) async fn spawn_settings_save(
     .map_err(|e| e.to_string())?
 }
 
+/// One-time, non-overwriting import of the old frontend `defaultAgents`
+/// pref into settings.json (#730). Returns `{imported, defaultAgents}`.
+#[tauri::command]
+pub(crate) async fn default_agents_import(
+    default_agents: std::collections::BTreeMap<String, String>,
+    app: tauri::AppHandle,
+) -> Result<DefaultAgentsImport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let spawn_env = app.state::<Arc<SpawnEnvState>>();
+        default_agents_import_impl(&spawn_env, default_agents)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Set (or, with a null / blank `agent`, clear) one kind's default agent;
+/// returns the whole new `{kind: agent}` map (#730).
+#[tauri::command]
+pub(crate) async fn default_agent_set(
+    kind: crate::harness_kind::HarnessKind,
+    agent: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let spawn_env = app.state::<Arc<SpawnEnvState>>();
+        default_agent_set_impl(&spawn_env, kind, agent.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The environment a harness would get if it spawned right now.
 ///
 /// Built by the *same* code the spawn path runs, so the panel can't
@@ -88,16 +122,18 @@ pub(crate) fn spawn_env_preview(
 pub(crate) async fn list_harness_agents(
     kind: crate::harness_kind::HarnessKind,
     cwd: String,
+    check: Option<String>,
     spawn_env: tauri::State<'_, Arc<SpawnEnvState>>,
     harness_config: tauri::State<'_, crate::harness_config::HarnessConfig>,
-) -> Result<crate::agents::AgentListDto, String> {
+) -> Result<skein_daemon::harness_argv::AgentListReply, String> {
     let settings = spawn_env.snapshot();
     // Cloned rather than borrowed: the closure outlives this frame as
     // far as the compiler is concerned, and the config is a handful of
     // paths.
     let config = harness_config.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::agents::list(kind, &cwd, &settings, Some(&config))
+        let listing = crate::agents::list(kind, &cwd, &settings, Some(&config));
+        skein_daemon::harness_argv::with_verdict(listing, check.as_deref())
     })
     .await
     .map_err(|e| format!("agent discovery panicked: {e}"))

@@ -4,6 +4,7 @@
 //! PTY wiring sit above it.
 
 pub mod http;
+pub mod launch;
 mod process;
 mod record;
 pub mod start;

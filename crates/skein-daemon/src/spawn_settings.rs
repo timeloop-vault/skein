@@ -126,6 +126,12 @@ pub struct SpawnSettings {
     /// `None` = off. Held here, not in the webview, so the agent API
     /// (#689) can read it later.
     pub context_threshold: Option<u64>,
+    /// Per-kind default agent for `--agent` (#730), keyed by harness
+    /// kind. `None` = never imported from the old frontend pref; `Some`
+    /// (even empty) = the daemon owns it. A wholesale settings save that
+    /// states no value keeps the stored one (see `spawn_settings_save_impl`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_agents: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl Default for SpawnSettings {
@@ -146,6 +152,7 @@ impl Default for SpawnSettings {
             disable_claude_wheel_acceleration: false,
             lower_harness_priority: true,
             context_threshold: None,
+            default_agents: None,
         }
     }
 }

@@ -13,7 +13,6 @@ import {
 	rememberFolder,
 	saveNudgeOverrides,
 	startingAgent,
-	withDefaultAgent,
 } from "./prefs.ts";
 
 const defaults = (over: Partial<FolderDefaults> = {}): FolderDefaults => ({
@@ -140,18 +139,14 @@ describe("defaultsFor", () => {
 });
 
 describe("default agents (#248)", () => {
-	it("has no default until one is set, and clearing is not a name", () => {
+	it("has no default until one is set, and a blank is not a name", () => {
 		expect(defaultAgentFor({}, "claude")).toBeUndefined();
-		const set = withDefaultAgent({}, "claude", "coder");
-		expect(defaultAgentFor(set, "claude")).toBe("coder");
-		const cleared = withDefaultAgent(set, "claude", undefined);
-		// Absent key, not "" — "no default" must not be a storable name.
-		expect(cleared).toEqual({});
-		expect(withDefaultAgent(set, "claude", "  ")).toEqual({});
+		expect(defaultAgentFor({ claude: "coder" }, "claude")).toBe("coder");
+		expect(defaultAgentFor({ claude: "  " }, "claude")).toBeUndefined();
 	});
 
 	it("keeps each kind's default separate", () => {
-		const d = withDefaultAgent(withDefaultAgent({}, "claude", "coder"), "opencode", "plan");
+		const d: DefaultAgents = { claude: "coder", opencode: "plan" };
 		expect(defaultAgentFor(d, "claude")).toBe("coder");
 		expect(defaultAgentFor(d, "opencode")).toBe("plan");
 	});
@@ -165,7 +160,6 @@ describe("default agents (#248)", () => {
 	it("survives a blob that parsed into the wrong shape", () => {
 		const junk = null as unknown as DefaultAgents;
 		expect(defaultAgentFor(junk, "claude")).toBeUndefined();
-		expect(withDefaultAgent(junk, "claude", "coder")).toEqual({ claude: "coder" });
 		expect(defaultAgentFor({ claude: 7 } as unknown as DefaultAgents, "claude")).toBeUndefined();
 	});
 });

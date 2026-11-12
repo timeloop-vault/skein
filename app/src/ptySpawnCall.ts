@@ -15,8 +15,10 @@ export interface PtySpawnArgs {
 	/** #615: the harness's override; undefined = follow the global one. */
 	envProfile: string | undefined;
 	onEvent: Channel<PtyEvent>;
-	/** #676: set only for an opencode v2 TUI bound to a Skein sidecar. */
-	sidecarGeneration?: number | undefined;
+	/** From the harness RECORD (#730): the daemon builds the opencode v2 argv
+	 *  and starts the sidecar from these; never parsed out of `cmd`. */
+	agent?: string | undefined;
+	sessionId?: string | undefined;
 }
 
 /** The `pty_spawn` invoke. Split out of useTerminalSpawn.ts (400-line cap). */
@@ -40,7 +42,9 @@ export function ptySpawn(a: PtySpawnArgs): Promise<PtySpawnResult> {
 		// #615: the harness's override; null = follow the global one.
 		envProfile: a.envProfile ?? null,
 		onEvent: a.onEvent,
-		// Absent (not null) for v1, so its invoke args are unchanged.
-		...(a.sidecarGeneration === undefined ? {} : { sidecarGeneration: a.sidecarGeneration }),
+		// Deliberately no `sidecarGeneration`: absent, the daemon probes the
+		// opencode CLI and owns the sidecar (#730).
+		agent: a.agent ?? null,
+		sessionId: a.sessionId ?? null,
 	});
 }

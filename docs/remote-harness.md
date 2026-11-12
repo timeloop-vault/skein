@@ -10,7 +10,9 @@ A `remote` harness kind. Skein spawns `ssh` in a local PTY, and the remote end
 runs the tool inside a named tmux session. The record
 `Harness.remote {host, tool, session, dir?}` is the authority; the argv is
 rebuilt from it at every boot and reopen, never matched against the previous
-argv (the `harnessCmd.ts` rule, #153/#170). `remoteCmd.ts` is the pure builder.
+argv (the record-not-argv rule, #153/#170). Since #730 the argv builder is
+`remote_argv` in the daemon's `harness_argv/remote.rs`; `remoteCmd.ts` keeps
+only the session name and `buildRemoteSpec`, which build the record's spec.
 
 For `{host: "user@devbox", tool: "claude", session: "skein-r1-h1", dir: "~/work"}`:
 
@@ -40,7 +42,7 @@ Skein machine. To end a session for good, exit the tool inside tmux, or run
 `tmux kill-session -t skein-...` on the host.
 
 Where it lives: the `remote` entry in `data.tsx` / `types.ts` /
-`harness_kind.rs`, `remoteCmd.ts`, `RemoteHostStep.tsx`, and the `remote`
+`harness_kind.rs`, `remoteCmd.ts`, `harness_argv/remote.rs`, `RemoteHostStep.tsx`, and the `remote`
 field in `db/rooms.rs`.
 
 ## Design choices and why

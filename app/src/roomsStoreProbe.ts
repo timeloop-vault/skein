@@ -70,7 +70,7 @@ export async function inspectFolderMissing(cwd: string, roomId: string): Promise
 /** #508: strip the sessionId of every Claude (and, #624, Hermes) harness
  *  whose session was never written, so the reopen path mints a fresh `--session-id`
  *  (#486) instead of spawning `claude --resume <id>` against nothing.
- *  A fresh harness's id is pre-allocated by `cmdForKind`, and a room
+ *  A fresh harness's id is minted by the daemon's fresh argv (#730), and a room
  *  archived in the same run never passed hydrate's probe. opencode
  *  harnesses are returned untouched. `exists` errors are the caller's
  *  to make conservative (`stillExists` returns true on a failed invoke). */
@@ -99,7 +99,7 @@ export function opencodeSessionProbeApplies(h: Harness): boolean {
 }
 
 // Chapter 5 phase 4: drop any stored sessionId that no longer
-// exists on disk before resumeCmd uses it. claude --resume <id>
+// exists on disk before the daemon's resume argv uses it. claude --resume <id>
 // or opencode --session <id> against a deleted conversation
 // would either error or attach to nothing useful; falling back
 // to picker / --continue is the safer default.

@@ -1,3 +1,4 @@
+import type { CreationOutcome } from "./creationOutcome.ts";
 import { HermesConsentDialog } from "./HermesConsentDialog.tsx";
 import { BranchSection } from "./NewRoomBranchSection.tsx";
 import type { CreateRoomArgs } from "./NewRoomDialogTypes.ts";
@@ -53,7 +54,7 @@ export const NewRoomDialog = ({
 	recent: RecentFolder[];
 	/** Called with the folder and its defaults after a room is created. */
 	onRemember: (folder: string, defaults: Omit<FolderDefaults, "lastUsed">) => void;
-	onCommit: (args: CreateRoomArgs) => void;
+	onCommit: (args: CreateRoomArgs) => Promise<CreationOutcome>;
 	onCancel: () => void;
 }) => {
 	useFocusRestore();

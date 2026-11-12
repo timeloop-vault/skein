@@ -69,7 +69,7 @@ export default function App() {
 	} = useAppUiState();
 
 	// #19: room lifecycle + persistence state — see useRoomsStore.ts.
-	const store = useRoomsStore(defaultShell, setRenaming, lastUsedByGroupRef);
+	const store = useRoomsStore(setRenaming, lastUsedByGroupRef);
 	const {
 		setRooms,
 		roomsRef,
@@ -167,14 +167,13 @@ export default function App() {
 		setOpencodePorts,
 		setActiveRoomId,
 		activeRoomIdRef,
-		defaultShell,
 		defaultCwd,
 		showPicker,
 		setShowPicker,
 		setShowNewRoom,
 		switchHarnessInRoom,
 	);
-	const { createRoom, writeBacks: wb } = creation;
+	const { createRoomForUser: createRoom, writeBacks: wb } = creation;
 
 	// #19: the notification engine (badge/toast/OS notifications, permission
 	// and session-start listeners, transition logging) — see

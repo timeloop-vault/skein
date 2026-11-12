@@ -1,5 +1,4 @@
-//! The PTY commands: spawn, write, resize, kill, and the free-port
-//! picker opencode's embedded server needs.
+//! The PTY commands: spawn, write, resize, kill and the opencode scan.
 
 use std::sync::Arc;
 
@@ -44,7 +43,8 @@ pub(crate) async fn pty_spawn(
     harness_id: String,
     kind: crate::harness_kind::HarnessKind,
     env_profile: Option<String>,
-    sidecar_generation: Option<u64>,
+    agent: Option<String>,
+    session_id: Option<String>,
     on_event: Channel<PtyEvent>,
     app: tauri::AppHandle,
 ) -> Result<PtySpawnResult, String> {
@@ -74,10 +74,12 @@ pub(crate) async fn pty_spawn(
                 harness_id,
                 kind,
                 env_profile,
-                sidecar_generation,
+                agent,
+                session_id,
             },
             TauriChannelSink::new(on_event),
             move |binding| stop_bound_sidecar(&exit_app, binding),
+            &super::opencode_sidecar::sidecar_exit_hook(&app),
         )
     })
     .await
@@ -155,11 +157,4 @@ pub(crate) async fn pty_scan_opencode(
     })
     .await
     .map_err(|e| e.to_string())
-}
-
-/// Allocate a free TCP port on `127.0.0.1` for opencode's embedded
-/// HTTP server. Epic #50 L2c-2. See `skein_daemon::pty::opencode`.
-#[tauri::command]
-pub(crate) fn pick_free_port() -> Result<u16, String> {
-    skein_daemon::pty::opencode::pick_free_port()
 }

@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { kindHasAgents } from "./agents.ts";
 import { applyBranchTemplate, branchFieldProblem, taskSlug } from "./branchName.ts";
 import { useAgentListing } from "./components.tsx";
+import type { CreationOutcome } from "./creationOutcome.ts";
 import type { CreateRoomArgs, FolderInfoDto, RepoStatus } from "./NewRoomDialogTypes.ts";
 import { folderStatusBlurb } from "./NewRoomStatusBlurb.tsx";
+import { submitNewRoom } from "./newRoomSubmit.ts";
 import {
 	branchTemplateFor,
 	type DefaultAgents,
@@ -52,7 +54,8 @@ export const useNewRoomForm = ({
 	appBranchTemplate: string;
 	/** Called with the folder and its defaults after a room is created. */
 	onRemember: (folder: string, defaults: Omit<FolderDefaults, "lastUsed">) => void;
-	onCommit: (args: CreateRoomArgs) => void;
+	/** Resolves once the room exists, or says why it does not. */
+	onCommit: (args: CreateRoomArgs) => Promise<CreationOutcome>;
 }) => {
 	const [cwd, setCwd] = useState<string>(initialCwd);
 	const [task, setTask] = useState("");
@@ -310,51 +313,36 @@ export const useNewRoomForm = ({
 
 	const create = async () => {
 		hermes.setConsent(null);
-		setBusy(true);
-		setError(null);
-		// Called only on a path that genuinely created the room — a create
-		// that throws (or fails validation) must not teach the dialog
-		// anything.
-		const remember = (base: string, template?: string) =>
-			onRemember(cwd, {
-				baseBranch: base,
-				harness,
-				branchMode,
-				...(agent ? { agent } : {}),
-				...(harness === "hermes" ? { hermesProfile: hermes.hermesProfile } : {}),
-				...(template ? { branchTemplate: template } : {}),
-			});
-		try {
+		await submitNewRoom({
 			// A non-repo folder is always a plain-folder room (#231),
 			// regardless of the (hidden, for a non-repo) branch-mode radio
 			// — `createRoomArgs` treats "worktree" on a non-repo folder as
 			// an error, so this is the one place that distinction is made.
-			const outcome = await createRoomArgs({
-				folder: cwd,
-				task,
-				harness,
-				...(agent ? { agent } : {}),
-				...(harness === "hermes" ? { hermesProfile: hermes.hermesProfile } : {}),
-				branchMode: isRepo ? branchMode : "current",
-				branch,
-				baseBranch,
-				branchTemplate,
-			});
-			if (!outcome.ok) {
-				setError(outcome.error);
-				setBusy(false);
-				return;
-			}
-			// #227: only a successful create teaches the folder its branch
-			// template — a failed one must not poison the next open with a
-			// prefix that never actually landed.
-			remember(outcome.remember.baseBranch, outcome.remember.branchTemplate);
-			onCommit(outcome.args);
-		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : String(err);
-			setError(msg);
-			setBusy(false);
-		}
+			prepare: () =>
+				createRoomArgs({
+					folder: cwd,
+					task,
+					harness,
+					...(agent ? { agent } : {}),
+					...(harness === "hermes" ? { hermesProfile: hermes.hermesProfile } : {}),
+					branchMode: isRepo ? branchMode : "current",
+					branch,
+					baseBranch,
+					branchTemplate,
+				}),
+			commit: onCommit,
+			remember: (base, template) =>
+				onRemember(cwd, {
+					baseBranch: base,
+					harness,
+					branchMode,
+					...(agent ? { agent } : {}),
+					...(harness === "hermes" ? { hermesProfile: hermes.hermesProfile } : {}),
+					...(template ? { branchTemplate: template } : {}),
+				}),
+			setError,
+			setBusy,
+		});
 	};
 
 	const statusBlurb = folderStatusBlurb(repoStatus, resolvedFromWorktree);

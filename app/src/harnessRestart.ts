@@ -1,4 +1,5 @@
-// harnessRestart — the pure gate and argv for "restart this harness" (#490).
+// harnessRestart — the pure gate for "restart this harness" (#490). The respawn
+// record itself comes from the daemon (#730, harness_resume_cmd).
 //
 // A restart kills the harness's process and respawns it from its own
 // record. It is only safe where nothing is in flight that the kill would
@@ -11,9 +12,9 @@ import { checkDraft } from "./composerDraft.ts";
 import type { HarnessCapabilities } from "./data.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
 import type { ActivityPhase } from "./harnessActivityTypes.ts";
-import { isOpencodeV2, resumeHarness } from "./harnessCmd.ts";
+import { isOpencodeV2 } from "./harnessCmd.ts";
 import type { GateResult } from "./harnessInputGate.ts";
-import type { Harness, HarnessKind, OpencodeVersion } from "./types.ts";
+import type { HarnessKind, OpencodeVersion } from "./types.ts";
 
 export interface CanRestartInput {
 	kind: HarnessKind;
@@ -75,15 +76,4 @@ export function canRestart(input: CanRestartInput): GateResult {
 	const held = checkDraft(draft);
 	if (held) return refuse("unsent text in the prompt — submit or clear it first");
 	return { ok: true };
-}
-
-/// The ONE place the respawn record is built: `resumeHarness` returns the
-/// whole harness, so a session id minted for a Claude harness with none
-/// (#486) comes back on the record for the caller to persist.
-export function restartedHarness(
-	h: Harness,
-	opencodePort?: number,
-	mintSessionId?: () => string,
-): Harness {
-	return resumeHarness(h, opencodePort, mintSessionId);
 }

@@ -1,5 +1,6 @@
 // Settings → agent defaults and the worktree branch template.
 
+import { useState } from "react";
 import { kindHasAgents } from "./agents.ts";
 import { ContextThresholdField } from "./ContextThresholdField.tsx";
 import { HChip, NO_REVIEW_TOOLS_TITLE, useAgentListing } from "./components.tsx";
@@ -79,49 +80,61 @@ export const AgentSettings = ({
 	onSpawnSettings,
 }: {
 	defaultAgents: DefaultAgents;
-	onDefaultAgent: (kind: HarnessKind, agent: string | undefined) => void;
+	onDefaultAgent: (kind: HarnessKind, agent: string | undefined) => Promise<string | null>;
 	agentCwd: string;
 	branchTemplate: string;
 	onBranchTemplate: (v: string) => void;
 	spawnSettings: SpawnSettings | null;
 	onSpawnSettings: (next: SpawnSettings) => Promise<void>;
-}) => (
-	<>
-		<div className="sk-field">
-			<label>Default agents</label>
-			<div className="sk-help">
-				The agent a new harness of each kind starts as. The <code>+ harness</code> picker highlights
-				it, so Enter takes it, and New room fills it in unless the folder remembers its own. (tool
-				default) names no agent and leaves it to the tool's own setting.
+}) => {
+	// #730: a refused or failed save snaps the select back; say why.
+	const [saveError, setSaveError] = useState<string | null>(null);
+	return (
+		<>
+			<div className="sk-field">
+				<label>Default agents</label>
+				<div className="sk-help">
+					The agent a new harness of each kind starts as. The <code>+ harness</code> picker
+					highlights it, so Enter takes it, and New room fills it in unless the folder remembers its
+					own. (tool default) names no agent and leaves it to the tool's own setting.
+				</div>
+				{saveError && (
+					<div className="sk-env-banner sk-env-err">
+						Couldn't save the default agent: {saveError}
+					</div>
+				)}
+				{HARNESS_ORDER.filter(kindHasAgents).map((kind) => (
+					<DefaultAgentField
+						key={kind}
+						kind={kind}
+						cwd={agentCwd}
+						value={defaultAgentFor(defaultAgents, kind)}
+						onChange={(agent) => {
+							setSaveError(null);
+							void onDefaultAgent(kind, agent).then(setSaveError);
+						}}
+					/>
+				))}
 			</div>
-			{HARNESS_ORDER.filter(kindHasAgents).map((kind) => (
-				<DefaultAgentField
-					key={kind}
-					kind={kind}
-					cwd={agentCwd}
-					value={defaultAgentFor(defaultAgents, kind)}
-					onChange={(agent) => onDefaultAgent(kind, agent)}
+
+			<div className="sk-field">
+				<label htmlFor="sk-branch-template">Branch template</label>
+				<div className="sk-help">
+					{"{slug}"} is the task; a folder remembers the last prefix you used.
+				</div>
+				<input
+					id="sk-branch-template"
+					className="sk-input"
+					value={branchTemplate}
+					onChange={(e) => onBranchTemplate(e.target.value)}
 				/>
-			))}
-		</div>
-
-		<div className="sk-field">
-			<label htmlFor="sk-branch-template">Branch template</label>
-			<div className="sk-help">
-				{"{slug}"} is the task; a folder remembers the last prefix you used.
 			</div>
-			<input
-				id="sk-branch-template"
-				className="sk-input"
-				value={branchTemplate}
-				onChange={(e) => onBranchTemplate(e.target.value)}
-			/>
-		</div>
 
-		<ContextThresholdField
-			value={spawnSettings?.contextThreshold}
-			loaded={spawnSettings !== null}
-			onSpawnSettings={onSpawnSettings}
-		/>
-	</>
-);
+			<ContextThresholdField
+				value={spawnSettings?.contextThreshold}
+				loaded={spawnSettings !== null}
+				onSpawnSettings={onSpawnSettings}
+			/>
+		</>
+	);
+};

@@ -52,7 +52,7 @@ export function attachAdapters(a: AdapterAttach): (() => void) | null {
 		};
 	}
 	// L2c-2: attach the opencode SSE adapter when we have a
-	// port (App allocated one via pick_free_port before the
+	// port (the daemon allocated one (#730) before the
 	// spawn argv was finalized). Without a port the adapter
 	// can't know where to subscribe — graceful fallback to
 	// L2a + the sqlite-poll session-id capture.

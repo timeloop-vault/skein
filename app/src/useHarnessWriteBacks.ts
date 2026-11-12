@@ -33,7 +33,7 @@ export function useHarnessWriteBacks(setRooms: Dispatch<SetStateAction<Room[]>>)
 	// superseded (opencode), so the new one must win even though
 	// `sessionId` is already set. `cmd` is untouched here — it's part of
 	// LiveTerminal's mountKey, so changing it would respawn the PTY;
-	// `resumeCmd` (harnessCmd.ts) rebuilds the argv from `sessionId` on
+	// the daemon (harness_argv/) rebuilds the argv from `sessionId` on
 	// the next boot/reopen, which is what makes the new conversation the
 	// one resumed.
 	const replaceHarnessSessionId = (targetRoomId: string, harnessId: string, sessionId: string) => {

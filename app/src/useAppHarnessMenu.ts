@@ -1,4 +1,5 @@
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import { type Dispatch, type MutableRefObject, type SetStateAction, useEffect } from "react";
+import { setArgvFailureSink } from "./argvFailure.ts";
 import { useEnvProfiles } from "./envProfileStore.ts";
 import type { Room } from "./types.ts";
 import { useEnvProfileSwitch } from "./useEnvProfileSwitch.ts";
@@ -19,6 +20,12 @@ export function useAppHarnessMenu(
 	restartHarness: Parameters<typeof useRestartHarness>[1],
 	pushToast: PushToast,
 ) {
+	// #730: actions with no result to return (add harness, new room, reopen,
+	// repoint) toast through this when the daemon refuses to build an argv.
+	useEffect(() => {
+		setArgvFailureSink(pushToast);
+		return () => setArgvFailureSink(null);
+	}, [pushToast]);
 	const onReattachTelemetry = useReattachTelemetry(roomsRef, pushToast);
 	const onRestartHarness = useRestartHarness(roomsRef, restartHarness, pushToast);
 	const envProfiles = useEnvProfiles();

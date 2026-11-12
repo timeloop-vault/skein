@@ -1,3 +1,5 @@
+import type { OpencodeVersion } from "./types.ts";
+
 /// `pty_spawn`'s resolved value. `injected` mirrors whether #215's
 /// config injection was non-empty for this spawn — see
 /// `harnessActivity.injected` and the #238 nudge gate in
@@ -13,4 +15,10 @@ export interface PtySpawnResult {
 	mouseClicksDisabled: boolean;
 	/// #615: the env profile actually applied at this spawn (`null` = none).
 	envProfile: string | null;
+	/// #730: the sidecar generation the daemon started for an opencode v2 TUI.
+	sidecarGeneration: number | null;
+	/// #730: the CLI version the daemon probed (v1 included); null = not probed.
+	opencodeVersion: OpencodeVersion | null;
+	/// #730: the session the daemon created or confirmed when it started a sidecar.
+	sessionId: string | null;
 }

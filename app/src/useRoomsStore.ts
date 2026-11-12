@@ -29,7 +29,6 @@ import { useRoomsHydrate } from "./useRoomsHydrate.ts";
 import { useRoomsRepoIdentity } from "./useRoomsRepoIdentity.ts";
 
 export function useRoomsStore(
-	defaultShell: string[],
 	setRenaming: Dispatch<SetStateAction<RenameTarget | null>>,
 	lastUsedByGroupRef: MutableRefObject<Map<string, string>>,
 ) {
@@ -40,7 +39,7 @@ export function useRoomsStore(
 	const activeRoomIdRef = useRef(activeRoomId);
 	activeRoomIdRef.current = activeRoomId;
 	// Epic #50 L2c-2: per-opencode-harness embedded-server port.
-	// Ephemeral — each spawn gets a fresh port via `pick_free_port`,
+	// Ephemeral — each spawn gets a fresh port from the daemon (#730),
 	// kept here so LiveTerminal can pass it to attachOpencodeEvents
 	// without re-allocating. Not persisted: a port is meaningless
 	// after the process that bound it dies.
@@ -194,7 +193,6 @@ export function useRoomsStore(
 	const {
 		closeRoom,
 		closeRoomForAgent,
-		allocateOpencodePorts,
 		unarchiveRoom,
 		unarchiveRoomRef,
 		deleteRoomForever,
@@ -221,7 +219,6 @@ export function useRoomsStore(
 
 	const { recreateMissingWorktree, pickMissingFolder, confirmSameRepo, retireMismatchedRoom } =
 		useRoomsRepoIdentity({
-			defaultShell,
 			activeRooms,
 			roomsRef,
 			activeRoomIdRef,
@@ -235,7 +232,7 @@ export function useRoomsStore(
 			setMissingFolders,
 			setMismatch,
 			syncRepoMeta,
-			allocateOpencodePorts,
+			setOpencodePorts,
 		});
 
 	return {
@@ -271,7 +268,6 @@ export function useRoomsStore(
 		archivedRoomsRef,
 		room,
 		activeHarness,
-		allocateOpencodePorts,
 		unarchiveRoom,
 		unarchiveRoomRef,
 		recreateMissingWorktree,

@@ -135,9 +135,9 @@ export const rememberFolder = (
 
 // ── Default agent per kind (#248) ──────────────────────────────────
 //
-// localStorage and not `spawn_settings.rs`: the agent goes into the
-// argv, and the argv is built in the frontend (`harnessCmd.ts`). Rust
-// never reads this.
+// Owned by the daemon's settings.json since #730 (`defaultAgentsStore.ts`
+// loads and writes it); the old localStorage key is only a one-time
+// import source and is never the authority again.
 //
 // A kind with no entry has no default, which means "let the tool's own
 // `agent` setting decide" — the same thing an absent `Harness.agent`
@@ -155,19 +155,6 @@ export const defaultAgentFor = (defaults: DefaultAgents, kind: HarnessKind): str
 	if (typeof defaults !== "object" || defaults === null) return undefined;
 	const name = defaults[kind];
 	return typeof name === "string" && name.trim() ? name : undefined;
-};
-
-/** `defaults` with `kind` set to `agent`, or cleared by `undefined`. */
-export const withDefaultAgent = (
-	defaults: DefaultAgents,
-	kind: HarnessKind,
-	agent: string | undefined,
-): DefaultAgents => {
-	const next: DefaultAgents =
-		typeof defaults === "object" && defaults !== null ? { ...defaults } : {};
-	if (agent?.trim()) next[kind] = agent;
-	else delete next[kind];
-	return next;
 };
 
 // ── Claude Code update notice mode per kind (#491) ─────────────────

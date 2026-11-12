@@ -36,7 +36,7 @@ import {
 	resolveKind,
 	specFromCreateArgs,
 } from "./agentRequests.ts";
-import { listHarnessAgents } from "./agents.ts";
+import { checkAgent } from "./agents.ts";
 import { workSnapshot } from "./deferral.ts";
 import { handleDesignRequest, isDesignKind } from "./designAgentRequests.ts";
 import type { DesignDevice } from "./designDevice.ts";
@@ -152,13 +152,12 @@ export function useAgentRequests(
 			const kindResult = resolveKind(requestedKind, folderDefaults);
 			if (!kindResult.ok) return complete(id, undefined, kindResult.error);
 			const kind = kindResult.value;
-			const listing = await listHarnessAgents(kind, path);
-			const agentResult = resolveAgent(
+			const agentResult = await resolveAgent(
 				requestedAgent,
 				kind,
 				folderDefaults,
 				defaultAgentsRef.current,
-				listing,
+				(a) => checkAgent(kind, path, a),
 			);
 			if (!agentResult.ok) return complete(id, undefined, agentResult.error);
 			return complete(id, { kind, agent: agentResult.value });
@@ -277,13 +276,12 @@ export function useAgentRequests(
 			const kindResult = resolveKind(requestedKind, folderDefaults);
 			if (!kindResult.ok) return complete(id, undefined, kindResult.error);
 			const kind = kindResult.value;
-			const listing = await listHarnessAgents(kind, cwd);
-			const agentResult = resolveAgent(
+			const agentResult = await resolveAgent(
 				requestedAgent,
 				kind,
 				folderDefaults,
 				defaultAgentsRef.current,
-				listing,
+				(a) => checkAgent(kind, cwd, a),
 			);
 			if (!agentResult.ok) return complete(id, undefined, agentResult.error);
 			return complete(id, { kind, agent: agentResult.value });
