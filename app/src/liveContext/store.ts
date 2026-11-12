@@ -25,9 +25,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { span } from "../perfTelemetry.ts";
+import { startRoomActionsRun } from "./roomActionsRun.ts";
 import type { RoomDerived } from "./roomFold.ts";
-import { applyRows, emptyRows, type RowsState } from "./roomRows.ts";
+import { emptyRows, type RowsState } from "./roomRows.ts";
 
 /// One row from `harness_actions`. Mirrors the Rust `HarnessAction`
 /// (db.rs) and the live `HarnessActionEvent` (harness_action_event.rs);
@@ -120,75 +120,23 @@ export function useRoomActions(
 			return;
 		}
 
-		let cancelled = false;
-		stateRef.current = emptyRows();
-		pendingRef.current = [];
-		setView(stateRef.current);
-		idsRef.current = new Set();
-		liveIdsRef.current = new Set();
-		lastLiveRef.current = 0;
-		setLoading(true);
-
-		const flush = (reveal = false) => {
-			if (cancelled) return;
-			if (pendingRef.current.length === 0 && !reveal) return;
-			// Only flushes that do work are timed (the guards above are no-ops).
-			span("liveContext.flush", () => {
-				const batch = pendingRef.current;
-				pendingRef.current = [];
-				const res = applyRows(stateRef.current, batch, { reveal, derive: deriveRef.current });
-				if (res.state === stateRef.current) return;
-				for (const t of res.trimmed) liveIdsRef.current.delete(t.id);
-				stateRef.current = res.state;
-				setView(res.state);
-			});
-		};
-		flushRef.current = flush;
-
-		const enqueue = (rows: HarnessAction[]) => {
-			if (cancelled) return;
-			pendingRef.current.push(...rows);
-			if (visibleRef.current) flush();
-		};
-
-		// Attach the listener BEFORE the backfill query so a row
-		// inserted in the gap still lands (de-duped by id if the query
-		// also returned it).
-		const unlistenPromise = listen<HarnessAction>(ACTION_EVENT, (event) =>
-			span("liveContext.apply", () => {
-				const a = event.payload;
-				if (a.roomId !== roomId || idsRef.current.has(a.id)) return;
-				idsRef.current.add(a.id);
-				liveIdsRef.current.add(a.id);
-				lastLiveRef.current = Date.now();
-				enqueue([a]);
-			}),
-		);
-
-		void invoke<HarnessAction[]>("db_recent_harness_actions_by_room", {
+		return startRoomActionsRun(
 			roomId,
-			// `-1` so timestamp 0 rows (timestamp-less Claude row types
-			// stamped 0 before any timestamped row) are still included.
-			sinceMs: -1,
-			limit: BACKFILL_LIMIT,
-		})
-			.then((rows) => {
-				const fresh = rows.filter((a) => !idsRef.current.has(a.id));
-				for (const a of fresh) idsRef.current.add(a.id);
-				enqueue(fresh);
-			})
-			.catch((err: unknown) => {
-				const msg = err instanceof Error ? err.message : String(err);
-				console.warn(`[skein] db_recent_harness_actions_by_room failed for ${roomId}:`, msg);
-			})
-			.finally(() => {
-				if (!cancelled) setLoading(false);
-			});
-
-		return () => {
-			cancelled = true;
-			void unlistenPromise.then((un) => un());
-		};
+			{ stateRef, pendingRef, visibleRef, deriveRef, flushRef, idsRef, liveIdsRef, lastLiveRef },
+			{
+				listen: (handler) => listen<HarnessAction>(ACTION_EVENT, handler),
+				fetchBackfill: (id) =>
+					invoke<HarnessAction[]>("db_recent_harness_actions_by_room", {
+						roomId: id,
+						// `-1` so timestamp 0 rows (timestamp-less Claude row types
+						// stamped 0 before any timestamped row) are still included.
+						sinceMs: -1,
+						limit: BACKFILL_LIMIT,
+					}),
+				setView,
+				setLoading,
+			},
+		);
 	}, [roomId]);
 
 	// Reveal: fold whatever piled up while hidden before the first painted
