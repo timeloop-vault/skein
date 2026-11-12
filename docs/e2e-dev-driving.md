@@ -6,8 +6,8 @@ Verified end to end on 2026-10-10.
 
 - Single-instance forwards a second launch to the running Skein and
   exits, so a second app on an identifier already in use never starts.
-- Two Skeins on one `skein.db` erase each other's rooms (`save_all`
-  replaces every row).
+- Two Skeins on one `skein.db` each hold their own room store and
+  overwrite each other's rows without seeing the other's changes.
 - Dev's vite port 1420 is `strictPort` and may belong to another
   worktree.
 

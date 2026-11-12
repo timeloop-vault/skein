@@ -1,6 +1,7 @@
 # skeind P2a: the daemon owns the harness lifecycle (#583)
 
-Status: design, decided 2026-11-12. Not yet implemented.
+Status: design decided 2026-11-12. Slice 1 implemented (#729);
+slices 2 to 6 not yet.
 Epic: #575. Design: docs/skeind-design.md. Recon:
 docs/skeind-recon.md (section 2 rows 6, 14-18, 28-30, 37, 45, 46, and
 section 8).
@@ -25,7 +26,7 @@ no client attached. Surviving the restart is #584.
 | opencode port, sidecar | Frontend | `pick_free_port` from several call sites, `opencodeV2Spawn.ts` |
 | Spawn and kill of the PTY | Frontend | `useTerminalSpawn.ts`: spawn in a mount effect, `pty_kill` on unmount |
 | PTY output | Per-spawn channel | No ring buffer in the daemon; a dead channel drops output |
-| Room and harness records | Frontend, saved wholesale | `useRoomsStore`, `roomsSaveScheduler.ts`, `db_save_rooms` (wipe and re-insert) |
+| Room and harness records | Daemon since slice 1 (#729); before it, the frontend saved wholesale | `RoomStore` (`room_store/`); clients send mutations through `rooms_apply`. `db_save_rooms` and `roomsSaveScheduler.ts` are gone |
 | Boot resume | Frontend | `useRoomsHydrate.ts`: probes, stale sessionIds, `withResumeCmds`, identity gate |
 | Adapters (Claude JSONL, opencode SSE, Hermes) | Engines in daemon, attached from the webview | `terminalSpawnAdapters.ts` |
 | Transition log (`harness_events`), action rows (`harness_actions`) | Webview calls the daemon; transitions follow the phase machine | `useTransitionLog.ts`, `useHarnessActions.ts` |
@@ -314,6 +315,167 @@ flowchart LR
 Figure 3: slice dependencies. Renders section "Slices"; the text is
 authoritative (non-normative).
 
+## Slice 1 as built (#729)
+
+The daemon now holds the room and harness records in memory, in
+`RoomStore` (`crates/skein-daemon/src/room_store/`). That copy is the
+authority. A client diffs what it has against what the daemon is known
+to hold, sends the difference as mutations, and applies the change
+events the daemon broadcasts as `skein://rooms-changed`. The daemon
+writes sqlite one row at a time.
+
+The 37 `setRooms` call sites in the frontend were left alone on
+purpose. Nearly every shipped regression has lived in the frontend, and
+rewriting 37 call sites would be the riskiest way to move the records.
+The seam is the save path instead: it used to send the whole array to
+`db_save_rooms`, and now it diffs (`diffRooms` in `roomMutations.ts`)
+and sends mutations. The React state is unchanged.
+
+Wire types are in `crates/skein-proto/src/room_mutations.rs`.
+
+| Mutation | Effect |
+| --- | --- |
+| `createRoom` | Adds a whole room, harnesses included, at the end. Skipped as `exists` if the id is taken |
+| `updateRoom` | Replaces the room-level fields. The payload's `harnesses` is ignored; the stored ones are kept |
+| `removeRoom` | Removes a room. Skipped as `absent` if it is not there |
+| `reorderRooms` | Listed ids take the listed order; unlisted rooms follow in their old order |
+| `putHarness` | Replaces a harness by id, or appends it if new |
+| `removeHarness` | Removes a harness. Skipped as `absent` if it is not there |
+| `reorderHarnesses` | Same rule as `reorderRooms`, within one room |
+
+| Change | Meaning |
+| --- | --- |
+| `roomPut` | The full room after the batch (create, update or any harness change). Idempotent |
+| `roomRemoved` | The room is gone |
+| `roomsOrder` | The full order of all rooms after the batch |
+
+A room-scoped mutation (`updateRoom`, `putHarness`, `removeHarness`,
+`reorderHarnesses`) for a room the store does not hold is skipped as
+`unknown_room`. The outcome lists skipped mutations by index. A batch
+where everything was skipped emits no event.
+
+```mermaid
+sequenceDiagram
+    participant A as Client A
+    participant D as Daemon
+    participant B as Client B
+    A->>D: 1 rooms_apply (batch)
+    D->>D: 2 apply in order, one lock
+    D-->>B: 3 rooms-changed (origin A)
+    D-->>A: 4 rooms-changed (origin A)
+    A->>A: 5 ignore own echo
+    B->>B: 6 rebase onto local edits
+    D->>D: 7 persist dirty rows
+    D-->>A: 8 outcome (skipped list)
+    A->>A: 9 baseline becomes sent snapshot
+```
+
+Figure 4: a room mutation with two clients. Renders section "Slice 1
+as built" and crates/skein-daemon/src/room_store/; the text is
+authoritative (non-normative).
+
+1. Client A diffs its baseline against its current rooms and sends the
+   mutations in one `rooms_apply` call with its `clientId`.
+2. The store applies them in order under its lock. It refuses the whole
+   call if no rooms load has succeeded yet.
+3. The store emits one `rooms-changed` event carrying `origin` and the
+   changes. Client B receives it.
+4. Client A receives the same event.
+5. Client A sees `origin` equals its own `clientId` and ignores it.
+6. Client B merges the changes into its React state and its baseline
+   (see "The conflict rule").
+7. The store persists the dirty rows. A structural batch is written
+   before the call returns. Anything else is written by the debounce.
+8. The call returns the outcome, listing skipped mutations.
+9. Client A moves its baseline to the snapshot it sent, with any remote
+   changes that arrived during the call applied on top. On failure the
+   baseline stays put and the send is retried after 2 s.
+
+Steps 3 to 7 are not strictly ordered in time. The code emits the event
+before it persists; the figure follows the code.
+
+### Where the #167 safety properties live
+
+- **Quarantine.** `load_all` is unchanged: an unparseable row goes to
+  `sessions_quarantine`, never dropped.
+- **Snapshots.** The `.bak` and `.bak.1` rotation is unchanged.
+- **No write before a successful load.** The store enforces it for
+  every mutation, not only an empty save. `RoomStore::apply` returns an
+  error until `load_rooms` has filled the store. A reload goes through
+  `RoomStore::load_with`: under the store lock it persists anything
+  dirty, then reads sqlite and installs the result, so a reload cannot
+  overwrite a mutation that landed in between. If that persist fails, the
+  reload returns before it reads.
+- **Writes cannot wipe.** `Database::write_room_rows` upserts the
+  touched rows, deletes the removed ids and writes the order into
+  `created_at`, all in one transaction. A row nobody named is not
+  touched, so a client cannot erase another client's room.
+
+### Structural versus debounced
+
+The client no longer has a timer or a scheduler. It sends every change
+at once, and the daemon decides when to write.
+
+Structural batches are written before `rooms_apply` returns:
+`createRoom`, `removeRoom`, `reorderRooms`, `removeHarness`,
+`reorderHarnesses`, a `putHarness` that adds a harness, and an
+`updateRoom` or `putHarness` that changes a key field. The room key is
+id, name, archived, retired, cwd, repoRoot, branch, createdBy and
+closedBy. The harness key is id, kind, name, agent, cwd, remote,
+sessionId and createdBy. This is the #594 list, now in `structural.rs`.
+
+Everything else is coalesced: a 500 ms debounce, with a 2 s maximum wait
+from the first unwritten change. `rooms_flush` writes at once. The
+client calls it on window close, Cmd+Q, updater install and page hide,
+after draining its own send.
+
+### The conflict rule
+
+A remote `roomPut` replaces the local room in the baseline
+(`roomChanges.ts`): a field the remote room lacks is cleared, and an
+equal room keeps its object identity. The React state is then merged
+three-way, in `roomsRebase.ts`: per key over the union of keys, for the
+room-level fields and, per harness id, for the harness fields. A local
+value that differs from the baseline is an edit not yet synced. It wins,
+and the next diff sends it. So a remote change to one field and an
+unsynced local edit to another field of the same room or harness both
+survive.
+
+`spawnGen` is the one Harness field the daemon does not store
+(`LOCAL_ONLY_HARNESS_KEYS` in `roomMutations.ts`). It is never sent on
+its own, and a remote change never overwrites it.
+
+- A room removed locally and not yet synced is not brought back by a
+  remote `roomPut`.
+- A room created locally and not yet synced is kept whole.
+- A remote `roomsOrder` is ignored while a local reorder is pending.
+- On the daemon, the skip rules never resurrect a room: a mutation for
+  a removed room is skipped as `unknown_room`.
+
+### Known limits
+
+- No sequence number and no reattach yet. A client that misses an event
+  has no way to catch up. That is #584.
+- The agent API verbs (`create_room`, `open_harness`, `close_harness`,
+  `close_room`) still go through the frontend until slice 6.
+- `Database::save_all` survives for migration and tests only.
+- The event goes out before a structural write. If that write fails,
+  `rooms_apply` returns an error, the rows stay dirty and the writer
+  re-arms itself (`persist_or_rearm`). A client retry of the same
+  mutations is answered with an error while the write still fails, and
+  with Ok only once the row is on disk.
+- The client has no debounce. Each change is one small `rooms_apply`
+  call. Calls never overlap, and changes made during a call collapse
+  into the next one.
+- A batch the daemon always rejects is retried every 2 s, with no
+  backoff, as the old scheduler did.
+- The client subscribes to `skein://rooms-changed` at mount, not after
+  load. Events from other clients that arrive during the load are
+  buffered and replayed when the loaded rooms are installed
+  (`beginHydrate` / `finishHydrate` in `roomsSync.ts`), so none is
+  merged against an empty list. An event emitted before the listener
+  has registered is not seen; the load that follows reflects it.
+
 ## What #583 assumes of #584 and #585
 
 Not designed here. #583 assumes:
@@ -344,10 +506,10 @@ Not designed here. #583 assumes:
 - **localStorage defaults migration.** `defaultAgents` moves to
   daemon settings. A one-time import must not overwrite a value the
   daemon already has, and must not lose one the user set.
-- **Two writers during the slice 1 transition.** Until `save_all` is
-  retired, the client and the daemon can both write rooms. Mitigation:
-  the client stops calling `db_save_rooms` in the same slice that adds
-  the mutations.
+- **Two writers during the slice 1 transition.** Resolved in slice 1.
+  `db_save_rooms` is removed, so the client cannot write rows. Every
+  write goes through the daemon's `RoomStore`, which writes per row.
+  `Database::save_all` is left for migration and tests only.
 - **Post-exit shell unattended.** The post-exit shell and
   `opencodeShellFollow.ts` are keystroke-driven in xterm. What a
   daemon-run harness does on exit with no terminal is a policy to set

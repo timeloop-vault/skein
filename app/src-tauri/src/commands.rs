@@ -22,7 +22,7 @@
 //! - `hermes_work` — attach/detach for the Hermes work poller (#628).
 //! - `opencode_sidecar` — start/stop of the per-harness `opencode serve`
 //!   sidecar on opencode v2 (#676).
-//! - `rooms` — `db_load_rooms` / `db_save_rooms`.
+//! - `rooms` — `db_load_rooms` / `rooms_apply` / `rooms_flush`.
 //! - `todos` — `db_load_global_todos` / `db_save_global_todos` (#335).
 //! - `spawn_env` — `SpawnEnvState`, the Settings environment commands,
 //!   agent discovery, and the default shell / home / cwd lookups.

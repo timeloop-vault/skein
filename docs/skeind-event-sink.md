@@ -37,6 +37,9 @@ to a window.
   `skein://harness-session-end`, `skein://mail-changed`,
   `skein://agent-request`.
 - `agent_api/hermes_event.rs`: `skein://harness-hermes-hook`.
+- `room_store/mod.rs`: `skein://rooms-changed` (#729), one per applied
+  `rooms_apply` batch, carrying the sender's `origin` so it can skip its
+  own echo.
 
 The `agent_api/` files above are in `crates/skein-daemon` since #582.
 `setup/embed.rs` builds one sink, passes it in the `InProcessTransport`

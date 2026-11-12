@@ -6,9 +6,10 @@
 //! over fields like `repo` or `branch` — when a phase needs that, we can
 //! split the blob into proper columns.
 //!
-//! Save semantics: `save_all` is a wipe + re-insert inside one transaction.
-//! Cheap at prototype scale (a dozen rows of <1 KB each) and frees the
-//! frontend from tracking which rooms changed.
+//! Save semantics: clients write through the daemon's `RoomStore`, which
+//! persists changed rows only (`write_room_rows`, #729). `save_all` is a
+//! wipe + re-insert inside one transaction and survives for migration and
+//! tests only.
 //!
 //! The sqlite table is still called `sessions` for legacy reasons —
 //! pre-chapter-6 the Skein concept was called "session" and renaming
@@ -43,6 +44,7 @@ mod harness_log;
 mod mail;
 mod review_baselines;
 mod review_threads;
+mod room_rows;
 mod rooms;
 mod schema;
 mod snapshots;
@@ -79,21 +81,16 @@ pub struct Database {
     /// the frontend only legitimately saves `[]` after a good load
     /// (issue #167: a failed boot load must never wipe the table).
     loaded_ok: AtomicBool,
-    /// Ticket source for `save_all_seq` (#171). `db_save_rooms` became
-    /// an async command so it could move sqlite's wipe-and-reinsert
-    /// off the main thread — but the frontend fires it un-debounced on
-    /// every `rooms` state change without awaiting the previous call,
-    /// so two saves can now reach the connection lock out of order.
-    /// Each save mints a ticket before its blocking work starts; see
-    /// `save_all_seq`.
+    /// Ticket source for `save_global_todos_seq` (#171). The frontend
+    /// fires todo saves un-awaited, so two could reach the connection
+    /// lock out of order; each save mints a ticket before its blocking
+    /// work starts.
     save_seq: AtomicU64,
-    /// The ticket of the last save that actually committed, held for
-    /// the whole check-then-write so it can't race a concurrent save's
-    /// own check (#171). `Mutex<u64>` rather than an atomic: the guard
-    /// serializes seq-aware saves against each other for their full
-    /// duration, not just the compare.
-    last_saved_seq: Mutex<u64>,
-    /// Same guard as `last_saved_seq`, for the global todo list (#335).
+    /// The ticket of the last global-todos save that actually committed,
+    /// held for the whole check-then-write so it can't race a concurrent
+    /// save's own check (#335). `Mutex<u64>` rather than an atomic: the
+    /// guard serializes seq-aware saves against each other for their
+    /// full duration, not just the compare.
     last_saved_todos_seq: Mutex<u64>,
 }
 
@@ -135,15 +132,14 @@ impl Database {
             path: path.to_path_buf(),
             loaded_ok: AtomicBool::new(false),
             save_seq: AtomicU64::new(0),
-            last_saved_seq: Mutex::new(0),
             last_saved_todos_seq: Mutex::new(0),
         })
     }
 
-    /// Mint the next ticket for a `save_all_seq` call (#171). Callers
-    /// mint this *before* the blocking work starts, which is what lets
-    /// `save_all_seq` detect a save that reaches the connection lock
-    /// after a newer one already committed — the realistic case, since
+    /// Mint the next ticket for a `save_global_todos_seq` call (#171).
+    /// Callers mint this *before* the blocking work starts, which is
+    /// what lets that save detect a call that reaches the connection
+    /// lock after a newer one already committed — the realistic case, since
     /// two overlapping saves racing sqlite is far more likely than
     /// their tickets minting out of order. Minting itself happens at
     /// the top of the async command body, not at dispatch time, so a

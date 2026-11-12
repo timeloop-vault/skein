@@ -561,49 +561,6 @@ fn save_all_empty_after_successful_load_is_allowed() {
     assert!(db.load_all().unwrap().rooms.is_empty());
 }
 
-// ── save_all_seq ordering (#171) ─────────────────────────────
-
-#[test]
-fn save_all_seq_applies_in_order_tickets() {
-    let (_dir, db) = fresh_db();
-    let _ = db.load_all().unwrap();
-    db.save_all_seq(&[room("r1")], db.next_save_seq()).unwrap();
-    db.save_all_seq(&[room("r1"), room("r2")], db.next_save_seq())
-        .unwrap();
-    assert_eq!(db.load_all().unwrap().rooms.len(), 2);
-}
-
-#[test]
-fn save_all_seq_drops_a_save_whose_ticket_already_lost() {
-    let (_dir, db) = fresh_db();
-    let _ = db.load_all().unwrap();
-    // Mint tickets in order, but apply them out of order — the
-    // shape of an async db_save_rooms(N) that reaches the
-    // connection lock after db_save_rooms(N+1) already committed.
-    let older = db.next_save_seq();
-    let newer = db.next_save_seq();
-    db.save_all_seq(&[room("r1"), room("r2")], newer).unwrap();
-    db.save_all_seq(&[room("r1")], older).unwrap();
-    // The stale save must not have reverted the newer room list.
-    assert_eq!(db.load_all().unwrap().rooms.len(), 2);
-}
-
-#[test]
-fn save_all_seq_still_refuses_the_167_empty_save() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    {
-        let db = Database::open(&path).unwrap();
-        db.save_all(&[room("r1")]).unwrap();
-    }
-    // Fresh process: loaded_ok is false, same #167 boot-wipe guard
-    // save_all_seq must not bypass.
-    let db = Database::open(&path).unwrap();
-    let err = db.save_all_seq(&[], db.next_save_seq()).unwrap_err();
-    assert!(err.contains("#167"), "unexpected error: {err}");
-    assert_eq!(db.load_all().unwrap().rooms.len(), 1);
-}
-
 #[test]
 fn first_load_is_flagged_only_once_per_process() {
     let (_dir, db) = fresh_db();

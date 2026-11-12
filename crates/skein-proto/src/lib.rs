@@ -10,6 +10,7 @@
 pub mod harness_kind;
 pub mod harness_log;
 pub mod resume;
+pub mod room_mutations;
 pub mod rooms;
 pub mod spawn_env;
 

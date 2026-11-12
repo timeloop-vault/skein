@@ -11,13 +11,9 @@ import {
 	type SetStateAction,
 	useCallback,
 	useEffect,
-	useRef,
 } from "react";
 import { withResumeCmds } from "./harnessCmd.ts";
-import { spanAsync } from "./perfTelemetry.ts";
 import { isStorable, nextRepoRoot } from "./repoIdentity.ts";
-import { registerRoomsFlusher } from "./roomsFlush.ts";
-import { createRoomsSaveScheduler, type RoomsSaveScheduler } from "./roomsSaveScheduler.ts";
 import {
 	checkProbe,
 	type DbLoadOutcome,
@@ -26,6 +22,7 @@ import {
 	stillExists,
 } from "./roomsStoreProbe.ts";
 import type { Room } from "./types.ts";
+import { useRoomsSync } from "./useRoomsSync.ts";
 
 export interface RoomsHydrateDeps {
 	rooms: Room[];
@@ -65,6 +62,13 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 		hydratedOnceRef,
 		loadedRef,
 	} = d;
+	// #729: diff-based sync with the daemon's room store; parked until loaded.
+	const { beginHydrate, finishHydrate, flushRoomsSave } = useRoomsSync({
+		rooms,
+		loaded,
+		loadFailed,
+		setRooms,
+	});
 	// #76 + #418: background repo metadata for rooms; never awaited by a
 	// caller, so a slow or failing repo cannot delay or break hydrate/
 	// reopen. Per room, in parallel: (1) a room without `repoRoot` gets
@@ -108,6 +112,9 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 		[identityTriedRef, mismatchedRef, setRooms],
 	);
 	const hydrateRooms = useCallback(() => {
+		// #729: buffer foreign room events until the rooms are installed;
+		// finishHydrate sets the baseline (the rows) and replays them.
+		beginHydrate();
 		invoke<DbLoadOutcome>("db_load_rooms")
 			.then(async ({ rooms: rows, skipped, backupRooms }) => {
 				hydratedOnceRef.current = true;
@@ -200,12 +207,24 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 					);
 					mismatchedRef.current = initialMismatch;
 					setMismatchedRooms(initialMismatch);
-					setRooms(withResume);
-					syncRepoMeta(withResume);
+					// Baseline = rows; the transforms diff out as mutations.
+					const installed = finishHydrate(rows, withResume);
+					setRooms(installed);
+					syncRepoMeta(installed);
 					// Pick the first *active* room; archived ones aren't
 					// supposed to be the boot-time selection.
-					const first = withResume.find((r) => !r.archived);
+					const first = installed.find((r) => !r.archived);
 					if (first) setActiveRoomId(first.id);
+				} else {
+					// Nothing stored, but a foreign client may have created rooms
+					// while we loaded.
+					const installed = finishHydrate(rows, rows);
+					if (installed.length > 0) {
+						setRooms(installed);
+						syncRepoMeta(installed);
+						const first = installed.find((r) => !r.archived);
+						if (first) setActiveRoomId(first.id);
+					}
 				}
 				loadedRef.current = true;
 				setLoaded(true);
@@ -222,6 +241,8 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 			});
 	}, [
 		syncRepoMeta,
+		beginHydrate,
+		finishHydrate,
 		hydratedOnceRef,
 		loadedRef,
 		mismatchedRef,
@@ -240,47 +261,11 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 		hydrateRooms();
 	}, [hydrateRooms]);
 
-	// Phase 3: mirror `rooms` to sqlite, coalesced (#594) — structural
-	// changes save at once, the rest trail a debounce; see
-	// roomsSaveScheduler.ts. Parked while !loaded / loadFailed (#167), and
-	// a flush while parked is a no-op because nothing was ever scheduled
-	// from unloaded state.
-	const guardRef = useRef(false);
-	guardRef.current = loaded && loadFailed === null;
-	const schedulerRef = useRef<RoomsSaveScheduler | null>(null);
-	if (schedulerRef.current === null) {
-		schedulerRef.current = createRoomsSaveScheduler({
-			save: (r) => spanAsync("rooms.save", () => invoke("db_save_rooms", { rooms: r })),
-			// Belt and braces for the debounced fire (#167): never save
-			// from an unloaded / failed state.
-			canSave: () => guardRef.current,
-		});
-	}
-	useEffect(() => {
-		if (!loaded || loadFailed !== null) return;
-		schedulerRef.current?.update(rooms);
-	}, [rooms, loaded, loadFailed]);
-	const flushRoomsSave = useCallback(async () => {
-		await schedulerRef.current?.flush();
-	}, []);
-
-	// Exit paths (close / quit / updater) reach the flush through roomsFlush.
-	// Best-effort too: the page is going away (reload, webview teardown).
-	useEffect(() => {
-		registerRoomsFlusher(flushRoomsSave);
-		const onHide = () => {
-			if (document.visibilityState === "hidden") void flushRoomsSave();
-		};
-		const onPageHide = () => void flushRoomsSave();
-		document.addEventListener("visibilitychange", onHide);
-		window.addEventListener("pagehide", onPageHide);
-		return () => {
-			registerRoomsFlusher(null);
-			document.removeEventListener("visibilitychange", onHide);
-			window.removeEventListener("pagehide", onPageHide);
-		};
-	}, [flushRoomsSave]);
-
+	// Phase 3: sync `rooms` to the daemon as mutations (#729); the daemon
+	// coalesces the writes (#594) — structural changes at once, the rest
+	// after a debounce. See roomsSync.ts. Parked while !loaded / loadFailed
+	// (#167), and a flush while parked is a no-op because nothing was ever
+	// sent from unloaded state.
 	// #418: a room created this session (New room, worktree room,
 	// agent create_room) reaches `rooms` through setRooms with no
 	// identity; one effect keyed on that fact covers every creation path

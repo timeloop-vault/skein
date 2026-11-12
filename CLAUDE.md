@@ -100,7 +100,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   rewrite it, if an issue ever needs writes
     ├── crates/skein-proto/          # Wire types skeind and its clients share (#580, epic #575).
     │   └── src/lib.rs               #   Pure data, serde only: the Room/Harness family (rooms),
-    │                                #   HarnessEvent/HarnessAction (harness_log), HarnessKind,
+    │                                #   RoomMutation/RoomChange/RoomsChanged (room_mutations,
+    │                                #   #729), HarnessEvent/HarnessAction (harness_log), HarnessKind,
     │                                #   PendingDto/TranscriptStatDto (resume), DropReason
     │                                #   (spawn_env), and PROTO_VERSION. No handshake (#584), no
     │                                #   framing (transport phase, #585/#582)
@@ -137,7 +138,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   constructs every piece and returns the two server
     │                                #   futures) and transport.rs (`InProcessTransport`:
     │                                #   events + client requests + capture). No `tauri`
-    │                                #   anywhere in it.
+    │                                #   anywhere in it. #729 added room_store/ (the
+    │                                #   in-memory authoritative RoomStore: apply, structural,
+    │                                #   persist) and db/room_rows (per-row writes)
     │                                #   See docs/skeind-crates.md
     ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
     │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
@@ -509,17 +512,26 @@ not a roadmap. Two standing decisions that no issue body will tell you:
 
 - **Rooms** persist in sqlite at `<APP_DATA>/skein.db`, one row per
   room, the whole Room as a camelCase JSON blob. `useRoomsStore.ts`
-  hydrates once on mount (`db_load_rooms`); every `rooms` state change
-  after a successful load mirrors back wholesale (`db_save_rooms`,
-  wipe + re-insert in one transaction). **Coalesced (#594,
-  `roomsSaveScheduler.ts`):** a change to which rooms/harnesses exist or their
+  hydrates once on mount (`db_load_rooms`), which also fills the daemon's
+  in-memory `RoomStore` (#729), the authoritative copy (the load persists
+  anything dirty first, under the store lock, so it cannot overwrite a
+  mutation). After a successful
+  load the frontend diffs its last-synced rooms against the current
+  `rooms` state (`roomMutations.ts` `diffRooms`) and sends the result as
+  mutations through `rooms_apply`; the store applies them, writes the
+  changed rows only (`Database::write_room_rows`, never a wipe +
+  re-insert) and broadcasts `skein://rooms-changed`, which other clients
+  apply (`roomChanges.ts`, `roomsRebase.ts`, `roomsSync.ts`,
+  `useRoomsSync.ts`). **Coalesced (#594, now by the daemon, #729):** a
+  change to which rooms/harnesses exist or their
   scope (the structural key: ids, names, order, archived/retired, cwd, repo/branch, harness agent/session/remote, attribution)
-  saves at once, because Rust reads the persisted rows; anything else is
+  is written at once, because Rust reads the persisted rows; anything else is
   debounced 500 ms / max 2 s and flushed on window close, Cmd+Q, updater
-  install and page hide (`roomsFlush.ts`). **#167 hardening:** unparseable rows
+  install and page hide (`roomsFlush.ts` drains the client's sync, then
+  calls `rooms_flush`). **#167 hardening:** unparseable rows
   are quarantined to `sessions_quarantine` (never silently dropped);
   a wholesale load failure parks the autosave and shows a retry card;
-  `save_all` refuses an empty commit before a successful load; WAL +
+  the store refuses every mutation before a successful load; WAL +
   `skein.db.bak` / `.bak.1` last-known-good snapshots rotate on the
   first clean non-empty load per process. **Field policy: every field
   added to Room/Harness after v0.2.5 MUST be `#[serde(default)]` or
@@ -535,8 +547,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   `find_rooms_for_path` with `retired: true` / `safe_to_remove`. It keeps
   its `sessions` row, so the #237 `sweep_orphans` never erases its
   history; only Delete forever does. The `Room` struct (skein-proto
-  `rooms.rs`, serialized by skein-daemon's `db`) is what `save_all`
-  writes and it has no catch-all, so any new frontend Room
+  `rooms.rs`, serialized by skein-daemon's `db`) is what the store
+  writes (`save_all` survives for migration and tests only) and it has
+  no catch-all, so any new frontend Room
   field must be added there too or it is silently dropped on save.
   **Repo identity (#418):** `Room.repoIdentity` = `{rootCommits, originUrl?}`,
   the root commits from a first-parent walk of HEAD (`originUrl` is display
@@ -964,8 +977,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   frontend keeps you in the room you are in if it is one of the equal
   owners, otherwise focuses/reopens via `unarchiveRoom`, or opens New
   room seeded with the enclosing checkout. Single instance matters
-  beyond this: two Skeins on one `skein.db` erase each other's rooms
-  (`save_all` replaces every row) and revoke each other's agent
+  beyond this: two Skeins on one `skein.db` each hold their own
+  `RoomStore` and overwrite each other's rows without seeing the other's
+  changes, and revoke each other's agent
   tokens. The scheme and the command are per build profile (`skein`,
   `skein-local`, `skein-dev`). The command installer is macOS/Linux
   only so far: a bundled macOS app is reached through a link via

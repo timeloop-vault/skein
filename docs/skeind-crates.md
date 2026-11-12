@@ -215,8 +215,8 @@ flowchart LR
 
 1. The webview calls a Tauri command.
 2. The wrapper calls the daemon's state directly; there is no wire.
-3. The daemon pushes broadcast events (`skein://review-changed` and the
-   rest) through `EventSink`.
+3. The daemon pushes broadcast events (`skein://review-changed`,
+   `skein://rooms-changed` and the rest) through `EventSink`.
 4. When the agent API needs the webview to act or answer
    (`request_frontend`, for `create_room` and similar), it goes through
    `ClientRequests`, which the Tauri impl emits as `skein://agent-request`.
