@@ -739,6 +739,30 @@ fn every_listed_host_terminal_var_is_stripped() {
 }
 
 #[test]
+fn claude_code_session_markers_are_stripped() {
+    // #739: CHILD_SESSION makes a nested `claude --resume` skip the session.
+    for key in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SSE_PORT",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+    ] {
+        assert!(is_host_terminal_var(key), "{key} should be stripped");
+    }
+    // Exact names only: user config and credentials must pass.
+    for key in [
+        "CLAUDE_CODE_GIT_BASH_PATH",
+        "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE",
+        "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "ANTHROPIC_API_KEY",
+    ] {
+        assert!(!is_host_terminal_var(key), "{key} must be kept");
+    }
+}
+
+#[test]
 fn the_keep_list_always_survives() {
     // The single most important assertion in this module. A careless
     // `SSH_*` prefix rule would eat the agent's ssh-agent socket and
