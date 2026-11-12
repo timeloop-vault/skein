@@ -405,9 +405,26 @@ pub(crate) const HOST_TERMINAL_ENV_VARS: &[&str] = &[
     "XDG_ACTIVATION_TOKEN",
     // Claude Code's own session markers. A nested `claude` must not think
     // it is the outer one. `CLAUDE_CODE_GIT_BASH_PATH` is deliberately
-    // absent — see `KEEP`.
+    // absent — see `KEEP`. Exact names only, never a `CLAUDE_CODE_` prefix:
+    // user config and OAuth variables must pass. #739: Claude Code (v2.1.172+)
+    // sets `CLAUDE_CODE_CHILD_SESSION=1` in Bash/PowerShell/Monitor tool
+    // subprocesses, hooks and status-line commands, and a nested interactive
+    // `claude` started with it is excluded from `--resume`/`--continue`,
+    // which breaks Skein's `claude --resume <sid>`. `CLAUDE_CODE_SESSION_ID`
+    // is the outer session's id, set in the same subprocesses.
+    // `CLAUDE_CODE_BRIDGE_SESSION_ID` is the outer session's Remote Control
+    // id (Bash-tool and hook subprocesses). `CLAUDE_CODE_MESSAGING_SOCKET`
+    // and `_TOKEN` are the outer session's inbox socket path and per-session
+    // token, exported to hooks and Bash commands (settings `env` cannot set
+    // them); a nested harness must neither address that inbox nor carry the
+    // token.
     "CLAUDECODE",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_CHILD_SESSION",
     "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_CODE_SSE_PORT",
     // Windows / MSYS shell identity.
     "MSYSTEM",
@@ -446,7 +463,7 @@ pub(crate) const HOST_TERMINAL_ENV_KEEP: &[&str] = &[
     "SSH_AUTH_SOCK",
     // Claude Code on native Windows requires Git Bash and finds it here.
     // No current rule matches it; this is a guard against someone later
-    // "tidying" the three `CLAUDE_CODE_*` names above into a prefix.
+    // "tidying" the `CLAUDE_CODE_*` names above into a prefix.
     "CLAUDE_CODE_GIT_BASH_PATH",
     // Colour preference is user intent, not host identity.
     "CLICOLOR",
