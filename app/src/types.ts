@@ -127,6 +127,10 @@ export interface Harness {
 	// Absent = no live claim. Resume honours it only while it still
 	// equals `sessionId` (see the daemon's harness_argv resume).
 	shellClaim?: ShellClaim;
+	// Whether the pane runs the tool or its post-exit shell (#752). Absent =
+	// the tool. `cmd` stays the TOOL's argv either way; the daemon derives the
+	// spawn argv from this. Read through `spawnArgv` / `launchOf`.
+	launch?: LaunchMode;
 	// #675 (epic #674): the opencode version seen at the last spawn. Absent =
 	// unknown / never probed, which means v1. Resume needs it because v1 and
 	// v2 session ids look alike. Not structural for the save scheduler.
@@ -138,6 +142,8 @@ export interface OpencodeVersion {
 	version: string;
 }
 
+/** How a harness's pane launches (#752). Mirrors skein-proto's `LaunchMode`. */
+export type LaunchMode = { mode: "tool" } | { mode: "shell"; argv: string[] };
 export type ShellClaim = { sessionId: string; port?: number };
 
 export interface Room {

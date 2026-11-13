@@ -26,6 +26,7 @@ const args = {
 	restart: true,
 	mountKey: "k1",
 	expectCmd: ["claude", "--x"],
+	expectLaunch: { mode: "tool" },
 	onEvent: {},
 } as unknown as EnsureArgs;
 
@@ -66,6 +67,7 @@ describe("ensureRunning", () => {
 			envProfile: null,
 			restart: true,
 			expectCmd: ["claude", "--x"],
+			expectLaunch: { mode: "tool" },
 			onEvent: args.onEvent,
 		});
 	});
@@ -82,6 +84,26 @@ describe("ensureRunning", () => {
 		expect(d.drain).toHaveBeenCalledTimes(3);
 		expect(vi.mocked(d.sleep).mock.calls).toEqual([[ENSURE_BACKOFF_MS], [ENSURE_BACKOFF_MS * 2]]);
 	});
+
+	it.each([
+		["tool", { mode: "tool" }],
+		["shell", { mode: "shell", argv: ["/bin/zsh", "-l"] }],
+	])(
+		"sends expectLaunch for a %s launch and retries a launch-mismatch stale_record",
+		async (_n, launch) => {
+			const a = { ...args, expectLaunch: launch } as unknown as EnsureArgs;
+			const call = vi
+				.fn()
+				.mockRejectedValueOnce("stale_record: launch differs")
+				.mockResolvedValue(ok);
+			const d = deps({ call });
+			await expect(ensureRunning(a, d)).resolves.toBe(ok);
+			expect(call).toHaveBeenCalledTimes(2);
+			for (const c of call.mock.calls) {
+				expect(c[0]).toMatchObject({ expectCmd: ["claude", "--x"], expectLaunch: launch });
+			}
+		},
+	);
 
 	it("gives up after 4 attempts and throws the last error", async () => {
 		const call = vi.fn().mockRejectedValue("stale_record: still stale");

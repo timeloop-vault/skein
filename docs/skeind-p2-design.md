@@ -664,7 +664,8 @@ Three more pieces: `boot_resume.rs` (boot resume), `pty/sink_slot.rs`
 
 - **Exit policy.** A harness that exits stays exited. The daemon starts
   nothing in its place. The post-exit shell starts only when a client
-  asks: Enter changes the record's `cmd` to the shell, and the view then
+  asks: Enter sets the record's `launch` to the shell (#752; it rewrote
+  `cmd` before, see "Spawn-time argv (#752)"), and the view then
   asks again with `restart`. Rejected: the daemon starts the shell, and
   the daemon restarts the harness.
 - **Re-attach with no ring buffer.** The terminal starts blank, and the
@@ -690,8 +691,9 @@ Three more pieces: `boot_resume.rs` (boot resume), `pty/sink_slot.rs`
 are removed.
 
 `ensure_running` takes `{roomId, harnessId, rows, cols, envProfile,
-restart, expectCmd}`. Argv, folder, kind, agent and session id come from
-the stored record, never from the caller. It refuses with one of these
+restart, expectCmd, expectLaunch}`. Argv, folder, kind, agent and session
+id come from the stored record, never from the caller; since #752 the argv
+is derived at spawn (see "Spawn-time argv (#752)"). It refuses with one of these
 codes:
 
 | Code | When |
@@ -702,7 +704,7 @@ codes:
 | `no_cmd` | The record has no argv |
 | `folder_missing` | The harness's folder, else the room's, is not a directory |
 | `repo_mismatch` | The #418 identity check (`check_identity`) says the folder holds another repository. An unknown identity passes |
-| `stale_record` | `expectCmd` is set and differs from the record's `cmd`. Checked before anything is touched |
+| `stale_record` | `expectCmd` is set and differs from the record's `cmd`, or `expectLaunch` differs from its `launch`. Checked before anything is touched |
 | `spawn_failed` | The spawn itself failed |
 
 An existing process is reused (`started: false`) unless `restart` is
@@ -737,7 +739,8 @@ crates/skein-daemon/src/harness_runner/; the text is authoritative
 
 1. At the first successful rooms load of the daemon process, boot resume
    probes the stored sessions, clears stale ids and rewrites every `cmd`
-   to resume form. It spawns nothing.
+   to resume form. It spawns nothing. (Since #752 the rewrite is no longer
+   what makes a spawn resume; the spawn derives its argv itself.)
 2. A view asks for the harness with `harness_ensure_running`. Before it
    does, the client drains its pending room mutations so the record is
    at the daemon.
@@ -771,7 +774,9 @@ first successful load with at least one room in this daemon process it:
   stale ones. A probe error keeps the id. An opencode v2 id is trusted
   and not probed;
 - rewrites each `cmd` to resume form with a fresh opencode port, using
-  the slice 2 builders;
+  the slice 2 builders (#752: first it runs `migrate_launch`, and the
+  rewrite keeps a shell `launch`; the spawn does not depend on the
+  rewritten `cmd`);
 - saves the changed harnesses through `RoomStore::apply` under origin
   `daemon-boot`, then flushes. A failed flush is logged, and the
   prepared rooms are still what the client receives.
@@ -854,7 +859,8 @@ archived meanwhile, which covers what `reconcile` could not see yet.
   `harness_ensure_running` with `expectCmd`, and retries a bounded number
   of times (4 attempts) on `stale_record` and `unknown_harness`.
 - `harnessMounts.ts` sets `restart` only when the mount key changed in
-  this webview: Restart harness, Enter for shell and repoint. The key is
+  this webview: Restart harness, Enter for shell and repoint (since #752 the
+  mount key is derived from the spawn argv, so a launch change moves it). The key is
   read with `restartFor` and recorded with `commitMount` only when the
   ensure call is actually dispatched (`harnessEnsure.ts`), so a React
   StrictMode double mount cannot swallow a restart.
@@ -909,6 +915,85 @@ Not covered: macOS and Linux, Hermes, opencode v2, remote harnesses.
 
 Observed, not a result of this slice: the Activity card read "0 events"
 after a restart while `harness_actions` held rows (#740).
+
+## Spawn-time argv (#752)
+
+Since #752 the argv is derived when the harness spawns, not read from the
+stored `cmd`. `spawn_argv` (`harness_argv/spawn.rs`, pure) takes the
+record's `launch`, `kind`, `session_id` and `agent`, plus a session-exists
+probe that `ensure_running` runs at spawn. The stored `cmd` text no longer
+decides resume versus fresh or shell versus tool, so a stale `cmd` cannot
+resume a conversation that is gone.
+
+```mermaid
+flowchart TD
+    A["ensure_running"] --> B["gates: lookup, expectCmd and expectLaunch, existing process"]
+    B --> C["SpawnPlan::from_record, probe injected"]
+    C --> D{"launch is shell?"}
+    D -->|yes| E["argv = the shell argv"]
+    D -->|no| F{"kind"}
+    F -->|Claude| G{"transcript exists?"}
+    G -->|yes| H["claude --resume sid"]
+    G -->|no or no id| I["claude --session-id sid, minted if none"]
+    F -->|opencode, Hermes| J{"session exists?"}
+    J -->|yes| K["resume this session"]
+    J -->|no| L["fresh, never --continue"]
+    F -->|"shell, remote, other"| M["remote argv or the stored cmd"]
+    E --> N["spawn PTY"]
+    H --> N
+    I --> N
+    K --> N
+    L --> N
+    M --> N
+    N --> O["write back session id if minted, dropped or changed"]
+```
+
+Figure 7: how `ensure_running` turns a record into an argv. Renders this
+section and crates/skein-daemon/src/harness_argv/spawn.rs; the text is
+authoritative (non-normative).
+
+1. The gates run first. `expectCmd` and the new `expectLaunch` are
+   compared with the record and a mismatch is `stale_record`.
+2. `SpawnPlan::from_record` calls `spawn_argv` with the probe. The probe
+   runs at most once and only for a non-blank session id of a Claude,
+   opencode or Hermes harness (opencode v2 excepted: its stored id is
+   trusted, #679).
+3. The argv is spawned. Claude with no id mints one. opencode and Hermes
+   with no live session start fresh.
+4. The minted or dropped session id is written back to the record.
+
+Who writes `launch` (`{"mode":"tool"}` or `{"mode":"shell","argv":[..]}`;
+absent means the kind's own tool):
+
+| Event | Effect on `launch` |
+| --- | --- |
+| Enter on an exited pane (`withShellLaunch`, `harnessCreation.ts`) | Sets shell; `cmd` is left alone |
+| Restart harness (`back_to_tool`, `plan.rs`) | Clears it: back to the tool |
+| Boot resume, unarchive | Keep a shell launch (`resume_shell`) |
+| A live shell claim (#517, `resume_shell`) | Clears it, the claimed session resumes |
+| `migrate_launch` (`launch.rs`, first in boot resume) | Infers shell once for old records whose `cmd[0]` is not the kind's program |
+
+`cmd` is still stored and still written by boot resume and by the client
+on create, restart and unarchive. It now carries only the opencode
+`--port` (`stored_opencode_port` in `gates.rs`), is the argv for kinds
+that do not resume, and feeds the `expectCmd` staleness check.
+
+Two facts from the live check on 2026-11-13, both unchanged behaviour:
+
+- Boot resume still drops a Claude session id that has no transcript and
+  mints a new one, so a never-prompted Claude harness gets a new id on
+  each app start (#753's area). The spawn itself reuses a stored id whose
+  transcript is missing.
+- Boot resume still writes `--continue` into an opencode harness's STORED
+  `cmd` when no session id is known, but the spawned argv never carries it.
+
+User decisions, 2026-11-13: Enter-for-shell is a launch mode, not a
+rewritten `cmd`; boot and unarchive keep a post-exit shell (#745 part 1);
+Restart harness returns a post-exit shell to its tool.
+
+Seams for the follow-ups: #754 replaces `stored_opencode_port` with a
+daemon-owned port; #753 and #755 remove the stored `cmd` and the
+`expectCmd` check.
 
 ## Slice 4 as built (#732)
 
@@ -1181,7 +1266,7 @@ flowchart LR
     A -->|"9 phase and work reads"| S
 ```
 
-Figure 7: the daemon decides the phase, publishes it, and the webview
+Figure 8: the daemon decides the phase, publishes it, and the webview
 mirrors it. Renders section "Slice 4 as built" and
 crates/skein-daemon/src/harness_phase/; the text is authoritative
 (non-normative).
@@ -1360,7 +1445,7 @@ Claude harness was spawned with `--session-id` for a transcript that
 already existed and exited with "Session ID ... is already in use", with
 no earlier claude process alive; after `/exit` and Enter for shell, the
 harness came back as a shell on relaunch and Restart harness also
-started the shell; New Room on a linked worktree's path resolved to the
+started the shell (both fixed by #752: see "Spawn-time argv"); New Room on a linked worktree's path resolved to the
 main checkout with a trailing slash and tailed the wrong transcript
 directory.
 

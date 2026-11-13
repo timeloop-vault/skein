@@ -235,6 +235,22 @@ describe("repointRoom", () => {
 		expect(next.harnesses[0]?.spawnGen).toBe(3);
 	});
 
+	it("clears a shell launch mode: the fresh cmd brings the tool back (#752)", async () => {
+		const r = room({
+			cwd: "/old",
+			harnesses: [
+				harness({
+					id: "h1",
+					cwd: "/old",
+					cmd: ["claude"],
+					launch: { mode: "shell", argv: ["bash"] },
+				}),
+			],
+		});
+		const { room: next } = await repointRoom(r, "/new", fake().freshCmd);
+		expect(next.harnesses[0]).not.toHaveProperty("launch");
+	});
+
 	it("moves a non-resumable harness (shell) without asking the daemon", async () => {
 		const r = room({
 			cwd: "/old",

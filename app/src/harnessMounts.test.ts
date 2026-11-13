@@ -1,5 +1,27 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { commitMount, resetMounts, restartFor } from "./harnessMounts.ts";
+import { commitMount, mountKeyFor, resetMounts, restartFor } from "./harnessMounts.ts";
+
+describe("mountKeyFor", () => {
+	const tool = ["claude", "--x"];
+	const shell = ["/bin/zsh", "-l"];
+
+	it("tool -> shell -> tool: the ends match only when spawnGen matches", () => {
+		const first = mountKeyFor("h1", 0, tool);
+		const mid = mountKeyFor("h1", 1, shell);
+		expect(new Set([first, mid, mountKeyFor("h1", 2, tool)]).size).toBe(3);
+		expect(mountKeyFor("h1", 0, tool)).toBe(first);
+		expect(mountKeyFor("h1", 2, tool)).not.toBe(first);
+	});
+
+	it("a launch change alone (same spawnGen) changes the key", () => {
+		expect(mountKeyFor("h1", 1, shell)).not.toBe(mountKeyFor("h1", 1, tool));
+	});
+
+	it("treats an absent spawnGen as 0 and differs per harness", () => {
+		expect(mountKeyFor("h1", undefined, tool)).toBe(mountKeyFor("h1", 0, tool));
+		expect(mountKeyFor("h2", 0, tool)).not.toBe(mountKeyFor("h1", 0, tool));
+	});
+});
 
 describe("restartFor / commitMount", () => {
 	beforeEach(resetMounts);

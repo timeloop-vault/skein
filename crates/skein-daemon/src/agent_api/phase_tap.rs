@@ -11,6 +11,7 @@ use skein_proto::rooms::Harness;
 
 use super::hermes_event::HarnessHermesHook;
 use super::state::AgentApiState;
+use crate::harness_argv::shell_argv;
 use crate::harness_kind::HarnessKind;
 use crate::harness_phase::PhaseService;
 use crate::harness_work_hermes::HermesWorkAttacher;
@@ -27,32 +28,16 @@ pub struct PhaseTap {
     pub hermes_work: Option<Arc<HermesWorkAttacher>>,
 }
 
-/// Is the Claude harness in post-exit-shell mode (#318)? The webview keeps
-/// this in memory (`shellClaim.noteSpawn`: a Claude pane whose argv[0] is not
-/// `claude` is in shell mode). The daemon derives it from the record: "Enter
-/// for shell" rewrites the stored `cmd` to the shell, and a resume rewrites it
-/// back to `claude ...` only when it consumes the claim.
+/// Is the Claude harness in post-exit-shell mode (#318)? The record says so
+/// (#752): its launch mode is `Shell`. Boot preparation migrates a legacy
+/// record (no `launch`, `cmd[0]` not `claude`) before anything spawns, so the
+/// argv is no longer read here. A record with no argv at all is still treated
+/// as shell mode, as the webview's `noteSpawn` did.
 fn in_shell_mode(h: &Harness) -> bool {
     if HarnessKind::from_name(&h.kind) != Some(HarnessKind::Claude) {
         return false;
     }
-    // No argv0 is "not running the kind's program" too (`noteSpawn`).
-    let Some(argv0) = h.cmd.as_ref().and_then(|c| c.first()) else {
-        return true;
-    };
-    // `runsKindProgram`: the stem, without a Windows executable extension.
-    let base = argv0.rsplit(['/', '\\']).next().unwrap_or("");
-    let stem = match base.rsplit_once('.') {
-        Some((stem, ext))
-            if ["exe", "cmd", "bat", "com"]
-                .iter()
-                .any(|e| ext.eq_ignore_ascii_case(e)) =>
-        {
-            stem
-        }
-        _ => base,
-    };
-    !stem.eq_ignore_ascii_case("claude")
+    shell_argv(h).is_some() || h.cmd.as_ref().and_then(|c| c.first()).is_none()
 }
 
 /// `shellClaim.acceptsPermission`: outside shell mode a ping is always

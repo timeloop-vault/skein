@@ -1,8 +1,12 @@
 //! The daemon starts and stops harnesses itself (#731, skeind P2a slice 3).
 //!
 //! `ensure_running` spawns a harness from its stored record, with no client
-//! involved, and attaches the L2c adapters. A view going away
-//! (`detach_view`) never kills it; only `stop_harness`, a record change
+//! involved, and attaches the L2c adapters. The argv is DERIVED from the
+//! record at spawn time (`harness_argv::spawn_argv`, #752: launch mode, kind,
+//! session id and a session-existence probe), never spawned as the stored
+//! `cmd` text (in shell launch mode the stored shell argv is what is spawned);
+//! the session id the derivation ends with is written back. A view going
+//! away (`detach_view`) never kills it; only `stop_harness`, a record change
 //! (`reconcile`) or `restart` does. When the process exits on its own the
 //! runner does nothing: the entry stays and reads as exited, and nothing is
 //! started in its place.
@@ -29,14 +33,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use skein_proto::rooms::Room;
+use skein_proto::rooms::{Harness, LaunchMode, Room};
 
 use self::adapters::{Adapters, AttachSpec};
 pub use self::gates::{EnsureError, Refusal};
 use self::gates::{SpawnPlan, lookup, wanted};
 use self::phase_tap::RunnerObserver;
 use crate::agent_endpoint::AgentApiEndpoint;
-use crate::boot_resume::opencode_port_from_cmd;
+use crate::boot_resume::{opencode_port_from_cmd, probe_session};
 use crate::db::Database;
 use crate::event_sink::{self, SharedEventSink};
 use crate::harness_actions_hermes::HermesActionsManager;
@@ -81,6 +85,9 @@ pub struct RunnerDeps {
     pub events: SharedEventSink,
     /// The phase machine (#732); the runner feeds it.
     pub phase: Arc<PhaseService>,
+    /// The session-existence probe; `None` = the real one over the tools'
+    /// own stores ([`probe_session`]). Tests inject.
+    pub session_probe: Option<SessionProbe>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,7 +103,15 @@ pub struct EnsureRequest {
     /// The argv the caller believes the record holds. When set and different,
     /// the request is refused as `stale_record` before anything is touched.
     pub expect_cmd: Option<Vec<String>>,
+    /// The launch mode the caller believes the record holds (absent in the
+    /// record reads as `Tool`). When set and different, the request is
+    /// refused as `stale_record`, like `expect_cmd`.
+    pub expect_launch: Option<LaunchMode>,
 }
+
+/// "Does this harness's stored session still exist?" The runner asks it at
+/// every spawn to choose resume over fresh (#752). An error keeps the id.
+pub type SessionProbe = Arc<dyn Fn(&Harness) -> Result<bool, String> + Send + Sync>;
 
 pub struct EnsureOutcome {
     /// False when an existing process was reused.
@@ -138,11 +153,20 @@ pub struct HarnessRunner {
     sidecar_exit: OnExit,
     adapters: Adapters,
     phase: Arc<PhaseService>,
+    session_probe: Mutex<SessionProbe>,
     entries: Mutex<HashMap<String, Running>>,
     spawns: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Test-only pause points: name -> a closure run when the code reaches it.
     #[cfg(test)]
     pause_points: Mutex<HashMap<&'static str, PauseHook>>,
+    /// Test-only: every argv handed to the PTY layer, oldest first.
+    #[cfg(test)]
+    spawned_argv: Mutex<Vec<Vec<String>>>,
+    /// Test-only: when set, this argv is spawned in place of the derived one
+    /// (which is still recorded), so a test can derive `claude ...` without
+    /// the CLI being installed.
+    #[cfg(test)]
+    stand_in: Mutex<Option<Vec<String>>>,
 }
 
 /// What happens when an opencode sidecar exits on its own: tell the clients,
@@ -189,8 +213,14 @@ impl HarnessRunner {
             harness_config,
             events,
             phase,
+            session_probe,
         } = deps;
+        let session_probe = session_probe.unwrap_or_else(|| {
+            let env = Arc::clone(&spawn_env);
+            Arc::new(move |h: &Harness| probe_session(Some(&env), h))
+        });
         Self {
+            session_probe: Mutex::new(session_probe),
             store,
             db,
             sidecar_exit: sidecar_exit_hook(pty.clone(), events),
@@ -213,6 +243,10 @@ impl HarnessRunner {
             spawns: Mutex::new(HashMap::new()),
             #[cfg(test)]
             pause_points: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            spawned_argv: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            stand_in: Mutex::new(None),
         }
     }
 
@@ -233,8 +267,11 @@ impl HarnessRunner {
     /// With a process already known and `restart` false nothing is spawned:
     /// `sink` is attached to that process (an exited one delivers its `Exit`
     /// through the attach) and the stored spawn result comes back with
-    /// `started: false`. Argv, folder, kind, agent and session id come from
-    /// the record, never from the caller.
+    /// `started: false`. Folder, kind, agent and session id come from the
+    /// record, never from the caller; the argv is derived from it at spawn
+    /// time (resume versus fresh via the session probe, the shell argv in
+    /// shell launch mode). A session id minted or dropped by the derivation
+    /// is written back to the record after the spawn.
     ///
     /// # Errors
     /// A [`Refusal`] (see [`Refusal::code`]), or the spawn failed.
@@ -252,6 +289,11 @@ impl HarnessRunner {
 
         if let Some(expect) = &req.expect_cmd
             && harness.cmd.as_ref() != Some(expect)
+        {
+            return Err(EnsureError::Refused(Refusal::StaleRecord));
+        }
+        if let Some(expect) = &req.expect_launch
+            && harness.launch.clone().unwrap_or(LaunchMode::Tool) != *expect
         {
             return Err(EnsureError::Refused(Refusal::StaleRecord));
         }
@@ -288,7 +330,14 @@ impl HarnessRunner {
             self.stop_process(&req.harness_id, false);
         }
 
-        let plan = match SpawnPlan::from_record(room, harness, kind, req.env_profile.as_deref()) {
+        let probe = Arc::clone(&self.session_probe.lock());
+        let plan = match SpawnPlan::from_record(
+            room,
+            harness,
+            kind,
+            req.env_profile.as_deref(),
+            &*probe,
+        ) {
             Ok(plan) => plan,
             Err(refusal) => {
                 // The old process (if any) is already stopped, and its phase
@@ -332,8 +381,9 @@ impl HarnessRunner {
             .lock()
             .insert(req.harness_id.clone(), run.clone());
 
-        // Opencode v2 may have created or confirmed a different session.
-        let session_now = spawn.session_id.clone().or(session_before.clone());
+        // The derived id (minted, or the stale one dropped); opencode v2 may
+        // have created or confirmed a different session, and that wins.
+        let session_now = spawn.session_id.clone().or(plan.session_id.clone());
         self.attach_adapters(&req.harness_id, &run, session_now.as_deref(), true);
         record::write_back(
             &self.store,
@@ -341,6 +391,7 @@ impl HarnessRunner {
             &req.harness_id,
             kind,
             &spawn,
+            session_now.as_deref(),
             session_before.as_deref(),
             version_before.as_ref(),
         );
@@ -476,6 +527,12 @@ impl HarnessRunner {
         observer: &Arc<RunnerObserver>,
     ) -> Result<PtySpawnResult, EnsureError> {
         let sidecars = self.sidecars.clone();
+        let cmd = plan.cmd.clone();
+        #[cfg(test)]
+        let cmd = {
+            self.spawned_argv.lock().push(cmd.clone());
+            self.stand_in.lock().clone().unwrap_or(cmd)
+        };
         pty_spawn_with_sink(
             PtySpawnDeps {
                 manager: &self.pty,
@@ -486,7 +543,7 @@ impl HarnessRunner {
                 sidecars: &self.sidecars,
             },
             PtySpawnArgs {
-                cmd: plan.cmd.clone(),
+                cmd,
                 cwd: plan.cwd.clone(),
                 rows: if req.rows == 0 {
                     DEFAULT_ROWS
@@ -563,6 +620,25 @@ impl HarnessRunner {
         {
             spawns.remove(harness_id);
         }
+    }
+
+    /// Test-only: replace the session probe.
+    #[cfg(test)]
+    fn set_session_probe(&self, probe: SessionProbe) {
+        *self.session_probe.lock() = probe;
+    }
+
+    /// Test-only: spawn `argv` in place of whatever is derived (which is
+    /// still recorded by [`spawned_argv`](Self::spawned_argv)).
+    #[cfg(test)]
+    fn set_stand_in(&self, argv: Vec<String>) {
+        *self.stand_in.lock() = Some(argv);
+    }
+
+    /// Test-only: every derived argv handed to the PTY layer, oldest first.
+    #[cfg(test)]
+    fn spawned_argv(&self) -> Vec<Vec<String>> {
+        self.spawned_argv.lock().clone()
     }
 
     #[cfg(test)]

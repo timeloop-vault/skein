@@ -128,7 +128,7 @@ export interface HarnessColumnProps {
 	onSwitchHarness: (roomId: string, harnessId: string) => void;
 	onCloseHarness: (roomId: string, harnessId: string) => void;
 	onRenameHarness: (roomId: string, harnessId: string, name: string) => void;
-	onHarnessCmdChange: (roomId: string, harnessId: string, cmd: string[]) => void;
+	onHarnessShellRequest: (roomId: string, harnessId: string, argv: string[]) => void;
 	onDesignEntryChange: (roomId: string, harnessId: string, entry: string) => void;
 	onDesignDeviceChange: DeviceChangeHandler;
 	dockedDesign: DockedDesign;
@@ -174,7 +174,7 @@ const HarnessColumnImpl = ({
 	onSwitchHarness,
 	onCloseHarness,
 	onRenameHarness,
-	onHarnessCmdChange,
+	onHarnessShellRequest,
 	onDesignEntryChange,
 	onDesignDeviceChange,
 	dockedDesign,
@@ -332,7 +332,7 @@ const HarnessColumnImpl = ({
 							defaultShell={defaultShell}
 							docked={dockedDesign[h.id] === true}
 							opencodePort={opencodePorts.get(h.id)}
-							onCmdChange={(newCmd) => onHarnessCmdChange(room.id, h.id, newCmd)}
+							onShellRequest={(argv) => onHarnessShellRequest(room.id, h.id, argv)}
 							onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
 							onSessionFollowed={(sid) => onOpencodeSessionFollowed(h.id, sid)}
 							opencodeClaim={opencodeShellClaim(h.id)}

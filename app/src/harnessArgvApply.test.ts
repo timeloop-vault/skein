@@ -52,6 +52,17 @@ describe("applyResumedHarness", () => {
 		expect(out.cmd).toEqual(["claude", "--resume", "s"]);
 	});
 
+	it("copies launch back only when the daemon returned one", () => {
+		const shell: Harness["launch"] = { mode: "shell", argv: ["bash"] };
+		const kept = applyResumedHarness(h({ cmd: ["claude"] }), h({ cmd: ["claude"], launch: shell }));
+		expect(kept.launch).toEqual(shell);
+		const dropped = applyResumedHarness(
+			h({ cmd: ["claude"], launch: shell }),
+			h({ cmd: ["claude", "--resume", "s"] }),
+		);
+		expect(dropped).not.toHaveProperty("launch");
+	});
+
 	it("keeps cmd absent when the returned harness has none", () => {
 		const out = applyResumedHarness(h({ kind: "files" }), h({ kind: "files" }));
 		expect(out).not.toHaveProperty("cmd");

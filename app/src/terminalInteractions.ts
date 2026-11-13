@@ -49,7 +49,7 @@ export interface TerminalInteractionsDeps {
 	/// promises that resolve after teardown.
 	isCancelled: () => boolean;
 	defaultShellRef: { current: string[] };
-	onCmdChangeRef: { current: (cmd: string[]) => void };
+	onShellRequestRef: { current: (argv: string[]) => void };
 	ptyIdRef: { current: string | null };
 	setHint: (hint: string | null) => void;
 	hintTimerRef: { current: ReturnType<typeof setTimeout> | null };
@@ -71,7 +71,7 @@ export function attachTerminalInteractions(
 		getPhase,
 		isCancelled,
 		defaultShellRef,
-		onCmdChangeRef,
+		onShellRequestRef,
 		ptyIdRef,
 		setHint,
 		hintTimerRef,
@@ -197,13 +197,12 @@ export function attachTerminalInteractions(
 			if (e.key === "Enter") {
 				const shell = defaultShellRef.current;
 				if (shell.length > 0) {
-					// onCmdChange propagates the new cmd up to App
-					// state. App's HarnessBody derives mountKey from
-					// cmd content, so this triggers an unmount +
-					// remount and a clean shell spawns into a fresh
-					// xterm. No respawn / reset logic to maintain
-					// here — just hand off and let React do it.
-					onCmdChangeRef.current(shell);
+					// onShellRequest records the shell as the harness's
+					// launch mode (#752). HarnessBody derives mountKey from
+					// the spawn argv + spawnGen, so this triggers an
+					// unmount + remount and a clean shell spawns into a
+					// fresh xterm. Just hand off and let React do it.
+					onShellRequestRef.current(shell);
 				}
 				return false;
 			}

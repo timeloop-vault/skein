@@ -20,7 +20,7 @@ pub(super) fn room_key_eq(a: &Room, b: &Room) -> bool {
 }
 
 /// Harness structural key: id, kind, name, agent, cwd, remote, sessionId,
-/// createdBy.
+/// launch (#752: the spawn reads it), createdBy.
 pub(super) fn harness_key_eq(a: &Harness, b: &Harness) -> bool {
     a.id == b.id
         && a.kind == b.kind
@@ -29,5 +29,6 @@ pub(super) fn harness_key_eq(a: &Harness, b: &Harness) -> bool {
         && a.cwd == b.cwd
         && a.remote == b.remote
         && a.session_id == b.session_id
+        && a.launch == b.launch
         && a.created_by == b.created_by
 }

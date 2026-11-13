@@ -52,8 +52,8 @@ const useRoomHandlers = (p: RoomWorkspaceProps): RoomHandlers => {
 			closeHarness: (roomId, harnessId) => latest.current.actions.closeHarness(roomId, harnessId),
 			renameHarness: (roomId, harnessId, name) =>
 				latest.current.store.setRooms((prev) => withHarnessName(prev, roomId, harnessId, name)),
-			cmdChange: (roomId, harnessId, cmd) =>
-				latest.current.actions.updateHarnessCmd(roomId, harnessId, cmd),
+			shellRequest: (roomId, harnessId, argv) =>
+				latest.current.actions.startShell(roomId, harnessId, argv),
 			designEntry: (roomId, harnessId, entry) =>
 				latest.current.actions.setHarnessDesignEntry(roomId, harnessId, entry),
 			designDevice: (roomId, harnessId, device) =>

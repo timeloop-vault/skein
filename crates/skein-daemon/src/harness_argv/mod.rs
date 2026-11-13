@@ -19,10 +19,12 @@
 //! only place the Rust port is total where the original was typed.
 
 mod agent_check;
+mod launch;
 mod opencode_v2;
 mod plan;
 mod remote;
 mod resume;
+mod spawn;
 
 #[cfg(test)]
 mod agent_check_tests;
@@ -30,6 +32,10 @@ mod agent_check_tests;
 mod claim_tests;
 #[cfg(test)]
 mod fresh_tests;
+#[cfg(test)]
+mod launch_resume_tests;
+#[cfg(test)]
+mod launch_tests;
 #[cfg(test)]
 mod opencode_v2_tests;
 #[cfg(test)]
@@ -41,9 +47,12 @@ mod resume_agent_tests;
 #[cfg(test)]
 mod resume_tests;
 #[cfg(test)]
+mod spawn_tests;
+#[cfg(test)]
 mod test_util;
 
 pub use agent_check::{AgentListReply, AgentVerdict, validate_agent, with_verdict};
+pub use launch::{effective_shell_argv, infer_launch, migrate_launch, shell_argv};
 pub use opencode_v2::{OpencodeMode, is_opencode_v2, opencode_spawn_plan, opencode_v2_argv};
 pub use plan::{
     FreshCmdInput, FreshCmdOutput, ResumeOneInput, ResumeOneOutput, ResumeRoomsInput,
@@ -56,6 +65,7 @@ pub use resume::{
 };
 use skein_proto::harness_kind::HarnessKind;
 use skein_proto::rooms::RemoteSpec;
+pub use spawn::{SpawnArgv, spawn_argv};
 
 /// Skein's own Hermes profile (#626); the default for new Hermes harnesses.
 pub const SKEIN_HERMES_PROFILE: &str = "skein";

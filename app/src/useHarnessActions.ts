@@ -5,8 +5,8 @@
 // alerted-room/-harness cyclers (#67, `cycleAlertedRoom` /
 // `cycleAlertedHarness`, plus the private `topPendingHarness` helper
 // they share), `closeHarness` (with its #185 unsaved-files-in-a-Files-
-// harness confirm), `updateHarnessCmd` (the Enter-for-shell respawn
-// path), `addHarness` (#189's + harness picker toggle), and the #241
+// harness confirm), `updateHarnessCmd` (the restart respawn path)
+// and `startShell` (Enter-for-shell, #752), `addHarness` (#189's + harness picker toggle), and the #241
 // inline-rename trio (`startRenameRoom`/`endRenameRoom`/
 // `commitRenameRoom`).
 //
@@ -31,7 +31,7 @@ import { filesRegistry } from "./filesRegistry.ts";
 import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
 import { harnessResumeCmd } from "./harnessArgvApi.ts";
 import { applyResumedHarness } from "./harnessArgvApply.ts";
-import { withRespawnedCmd } from "./harnessCreation.ts";
+import { withRespawnedCmd, withShellLaunch } from "./harnessCreation.ts";
 import { harnessInput } from "./harnessInput.ts";
 import type { GateResult } from "./harnessInputGate.ts";
 import { canRestart, exitedRestartable } from "./harnessRestart.ts";
@@ -219,20 +219,25 @@ export function useHarnessActions(
 		return { ok: true, value: { harnessId, phase } };
 	};
 
-	// When a harness's child exits and the user picks the shell-fallback
-	// path, LiveTerminal calls this so the new cmd persists to the DB
-	// and a Skein restart re-spawns the shell.
+	// Restart: replaces the stored cmd with a freshly built one (the tool's
+	// argv, never the shell's) so it persists and the next spawn uses it.
 	const updateHarnessCmd = (
 		roomId: string,
 		harnessId: string,
 		cmd: string[],
 		sessionId?: string,
 	) => {
-		// Every cmd change is a deliberate respawn (Enter-for-shell), so
-		// bump spawnGen too — that's what remounts the terminal when the
-		// new cmd equals the old one (shell→shell, #53).
-		// #520: also drops any shell claim: the new cmd is a fresh process.
+		// Every cmd change is a deliberate respawn (restart), so bump
+		// spawnGen too — that's what remounts the terminal when the new cmd
+		// equals the old one. #520: also drops any shell claim; #752: and
+		// any shell launch mode (Restart brings the tool back).
 		setRooms((prev) => withRespawnedCmd(prev, roomId, harnessId, cmd, sessionId));
+	};
+
+	// #752: Enter on an exited pane records the post-exit shell as the
+	// harness's launch mode; the tool's `cmd` stays on the record.
+	const startShell = (roomId: string, harnessId: string, argv: string[]) => {
+		setRooms((prev) => withShellLaunch(prev, roomId, harnessId, argv));
 	};
 
 	// #490: restart a harness in place — kill its process and respawn from
@@ -372,6 +377,7 @@ export function useHarnessActions(
 		closeHarness,
 		closeHarnessForAgent,
 		updateHarnessCmd,
+		startShell,
 		restartHarness,
 		setHarnessDesignEntry,
 		setHarnessDesignDevice,

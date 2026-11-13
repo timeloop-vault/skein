@@ -14,9 +14,10 @@ import type { Harness, Room } from "./types.ts";
 /** The daemon-owned fields of `returned` laid over `h`. */
 export const applyResumedHarness = (h: Harness, returned: Harness | undefined): Harness => {
 	if (!returned) return h;
-	const { cmd: _cmd, sessionId: _sid, shellClaim: _claim, ...rest } = h;
+	const { cmd: _cmd, sessionId: _sid, shellClaim: _claim, launch: _launch, ...rest } = h;
 	return {
 		...rest,
+		...(returned.launch ? { launch: returned.launch } : {}),
 		...(returned.cmd ? { cmd: returned.cmd } : {}),
 		...(returned.sessionId ? { sessionId: returned.sessionId } : {}),
 		...(returned.shellClaim ? { shellClaim: returned.shellClaim } : {}),

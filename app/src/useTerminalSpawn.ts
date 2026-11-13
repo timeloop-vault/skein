@@ -33,7 +33,7 @@ import {
 	observeResize,
 	registerInputTarget,
 } from "./terminalSpawnInput.ts";
-import type { HarnessKind } from "./types.ts";
+import type { HarnessKind, LaunchMode } from "./types.ts";
 import { useClaudeRepoint } from "./useClaudeRepoint.ts";
 
 export interface UseTerminalSpawnParams {
@@ -65,7 +65,10 @@ export interface UseTerminalSpawnParams {
 	sessionIdRef: { current: string | undefined };
 	claudeAdapterRef: { current: { detach: () => void; sessionId: string } | null };
 	defaultShellRef: { current: string[] };
-	onCmdChangeRef: { current: (cmd: string[]) => void };
+	onShellRequestRef: { current: (argv: string[]) => void };
+	/** The stored record's tool argv + launch mode: the daemon's expectation (#752). */
+	expectCmd: string[];
+	expectLaunch: LaunchMode;
 	copyOnSelectRef: { current: boolean };
 	setHint: (hint: string | null) => void;
 }
@@ -102,9 +105,11 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		sessionIdRef,
 		claudeAdapterRef,
 		defaultShellRef,
-		onCmdChangeRef,
+		onShellRequestRef,
 		copyOnSelectRef,
 		setHint,
+		expectCmd,
+		expectLaunch,
 	} = params;
 
 	// Run only on mountKey changes. cmd / cwd / fontSize are consumed once at
@@ -143,7 +148,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			getPhase: () => phase,
 			isCancelled: () => cancelled,
 			defaultShellRef,
-			onCmdChangeRef,
+			onShellRequestRef,
 			ptyIdRef,
 			setHint,
 			hintTimerRef,
@@ -246,7 +251,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 						envProfile,
 						restart,
 						mountKey,
-						expectCmd: cmdToSpawn,
+						expectCmd,
+						expectLaunch,
 						onEvent: channel,
 					},
 					defaultEnsureDeps(() => cancelled),

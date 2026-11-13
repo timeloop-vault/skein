@@ -363,3 +363,34 @@ fn a_concurrent_load_waits_for_the_preparation_and_returns_prepared_rows() {
     assert_eq!(b_probes.load(Ordering::SeqCst), 0, "B must not prepare");
     assert_eq!(picks.load(Ordering::SeqCst), 1, "one port, one preparation");
 }
+
+#[test]
+fn prepare_migrates_a_legacy_shell_record_once() {
+    use skein_proto::rooms::LaunchMode;
+
+    let legacy = harness("c", "claude", Some("s"), &["pwsh.exe"], &json!({}));
+    let tool = harness(
+        "t",
+        "claude",
+        Some("s2"),
+        &["claude", "--resume", "s2"],
+        &json!({}),
+    );
+    let out = prepare_with(
+        vec![room("r", false, vec![legacy, tool])],
+        |_| Ok(true),
+        || Ok(1),
+        || "m".to_owned(),
+    );
+    assert_eq!(
+        find(&out.rooms, "c").launch,
+        Some(LaunchMode::Shell {
+            argv: sv(&["pwsh.exe"])
+        })
+    );
+    assert_eq!(find(&out.rooms, "c").cmd, Some(sv(&["pwsh.exe"])));
+    assert_eq!(find(&out.rooms, "t").launch, None);
+    let again = prepare_with(out.rooms.clone(), |_| Ok(true), || Ok(1), || "m".to_owned());
+    assert_eq!(find(&again.rooms, "c").launch, find(&out.rooms, "c").launch);
+    assert_eq!(find(&again.rooms, "t").launch, None);
+}

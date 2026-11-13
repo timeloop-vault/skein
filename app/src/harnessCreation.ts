@@ -241,8 +241,23 @@ export const withHarnessName = (
 ): Room[] =>
 	mapHarness(rooms, targetRoomId, harnessId, (h) => (h.name === name ? h : { ...h, name }));
 
-// A cmd replacement (Enter-for-shell, restart) is a fresh process: bump
-// spawnGen, optionally set the session id, and drop any shell claim (#520).
+// Enter-for-shell (#752): the pane switches to its post-exit shell. `cmd`
+// (the tool's argv) and `sessionId` stay; the launch mode records the shell.
+// A fresh process: bump spawnGen and drop any shell claim (#520).
+export const withShellLaunch = (
+	rooms: Room[],
+	targetRoomId: string,
+	harnessId: string,
+	argv: string[],
+): Room[] =>
+	mapHarness(rooms, targetRoomId, harnessId, (h) => {
+		const { shellClaim: _dropped, ...rest } = h;
+		return { ...rest, launch: { mode: "shell", argv }, spawnGen: (h.spawnGen ?? 0) + 1 };
+	});
+
+// A cmd replacement (restart) is a fresh process: bump spawnGen, optionally
+// set the session id, and drop any shell claim (#520) and shell launch
+// mode (#752: Restart brings the tool back).
 export const withRespawnedCmd = (
 	rooms: Room[],
 	targetRoomId: string,
@@ -251,7 +266,7 @@ export const withRespawnedCmd = (
 	sessionId?: string,
 ): Room[] =>
 	mapHarness(rooms, targetRoomId, harnessId, (h) => {
-		const { shellClaim: _dropped, ...rest } = h;
+		const { shellClaim: _dropped, launch: _launch, ...rest } = h;
 		return {
 			...rest,
 			cmd,

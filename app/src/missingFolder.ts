@@ -102,7 +102,8 @@ export async function repointRoom(
 			if (!HARNESS_KINDS[h.kind].capabilities.resume) {
 				return { ...h, cwd: newCwd, spawnGen: (h.spawnGen ?? 0) + 1 };
 			}
-			const { sessionId: _old, ...rest } = h;
+			// `launch` goes too: the fresh cmd brings the tool back (#752).
+			const { sessionId: _old, launch: _launch, ...rest } = h;
 			// No `newHarness`: a moved Claude starts a bare `claude`, as it
 			// always did, and the record keeps no session id, and a Hermes
 			// record's own profile (if any) is passed through unchanged.

@@ -5,7 +5,9 @@ use std::path::Path;
 
 use skein_proto::rooms::{Harness, Room};
 
+use crate::boot_resume::{opencode_port_from_cmd, session_survives};
 use crate::git::{IdentityCheck, check_identity};
+use crate::harness_argv::{SpawnArgv, shell_argv, spawn_argv, uuid_session_id};
 use crate::harness_kind::HarnessKind;
 
 /// Why a harness was not spawned. The `code` strings are a wire contract.
@@ -104,29 +106,49 @@ pub(super) fn wanted(rooms: &[Room], harness_id: &str) -> bool {
         .any(|r| r.archived.is_none() && r.harnesses.iter().any(|h| h.id == harness_id))
 }
 
+/// The `--port` the record's STORED cmd pins for opencode, which the derived
+/// argv re-passes; `None` in shell launch mode (the stored cmd then holds
+/// whatever the shell was, not a port Skein allocated).
+///
+/// This is the seam issue #754 replaces when the runner allocates the port
+/// itself instead of recovering it from the stored text.
+pub(super) fn stored_opencode_port(h: &Harness) -> Option<u16> {
+    if shell_argv(h).is_some() {
+        return None;
+    }
+    opencode_port_from_cmd(h.cmd.as_deref()?)
+}
+
 /// Everything a spawn takes from the record.
 pub(super) struct SpawnPlan {
+    /// The argv derived at spawn time (#752), not the stored `cmd`.
     pub cmd: Vec<String>,
     pub cwd: String,
     pub kind: HarnessKind,
     pub agent: Option<String>,
+    /// The session id the record should hold after this spawn (minted, or
+    /// the stale one dropped); may differ from the stored one.
     pub session_id: Option<String>,
     pub env_profile: Option<String>,
     pub hermes_profile: Option<String>,
 }
 
 impl SpawnPlan {
-    /// The spawn gates, in order: argv, folder, repository identity (an
-    /// unknown identity passes). `request_profile` beats the record's.
+    /// The spawn gates, in order: a stored argv, folder, repository identity
+    /// (an unknown identity passes), then the argv derived from the record
+    /// (this is the only step that probes for the session). `request_profile`
+    /// beats the record's.
     pub(super) fn from_record(
         room: &Room,
         harness: &Harness,
         kind: HarnessKind,
         request_profile: Option<&str>,
+        probe: &dyn Fn(&Harness) -> Result<bool, String>,
     ) -> Result<Self, Refusal> {
-        let cmd = harness
+        // A record never given an argv is not spawnable, whatever it derives.
+        harness
             .cmd
-            .clone()
+            .as_ref()
             .filter(|c| c.first().is_some_and(|p| !p.is_empty()))
             .ok_or(Refusal::NoCmd)?;
         // The harness's own folder, else the room's: what the pane used.
@@ -142,12 +164,20 @@ impl SpawnPlan {
         {
             return Err(Refusal::RepoMismatch);
         }
+        let SpawnArgv { cmd, session_id } = spawn_argv(
+            harness,
+            kind,
+            || session_survives(harness, &probe),
+            stored_opencode_port(harness),
+            uuid_session_id,
+        )
+        .ok_or(Refusal::NoCmd)?;
         Ok(Self {
             cmd,
             cwd,
             kind,
             agent: harness.agent.clone(),
-            session_id: harness.session_id.clone(),
+            session_id,
             env_profile: request_profile
                 .map(str::to_owned)
                 .or_else(|| harness.env_profile.clone()),

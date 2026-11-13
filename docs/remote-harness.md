@@ -9,7 +9,7 @@ as a feature in its own right.
 A `remote` harness kind. Skein spawns `ssh` in a local PTY, and the remote end
 runs the tool inside a named tmux session. The record
 `Harness.remote {host, tool, session, dir?}` is the authority; the argv is
-rebuilt from it at every boot and reopen, never matched against the previous
+derived from it at every spawn (#752; boot and reopen still rewrite the stored cmd), never matched against the previous
 argv (the record-not-argv rule, #153/#170). Since #730 the argv builder is
 `remote_argv` in the daemon's `harness_argv/remote.rs`; `remoteCmd.ts` keeps
 only the session name and `buildRemoteSpec`, which build the record's spec.

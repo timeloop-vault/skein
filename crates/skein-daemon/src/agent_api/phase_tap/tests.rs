@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use skein_proto::rooms::ShellClaim;
+use skein_proto::rooms::{LaunchMode, ShellClaim};
 
 use super::PhaseTap;
 use crate::agent_api::hermes_event::HarnessHermesHook;
@@ -37,10 +37,32 @@ fn fx(kind: &str, cmd: &[&str], claim: Option<&str>) -> Fx {
     )
 }
 
+/// The harness is in the shell the user fell back to (#752): its launch mode
+/// says so, whatever `cmd` holds.
+fn fx_shell(kind: &str, cmd: &[&str], claim: Option<&str>) -> Fx {
+    let cmd: Vec<String> = cmd.iter().map(|s| (*s).to_owned()).collect();
+    fx_launch(
+        kind,
+        Some(cmd.clone()),
+        Some(LaunchMode::Shell { argv: cmd }),
+        claim,
+    )
+}
+
 fn fx_with(kind: &str, cmd: Option<Vec<String>>, claim: Option<&str>) -> Fx {
+    fx_launch(kind, cmd, None, claim)
+}
+
+fn fx_launch(
+    kind: &str,
+    cmd: Option<Vec<String>>,
+    launch: Option<LaunchMode>,
+    claim: Option<&str>,
+) -> Fx {
     let f = fixture();
     let mut h = harness("h1", kind, "h1");
     h.cmd = cmd;
+    h.launch = launch;
     h.shell_claim = claim.map(|s| ShellClaim {
         session_id: s.to_owned(),
         port: None,
@@ -85,9 +107,27 @@ fn outside_shell_mode_a_ping_is_always_accepted() {
 
 #[test]
 fn a_shell_without_a_claim_drops_the_ping() {
-    let x = fx("claude", &["bash"], None);
+    let x = fx_shell("claude", &["bash"], None);
     assert_eq!(x.ping(None), ActivityPhase::Spawning);
     assert_eq!(x.ping(Some("s1")), ActivityPhase::Spawning);
+}
+
+/// Shell mode is the record's launch mode, not the text of `cmd`: a legacy
+/// record that boot preparation has not migrated is not read by argv0.
+#[test]
+fn shell_mode_does_not_come_from_the_argv_text() {
+    let x = fx("claude", &["bash"], None);
+    assert_eq!(x.ping(None), ActivityPhase::Permission);
+    // And an explicit shell launch is one even if `cmd` reads as the tool.
+    let x = fx_launch(
+        "claude",
+        Some(vec!["claude".to_owned()]),
+        Some(LaunchMode::Shell {
+            argv: vec!["bash".to_owned()],
+        }),
+        None,
+    );
+    assert_eq!(x.ping(None), ActivityPhase::Spawning);
 }
 
 /// `shellClaim.noteSpawn`: a missing argv0 is "not running the kind's
@@ -107,23 +147,23 @@ fn a_claude_record_with_no_cmd_is_in_shell_mode() {
 
 #[test]
 fn a_claimed_shell_accepts_the_matching_or_a_missing_session() {
-    let x = fx("claude", &["/bin/zsh"], Some("s1"));
+    let x = fx_shell("claude", &["/bin/zsh"], Some("s1"));
     assert_eq!(x.ping(Some("s1")), ActivityPhase::Permission);
-    let x = fx("claude", &["/bin/zsh"], Some("s1"));
+    let x = fx_shell("claude", &["/bin/zsh"], Some("s1"));
     assert_eq!(x.ping(None), ActivityPhase::Permission);
-    let x = fx("claude", &["/bin/zsh"], Some("s1"));
+    let x = fx_shell("claude", &["/bin/zsh"], Some("s1"));
     assert_eq!(x.ping(Some("")), ActivityPhase::Permission);
 }
 
 #[test]
 fn a_claimed_shell_drops_a_different_session() {
-    let x = fx("claude", &["/bin/zsh"], Some("s1"));
+    let x = fx_shell("claude", &["/bin/zsh"], Some("s1"));
     assert_eq!(x.ping(Some("nested-child")), ActivityPhase::Spawning);
 }
 
 #[test]
 fn an_unknown_harness_is_accepted_like_an_unknown_shell_state() {
-    let x = fx("claude", &["bash"], None);
+    let x = fx_shell("claude", &["bash"], None);
     x.state
         .phase_permission("r1", "no-such", None, None, None, None);
     x.state

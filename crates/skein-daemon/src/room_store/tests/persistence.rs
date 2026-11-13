@@ -130,6 +130,7 @@ fn harness_fields_flip_the_structural_classification() {
             json!({"host": "h", "tool": "claude", "session": "s"}),
         ),
         ("sessionId", json!("sid")),
+        ("launch", json!({"mode": "shell", "argv": ["bash"]})),
         ("createdBy", json!({"roomId": "c"})),
     ];
     let debounced = [
