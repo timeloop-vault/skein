@@ -74,6 +74,16 @@ pub(super) async fn api_harness_permission(
         session_id = session_id.as_deref(),
         "agent api: harness permission ping"
     );
+    // #732 (shadow): the daemon's own machine hears the ping, gated the way
+    // the webview gates it. The emit below is what the client acts on.
+    state.phase_permission(
+        &caller.room_id,
+        &harness_id,
+        tool_name.as_deref(),
+        agent_type.as_deref(),
+        agent_id.as_deref(),
+        session_id.as_deref(),
+    );
     state.notify_harness_permission(
         &caller.room_id,
         &harness_id,

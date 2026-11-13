@@ -25,6 +25,7 @@ use crate::transport::InProcessTransport;
 
 mod acceptance;
 mod lifecycle;
+mod phase;
 mod refusals;
 mod stops;
 

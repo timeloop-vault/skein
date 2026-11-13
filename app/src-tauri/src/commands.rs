@@ -18,6 +18,8 @@
 //!   and opencode's SSE stream (L2c-2).
 //! - `harness_log` — the `harness_events` and `harness_actions` tables:
 //!   record and recent-rows queries.
+//! - `harness_phase` — client-only inputs to the daemon's shadow phase
+//!   machine (#732).
 //! - `fs` — the Files overlay's list / read / write commands (#185, #409).
 //! - `git` — the git commands: repo inspection, worktrees, status, diff and
 //!   the two watchers.
@@ -33,6 +35,7 @@ pub(crate) mod git;
 pub(crate) mod harness_argv;
 pub(crate) mod harness_events;
 pub(crate) mod harness_log;
+pub(crate) mod harness_phase;
 pub(crate) mod harness_runner;
 pub(crate) mod hermes_work;
 pub(crate) mod pty;

@@ -20,7 +20,7 @@ use std::time::Instant;
 use skein_proto::room_mutations::{
     ROOMS_CHANGED_EVENT, RoomChange, RoomMutation, RoomsApplyOutcome, RoomsChanged, SkippedMutation,
 };
-use skein_proto::rooms::Room;
+use skein_proto::rooms::{Harness, Room};
 
 use crate::db::{Database, LoadOutcome};
 use crate::event_sink::{self, SharedEventSink};
@@ -228,6 +228,18 @@ impl RoomStore {
     #[must_use]
     pub fn rooms(&self) -> Vec<Room> {
         self.shared.lock().rooms.clone()
+    }
+
+    /// One harness's record, cloned alone (not the room list).
+    #[must_use]
+    pub fn harness_record(&self, room_id: &str, harness_id: &str) -> Option<Harness> {
+        self.shared
+            .lock()
+            .rooms
+            .iter()
+            .find(|r| r.id == room_id)
+            .and_then(|r| r.harnesses.iter().find(|h| h.id == harness_id))
+            .cloned()
     }
 }
 

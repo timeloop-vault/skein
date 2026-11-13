@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::db::{Database, HarnessAction, HarnessEvent};
 use skein_daemon::harness_log::{HarnessContextSize, context_sizes};
+use skein_daemon::harness_phase::PhaseService;
 
 /// Append one row to the `harness_events` log. Epic #50 L6.
 ///
@@ -29,10 +30,12 @@ pub(crate) async fn db_record_harness_event(
     has_user_input: bool,
     source: Option<String>,
     db: tauri::State<'_, Arc<Database>>,
+    phase: tauri::State<'_, Arc<PhaseService>>,
 ) -> Result<(), String> {
     let db = Arc::clone(&db);
+    let phase = Arc::clone(&phase);
     tauri::async_runtime::spawn_blocking(move || {
-        db.record_harness_event(
+        let recorded = db.record_harness_event(
             &harness_id,
             &room_id,
             &from_phase,
@@ -40,7 +43,17 @@ pub(crate) async fn db_record_harness_event(
             timestamp_ms,
             has_user_input,
             source.as_deref(),
-        )
+        );
+        // #732 shadow: the comparator sees every transition the TypeScript
+        // machine logs. A short mutex section; it cannot fail the command.
+        phase.shadow_client_transition(
+            &harness_id,
+            &from_phase,
+            &to_phase,
+            source.as_deref(),
+            timestamp_ms,
+        );
+        recorded
     })
     .await
     .map_err(|e| e.to_string())?

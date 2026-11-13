@@ -40,6 +40,7 @@
 
 pub mod command;
 pub mod env;
+pub mod observer;
 pub mod opencode;
 pub mod opencode_prepare;
 mod output;
@@ -56,6 +57,7 @@ use preview::windows_resolved_program;
 use probe::probe_result;
 use sink_slot::SinkSlot;
 
+pub use observer::PtyObserver;
 pub use preview::{EnvPreview, env_preview, harness_program_lookup};
 #[cfg(not(target_os = "windows"))]
 pub use probe::probe_shell;
@@ -262,18 +264,21 @@ impl PtyManager {
     where
         F: Fn(PtyEvent) + Send + Sync + 'static,
     {
-        self.spawn_with_sink(req, Some(Box::new(FnSink(on_event))), None)
+        self.spawn_with_sink(req, Some(Box::new(FnSink(on_event))), None, None)
     }
 
     /// [`spawn`](Self::spawn) with a replaceable sink (#731). `sink` is
     /// the first attached sink, or `None` to start unattended; `on_exit`
     /// runs on the waiter thread when the child exits, before the sink is
-    /// told and whether or not one is attached.
+    /// told and whether or not one is attached. `observer` (#732) hears
+    /// `started` once the child exists, then every output chunk and the
+    /// exit, attached or not.
     pub fn spawn_with_sink(
         &self,
         req: SpawnRequest<'_>,
         sink: Option<Box<dyn StreamSink<PtyEvent>>>,
         on_exit: Option<ExitHook>,
+        observer: Option<Arc<dyn PtyObserver>>,
     ) -> Result<SpawnOutcome, PtyError> {
         let SpawnRequest {
             id,
@@ -459,9 +464,15 @@ impl PtyManager {
         // reader starts so no output is lost. Its unattended `ConPTY`
         // cursor answer goes out through the same writer channel.
         let reply_tx = writer_tx.clone();
-        let slot = Arc::new(SinkSlot::new(sink, move |bytes| {
+        let mut slot = SinkSlot::new(sink, move |bytes| {
             let _ = reply_tx.send(bytes);
-        }));
+        });
+        // #732: before any thread can produce output.
+        if let Some(observer) = observer {
+            observer.started(injected);
+            slot = slot.with_observer(observer);
+        }
+        let slot = Arc::new(slot);
         let slot_reader = Arc::clone(&slot);
         let slot_waiter = Arc::clone(&slot);
 
@@ -740,6 +751,8 @@ mod cwd_tests;
 #[cfg(test)]
 mod thread_tests;
 
+#[cfg(test)]
+mod observer_pty_tests;
 #[cfg(test)]
 mod sink_pty_tests;
 

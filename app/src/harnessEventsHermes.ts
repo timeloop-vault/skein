@@ -24,6 +24,7 @@ import {
 	type HermesWorkEvent,
 	startSubagent,
 } from "./hermesWork.ts";
+import { sendPhaseInput } from "./phaseInput.ts";
 import type { ScreenPhase } from "./screenPhase.ts";
 
 export const HERMES_HOOK_EVENT = "skein://harness-hermes-hook";
@@ -115,7 +116,9 @@ export function createHermesBinding(
 			if (phase !== "spawning") deps.clearInterval(poll);
 			return;
 		}
-		ready = deps.readScreen(harnessId) === "waiting" ? ready + 1 : 0;
+		const screenWaiting = deps.readScreen(harnessId) === "waiting";
+		sendPhaseInput(harnessId, { kind: "hermesLaunchPoll", screenWaiting });
+		ready = screenWaiting ? ready + 1 : 0;
 		if (ready >= 2) {
 			deps.clearInterval(poll);
 			harnessActivity.noteLaunchSignal(harnessId, TRANSITION_SOURCE.L2c3HermesReady);

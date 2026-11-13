@@ -54,6 +54,7 @@ import { lifecycleMethods } from "./harnessActivityLifecycle.ts";
 import { permissionMethods } from "./harnessActivityPermission.ts";
 import { supervisorMethods } from "./harnessActivitySupervisor.ts";
 import type { ActivityPhase, HarnessActivity, TransitionListener } from "./harnessActivityTypes.ts";
+import { sendPhaseInput } from "./phaseInput.ts";
 
 export {
 	atSafeStoppingPoint,
@@ -91,6 +92,41 @@ export const harnessActivity = {
 	...permissionMethods,
 	...ioMethods,
 	...supervisorMethods,
+
+	// #732: client-only inputs the daemon's shadow machine cannot see. Each
+	// forwards after the TypeScript call, with no change to what it does.
+	recordInput(id: string, data: string, opts?: { emptyComposer?: boolean }): void {
+		ioMethods.recordInput(id, data, opts);
+		sendPhaseInput(id, { kind: "input", data, emptyComposer: opts?.emptyComposer ?? false });
+	},
+
+	notePromptSubmitted(id: string): void {
+		ioMethods.notePromptSubmitted(id);
+		sendPhaseInput(id, { kind: "promptSubmitted" });
+	},
+
+	muteInducedOutput(id: string): void {
+		ioMethods.muteInducedOutput(id);
+		sendPhaseInput(id, { kind: "muteInducedOutput" });
+	},
+
+	reattached(id: string): void {
+		lifecycleMethods.reattached(id);
+		sendPhaseInput(id, { kind: "reattached" });
+	},
+
+	/// The view state for a still-running harness is thrown away and rebuilt
+	/// (`forgetViewState`); the daemon's machine keeps its own, so say so.
+	forget(id: string): void {
+		lifecycleMethods.forget(id);
+		sendPhaseInput(id, { kind: "viewReset" });
+	},
+
+	recoverUnheardSilence(id: string): boolean {
+		const recovered = supervisorMethods.recoverUnheardSilence(id);
+		sendPhaseInput(id, { kind: "recoverUnheardSilence" });
+		return recovered;
+	},
 
 	get(id: string): HarnessActivity | null {
 		return store.get(id) ?? null;

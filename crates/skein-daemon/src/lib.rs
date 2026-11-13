@@ -21,6 +21,7 @@ pub mod harness_config;
 pub mod harness_events_claude;
 pub mod harness_events_opencode;
 pub mod harness_log;
+pub mod harness_phase;
 pub mod harness_runner;
 pub mod hermes_profile;
 pub use skein_proto::harness_kind;

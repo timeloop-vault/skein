@@ -6,6 +6,7 @@ use parking_lot::Mutex;
 
 use super::{AttachOutcome, SinkSlot};
 use crate::pty::PtyEvent;
+use crate::pty::observer::PtyObserver;
 use crate::stream_sink::StreamSink;
 
 const QUERY: &str = "\x1b[6n";
@@ -182,6 +183,70 @@ fn an_attached_sink_is_never_answered_for() {
     s.data("6n".into());
     assert!(replies.lock().is_empty());
     assert_eq!(rec.events().len(), 3, "the query still reaches the view");
+}
+
+/// Records what an observer (#732) is told.
+#[derive(Clone, Default)]
+struct Observed(Arc<Mutex<Vec<String>>>);
+
+impl Observed {
+    fn events(&self) -> Vec<String> {
+        self.0.lock().clone()
+    }
+}
+
+impl PtyObserver for Observed {
+    fn started(&self, injected: bool) {
+        self.0.lock().push(format!("started:{injected}"));
+    }
+    fn output(&self, chunk: &str) {
+        self.0.lock().push(format!("out:{chunk}"));
+    }
+    fn exited(&self, code: Option<u32>) {
+        self.0.lock().push(format!("exit:{code:?}"));
+    }
+}
+
+#[test]
+fn an_observer_hears_output_and_one_exit_with_no_view_attached() {
+    let seen = Observed::default();
+    let (s, replies) = slot(None);
+    let s = s.with_observer(Arc::new(seen.clone()));
+    s.data("a".into());
+    s.data(format!("b{QUERY}"));
+    s.exit(Some(3));
+    assert_eq!(
+        seen.events(),
+        ["out:a", format!("out:b{QUERY}").as_str(), "exit:Some(3)"]
+    );
+    // The slot's own cursor answer is not an observer call.
+    assert_eq!(replies.lock().len(), 1);
+}
+
+#[test]
+fn attaching_to_an_exited_process_does_not_repeat_the_exit_to_the_observer() {
+    let seen = Observed::default();
+    let (s, _) = slot(None);
+    let s = s.with_observer(Arc::new(seen.clone()));
+    s.exit(Some(7));
+    let rec = Recorder::default();
+    assert_eq!(
+        s.attach(Box::new(rec.clone())),
+        AttachOutcome::Exited { code: Some(7) }
+    );
+    assert_eq!(rec.events(), ["exit:Some(7)"]);
+    s.exit(Some(7)); // a stray second exit is not repeated to the observer
+    assert_eq!(seen.events(), ["exit:Some(7)"]);
+}
+
+#[test]
+fn an_observer_hears_what_a_dead_view_sink_drops() {
+    let seen = Observed::default();
+    let (s, _) = slot(Some(Box::new(Dead)));
+    let s = s.with_observer(Arc::new(seen.clone()));
+    s.data("x".into());
+    s.exit(None);
+    assert_eq!(seen.events(), ["out:x", "exit:None"]);
 }
 
 #[test]

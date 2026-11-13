@@ -283,6 +283,11 @@ impl OpencodeEventsManager {
         );
     }
 
+    /// Whether an adapter is attached for `harness_id` (#732).
+    pub fn is_attached(&self, harness_id: &str) -> bool {
+        self.inner.lock().contains_key(harness_id)
+    }
+
     /// Stop the adapter for `harness_id`. Idempotent.
     pub fn detach(&self, harness_id: &str) {
         // Dropping the Adapter triggers Drop → notify the task.

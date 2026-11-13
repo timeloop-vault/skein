@@ -15,6 +15,7 @@ import { restartFor } from "./harnessMounts.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
 import { createSidecarDeathRecord, watchSidecarExit } from "./opencodeSidecarExit.ts";
+import { noteViewAttached } from "./phaseInput.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
 import { forget as forgetLatency, recordEcho } from "./ptyLatency.ts";
 import { shellClaim } from "./shellClaim.ts";
@@ -264,6 +265,9 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				}
 				const { id, hermesHooks, mouseClicksDisabled, started } = result;
 				attached = { attachId: result.attachId };
+				// #732: this page rebuilt the phase record (`spawned` above) for a process
+				// it did not start; tell the daemon before any adapter feeds it.
+				noteViewAttached(harnessId, started);
 				ptyIdRef.current = id;
 				if (result.exited) {
 					// The `exit` event comes through the channel (exit line + shell

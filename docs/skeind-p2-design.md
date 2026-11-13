@@ -813,8 +813,9 @@ disabled; that check was run by hand and is not an automated assertion.
 
 ### Adapters and rows
 
-After a spawn the daemon attaches the adapters itself, with a consumer
-that drops every event. They write the `harness_actions` rows. opencode
+After a spawn the daemon attaches the adapters itself. They write the
+`harness_actions` rows, and since slice 4 their events feed the daemon's
+shadow phase machine. opencode
 attaches by the `--port` in the stored `cmd`, or by sidecar generation on
 v2. The client still attaches its own event channels for its phase
 machine, which stays in TypeScript until slice 4. Its attach replaces the
@@ -864,9 +865,9 @@ archived meanwhile, which covers what `reconcile` could not see yet.
 
 - The agent verdict check before a spawn is still client-side
   (`terminalSpawnAgent.ts`, calling `list_harness_agents`).
-- The phase machine and `harness_events` are client-side until slice 4.
-  Events emitted while no client is attached never reach the phase
-  machine.
+- The phase machine that decides and `harness_events` are client-side
+  until the flip (slice 4, part 2). Events emitted while no client is
+  attached reach only the daemon's shadow copy (see "Slice 4 as built").
 - Output written while no view is attached is lost until #584.
 - An unbound Hermes session capture and `hermes_work` stay client-side.
   The daemon tails Hermes only when the session id is already bound and
@@ -907,6 +908,286 @@ Not covered: macOS and Linux, Hermes, opencode v2, remote harnesses.
 
 Observed, not a result of this slice: the Activity card read "0 events"
 after a restart while `harness_actions` held rows (#740).
+
+## Slice 4 as built (#732)
+
+Slice 4 lands as two pull requests. This section describes part 1, the
+shadow run. The Rust phase machine exists, is fed, and is compared with
+the TypeScript one. The TypeScript machine still decides everything on
+screen: badges, toasts, notifications, the send gate and the
+`harness_events` log. Part 2, the flip, will rewrite this section.
+
+The code is `crates/skein-daemon/src/harness_phase/`:
+
+| File | The question it answers |
+| --- | --- |
+| `machine.rs` | What is the phase of each harness, and what does a tick change? (`PhaseMachine`) |
+| `lifecycle.rs` | What do spawn, exit, attach, detach, a session switch and a re-attach do? |
+| `io.rs` | What do PTY output, a keystroke and a submitted prompt do? |
+| `permission.rs` | When does a permission dialog open, and what clears it? |
+| `deferral.rs`, `work.rs` | Is an end of turn deferred while subagents or background tasks still run, and until when? |
+| `screen.rs` | What does the rendered Hermes screen say (`waiting`, `running`, `unknown`)? |
+| `supervisor.rs`, `supervisor_state.rs`, `invariants.rs` | Is the machine's state consistent with the facts, and what repairs a stale one? |
+| `subagents.rs`, `background_tasks.rs` | Which delegated work is outstanding per harness? |
+| `patterns.rs` | Does the screen tail end in a waiting prompt? |
+| `constants.rs`, `types.rs` | The thresholds and the vocabulary (phase, source, transition) |
+| `translate/` | What does one Claude, opencode or Hermes event mean for the machine? |
+| `service.rs` | Who owns the clock, the lock and the tick thread? (`PhaseService`) |
+| `shadow.rs` | Did both machines make the same transition? (`ShadowComparator`) |
+| `sinks.rs` | How do adapter events reach the service beside a client's own sink? (phase sinks, `Tee`) |
+| `client_input.rs` | What does the webview still have to tell the daemon? (`ClientPhaseInput`) |
+
+Four small pieces sit outside it: `pty/observer.rs` (`PtyObserver`),
+`harness_runner/phase_tap.rs` (the runner's observer) and
+`harness_runner/events.rs` (the phase sinks the app tees), and
+`agent_api/phase_tap.rs` (the hook routes). In the app,
+`commands/harness_phase.rs` has the one new command.
+
+### The port
+
+The machine is pure. Time is injected as `now_ms`, and it has no
+globals, threads or I/O. The TypeScript listeners became outboxes:
+`drain_transitions`, `drain_changed` and `drain_delegation_armed`. The
+transition source strings are the same as the TypeScript ones, because
+the comparator pairs on them.
+
+The vitest tables were ported as the spec before the machine was
+written to pass them. There are about 350 `#[test]` functions under
+`harness_phase/`. The cases that test code staying in the webview are
+marked `// NOT PORTED` with the reason: status labels and room
+aggregation (display), the `canSendPrompt` gate (send), and the mocked
+`invoke` and `Channel` plumbing assertions.
+
+The workspace has no regex dependency. The eight waiting-prompt regexes
+of `harnessPatterns.ts` are a hand-written matcher (`patterns.rs`) that
+reproduces the JavaScript semantics they use: ASCII case folding, `$`
+at line terminators, JavaScript `\s` and ASCII `\b`. It is checked
+against the real JavaScript regexes case by case.
+
+`PhaseService` is the driver. It holds the machine, the translators and
+the comparator behind one `std::sync::Mutex`. The clock is read and the
+facts are gathered before the lock is taken, and nothing is logged to a
+database from inside it. A poisoned lock is taken over. One std thread,
+`skein-phase-tick`, calls `tick_once` every 1 s. It holds only a `Weak`
+and ends when the service is dropped, and a panic in one pass is logged
+and the next one runs.
+
+### The inputs
+
+| Group | Input | How it reaches the machine |
+| --- | --- | --- |
+| Daemon | Spawn, restart, stop | `HarnessRunner` calls `spawned` through the observer, and `forget` on a stop or a failed restart. A restart's `spawned` clears the old record itself. A retired observer drops the old process's late output and exit |
+| Daemon | Every PTY output chunk and the exit | `PtyObserver` on the `SinkSlot`, whether or not a view is attached |
+| Daemon | Claude and opencode adapter events | The adapters the runner attaches deliver into the phase sinks |
+| Daemon | Claude `PermissionRequest` hook | `/api/harness/permission` calls `phase_permission`. It is dropped in post-exit-shell mode unless the stored shell claim accepts it. Both are read from the record |
+| Daemon | Hermes status hooks | `phase_hermes_hook` into the Hermes translator |
+| Client, teed | Claude and opencode event channels, the Hermes work poller | The app attaches its own channel with `Tee::new(client sink, phase sink)`. The new attach replaces the daemon's adapter, so the phase sink goes with it. The translator is told `attached` first |
+| Client | Keystroke | `input`: the key bytes and the empty-composer flag |
+| Client | Prompt submitted | `promptSubmitted`: a prompt sent through the #238 seam |
+| Client | Focus mute | `muteInducedOutput`: the client is about to cause a redraw |
+| Client | Screen reading | `screenReading`: `waiting`, `running`, `unknown`, or null to clear (#623) |
+| Client | Hermes launch poll | `hermesLaunchPoll`: one 500 ms poll, with whether the screen read `waiting` (#625) |
+| Client | Launch signal | `launchSignal`: the Claude CLI reported its own launch (`SessionStart`) |
+| Client | Session switched | `sessionSwitched`: `clear`, `resume`, `fork` or `startup` (#116, #539) |
+| Client | Recover unheard silence | `recoverUnheardSilence`: a mail nudge's lost first paste (#404) |
+| Client | Reattached | `reattached`: a view attached to a process that was already running (#731) |
+| Client | View reset | `viewReset`: the webview rebuilt its own record for a harness that keeps running. It touches no machine state and makes the comparator resync |
+
+The client inputs go through `harness_phase_input` (`{harnessId,
+input}`), one tagged enum, `ClientPhaseInput`. It is fire-and-forget:
+`phaseInput.ts` swallows any failure and the TypeScript machine never
+waits on the answer. The command is `async` so a keystroke does not run
+on the main thread.
+
+### Deviation from D2
+
+D2 says the daemon sees stdin writes itself and the client only adds the
+empty-composer fact. As built, the client reports each keystroke as an
+input (the data and the flag), and the daemon does not tap stdin. The
+TypeScript machine counts only keystrokes (xterm `onKey`), while the
+PTY's stdin also carries pastes, mail nudges, focus reports and terminal
+replies. Tapping all writes would change the decisive-input rule.
+
+Likewise the Claude `SessionStart` hook's launch signal and session
+switch are forwarded by the client, and the hook route does not feed
+them. The decision depends on shell-claim and session-follow state that
+stays client-side in this slice.
+
+### The shadow comparator
+
+Every transition the TypeScript machine logs already goes through
+`db_record_harness_event`. That command now also hands it to the
+comparator (`shadow_client_transition`), after the database write and
+whatever its result. The Rust side hands over each transition the
+machine makes, in `Inner::after`, for harnesses the service knows.
+
+- **Pairing.** Two transitions are the same when `to` and `source`
+  match and their timestamps are within `SHADOW_PAIR_WINDOW_MS` (5 s).
+  The closest twin wins. A differing `from` is counted as
+  `from_mismatch` and logged at debug, not warned: it is the echo of an
+  earlier divergence.
+- **Expiry.** An entry with no twin after 5 s, measured from when it
+  reached the comparator, is a divergence, reported once. Each side keeps
+  at most `SHADOW_PENDING_CAP` (256) pending entries per harness.
+- **Skipped.** Client rows with source `user-restart` or
+  `version-auto-restart` (the frontend writes these straight to the log),
+  and rows for a harness the service does not know.
+- **View reset.** After `viewReset` the comparator drops what is pending
+  for the harness and skips client rows whose `from` is `spawning`, until
+  the first one that is not, or for `SHADOW_RESYNC_MS` (15 s). A reloaded
+  webview replays `spawning -> ...` rows that the steady Rust machine
+  never makes.
+  A real spawn ends a resync (`PhaseService::spawned`), because a
+  restart is not a rebuild of a running harness; a `viewReset` within
+  `SHADOW_RESET_AFTER_SPAWN_MS` (2 s) after a spawn is ignored, for the
+  other arrival order.
+- **Log.** Target `skein::phase_shadow`. WARN with `side` `rust_only` or
+  `client_only`, the age, and the other side's three nearest pending
+  transitions. At most `SHADOW_WARN_PER_MIN` (20) WARN lines per harness
+  per rolling minute; the rest are counted as `suppressed`. Pairs are
+  logged at debug, and the supervisor's violations too. Every
+  `SHADOW_SUMMARY_EVERY_MS` (5 minutes) one info line gives the counters,
+  if anything was compared.
+
+```mermaid
+flowchart LR
+    H[Harness process]
+    T["Daemon taps"]
+    W["Webview, TypeScript machine"]
+    I[harness_phase_input]
+    S["PhaseService, Rust machine"]
+    R[db_record_harness_event]
+    C[Comparator]
+    L[Log]
+    H -->|"1 output, exit"| T
+    T -->|"2 events, hooks"| S
+    T -->|"3 same events"| W
+    W -->|"4 keys, screen, signals"| I
+    I -->|"5 client inputs"| S
+    W -->|"6 transitions"| R
+    R -->|"7 client side"| C
+    S -->|"8 Rust side"| C
+    C -->|"9 divergences"| L
+```
+
+Figure 7: the inputs into the Rust machine, and where the two
+transition streams meet. Renders section "Slice 4 as built" and
+crates/skein-daemon/src/harness_phase/; the text is authoritative
+(non-normative).
+
+1. The harness process writes output and eventually exits. The PTY
+   observer hears both, whether or not a view is attached. The adapters
+   tail the tool's own transcript or event stream.
+2. The taps feed the Rust machine: PTY output and exit, the adapter
+   events through the phase sinks, the Claude permission hook (gated on
+   shell mode and the stored shell claim) and the Hermes hooks.
+3. The webview's own channels carry the same adapter events. They are
+   teed, so each event also reaches the Rust machine through step 2's
+   sinks.
+4. The webview observes what the daemon cannot: keystrokes, the rendered
+   Hermes screen, a submitted prompt, the focus mute and the Claude
+   launch and session decisions.
+5. It forwards those through `harness_phase_input`, and the service
+   applies them.
+6. The TypeScript machine decides, and logs each transition.
+7. `db_record_harness_event` writes the row and also hands the transition
+   to the comparator.
+8. The Rust machine's transitions go to the comparator from the service.
+9. A transition with no twin within 5 s is logged as a divergence under
+   `skein::phase_shadow`.
+
+### What part 1 does not do
+
+- The daemon writes no `harness_events` rows. The client still does.
+- It emits no phase stream.
+- `harness_phases` is still a client round trip.
+- The double attach stays: the client attaches its own event channels,
+  replacing the daemon's, and `release_events` hands the adapter back.
+- Mail delivery and nudges are untouched (#733).
+- The changed and delegation-armed outboxes are drained and dropped, so
+  they cannot grow. The flip reads them (`FLIP(#732)` markers in
+  `service.rs`).
+
+### Known limits
+
+- With no client attached, the Hermes screen phase reads `unknown`
+  (#584). The machine treats "no client reporting" as an `unknown`
+  reading.
+- The supervisor's `mail_held` and `tail_silent_file_growing` get no
+  facts yet. The tick supplies only whether an adapter is attached, so
+  those two cannot fire. The mail facts move with #733 and the
+  transcript sampler comes with the flip.
+- During the attach swap, two sources can briefly feed one translator:
+  the daemon's adapter until the client's attach replaces it, and the
+  client's channel after.
+- The shell claim reaches the daemon through debounced room saves
+  (`shellClaim` and `cmd` are not in the structural key). A permission
+  ping within that window can be gated differently than in the webview.
+- The screen reading is forwarded only while the webview samples it,
+  and only when it changes (`screenPhaseTick.ts`).
+- A webview reload makes the TypeScript machine rebuild its record from
+  the transcripts; an armed end-of-turn deferral is lost there
+  (attach-seeded work never counts) while the Rust machine keeps it, so
+  the two disagree until the next end of turn. The flip removes the
+  TypeScript side of this.
+- A webview reload also gives the TypeScript side a fresh Hermes
+  binding, while the daemon keeps its Hermes translator and the state
+  in it (open approvals, the open main turn).
+- In a dev build, React StrictMode's second mount can send its view
+  reset more than 2 s after the spawn when the adapter attach replays a
+  long transcript. The comparator then opens a resync it should not, and
+  skips that harness's `spawning` rows for up to 15 s.
+
+### Live verification
+
+On 2026-11-12 an isolated dev instance on Windows was driven over CDP
+twice, with the shadow comparator logging at debug.
+
+Run 1 (before the review fixes): a Claude turn, a main-session
+permission dialog answered by a keystroke, a short subagent, `/context`,
+an opencode busy/idle cycle, a shell's idle heuristic, a webview reload,
+`/exit`, and an app restart. 42 transitions paired, 14 did not. All 14
+had one of two causes:
+
+- The webview's rebuild rows after the reload (3).
+- The order of adapter attach and first PTY output (11): the daemon
+  attaches its adapter at spawn, so the Rust machine is authoritative
+  before the first output and goes `spawning` to `waiting` on the launch
+  signal or the replayed end of turn, where the TypeScript machine in a
+  dev build sees output first and goes `spawning` to `running` via
+  `pty-output`.
+
+One launch also took the 15 s launch-silent fallback on the Rust side,
+because a folder-trust dialog delayed Claude's SessionStart hook. The
+end states agreed in every case.
+
+Run 2 (after the fixes: pairing on `to` and `source`, view reset, clean
+restart): a fresh Claude launch, a turn, a background subagent and a
+background task that both outlived the turn (status "delegating · 1
+agent, 1 task" and "background · 1 task"), a reload while the task was
+outstanding, Restart harness, a shell, and an opencode busy/idle cycle.
+21 paired, 4 did not, 3 rebuild rows skipped, no `from` mismatch. The 4:
+
+- Two were the attach-order difference above, in a room opened on the
+  wrong folder.
+- One was the reload losing the TypeScript side's deferral (see Known
+  limits).
+- One was the comparator skipping a real restart's row, fixed afterwards
+  by ending a resync on a real spawn (covered by unit tests, not re-run
+  live).
+
+Not covered live: a subagent's own permission dialog, a background task
+reaching its ceiling, a real opencode reply (the local model was
+unreachable), Hermes, opencode v2, remote harnesses, macOS and Linux.
+
+Observed, not a result of this slice: after an app kill and relaunch a
+Claude harness was spawned with `--session-id` for a transcript that
+already existed and exited with "Session ID ... is already in use", with
+no earlier claude process alive; after `/exit` and Enter for shell, the
+harness came back as a shell on relaunch and Restart harness also
+started the shell; New Room on a linked worktree's path resolved to the
+main checkout with a trailing slash and tailed the wrong transcript
+directory.
 
 ## What #583 assumes of #584 and #585
 

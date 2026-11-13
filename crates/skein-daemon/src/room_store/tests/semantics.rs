@@ -25,6 +25,14 @@ fn harness_ids(f: &Fixture, room_id: &str) -> Vec<String> {
 }
 
 #[test]
+fn harness_record_clones_only_the_named_harness() {
+    let f = Fixture::with_rooms(&[room_with("r1", &["h1", "h2"]), room_with("r2", &["h1"])]);
+    assert_eq!(f.store.harness_record("r1", "h2").unwrap().id, "h2");
+    assert!(f.store.harness_record("r1", "nope").is_none());
+    assert!(f.store.harness_record("nope", "h1").is_none());
+}
+
+#[test]
 fn two_clients_writing_different_rooms_do_not_erase_each_other() {
     let f = Fixture::with_rooms(&[room("r1")]);
     f.apply("a", vec![M::CreateRoom { room: room("r2") }]);

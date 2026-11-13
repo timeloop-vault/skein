@@ -294,6 +294,12 @@ impl ClaudeEventsManager {
         removed
     }
 
+    /// Whether an adapter is attached for `harness_id` (#732: the phase
+    /// supervisor's `live_attach` fact).
+    pub fn is_attached(&self, harness_id: &str) -> bool {
+        self.inner.lock().adapters.contains_key(harness_id)
+    }
+
     /// Manual counterpart to the automatic dead-tail path in
     /// `supervise_map` (#410) — the `claude_events_reattach` Tauri
     /// command's entry point. Unlike the automatic path, this never

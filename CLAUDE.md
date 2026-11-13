@@ -151,6 +151,13 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   reconcile on RoomStore::observe), boot_resume (the
     │                                #   once-per-process resume preparation; spawns nothing)
     │                                #   and pty/sink_slot (the replaceable output sink)
+    │                                #   #732 (part 1) added harness_phase/ (the pure
+    │                                #   PhaseMachine port of the TS phase store, translate/
+    │                                #   for the Claude/opencode/Hermes events, PhaseService
+    │                                #   the driver with the 1 s tick, and the shadow
+    │                                #   comparator) and pty/observer (the tap on a PTY's
+    │                                #   output and exit); it runs beside the TS machine
+    │                                #   and decides nothing yet
     │                                #   See docs/skeind-crates.md
     ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
     │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
@@ -237,6 +244,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   patterns + L2c authoritative adapters. #277 defers
     │   │   │                        #   a main session's end-of-turn while its subagents
     │   │   │                        #   are still working, rather than adding a phase.
+    │   │   │                        #   A Rust port of this machine runs in shadow in
+    │   │   │                        #   skein-daemon's harness_phase/ (#732); this TS one
+    │   │   │                        #   stays the authority until the flip.
     │   │   │                        #   Split (#19) into the public entry (store object +
     │   │   │                        #   re-exports; importers keep using ./harnessActivity)
     │   │   │                        #   over harnessActivityCore.ts (the single mutable
@@ -628,7 +638,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   server's `/event` SSE stream. Each source feeds two consumers:
   (a) semantic events → `harnessEvents.ts` → the `harnessActivity`
   phase store (single state machine; transitions are logged to
-  `harness_events` and drive badges/toasts/OS notifications), and
+  `harness_events` and drive badges/toasts/OS notifications; a Rust
+  port of it runs in shadow in skein-daemon's `harness_phase/` (#732),
+  fed by the same events plus the client's own inputs, and the
+  TypeScript machine stays the authority until the flip; every
+  transition without a twin on the other side is logged under the
+  `skein::phase_shadow` target), and
   (b) action extraction → `harness_actions` rows in sqlite + a global
   `"harness-action"` Tauri event for live rows only. **Where the store
   paths and row shapes live: `crates/skein-harness` (#209)** — parser
@@ -1122,7 +1137,7 @@ the agent API from a shell harness); macOS isn't covered yet.
 - **Tests live with the code that owns them.**
   `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `crates/skein-review` has 45; `crates/skein-daemon` has ~1,250
+  `crates/skein-review` has 45; `crates/skein-daemon` has 1,833
   in-module tests on Windows (db persistence, spawn-env merging, resume
   probes, harness JSONL/SSE parsers, pty, the agent API, …); `crates/skein-proto` has the 4 harness_kind tests;
   `app/src-tauri` has ~70 in-module unit tests that run on Windows

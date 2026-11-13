@@ -15,6 +15,7 @@ use crate::harness_events_opencode::{
 use crate::harness_runner::HarnessRunner;
 use crate::opencode_sidecar::OpencodeSidecarManager;
 use crate::tauri_stream_sink::TauriChannelSink;
+use skein_daemon::harness_phase::sinks::Tee;
 
 /// Start tailing the Claude JSONL session log for a harness. Emits
 /// semantic `ClaudeEvent` values over `on_event` whenever the file
@@ -42,8 +43,13 @@ pub(crate) async fn claude_events_attach(
     fresh_process: bool,
     on_event: Channel<ClaudeEvent>,
     app: tauri::AppHandle,
+    runner: tauri::State<'_, Arc<HarnessRunner>>,
 ) -> Result<(), String> {
     let log_harness_id = harness_id.clone();
+    // #732 shadow: a new attach replaces the daemon's own adapter, so its
+    // phase translator is told first and fed beside the client's channel.
+    let phase_sink = runner.claude_phase_sink(&harness_id);
+    runner.phase().claude_attached(&harness_id);
     let join_result = tauri::async_runtime::spawn_blocking(move || {
         let manager = app.state::<ClaudeEventsManager>();
         claude_events_attach_impl(
@@ -53,7 +59,7 @@ pub(crate) async fn claude_events_attach(
             &session_id,
             &cwd,
             fresh_process,
-            TauriChannelSink::new(on_event),
+            Tee::new(TauriChannelSink::new(on_event), phase_sink),
         )
     })
     .await;
@@ -167,7 +173,10 @@ pub(crate) async fn opencode_events_attach(
     on_event: Channel<OpencodeEvent>,
     manager: tauri::State<'_, OpencodeEventsManager>,
     sidecars: tauri::State<'_, OpencodeSidecarManager>,
+    runner: tauri::State<'_, Arc<HarnessRunner>>,
 ) -> Result<(), String> {
+    let phase_sink = runner.opencode_phase_sink(&harness_id);
+    runner.phase().opencode_attached(&harness_id);
     opencode_events_attach_impl(
         &manager,
         &sidecars,
@@ -179,7 +188,7 @@ pub(crate) async fn opencode_events_attach(
             session_id,
             sidecar_generation,
         },
-        TauriChannelSink::new(on_event),
+        Tee::new(TauriChannelSink::new(on_event), phase_sink),
     )
 }
 
