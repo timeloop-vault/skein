@@ -1,21 +1,25 @@
-//! Boot resume, owned by the daemon (#731): once per daemon process, at the
-//! first successful rooms load, probe each harness's stored session, drop the
-//! stale ids, rewrite every harness `cmd` to its resume form (allocating fresh
-//! opencode ports) and store the result through the `RoomStore` write path.
-//! Nothing is spawned here; that happens on first request.
+//! Boot preparation, owned by the daemon (#731, reduced by #753): at the first
+//! rooms load that returns rooms, three small steps over the stored rows,
+//! written through the `RoomStore` write path. Nothing is spawned here; that
+//! happens on first request, and `ensure_running` derives the argv from the
+//! record then (#752), so resume-versus-fresh, stale session ids and session
+//! minting are the spawn's business, not this module's.
+//!
+//! 1. `migrate_launch`: fill in `Harness.launch` on pre-#752 records.
+//! 2. The #517 shell claim: a live claim turns a shell-mode Claude/opencode
+//!    harness back into its tool (`launch` and claim cleared, `cmd` reset to
+//!    the bare program); a stale one is just cleared.
+//! 3. A fresh opencode port: the spawn re-passes the `--port` parsed from the
+//!    stored cmd, so each process start needs a new free one in it.
 //!
 //! The preparation is a barrier (#744). A mutex is held across the load and
 //! the preparation, so a load that starts meanwhile (a reload, a double
 //! hydrate, the retry button) waits, then does its own load and reads the
 //! prepared rows. No load returns while the preparation is still running; a
-//! caller gets unprepared rows only when the preparation itself failed.
+//! caller gets unprepared rows only when the preparation itself failed, and
+//! then the next load tries again.
 //! Lock order: this barrier is taken first, before the store lock and the db
 //! lock, and never while holding either.
-//!
-//! This is the port of the frontend's hydrate step (`useRoomsHydrate.ts` +
-//! `roomsStoreProbe.ts` `stillExists`): a session id is stale only when its
-//! probe says `false`; a probe error keeps the id; opencode v2 skips the
-//! probe. Archived rooms are included, exactly as the frontend did.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -25,10 +29,7 @@ use skein_proto::room_mutations::RoomMutation;
 use skein_proto::rooms::{Harness, Room};
 
 use crate::db::{Database, LoadOutcome};
-use crate::harness_argv::{
-    ResumeRoomsInput, ResumeRoomsOutput, is_opencode_v2, migrate_launch, resume_rooms_with,
-    uuid_session_id,
-};
+use crate::harness_argv::{is_opencode_v2, migrate_launch, opencode_port_args, shell_argv};
 use crate::pty::opencode::pick_free_port;
 use crate::room_store::RoomStore;
 use crate::spawn_env::state::SpawnEnvState;
@@ -38,15 +39,18 @@ pub const BOOT_ORIGIN: &str = "daemon-boot";
 
 /// Once-per-process state of the boot preparation.
 pub struct BootResume {
-    /// The barrier. `true` once the first successful load has been through
-    /// the preparation (or skipped it because there were no rooms).
+    /// The barrier. `true` once a load with rooms has been through a
+    /// preparation that succeeded.
     done: Mutex<bool>,
     /// `None` only in tests; Hermes then reads as "can't tell".
     spawn_env: Option<Arc<SpawnEnvState>>,
+    /// Does the harness have a process right now? A retried preparation must
+    /// not touch a harness that is up.
+    running: Arc<dyn Fn(&str) -> bool + Send + Sync>,
 }
 
-/// The `--port <p>` of an opencode resume argv: how a later step recovers the
-/// port this module allocated, without a side map.
+/// The `--port <p>` of an opencode argv: how a later step recovers the port
+/// this module allocated, without a side map.
 #[must_use]
 pub fn opencode_port_from_cmd(cmd: &[String]) -> Option<u16> {
     let at = cmd.iter().position(|a| a == "--port")?;
@@ -108,38 +112,73 @@ pub fn session_survives(h: &Harness, probe: &impl Fn(&Harness) -> Result<bool, S
     }
 }
 
-/// Drop stale session ids, then rewrite every harness to resume form, with
-/// the probe, port picker and session minter injected.
+/// The three boot steps over the stored rooms, with the probe, port picker
+/// and running check injected. `session_id` is read, never changed.
+///
+/// # Errors
+/// The port picker failed; nothing is returned then.
 pub fn prepare_with(
     mut rooms: Vec<Room>,
     probe: impl Fn(&Harness) -> Result<bool, String>,
-    pick: impl FnMut() -> Result<u16, String>,
-    mint: impl FnMut() -> String,
-) -> ResumeRoomsOutput {
+    mut pick: impl FnMut() -> Result<u16, String>,
+    is_running: impl Fn(&str) -> bool,
+) -> Result<Vec<Room>, String> {
     for room in &mut rooms {
         // #752's one-time migration: records written before `launch` existed
-        // get it filled in here, and `changed_harnesses` persists it. Keep
-        // this first step if boot resume is reworked (#753).
+        // get it filled in here, and `changed_harnesses` persists it. It must
+        // run once per boot, before any spawn.
         migrate_launch(room);
+        let archived = room.archived.is_some();
         for h in &mut room.harnesses {
-            if !session_survives(h, &probe) {
-                tracing::info!(kind = %h.kind, harness = %h.id, "boot resume: dropping stale sessionId");
-                h.session_id = None;
+            if h.cmd.is_none() || is_running(&h.id) {
+                continue;
+            }
+            let Some(kind) = HarnessKind::from_name(&h.kind) else {
+                continue;
+            };
+            if matches!(kind, HarnessKind::Claude | HarnessKind::Opencode) {
+                settle_shell_claim(h, kind, &probe);
+            }
+            if kind == HarnessKind::Opencode && !archived && shell_argv(h).is_none() {
+                let port = pick()?;
+                let mut cmd = vec!["opencode".to_owned()];
+                cmd.extend(opencode_port_args(port));
+                h.cmd = Some(cmd);
             }
         }
     }
-    resume_rooms_with(
-        ResumeRoomsInput {
-            rooms,
-            unarchive: false,
-        },
-        pick,
-        mint,
-    )
+    Ok(rooms)
+}
+
+/// The #517 claim: live (same non-blank session, which still exists) puts a
+/// shell-mode harness back on its tool; anything else just drops the claim.
+/// The session id is never touched; the spawn drops a stale one itself. The
+/// probe is only called for a shell-mode harness whose claim matches.
+fn settle_shell_claim(
+    h: &mut Harness,
+    kind: HarnessKind,
+    probe: &impl Fn(&Harness) -> Result<bool, String>,
+) {
+    let Some(claim) = h.shell_claim.as_ref() else {
+        return;
+    };
+    if shell_argv(h).is_none() {
+        h.shell_claim = None;
+        return;
+    }
+    let matches =
+        !claim.session_id.trim().is_empty() && h.session_id.as_deref() == Some(&claim.session_id);
+    let live = matches && session_survives(h, probe);
+    h.shell_claim = None;
+    if live && let Some(program) = kind.program() {
+        h.launch = None;
+        h.cmd = Some(vec![program.to_owned()]);
+    }
 }
 
 /// One `PutHarness` per harness that differs between `before` and `after`
-/// (same rooms, same harness order: resume never adds or removes either).
+/// (same rooms, same harness order: preparation never adds or removes either).
+/// The whole-harness `PutHarness` is left for #755.
 #[must_use]
 pub fn changed_harnesses(before: &[Room], after: &[Room]) -> Vec<RoomMutation> {
     let same =
@@ -159,11 +198,16 @@ pub fn changed_harnesses(before: &[Room], after: &[Room]) -> Vec<RoomMutation> {
 }
 
 impl BootResume {
+    /// `running` answers "does this harness id have a process right now".
     #[must_use]
-    pub fn new(spawn_env: Arc<SpawnEnvState>) -> Self {
+    pub fn new(
+        spawn_env: Arc<SpawnEnvState>,
+        running: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    ) -> Self {
         Self {
             done: Mutex::new(false),
             spawn_env: Some(spawn_env),
+            running,
         }
     }
 
@@ -172,6 +216,7 @@ impl BootResume {
         Self {
             done: Mutex::new(false),
             spawn_env: None,
+            running: Arc::new(|_| false),
         }
     }
 
@@ -182,25 +227,20 @@ impl BootResume {
         probe_session(self.spawn_env.as_deref(), h)
     }
 
-    /// [`crate::rooms::load_rooms`], then, on the first successful load of
-    /// this process, the boot preparation. The prepared rooms are what the
-    /// store holds and what the outcome returns. A load that starts while the
+    /// [`crate::rooms::load_rooms`], then, until a preparation has
+    /// succeeded, the boot preparation. The prepared rooms are what the store
+    /// holds and what the outcome returns. A load that starts while the
     /// preparation runs waits for it and then reads the prepared rows; so
-    /// does every later load. A failed load does not use up the preparation.
-    /// A preparation failure is logged and the unprepared rooms are
-    /// returned; it is not retried, since a later load may find the
-    /// harnesses already running.
+    /// does every later load. A failed load does not use up the preparation,
+    /// and neither does a load with no rooms. A preparation failure is logged
+    /// and the unprepared rooms are returned; the next load tries again. A
+    /// retry can run while harnesses are up, so the running check is what
+    /// keeps it from touching a live harness.
     ///
     /// # Errors
     /// The underlying load failed.
     pub fn load_rooms(&self, db: &Arc<Database>, store: &RoomStore) -> Result<LoadOutcome, String> {
-        self.load_rooms_with(
-            db,
-            store,
-            |h| self.probe(h),
-            pick_free_port,
-            uuid_session_id,
-        )
+        self.load_rooms_with(db, store, |h| self.probe(h), pick_free_port)
     }
 
     fn load_rooms_with(
@@ -209,18 +249,17 @@ impl BootResume {
         store: &RoomStore,
         probe: impl Fn(&Harness) -> Result<bool, String>,
         pick: impl FnMut() -> Result<u16, String>,
-        mint: impl FnMut() -> String,
     ) -> Result<LoadOutcome, String> {
         // Held to the end: see the module doc for the lock order. A poisoned
         // guard is recovered, since the flag is always valid.
         let mut done = self.done.lock().unwrap_or_else(PoisonError::into_inner);
         let mut outcome = crate::rooms::load_rooms(db, store)?;
-        if !*done {
-            *done = true;
-            if !outcome.rooms.is_empty()
-                && let Err(e) = prepare(store, &mut outcome, probe, pick, mint)
-            {
-                tracing::error!(error = %e, "boot resume: preparation failed; rooms left unprepared");
+        if !*done && !outcome.rooms.is_empty() {
+            match prepare(store, &mut outcome, probe, pick, &*self.running) {
+                Ok(()) => *done = true,
+                Err(e) => {
+                    tracing::error!(error = %e, "boot resume: preparation failed; rooms left unprepared");
+                }
             }
         }
         Ok(outcome)
@@ -232,21 +271,23 @@ fn prepare(
     outcome: &mut LoadOutcome,
     probe: impl Fn(&Harness) -> Result<bool, String>,
     pick: impl FnMut() -> Result<u16, String>,
-    mint: impl FnMut() -> String,
+    is_running: impl Fn(&str) -> bool,
 ) -> Result<(), String> {
-    let prepared = prepare_with(outcome.rooms.clone(), probe, pick, mint);
-    let mutations = changed_harnesses(&outcome.rooms, &prepared.rooms);
-    let dropped = outcome
+    let prepared = prepare_with(outcome.rooms.clone(), probe, pick, is_running)?;
+    let mutations = changed_harnesses(&outcome.rooms, &prepared);
+    let ports_refreshed = outcome
         .rooms
         .iter()
-        .zip(&prepared.rooms)
+        .zip(&prepared)
         .flat_map(|(b, a)| b.harnesses.iter().zip(&a.harnesses))
-        .filter(|(hb, ha)| hb.session_id.is_some() && hb.session_id != ha.session_id)
+        .filter(|(hb, ha)| {
+            hb.cmd != ha.cmd && ha.cmd.as_deref().and_then(opencode_port_from_cmd).is_some()
+        })
         .count();
     tracing::info!(
         rooms = outcome.rooms.len(),
-        cmds_changed = mutations.len(),
-        stale_sessions_dropped = dropped,
+        harnesses_changed = mutations.len(),
+        ports_refreshed,
         "boot resume: prepared the stored rooms"
     );
     if mutations.is_empty() {

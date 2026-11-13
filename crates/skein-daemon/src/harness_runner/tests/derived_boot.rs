@@ -33,8 +33,8 @@ fn as_json(h: &Harness) -> Value {
 /// write the changed harnesses through the store.
 fn boot_prepare(fx: &Fx, probe: impl Fn(&Harness) -> Result<bool, String>) {
     let before = fx.daemon.rooms.rooms();
-    let out = prepare_with(before.clone(), probe, || Ok(4321), || "minted".to_owned());
-    let muts = changed_harnesses(&before, &out.rooms);
+    let out = prepare_with(before.clone(), probe, || Ok(4321), |_| false).unwrap();
+    let muts = changed_harnesses(&before, &out);
     if !muts.is_empty() {
         let res = fx.daemon.rooms.apply("daemon-boot", muts).unwrap();
         assert!(res.skipped.is_empty(), "{:?}", res.skipped);
@@ -77,9 +77,10 @@ fn a_claude_record_resumes_with_or_without_boot_preparation() {
             boot_prepare(&fx, |_| Ok(true));
             assert_eq!(
                 stored(&fx).cmd,
-                Some(sv(&["claude", "--resume", SID])),
-                "boot did rewrite the stored cmd"
+                Some(sv(&["claude", "--session-id", SID])),
+                "boot leaves a Claude cmd and its session id as stored"
             );
+            assert_eq!(stored(&fx).session_id.as_deref(), Some(SID));
         }
         fx.ensure(false, None).unwrap();
         assert_eq!(

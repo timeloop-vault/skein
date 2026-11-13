@@ -149,7 +149,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   ensure_running spawns from the stored record and
     │                                #   attaches the adapters, stop_harness, detach_view,
     │                                #   reconcile on RoomStore::observe), boot_resume (the
-    │                                #   once-per-process resume preparation; spawns nothing)
+    │                                #   retryable boot preparation, #753: launch, shell claim,
+    │                                #   opencode port; spawns nothing)
     │                                #   and pty/sink_slot (the replaceable output sink)
     │                                #   #752 added harness_argv/spawn.rs (`spawn_argv`) and
     │                                #   launch.rs (`migrate_launch`): `ensure_running` derives
@@ -639,19 +640,21 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   then finds the session, never `--continue`, and the shell argv when
   `Harness.launch` is a shell (Enter on an exited pane sets it and leaves
   `cmd` alone; Restart harness clears it; boot and unarchive keep it).
-  Boot resume is the daemon's too (`boot_resume.rs`; first `migrate_launch`
-  fills `launch` for old records): at the first successful rooms
-  load of the process it drops stale sessionIds (`resume.rs`, probes the
-  tools' own stores) and rewrites each stored cmd to its resume form with
-  a fresh opencode port (`resume_harness` in `harness_argv/`:
-  `claude --resume <sid>`,
-  `opencode --port <p> --hostname 127.0.0.1 --session <sid>`), saved
-  under origin `daemon-boot`, though that is no longer what makes a
-  spawn resume (`cmd` now carries the opencode port, serves non-resuming
-  kinds and the `expectCmd` check); it spawns nothing — a harness starts
-  on its first request. The frontend reads the ports back from the cmds
-  (`opencodePort.ts`). Reopening an archived room runs the same rewrite
-  (#153) through `rooms_resume_cmds` (#730), merged back by id
+  Boot preparation is the daemon's too (`boot_resume.rs`, reduced by
+  #753): every rooms load takes a mutex, and the first load that returns
+  a room prepares it, once it succeeds (a failure is logged, that load
+  returns the unprepared rooms and the next one retries, skipping
+  running harnesses). It runs `migrate_launch` (fills `launch` for old
+  records), settles each #517 shell claim (a live claim goes back to its
+  tool, a dead one is removed) and gives each opencode harness in tool
+  mode a fresh port, so its stored cmd is
+  `opencode --port <p> --hostname 127.0.0.1`. Stale session ids are the
+  spawn's business (it probes and writes the id back), so boot no longer
+  drops them, mints Claude ids or writes resume forms. It saves under
+  origin `daemon-boot` and spawns nothing — a harness starts on its first
+  request. The frontend reads the ports back from the cmds
+  (`opencodePort.ts`). Reopening an archived room runs the resume
+  rewrite (#153) through `rooms_resume_cmds` (#730), merged back by id
   (`harnessArgvApply.ts`). See docs/skeind-p2-design.md, "Slice 3".
 - **Watchers** (`WatcherManager`, notify-debouncer-mini, 200 ms,
   `.git/` deliberately unfiltered) push `()` over a Channel; the

@@ -27,7 +27,7 @@ no client attached. Surviving the restart is #584.
 | Spawn and kill of the PTY | Daemon since slice 3 (#731); before it, the frontend | `harness_runner/`: spawns from the stored record on first request, stops when the record goes. `useTerminalSpawn.ts` asks, attaches and detaches |
 | PTY output | Replaceable sink per PTY | `pty/sink_slot.rs`. No ring buffer in the daemon (#584); with no sink attached output is dropped |
 | Room and harness records | Daemon since slice 1 (#729); before it, the frontend saved wholesale | `RoomStore` (`room_store/`); clients send mutations through `rooms_apply`. `db_save_rooms` and `roomsSaveScheduler.ts` are gone |
-| Boot resume | Daemon since slice 3 (#731); before it, the frontend | `boot_resume.rs`: probes, stale session ids, resume cmds, saved under origin `daemon-boot`. `useRoomsHydrate.ts` keeps the folder and identity gates |
+| Boot resume | Daemon since slice 3 (#731); before it, the frontend | `boot_resume.rs`: launch migration, shell claims, a fresh opencode port; retried until it succeeds (#753), saved under origin `daemon-boot`. `useRoomsHydrate.ts` keeps the folder and identity gates |
 | Adapters (Claude JSONL, opencode SSE, Hermes) | Daemon attaches them after a spawn (slice 3); the client still attaches its own Claude and opencode event channels, teed into the daemon's phase sink, for non-phase consumers (slice 4) | `harness_runner/adapters.rs`, `terminalSpawnAdapters.ts` |
 | Transition log (`harness_events`), action rows (`harness_actions`) | Daemon: action rows since slice 3, the transition log since slice 4 | `harness_phase/stream.rs`, `useHarnessActions.ts` |
 | Phase machine | Daemon since slice 4 (#732); before it, the frontend. The webview mirrors it | `harness_phase/`; `phaseMirror.ts`, `harnessActivity.ts`, `subagents.ts`, `backgroundTasks.ts` |
@@ -737,10 +737,12 @@ a stop. Renders section "Slice 3 as built" and
 crates/skein-daemon/src/harness_runner/; the text is authoritative
 (non-normative).
 
-1. At the first successful rooms load of the daemon process, boot resume
-   probes the stored sessions, clears stale ids and rewrites every `cmd`
-   to resume form. It spawns nothing. (Since #752 the rewrite is no longer
-   what makes a spawn resume; the spawn derives its argv itself.)
+1. At the first successful rooms load of the daemon process, boot
+   preparation runs the launch migration per room, the shell-claim step and
+   a fresh opencode port, and is retried until it succeeds (#753). It
+   spawns nothing. (As built in #731 it also probed sessions and rewrote
+   every `cmd` to resume form; #753 reduced it, see "Boot preparation
+   after #753". Since #752 the spawn derives its argv itself.)
 2. A view asks for the harness with `harness_ensure_running`. Before it
    does, the client drains its pending room mutations so the record is
    at the daemon.
@@ -766,6 +768,9 @@ crates/skein-daemon/src/harness_runner/; the text is authoritative
     `harness_stop` does the same, after waiting for the gate.
 
 ### Boot resume
+
+(#753 reduced this step; see "Boot preparation after #753". The rest of
+this section is the record of #731 as built.)
 
 `BootResume::load_rooms` (`boot_resume.rs`) wraps the rooms load. At the
 first successful load with at least one room in this daemon process it:
@@ -969,31 +974,123 @@ absent means the kind's own tool):
 | --- | --- |
 | Enter on an exited pane (`withShellLaunch`, `harnessCreation.ts`) | Sets shell; `cmd` is left alone |
 | Restart harness (`back_to_tool`, `plan.rs`) | Clears it: back to the tool |
-| Boot resume, unarchive | Keep a shell launch (`resume_shell`) |
-| A live shell claim (#517, `resume_shell`) | Clears it, the claimed session resumes |
-| `migrate_launch` (`launch.rs`, first in boot resume) | Infers shell once for old records whose `cmd[0]` is not the kind's program |
+| Boot preparation (#753), unarchive | Keep a shell launch |
+| A live shell claim (#517; boot preparation, #753) | Clears it, the claimed session resumes |
+| `migrate_launch` (`launch.rs`, first in boot preparation) | Infers shell once for old records whose `cmd[0]` is not the kind's program |
 
-`cmd` is still stored and still written by boot resume and by the client
-on create, restart and unarchive. It now carries only the opencode
-`--port` (`stored_opencode_port` in `gates.rs`), is the argv for kinds
-that do not resume, and feeds the `expectCmd` staleness check.
+`cmd` is still stored. The client writes it on create, restart and
+unarchive, and since #753 boot preparation writes it only to give an
+opencode harness a fresh `--port` (or to reduce it to the program when a
+shell claim goes back to its tool). It carries the opencode `--port`
+(`stored_opencode_port` in `gates.rs`), is the argv for kinds that do not
+resume, and feeds the `expectCmd` staleness check.
 
-Two facts from the live check on 2026-11-13, both unchanged behaviour:
+Two facts from the live check on 2026-11-13, both fixed by #753 on the same
+day (see "Boot preparation after #753"):
 
-- Boot resume still drops a Claude session id that has no transcript and
-  mints a new one, so a never-prompted Claude harness gets a new id on
-  each app start (#753's area). The spawn itself reuses a stored id whose
-  transcript is missing.
-- Boot resume still writes `--continue` into an opencode harness's STORED
-  `cmd` when no session id is known, but the spawned argv never carries it.
+- Boot resume dropped a Claude session id that had no transcript and
+  minted a new one, so a never-prompted Claude harness got a new id on
+  each app start. Boot preparation no longer touches session ids.
+- Boot resume wrote `--continue` into an opencode harness's STORED `cmd`
+  when no session id was known, though the spawned argv never carried it.
+  Boot preparation writes no `--continue` now; restart and unarchive
+  (`resume_harness`) still can write it into the stored `cmd`, and the
+  spawn never passes it.
 
 User decisions, 2026-11-13: Enter-for-shell is a launch mode, not a
 rewritten `cmd`; boot and unarchive keep a post-exit shell (#745 part 1);
 Restart harness returns a post-exit shell to its tool.
 
 Seams for the follow-ups: #754 replaces `stored_opencode_port` with a
-daemon-owned port; #753 and #755 remove the stored `cmd` and the
-`expectCmd` check.
+daemon-owned port; #755 and #754 together remove the stored `cmd` and the
+`expectCmd` check (#753 reduced boot preparation but did not remove it).
+
+## Boot preparation after #753
+
+#753 reduced the once-per-process preparation that "Boot resume" above
+recorded as built in #731. `BootResume::load_rooms` still wraps every
+rooms load and holds a mutex across the load and the preparation, so a
+concurrent load waits and then reads prepared rows (#744). The lock order
+is unchanged. The preparation is now only this:
+
+1. `migrate_launch` runs once per room, over all its harnesses, running or
+   not, and fills `Harness.launch` for records older than #752.
+2. The shell claim (#517, #520), Claude and opencode only. A shell-mode
+   harness whose `shellClaim.sessionId` is non-blank, equals `sessionId`
+   and names a session that still exists goes back to its tool: `launch`
+   and the claim are cleared and `cmd` is reduced to the program. This is
+   the only probe boot still runs, and a probe error counts as existing. A
+   claim that is not live is removed and the shell is kept. A Claude
+   harness in tool mode just loses a leftover claim.
+3. Each opencode harness in tool mode, in a room that is not archived, gets
+   a fresh free port. Its stored `cmd` becomes exactly
+   `opencode --port <p> --hostname 127.0.0.1`. The spawn
+   (`harness_argv/spawn.rs`) adds `--session` and `--agent` from the
+   record.
+
+It no longer probes and drops stale session ids (the spawn does that and
+writes the id back), mints Claude session ids, rewrites Claude, Hermes or
+remote `cmd`s to resume form, or writes `--continue`. A never-prompted
+Claude harness therefore keeps its session id across restarts.
+
+The preparation counts as done only after it succeeded on a load that
+returned at least one room, so an empty load does not mark it done. A
+failure (a port could not be picked, or the store refused the write) is
+logged, that load returns the unprepared rooms, and the next load tries
+again. A retry skips every harness that is running, checked through the
+runner, so a live process's record is never rewritten. The changes are
+saved through `RoomStore::apply` under origin `daemon-boot` as
+whole-harness `PutHarness` mutations, then flushed. The frontend still
+reads the opencode ports from the stored `cmd` (`opencodePort.ts`), and
+unarchive still runs `rooms_resume_cmds`.
+
+Decision, 2026-11-13: full removal was deferred because the port and the
+claim have no spawn-time home yet. #755 replaces the whole-harness writes
+with field-level ones. #754 moves the port out of the stored `cmd` to the
+runner at spawn, after which only `migrate_launch` and the claim step
+remain.
+
+Known limits:
+
+- The running check asks whether the runner holds an entry for the
+  harness, so a harness whose process exited but whose entry is still
+  there is also skipped by a retry.
+- The running check and the write are not atomic. A harness that spawns
+  between a retry's snapshot and its `RoomStore::apply` can have its
+  record overwritten by the snapshot: a new port in `cmd` while the
+  process is on the old one, and a session id the spawn just wrote back
+  lost. A retry only happens after an empty first load or a failed
+  preparation, so this is rare, and it is the whole-harness-write class
+  that #755 removes.
+- A pane that mounted before a retry holds the old `cmd` as `expectCmd`,
+  so its first ensure after the retry can be refused as `stale_record`
+  until the client applies the `daemon-boot` change.
+
+```mermaid
+flowchart TD
+    A["load_rooms: take the barrier"] --> B["load rooms"]
+    B --> C{"already done?"}
+    C -->|yes| R1["return the rows"]
+    C -->|no| D{"any rooms?"}
+    D -->|no| R2["return the rows, not done"]
+    D -->|yes| E["per room: migrate_launch over all its harnesses"]
+    E --> F{"per harness: running?"}
+    F -->|yes| G["skip this harness"]
+    F -->|no| H["claim step, Claude and opencode"]
+    H --> I["port step, opencode in tool mode"]
+    G --> J{"pick failed?"}
+    I --> J
+    J -->|yes| K["log, return unprepared rows, not done"]
+    J -->|no| L["apply under daemon-boot, then flush"]
+    L --> M{"store refused?"}
+    M -->|yes| K
+    M -->|no| N["mark done"]
+    N --> O["return the prepared rows"]
+```
+
+Figure 8: one rooms load through boot preparation. Renders this section
+and crates/skein-daemon/src/boot_resume.rs; the text is authoritative
+(non-normative).
 
 ## Slice 4 as built (#732)
 
@@ -1266,7 +1363,7 @@ flowchart LR
     A -->|"9 phase and work reads"| S
 ```
 
-Figure 8: the daemon decides the phase, publishes it, and the webview
+Figure 9: the daemon decides the phase, publishes it, and the webview
 mirrors it. Renders section "Slice 4 as built" and
 crates/skein-daemon/src/harness_phase/; the text is authoritative
 (non-normative).
