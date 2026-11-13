@@ -4,14 +4,21 @@
 //! opencode ports) and store the result through the `RoomStore` write path.
 //! Nothing is spawned here; that happens on first request.
 //!
+//! The preparation is a barrier (#744). A mutex is held across the load and
+//! the preparation, so a load that starts meanwhile (a reload, a double
+//! hydrate, the retry button) waits, then does its own load and reads the
+//! prepared rows. No load returns while the preparation is still running; a
+//! caller gets unprepared rows only when the preparation itself failed.
+//! Lock order: this barrier is taken first, before the store lock and the db
+//! lock, and never while holding either.
+//!
 //! This is the port of the frontend's hydrate step (`useRoomsHydrate.ts` +
 //! `roomsStoreProbe.ts` `stillExists`): a session id is stale only when its
 //! probe says `false`; a probe error keeps the id; opencode v2 skips the
 //! probe. Archived rooms are included, exactly as the frontend did.
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use skein_proto::harness_kind::HarnessKind;
 use skein_proto::room_mutations::RoomMutation;
@@ -30,7 +37,9 @@ pub const BOOT_ORIGIN: &str = "daemon-boot";
 
 /// Once-per-process state of the boot preparation.
 pub struct BootResume {
-    done: AtomicBool,
+    /// The barrier. `true` once the first successful load has been through
+    /// the preparation (or skipped it because there were no rooms).
+    done: Mutex<bool>,
     /// `None` only in tests; Hermes then reads as "can't tell".
     spawn_env: Option<Arc<SpawnEnvState>>,
 }
@@ -119,7 +128,7 @@ impl BootResume {
     #[must_use]
     pub fn new(spawn_env: Arc<SpawnEnvState>) -> Self {
         Self {
-            done: AtomicBool::new(false),
+            done: Mutex::new(false),
             spawn_env: Some(spawn_env),
         }
     }
@@ -127,7 +136,7 @@ impl BootResume {
     #[cfg(test)]
     fn detached() -> Self {
         Self {
-            done: AtomicBool::new(false),
+            done: Mutex::new(false),
             spawn_env: None,
         }
     }
@@ -160,9 +169,12 @@ impl BootResume {
 
     /// [`crate::rooms::load_rooms`], then, on the first successful load of
     /// this process, the boot preparation. The prepared rooms are what the
-    /// store holds and what the outcome returns. A preparation failure is
-    /// logged and the unprepared rooms are returned; it is not retried, since
-    /// a later load may find the harnesses already running.
+    /// store holds and what the outcome returns. A load that starts while the
+    /// preparation runs waits for it and then reads the prepared rows; so
+    /// does every later load. A failed load does not use up the preparation.
+    /// A preparation failure is logged and the unprepared rooms are
+    /// returned; it is not retried, since a later load may find the
+    /// harnesses already running.
     ///
     /// # Errors
     /// The underlying load failed.
@@ -184,12 +196,17 @@ impl BootResume {
         pick: impl FnMut() -> Result<u16, String>,
         mint: impl FnMut() -> String,
     ) -> Result<LoadOutcome, String> {
+        // Held to the end: see the module doc for the lock order. A poisoned
+        // guard is recovered, since the flag is always valid.
+        let mut done = self.done.lock().unwrap_or_else(PoisonError::into_inner);
         let mut outcome = crate::rooms::load_rooms(db, store)?;
-        if !self.done.swap(true, Ordering::SeqCst)
-            && !outcome.rooms.is_empty()
-            && let Err(e) = prepare(store, &mut outcome, probe, pick, mint)
-        {
-            tracing::error!(error = %e, "boot resume: preparation failed; rooms left unprepared");
+        if !*done {
+            *done = true;
+            if !outcome.rooms.is_empty()
+                && let Err(e) = prepare(store, &mut outcome, probe, pick, mint)
+            {
+                tracing::error!(error = %e, "boot resume: preparation failed; rooms left unprepared");
+            }
         }
         Ok(outcome)
     }

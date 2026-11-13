@@ -780,8 +780,11 @@ The preparation writes one info log line with the counts (rooms, `cmd`s
 changed, stale sessions dropped).
 
 A later load in the same process (a retry or a webview reload) returns
-the store untouched. A failed preparation is logged, the unprepared rooms
-are returned and it is not retried. The frontend no longer probes at boot
+the stored rows, already prepared, and does not prepare again. A load that
+starts while the preparation is running waits for it and then returns the
+prepared rows (#744): the preparation holds a mutex, taken before the store
+and db locks. A failed preparation is logged, the unprepared rooms are
+returned and it is not retried. The frontend no longer probes at boot
 and no longer calls `rooms_resume_cmds` at boot. It takes the opencode
 ports from the stored `cmd` (`opencodePort.ts`). `rooms_resume_cmds`
 remains for unarchive.
