@@ -1,25 +1,14 @@
-//! Boot resume: the pure core with injected probe/picker/minter, then the
-//! load wiring (once per process, persisted, returned).
+//! Boot preparation: the pure core with injected probe, picker and running
+//! check (this file), then the load wiring (`load.rs`).
 
-use std::sync::Arc;
+mod load;
 
 use serde_json::json;
-use skein_proto::rooms::{Harness, Room};
+use skein_proto::rooms::{Harness, LaunchMode, Room, ShellClaim};
 
-use super::{BootResume, opencode_port_from_cmd, prepare_with, session_survives};
-use crate::db::test_support::fresh_db;
-use crate::event_sink::EventSink;
-use crate::room_store::RoomStore;
+use super::{opencode_port_from_cmd, prepare_with, session_survives};
 
-struct Quiet;
-
-impl EventSink for Quiet {
-    fn emit_json(&self, _: &str, _: String) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-fn harness(
+pub(super) fn harness(
     id: &str,
     kind: &str,
     sid: Option<&str>,
@@ -41,7 +30,7 @@ fn harness(
     serde_json::from_value(v).unwrap()
 }
 
-fn room(id: &str, archived: bool, harnesses: Vec<Harness>) -> Room {
+pub(super) fn room(id: &str, archived: bool, harnesses: Vec<Harness>) -> Room {
     let mut v = json!({
         "id": id, "name": id, "task": "", "status": "idle", "badge": 0,
         "harnesses": [], "activeHarnessId": ""
@@ -54,7 +43,7 @@ fn room(id: &str, archived: bool, harnesses: Vec<Harness>) -> Room {
     r
 }
 
-fn find<'a>(rooms: &'a [Room], id: &str) -> &'a Harness {
+pub(super) fn find<'a>(rooms: &'a [Room], id: &str) -> &'a Harness {
     rooms
         .iter()
         .flat_map(|r| &r.harnesses)
@@ -62,11 +51,20 @@ fn find<'a>(rooms: &'a [Room], id: &str) -> &'a Harness {
         .unwrap()
 }
 
-fn sv(v: &[&str]) -> Vec<String> {
+pub(super) fn sv(v: &[&str]) -> Vec<String> {
     v.iter().map(|s| (*s).to_owned()).collect()
 }
 
-fn sample() -> Vec<Room> {
+fn as_json(h: &Harness) -> serde_json::Value {
+    serde_json::to_value(h).unwrap()
+}
+
+/// The cmd an opencode harness holds after boot picked `port`.
+pub(super) fn opencode_cmd(port: &str) -> Vec<String> {
+    sv(&["opencode", "--port", port, "--hostname", "127.0.0.1"])
+}
+
+pub(super) fn sample() -> Vec<Room> {
     vec![
         room(
             "r1",
@@ -93,77 +91,273 @@ fn sample() -> Vec<Room> {
         room(
             "r2",
             true,
-            vec![harness(
-                "c2",
-                "claude",
-                Some("gone"),
-                &["claude", "--session-id", "gone"],
-                &json!({}),
-            )],
+            vec![
+                harness(
+                    "c2",
+                    "claude",
+                    Some("gone"),
+                    &["claude", "--session-id", "gone"],
+                    &json!({}),
+                ),
+                harness(
+                    "o2",
+                    "opencode",
+                    Some("o2-sid"),
+                    &["opencode", "--port", "1111"],
+                    &json!({}),
+                ),
+            ],
         ),
     ]
 }
 
-#[test]
-fn stale_ids_are_dropped_for_each_probed_kind_and_the_cmd_follows_the_record() {
-    let out = prepare_with(
-        sample(),
-        |h| Ok(h.id != "c" && h.id != "o" && h.id != "h" && h.id != "c2"),
-        || Ok(4321),
-        || "minted".to_owned(),
-    );
-    let c = find(&out.rooms, "c");
-    assert_eq!(c.session_id.as_deref(), Some("minted"));
-    assert_eq!(
-        c.cmd.as_ref().unwrap(),
-        &sv(&["claude", "--session-id", "minted"])
-    );
-    let o = find(&out.rooms, "o");
-    assert_eq!(o.session_id, None);
-    assert_eq!(opencode_port_from_cmd(o.cmd.as_ref().unwrap()), Some(4321));
-    assert!(o.cmd.as_ref().unwrap().contains(&"--continue".to_owned()));
-    let h = find(&out.rooms, "h");
-    assert_eq!(h.session_id, None);
-    assert_eq!(h.cmd.as_ref().unwrap(), &sv(&["hermes", "--tui"]));
-    // Unprobed kind untouched; archived rooms are included.
-    assert_eq!(find(&out.rooms, "s").session_id.as_deref(), Some("keep"));
-    assert_eq!(find(&out.rooms, "c2").session_id.as_deref(), Some("minted"));
-    assert_eq!(out.ports.get("o"), Some(&4321));
+/// A harness in shell mode, with an optional #517 claim.
+fn shell_harness(id: &str, kind: &str, sid: Option<&str>, claim: Option<&str>) -> Harness {
+    let mut h = harness(id, kind, sid, &["pwsh.exe"], &json!({}));
+    h.launch = Some(LaunchMode::Shell {
+        argv: sv(&["pwsh.exe"]),
+    });
+    h.shell_claim = claim.map(|c| ShellClaim {
+        session_id: c.to_owned(),
+        port: Some(9),
+    });
+    h
+}
+
+fn prep(
+    rooms: Vec<Room>,
+    probe: impl Fn(&Harness) -> Result<bool, String>,
+    port: u16,
+) -> Vec<Room> {
+    prepare_with(rooms, probe, || Ok(port), |_| false).unwrap()
 }
 
 #[test]
-fn live_ids_resume_and_probe_errors_keep_the_id() {
-    let out = prepare_with(
-        sample(),
-        |h| {
-            if h.id == "c" {
-                Ok(true)
-            } else {
-                Err("boom".to_owned())
-            }
-        },
-        || Ok(4000),
-        || "minted".to_owned(),
-    );
-    assert_eq!(
-        find(&out.rooms, "c").cmd.as_ref().unwrap(),
-        &sv(&["claude", "--resume", "c-sid"])
-    );
-    let o = find(&out.rooms, "o");
+fn only_the_opencode_port_changes_and_nothing_is_dropped_or_minted() {
+    let rooms = prep(sample(), |_| panic!("no claim, so no probe"), 4321);
+    let before = sample();
+    for id in ["c", "h", "s", "c2"] {
+        assert_eq!(
+            as_json(find(&rooms, id)),
+            as_json(find(&before, id)),
+            "{id}"
+        );
+    }
+    let o = find(&rooms, "o");
     assert_eq!(o.session_id.as_deref(), Some("o-sid"));
+    assert_eq!(o.cmd, Some(opencode_cmd("4321")));
+    assert_eq!(opencode_port_from_cmd(o.cmd.as_ref().unwrap()), Some(4321));
+    // A closed room's opencode gets no port: nothing will spawn it.
     assert_eq!(
-        o.cmd.as_ref().unwrap(),
-        &sv(&[
-            "opencode",
-            "--port",
-            "4000",
-            "--hostname",
-            "127.0.0.1",
-            "--session",
-            "o-sid"
-        ])
+        as_json(find(&rooms, "o2")),
+        as_json(find(&before, "o2")),
+        "archived"
     );
-    assert_eq!(find(&out.rooms, "c2").session_id.as_deref(), Some("gone"));
+}
+
+#[test]
+fn a_never_prompted_claude_keeps_its_id_and_cmd_across_boots() {
+    let seed = vec![room(
+        "r",
+        false,
+        vec![harness(
+            "c",
+            "claude",
+            Some("fresh"),
+            &["claude", "--session-id", "fresh"],
+            &json!({}),
+        )],
+    )];
+    let first = prep(seed.clone(), |_| panic!("not probed"), 1);
+    let second = prep(first.clone(), |_| panic!("not probed"), 2);
+    for rooms in [&first, &second] {
+        assert_eq!(as_json(find(rooms, "c")), as_json(find(&seed, "c")));
+    }
+}
+
+#[test]
+fn opencode_gets_a_bare_port_cmd_and_never_continue() {
+    let seed = vec![room(
+        "r",
+        false,
+        vec![
+            harness("none", "opencode", None, &["opencode"], &json!({})),
+            harness(
+                "cont",
+                "opencode",
+                None,
+                &["opencode", "--continue", "--port", "7"],
+                &json!({}),
+            ),
+            harness(
+                "sess",
+                "opencode",
+                Some("s1"),
+                &[
+                    "opencode",
+                    "--port",
+                    "7",
+                    "--hostname",
+                    "127.0.0.1",
+                    "--session",
+                    "s1",
+                ],
+                &json!({}),
+            ),
+        ],
+    )];
+    let rooms = prep(seed, |_| panic!("not probed"), 4000);
+    for id in ["none", "cont", "sess"] {
+        assert_eq!(find(&rooms, id).cmd, Some(opencode_cmd("4000")), "{id}");
+    }
+    assert_eq!(find(&rooms, "sess").session_id.as_deref(), Some("s1"));
+    assert_eq!(find(&rooms, "none").session_id, None);
+}
+
+#[test]
+fn a_live_claim_puts_the_harness_back_on_its_tool() {
+    let seed = vec![room(
+        "r",
+        false,
+        vec![
+            shell_harness("o", "opencode", Some("sid"), Some("sid")),
+            shell_harness("c", "claude", Some("sid"), Some("sid")),
+        ],
+    )];
+    let rooms = prep(seed, |_| Ok(true), 4100);
+    let o = find(&rooms, "o");
+    assert_eq!((o.launch.clone(), o.shell_claim.clone()), (None, None));
+    assert_eq!(o.cmd, Some(opencode_cmd("4100")));
+    assert_eq!(o.session_id.as_deref(), Some("sid"));
+    let c = find(&rooms, "c");
+    assert_eq!((c.launch.clone(), c.shell_claim.clone()), (None, None));
+    assert_eq!(c.cmd, Some(sv(&["claude"])));
+    assert_eq!(c.session_id.as_deref(), Some("sid"));
+}
+
+#[test]
+fn a_stale_claim_is_cleared_and_the_shell_is_kept() {
+    let seed = vec![room(
+        "r",
+        false,
+        vec![
+            // Session no longer exists.
+            shell_harness("gone", "opencode", Some("sid"), Some("sid")),
+            // The claim names another session than the record holds.
+            shell_harness("other", "claude", Some("sid"), Some("different")),
+            shell_harness("blank", "claude", Some(" "), Some(" ")),
+        ],
+    )];
+    let rooms = prepare_with(
+        seed,
+        |h| {
+            assert_ne!(h.id, "other", "a mismatched claim is not probed");
+            assert_ne!(h.id, "blank", "a blank claim is not probed");
+            Ok(false)
+        },
+        || panic!("a shell-mode opencode gets no port"),
+        |_| false,
+    )
+    .unwrap();
+    for (id, sid) in [("gone", "sid"), ("other", "sid"), ("blank", " ")] {
+        let h = find(&rooms, id);
+        assert_eq!(h.shell_claim, None, "{id}");
+        assert_eq!(h.cmd, Some(sv(&["pwsh.exe"])), "{id}");
+        assert!(h.launch.is_some(), "{id}");
+        assert_eq!(h.session_id.as_deref(), Some(sid), "{id}");
+    }
+}
+
+#[test]
+fn a_tool_mode_claim_is_dropped_and_other_kinds_keep_theirs() {
+    let mut tool = harness("c", "claude", Some("s"), &["claude"], &json!({}));
+    tool.shell_claim = Some(ShellClaim {
+        session_id: "s".into(),
+        port: None,
+    });
+    let mut hermes = shell_harness("h", "hermes", Some("s"), Some("s"));
+    hermes.shell_claim = Some(ShellClaim {
+        session_id: "s".into(),
+        port: None,
+    });
+    let rooms = prep(
+        vec![room("r", false, vec![tool, hermes.clone()])],
+        |_| panic!("not probed"),
+        1,
+    );
+    assert_eq!(find(&rooms, "c").shell_claim, None);
+    assert_eq!(as_json(find(&rooms, "h")), as_json(&hermes));
+}
+
+#[test]
+fn a_shell_mode_opencode_without_a_claim_is_untouched_and_picks_no_port() {
+    let seed = vec![room(
+        "r",
+        false,
+        vec![shell_harness("o", "opencode", Some("s"), None)],
+    )];
+    let rooms = prepare_with(
+        seed.clone(),
+        |_| panic!("not probed"),
+        || panic!("no port for a shell"),
+        |_| false,
+    )
+    .unwrap();
+    assert_eq!(as_json(find(&rooms, "o")), as_json(find(&seed, "o")));
+}
+
+#[test]
+fn an_archived_room_is_migrated_but_picks_no_port() {
+    let legacy = harness("o", "opencode", Some("s"), &["pwsh.exe"], &json!({}));
+    let rooms = prepare_with(
+        vec![room("r", true, vec![legacy])],
+        |_| panic!("not probed"),
+        || panic!("no port for an archived room"),
+        |_| false,
+    )
+    .unwrap();
+    assert_eq!(
+        find(&rooms, "o").launch,
+        Some(LaunchMode::Shell {
+            argv: sv(&["pwsh.exe"])
+        })
+    );
+}
+
+#[test]
+fn a_running_harness_is_left_alone() {
+    let seed = vec![room(
+        "r",
+        false,
+        vec![
+            shell_harness("up", "opencode", Some("sid"), Some("sid")),
+            harness(
+                "up2",
+                "opencode",
+                None,
+                &["opencode", "--port", "1"],
+                &json!({}),
+            ),
+            harness("down", "opencode", None, &["opencode"], &json!({})),
+        ],
+    )];
+    let rooms = prepare_with(
+        seed.clone(),
+        |_| panic!("a running harness is not probed"),
+        || Ok(4200),
+        |id| id.starts_with("up"),
+    )
+    .unwrap();
+    for id in ["up", "up2"] {
+        assert_eq!(as_json(find(&rooms, id)), as_json(find(&seed, id)), "{id}");
+    }
+    assert_eq!(find(&rooms, "down").cmd, Some(opencode_cmd("4200")));
+}
+
+#[test]
+fn a_failing_port_picker_fails_the_whole_preparation() {
+    let out = prepare_with(sample(), |_| Ok(true), || Err("no ports".into()), |_| false);
+    assert_eq!(out.unwrap_err(), "no ports");
 }
 
 #[test]
@@ -186,7 +380,18 @@ fn opencode_v2_skips_the_probe() {
 }
 
 #[test]
-fn port_is_recovered_from_a_resume_cmd() {
+fn a_probe_error_keeps_the_claimed_session() {
+    let seed = vec![room(
+        "r",
+        false,
+        vec![shell_harness("c", "claude", Some("sid"), Some("sid"))],
+    )];
+    let rooms = prep(seed, |_| Err("boom".into()), 1);
+    assert_eq!(find(&rooms, "c").cmd, Some(sv(&["claude"])));
+}
+
+#[test]
+fn port_is_recovered_from_an_opencode_cmd() {
     assert_eq!(
         opencode_port_from_cmd(&sv(&["opencode", "--port", "99"])),
         Some(99)
@@ -199,175 +404,7 @@ fn port_is_recovered_from_a_resume_cmd() {
 }
 
 #[test]
-fn a_failed_flush_still_returns_the_rooms_the_store_holds() {
-    let (_dir, db) = fresh_db();
-    let db = Arc::new(db);
-    let store = RoomStore::new(Arc::clone(&db), Arc::new(Quiet));
-    db.write_room_rows(&sample(), &[], None).unwrap();
-    let boot = BootResume::detached();
-    // Every session is live, so only the cmds change (a debounced write);
-    // the probe breaks the table after the rooms were read.
-    let probe = |_: &Harness| {
-        crate::db::test_support::break_room_writes(&db);
-        Ok(true)
-    };
-
-    let out = boot
-        .load_rooms_with(&db, &store, probe, || Ok(5000), || "m".to_owned())
-        .unwrap();
-    assert_eq!(
-        find(&out.rooms, "c").cmd.as_ref().unwrap(),
-        &sv(&["claude", "--resume", "c-sid"])
-    );
-    assert_eq!(
-        serde_json::to_value(&out.rooms).unwrap(),
-        serde_json::to_value(store.rooms()).unwrap(),
-        "the client baseline must be what the store holds"
-    );
-}
-
-#[test]
-fn first_load_prepares_stores_and_returns_later_loads_do_not() {
-    let (_dir, db) = fresh_db();
-    let db = Arc::new(db);
-    let store = RoomStore::new(Arc::clone(&db), Arc::new(Quiet));
-    db.write_room_rows(&sample(), &[], None).unwrap();
-    let boot = BootResume::detached();
-    let probe = |h: &Harness| Ok(h.id != "c2");
-
-    let first = boot
-        .load_rooms_with(&db, &store, probe, || Ok(5000), || "m".to_owned())
-        .unwrap();
-    assert_eq!(
-        find(&first.rooms, "c").cmd.as_ref().unwrap(),
-        &sv(&["claude", "--resume", "c-sid"])
-    );
-    assert_eq!(find(&first.rooms, "c2").session_id.as_deref(), Some("m"));
-    assert_eq!(store.rooms().len(), 2);
-    // Persisted through the per-row path.
-    let reread = db.load_all().unwrap();
-    assert_eq!(
-        find(&reread.rooms, "o").cmd.as_ref().unwrap(),
-        find(&first.rooms, "o").cmd.as_ref().unwrap()
-    );
-
-    // A second load must not re-prepare (no new port, same cmds).
-    let second = boot
-        .load_rooms_with(&db, &store, probe, || Ok(6000), || "m2".to_owned())
-        .unwrap();
-    assert_eq!(
-        serde_json::to_value(&second.rooms).unwrap(),
-        serde_json::to_value(&first.rooms).unwrap()
-    );
-}
-
-#[test]
-fn a_concurrent_load_waits_for_the_preparation_and_returns_prepared_rows() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::mpsc;
-    use std::time::Duration;
-
-    let (_dir, db) = fresh_db();
-    let db = Arc::new(db);
-    let store = Arc::new(RoomStore::new(Arc::clone(&db), Arc::new(Quiet)));
-    let seed = vec![room(
-        "r1",
-        false,
-        vec![
-            harness(
-                "c",
-                "claude",
-                Some("c-sid"),
-                &["claude", "--session-id", "c-sid"],
-                &json!({}),
-            ),
-            harness("o", "opencode", Some("o-sid"), &["opencode"], &json!({})),
-        ],
-    )];
-    db.write_room_rows(&seed, &[], None).unwrap();
-    let boot = Arc::new(BootResume::detached());
-    let b_probes = Arc::new(AtomicUsize::new(0));
-    let picks = Arc::new(AtomicUsize::new(0));
-
-    let (entered_tx, entered_rx) = mpsc::channel::<()>();
-    // Dropping the sender releases every blocked `recv`.
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    let a = {
-        let (boot, db, store, picks) = (
-            Arc::clone(&boot),
-            Arc::clone(&db),
-            Arc::clone(&store),
-            Arc::clone(&picks),
-        );
-        std::thread::spawn(move || {
-            let probe = move |_: &Harness| {
-                let _ = entered_tx.send(());
-                let _ = release_rx.recv();
-                Ok(true)
-            };
-            let pick = || {
-                picks.fetch_add(1, Ordering::SeqCst);
-                Ok(5000)
-            };
-            boot.load_rooms_with(&db, &store, probe, pick, || "m".to_owned())
-        })
-    };
-    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-
-    let (done_tx, done_rx) = mpsc::channel();
-    let b = {
-        let (boot, db, store, picks, b_probes) = (
-            Arc::clone(&boot),
-            Arc::clone(&db),
-            Arc::clone(&store),
-            Arc::clone(&picks),
-            Arc::clone(&b_probes),
-        );
-        std::thread::spawn(move || {
-            let probe = |_: &Harness| {
-                b_probes.fetch_add(1, Ordering::SeqCst);
-                Ok(true)
-            };
-            let pick = || {
-                picks.fetch_add(1, Ordering::SeqCst);
-                Ok(6000)
-            };
-            let out = boot.load_rooms_with(&db, &store, probe, pick, || "m2".to_owned());
-            done_tx.send(()).unwrap();
-            out
-        })
-    };
-    assert!(
-        done_rx.recv_timeout(Duration::from_millis(300)).is_err(),
-        "a concurrent load returned while the preparation was still running"
-    );
-
-    drop(release_tx);
-    let out_a = a.join().unwrap().unwrap();
-    let out_b = b.join().unwrap().unwrap();
-
-    let claude = sv(&["claude", "--resume", "c-sid"]);
-    let opencode = sv(&[
-        "opencode",
-        "--port",
-        "5000",
-        "--hostname",
-        "127.0.0.1",
-        "--session",
-        "o-sid",
-    ]);
-    for rooms in [out_a.rooms, out_b.rooms, store.rooms()] {
-        assert_eq!(find(&rooms, "c").cmd.as_ref().unwrap(), &claude);
-        assert_eq!(find(&rooms, "o").cmd.as_ref().unwrap(), &opencode);
-    }
-    assert_eq!(b_probes.load(Ordering::SeqCst), 0, "B must not prepare");
-    assert_eq!(picks.load(Ordering::SeqCst), 1, "one port, one preparation");
-}
-
-#[test]
 fn prepare_migrates_a_legacy_shell_record_once() {
-    use skein_proto::rooms::LaunchMode;
-
     let legacy = harness("c", "claude", Some("s"), &["pwsh.exe"], &json!({}));
     let tool = harness(
         "t",
@@ -376,21 +413,16 @@ fn prepare_migrates_a_legacy_shell_record_once() {
         &["claude", "--resume", "s2"],
         &json!({}),
     );
-    let out = prepare_with(
-        vec![room("r", false, vec![legacy, tool])],
-        |_| Ok(true),
-        || Ok(1),
-        || "m".to_owned(),
-    );
+    let out = prep(vec![room("r", false, vec![legacy, tool])], |_| Ok(true), 1);
     assert_eq!(
-        find(&out.rooms, "c").launch,
+        find(&out, "c").launch,
         Some(LaunchMode::Shell {
             argv: sv(&["pwsh.exe"])
         })
     );
-    assert_eq!(find(&out.rooms, "c").cmd, Some(sv(&["pwsh.exe"])));
-    assert_eq!(find(&out.rooms, "t").launch, None);
-    let again = prepare_with(out.rooms.clone(), |_| Ok(true), || Ok(1), || "m".to_owned());
-    assert_eq!(find(&again.rooms, "c").launch, find(&out.rooms, "c").launch);
-    assert_eq!(find(&again.rooms, "t").launch, None);
+    assert_eq!(find(&out, "c").cmd, Some(sv(&["pwsh.exe"])));
+    assert_eq!(find(&out, "t").launch, None);
+    let again = prep(out.clone(), |_| Ok(true), 1);
+    assert_eq!(find(&again, "c").launch, find(&out, "c").launch);
+    assert_eq!(find(&again, "t").launch, None);
 }

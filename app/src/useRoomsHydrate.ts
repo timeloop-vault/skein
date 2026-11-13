@@ -134,10 +134,11 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 					setBackupRoomCount(backupRooms);
 				}
 				if (rows.length > 0) {
-					// #731: the daemon already probed the stored sessions and rewrote
-					// every cmd to its resume form (fresh opencode port included) in
-					// this load, so the rows are mounted as they are. The ports the
-					// SSE attach reads come from those cmds.
+					// #731, #753: the daemon already prepared the rows in this load
+					// (launch filled, shell claims settled, a fresh port in each
+					// opencode cmd), so they are mounted as they are. The spawn
+					// derives resume from the record. The ports the SSE attach
+					// reads come from those cmds.
 					const withResume = rows;
 					setOpencodePorts(opencodePortsFromRooms(rows));
 					// #164: check every active room's folder in parallel and

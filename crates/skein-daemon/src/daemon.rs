@@ -351,7 +351,7 @@ impl Daemon {
             }
         };
 
-        let boot_resume = Arc::new(BootResume::new(Arc::clone(&boot_env)));
+        let boot_probe_env = Arc::clone(&boot_env);
         // #731: the runner drives the same managers the app manages (clones
         // share their registries) and hears of every applied room batch.
         let harness_runner = Arc::new(HarnessRunner::new(RunnerDeps {
@@ -371,6 +371,12 @@ impl Daemon {
             session_probe: None,
         }));
         harness_runner.observe_store();
+        // #753: a retried boot preparation leaves a harness that has a
+        // process alone (the runner keeps an entry for each).
+        let boot_resume = Arc::new(BootResume::new(boot_probe_env, {
+            let runner = Arc::clone(&harness_runner);
+            Arc::new(move |id: &str| runner.pty_id(id).is_some())
+        }));
         Ok(Self {
             phase,
             harness_config: state.harness_config,

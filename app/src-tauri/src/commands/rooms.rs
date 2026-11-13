@@ -19,8 +19,9 @@ use skein_proto::room_mutations::{RoomMutation, RoomsApplyOutcome};
 /// Async: `load_all` walks every row in `sessions` and parses each
 /// blob — sqlite I/O plus JSON parsing, off the main thread (#171).
 ///
-/// #731: the first successful load of the process also prepares the rooms
-/// for resume (stale ids dropped, cmds rewritten); see `BootResume`.
+/// #731/#753: the first load of the process that returns rooms also runs the
+/// boot preparation (launch migration, shell claims, a fresh opencode port),
+/// retried by later loads until it succeeds; see `BootResume`.
 #[tauri::command]
 pub(crate) async fn db_load_rooms(
     db: tauri::State<'_, Arc<Database>>,

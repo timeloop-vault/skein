@@ -368,7 +368,8 @@ rework with #584.
   Err(e) = prepare(..)` (`crates/skein-daemon/src/boot_resume.rs:188-193`).
   A concurrent second load returns unprepared rows, a failed
   preparation is never retried, and the flag is set even when the first
-  load is empty.
+  load is empty. (2026-11-13: addressed by #744 and #753, see
+  skeind-p2-design.md "Boot preparation after #753".)
 - c1/c2, med: the record does not hold desired state. `reconcile` only
   stops, never starts (`harness_runner/mod.rs:435-448`). A daemon with
   no client resumes nothing. The design doc documents this, but #584's
@@ -612,7 +613,8 @@ writes room and harness records, decides what to spawn, and holds phase.
 - **B. Boot resume idempotent under the store lock, or removed once A
   lands.** The done flag moves after preparation, and a failed
   preparation retries. Test first: concurrent loads. Depends on: A.
-  When: before #733/#734.
+  When: before #733/#734. (2026-11-13: addressed by #744 and #753, see
+  skeind-p2-design.md "Boot preparation after #753".)
 - **C. Opencode port allocated at spawn and owned by the runner.**
   Delete the argv port parsers and the client port map. The port is
   reported in the spawn result. Depends on: A. When: before
