@@ -21,7 +21,7 @@
 //!   subscription aid and is not ported either; derive it from `get`.
 //! * Iteration order is insertion order, like a JS `Map`, because the tick
 //!   walks the store in that order and the order of the transitions it emits
-//!   is compared in the shadow run.
+//!   must match the TypeScript machine this was ported from.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -96,15 +96,24 @@ impl PhaseMachine {
     }
 
     /// #356: every harness id currently in the store, mapped to its phase,
-    /// for the `harness_phases` agent-request kind. A harness this process
+    /// for the agent API's listing verbs. A harness this process
     /// never spawned (or has since `forget`-ten) is simply absent: the
-    /// request handler reads that omission as "unknown" per issue #356's
+    /// verbs read that omission as "unknown" per issue #356's
     /// phase rule, rather than this guessing at one.
     #[must_use]
     pub fn phase_snapshot(&self) -> BTreeMap<String, ActivityPhase> {
         self.store
             .iter()
             .map(|(id, a)| (id.clone(), a.phase))
+            .collect()
+    }
+
+    /// Every harness id to its record's `spawned_at`, in one pass.
+    #[must_use]
+    pub fn spawned_at_snapshot(&self) -> BTreeMap<String, i64> {
+        self.store
+            .iter()
+            .map(|(id, a)| (id.clone(), a.spawned_at))
             .collect()
     }
 

@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useGlobalControlCenterShortcut } from "./controlCenter/useGlobalShortcut.ts";
+import { startPhaseMirror } from "./phaseMirror.ts";
 import { versionNoticeModeFor } from "./prefs.ts";
-import { startSupervisor } from "./supervisor/runtime.ts";
+import { startScreenReadingFeed } from "./screenPhaseTick.ts";
 import { useAgentRequests } from "./useAgentRequests.ts";
 import type { useAppSettings } from "./useAppSettings.ts";
 import { useClaudeVersionWatch } from "./useClaudeVersionWatch.ts";
@@ -17,7 +18,7 @@ import type { useRoomsStore } from "./useRoomsStore.ts";
 type Store = ReturnType<typeof useRoomsStore>;
 
 // The hooks that only listen — OS-notification clicks, folder-open
-// requests, agent mail, the supervisor and the agent API's frontend half.
+// requests, agent mail, the phase mirror and the agent API's frontend half.
 // Nothing here renders; App passes in what they each need.
 export function useAppBackgroundWiring(a: {
 	store: Store;
@@ -69,9 +70,13 @@ export function useAppBackgroundWiring(a: {
 		versionNoticeModeFor(settings.versionNoticeModes, "claude"),
 	);
 
-	// #423: the harness supervisor rides the activity tick; idempotent, so
-	// StrictMode's double mount is harmless.
-	useEffect(() => startSupervisor(), []);
+	// #732: the daemon owns the harness phase machine; this mirrors its stream
+	// and feeds it the screen readings only the webview can take. Both are
+	// idempotent, so StrictMode's double mount is harmless.
+	useEffect(() => {
+		void startPhaseMirror();
+		return startScreenReadingFeed();
+	}, []);
 
 	// #330: the `create_room` agent verb's frontend half — answers
 	// #328's `skein://agent-request` round trip. Unlike `useMailDelivery`

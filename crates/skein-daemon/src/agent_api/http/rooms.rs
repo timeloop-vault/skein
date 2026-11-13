@@ -119,8 +119,7 @@ pub(super) struct ListRoomsQuery {
 /// — the plain-JSON mirror of the MCP `list_rooms` tool (#356, #612).
 /// Archived rooms are hidden unless `include_archived` (or
 /// `include_retired`) is true. Async, unlike every synchronous route
-/// above that goes through `with_caller`: the verb underneath makes its
-/// own `"harness_phases"` round trip to the webview.
+/// above that goes through `with_caller`, because the verb underneath is.
 pub(super) async fn api_list_rooms(
     State(state): State<Arc<AgentApiState>>,
     headers: HeaderMap,

@@ -151,7 +151,13 @@ impl SpawnPlan {
             env_profile: request_profile
                 .map(str::to_owned)
                 .or_else(|| harness.env_profile.clone()),
-            hermes_profile: harness.hermes_profile.clone(),
+            // Trimmed, blank = none: what the work-poller hook path does.
+            hermes_profile: harness
+                .hermes_profile
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned),
         })
     }
 }

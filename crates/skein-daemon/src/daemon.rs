@@ -8,6 +8,7 @@
 //! its own: each server comes back as a future for the embedder to spawn.
 //! Imports nothing from `tauri`.
 
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -24,9 +25,11 @@ use crate::harness_actions_hermes::HermesActionsManager;
 use crate::harness_config::HarnessConfig;
 use crate::harness_events_claude::ClaudeEventsManager;
 use crate::harness_events_opencode::OpencodeEventsManager;
-use crate::harness_phase::{HarnessFacts, PhaseService, SupervisorFacts};
+use crate::harness_phase::{
+    HarnessFacts, PhaseService, SupervisorFacts, TranscriptSampler, now_ms,
+};
 use crate::harness_runner::{HarnessRunner, RunnerDeps};
-use crate::harness_work_hermes::HermesWorkManager;
+use crate::harness_work_hermes::{HermesWorkAttacher, HermesWorkManager};
 use crate::opencode_sidecar::OpencodeSidecarManager;
 use crate::paths::Paths;
 use crate::pty::PtyManager;
@@ -156,7 +159,7 @@ pub struct Daemon {
     pub boot_resume: Arc<BootResume>,
     /// Starts and stops harnesses from their records (#731).
     pub harness_runner: Arc<HarnessRunner>,
-    /// The harness phase machine, in shadow beside the webview's (#732). The
+    /// The harness phase machine, the phase authority (#732). The
     /// same `Arc` the runner and the hook routes feed; manage it so commands
     /// can reach it.
     pub phase: Arc<PhaseService>,
@@ -166,7 +169,6 @@ pub struct Daemon {
     pub claude: ClaudeEventsManager,
     pub opencode: OpencodeEventsManager,
     pub hermes_actions: HermesActionsManager,
-    pub hermes_work: HermesWorkManager,
     pub events: SharedEventSink,
     /// `None` when the agent API listener failed to bind.
     pub agent_api: Option<Arc<AgentApiState>>,
@@ -183,30 +185,55 @@ pub struct Daemon {
 /// `live_attach` from the three adapter registries, which the client's own
 /// attach replaces in place (same key), so one answer covers both.
 ///
-/// FLIP(#732): `mail` (moves in #733) and `transcript` (the sampler is added
-/// in the flip PR) stay absent, so the invariants that need them cannot fire.
+/// The Claude transcript samples come from a `TranscriptSampler` (one stat per
+/// Claude harness every 15 s, on the ticker thread, with neither the phase lock
+/// nor the room-store lock held). The `mail` facts stay absent until #733, so
+/// `mail_held` cannot fire yet.
 ///
 /// The closure holds only a `Weak`: the ticker thread must not keep the
 /// service alive.
-fn start_phase_ticker(phase: &Arc<PhaseService>, state: &SharedState) {
+fn start_phase_ticker(phase: &Arc<PhaseService>, state: &SharedState, rooms: &Arc<RoomStore>) {
     let weak = Arc::downgrade(phase);
     let (claude, opencode, hermes) = (
         state.claude.clone(),
         state.opencode.clone(),
         state.hermes_actions.clone(),
     );
+    let rooms = Arc::clone(rooms);
+    let sampler = TranscriptSampler::system();
     let facts = Arc::new(move || {
         let mut facts = SupervisorFacts::default();
         let Some(phase) = weak.upgrade() else {
             return facts;
         };
-        for id in phase.phase_snapshot().into_keys() {
-            let live =
-                claude.is_attached(&id) || opencode.is_attached(&id) || hermes.is_attached(&id);
+        let spawned = phase.spawned_at_snapshot();
+        let ids: HashSet<String> = spawned.keys().cloned().collect();
+        sampler.prune(&ids);
+        let claude_ids: HashSet<String> = ids
+            .iter()
+            .filter(|id| claude.is_attached(id))
+            .cloned()
+            .collect();
+        let sources = if claude_ids.is_empty() {
+            HashMap::new()
+        } else {
+            rooms.session_sources(&claude_ids)
+        };
+        let now = now_ms();
+        for id in ids {
+            let spawned_at = spawned.get(&id).copied().unwrap_or_default();
+            let is_claude = claude_ids.contains(&id);
+            let live = is_claude || opencode.is_attached(&id) || hermes.is_attached(&id);
+            let source = sources
+                .get(&id)
+                .filter(|_| is_claude)
+                .map(|(sid, cwd)| (sid.as_str(), cwd.as_str()));
+            let transcript = sampler.sample(&id, spawned_at, source, now);
             facts.harnesses.insert(
                 id,
                 HarnessFacts {
                     live_attach: Some(live),
+                    transcript,
                     ..HarnessFacts::default()
                 },
             );
@@ -248,9 +275,15 @@ impl Daemon {
         let state = SharedState::build(paths, events.clone())?;
         let boot_env = Arc::clone(&spawn_env);
         let rooms = RoomStore::new(Arc::clone(&state.db), state.events.clone());
-        // #732: the shadow phase machine, fed by the runner and the hooks.
-        let phase = PhaseService::new();
-        start_phase_ticker(&phase, &state);
+        // #732: the phase machine, fed by the runner and the hooks.
+        let phase = PhaseService::new(Arc::clone(&state.db), state.events.clone());
+        start_phase_ticker(&phase, &state, &rooms);
+        // #732: the daemon polls a Hermes harness's delegated work itself.
+        let hermes_work = Arc::new(HermesWorkAttacher::new(
+            state.hermes_work.clone(),
+            Arc::clone(&spawn_env),
+            Arc::clone(&phase),
+        ));
 
         // Bound with the std listener so a failure is known *here*,
         // synchronously, and can be recorded: an async bind inside the
@@ -272,6 +305,7 @@ impl Daemon {
                     phase_tap: PhaseTap {
                         service: Arc::clone(&phase),
                         rooms: Arc::clone(&rooms),
+                        hermes_work: Some(Arc::clone(&hermes_work)),
                     },
                 }));
                 let serving = Arc::clone(&api);
@@ -328,6 +362,7 @@ impl Daemon {
             claude: state.claude.clone(),
             opencode: state.opencode.clone(),
             hermes_actions: state.hermes_actions.clone(),
+            hermes_work,
             spawn_env: boot_env,
             endpoint: agent_endpoint.clone(),
             harness_config: state.harness_config.clone(),
@@ -348,7 +383,6 @@ impl Daemon {
             claude: state.claude,
             opencode: state.opencode,
             hermes_actions: state.hermes_actions,
-            hermes_work: state.hermes_work,
             events: state.events,
             agent_api,
             agent_endpoint,

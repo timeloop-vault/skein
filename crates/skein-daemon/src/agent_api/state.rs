@@ -127,7 +127,7 @@ pub struct AgentApiState {
     /// `None` in a unit test.
     pub capture: Option<Arc<dyn WebviewCapture>>,
     /// Where the Claude permission and Hermes hooks are also fed to the
-    /// daemon's shadow phase machine (#732). `None` in a unit test.
+    /// daemon's phase machine (#732). `None` in a unit test.
     pub(crate) phase_tap: Option<super::phase_tap::PhaseTap>,
     /// Requests sent to the webview and not yet answered, keyed by a
     /// fresh id per request. Every insertion is matched by exactly one

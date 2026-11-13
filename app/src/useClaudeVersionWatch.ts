@@ -16,9 +16,11 @@ import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { harnessActivity } from "./harnessActivity.ts";
 import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
 import type { GateResult } from "./harnessInputGate.ts";
+import type { RestartSource } from "./phaseInput.ts";
+import { onFirstSnapshot } from "./phaseMirror.ts";
 import type { Room } from "./types.ts";
 
-type RestartFn = (roomId: string, harnessId: string, source?: string) => Promise<GateResult>;
+type RestartFn = (roomId: string, harnessId: string, source?: RestartSource) => Promise<GateResult>;
 
 export function useClaudeVersionWatch(
 	roomsRef: MutableRefObject<Room[]>,
@@ -130,6 +132,9 @@ export function useClaudeVersionWatch(
 			probe();
 			evaluate();
 		});
+		// #732: the mirror's first snapshot carries no transition, so a harness
+		// already waiting when the app loaded is evaluated here.
+		const unsubSnapshot = onFirstSnapshot(evaluate);
 		const unFocus = getCurrentWindow().onFocusChanged(({ payload }) => {
 			if (payload) probe();
 		});
@@ -137,6 +142,7 @@ export function useClaudeVersionWatch(
 			if (timer !== null) clearTimeout(timer);
 			unsubStore();
 			unsubTransitions();
+			unsubSnapshot();
 			void unFocus.then((un) => un());
 		};
 	}, [mode]);

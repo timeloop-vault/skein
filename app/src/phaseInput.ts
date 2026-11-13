@@ -1,9 +1,10 @@
 // Client-only phase inputs, forwarded to the daemon (#732). The daemon's
-// Rust phase machine runs in shadow beside the TypeScript one and cannot
-// see these facts (they exist only in the webview). Fire-and-forget: the
-// TypeScript machine never waits on, or depends on, the answer.
+// phase machine is the authority but cannot see these facts (they exist only
+// in the webview). Fire-and-forget: the mirror never waits on the answer.
 
 import { invoke } from "@tauri-apps/api/core";
+
+export type RestartSource = "user-restart" | "version-auto-restart";
 
 export type PhaseInput =
 	| { kind: "input"; data: string; emptyComposer: boolean }
@@ -14,8 +15,10 @@ export type PhaseInput =
 	| { kind: "launchSignal" }
 	| { kind: "sessionSwitched"; switch: "clear" | "resume" | "fork" | "startup" }
 	| { kind: "recoverUnheardSilence" }
-	| { kind: "reattached" }
-	| { kind: "viewReset" };
+	/// A start produced no process (agent refused, the daemon returned no child).
+	| { kind: "startFailed" }
+	/// The user (or the version auto-restart) asked to restart the harness.
+	| { kind: "restartRequested"; source: RestartSource };
 
 export function sendPhaseInput(harnessId: string, input: PhaseInput): void {
 	try {
@@ -25,12 +28,4 @@ export function sendPhaseInput(harnessId: string, input: PhaseInput): void {
 	} catch (e) {
 		console.debug("[skein] harness_phase_input failed", e);
 	}
-}
-
-/// A page that did not start the process (`ensureRunning` reported
-/// `started: false`) is rebuilding a phase record for a harness that kept
-/// running: a reload cannot tell the daemon, so the first attach does. Sent
-/// before this page's adapters or `reattached` can feed the machine.
-export function noteViewAttached(harnessId: string, started: boolean): void {
-	if (!started) sendPhaseInput(harnessId, { kind: "viewReset" });
 }

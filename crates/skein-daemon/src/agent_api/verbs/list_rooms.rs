@@ -216,6 +216,10 @@ fn lead_ids(rooms: &[&Room], mail: &MailContext) -> Vec<String> {
 /// keeps only rooms in the named states; `limit`/`since` page (a page
 /// reports `has_more`, its last `room_id` is the next `since`);
 /// `fields: "summary"` drops the bulky per-room fields.
+#[allow(
+    clippy::unused_async,
+    reason = "kept async for its many callers; it once awaited the webview"
+)]
 pub async fn list_rooms(
     state: &AgentApiState,
     caller: &Caller,
@@ -261,7 +265,7 @@ pub async fn list_rooms(
     // can page; without one, only the page's rooms are asked about.
     let mut phases = BTreeMap::new();
     if lifecycle_filter.is_some() {
-        phases = harness_snapshots(state, &lead_ids(&visible, mail)).await;
+        phases = harness_snapshots(state, &lead_ids(&visible, mail));
     }
     let (page, has_more) = page_after(
         visible,
@@ -271,7 +275,7 @@ pub async fn list_rooms(
         limit,
     )?;
     if lifecycle_filter.is_none() {
-        phases = harness_snapshots(state, &lead_ids(&page, mail)).await;
+        phases = harness_snapshots(state, &lead_ids(&page, mail));
     }
 
     let mut out = Vec::with_capacity(page.len());

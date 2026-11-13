@@ -10,7 +10,6 @@ import type { GateResult } from "./harnessInput.ts";
 import { harnessInput } from "./harnessInput.ts";
 import { isDraftHold } from "./mailNudge.ts";
 import { mailPending } from "./mailRetry.ts";
-import { noteMailState } from "./supervisor/mailFeed.ts";
 import type { HarnessKind } from "./types.ts";
 
 /// DTO mirror of `agent_api::verbs::MailUnread` — see `mail_unread` in
@@ -87,7 +86,6 @@ export function logMailRefusal(refs: MailRefs, harnessId: string, refusal: GateR
 	const reason = refusal.ok ? "" : refusal.reason;
 	if (refs.lastMailRefusalReasonRef.current.get(harnessId) === reason) return;
 	refs.lastMailRefusalReasonRef.current.set(harnessId, reason);
-	noteMailState(harnessId, { lastRefusal: reason === "" ? null : reason });
 	// #413: name what last moved the draft off clean (event class only,
 	// never content) when the refusal is the draft guard's.
 	const cause = isDraftHold(refusal) ? harnessInput.draftCause(harnessId) : null;
@@ -115,7 +113,6 @@ export function pendingResult(
 	const pending = mailPending(count, lastNudged);
 	if (!pending) {
 		refs.lastMailRefusalReasonRef.current.delete(harnessId);
-		noteMailState(harnessId, { lastRefusal: null });
 	}
 	return pending;
 }

@@ -1057,12 +1057,10 @@ scope that question. `list_rooms` alone takes a room-scoped filter,
 widening what the token can see.
 
 Every phase these three verbs report (`lifecycle` on `list_rooms`,
-`phase` on `get_room` and `list_harnesses`) comes from the same
-round trip to the webview `create_room` uses (#328), asked fresh on
-every call with a 3-second timeout. Anything the backend cannot vouch
-for — no webview, a timeout, a harness the answer never named, an
-archived room, or a value outside the phases the frontend's own
-activity store defines — reads `"unknown"`, never a guess and never
+`phase` on `get_room` and `list_harnesses`) is read fresh on every
+call from the daemon's own phase machine (#732), with no round trip to
+the webview. Anything the daemon cannot vouch for — a harness it has
+no record of, or an archived room — reads `"unknown"`, never a guess and never
 `"idle"`: that is a real phase, and reporting it without an answer
 would be a lie Skein never told itself.
 
@@ -1162,12 +1160,10 @@ tasks running and not overdue — exactly what the end-of-turn deferral
 counts, nothing more. They let a planner tell "waiting on a task" from
 "waiting on you": a `running` harness with a non-zero count is
 waiting on its own delegated work, not on anyone's input. Both are
-always present and are `null` when Skein cannot say — no webview, a
-timeout, an answer without a `work` map (an older webview), an answer
-whose `work` omits the harness, or a count that is not a non-negative
-integer — never `0` as a guess. They come from the same webview round
-trip as `phase`, so they are as fresh as it is; `phase` and the counts
-can be unknown independently.
+always present and are `null` when Skein cannot say — the daemon has
+no record of the harness — never `0` as a guess. They come from the
+same read of the daemon's phase machine as `phase`, so they are as
+fresh as it is.
 
 ### `list_harnesses`
 

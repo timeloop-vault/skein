@@ -187,5 +187,5 @@ impl Subagents {
 }
 
 #[cfg(test)]
-#[path = "subagents_tests.rs"]
+#[path = "tests/subagents.rs"]
 mod tests;

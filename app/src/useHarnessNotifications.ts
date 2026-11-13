@@ -5,7 +5,7 @@
 // the rest, in this order: useWindowFocusPermission, useHarnessHookEvents
 // (`harness-permission` / `harness-session-start`),
 // useTransitionNotifications (badge/toast/OS, L5a/L5b/L5c),
-// useApiErrorToasts (D2f), useTransitionLog (L6). NOT here: the OS-notification
+// useApiErrorToasts (D2f). NOT here: the OS-notification
 // click handling (`jumpToTarget`/`drainPendingClick`) — that stays in
 // App.tsx as a separate, later extraction. App.tsx calls this hook at
 // the point this state used to be declared and destructures the
@@ -19,7 +19,6 @@ import { appendToast, type NewToast, type ToastEntry } from "./toastStack.ts";
 import type { Room } from "./types.ts";
 import { useApiErrorToasts } from "./useApiErrorToasts.ts";
 import { useHarnessHookEvents } from "./useHarnessHookEvents.ts";
-import { useTransitionLog } from "./useTransitionLog.ts";
 import { useTransitionNotifications } from "./useTransitionNotifications.ts";
 import {
 	type NotificationPermission,
@@ -123,7 +122,6 @@ export function useHarnessNotifications(
 		windowFocusedRef,
 		lastApiErrorAtRef,
 	);
-	useTransitionLog(roomsRef);
 
 	// L5a — clear pending on view. Runs every time the (active room,
 	// active harness of active room) tuple changes — covers tab

@@ -1,19 +1,13 @@
 // React hooks over the harness activity store (epic #50). Split out of
-// harnessActivity.ts (#19) — these read the single store instance living
-// in harnessActivityCore.ts and the `harnessActivity` object in
-// harnessActivity.ts. See harnessActivity.ts for the module this belongs
-// to.
+// harnessActivity.ts (#19) — these read the phase mirror (phaseMirror.ts,
+// #732). See harnessActivity.ts for the module this belongs to.
 
 import { useCallback, useSyncExternalStore } from "react";
 import { harnessActivity } from "./harnessActivity.ts";
-import {
-	store as activityStore,
-	permissionIds,
-	permissionListeners,
-} from "./harnessActivityCore.ts";
 import type { RoomHarnessRef } from "./harnessActivityLabels.ts";
 import { aggregateRoomStatus } from "./harnessActivityLabels.ts";
 import type { HarnessActivity } from "./harnessActivityTypes.ts";
+import { phaseMirror } from "./phaseMirror.ts";
 import type { Status } from "./types.ts";
 
 /// React hook: subscribes to the activity store for a single
@@ -38,13 +32,8 @@ export function useHarnessActivity(id: string | null): HarnessActivity | null {
 /// as `useSyncExternalStore` requires.
 export function usePermissionHarnessIds(): ReadonlySet<string> {
 	return useSyncExternalStore(
-		(cb) => {
-			permissionListeners.add(cb);
-			return () => {
-				permissionListeners.delete(cb);
-			};
-		},
-		() => permissionIds,
+		(cb) => phaseMirror.subscribePermissionIds(cb),
+		() => phaseMirror.permissionIds(),
 	);
 }
 
@@ -73,7 +62,7 @@ export function useRoomActivity(harnesses: readonly RoomHarnessRef[]): Status {
 		[harnesses],
 	);
 	const getSnapshot = useCallback(
-		() => aggregateRoomStatus(harnesses, (id) => activityStore.get(id)),
+		() => aggregateRoomStatus(harnesses, (id) => phaseMirror.get(id)),
 		[harnesses],
 	);
 	return useSyncExternalStore(subscribe, getSnapshot);

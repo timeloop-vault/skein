@@ -1,5 +1,5 @@
-//! The hook routes' tap into the phase machine (#732). Shadow mode: the
-//! webview still decides, this only feeds the daemon's copy of the machine.
+//! The hook routes' tap into the phase machine (#732). The
+//! daemon's machine decides; this feeds it from the hook routes.
 //!
 //! Claude `SessionStart` / `SessionEnd` are NOT fed here. The webview decides
 //! them (shell claims, session follow) and forwards its decision as a client
@@ -13,6 +13,7 @@ use super::hermes_event::HarnessHermesHook;
 use super::state::AgentApiState;
 use crate::harness_kind::HarnessKind;
 use crate::harness_phase::PhaseService;
+use crate::harness_work_hermes::HermesWorkAttacher;
 use crate::room_store::RoomStore;
 
 /// What the hook routes need to feed the phase service: the service itself
@@ -22,6 +23,8 @@ use crate::room_store::RoomStore;
 pub struct PhaseTap {
     pub service: Arc<PhaseService>,
     pub rooms: Arc<RoomStore>,
+    /// Attaches the Hermes work poller when a hook names the session.
+    pub hermes_work: Option<Arc<HermesWorkAttacher>>,
 }
 
 /// Is the Claude harness in post-exit-shell mode (#318)? The webview keeps
@@ -69,6 +72,11 @@ fn accepts_permission(h: Option<&Harness>, session_id: Option<&str>) -> bool {
 }
 
 impl AgentApiState {
+    /// The daemon's phase authority, when this state has one.
+    pub(crate) fn phase_service(&self) -> Option<&Arc<PhaseService>> {
+        self.phase_tap.as_ref().map(|t| &t.service)
+    }
+
     /// Feed a Claude `PermissionRequest` ping to the phase service, gated the
     /// way the webview gates it. No-op without a tap.
     pub(crate) fn phase_permission(
@@ -96,11 +104,16 @@ impl AgentApiState {
         }
     }
 
-    /// Feed a Hermes hook to the phase service. The outcome (what the client
-    /// still has to do) is ignored: the client does it.
+    /// Feed a Hermes hook to the phase service. Most of the outcome (what the
+    /// client still has to do) is ignored: the client does it. The session an
+    /// `on_session_start` names is where the daemon starts the work poller.
     pub(crate) fn phase_hermes_hook(&self, hook: &HarnessHermesHook) {
-        if let Some(tap) = &self.phase_tap {
-            let _ = tap.service.hermes_hook(&hook.harness_id, hook);
+        let Some(tap) = &self.phase_tap else {
+            return;
+        };
+        let outcome = tap.service.hermes_hook(&hook.harness_id, hook);
+        if let (Some(work), Some((session_id, _))) = (&tap.hermes_work, outcome.session_started) {
+            work.session_started(&tap.rooms, &hook.room_id, &hook.harness_id, &session_id);
         }
     }
 }

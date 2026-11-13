@@ -4,9 +4,9 @@
 //! store, no behaviour beyond the string mappings.
 //!
 //! The strings of [`ActivityPhase`] and [`TransitionSource`] are persisted
-//! to `harness_events.from_phase/to_phase/source` and compared against the
-//! TypeScript machine in the shadow run, so `as_str()` and the serde names
-//! must stay byte-identical to the TS values.
+//! to `harness_events.from_phase/to_phase/source` and the webview mirrors
+//! them from the phase stream, so `as_str()` and the serde names must stay
+//! byte-identical to the TS values.
 
 // The doc comments are the ported spec and quote TS identifiers verbatim.
 #![allow(clippy::doc_markdown)]
@@ -75,8 +75,7 @@ pub struct AdapterEvent {
 
 /// The per-harness record (`HarnessActivity` in TS). 28 fields; every
 /// timestamp is epoch ms.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct HarnessActivity {
     pub phase: ActivityPhase,
@@ -361,7 +360,6 @@ transition_sources! {
     PtyOutput => "pty-output",
     PtyExit => "pty-exit",
     /// #731: a view re-attached to a process that was already running; not news.
-    Reattached => "reattached",
     /// L2a: idle heuristic on the worktree-watcher tick.
     L2aIdle => "l2a-idle",
     /// L2b: generic prompt-pattern fallback.

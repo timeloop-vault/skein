@@ -282,18 +282,18 @@ pub fn apply_hook_session_switched(
 }
 
 #[cfg(test)]
-#[path = "claude_tests.rs"]
+#[path = "tests/claude.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "claude_authority_tests.rs"]
+#[path = "tests/claude_authority.rs"]
 mod authority_tests;
 #[cfg(test)]
-#[path = "claude_local_command_tests.rs"]
+#[path = "tests/claude_local_command.rs"]
 mod local_command_tests;
 #[cfg(test)]
-#[path = "claude_reclaim_tests.rs"]
+#[path = "tests/claude_reclaim.rs"]
 mod reclaim_tests;
 #[cfg(test)]
-#[path = "claude_subagent_exit_tests.rs"]
+#[path = "tests/claude_subagent_exit.rs"]
 mod subagent_exit_tests;

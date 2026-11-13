@@ -31,8 +31,7 @@ describe("not in shell mode", () => {
 		expect(start("a", "b", "startup")).toEqual({ kind: "ignore" });
 		expect(start("a", "a", "resume")).toEqual({ kind: "ignore" });
 	});
-	it("accepts permission", () => {
-		expect(sc.acceptsPermission(H, "x")).toBe(true);
+	it("is not in shell mode", () => {
 		expect(sc.isShell(H)).toBe(false);
 	});
 });
@@ -56,11 +55,11 @@ describe("claiming", () => {
 		["startup", ""],
 	])("ignores source=%s id=%s while unclaimed", (source, id) => {
 		expect(start("old", id, source)).toEqual({ kind: "ignore" });
-		expect(sc.acceptsPermission(H, "a")).toBe(false);
+		expect(sc.claimedId(H)).toBe(null);
 	});
 	it("same id as stored claims without repoint", () => {
 		expect(start("a", "a", "resume")).toMatchObject({ claim: true, repoint: false });
-		expect(sc.acceptsPermission(H, "a")).toBe(true);
+		expect(sc.claimedId(H)).toBe("a");
 	});
 	it("fresh-process flag is one-shot", () => {
 		expect(sc.consumeFreshProcess(H)).toBe(false);
@@ -79,10 +78,7 @@ describe("nested child", () => {
 		const d = start("A", "B", "startup", true);
 		expect(d).toMatchObject({ kind: "probe-then-replace", claimedBusy: true });
 		expect(shouldReplaceClaim(true, true)).toBe(false); // transcript exists, busy
-		expect(sc.acceptsPermission(H, "B")).toBe(false);
-		expect(sc.acceptsPermission(H, "A")).toBe(true);
-		expect(sc.acceptsPermission(H, null)).toBe(true);
-		expect(sc.acceptsPermission(H, undefined)).toBe(true);
+		expect(sc.claimedId(H)).toBe("A");
 	});
 	it("compact and same-id events are ignored", () => {
 		expect(start("A", "A", "compact")).toEqual({ kind: "ignore" });
@@ -93,7 +89,6 @@ describe("nested child", () => {
 		(source) => {
 			expect(start("A", "B", source, true, true)).toEqual({ kind: "ignore" });
 			expect(sc.claimedId(H)).toBe("A");
-			expect(sc.acceptsPermission(H, "B")).toBe(false);
 		},
 	);
 	it.each(["resume", "clear", "fork"])("idle: different-id %s moves the claim", (source) => {
@@ -113,7 +108,7 @@ describe("nested child", () => {
 	});
 	it("SessionEnd for B is ignored", () => {
 		expect(sc.onSessionEnd(H, { sessionId: "B", reason: "other" })).toBe(false);
-		expect(sc.acceptsPermission(H, "A")).toBe(true);
+		expect(sc.claimedId(H)).toBe("A");
 	});
 });
 
@@ -129,8 +124,7 @@ describe("moving and releasing", () => {
 			claim: true,
 			repoint: true,
 		});
-		expect(sc.acceptsPermission(H, "B")).toBe(true);
-		expect(sc.acceptsPermission(H, "A")).toBe(false);
+		expect(sc.claimedId(H)).toBe("B");
 		expect(sc.consumeFreshProcess(H)).toBe(true); // from the first claim only
 		expect(sc.consumeFreshProcess(H)).toBe(false);
 	});
@@ -143,14 +137,14 @@ describe("moving and releasing", () => {
 	it("SessionEnd releases; next claude claims", () => {
 		start("old", "A", "startup");
 		expect(sc.onSessionEnd(H, { sessionId: "A", reason: "other" })).toBe(true);
-		expect(sc.acceptsPermission(H, "A")).toBe(false);
+		expect(sc.claimedId(H)).toBe(null);
 		expect(start("A", "C", "startup")).toMatchObject({ kind: "follow", claim: true });
-		expect(sc.acceptsPermission(H, "C")).toBe(true);
+		expect(sc.claimedId(H)).toBe("C");
 	});
 	it.each(["clear", "resume"])("SessionEnd reason %s does not release", (reason) => {
 		start("old", "A", "startup");
 		expect(sc.onSessionEnd(H, { sessionId: "A", reason })).toBe(false);
-		expect(sc.acceptsPermission(H, "A")).toBe(true);
+		expect(sc.claimedId(H)).toBe("A");
 	});
 });
 
@@ -166,10 +160,9 @@ describe("phantom startup", () => {
 			claimedBusy: false,
 		});
 		// nothing changed until the caller replaces
-		expect(sc.acceptsPermission(H, "P")).toBe(true);
+		expect(sc.claimedId(H)).toBe("P");
 		sc.replaceClaim(H, "R");
-		expect(sc.acceptsPermission(H, "R")).toBe(true);
-		expect(sc.acceptsPermission(H, "P")).toBe(false);
+		expect(sc.claimedId(H)).toBe("R");
 	});
 	it("a resume-sourced claim also gets probe-then-replace", () => {
 		start("old", "A", "resume");
@@ -222,14 +215,14 @@ describe("forget", () => {
 		sc.forget(H);
 		expect(sc.isShell(H)).toBe(false);
 		expect(sc.consumeFreshProcess(H)).toBe(false);
-		expect(sc.acceptsPermission(H, "zzz")).toBe(true);
+		expect(sc.claimedId(H)).toBe(null);
 		expect(start("a", "b", "clear")).toMatchObject({ claim: false });
 	});
 	it("a new shell spawn starts unclaimed", () => {
 		sc.noteSpawn(H, "claude", "/bin/zsh");
 		start("old", "A", "startup");
 		sc.noteSpawn(H, "claude", "/bin/zsh");
-		expect(sc.acceptsPermission(H, "A")).toBe(false);
+		expect(sc.claimedId(H)).toBe(null);
 	});
 });
 

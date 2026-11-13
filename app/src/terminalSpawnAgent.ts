@@ -1,7 +1,7 @@
 // The #247 pre-spawn agent check, split out of useTerminalSpawn.ts (#459).
 
 import { type AgentVerdict, checkAgent, unknownAgentMessage } from "./agents.ts";
-import { harnessActivity } from "./harnessActivity.ts";
+import { sendPhaseInput } from "./phaseInput.ts";
 import type { HarnessKind } from "./types.ts";
 
 export interface AgentCheck {
@@ -13,8 +13,8 @@ export interface AgentCheck {
 	/** The terminal's output gate (#592), so order with buffered output holds. */
 	out: { write(data: string): void };
 	isCancelled: () => boolean;
-	/** Called when the spawn is refused, before the activity store is
-	 *  told the harness exited — flips the effect's own `phase`. */
+	/** Called when the spawn is refused, before the daemon is
+	 *  told the start failed — flips the effect's own `phase`. */
 	onRefused: () => void;
 	/** The daemon's verdict (one `list_harness_agents` call with `check`);
 	 *  injectable for tests. */
@@ -58,6 +58,6 @@ export async function agentResolves(c: AgentCheck): Promise<boolean> {
 	// visible way forward.
 	out.write("\x1b[2m[skein] Press \x1b[0;1mEnter\x1b[0;2m for shell.\x1b[0m\r\n");
 	c.onRefused();
-	harnessActivity.exited(harnessId, null);
+	sendPhaseInput(harnessId, { kind: "startFailed" });
 	return false;
 }

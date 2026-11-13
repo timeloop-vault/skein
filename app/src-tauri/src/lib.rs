@@ -21,7 +21,6 @@ pub(crate) use skein_daemon::harness_events_claude;
 pub(crate) use skein_daemon::harness_events_opencode;
 pub(crate) use skein_daemon::harness_kind;
 pub(crate) use skein_daemon::harness_runner;
-pub(crate) use skein_daemon::harness_work_hermes;
 mod hermes_profile;
 mod open_request;
 mod opencode_sidecar;
@@ -165,13 +164,11 @@ pub fn run() {
             harness_actions_hermes::hermes_actions_attach,
             harness_actions_hermes::hermes_actions_detach,
             harness_actions_hermes::hermes_actions_turn_end,
-            commands::hermes_work::hermes_work_attach,
-            commands::hermes_work::hermes_work_detach,
             commands::harness_phase::harness_phase_input,
+            commands::harness_phase::harness_phase_snapshot,
             commands::harness_argv::harness_fresh_cmd,
             commands::harness_argv::harness_resume_cmd,
             commands::harness_argv::rooms_resume_cmds,
-            commands::harness_log::db_record_harness_event,
             commands::harness_log::db_recent_harness_events_by_harness,
             commands::harness_log::db_recent_harness_events_by_room,
             commands::harness_log::db_recent_harness_actions_by_harness,

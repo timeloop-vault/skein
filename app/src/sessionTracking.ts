@@ -1,7 +1,7 @@
 // #116 — deciding whether to follow a `SessionStart` hook payload onto
 // a new session id. Pure and separate from `harnessActivity.ts` so the
 // decision is unit-testable without the store, same split
-// `pendingPrompts.ts` and `subagents.ts` make for their own slices.
+// `subagents.ts` makes for its own slice.
 //
 // `source === "clear"`, `"resume"` and `"fork"` all re-point the tail;
 // the other sources the hook can report are all wrong to act on here:

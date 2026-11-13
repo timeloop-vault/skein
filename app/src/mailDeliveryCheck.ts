@@ -26,7 +26,6 @@ import {
 } from "./mailNudge.ts";
 import { evaluateSettlement, NUDGE_SETTLE_MS } from "./mailSettle.ts";
 import { mailStore } from "./mailStore.ts";
-import { noteMailState } from "./supervisor/mailFeed.ts";
 
 // #388: settle a still-pending nudge BEFORE asking for the live
 // unread count — a rollback here has to land before
@@ -92,23 +91,19 @@ function settlePending(refs: MailRefs, harnessId: string): boolean {
 			// #404: this same run's rollback may itself be why a #259
 			// adapter-silent degrade fired — the nudge that armed the
 			// watchdog never landed, so the tail was never given a real
-			// prompt to answer. Recover it before the gate below runs,
-			// but only when no human has driven the harness since the
-			// nudge was pasted.
+			// prompt to answer. Ask the daemon to recover it, but only when
+			// no human has driven the harness since the nudge was pasted.
+			// The mirror still shows the pre-recovery record for this pass,
+			// so the gate below refuses; the rolled-back `lastNudged` keeps
+			// the mail pending, and `useMailDelivery`'s 2 s bounded retry
+			// (phase-independent) re-runs the check once the mirror updates.
 			if (decision.attemptRecovery) {
-				if (harnessActivity.recoverUnheardSilence(harnessId)) {
-					logBoth(
-						"info",
-						"skein::mail",
-						`[skein] useMailDelivery: recovered harness ${harnessId} from a lost first paste before retrying (#404)`,
-					);
-				} else {
-					logBoth(
-						"info",
-						"skein::mail",
-						`[skein] useMailDelivery: declined to recover harness ${harnessId} from a lost first paste (#404)`,
-					);
-				}
+				harnessActivity.recoverUnheardSilence(harnessId);
+				logBoth(
+					"info",
+					"skein::mail",
+					`[skein] useMailDelivery: asked the daemon to recover harness ${harnessId} from a lost first paste before retrying (#404)`,
+				);
 			}
 		}
 		// "wait": leave the settlement armed and fall through to the
@@ -149,7 +144,6 @@ export async function checkMail(
 		return true;
 	}
 	mailStore.set(harnessId, res.count, res.fromRoomNames);
-	noteMailState(harnessId, { unread: res.count });
 	const activity = harnessActivity.get(harnessId);
 	if (!activity) return true;
 	const body = mailNudgeText(res.count, res.fromRoomNames);
@@ -273,7 +267,6 @@ export async function checkMail(
 		);
 	}
 	refs.lastMailRefusalReasonRef.current.delete(harnessId);
-	noteMailState(harnessId, { lastRefusal: null, lastNudgeAt: Date.now() });
 	refs.lastNudgedRef.current.set(harnessId, decision.lastNudged);
 	const prior = refs.settleRef.current.get(harnessId);
 	if (prior) clearTimeout(prior.timer);

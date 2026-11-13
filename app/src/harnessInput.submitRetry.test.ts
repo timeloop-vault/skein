@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
+import { harnessActivity } from "./harnessActivity.ts";
 import type { HarnessInputTarget } from "./harnessInput.ts";
 import { harnessInput, sendPrompt } from "./harnessInput.ts";
-import { subagents } from "./subagents.ts";
+import { mirrorSet, SENDABLE, subagentEntry } from "./phaseTestSupport.ts";
 import { SUBMIT_GAP_MS, SUBMIT_RETRY_SCHEDULE_MS } from "./submitRetry.ts";
 
 // #380 — end-to-end `sendPrompt`: the paste/gate stay synchronous, but
@@ -39,20 +39,14 @@ const sendableHarness = (): { id: string; target: HarnessInputTarget } => {
 		bracketedPaste: () => false,
 		submit: vi.fn(),
 	};
-	harnessActivity.spawned(id);
-	harnessActivity.attachAuthoritativeSource(id);
-	harnessActivity.adapterDelivered(id);
-	harnessActivity.setWaitingFromAdapter(id, "test");
-	harnessActivity.setInjected(id, true);
+	mirrorSet(id, "waiting", SENDABLE);
 	harnessInput.register(id, target);
 	return { id, target };
 };
 
-/// A registered, sendable harness sitting at the OTHER stopping point
-/// #381 adds: `running`, with a #277 delegation deferral armed because a
-/// background subagent is still working — the main session already
-/// ended its own turn (`awaitingPromptFromAdapter`), authoritative,
-/// heard-from and injected, same as `sendableHarness` otherwise.
+/// A registered, sendable harness at the OTHER stopping point #381 adds:
+/// `running` with a #277 delegation deferral armed because a background
+/// subagent is still working.
 const deferredHarness = (): { id: string; target: HarnessInputTarget } => {
 	const id = nextId();
 	const target: HarnessInputTarget = {
@@ -60,14 +54,12 @@ const deferredHarness = (): { id: string; target: HarnessInputTarget } => {
 		bracketedPaste: () => false,
 		submit: vi.fn(),
 	};
-	harnessActivity.spawned(id);
-	harnessActivity.attachAuthoritativeSource(id);
-	harnessActivity.adapterDelivered(id);
-	harnessActivity.setRunningFromAdapter(id, "test");
-	harnessActivity.setInjected(id, true);
-	subagents.record(id, { agentId: "a1", agentType: "explore", description: null }, false);
-	harnessActivity.noteSubagentStarted(id);
-	harnessActivity.awaitingPromptFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeEndTurn);
+	mirrorSet(
+		id,
+		"running",
+		{ ...SENDABLE, delegationDeferredAt: Date.now() },
+		{ subagents: [subagentEntry("a1", { agentType: "explore" })] },
+	);
 	harnessInput.register(id, target);
 	return { id, target };
 };
@@ -117,7 +109,7 @@ describe("sendPrompt's #380 gap + retry", () => {
 
 		// Proof the Enter landed — the harness moved on. Every later
 		// scheduled attempt must refuse from here, not just the next one.
-		harnessActivity.setRunningFromAdapter(id, "test");
+		mirrorSet(id, "running", SENDABLE);
 
 		vi.advanceTimersByTime(PAST_SCHEDULE_MS - (SUBMIT_RETRY_SCHEDULE_MS[0] ?? 0));
 		expect(target.submit).toHaveBeenCalledTimes(2);
@@ -164,7 +156,7 @@ describe("sendPrompt's #380 gap + retry", () => {
 		vi.advanceTimersByTime(SUBMIT_GAP_MS);
 		expect(target.submit).toHaveBeenCalledTimes(1);
 
-		harnessActivity.detachAuthoritativeSource(id);
+		mirrorSet(id, "waiting", { ...SENDABLE, authoritative: false });
 
 		vi.advanceTimersByTime(PAST_SCHEDULE_MS);
 		expect(target.submit).toHaveBeenCalledTimes(1);
@@ -174,13 +166,11 @@ describe("sendPrompt's #380 gap + retry", () => {
 		const { id, target } = sendableHarness();
 
 		sendPrompt(id, "claude", "hello");
-		harnessActivity.setPermissionFromAdapter(
-			id,
-			TRANSITION_SOURCE.L2c1ClaudePermission,
-			"Bash",
-			null,
-			"agent-1",
-		);
+		mirrorSet(id, "permission", {
+			...SENDABLE,
+			permissionTool: "Bash",
+			permissionAgentType: "agent-1",
+		});
 
 		vi.advanceTimersByTime(SUBMIT_GAP_MS);
 		expect(target.submit).not.toHaveBeenCalled();
@@ -198,7 +188,7 @@ describe("sendPrompt's #380 gap + retry", () => {
 		const { id, target } = sendableHarness();
 
 		sendPrompt(id, "claude", "hello");
-		harnessActivity.setRunningFromAdapter(id, "test");
+		mirrorSet(id, "running", SENDABLE);
 
 		vi.advanceTimersByTime(SUBMIT_GAP_MS);
 		expect(target.submit).not.toHaveBeenCalled();
@@ -249,7 +239,7 @@ describe("sendPrompt's #380 gap + retry, sent under a #277 delegation deferral (
 		// A main-transcript work signal disarms the deferral (#277 Rule
 		// 2) without changing the phase — still `running`, just no
 		// longer deferred.
-		harnessActivity.setRunningFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeToolUse);
+		mirrorSet(id, "running", SENDABLE);
 		expect(harnessActivity.get(id)?.delegationDeferredAt).toBeNull();
 
 		vi.advanceTimersByTime(PAST_SCHEDULE_MS);
@@ -260,7 +250,7 @@ describe("sendPrompt's #380 gap + retry, sent under a #277 delegation deferral (
 		const { id, target } = deferredHarness();
 
 		sendPrompt(id, "claude", "hello");
-		harnessActivity.setRunningFromAdapter(id, TRANSITION_SOURCE.L2c1ClaudeToolUse);
+		mirrorSet(id, "running", SENDABLE);
 
 		vi.advanceTimersByTime(SUBMIT_GAP_MS);
 		expect(target.submit).not.toHaveBeenCalled();

@@ -47,12 +47,13 @@ fn fx_with(kind: &str, cmd: Option<Vec<String>>, claim: Option<&str>) -> Fx {
     });
     let rooms = RoomStore::new(Arc::clone(&f.db), Arc::new(NoEvents));
     rooms.fill(vec![room("r1", vec![h])]).unwrap();
-    let phase = PhaseService::new();
+    let phase = PhaseService::test_new();
     phase.spawned("h1", "r1", true);
     let mut state = AgentApiState::for_test(Arc::clone(&f.db));
     state.phase_tap = Some(PhaseTap {
         service: Arc::clone(&phase),
         rooms,
+        hermes_work: None,
     });
     Fx {
         _f: f,

@@ -65,14 +65,13 @@ export interface LaunchSettledInput {
 	/// `HarnessActivity.lastOutputAt` — the most recent PTY chunk, bumped
 	/// on every chunk including while `authoritative` (#404 relies on
 	/// that: `recordOutput` keeps updating it for an adapter-owned
-	/// harness even though phase itself doesn't move). Not gospel,
-	/// though: `recordOutput` returns before touching it at all while a
-	/// `muteInducedOutput` window is active (`INDUCED_MUTE_MS` after a
-	/// forwarded focus in/out escape), so real output inside that window
-	/// is invisible here — a focus toggle landing near the ping can make
-	/// the terminal read quiet earlier than it actually went quiet. The
-	/// #388 settlement and #404's own recovery are the backstop for a
-	/// paste let through on that stale a read.
+	/// harness even though phase itself doesn't move). Since #732 the
+	/// webview stamps every chunk locally, including the redraw a forwarded
+	/// focus in/out escape provokes (the old `muteInducedOutput` skip is
+	/// gone from the stamp), and skips only an `exited` record. A focus
+	/// toggle can therefore extend the quiet window, which only delays a
+	/// first paste: the safe direction. The #388 settlement and #404's own
+	/// recovery are the backstop for a paste let through on a stale read.
 	lastOutputAt: number | null;
 	/// The current time, in the same clock as the two fields above.
 	nowMs: number;

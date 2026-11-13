@@ -1,129 +1,74 @@
-// The activity tick's screen-phase rule (#623): a TUI that never goes
-// byte-quiet (Hermes redraws a clock and a spinner constantly) can't reach
-// L2a idle or an L2b tail match, so its running <-> waiting comes from the
-// rendered screen. Kept out of harnessActivityCore.ts for file size; the
-// core hands in its own `setPhase`, the way deferral.ts does.
+// The screen-reading feed (#623, #732). A TUI that never goes byte-quiet
+// (Hermes redraws a clock and a spinner constantly) can't reach L2a idle or
+// an L2b tail match, so the daemon's phase machine moves it between running
+// and waiting from what its rendered screen says. Only the webview has the
+// xterm buffer, so once a second this reads it for every non-authoritative
+// harness that is running or waiting and forwards a CHANGED reading to the
+// daemon, which owns the debounce and every transition.
 
-import type { ActivityPhase, HarnessActivity, TransitionSource } from "./harnessActivityTypes.ts";
-import { TRANSITION_SOURCE } from "./harnessActivityTypes.ts";
 import { type PhaseInput, sendPhaseInput } from "./phaseInput.ts";
+import { phaseMirror } from "./phaseMirror.ts";
 import type { ScreenPhase } from "./screenPhase.ts";
 
-type SetPhase = (id: string, phase: ActivityPhase, source: TransitionSource) => void;
+export const SCREEN_FEED_INTERVAL_MS = 1_000;
 
-/// Consecutive identical readings needed before a transition: a torn
-/// ConPTY frame must not flip the phase.
-const CONFIRM_READS = 2;
-
-/// A screen-owned waiting whose screen then stops being recognised (an
-/// overlay, a picker, a resize) for this many ticks in a row is released to
-/// `running`, so the ordinary L2a/L2b rules can take over. Without it the
-/// phase would stay stuck at waiting while the agent works.
-export const SCREEN_UNKNOWN_RELEASE_TICKS = 5;
-
-/// Injected rather than imported: the input registry owns the terminals,
-/// and the activity store must not depend on it. The registry sets this
-/// once at module load; unset reads as "unknown".
+/// Injected rather than imported: the input registry owns the terminals.
+/// The registry sets this once at module load; unset reads as "unknown".
 let reader: ((id: string) => ScreenPhase) | null = null;
 
 export function setScreenPhaseReader(fn: ((id: string) => ScreenPhase) | null): void {
 	reader = fn;
 }
 
-interface Debounce {
-	reading: ScreenPhase;
-	count: number;
-	/// The activity phase this count was taken in; a change resets it.
-	phase: ActivityPhase;
-}
-
-const debounce = new Map<string, Debounce>();
-/// `phaseSince` of the waiting this module set, per harness.
-const screenWaitingSince = new Map<string, number>();
-/// Consecutive unrecognised ticks while the screen owns a waiting.
-const unknownTicks = new Map<string, number>();
-
-/// Is `a` in a `waiting` that the screen rule set (and still is that same
-/// waiting)? Output must not undo it; only the tick may.
-export function isScreenWaiting(id: string, a: HarnessActivity): boolean {
-	return a.phase === "waiting" && screenWaitingSince.get(id) === a.phaseSince;
-}
-
-/// Drop the screen's claim on `id`'s waiting and its debounce state.
-export function clearScreenOwnership(id: string): void {
-	debounce.delete(id);
-	screenWaitingSince.delete(id);
-	unknownTicks.delete(id);
-}
-
-/// The harness is gone: also tell the daemon's shadow machine to drop its
-/// reading, so it never keeps a stale one (#732).
-export function forgetScreenPhase(id: string): void {
-	clearScreenOwnership(id);
-	forwardScreenReading(id, null);
-}
-
-/// #732: last reading forwarded to the daemon, per harness.
-const forwardedReading = new Map<string, ScreenReading>();
 type ScreenReading = Extract<PhaseInput, { kind: "screenReading" }>["reading"];
 
-function forwardScreenReading(id: string, reading: ScreenReading): void {
+/// Last reading forwarded to the daemon, per harness, with the spawn it was
+/// read for: a respawn keeps the id but the daemon's record starts fresh.
+const forwarded = new Map<string, { reading: ScreenReading; spawnedAt: number }>();
+
+function forward(id: string, reading: ScreenReading, spawnedAt = 0): void {
 	if (reading === null) {
-		if (!forwardedReading.delete(id)) return;
+		if (!forwarded.delete(id)) return;
 	} else {
-		if (forwardedReading.get(id) === reading) return;
-		forwardedReading.set(id, reading);
+		const prev = forwarded.get(id);
+		if (prev && prev.reading === reading && prev.spawnedAt === spawnedAt) return;
+		forwarded.set(id, { reading, spawnedAt });
 	}
 	sendPhaseInput(id, { kind: "screenReading", reading });
 }
 
-/// One non-authoritative harness's tick. Returns true when the screen gave
-/// a positive reading and the caller should skip L2a/L2b for this tick.
-export function tickScreenPhase(
-	id: string,
-	a: HarnessActivity,
-	setPhase: SetPhase,
-	get: (id: string) => HarnessActivity | undefined,
-): boolean {
-	if (reader === null) return false;
-	const screenOwnsWaiting = isScreenWaiting(id, a);
-	if (a.phase !== "running" && !screenOwnsWaiting) {
-		debounce.delete(id);
-		return false;
-	}
-	let reading: ScreenPhase;
-	try {
-		reading = reader(id);
-	} catch {
-		reading = "unknown";
-	}
-	forwardScreenReading(id, reading);
-	if (reading === "unknown") {
-		debounce.delete(id);
-		if (!screenOwnsWaiting) return false;
-		const n = (unknownTicks.get(id) ?? 0) + 1;
-		if (n < SCREEN_UNKNOWN_RELEASE_TICKS) {
-			unknownTicks.set(id, n);
-			return true;
+/// One pass: read and forward changes, and drop the reading of a harness the
+/// daemon has forgotten.
+export function tickScreenReadings(): void {
+	if (reader === null) return;
+	const live = new Set(phaseMirror.ids());
+	for (const id of [...forwarded.keys()]) if (!live.has(id)) forward(id, null);
+	for (const id of live) {
+		const a = phaseMirror.get(id);
+		if (!a || a.authoritative) continue;
+		if (a.phase !== "running" && a.phase !== "waiting") continue;
+		let reading: ScreenPhase;
+		try {
+			reading = reader(id);
+		} catch {
+			reading = "unknown";
 		}
-		clearScreenOwnership(id);
-		setPhase(id, "running", TRANSITION_SOURCE.L2bScreenCleared);
-		return true;
+		forward(id, reading, a.spawnedAt);
 	}
-	unknownTicks.delete(id);
-	const prev = debounce.get(id);
-	const count = prev?.reading === reading && prev.phase === a.phase ? prev.count + 1 : 1;
-	debounce.set(id, { reading, count, phase: a.phase });
-	if (count < CONFIRM_READS) return true;
-	if (a.phase === "running" && reading === "waiting") {
-		setPhase(id, "waiting", TRANSITION_SOURCE.L2bScreen);
-		// `setPhase` replaces the record, so re-read it for the new phaseSince.
-		const next = get(id);
-		if (next?.phase === "waiting") screenWaitingSince.set(id, next.phaseSince);
-		debounce.delete(id);
-	} else if (screenOwnsWaiting && reading === "running") {
-		setPhase(id, "running", TRANSITION_SOURCE.L2bScreenCleared);
-		clearScreenOwnership(id);
-	}
-	return true;
+}
+
+let timer: ReturnType<typeof setInterval> | null = null;
+
+/// Idempotent, so StrictMode's double mount is harmless.
+export function startScreenReadingFeed(): () => void {
+	if (timer === null) timer = setInterval(tickScreenReadings, SCREEN_FEED_INTERVAL_MS);
+	return () => {
+		if (timer !== null) clearInterval(timer);
+		timer = null;
+	};
+}
+
+/// Test-only: forget what was forwarded.
+export function resetScreenReadings(): void {
+	forwarded.clear();
 }

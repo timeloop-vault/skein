@@ -4,7 +4,7 @@
 
 use super::HarnessRunner;
 use super::gates::lookup;
-use crate::harness_phase::sinks::{ClaudePhaseSink, HermesWorkPhaseSink, OpencodePhaseSink};
+use crate::harness_phase::sinks::{ClaudePhaseSink, OpencodePhaseSink};
 
 impl HarnessRunner {
     /// The sink to put beside the client's own in `Tee::new(client, this)`
@@ -22,16 +22,6 @@ impl HarnessRunner {
     #[must_use]
     pub fn opencode_phase_sink(&self, harness_id: &str) -> OpencodePhaseSink {
         OpencodePhaseSink {
-            service: std::sync::Arc::clone(&self.phase),
-            harness_id: harness_id.to_owned(),
-        }
-    }
-
-    /// [`claude_phase_sink`](Self::claude_phase_sink) for the Hermes work
-    /// poller, which only the client attaches.
-    #[must_use]
-    pub fn hermes_work_phase_sink(&self, harness_id: &str) -> HermesWorkPhaseSink {
-        HermesWorkPhaseSink {
             service: std::sync::Arc::clone(&self.phase),
             harness_id: harness_id.to_owned(),
         }

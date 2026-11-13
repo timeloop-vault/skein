@@ -46,11 +46,9 @@
 //! [`crate::db::Database`] — [`call_tool`] only needed to be async once
 //! `create_room` landed, since opening a room means round-tripping to
 //! the webview (`AgentApiState::request_frontend`). #356's `list_rooms`,
-//! `get_room` and `list_harnesses` are async for the same reason: each
-//! makes its own such round trip (`"harness_phases"`) to read a live
-//! harness's activity phase, capped at a few seconds rather than
-//! `create_room`'s whole minute — a read-only listing call must never
-//! hang on a busy or absent webview.
+//! `get_room` and `list_harnesses` are async too, but read a live
+//! harness's activity phase from the daemon's `PhaseService` (#732), with
+//! no webview round trip.
 
 mod design_specs;
 mod instructions;

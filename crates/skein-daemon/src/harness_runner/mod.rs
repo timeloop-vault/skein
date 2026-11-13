@@ -19,6 +19,7 @@
 //! `ensure_running` repairs itself by re-checking the records afterwards.
 
 mod adapters;
+mod client_input;
 mod events;
 mod gates;
 mod phase_tap;
@@ -44,6 +45,7 @@ use crate::harness_events_claude::ClaudeEventsManager;
 use crate::harness_events_opencode::OpencodeEventsManager;
 use crate::harness_kind::HarnessKind;
 use crate::harness_phase::PhaseService;
+use crate::harness_work_hermes::HermesWorkAttacher;
 use crate::opencode_sidecar::start::{EXIT_EVENT, SidecarExitPayload};
 use crate::opencode_sidecar::{OnExit, OpencodeSidecarManager};
 use crate::pty::command::{PtySpawnArgs, PtySpawnDeps, PtySpawnResult, pty_spawn_with_sink};
@@ -72,11 +74,12 @@ pub struct RunnerDeps {
     pub claude: ClaudeEventsManager,
     pub opencode: OpencodeEventsManager,
     pub hermes_actions: HermesActionsManager,
+    pub hermes_work: Arc<HermesWorkAttacher>,
     pub spawn_env: Arc<SpawnEnvState>,
     pub endpoint: AgentApiEndpoint,
     pub harness_config: HarnessConfig,
     pub events: SharedEventSink,
-    /// The shadow phase machine (#732); the runner feeds it.
+    /// The phase machine (#732); the runner feeds it.
     pub phase: Arc<PhaseService>,
 }
 
@@ -180,6 +183,7 @@ impl HarnessRunner {
             claude,
             opencode,
             hermes_actions,
+            hermes_work,
             spawn_env,
             endpoint,
             harness_config,
@@ -196,6 +200,7 @@ impl HarnessRunner {
                 claude,
                 opencode,
                 hermes: hermes_actions,
+                hermes_work,
                 sidecars,
                 spawn_env: Arc::clone(&spawn_env),
                 phase: Arc::clone(&phase),
@@ -392,15 +397,18 @@ impl HarnessRunner {
                     .stop_if_generation(&sidecar_harness, generation);
             }
         }
-        self.adapters.detach(harness_id);
         if forget_phase {
-            // Takes the translators with it, so no separate `*_detached`.
+            // First, so a Hermes session-start hook landing mid-stop sees no
+            // record and attaches nothing; `adapters.detach` never reads the
+            // phase record. Takes the translators with it, so no separate
+            // `*_detached`.
             self.phase.forget(harness_id);
         }
+        self.adapters.detach(harness_id);
         removed.is_some()
     }
 
-    /// The shadow phase service this runner feeds (#732).
+    /// The phase service this runner feeds (#732).
     #[must_use]
     pub fn phase(&self) -> &Arc<PhaseService> {
         &self.phase
