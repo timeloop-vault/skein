@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const sent = vi.hoisted(() => ({ sendPhaseInput: vi.fn() }));
+vi.mock("./phaseInput.ts", () => ({ sendPhaseInput: sent.sendPhaseInput }));
+
 import type { AgentVerdict } from "./agents.ts";
 import { agentResolves } from "./terminalSpawnAgent.ts";
 
@@ -23,11 +27,14 @@ const run = async (
 	return { ok, check, out, onRefused };
 };
 
+beforeEach(() => sent.sendPhaseInput.mockReset());
+
 describe("agentResolves (#730: the daemon's verdict)", () => {
 	it("unknown blocks the spawn and says why", async () => {
 		const r = await run({ kind: "unknown", agent: "ghost" });
 		expect(r.ok).toBe(false);
 		expect(r.onRefused).toHaveBeenCalled();
+		expect(sent.sendPhaseInput).toHaveBeenCalledWith("h1", { kind: "startFailed" });
 		expect(r.out.write.mock.calls.join("")).toContain('agent "ghost"');
 	});
 
@@ -36,6 +43,7 @@ describe("agentResolves (#730: the daemon's verdict)", () => {
 		const r = await run({ kind: "unverified", agent: "ghost", why: "cli down" });
 		expect(r.ok).toBe(true);
 		expect(r.onRefused).not.toHaveBeenCalled();
+		expect(sent.sendPhaseInput).not.toHaveBeenCalled();
 	});
 
 	it("ok does not block", async () => {

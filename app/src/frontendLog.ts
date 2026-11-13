@@ -13,7 +13,7 @@
 //
 // Deliberately imports nothing but `@tauri-apps/api/core` — this
 // module is imported from `harnessEvents.ts`, `harnessActivity.ts`,
-// `harnessActivityCore.ts`, `harnessInput.ts` and `useMailDelivery.ts`,
+// `phaseMirror.ts`, `harnessInput.ts` and `useMailDelivery.ts`,
 // so pulling in anything from this codebase here risks an import
 // cycle.
 

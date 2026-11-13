@@ -264,5 +264,5 @@ impl BackgroundTasks {
 }
 
 #[cfg(test)]
-#[path = "background_tasks_tests.rs"]
+#[path = "tests/background_tasks.rs"]
 mod tests;

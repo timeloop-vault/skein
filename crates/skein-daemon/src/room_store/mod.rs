@@ -230,6 +230,28 @@ impl RoomStore {
         self.shared.lock().rooms.clone()
     }
 
+    /// `(session id, cwd)` of the wanted harnesses that have a session id, for
+    /// the transcript sampler (#732). The cwd is the harness's own folder, else
+    /// the room's (what the spawn used). Only those strings are cloned, and the
+    /// store lock is released before the caller touches a file.
+    #[must_use]
+    pub fn session_sources(
+        &self,
+        wanted: &std::collections::HashSet<String>,
+    ) -> std::collections::HashMap<String, (String, String)> {
+        let st = self.shared.lock();
+        let mut out = std::collections::HashMap::new();
+        for room in &st.rooms {
+            for h in room.harnesses.iter().filter(|h| wanted.contains(&h.id)) {
+                let cwd = h.cwd.as_ref().or(room.cwd.as_ref());
+                if let (Some(sid), Some(cwd)) = (h.session_id.as_ref(), cwd) {
+                    out.insert(h.id.clone(), (sid.clone(), cwd.clone()));
+                }
+            }
+        }
+        out
+    }
+
     /// One harness's record, cloned alone (not the room list).
     #[must_use]
     pub fn harness_record(&self, room_id: &str, harness_id: &str) -> Option<Harness> {

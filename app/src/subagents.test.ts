@@ -1,159 +1,79 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { resetPhaseMirror } from "./phaseMirror.ts";
+import { mirrorForget, mirrorSet, subagentEntry } from "./phaseTestSupport.ts";
 import { subagents } from "./subagents.ts";
 
-// #298 — per-harness live-subagent bookkeeping, kept pure so it's
-// testable without the activity store or an event stream.
+// #732: the registry is the daemon's; this is the read side over the mirror.
 
-const nextId = (() => {
-	let n = 0;
-	return () => `h_${++n}`;
-})();
+const H = "h";
 
-describe("subagents", () => {
-	it("record is idempotent and preserves the original startedAt", () => {
-		const h = nextId();
-		subagents.record(h, { agentId: "a1", agentType: "explore", description: "look around" }, false);
-		const first = subagents.live(h);
-		expect(first).toHaveLength(1);
-		const startedAt = first[0]?.startedAt;
-
-		// A restart replay of the same agentId must not double-count
-		// or reset when it started.
-		subagents.record(h, { agentId: "a1", agentType: "explore", description: "look around" }, false);
-		const second = subagents.live(h);
-		expect(second).toHaveLength(1);
-		expect(second[0]?.startedAt).toBe(startedAt);
-	});
-
-	it("relabel updates an existing entry and preserves startedAt and fromAttach", () => {
-		const h = nextId();
-		subagents.record(h, { agentId: "a1", agentType: null, description: null }, true);
-		const before = subagents.live(h)[0];
-		subagents.relabel(h, "a1", "explore", "look around");
-		const after = subagents.live(h);
-		expect(after).toHaveLength(1);
-		expect(after[0]).toEqual({
-			agentId: "a1",
-			agentType: "explore",
-			description: "look around",
-			startedAt: before?.startedAt,
-			fromAttach: true,
-		});
-	});
-
-	it("relabel for an unknown agentId is a no-op", () => {
-		const h = nextId();
-		subagents.relabel(h, "nope", "explore", null);
-		expect(subagents.live(h)).toHaveLength(0);
-	});
-
-	it("finish removes the entry", () => {
-		const h = nextId();
-		subagents.record(h, { agentId: "a1", agentType: "explore", description: null }, false);
-		subagents.finish(h, "a1");
-		expect(subagents.live(h)).toHaveLength(0);
-	});
-
-	it("finish for an unknown agentId is a no-op, not a throw", () => {
-		const h = nextId();
-		expect(() => subagents.finish(h, "does-not-exist")).not.toThrow();
-		expect(subagents.live(h)).toHaveLength(0);
-	});
-
-	it("forget clears every subagent tracked for the harness", () => {
-		const h = nextId();
-		subagents.record(h, { agentId: "a1", agentType: "explore", description: null }, false);
-		subagents.record(h, { agentId: "a2", agentType: "build", description: null }, false);
-		subagents.forget(h);
-		expect(subagents.live(h)).toHaveLength(0);
-	});
-
-	it("forget for a harness with nothing tracked is a no-op, not a throw", () => {
-		const h = nextId();
-		expect(() => subagents.forget(h)).not.toThrow();
-	});
-
-	it("live returns entries oldest first, stable across insertion order", () => {
-		const h = nextId();
-		subagents.record(h, { agentId: "a1", agentType: "explore", description: null }, false);
-		subagents.record(h, { agentId: "a2", agentType: "build", description: null }, false);
-		subagents.record(h, { agentId: "a3", agentType: "plan", description: null }, false);
-		const ids = subagents.live(h).map((e) => e.agentId);
-		expect(ids).toEqual(["a1", "a2", "a3"]);
-
-		// Re-recording the middle one doesn't reorder it — startedAt is
-		// preserved, and order is by startedAt.
-		subagents.record(h, { agentId: "a2", agentType: "build", description: null }, false);
-		expect(subagents.live(h).map((e) => e.agentId)).toEqual(["a1", "a2", "a3"]);
-	});
-
-	it("tracks harnesses independently", () => {
-		const a = nextId();
-		const b = nextId();
-		subagents.record(a, { agentId: "x", agentType: "explore", description: null }, false);
-		expect(subagents.live(b)).toHaveLength(0);
-		expect(subagents.live(a)).toHaveLength(1);
-	});
+beforeEach(() => {
+	resetPhaseMirror();
 });
 
-// #277 — `fromAttach` / `workingCount` / `presumeGone`: the counting
-// layer the delegation deferral reads, distinct from `live` (which
-// stays an honest disk mirror per #276's contract).
-describe("fromAttach / workingCount / presumeGone (#277)", () => {
-	it("a live start (initial=false) is never fromAttach", () => {
-		const h = nextId();
-		subagents.record(h, { agentId: "a1", agentType: "explore", description: null }, false);
-		expect(subagents.live(h)[0]?.fromAttach).toBe(false);
-		expect(subagents.workingCount(h)).toBe(1);
+describe("subagents (mirror read side)", () => {
+	it("is empty for an unknown harness, with a stable empty list", () => {
+		expect(subagents.live(H)).toEqual([]);
+		expect(subagents.live(H)).toBe(subagents.live("other"));
+		expect(subagents.workingCount(H)).toBe(0);
 	});
 
-	it("an attach-time start (initial=true) is fromAttach and not counted as working", () => {
-		const h = nextId();
-		subagents.record(h, { agentId: "a1", agentType: "explore", description: null }, true);
-		expect(subagents.live(h)[0]?.fromAttach).toBe(true);
-		expect(subagents.workingCount(h)).toBe(0);
-		// live() itself stays an honest mirror — the orphan is still
-		// reported, only the counting excludes it.
-		expect(subagents.live(h)).toHaveLength(1);
+	it("serves the list of the latest update, in the daemon's order", () => {
+		mirrorSet(
+			H,
+			"running",
+			{},
+			{ subagents: [subagentEntry("a", { startedAt: 1 }), subagentEntry("b")] },
+		);
+		expect(subagents.live(H).map((s) => s.agentId)).toEqual(["a", "b"]);
+		mirrorSet(H, "running", {}, { subagents: [subagentEntry("b")] });
+		expect(subagents.live(H).map((s) => s.agentId)).toEqual(["b"]);
+		mirrorSet(H, "running");
+		expect(subagents.live(H)).toEqual([]);
 	});
 
-	it("an attach-seeded id promoted by a later live start counts as working", () => {
-		const h = nextId();
-		subagents.record(h, { agentId: "a1", agentType: "explore", description: null }, true);
-		expect(subagents.workingCount(h)).toBe(0);
-
-		subagents.record(h, { agentId: "a1", agentType: "explore", description: null }, false);
-		expect(subagents.live(h)[0]?.fromAttach).toBe(false);
-		expect(subagents.workingCount(h)).toBe(1);
+	it("counts everything but attach-time orphans as working (#277)", () => {
+		mirrorSet(
+			H,
+			"running",
+			{},
+			{
+				subagents: [
+					subagentEntry("old", { fromAttach: true }),
+					subagentEntry("live"),
+					subagentEntry("live2"),
+				],
+			},
+		);
+		expect(subagents.live(H)).toHaveLength(3);
+		expect(subagents.workingCount(H)).toBe(2);
 	});
 
-	it("promotion is sticky: a later replay with initial=true does not revert it", () => {
-		const h = nextId();
-		subagents.record(h, { agentId: "a1", agentType: "explore", description: null }, false);
-		subagents.record(h, { agentId: "a1", agentType: "explore", description: null }, true);
-		expect(subagents.live(h)[0]?.fromAttach).toBe(false);
-		expect(subagents.workingCount(h)).toBe(1);
+	it("keeps the list reference while the harness's list is unchanged", () => {
+		mirrorSet(H, "running", {}, { subagents: [subagentEntry("a")] });
+		const first = subagents.live(H);
+		mirrorSet(H, "waiting", {}, { subagents: [subagentEntry("a")] });
+		expect(subagents.live(H)).toBe(first);
 	});
 
-	it("workingCount is 0 for a harness with nothing tracked", () => {
-		expect(subagents.workingCount(nextId())).toBe(0);
+	it("notifies subscribers on a list change only, and stops after unsubscribe", () => {
+		let calls = 0;
+		const off = subagents.subscribe(H, () => calls++);
+		mirrorSet(H, "running", {}, { subagents: [subagentEntry("a")] });
+		expect(calls).toBe(1);
+		mirrorSet(H, "waiting", {}, { subagents: [subagentEntry("a")] });
+		expect(calls).toBe(1);
+		mirrorSet(H, "waiting");
+		expect(calls).toBe(2);
+		off();
+		mirrorSet(H, "waiting", {}, { subagents: [subagentEntry("z")] });
+		expect(calls).toBe(2);
 	});
 
-	it("presumeGone drops only the working entries and reports the count", () => {
-		const h = nextId();
-		subagents.record(h, { agentId: "attached", agentType: "explore", description: null }, true);
-		subagents.record(h, { agentId: "live1", agentType: "build", description: null }, false);
-		subagents.record(h, { agentId: "live2", agentType: "plan", description: null }, false);
-
-		const dropped = subagents.presumeGone(h);
-		expect(dropped).toBe(2);
-		expect(subagents.workingCount(h)).toBe(0);
-		// The attach-only entry was never counted as working, so
-		// presumeGone leaves it alone.
-		expect(subagents.live(h).map((e) => e.agentId)).toEqual(["attached"]);
-	});
-
-	it("presumeGone for a harness with nothing tracked is a no-op, not a throw", () => {
-		expect(() => expect(subagents.presumeGone(nextId())).toBe(0)).not.toThrow();
+	it("drops the list when the daemon forgets the harness", () => {
+		mirrorSet(H, "running", {}, { subagents: [subagentEntry("a")] });
+		mirrorForget(H);
+		expect(subagents.live(H)).toEqual([]);
+		expect(subagents.workingCount(H)).toBe(0);
 	});
 });

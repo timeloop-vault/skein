@@ -92,7 +92,7 @@ import { mailHold } from "./mailHold.ts";
 import { shouldCheckOnTransition } from "./mailNudge.ts";
 import { nextMailRetry } from "./mailRetry.ts";
 import { mailStore } from "./mailStore.ts";
-import { forgetMailState, noteMailState } from "./supervisor/mailFeed.ts";
+import { onFirstSnapshot } from "./phaseMirror.ts";
 import type { Room } from "./types.ts";
 
 export function useMailDelivery(rooms: readonly Room[]): void {
@@ -140,7 +140,6 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 			seededRef.current.delete(id);
 			lastNudgedRef.current.delete(id);
 			lastMailRefusalReasonRef.current.delete(id);
-			forgetMailState(id);
 			mailStore.forget(id);
 			mailHold.forget(id);
 			clearRetry(refs, id);
@@ -154,7 +153,6 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 			invoke<MailUnread>("mail_unread", { roomId: m.roomId, harnessId: id })
 				.then((res) => {
 					mailStore.set(id, res.count, res.fromRoomNames);
-					noteMailState(id, { unread: res.count });
 				})
 				.catch((err: unknown) => {
 					logBoth(
@@ -297,6 +295,16 @@ export function useMailDelivery(rooms: readonly Room[]): void {
 			runSerialized(harnessId);
 		});
 		return unsub;
+	}, []);
+
+	// #732: the mirror's first snapshot carries no transition, so a harness
+	// that was already `waiting` (or that the registered/mail triggers saw
+	// before the mirror had it) is only checked here.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: runSerialized closes only over refs, stable across renders.
+	useEffect(() => {
+		return onFirstSnapshot(() => {
+			for (const id of [...metaRef.current.keys()]) runSerialized(id);
+		});
 	}, []);
 
 	// #413: the tab's "deliver now" click.

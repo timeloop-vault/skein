@@ -1,63 +1,10 @@
-//! The `harness_events` and `harness_actions` logs: one record command
-//! and the recent-rows queries for each.
+//! The `harness_events` and `harness_actions` logs: the recent-rows
+//! queries for each. The daemon writes `harness_events` itself.
 
 use std::sync::Arc;
 
 use crate::db::{Database, HarnessAction, HarnessEvent};
 use skein_daemon::harness_log::{HarnessContextSize, context_sizes};
-use skein_daemon::harness_phase::PhaseService;
-
-/// Append one row to the `harness_events` log. Epic #50 L6.
-///
-/// Called by the frontend's transition listener — once per real
-/// phase change. Fire-and-forget from the TS side; we still surface
-/// errors as `String` so the caller can console.warn if something
-/// goes wrong (most likely "disk full" or a corrupted DB; nothing
-/// actionable from the user's perspective beyond seeing a log).
-///
-/// `source` is reserved for L7 attribution ("which adapter event
-/// drove this transition"). For v1 the frontend passes `None`.
-///
-/// Async: an sqlite insert — off the main thread (#171).
-#[allow(clippy::too_many_arguments)]
-#[tauri::command]
-pub(crate) async fn db_record_harness_event(
-    harness_id: String,
-    room_id: String,
-    from_phase: String,
-    to_phase: String,
-    timestamp_ms: i64,
-    has_user_input: bool,
-    source: Option<String>,
-    db: tauri::State<'_, Arc<Database>>,
-    phase: tauri::State<'_, Arc<PhaseService>>,
-) -> Result<(), String> {
-    let db = Arc::clone(&db);
-    let phase = Arc::clone(&phase);
-    tauri::async_runtime::spawn_blocking(move || {
-        let recorded = db.record_harness_event(
-            &harness_id,
-            &room_id,
-            &from_phase,
-            &to_phase,
-            timestamp_ms,
-            has_user_input,
-            source.as_deref(),
-        );
-        // #732 shadow: the comparator sees every transition the TypeScript
-        // machine logs. A short mutex section; it cannot fail the command.
-        phase.shadow_client_transition(
-            &harness_id,
-            &from_phase,
-            &to_phase,
-            source.as_deref(),
-            timestamp_ms,
-        );
-        recorded
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
 /// Read recent events for a single harness. Newest-first. Epic #50 L6.
 ///

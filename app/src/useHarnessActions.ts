@@ -20,7 +20,6 @@
 // — everything below moved into this single hook call rather than
 // splitting across two.
 
-import { invoke } from "@tauri-apps/api/core";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { useCallback } from "react";
 import { decideCloseHarness, type RequestResult } from "./agentRequests.ts";
@@ -37,6 +36,7 @@ import { harnessInput } from "./harnessInput.ts";
 import type { GateResult } from "./harnessInputGate.ts";
 import { canRestart, exitedRestartable } from "./harnessRestart.ts";
 import { mailHold } from "./mailHold.ts";
+import { type RestartSource, sendPhaseInput } from "./phaseInput.ts";
 import type { RenameTarget } from "./RoomStrip.tsx";
 import { prepareRestart } from "./restartResume.ts";
 import { stillExists } from "./roomsStoreProbe.ts";
@@ -244,7 +244,7 @@ export function useHarnessActions(
 	const restartHarness = async (
 		roomId: string,
 		harnessId: string,
-		source: string = TRANSITION_SOURCE.UserRestart,
+		source: RestartSource = TRANSITION_SOURCE.UserRestart,
 	): Promise<GateResult> => {
 		// One restart per harness at a time: the awaits below leave a window
 		// where a second call would pass the same gates and respawn twice.
@@ -265,7 +265,7 @@ export function useHarnessActions(
 	const doRestart = async (
 		roomId: string,
 		harnessId: string,
-		source: string,
+		source: RestartSource,
 	): Promise<GateResult> => {
 		const h = findHarness(roomId, harnessId);
 		if (!h) return { ok: false, reason: "that harness no longer exists" };
@@ -304,8 +304,6 @@ export function useHarnessActions(
 		if (fresh.sessionId !== pre.sessionId) {
 			return { ok: false, reason: "its conversation changed while restarting - try again" };
 		}
-		const activity = harnessActivity.get(harnessId);
-		const fromPhase = activity?.phase ?? "unknown";
 		// Both updates below must land in the same render (React batches
 		// them in this tick); otherwise LiveTerminal remounts on the
 		// spawnGen bump with the OLD port.
@@ -314,20 +312,9 @@ export function useHarnessActions(
 		}
 		const next = applyResumedHarness(fresh, resumed.harness);
 		updateHarnessCmd(roomId, harnessId, next.cmd ?? [], next.sessionId);
-		// Source "user-restart" marks a user-initiated respawn: the new
-		// process starts out `spawning`.
-		invoke("db_record_harness_event", {
-			harnessId,
-			roomId,
-			fromPhase,
-			toPhase: "spawning",
-			timestampMs: Date.now(),
-			hasUserInput: activity?.hasUserInput ?? false,
-			source,
-		}).catch((err: unknown) => {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.warn(`[skein] db_record_harness_event failed for ${harnessId}:`, msg);
-		});
+		// The daemon logs the new process's `spawning` row (source
+		// "user-restart" / "version-auto-restart") and resets its record.
+		sendPhaseInput(harnessId, { kind: "restartRequested", source });
 		return { ok: true };
 	};
 

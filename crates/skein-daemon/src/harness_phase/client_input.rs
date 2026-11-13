@@ -1,5 +1,6 @@
-//! What the webview still tells the daemon about a harness while the phase
-//! machine runs in shadow (#732).
+//! What the webview still tells the daemon about a harness (#732): the
+//! daemon's phase machine is the authority and the webview mirrors its
+//! stream.
 //!
 //! These are the inputs only the client can observe: keystrokes in the
 //! xterm, the rendered Hermes screen, a seam-submitted prompt. The daemon
@@ -38,96 +39,37 @@ pub enum ClientPhaseInput {
     SessionSwitched { switch: SessionSwitch },
     /// A mail nudge's lost first paste (#404).
     RecoverUnheardSilence,
-    /// A view attached to a process that was already running (#731).
-    Reattached,
-    /// The webview threw away and rebuilt its own record for a harness that
-    /// keeps running (reload, view remount). Touches no machine state; the
-    /// shadow comparator resyncs.
-    ViewReset,
+    /// A start that produced no process (a refused agent, a failed ensure
+    /// call): the record is created or replaced and reads `exited`. Only
+    /// acted on for a stored harness with no live process, and under the
+    /// stored room id (`HarnessRunner::client_phase_input`); wire:
+    /// `{"kind":"startFailed"}`.
+    StartFailed,
+    /// The user (or the version auto-restart) asked for a respawn. Writes one
+    /// `harness_events` row (`<current phase> -> spawning`) and changes
+    /// nothing else: the new process's own spawn does the rest. Only acted on
+    /// for a stored harness, under the stored room id; wire:
+    /// `{"kind":"restartRequested","source":"user-restart"}`.
+    RestartRequested { source: RestartSource },
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Who asked for a restart: the `source` of the logged row. These are the two
+/// [`TransitionSource`](super::types::TransitionSource) strings of the same
+/// names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum RestartSource {
+    #[serde(rename = "user-restart")]
+    UserRestart,
+    #[serde(rename = "version-auto-restart")]
+    VersionAutoRestart,
+}
 
-    #[test]
-    fn wire_shape_is_camel_case_tagged() {
-        let i: ClientPhaseInput =
-            serde_json::from_str(r#"{"kind":"input","data":"a","emptyComposer":true}"#).unwrap();
-        assert!(matches!(
-            i,
-            ClientPhaseInput::Input {
-                empty_composer: true,
-                ..
-            }
-        ));
-        let i: ClientPhaseInput =
-            serde_json::from_str(r#"{"kind":"sessionSwitched","switch":"fork"}"#).unwrap();
-        assert!(matches!(
-            i,
-            ClientPhaseInput::SessionSwitched {
-                switch: SessionSwitch::Fork
-            }
-        ));
-        let i: ClientPhaseInput =
-            serde_json::from_str(r#"{"kind":"screenReading","reading":null}"#).unwrap();
-        assert!(matches!(
-            i,
-            ClientPhaseInput::ScreenReading { reading: None }
-        ));
-        let i: ClientPhaseInput =
-            serde_json::from_str(r#"{"kind":"hermesLaunchPoll","screenWaiting":true}"#).unwrap();
-        assert!(matches!(
-            i,
-            ClientPhaseInput::HermesLaunchPoll {
-                screen_waiting: true
-            }
-        ));
-    }
-
-    #[test]
-    fn every_frontend_shape_deserializes() {
-        let parse = |s: &str| serde_json::from_str::<ClientPhaseInput>(s).unwrap();
-        assert!(matches!(
-            parse(r#"{"kind":"promptSubmitted"}"#),
-            ClientPhaseInput::PromptSubmitted
-        ));
-        assert!(matches!(
-            parse(r#"{"kind":"muteInducedOutput"}"#),
-            ClientPhaseInput::MuteInducedOutput
-        ));
-        for (s, want) in [
-            ("waiting", ScreenReading::Waiting),
-            ("running", ScreenReading::Running),
-            ("unknown", ScreenReading::Unknown),
-        ] {
-            let i = parse(&format!(r#"{{"kind":"screenReading","reading":"{s}"}}"#));
-            assert!(matches!(i, ClientPhaseInput::ScreenReading { reading: Some(r) } if r == want));
+impl RestartSource {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserRestart => "user-restart",
+            Self::VersionAutoRestart => "version-auto-restart",
         }
-        assert!(matches!(
-            parse(r#"{"kind":"launchSignal"}"#),
-            ClientPhaseInput::LaunchSignal
-        ));
-        for (s, want) in [
-            ("clear", SessionSwitch::Clear),
-            ("resume", SessionSwitch::Resume),
-            ("fork", SessionSwitch::Fork),
-            ("startup", SessionSwitch::Startup),
-        ] {
-            let i = parse(&format!(r#"{{"kind":"sessionSwitched","switch":"{s}"}}"#));
-            assert!(matches!(i, ClientPhaseInput::SessionSwitched { switch } if switch == want));
-        }
-        assert!(matches!(
-            parse(r#"{"kind":"recoverUnheardSilence"}"#),
-            ClientPhaseInput::RecoverUnheardSilence
-        ));
-        assert!(matches!(
-            parse(r#"{"kind":"reattached"}"#),
-            ClientPhaseInput::Reattached
-        ));
-        assert!(matches!(
-            parse(r#"{"kind":"viewReset"}"#),
-            ClientPhaseInput::ViewReset
-        ));
     }
 }

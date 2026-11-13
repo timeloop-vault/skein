@@ -219,3 +219,16 @@ export function aggregateRoomStatus(
 	}
 	return best ?? "idle";
 }
+
+/// #381: is this harness at a point where pasting and submitting a
+/// prompt through the #238 seam (`canSendPrompt`/`sendPrompt`) is safe?
+/// `waiting` (end of turn) always is. So is `running` with an armed
+/// #277 delegation deferral — the main session already ended its own
+/// turn and only stayed `running` because background work was still
+/// going; a prompt landing now is exactly as safe as one landing once
+/// the deferral flushes to `waiting` on its own. `permission` is never a
+/// stopping point even with the deferral armed underneath it (#86
+/// outranks #277): it fails the `phase === "running"` check below.
+export function atSafeStoppingPoint(a: HarnessActivity): boolean {
+	return a.phase === "waiting" || (a.phase === "running" && a.delegationDeferredAt !== null);
+}

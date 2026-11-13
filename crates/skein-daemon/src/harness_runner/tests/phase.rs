@@ -1,4 +1,4 @@
-//! The runner feeds the shadow phase machine (#732): spawn, output, exit,
+//! The runner feeds the phase machine (#732): spawn, output, exit,
 //! stop, and the adapter events of a daemon with no client at all.
 
 use super::*;

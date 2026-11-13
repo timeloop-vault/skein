@@ -1,15 +1,20 @@
 //! Cross-room listing (#356): `list_rooms`, `get_room` and `list_harnesses`.
 
-use serde_json::json;
+use std::sync::Arc;
 
 use super::auth::Caller;
 use super::mail_send_tests::send;
 use super::mcp;
+use super::phase_tap::PhaseTap;
 use super::review_tests::{commit_file, git_repo_with_commit};
 use super::state::AgentApiState;
 use super::tests::{Fixture, agent_api_state, caller_for, fixture, harness, room, save};
 use super::verbs::{self, MailContext, VerbError};
 use crate::db::CreatedBy;
+use crate::event_sink::EventSink;
+use crate::harness_events_claude::ClaudeEvent;
+use crate::harness_phase::PhaseService;
+use crate::room_store::RoomStore;
 
 // ── cross-room room and harness listing, issue #356 ─────────────────
 
@@ -286,72 +291,38 @@ async fn get_room_reports_signoff_unavailable_when_the_room_has_no_worktree() {
     );
 }
 
-#[tokio::test]
-async fn get_room_maps_a_known_phase_the_frontend_reports() {
-    let f = fixture();
-    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
-    let state = agent_api_state(&f);
-    state.set_test_frontend(|kind, _args| match kind {
-        "harness_phases" => Ok(json!({ "phases": { "h1": "waiting" } })),
-        other => Err(format!("unexpected request_frontend kind {other:?}")),
+struct NoEvents;
+
+impl EventSink for NoEvents {
+    fn emit_json(&self, _event: &str, _payload: String) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// A state whose phase tap holds a real, empty [`PhaseService`].
+fn state_with_phases(f: &Fixture) -> (AgentApiState, Arc<PhaseService>) {
+    let phase = PhaseService::test_new();
+    let mut state = agent_api_state(f);
+    state.phase_tap = Some(PhaseTap {
+        service: Arc::clone(&phase),
+        rooms: RoomStore::new(Arc::clone(&f.db), Arc::new(NoEvents)),
+        hermes_work: None,
     });
-    let out = verbs::get_room(
-        &state,
-        &verbs::GetRoomArgs {
-            room: "r1".to_owned(),
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(out.harnesses[0].phase, "waiting");
+    (state, phase)
 }
 
-#[tokio::test]
-async fn get_room_treats_a_bogus_phase_value_as_unknown() {
-    let f = fixture();
-    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
-    let state = agent_api_state(&f);
-    state.set_test_frontend(|kind, _args| match kind {
-        "harness_phases" => Ok(json!({ "phases": { "h1": "vibing" } })),
-        other => Err(format!("unexpected request_frontend kind {other:?}")),
-    });
-    let out = verbs::get_room(
-        &state,
-        &verbs::GetRoomArgs {
-            room: "r1".to_owned(),
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(out.harnesses[0].phase, "unknown");
+fn subagent_start(id: &str) -> ClaudeEvent {
+    ClaudeEvent::SubagentStart {
+        agent_id: id.to_owned(),
+        agent_type: None,
+        description: None,
+        initial: false,
+    }
 }
 
-#[tokio::test]
-async fn get_room_reports_unknown_when_the_webview_never_answers() {
-    let f = fixture();
-    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
-    // `for_test` has no `AppHandle` and no `set_test_frontend` hook — the
-    // same "no webview" case `request_frontend_with_no_app_handle_fails_
-    // immediately_and_leaves_the_map_empty` exercises directly.
-    let state = agent_api_state(&f);
-    let out = verbs::get_room(
-        &state,
-        &verbs::GetRoomArgs {
-            room: "r1".to_owned(),
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(out.harnesses[0].phase, "unknown");
-}
-
-async fn work_for(answer: serde_json::Value) -> verbs::HarnessSummary {
-    let f = fixture();
-    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
-    let state = agent_api_state(&f);
-    state.set_test_frontend(move |_kind, _args| Ok(answer.clone()));
+async fn summary_of(state: &AgentApiState) -> verbs::HarnessSummary {
     let mut out = verbs::get_room(
-        &state,
+        state,
         &verbs::GetRoomArgs {
             room: "r1".to_owned(),
         },
@@ -362,52 +333,56 @@ async fn work_for(answer: serde_json::Value) -> verbs::HarnessSummary {
 }
 
 #[tokio::test]
-async fn get_room_maps_outstanding_work_counts() {
-    let h = work_for(json!({
-        "phases": { "h1": "running" },
-        "work": { "h1": { "subagents": 2, "backgroundTasks": 1 } }
-    }))
-    .await;
-    assert_eq!(h.outstanding_subagents, Some(2));
-    assert_eq!(h.outstanding_background_tasks, Some(1));
+async fn get_room_reports_the_phase_service_phase() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let (state, phase) = state_with_phases(&f);
+    phase.spawned("h1", "r1", false);
+    assert_eq!(summary_of(&state).await.phase, "spawning");
+    phase.record_output("h1", "hello");
+    assert_eq!(summary_of(&state).await.phase, "running");
+    phase.exited("h1", Some(0));
+    assert_eq!(summary_of(&state).await.phase, "exited");
 }
 
 #[tokio::test]
-async fn work_counts_are_null_when_work_is_absent() {
-    let h = work_for(json!({ "phases": { "h1": "waiting" } })).await;
-    assert_eq!(h.phase, "waiting");
+async fn get_room_reports_unknown_for_a_harness_the_service_has_no_record_of() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let (state, _phase) = state_with_phases(&f);
+    let h = summary_of(&state).await;
+    assert_eq!(h.phase, "unknown");
     assert_eq!(h.outstanding_subagents, None);
     assert_eq!(h.outstanding_background_tasks, None);
 }
 
 #[tokio::test]
-async fn work_counts_are_null_for_an_id_missing_from_work() {
-    let h = work_for(json!({
-        "phases": { "h1": "running" },
-        "work": { "other": { "subagents": 3, "backgroundTasks": 3 } }
-    }))
-    .await;
-    assert_eq!(h.outstanding_subagents, None);
-    assert_eq!(h.outstanding_background_tasks, None);
-}
-
-#[tokio::test]
-async fn work_counts_that_are_not_non_negative_integers_are_null() {
-    let h = work_for(json!({
-        "phases": { "h1": "running" },
-        "work": { "h1": { "subagents": -1, "backgroundTasks": "two" } }
-    }))
-    .await;
-    assert_eq!(h.phase, "running");
-    assert_eq!(h.outstanding_subagents, None);
-    assert_eq!(h.outstanding_background_tasks, None);
-}
-
-#[tokio::test]
-async fn work_counts_are_null_and_serialized_when_the_webview_never_answers() {
+async fn get_room_reports_unknown_when_the_state_has_no_phase_service() {
     let f = fixture();
     save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
     let state = agent_api_state(&f);
+    assert_eq!(summary_of(&state).await.phase, "unknown");
+}
+
+#[tokio::test]
+async fn get_room_maps_outstanding_work_counts() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let (state, phase) = state_with_phases(&f);
+    phase.spawned("h1", "r1", false);
+    phase.claude_attached("h1");
+    phase.claude_event("h1", &subagent_start("a"));
+    phase.claude_event("h1", &subagent_start("b"));
+    let h = summary_of(&state).await;
+    assert_eq!(h.outstanding_subagents, Some(2));
+    assert_eq!(h.outstanding_background_tasks, Some(0));
+}
+
+#[tokio::test]
+async fn work_counts_are_null_and_serialized_for_an_unknown_harness() {
+    let f = fixture();
+    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
+    let (state, _phase) = state_with_phases(&f);
     let out = verbs::list_harnesses(&state, &verbs::ListHarnessesArgs::default())
         .await
         .unwrap();
@@ -421,18 +396,13 @@ async fn work_counts_are_null_and_serialized_when_the_webview_never_answers() {
 async fn list_harnesses_maps_outstanding_work_counts() {
     let f = fixture();
     save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
-    let state = agent_api_state(&f);
-    state.set_test_frontend(|_kind, _args| {
-        Ok(json!({
-            "phases": { "h1": "running" },
-            "work": { "h1": { "subagents": 0, "backgroundTasks": 4 } }
-        }))
-    });
+    let (state, phase) = state_with_phases(&f);
+    phase.spawned("h1", "r1", false);
     let out = verbs::list_harnesses(&state, &verbs::ListHarnessesArgs::default())
         .await
         .unwrap();
     assert_eq!(out.harnesses[0].outstanding_subagents, Some(0));
-    assert_eq!(out.harnesses[0].outstanding_background_tasks, Some(4));
+    assert_eq!(out.harnesses[0].outstanding_background_tasks, Some(0));
 }
 
 #[tokio::test]
@@ -494,20 +464,6 @@ async fn list_harnesses_with_no_room_filter_skips_archived_rooms() {
         .map(|h| h.harness_id.as_str())
         .collect();
     assert_eq!(ids, vec!["h2"]);
-}
-
-#[tokio::test]
-async fn list_harnesses_skips_the_round_trip_when_nothing_needs_a_phase() {
-    let f = fixture();
-    save(&f.db, &[room("r1", vec![])]); // no harnesses at all
-    let state = agent_api_state(&f);
-    state.set_test_frontend(|kind, _args| {
-        panic!("request_frontend must not be called when no harness needs a phase: {kind}")
-    });
-    let out = verbs::list_harnesses(&state, &verbs::ListHarnessesArgs { room: None })
-        .await
-        .unwrap();
-    assert_eq!(out.harnesses, Vec::new());
 }
 
 #[tokio::test]

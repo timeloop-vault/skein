@@ -21,8 +21,8 @@
 // without a harness or a terminal.
 //
 // The schedule is bounded by, and stays inside, the #259 silent-adapter
-// watchdog's own `ADAPTER_SILENT_AFTER_MS` window (harnessActivity.ts /
-// harnessActivityCore.ts's `degradeSilentAdapter`) — every entry here
+// watchdog's own `ADAPTER_SILENT_AFTER_MS` window (the daemon's phase machine,
+// `degradeSilentAdapter`) — every entry here
 // is well under it. That isn't just tidy timing: once the watchdog
 // fires it sets `adapterSilent: true` and `authoritative: false`, and
 // from that moment "the harness left `waiting`" is no longer
@@ -48,8 +48,8 @@
 // more — a #277 delegation deferral (`running` with a non-null
 // `delegationDeferredAt`) is an equally safe one, since it means the
 // main session already ended its turn and only stayed `running` because
-// background subagents were still working (see `harnessActivityCore.ts`'s
-// `atSafeStoppingPoint`). `leftWaitingSinceSend` and a bare `phase ===
+// background subagents were still working (see
+// `atSafeStoppingPoint` in harnessActivityLabels.ts). `leftWaitingSinceSend` and a bare `phase ===
 // "waiting"` check can't tell that arm apart from an ordinary mid-turn
 // `running`, so this module now also takes `deferredAtSend` (the arm
 // `sendPrompt` snapshotted at submit time — `null` for a plain-`waiting`

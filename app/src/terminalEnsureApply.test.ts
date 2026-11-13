@@ -3,19 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const m = vi.hoisted(() => ({
 	markSpawned: vi.fn(),
 	adoptionForget: vi.fn(),
-	setInjected: vi.fn(),
-	activityForget: vi.fn(),
-	subagentsForget: vi.fn(),
-	bgForget: vi.fn(),
 	shellForget: vi.fn(),
 }));
 vi.mock("./claudeVersionStore.ts", () => ({ claudeVersionStore: { markSpawned: m.markSpawned } }));
 vi.mock("./startupAdoption.ts", () => ({ startupAdoption: { forget: m.adoptionForget } }));
-vi.mock("./harnessActivity.ts", () => ({
-	harnessActivity: { setInjected: m.setInjected, forget: m.activityForget },
-}));
-vi.mock("./subagents.ts", () => ({ subagents: { forget: m.subagentsForget } }));
-vi.mock("./backgroundTasks.ts", () => ({ backgroundTasks: { forget: m.bgForget } }));
 vi.mock("./shellClaim.ts", () => ({ shellClaim: { forget: m.shellForget } }));
 
 import type { EnsureResult } from "./harnessEnsure.ts";
@@ -57,7 +48,6 @@ describe("applyEnsureResult", () => {
 		applyEnsureResult(apply());
 		expect(m.markSpawned).toHaveBeenCalledWith("h1", 1234);
 		expect(m.adoptionForget).toHaveBeenCalledWith("h1");
-		expect(m.setInjected).toHaveBeenCalledWith("h1", true);
 		expect(spawnedProfile("h1")).toBe("work");
 	});
 
@@ -65,7 +55,6 @@ describe("applyEnsureResult", () => {
 		applyEnsureResult(apply({ result: result({ started: false }) }));
 		expect(m.markSpawned).toHaveBeenCalledWith("h1", 0);
 		expect(m.adoptionForget).not.toHaveBeenCalled();
-		expect(m.setInjected).toHaveBeenCalledWith("h1", true);
 	});
 
 	it("an already-exited result registers nothing but the sink-independent record", () => {
@@ -109,9 +98,6 @@ describe("applyEnsureResult", () => {
 describe("forgetViewState", () => {
 	it("drops the per-harness view state", () => {
 		forgetViewState("h1");
-		expect(m.activityForget).toHaveBeenCalledWith("h1");
-		expect(m.subagentsForget).toHaveBeenCalledWith("h1");
-		expect(m.bgForget).toHaveBeenCalledWith("h1");
 		expect(m.shellForget).toHaveBeenCalledWith("h1");
 		expect(m.adoptionForget).toHaveBeenCalledWith("h1");
 		expect(spawnedProfile("h1")).toBeUndefined();

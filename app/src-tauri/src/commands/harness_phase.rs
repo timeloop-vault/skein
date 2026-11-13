@@ -1,8 +1,9 @@
-//! The client-only inputs to the daemon's shadow phase machine (#732).
+//! The client-only inputs to the daemon's phase machine (#732).
 
 use std::sync::Arc;
 
-use skein_daemon::harness_phase::{ClientPhaseInput, PhaseService};
+use skein_daemon::harness_phase::{ClientPhaseInput, PhaseService, PhaseUpdate};
+use skein_daemon::harness_runner::HarnessRunner;
 
 /// One input only the webview can observe (keystrokes, the rendered Hermes
 /// screen, a seam-submitted prompt). Fire-and-forget: a short mutex section.
@@ -15,8 +16,19 @@ use skein_daemon::harness_phase::{ClientPhaseInput, PhaseService};
 pub(crate) async fn harness_phase_input(
     harness_id: String,
     input: ClientPhaseInput,
-    phase: tauri::State<'_, Arc<PhaseService>>,
+    runner: tauri::State<'_, Arc<HarnessRunner>>,
 ) -> Result<(), String> {
-    phase.client_input(&harness_id, input);
+    runner.client_phase_input(&harness_id, input);
     Ok(())
+}
+
+/// Every known harness's current phase state, each at the stream's current
+/// seq. A client listens to `skein://harness-phase` first, then reads this,
+/// and drops stream updates whose `seq` is not above the snapshot's.
+#[allow(clippy::unused_async)]
+#[tauri::command]
+pub(crate) async fn harness_phase_snapshot(
+    phase: tauri::State<'_, Arc<PhaseService>>,
+) -> Result<Vec<PhaseUpdate>, String> {
+    Ok(phase.stream_snapshot())
 }

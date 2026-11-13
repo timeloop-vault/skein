@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// #732: client-only phase inputs are forwarded to the daemon's shadow machine.
+// #732: client-only phase inputs are forwarded to the daemon, exactly once.
 
 const h = vi.hoisted(() => ({
 	calls: [] as Array<{ cmd: string; args: Record<string, unknown> }>,
@@ -18,14 +18,16 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("./frontendLog.ts", () => ({ logBoth: vi.fn(), logToRust: vi.fn() }));
 
 import { harnessActivity } from "./harnessActivity.ts";
-import type { HarnessActivity } from "./harnessActivityTypes.ts";
-import { noteViewAttached } from "./phaseInput.ts";
-import { forgetScreenPhase, setScreenPhaseReader, tickScreenPhase } from "./screenPhaseTick.ts";
+import { sendPhaseInput } from "./phaseInput.ts";
+import { resetPhaseMirror } from "./phaseMirror.ts";
+import { mirrorForget, mirrorSet } from "./phaseTestSupport.ts";
+import { setScreenPhaseReader, tickScreenReadings } from "./screenPhaseTick.ts";
 
 const forwarded = () => h.calls.filter((c) => c.cmd === "harness_phase_input").map((c) => c.args);
 
 beforeEach(() => {
 	h.calls.length = 0;
+	resetPhaseMirror();
 });
 
 describe("store methods forward their phase input", () => {
@@ -41,66 +43,56 @@ describe("store methods forward their phase input", () => {
 	it.each([
 		["notePromptSubmitted", "promptSubmitted"],
 		["muteInducedOutput", "muteInducedOutput"],
-		["reattached", "reattached"],
 		["recoverUnheardSilence", "recoverUnheardSilence"],
+		["noteLaunchSignal", "launchSignal"],
 	] as const)("%s", (method, kind) => {
 		harnessActivity[method]("b");
 		expect(forwarded()).toEqual([{ harnessId: "b", input: { kind } }]);
 	});
 
-	it("forget sends viewReset after the local forget", () => {
-		harnessActivity.spawned("f");
-		h.calls.length = 0;
-		harnessActivity.forget("f");
-		expect(harnessActivity.get("f")).toBeNull();
-		expect(forwarded()).toEqual([{ harnessId: "f", input: { kind: "viewReset" } }]);
+	it.each([
+		[{ kind: "startFailed" }],
+		[{ kind: "restartRequested", source: "user-restart" }],
+		[{ kind: "restartRequested", source: "version-auto-restart" }],
+	] as const)("sendPhaseInput passes %j through unchanged", (input) => {
+		sendPhaseInput("e", input);
+		expect(forwarded()).toEqual([{ harnessId: "e", input }]);
 	});
 
-	it("noteLaunchSignal through the store does not forward", () => {
-		harnessActivity.noteLaunchSignal("c");
-		expect(forwarded()).toEqual([]);
-	});
-});
-
-describe("noteViewAttached", () => {
-	it("sends viewReset only for a process this page did not start", () => {
-		noteViewAttached("v", true);
-		expect(forwarded()).toEqual([]);
-		noteViewAttached("v", false);
-		expect(forwarded()).toEqual([{ harnessId: "v", input: { kind: "viewReset" } }]);
+	it("sessionSwitched", () => {
+		harnessActivity.sessionSwitched("d", "fork");
+		expect(forwarded()).toEqual([
+			{ harnessId: "d", input: { kind: "sessionSwitched", switch: "fork" } },
+		]);
 	});
 });
 
-describe("screen reading", () => {
-	const act = (): HarnessActivity => harnessActivity.get("s") as HarnessActivity;
-
-	it("forwards on change only, and null on forget", () => {
-		harnessActivity.spawned("s");
-		// A running phase so the tick reads the screen.
-		harnessActivity.setRunningFromAdapter("s", "test" as never);
+describe("screen reading feed", () => {
+	it("forwards on change only, for running or waiting non-authoritative harnesses, and null on forget", () => {
+		mirrorSet("s", "running");
+		mirrorSet("auth", "running", { authoritative: true });
+		mirrorSet("idle", "idle");
 		let reading: "waiting" | "running" | "unknown" = "running";
 		setScreenPhaseReader(() => reading);
-		const set = vi.fn();
-		const get = () => harnessActivity.get("s") ?? undefined;
-		const tick = () => tickScreenPhase("s", act(), set, get);
 		h.calls.length = 0;
 
-		tick();
-		tick();
+		tickScreenReadings();
+		tickScreenReadings();
 		reading = "unknown";
-		tick();
+		tickScreenReadings();
 		reading = "running";
-		tick();
-		forgetScreenPhase("s");
-		forgetScreenPhase("s");
+		tickScreenReadings();
+		mirrorForget("s");
+		tickScreenReadings();
+		tickScreenReadings();
+		setScreenPhaseReader(null);
 
+		expect(forwarded().every((a) => a.harnessId === "s")).toBe(true);
 		expect(forwarded().map((a) => (a.input as { reading: unknown }).reading)).toEqual([
 			"running",
 			"unknown",
 			"running",
 			null,
 		]);
-		setScreenPhaseReader(null);
-		harnessActivity.forget("s");
 	});
 });

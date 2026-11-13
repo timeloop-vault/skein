@@ -41,7 +41,7 @@ describe("decideMailNudge", () => {
 
 	// #381: `atStoppingPoint` collapses `waiting` and a deferred `running`
 	// into one bool at this layer — the caller (`atSafeStoppingPoint`,
-	// tested separately in harnessActivityCore.test.ts) is what tells
+	// tested separately in harnessActivityLabels.test.ts) is what tells
 	// `running` with a deferral armed apart from plain `running` or
 	// `permission`, both of which pass `false` here.
 	it("does not nudge, and records nothing, when not at a safe stopping point (running, no deferral)", () => {

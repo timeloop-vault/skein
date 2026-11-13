@@ -1,24 +1,41 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
-import { ADAPTER_SILENT_AFTER_MS } from "./harnessActivityConstants.ts";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// #363 — `sendPrompt` (the #238/#327/#330 seam: nudges, mail delivery,
+// create_room's first prompt) must tell the daemon a prompt was submitted
+// the way a typed Enter does, since none of those callers ever touch
+// xterm's `onKey`. The daemon's phase machine arms the #259 watchdog on it
+// (#732); here the webview side is checked: the input is forwarded once,
+// after the #380 gap, and a harness stuck on a dialog is refused.
+
+const h = vi.hoisted(() => ({
+	calls: [] as Array<{ cmd: string; args: Record<string, unknown> }>,
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({
+	Channel: class {
+		onmessage: (e: unknown) => void = () => {};
+	},
+	invoke: (cmd: string, args: Record<string, unknown>) => {
+		h.calls.push({ cmd, args });
+		return Promise.resolve();
+	},
+}));
+vi.mock("./frontendLog.ts", () => ({ logBoth: vi.fn(), logToRust: vi.fn() }));
+
 import type { HarnessInputTarget } from "./harnessInput.ts";
 import { harnessInput, sendPrompt } from "./harnessInput.ts";
 import { LAUNCH_QUIET_MS } from "./launchReady.ts";
+import { mirrorSet } from "./phaseTestSupport.ts";
 import { SUBMIT_GAP_MS } from "./submitRetry.ts";
 
-// #363 — `sendPrompt` (the #238/#327/#330 seam: nudges, mail delivery,
-// create_room's first prompt) must arm the #259 silent-adapter watchdog
-// the same way a typed Enter does, since none of those callers ever
-// touch xterm's `onKey`. Fake timers are installed at file scope, not
-// per-test, for the same reason `harnessActivity.watchdog.test.ts`
-// does it that way: the tick's `setInterval` is created by the first
-// `harnessActivity.spawned()` call, under whichever fake-timer instance
-// is live at that moment.
 beforeAll(() => {
 	vi.useFakeTimers();
 });
 afterAll(() => {
 	vi.useRealTimers();
+});
+beforeEach(() => {
+	h.calls.length = 0;
 });
 
 const nextId = (() => {
@@ -26,9 +43,10 @@ const nextId = (() => {
 	return () => `si_${++n}`;
 })();
 
-/// A registered, sendable harness whose only proof of life is the
-/// launch signal (#273) — `adapterHeard` stays false, which is exactly
-/// what `shouldArmWatchdog` needs to see to arm on a submit.
+const forwarded = () => h.calls.filter((c) => c.cmd === "harness_phase_input").map((c) => c.args);
+
+/// A registered, sendable harness whose only proof of life is the launch
+/// signal (#273): `adapterHeard` stays false.
 const sendableHarness = (): { id: string; target: HarnessInputTarget } => {
 	const id = nextId();
 	const target: HarnessInputTarget = {
@@ -36,87 +54,42 @@ const sendableHarness = (): { id: string; target: HarnessInputTarget } => {
 		bracketedPaste: () => false,
 		submit: vi.fn(),
 	};
-	harnessActivity.spawned(id);
-	harnessActivity.attachAuthoritativeSource(id);
-	harnessActivity.noteLaunchSignal(id);
-	harnessActivity.setInjected(id, true);
+	mirrorSet(id, "waiting", {
+		authoritative: true,
+		launchSignalAt: Date.now(),
+		injected: true,
+	});
 	harnessInput.register(id, target);
 	return { id, target };
 };
 
-describe("sendPrompt arms the #259 watchdog (#363)", () => {
-	it("degrades a seam-submitted prompt exactly like a typed Enter, when the adapter never speaks", () => {
-		const { id } = sendableHarness();
-		expect(harnessActivity.get(id)?.promptSubmittedAt).toBeNull();
-		// #404: this harness's only proof of life is the launch signal
-		// just set by `sendableHarness` — give it its required quiet
-		// period before pasting, or the gate below would refuse.
+describe("sendPrompt tells the daemon about the submit (#363)", () => {
+	it("forwards promptSubmitted once, with the submit that lands after the #380 gap", () => {
+		const { id, target } = sendableHarness();
 		vi.advanceTimersByTime(LAUNCH_QUIET_MS);
 
-		const result = sendPrompt(id, "claude", "do the thing");
-		expect(result).toEqual({ ok: true });
-		// #380: the submit — and the watchdog arm that rides it — now
-		// lands `SUBMIT_GAP_MS` after the paste, not in the same tick.
-		expect(harnessActivity.get(id)?.promptSubmittedAt).toBeNull();
+		expect(sendPrompt(id, "claude", "do the thing")).toEqual({ ok: true });
+		expect(forwarded()).toEqual([]);
+
 		vi.advanceTimersByTime(SUBMIT_GAP_MS);
-		expect(harnessActivity.get(id)?.promptSubmittedAt).not.toBeNull();
-
-		vi.advanceTimersByTime(ADAPTER_SILENT_AFTER_MS + 1_000);
-
-		const a = harnessActivity.get(id);
-		expect(a?.adapterSilent).toBe(true);
-		expect(a?.degradedBy).toBe("adapter-silent");
-		expect(a?.authoritative).toBe(false);
+		expect(target.submit).toHaveBeenCalledTimes(1);
+		expect(forwarded()).toEqual([{ harnessId: id, input: { kind: "promptSubmitted" } }]);
 	});
 
-	it("refuses — and never pastes or submits, or arms anything — a harness stuck on a permission dialog", () => {
+	it("refuses — and never pastes or submits — a harness stuck on a permission dialog", () => {
 		const { id, target } = sendableHarness();
-		harnessActivity.setPermissionFromAdapter(
-			id,
-			TRANSITION_SOURCE.L2c1ClaudePermission,
-			"Bash",
-			null,
-			"agent-1",
-		);
-
-		harnessActivity.notePromptSubmitted(id);
-		const a = harnessActivity.get(id);
-		expect(a?.phase).toBe("permission");
-		expect(a?.permissionAgentId).toBe("agent-1");
-		expect(a?.promptSubmittedAt).toBeNull();
+		mirrorSet(id, "permission", {
+			authoritative: true,
+			launchSignalAt: Date.now(),
+			injected: true,
+			permissionTool: "Bash",
+			permissionAgentType: "agent-1",
+		});
 
 		const result = sendPrompt(id, "claude", "anything");
 		expect(result.ok).toBe(false);
 		expect(target.paste).not.toHaveBeenCalled();
 		expect(target.submit).not.toHaveBeenCalled();
-	});
-});
-
-describe("harnessActivity.notePromptSubmitted", () => {
-	it("never flips hasUserInput", () => {
-		const { id } = sendableHarness();
-		expect(harnessActivity.get(id)?.hasUserInput).toBe(false);
-		harnessActivity.notePromptSubmitted(id);
-		expect(harnessActivity.get(id)?.hasUserInput).toBe(false);
-	});
-
-	it("is a no-op once the adapter has already spoken", () => {
-		const id = nextId();
-		harnessActivity.spawned(id);
-		harnessActivity.attachAuthoritativeSource(id);
-		harnessActivity.adapterDelivered(id);
-		harnessActivity.notePromptSubmitted(id);
-		expect(harnessActivity.get(id)?.promptSubmittedAt).toBeNull();
-	});
-
-	it("does not overwrite an already-armed timer", () => {
-		const { id } = sendableHarness();
-		harnessActivity.notePromptSubmitted(id);
-		const first = harnessActivity.get(id)?.promptSubmittedAt ?? null;
-		expect(first).not.toBeNull();
-
-		vi.advanceTimersByTime(500);
-		harnessActivity.notePromptSubmitted(id);
-		expect(harnessActivity.get(id)?.promptSubmittedAt).toBe(first);
+		expect(forwarded()).toEqual([]);
 	});
 });

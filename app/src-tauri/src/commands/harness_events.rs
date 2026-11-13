@@ -46,7 +46,7 @@ pub(crate) async fn claude_events_attach(
     runner: tauri::State<'_, Arc<HarnessRunner>>,
 ) -> Result<(), String> {
     let log_harness_id = harness_id.clone();
-    // #732 shadow: a new attach replaces the daemon's own adapter, so its
+    // A new attach replaces the daemon's own adapter, so its
     // phase translator is told first and fed beside the client's channel.
     let phase_sink = runner.claude_phase_sink(&harness_id);
     runner.phase().claude_attached(&harness_id);

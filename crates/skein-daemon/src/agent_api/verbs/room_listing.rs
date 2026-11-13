@@ -1,9 +1,8 @@
 //! The cross-room read verbs (#356): `get_room` and `list_harnesses`
-//! (`list_rooms` lives in `list_rooms.rs`), and the phase round trip
-//! they share.
+//! (`list_rooms` lives in `list_rooms.rs`), and the phase read they
+//! share.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -33,32 +32,16 @@ pub(super) const KNOWN_PHASES: &[&str] = &[
     "exited",
 ];
 
-/// How long [`list_rooms`], [`get_room`] and [`list_harnesses`] wait
-/// for the webview to answer the `"harness_phases"` round trip before
-/// giving up and reporting every requested harness `"unknown"`. Short,
-/// deliberately: unlike `create_room`'s minute-long round trips, a
-/// read-only listing call must never hang on a busy or absent webview
-/// — a phase this backend cannot vouch for is exactly what `"unknown"`
-/// is for.
-const HARNESS_PHASE_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// Ask the webview what phase each of `harness_ids` is in right now
-/// (#328's request/answer round trip), and fall back to `"unknown"` for
-/// every one of them on any failure — no webview, a timeout, an answer
-/// that doesn't parse, a harness id the answer never named, or a value
-/// outside [`KNOWN_PHASES`]. Never `"idle"` as a default: that is a
-/// real phase, and guessing it would be a lie the frontend never told.
+/// What phase each of `harness_ids` is in right now, read from the
+/// daemon's own [`PhaseService`] (#732; it was a round trip to the
+/// webview before). A harness the service has no record of — never
+/// spawned in this process, or forgotten — is `"unknown"`, as is every
+/// harness when the state has no service. Never `"idle"` as a default:
+/// that is a real phase, and guessing it would be a lie.
 ///
-/// At most one round trip per call, and none at all when `harness_ids`
-/// is empty — every caller already filters out archived-room harnesses
-/// (no PTY is mounted for one, so there is nothing to ask) before
-/// building that list.
-///
-/// The same answer carries the outstanding-work counts (#448) from its
-/// optional `work` map; they ride the one round trip and are `None`
-/// whenever the phase is unknown for the same reasons, or `work` (or
-/// this id in it) is absent or not a non-negative integer.
-pub(super) async fn harness_snapshots(
+/// The outstanding-work counts (#448) are `Some` exactly when the
+/// service knows the harness, `None` otherwise.
+pub(super) fn harness_snapshots(
     state: &AgentApiState,
     harness_ids: &[String],
 ) -> BTreeMap<String, HarnessSnapshot> {
@@ -66,44 +49,29 @@ pub(super) async fn harness_snapshots(
         .iter()
         .map(|id| (id.clone(), HarnessSnapshot::default()))
         .collect();
+    let Some(service) = state.phase_service() else {
+        return snapshots;
+    };
     if harness_ids.is_empty() {
         return snapshots;
     }
-    let Ok(answer) = state
-        .request_frontend(
-            "harness_phases",
-            serde_json::json!({}),
-            HARNESS_PHASE_TIMEOUT,
-        )
-        .await
-    else {
-        return snapshots;
-    };
-    let phases = answer.get("phases").and_then(serde_json::Value::as_object);
-    let work = answer.get("work").and_then(serde_json::Value::as_object);
-    let count = |entry: Option<&serde_json::Value>, key: &str| {
-        entry
-            .and_then(|w| w.get(key))
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|n| u32::try_from(n).ok())
-    };
+    let phases = service.phase_snapshot();
+    let work = service.work_snapshot(harness_ids.iter().map(String::as_str));
     for (id, snap) in &mut snapshots {
-        if let Some(p) = phases
-            .and_then(|m| m.get(id))
-            .and_then(serde_json::Value::as_str)
-            && KNOWN_PHASES.contains(&p)
-        {
-            p.clone_into(&mut snap.phase);
+        let Some(phase) = phases.get(id) else {
+            continue;
+        };
+        phase.as_str().clone_into(&mut snap.phase);
+        if let Some(w) = work.get(id) {
+            snap.subagents = u32::try_from(w.subagents).ok();
+            snap.background_tasks = u32::try_from(w.background_tasks).ok();
         }
-        let entry = work.and_then(|m| m.get(id));
-        snap.subagents = count(entry, "subagents");
-        snap.background_tasks = count(entry, "backgroundTasks");
     }
     snapshots
 }
 
-/// One harness as the webview reported it: its phase (`"unknown"` when
-/// it could not vouch for one) and the outstanding work (#448) the
+/// One harness as the phase service reports it: its phase (`"unknown"`
+/// when it has no record) and the outstanding work (#448) the
 /// end-of-turn deferral counts, `None` when unknown.
 pub(super) struct HarnessSnapshot {
     pub(super) phase: String,
@@ -226,6 +194,10 @@ pub struct GetRoomOut {
 /// a bare `None`) since #356's whole point is a director inspecting a
 /// room it does not own. Not scoped to the caller's own room, the same
 /// considered exception as [`find_rooms_for_path`] and [`list_rooms`].
+#[allow(
+    clippy::unused_async,
+    reason = "kept async for its many callers; it once awaited the webview"
+)]
 pub async fn get_room(state: &AgentApiState, args: &GetRoomArgs) -> VerbResult<GetRoomOut> {
     let db = &state.db;
     let room_id = args.room.trim();
@@ -236,7 +208,7 @@ pub async fn get_room(state: &AgentApiState, args: &GetRoomArgs) -> VerbResult<G
     let room = require_open_room(&rooms, room_id)?;
 
     let harness_ids: Vec<String> = room.harnesses.iter().map(|h| h.id.clone()).collect();
-    let snapshots = harness_snapshots(state, &harness_ids).await;
+    let snapshots = harness_snapshots(state, &harness_ids);
     let harnesses = room
         .harnesses
         .iter()
@@ -322,6 +294,10 @@ pub struct ListHarnessesOut {
 /// [`get_room`]. Not scoped to the caller's own room, the same
 /// considered exception as [`find_rooms_for_path`], [`list_rooms`] and
 /// [`get_room`].
+#[allow(
+    clippy::unused_async,
+    reason = "kept async for its many callers; it once awaited the webview"
+)]
 pub async fn list_harnesses(
     state: &AgentApiState,
     args: &ListHarnessesArgs,
@@ -343,7 +319,7 @@ pub async fn list_harnesses(
         .iter()
         .flat_map(|r| r.harnesses.iter().map(|h| h.id.clone()))
         .collect();
-    let snapshots = harness_snapshots(state, &all_harness_ids).await;
+    let snapshots = harness_snapshots(state, &all_harness_ids);
 
     let mut out = Vec::new();
     for r in selected {

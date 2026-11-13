@@ -4,6 +4,7 @@
 // A plain shell stays blank until its next output; that is accepted.
 
 import { invoke } from "@tauri-apps/api/core";
+import { harnessActivity } from "./harnessActivity.ts";
 
 export const REPAINT_DELAY_MS = 80;
 
@@ -12,6 +13,10 @@ export interface RepaintDeps {
 	 *  between wins). */
 	size: () => { rows: number; cols: number };
 	resize: (rows: number, cols: number) => void;
+	/** Called immediately before each resize: the redraw it provokes is the
+	 *  client's doing, not the harness's, so the daemon must not read it as
+	 *  activity (the same input a focus redraw sends). */
+	muteInduced?: () => void;
 	delayMs?: number;
 	setTimer?: (fn: () => void, ms: number) => unknown;
 	clearTimer?: (handle: unknown) => void;
@@ -26,11 +31,13 @@ export function forceRepaint(d: RepaintDeps): () => void {
 	const clearTimer = d.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
 	const { rows, cols } = d.size();
 	if (rows <= 1) return () => {};
+	d.muteInduced?.();
 	d.resize(rows - 1, cols);
 	let pending = true;
 	const restore = () => {
 		pending = false;
 		const now = d.size();
+		d.muteInduced?.(); // a fresh window: the restore's redraw is induced too
 		d.resize(now.rows, now.cols);
 	};
 	const handle = setTimer(restore, d.delayMs ?? REPAINT_DELAY_MS);
@@ -42,9 +49,14 @@ export function forceRepaint(d: RepaintDeps): () => void {
 }
 
 /** `forceRepaint` against a live xterm and its PTY id. */
-export function repaintPty(term: { rows: number; cols: number }, id: string): () => void {
+export function repaintPty(
+	term: { rows: number; cols: number },
+	id: string,
+	harnessId: string,
+): () => void {
 	return forceRepaint({
 		size: () => ({ rows: term.rows, cols: term.cols }),
+		muteInduced: () => harnessActivity.muteInducedOutput(harnessId),
 		resize: (rows, cols) => void invoke("pty_resize", { id, rows, cols }),
 	});
 }

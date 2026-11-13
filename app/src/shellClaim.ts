@@ -169,13 +169,6 @@ export const shellClaim = {
 		state.claim = null;
 		return true;
 	},
-	acceptsPermission(id: string, sessionId: string | null | undefined): boolean {
-		const state = shells.get(id);
-		if (!state) return true;
-		if (!state.claim) return false;
-		if (typeof sessionId !== "string" || sessionId.length === 0) return true;
-		return sessionId === state.claim.sessionId;
-	},
 	/// One-shot: true once after a claim, then false.
 	consumeFreshProcess(id: string): boolean {
 		const state = shells.get(id);

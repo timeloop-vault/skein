@@ -2,9 +2,8 @@
 //! streams (#732).
 //!
 //! The Claude, opencode and Hermes-work adapters each deliver into one
-//! `StreamSink`. In shadow mode the webview's sink must keep working exactly
-//! as before while the daemon's machine hears the same events, so the runner
-//! hands the adapter a [`Tee`] of the client sink and a phase sink.
+//! `StreamSink`. The webview's sink keeps working while the daemon's machine hears the
+//! same events, so the runner hands the adapter a [`Tee`] of the client sink and a phase sink.
 
 use std::sync::Arc;
 

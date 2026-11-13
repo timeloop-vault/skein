@@ -1,21 +1,21 @@
-// The two Claude command-hook events useHarnessNotifications listens to
-// (#459 split; no behaviour change): `harness-permission` (#86) and
-// `harness-session-start` (#273/#116). Both are global, room-agnostic
-// Tauri events whose payload names the harness.
+// The Claude command-hook events useHarnessNotifications listens to (#459
+// split): `harness-session-start` (#273/#116) and its session-end twin, global,
+// room-agnostic Tauri events whose payload names the harness. The
+// `harness-permission` hook (#86) is the daemon's alone since #732.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { MutableRefObject } from "react";
 import { useEffect } from "react";
-import { outstandingWork } from "./deferral.ts";
+import { backgroundTasks } from "./backgroundTasks.ts";
 import { logBoth } from "./frontendLog.ts";
-import { harnessActivity, TRANSITION_SOURCE } from "./harnessActivity.ts";
-import { sendPhaseInput } from "./phaseInput.ts";
+import { harnessActivity } from "./harnessActivity.ts";
 import { followedSession } from "./sessionTracking.ts";
 import { releasePersists, shellClaim, shouldReplaceClaim } from "./shellClaim.ts";
 import { startupAdoption, startupCandidate } from "./startupAdoption.ts";
 import { runAdoptionCheck } from "./startupAdoptionCheck.ts";
-import { claudeTranscriptStat } from "./supervisor/transcriptStat.ts";
+import { subagents } from "./subagents.ts";
+import { claudeTranscriptStat } from "./transcriptStat.ts";
 import type { Room } from "./types.ts";
 
 export function useHarnessHookEvents(
@@ -24,40 +24,6 @@ export function useHarnessHookEvents(
 	setHarnessShellClaim: (targetRoomId: string, harnessId: string, sessionId: string) => void,
 	clearHarnessShellClaim: (targetRoomId: string, harnessId: string) => void,
 ) {
-	// #86: Claude's PermissionRequest hook fires this global event the
-	// moment a permission dialog is on screen — the Rust side owns the
-	// hook wiring, this is just the frontend half of the contract.
-	// Room-agnostic by design: the harness id alone is enough to route
-	// it, and `setPermissionFromAdapter` is already a no-op for an id
-	// Skein doesn't have a record for (a stale event racing a closed
-	// harness).
-	useEffect(() => {
-		const un = listen<{
-			roomId: string;
-			harnessId: string;
-			toolName: string | null;
-			agentType: string | null;
-			agentId: string | null;
-			sessionId?: string | null;
-		}>("skein://harness-permission", (event) => {
-			// #318: in a post-exit shell, only the claimed claude's pings count.
-			if (!shellClaim.acceptsPermission(event.payload.harnessId, event.payload.sessionId)) {
-				console.debug("[skein] dropped permission ping from unclaimed shell session");
-				return;
-			}
-			harnessActivity.setPermissionFromAdapter(
-				event.payload.harnessId,
-				TRANSITION_SOURCE.L2c1ClaudePermission,
-				event.payload.toolName,
-				event.payload.agentType,
-				event.payload.agentId,
-			);
-		});
-		return () => {
-			void un.then((f) => f());
-		};
-	}, []);
-
 	// #318: the shell-mode half of the session-start listener.
 	const followShellStart = async (
 		roomId: string,
@@ -67,7 +33,9 @@ export function useHarnessHookEvents(
 	) => {
 		const act = harnessActivity.get(harnessId);
 		const claimedBusy =
-			act?.phase === "running" || act?.phase === "permission" || outstandingWork(harnessId) > 0;
+			act?.phase === "running" ||
+			act?.phase === "permission" ||
+			subagents.workingCount(harnessId) + backgroundTasks.workingCount(harnessId) > 0;
 		// Main session mid-turn: a deferral-held `running` after an end of turn
 		// has lastTurnSignal "end", so background work alone does not count.
 		const mainBusy =
@@ -105,7 +73,6 @@ export function useHarnessHookEvents(
 			return;
 		}
 		harnessActivity.noteLaunchSignal(harnessId);
-		sendPhaseInput(harnessId, { kind: "launchSignal" });
 		// #520: persist the claim (and the id, in one update) so a restart
 		// can resume it; also covers `repoint: false` (same id).
 		if (d.claim) setHarnessShellClaim(roomId, harnessId, d.sessionId);
@@ -114,7 +81,6 @@ export function useHarnessHookEvents(
 			// `startup` has no phase source of its own; it reads like a resume.
 			const switched = d.source === "clear" || d.source === "fork" ? d.source : "resume";
 			harnessActivity.sessionSwitched(harnessId, switched);
-			sendPhaseInput(harnessId, { kind: "sessionSwitched", switch: switched });
 		} else {
 			// Same id: the tail is already on this file; just drop the one-shot flag.
 			shellClaim.consumeFreshProcess(harnessId);
@@ -138,7 +104,6 @@ export function useHarnessHookEvents(
 					?.harnesses.find((x) => x.id === harnessId)?.sessionId;
 				replaceHarnessSessionId(roomId, harnessId, sessionId);
 				harnessActivity.sessionSwitched(harnessId, "startup");
-				sendPhaseInput(harnessId, { kind: "sessionSwitched", switch: "startup" });
 				logBoth(
 					"info",
 					"skein::session",
@@ -160,7 +125,7 @@ export function useHarnessHookEvents(
 	// the moment its CLI has (re)started — including before any
 	// transcript exists, which is exactly the gap that used to leave a
 	// freshly spawned harness stuck in `spawning` forever. Room-agnostic
-	// like the permission listener above; `noteLaunchSignal` is already
+	// like the other listeners here; `noteLaunchSignal` is already
 	// a no-op for an id Skein doesn't have a record for.
 	//
 	// #116: the same hook is the ONLY signal Skein gets that a
@@ -200,13 +165,11 @@ export function useHarnessHookEvents(
 				return;
 			}
 			harnessActivity.noteLaunchSignal(harnessId);
-			sendPhaseInput(harnessId, { kind: "launchSignal" });
 			if (h?.kind !== "claude") return;
 			const next = followedSession(h.sessionId, event.payload);
 			if (next !== null) {
 				replaceHarnessSessionId(roomId, harnessId, next.sessionId);
 				harnessActivity.sessionSwitched(harnessId, next.source);
-				sendPhaseInput(harnessId, { kind: "sessionSwitched", switch: next.source });
 				return;
 			}
 			// #539: a different-id `startup` is not followed from the ping

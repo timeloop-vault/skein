@@ -32,27 +32,6 @@ impl PhaseMachine {
         self.emit(id);
     }
 
-    /// #731: the view attached to a process that was already running, so the
-    /// fresh `spawning` record is a lie. Call after the adapters attached: a
-    /// harness with an authoritative adapter is left to it; any other kind
-    /// (shell, copilot) moves to `idle`, what a quiet running process reads as.
-    /// Never notifies (`isNotifiable`). A pending permission state is not
-    /// carried across a re-attach; it moves with the phase machine (#732).
-    pub fn reattached(&mut self, id: &str, now_ms: i64) {
-        let Some(cur) = self.get(id) else {
-            return;
-        };
-        if cur.authoritative || cur.phase != ActivityPhase::Spawning {
-            return;
-        }
-        self.set_phase(
-            id,
-            ActivityPhase::Idle,
-            TransitionSource::Reattached,
-            now_ms,
-        );
-    }
-
     /// Record whether #215's config injection happened for this spawn.
     /// Call once `harness_ensure_running` resolves. No-op for a harness we've
     /// already forgotten (a cancelled spawn racing unmount).

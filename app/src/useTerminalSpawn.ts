@@ -15,7 +15,7 @@ import { restartFor } from "./harnessMounts.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
 import { createSidecarDeathRecord, watchSidecarExit } from "./opencodeSidecarExit.ts";
-import { noteViewAttached } from "./phaseInput.ts";
+import { sendPhaseInput } from "./phaseInput.ts";
 import { bufferPtyInput } from "./ptyInputBuffer.ts";
 import { forget as forgetLatency, recordEcho } from "./ptyLatency.ts";
 import { shellClaim } from "./shellClaim.ts";
@@ -160,9 +160,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			if (ev.kind === "data") {
 				gate.write(ev.chunk);
 				recordEcho(ptyIdRef.current, performance.now()); // #639
-				// Feed the activity model (epic #50) with every chunk, gated
-				// or not: the store throttles internally, and the chunk also
-				// feeds the L2b pattern matcher's per-harness tail buffer.
+				// Keep the mirror's last-output stamp fresh with every chunk,
+				// gated or not (the daemon hears the PTY itself, #732).
 				harnessActivity.recordOutput(harnessId, ev.chunk);
 				shellFollow?.onOutput(); // #517
 			} else {
@@ -198,7 +197,6 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			phase = "exited";
 			shellFollow?.dispose();
 			if (ptyIdRef.current) forgetLatency(ptyIdRef.current); // #639
-			harnessActivity.exited(harnessId, code);
 			detachInputTarget?.();
 			detachInputTarget = null;
 			// The writer is gone: stop forwarding keys so Enter reaches our handler.
@@ -227,11 +225,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			});
 			if (!resolved || cancelled) return;
 			phase = "running";
-			// The activity record must exist for the exit/output paths (it is dropped
-			// on every unmount, so a re-attach needs it too); the first output chunk
-			// flips `spawning` to `running`. Epic #50.
 			const spawnStartedAt = Date.now();
-			harnessActivity.spawned(harnessId);
 			// #484: catch xterm's reply to ConPTY's cursor query (portable-pty
 			// 0.9 waits for it), which can arrive before the ensure call resolves.
 			// If unmounted meanwhile, the settle paths below dispose it.
@@ -265,9 +259,6 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				}
 				const { id, hermesHooks, mouseClicksDisabled, started } = result;
 				attached = { attachId: result.attachId };
-				// #732: this page rebuilt the phase record (`spawned` above) for a process
-				// it did not start; tell the daemon before any adapter feeds it.
-				noteViewAttached(harnessId, started);
 				ptyIdRef.current = id;
 				if (result.exited) {
 					// The `exit` event comes through the channel (exit line + shell
@@ -312,8 +303,6 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					opencodeAdapter.current = { detach, port };
 				} else if (detach && (harnessKind === "hermes" || harnessKind === "opencode"))
 					stopOtherAdapter = detach;
-				// #731: a re-attached shell/copilot has no adapter to leave `spawning`.
-				if (!started) harnessActivity.reattached(harnessId);
 				shellFollow?.dispose();
 				shellFollow = followOpencodeShell(harnessKind, cmdToSpawn[0], {
 					harnessId,
@@ -338,15 +327,15 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				}
 				if (!resizeObserver) resizeObserver = observeResize(term, fit, host, ptyIdRef, gate);
 				// #731: a re-attach starts blank; a one-row resize and back repaints.
-				if (!started) cancelRepaint = repaintPty(term, id);
+				if (!started) cancelRepaint = repaintPty(term, id, harnessId);
 			} catch (err: unknown) {
 				early.dispose();
 				if (cancelled) return;
 				gate.write(startFailedBanner(err));
 				phase = "exited";
-				// The daemon produced no child; treat as exited
-				// so the status bar / tab dot don't sit on spawning.
-				harnessActivity.exited(harnessId, null);
+				// The daemon produced no child: tell it, so the status bar / tab
+				// dot don't sit on spawning.
+				sendPhaseInput(harnessId, { kind: "startFailed" });
 			}
 		};
 

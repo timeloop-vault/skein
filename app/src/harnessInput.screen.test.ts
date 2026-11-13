@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { harnessActivity } from "./harnessActivity.ts";
 import type { HarnessInputTarget } from "./harnessInput.ts";
 import { harnessInput, SCREEN_SETTLE_MS, sendPrompt } from "./harnessInput.ts";
+import { mirrorSet, SENDABLE } from "./phaseTestSupport.ts";
 import type { ScreenCell, ScreenSnapshot } from "./promptScreen.ts";
 
 // #413 — the screen check that releases an `unknown` composer latch.
@@ -156,11 +156,7 @@ describe("sendPrompt's automatic draft recheck (#413)", () => {
 			kind: "claude",
 			screen,
 		};
-		harnessActivity.spawned(id);
-		harnessActivity.attachAuthoritativeSource(id);
-		harnessActivity.adapterDelivered(id);
-		harnessActivity.setWaitingFromAdapter(id, "test");
-		harnessActivity.setInjected(id, true);
+		mirrorSet(id, "waiting", SENDABLE);
 		harnessInput.register(id, target);
 		return { id, target };
 	};

@@ -151,13 +151,21 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   reconcile on RoomStore::observe), boot_resume (the
     │                                #   once-per-process resume preparation; spawns nothing)
     │                                #   and pty/sink_slot (the replaceable output sink)
-    │                                #   #732 (part 1) added harness_phase/ (the pure
-    │                                #   PhaseMachine port of the TS phase store, translate/
-    │                                #   for the Claude/opencode/Hermes events, PhaseService
-    │                                #   the driver with the 1 s tick, and the shadow
-    │                                #   comparator) and pty/observer (the tap on a PTY's
-    │                                #   output and exit); it runs beside the TS machine
-    │                                #   and decides nothing yet
+    │                                #   #732 added harness_phase/ (the pure PhaseMachine,
+    │                                #   translate/ for the Claude/opencode/Hermes events,
+    │                                #   PhaseService the driver with the 1 s tick, stream.rs
+    │                                #   = PhaseUpdate + the skein-phase-out thread that
+    │                                #   writes harness_events and emits skein://harness-phase,
+    │                                #   transcript_sampler for the supervisor, tests/ folders)
+    │                                #   and pty/observer (the tap on a PTY's output and exit).
+    │                                #   It IS the phase authority: the webview only mirrors
+    │                                #   it and sends the inputs only a client can see
+    │                                #   (client_input.rs; harness_runner/client_input.rs is
+    │                                #   the validated entry point for them: startFailed and
+    │                                #   restartRequested are dropped unless the harness is
+    │                                #   stored, and run under the stored room id).
+    │                                #   harness_work_hermes/attacher.rs
+    │                                #   attaches the Hermes work poller in the daemon
     │                                #   See docs/skeind-crates.md
     ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
     │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
@@ -239,26 +247,27 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   (xterm.js Terminal + addon construction)
     │   │   ├── opencodeShellFollow.ts # Follows an opencode restarted from the post-exit
     │   │   │                        #   shell (#517): re-binds sessionId, re-points the SSE port
-    │   │   ├── harnessActivity.ts   # Source of truth for harness phase (spawning/running/
-    │   │   │                        #   idle/waiting/exited); L2a idle heuristic + L2b
-    │   │   │                        #   patterns + L2c authoritative adapters. #277 defers
-    │   │   │                        #   a main session's end-of-turn while its subagents
-    │   │   │                        #   are still working, rather than adding a phase.
-    │   │   │                        #   A Rust port of this machine runs in shadow in
-    │   │   │                        #   skein-daemon's harness_phase/ (#732); this TS one
-    │   │   │                        #   stays the authority until the flip.
-    │   │   │                        #   Split (#19) into the public entry (store object +
-    │   │   │                        #   re-exports; importers keep using ./harnessActivity)
-    │   │   │                        #   over harnessActivityCore.ts (the single mutable
-    │   │   │                        #   store + tick/watchdogs), …Types.ts, …Constants.ts,
-    │   │   │                        #   …Labels.ts, and useHarnessActivity.ts (the React hooks)
-    │   │   ├── subagents.ts         # Per-harness live-Claude-subagent registry + useLiveSubagents
-    │   │   │                        #   (#276, epic #298). Disk is the source of truth: the
-    │   │   │                        #   adapter re-derives the live set from the transcripts on
-    │   │   │                        #   every attach, so `record` is idempotent and a restart
-    │   │   │                        #   replay never looks like a second start. `workingCount`
-    │   │   │                        #   (excludes attach-time orphans) and `presumeGone` back
-    │   │   │                        #   #277's end-of-turn deferral in harnessActivity.ts
+    │   │   ├── harnessActivity.ts   # The MIRROR of harness phase (spawning/running/idle/
+    │   │   │                        #   waiting/exited), not a machine (#732): the daemon's
+    │   │   │                        #   PhaseService decides (L2a idle heuristic, L2b
+    │   │   │                        #   patterns, L2c adapters, #277's deferral all live in
+    │   │   │                        #   skein-daemon's harness_phase/). phaseMirror.ts holds
+    │   │   │                        #   the latest skein://harness-phase update per harness
+    │   │   │                        #   (listen, buffer, harness_phase_snapshot, then apply
+    │   │   │                        #   by seq); harnessActivity.ts keeps the read surface
+    │   │   │                        #   (get/phaseSnapshot/subscribe/subscribeTransitions/...) over it
+    │   │   │                        #   and forwards client-only inputs via phaseInput.ts
+    │   │   │                        #   (harness_phase_input). Public entry + re-exports over
+    │   │   │                        #   harnessActivity{Types,Constants,Labels}.ts and
+    │   │   │                        #   useHarnessActivity.ts (the React hooks); Core,
+    │   │   │                        #   Lifecycle, Permission, Supervisor, Io are gone
+    │   │   ├── subagents.ts         # Read side of the live-Claude-subagent list + useLiveSubagents
+    │   │   │                        #   (#276, epic #298). The daemon's registry is the
+    │   │   │                        #   authority (disk is its source of truth, re-derived on
+    │   │   │                        #   every attach); this serves the list from the mirror.
+    │   │   │                        #   `workingCount` (excludes attach-time orphans) backs
+    │   │   │                        #   #277's end-of-turn deferral, which the daemon applies.
+    │   │   │                        #   backgroundTasks.ts is the same for background tasks
     │   │   ├── harnessCmd.ts        # Only `isOpencodeV2` and the Hermes profile constant
     │   │   │                        #   since #730. Harness argv is the daemon's
     │   │   │                        #   `harness_argv/` (cmd_for_kind, resume_harness,
@@ -277,8 +286,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   is re-checked at EVERY spawn, not only at pick time —
     │   │   │                        #   only a fresh `claude --agent X` fails loudly; resume
     │   │   │                        #   and opencode fall back silently
-    │   │   ├── harnessEvents.ts     # L2c translators: ClaudeEvent/OpencodeEvent → phase calls
-    │   │   ├── harnessPatterns.ts   # L2b fallback regexes (copilot/shell waiting prompts)
+    │   │   ├── harnessEvents.ts     # The webview's own Claude/opencode event channels (teed
+    │   │   │                        #   into the daemon's phase sink), now for non-phase
+    │   │   │                        #   effects only: Claude cli_version (claudeVersionStore),
+    │   │   │                        #   opencode session capture + observed agent. The Hermes
+    │   │   │                        #   hook listener (harnessEventsHermes.ts) keeps session
+    │   │   │                        #   capture + hermes_actions_turn_end
     │   │   ├── data.tsx             # HARNESS_KINDS registry: chip/label/desc + the
     │   │   │                        #   capability model (pty/resume/notify/agents/
     │   │   │                        #   agentSwitchable, #184 + #247 + #248) — small but
@@ -288,7 +301,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   to Y" (opencode, from SSE user messages)
     │   │   ├── harnessInput.ts      # The #238 nudge seam (#41 reuses it): a per-harness
     │   │   │                        #   paste/submit registry LiveTerminal fills in once its
-    │   │   │                        #   PTY is live, plus the pure gate `canSendPrompt` — pty
+    │   │   │                        #   PTY is live, plus the pure gate `canSendPrompt` (in
+    │   │   │                        #   harnessInputGate.ts; reads the MIRRORED record) — pty
     │   │   │                        #   capability, registered, phase===waiting, a proven L2c
     │   │   │                        #   adapter, #215 config injection, and bracketed-paste
     │   │   │                        #   for multi-line bodies. No nudge where safety can't be
@@ -635,15 +649,34 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   pre-allocates the session uuid (`--session-id`), tails
   `~/.claude/projects/<encoded-cwd>/<sid>.jsonl` (50 ms debounce);
   opencode — Skein pins `--port` and subscribes to the embedded
-  server's `/event` SSE stream. Each source feeds two consumers:
-  (a) semantic events → `harnessEvents.ts` → the `harnessActivity`
-  phase store (single state machine; transitions are logged to
-  `harness_events` and drive badges/toasts/OS notifications; a Rust
-  port of it runs in shadow in skein-daemon's `harness_phase/` (#732),
-  fed by the same events plus the client's own inputs, and the
-  TypeScript machine stays the authority until the flip; every
-  transition without a twin on the other side is logged under the
-  `skein::phase_shadow` target), and
+  server's `/event` SSE stream. **Since #732 the machine, the #277/#446
+  deferral, the subagent and background-task registries, the watchdogs
+  and the supervisor live in `crates/skein-daemon/src/harness_phase/`
+  (`PhaseService`, one 1 s tick thread); the webview runs none of it.
+  The frontend names in the paragraphs below (`deferral.ts`, `tickWork`,
+  `harnessActivityCore.ts`, `harnessActivity.clearPermission`, the
+  `subagents.ts`/`backgroundTasks.ts` "registries", "the frontend
+  tick") are the rules' old homes: read them as the Rust modules of the
+  same name (`deferral.rs`, `work.rs`, `permission.rs`, ...) or, for
+  reads and subscriptions, the mirror (`phaseMirror.ts`).** The daemon
+  publishes a `PhaseUpdate` per changed harness on
+  `skein://harness-phase` (`stream.rs`; its `view: PhaseView` is the
+  wire type, never the machine's `HarnessActivity`: a display and
+  notifications group plus a send-gate group, `canSendPrompt` and mail
+  delivery still deciding in the webview, which leaves the wire with
+  #733; `PhaseView` lives in the daemon crate until the transport work
+  moves the phase wire types to `skein-proto`; the `skein-phase-out` thread
+  writes the `harness_events` rows first, so the app writes none) and
+  the webview mirrors it; badges, toasts and OS notifications stay in
+  the frontend, driven by the mirrored transitions. The inputs only a
+  client can see (keystroke, screen reading, submitted prompt, launch
+  hook decisions, startFailed, restartRequested) go back through
+  `harness_phase_input`. Each source feeds two consumers:
+  (a) semantic events → the daemon's phase sinks (the adapter's own, and
+  the webview's teed channel, which `harnessEvents.ts` keeps for the
+  non-phase effects: Claude `cli_version`, opencode session capture and
+  agent label) → `PhaseService` (transitions drive the mirror, and so
+  badges/toasts/OS notifications), and
   (b) action extraction → `harness_actions` rows in sqlite + a global
   `"harness-action"` Tauri event for live rows only. **Where the store
   paths and row shapes live: `crates/skein-harness` (#209)** — parser
@@ -734,13 +767,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   `outstandingWork` in `deferral.ts` = `subagents.workingCount` +
   `backgroundTasks.workingCount` — one deferral, one set of timers, still
   no new phase; the tick rules moved there from `harnessActivityCore.ts`
-  (`tickWork`). `backgroundTasks.ts` is a pure per-harness registry
-  mirroring `subagents.ts`: attach-seeded tasks (`initial = true`) are
+  (`tick_work`). The registry is the daemon's `background_tasks.rs`
+  (mirroring `subagents.rs`); `backgroundTasks.ts` only serves its live
+  list from the mirror: attach-seeded tasks (`initial = true`) are
   `fromAttach` and never count, since a missing `.output` trailer does not
   mean running, and an `overdue` flag keeps a task listed after a ceiling
   released it but stops it counting, so it cannot re-defer the next turn.
-  Ceilings are per kind and driven by the frontend tick (the Rust deadline
-  sweep only runs on transcript ticks): a Monitor with a timeout ends at
+  Ceilings are per kind and driven by the daemon's 1 s tick (the adapter's
+  own deadline sweep only runs on transcript ticks): a Monitor with a timeout ends at
   startedAt + timeout (`expireDue`) and the ordinary settle rule follows;
   Bash/PowerShell and persistent or timeout-less Monitors get
   `BACKGROUND_TASK_CEILING_MS` (15 min, from the later of deferral armed
@@ -795,8 +829,12 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   (end of turn / needs input), and outranks it everywhere. Claude's
   JSONL records nothing when a dialog opens, so the signal is a
   `PermissionRequest` command hook in the #215 plugin bundle that
-  curls `POST /api/harness/permission` → `skein://harness-permission`
-  (verified: it does not fire for auto-approved tools). Nothing says
+  curls `POST /api/harness/permission`, which the daemon's route feeds
+  straight into `PhaseService` (gated from the stored record: in
+  post-exit-shell mode only a matching shell claim accepts it; the
+  `skein://harness-permission` event is still emitted but the webview
+  no longer listens) (verified: it does not fire for auto-approved
+  tools). Nothing says
   when the dialog is *answered*, so a decisive keystroke in that PTY
   clears it, backed by the next tool_result / prompt / end-turn;
   PTY output and "still working" adapter events never do. opencode
@@ -812,16 +850,16 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   seen). That was epic #298's headline bug: the badge stuck for minutes
   on a subagent dialog nobody could answer with a keystroke. The fix is
   the subagent's own answering tool result: `SubagentToolResult` calls
-  `harnessActivity.clearPermission`, a no-op unless the phase is already
+  the machine's `clear_permission`, a no-op unless the phase is already
   `permission`, moving it only to `running` — never
   `waiting`/`idle`/`spawning`/`exited`, and never a notification,
   because a subagent tool result proves only that its own gate is gone,
   not that the harness is doing anything in particular.
   That "own gate" claim needed enforcing, and review caught that it
   wasn't: the hook payload carries `agent_id` when it fires inside a
-  subagent, Skein reads it (`agent_api/http/hooks.rs` in skein-daemon), ships it on
-  `skein://harness-permission` as `agentId`, and stores it as
-  `permissionAgentId`; `clearPermission(id, source, agentId)` now clears
+  subagent, Skein reads it (`agent_api/http/hooks.rs` in skein-daemon), hands it
+  to `PhaseService`, and stores it as `permission_agent_id`;
+  `clear_permission(id, source, agent_id)` now clears
   only when the stored `permissionAgentId` is `null` **or** equals the
   reporting subagent's id. The null case still clears unconditionally —
   that is a main-session dialog, or a CLI that didn't report the id, and
@@ -1137,7 +1175,7 @@ the agent API from a shell harness); macOS isn't covered yet.
 - **Tests live with the code that owns them.**
   `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `crates/skein-review` has 45; `crates/skein-daemon` has 1,833
+  `crates/skein-review` has 45; `crates/skein-daemon` has 1,841
   in-module tests on Windows (db persistence, spawn-env merging, resume
   probes, harness JSONL/SSE parsers, pty, the agent API, …); `crates/skein-proto` has the 4 harness_kind tests;
   `app/src-tauri` has ~70 in-module unit tests that run on Windows

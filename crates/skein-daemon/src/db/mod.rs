@@ -19,9 +19,8 @@
 //! Epic #50 L6 adds a second table — `harness_events` — that keeps an
 //! append-only log of every harness phase transition. Foundation for
 //! L7 (cross-harness activity feed) and a longer-term "since last
-//! visit" surface. The TS side writes per transition via
-//! `db_record_harness_event`; reads come back via the `recent_*`
-//! query commands.
+//! visit" surface. The daemon's phase service writes per transition;
+//! reads come back via the `recent_*` query commands.
 //!
 //! Issue #80 ("Live Context") adds a third table — `harness_actions` —
 //! that keeps the richer per-tool-call / per-plan-change / per-patch

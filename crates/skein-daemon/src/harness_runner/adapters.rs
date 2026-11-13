@@ -1,7 +1,7 @@
 //! The L2c adapters the daemon attaches itself (#731), a port of
 //! `app/src/terminalSpawnAdapters.ts`. The adapters write the
 //! `harness_actions` rows on their own; their event consumer is the phase
-//! service (#732), which runs in shadow beside the client's machine. The
+//! service (#732), the phase authority. The
 //! client attaches its own event channel through the existing commands and
 //! replaces this one (see `HarnessRunner::claude_phase_sink`).
 //!
@@ -18,6 +18,7 @@ use crate::harness_events_opencode::{
 use crate::harness_kind::HarnessKind;
 use crate::harness_phase::PhaseService;
 use crate::harness_phase::sinks::{ClaudePhaseSink, OpencodePhaseSink};
+use crate::harness_work_hermes::HermesWorkAttacher;
 use crate::opencode_sidecar::OpencodeSidecarManager;
 use crate::spawn_env::state::SpawnEnvState;
 
@@ -48,6 +49,8 @@ pub(super) struct Adapters {
     pub claude: ClaudeEventsManager,
     pub opencode: OpencodeEventsManager,
     pub hermes: HermesActionsManager,
+    /// The Hermes work poller (#628), whose only consumer is the phase machine.
+    pub hermes_work: Arc<HermesWorkAttacher>,
     pub sidecars: OpencodeSidecarManager,
     pub spawn_env: Arc<SpawnEnvState>,
     pub phase: Arc<PhaseService>,
@@ -82,6 +85,7 @@ impl Adapters {
         self.claude.detach(harness_id);
         self.opencode.detach(harness_id);
         self.hermes.detach(harness_id);
+        self.hermes_work.detach(harness_id);
     }
 
     /// [`detach`](Self::detach) for good while the harness stays known (the
@@ -149,9 +153,11 @@ impl Adapters {
         }
     }
 
-    /// The state.db tail, only when the status hooks work and a session is
-    /// already bound. An unbound session is captured later by the client
-    /// (`startHermesCapture`), which then attaches the tail itself.
+    /// The state.db tail and the work poller, only when the status hooks work
+    /// and a session is already bound. An unbound session is captured later by
+    /// the client (`startHermesCapture`), which then attaches the tail itself;
+    /// the work poller is attached by the hook tap when `on_session_start`
+    /// names the session (`HermesWorkAttacher::session_started`).
     fn attach_hermes(&self, spec: &AttachSpec<'_>) {
         if !spec.hermes_hooks || !is_hermes_program(spec.program) {
             return;
@@ -171,6 +177,12 @@ impl Adapters {
             );
             return;
         };
+        if let Err(e) = self
+            .hermes_work
+            .attach(spec.harness_id, session_id, spec.hermes_profile)
+        {
+            tracing::warn!(harness = spec.harness_id, error = %e, "harness runner: hermes work attach failed");
+        }
         let settings = self.spawn_env.snapshot();
         let Some(state_db) = crate::resume::profile_db(&settings, spec.hermes_profile) else {
             tracing::warn!(

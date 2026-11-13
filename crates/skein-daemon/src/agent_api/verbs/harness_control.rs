@@ -385,11 +385,10 @@ fn log_close_harness_outcome(caller_room: &str, target_harness: &str, outcome: &
 /// `filesRegistry` and an open permission dialog).
 ///
 /// Unlike `close_room`, no database row records the attribution:
-/// `harness_events` is filled exclusively from the frontend's own
-/// `harnessActivity` transition stream (`db.rs`'s
-/// `record_harness_event` doc comment — "the activity store is the
-/// source of truth and will only emit real transitions"), and this
-/// close does not go through that store. Writing a second, Rust-
+/// `harness_events` is filled exclusively from the daemon's phase
+/// machine (`record_harness_event`'s doc comment — "the activity store
+/// is the source of truth and will only emit real transitions"), and
+/// this close does not go through that machine. Writing a second, Rust-
 /// originated row for the same close risks a duplicate or conflicting
 /// entry in a log the eventual cross-harness activity feed reads, for
 /// an event the reply already carries in full. [`log_close_harness_outcome`]

@@ -37,10 +37,8 @@ import {
 	specFromCreateArgs,
 } from "./agentRequests.ts";
 import { checkAgent } from "./agents.ts";
-import { workSnapshot } from "./deferral.ts";
 import { handleDesignRequest, isDesignKind } from "./designAgentRequests.ts";
 import type { DesignDevice } from "./designDevice.ts";
-import { harnessActivity } from "./harnessActivity.ts";
 import type { CreateRoomArgs } from "./NewRoomDialogTypes.ts";
 import { branchTemplateFor, type DefaultAgents, defaultsFor, type NewRoomMemory } from "./prefs.ts";
 import { fetchScope } from "./review/api.ts";
@@ -232,19 +230,6 @@ export function useAgentRequests(
 			});
 		};
 
-		// #356: `list_harnesses`'s phase column — the backend has no
-		// authority of its own on this (the doc comment on
-		// `harnessActivityCore.ts`'s `phaseSnapshot` says why), so it asks
-		// the frontend store via the same #328 round trip `create_room`
-		// uses. `args` is unused: every harness this process knows about
-		// answers at once, and the caller picks out the ids it cares
-		// about.
-		const handlePhases = async (id: string): Promise<void> => {
-			const phases = harnessActivity.phaseSnapshot();
-			// #448: outstanding subagent / background-task counts, same ids.
-			return complete(id, { phases, work: workSnapshot(Object.keys(phases)) });
-		};
-
 		// #411: `close_room` — parsing/refusal-ladder is all in the pure
 		// `parseCloseRoomArgs`/`decideCloseRoom`; this is only the plumbing
 		// (Rust has already checked creator/sign-off/rate-limit by the
@@ -333,8 +318,6 @@ export function useAgentRequests(
 						await handleResolve(id, args);
 					} else if (kind === "create_room") {
 						await handleCreate(id, args);
-					} else if (kind === "harness_phases") {
-						await handlePhases(id);
 					} else if (kind === "close_room") {
 						await handleClose(id, args);
 					} else if (kind === "open_harness.resolve") {

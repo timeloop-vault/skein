@@ -19,7 +19,7 @@ use super::machine::{PhaseMachine, TickWork};
 use super::types::{ActivityPhase, TransitionSource};
 
 /// #448: the two counts behind [`PhaseMachine::outstanding_work`], per
-/// harness, for the `harness_phases` agent-request answer. Same
+/// harness, for the agent API's listing verbs. Same
 /// `working_count`s, so attach-seeded and overdue entries are excluded
 /// exactly as they are from the deferral.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

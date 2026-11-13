@@ -1,71 +1,22 @@
-// Per-harness activity state machine + event hook (epic #50, L1+L3+L2a).
+// The webview's view of "what is this harness doing right now?" (epic #50).
 //
-// The single source of truth for "what is this harness doing right
-// now?" — read by the bottom status bar (#29), by the harness tab
-// dots, and (in follow-on PRs) by the notification surfaces (#12),
-// the per-room aggregate (#50 L4), and the cross-harness activity
-// feed (#50 L7).
-//
-// Today we have exactly one signal flowing from a harness: bytes
-// over the PTY `Channel<String>`. This module derives a real state
-// machine from that signal using the idle-heuristic strategy (#50
-// L2a): output → `running`, sustained silence → `idle`, PTY exit
-// → `exited`. Pattern-match and harness-native strategies (L2b /
-// L2c) will plug in later by calling the same `setPhase` mutator —
-// consumers won't know or care which strategy fed the transition.
-//
-// Why not Rust-side: this state is purely derived from a stream
-// the frontend already receives. Putting the model in Rust would
-// add a second IPC channel and split logic across the boundary
-// for no win. If we ever need cross-restart persistence (epic L6)
-// the natural shape is "frontend emits transitions, Rust appends
-// to a log" — the state machine itself can stay here.
-//
-// #19: this module used to be one ~1450-line file. It is now the
-// entry point — the `harnessActivity` store object plus re-exports —
-// with the pieces that don't need to share its closure split out:
-// harnessActivityTypes.ts (ActivityPhase/HarnessActivity/TransitionSource
-// /TRANSITION_SOURCE), harnessActivityConstants.ts (the tuning
-// thresholds), harnessActivityCore.ts (the mutable store state, setPhase,
-// the background tick, the #259/#273 watchdog degrade helpers, #277's
-// disarmDelegation, isDecisiveInput), harnessActivityLabels.ts (pure
-// status/label derivation) and useHarnessActivity.ts (the React hooks).
-// #458 then split the store object's methods by the question a reader
-// has: harnessActivityLifecycle.ts (spawn/exit/forget, adapter
-// authority), harnessActivityDeferral.ts (adapter work/end-of-turn
-// signals and the #277/#446 deferral), harnessActivityPermission.ts
-// (#86), harnessActivityIo.ts (user input, PTY output) and
-// harnessActivitySupervisor.ts (#404 silence recovery, #423 repairs).
-// Reads and subscriptions stay here.
-// Every symbol this module exported before the split is still exported
-// from here, so `import { ... } from "./harnessActivity.ts"` is unchanged
-// for every caller.
+// Since #732 the daemon's `PhaseService` is the authority; this is a mirror
+// of its `skein://harness-phase` stream (`phaseMirror.ts`). Reads and
+// subscriptions are served from the mirror. The client-only inputs the
+// daemon cannot see (keystrokes, a submitted prompt, a launch hook) are
+// forwarded to it; it hears adapter events, PTY output, spawn and exit
+// itself. Pure derivation (labels, status) lives in
+// harnessActivityLabels.ts, the hooks in useHarnessActivity.ts.
 
-import {
-	delegationDeferredListeners,
-	listeners,
-	phaseSnapshot,
-	store,
-	transitionListeners,
-} from "./harnessActivityCore.ts";
-import { deferralMethods } from "./harnessActivityDeferral.ts";
-import { ioMethods } from "./harnessActivityIo.ts";
-import { lifecycleMethods } from "./harnessActivityLifecycle.ts";
-import { permissionMethods } from "./harnessActivityPermission.ts";
-import { supervisorMethods } from "./harnessActivitySupervisor.ts";
 import type { ActivityPhase, HarnessActivity, TransitionListener } from "./harnessActivityTypes.ts";
 import { sendPhaseInput } from "./phaseInput.ts";
+import { phaseMirror, stampOutput } from "./phaseMirror.ts";
 
-export {
-	atSafeStoppingPoint,
-	isDecisiveInput,
-	onTick,
-	phaseSnapshot,
-} from "./harnessActivityCore.ts";
 export type { RoomHarnessRef } from "./harnessActivityLabels.ts";
 export {
 	activityToStatus,
 	aggregateRoomStatus,
+	atSafeStoppingPoint,
 	delegationSummary,
 	effectiveStatus,
 	harnessDisplayStatus,
@@ -87,102 +38,66 @@ export {
 } from "./useHarnessActivity.ts";
 
 export const harnessActivity = {
-	...lifecycleMethods,
-	...deferralMethods,
-	...permissionMethods,
-	...ioMethods,
-	...supervisorMethods,
-
-	// #732: client-only inputs the daemon's shadow machine cannot see. Each
-	// forwards after the TypeScript call, with no change to what it does.
+	// Client-only inputs: forwarded to the daemon, no local state.
 	recordInput(id: string, data: string, opts?: { emptyComposer?: boolean }): void {
-		ioMethods.recordInput(id, data, opts);
 		sendPhaseInput(id, { kind: "input", data, emptyComposer: opts?.emptyComposer ?? false });
 	},
 
 	notePromptSubmitted(id: string): void {
-		ioMethods.notePromptSubmitted(id);
 		sendPhaseInput(id, { kind: "promptSubmitted" });
 	},
 
 	muteInducedOutput(id: string): void {
-		ioMethods.muteInducedOutput(id);
 		sendPhaseInput(id, { kind: "muteInducedOutput" });
 	},
 
-	reattached(id: string): void {
-		lifecycleMethods.reattached(id);
-		sendPhaseInput(id, { kind: "reattached" });
+	/// Claude's SessionStart hook reached the webview.
+	noteLaunchSignal(id: string): void {
+		sendPhaseInput(id, { kind: "launchSignal" });
 	},
 
-	/// The view state for a still-running harness is thrown away and rebuilt
-	/// (`forgetViewState`); the daemon's machine keeps its own, so say so.
-	forget(id: string): void {
-		lifecycleMethods.forget(id);
-		sendPhaseInput(id, { kind: "viewReset" });
+	sessionSwitched(id: string, source: "clear" | "resume" | "fork" | "startup"): void {
+		sendPhaseInput(id, { kind: "sessionSwitched", switch: source });
 	},
 
-	recoverUnheardSilence(id: string): boolean {
-		const recovered = supervisorMethods.recoverUnheardSilence(id);
+	recoverUnheardSilence(id: string): void {
 		sendPhaseInput(id, { kind: "recoverUnheardSilence" });
-		return recovered;
+	},
+
+	/// PTY output arrived. The daemon throttles `lastOutputAt`, so the local
+	/// stamp (silent, as it always was) keeps it fresh between updates.
+	recordOutput(id: string, _chunk?: string): void {
+		stampOutput(id, Date.now());
 	},
 
 	get(id: string): HarnessActivity | null {
-		return store.get(id) ?? null;
+		return phaseMirror.get(id);
 	},
 
-	/// #423: every harness id in the store, for the supervisor's sweep.
-	ids(): string[] {
-		return [...store.keys()];
-	},
-
-	/// #356: every harness id this process has a phase for, for the
-	/// `harness_phases` agent-request kind. See `phaseSnapshot`'s own
-	/// doc for why an id can be missing from the result.
+	/// Every harness id mapped to its phase; an id the daemon does not know
+	/// is absent.
 	phaseSnapshot(): Record<string, ActivityPhase> {
-		return phaseSnapshot(store);
+		const phases: Record<string, ActivityPhase> = {};
+		for (const id of phaseMirror.ids()) {
+			const a = phaseMirror.get(id);
+			if (a) phases[id] = a.phase;
+		}
+		return phases;
 	},
 
 	subscribe(id: string, cb: () => void): () => void {
-		let set = listeners.get(id);
-		if (!set) {
-			set = new Set();
-			listeners.set(id, set);
-		}
-		set.add(cb);
-		return () => {
-			const s = listeners.get(id);
-			if (!s) return;
-			s.delete(cb);
-			if (s.size === 0) listeners.delete(id);
-		};
+		return phaseMirror.subscribe(id, cb);
 	},
 
-	/// Subscribe to every phase transition across every harness.
-	/// One callback fires for each real transition with `(id, from,
-	/// to)`. Returns an unsubscribe. Used by App-level notification
-	/// logic that fans out to multiple rooms.
+	/// Subscribe to every phase transition across every harness:
+	/// `(id, from, to, source)`. Returns an unsubscribe.
 	subscribeTransitions(cb: TransitionListener): () => void {
-		transitionListeners.add(cb);
-		return () => {
-			transitionListeners.delete(cb);
-		};
+		return phaseMirror.subscribeTransitions(cb);
 	},
 
-	/// #381: subscribe to #277 delegation deferrals ARMING — `cb(id)`
-	/// fires the instant a harness's end-of-turn is deferred for
-	/// background subagents (`awaitingPromptFromAdapter`'s
-	/// `delegationDeferredAt` going null → non-null), never on the
-	/// idempotent re-arm and never on disarm. Step B (mail delivery
-	/// during a deferral) is the intended caller — see
-	/// `atSafeStoppingPoint` for the companion "is it still safe to send
-	/// into right now" check. Returns an unsubscribe, same shape as
-	/// `subscribeTransitions`.
+	/// #381: `cb(id)` fires when a harness's end-of-turn is deferred for
+	/// background work (a #277 deferral arming), never on disarm.
 	subscribeDelegationDeferred(cb: (id: string) => void): () => void {
-		delegationDeferredListeners.add(cb);
-		return () => {
-			delegationDeferredListeners.delete(cb);
-		};
+		return phaseMirror.subscribeDelegationDeferred(cb);
 	},
 };

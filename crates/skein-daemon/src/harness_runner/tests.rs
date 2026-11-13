@@ -24,6 +24,8 @@ use crate::stream_sink::StreamSink;
 use crate::transport::InProcessTransport;
 
 mod acceptance;
+mod client_input;
+mod hermes_work;
 mod lifecycle;
 mod phase;
 mod refusals;

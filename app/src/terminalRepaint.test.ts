@@ -1,13 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
+const mute = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
+vi.mock("./harnessActivity.ts", () => ({
+	harnessActivity: { muteInducedOutput: (...a: unknown[]) => mute(...a) },
+}));
 
 import { forceRepaint, REPAINT_DELAY_MS, repaintPty } from "./terminalRepaint.ts";
 
 beforeEach(() => {
 	vi.useFakeTimers();
 	invoke.mockReset();
+	mute.mockReset();
 });
 afterEach(() => vi.useRealTimers());
 
@@ -45,6 +50,18 @@ describe("forceRepaint", () => {
 		expect(resize).toHaveBeenCalledTimes(2);
 	});
 
+	it("mutes induced output immediately before each resize", () => {
+		const calls: string[] = [];
+		forceRepaint({
+			size: () => ({ rows: 10, cols: 40 }),
+			resize: () => calls.push("resize"),
+			muteInduced: () => calls.push("mute"),
+		});
+		expect(calls).toEqual(["mute", "resize"]);
+		vi.advanceTimersByTime(REPAINT_DELAY_MS);
+		expect(calls).toEqual(["mute", "resize", "mute", "resize"]);
+	});
+
 	it("does nothing for a one-row terminal", () => {
 		const resize = vi.fn();
 		const cancel = forceRepaint({ size: () => ({ rows: 1, cols: 40 }), resize });
@@ -65,7 +82,7 @@ describe("forceRepaint", () => {
 
 describe("repaintPty", () => {
 	it("resizes the pty by id, one row fewer and back", () => {
-		const cancel = repaintPty({ rows: 20, cols: 60 }, "p1");
+		const cancel = repaintPty({ rows: 20, cols: 60 }, "p1", "h1");
 		expect(invoke).toHaveBeenCalledTimes(1);
 		expect(invoke).toHaveBeenLastCalledWith("pty_resize", { id: "p1", rows: 19, cols: 60 });
 		vi.advanceTimersByTime(REPAINT_DELAY_MS);
@@ -74,8 +91,16 @@ describe("repaintPty", () => {
 		cancel();
 	});
 
+	it("mutes the harness before the shrinking resize, and again before the restore", () => {
+		repaintPty({ rows: 20, cols: 60 }, "p1", "h1");
+		expect(mute).toHaveBeenCalledTimes(1);
+		expect(mute).toHaveBeenLastCalledWith("h1");
+		vi.advanceTimersByTime(REPAINT_DELAY_MS);
+		expect(mute).toHaveBeenCalledTimes(2);
+	});
+
 	it("cancel sends the restoring resize immediately, not later", () => {
-		const cancel = repaintPty({ rows: 20, cols: 60 }, "p1");
+		const cancel = repaintPty({ rows: 20, cols: 60 }, "p1", "h1");
 		cancel();
 		expect(invoke).toHaveBeenCalledTimes(2);
 		expect(invoke).toHaveBeenLastCalledWith("pty_resize", { id: "p1", rows: 20, cols: 60 });

@@ -14,11 +14,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("./frontendLog.ts", () => ({ logBoth: vi.fn(), logToRust: vi.fn() }));
 
-import { harnessActivity } from "./harnessActivity.ts";
 import { attachOpencodeEvents } from "./harnessEvents.ts";
 
 const attachWith = (id: string, generation?: number): Record<string, unknown> => {
-	harnessActivity.spawned(id);
 	attachOpencodeEvents(
 		id,
 		"r",

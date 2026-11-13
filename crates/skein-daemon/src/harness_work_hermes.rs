@@ -1,8 +1,10 @@
 //! Streams a Hermes harness's outstanding work (#628): background
 //! `delegate_task` children and background terminal processes, read from
 //! the profile's `state.db` and `processes.json` by
-//! `skein_harness::hermes::work`. The frontend (`hermesWork.ts`) feeds
-//! these into the same end-of-turn deferral Claude's subagents use.
+//! `skein_harness::hermes::work`. The phase machine feeds these into the
+//! same end-of-turn deferral Claude's subagents use. Since #732 the daemon
+//! attaches the poller itself ([`HermesWorkAttacher`]), with the phase
+//! machine as its only consumer.
 //!
 //! Polled, not watched: `state.db` is WAL, so a watcher would need the
 //! `-wal` sidecar and `processes.json` too, for a 1 s granularity gain
@@ -228,6 +230,9 @@ impl Poller {
 struct Entry {
     stopped: Arc<AtomicBool>,
     handle: JoinHandle<()>,
+    /// Completed poll passes, so a test can wait for the attach snapshot.
+    #[cfg(test)]
+    passes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Drop for Entry {
@@ -237,10 +242,10 @@ impl Drop for Entry {
     }
 }
 
-/// The pollers, keyed by harness id.
-#[derive(Default)]
+/// The pollers, keyed by harness id. Clones share the registry.
+#[derive(Default, Clone)]
 pub struct HermesWorkManager {
-    inner: Mutex<HashMap<String, Entry>>,
+    inner: Arc<Mutex<HashMap<String, Entry>>>,
 }
 
 impl HermesWorkManager {
@@ -264,6 +269,10 @@ impl HermesWorkManager {
             seeded: false,
             warned: false,
         }));
+        #[cfg(test)]
+        let passes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        #[cfg(test)]
+        let counted = Arc::clone(&passes);
         let handle = tokio::spawn(async move {
             let mut tick = tokio::time::interval(POLL);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -274,19 +283,42 @@ impl HermesWorkManager {
                 }
                 let p = Arc::clone(&poller);
                 match tokio::task::spawn_blocking(move || p.lock().step(pid_exists)).await {
-                    Ok(true) => {}
+                    Ok(true) => {
+                        #[cfg(test)]
+                        counted.fetch_add(1, Ordering::SeqCst);
+                    }
                     _ => break, // Channel closed or the pass panicked.
                 }
             }
         });
         // Drop of the replaced entry stops the old poller.
+        self.inner.lock().insert(
+            harness_id,
+            Entry {
+                stopped,
+                handle,
+                #[cfg(test)]
+                passes,
+            },
+        );
+    }
+
+    /// Poll passes the harness's poller has completed (0 when none).
+    #[cfg(test)]
+    pub(crate) fn passes(&self, harness_id: &str) -> usize {
         self.inner
             .lock()
-            .insert(harness_id, Entry { stopped, handle });
+            .get(harness_id)
+            .map_or(0, |e| e.passes.load(Ordering::SeqCst))
     }
 
     pub fn detach(&self, harness_id: &str) {
         self.inner.lock().remove(harness_id);
+    }
+
+    #[must_use]
+    pub fn is_attached(&self, harness_id: &str) -> bool {
+        self.inner.lock().contains_key(harness_id)
     }
 }
 
@@ -309,6 +341,9 @@ pub fn hermes_work_attach_impl(
     manager.attach(harness_id, session_id, state_db, sink);
     Ok(())
 }
+
+mod attacher;
+pub use attacher::HermesWorkAttacher;
 
 #[cfg(test)]
 mod tests;

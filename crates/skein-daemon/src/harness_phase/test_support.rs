@@ -7,8 +7,83 @@
 //! tick that falls inside the advance, in order. [`Rig::advance`] does the
 //! same, so a ported table reads line for line like its TS original.
 
-use super::PhaseMachine;
+use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex, PoisonError};
+
 use super::constants::TICK_INTERVAL_MS;
+use super::service::Clock;
+use super::stream::OutMsg;
+use super::{PhaseMachine, PhaseService};
+use crate::db::Database;
+use crate::event_sink::{EventSink, SharedEventSink};
+
+/// An [`EventSink`] that keeps every `(event, payload)` it is given.
+#[derive(Default)]
+pub struct RecordingSink(pub Mutex<Vec<(String, String)>>);
+
+impl RecordingSink {
+    pub fn events(&self) -> Vec<(String, String)> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl EventSink for RecordingSink {
+    fn emit_json(&self, event: &str, payload: String) -> Result<(), String> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((event.to_owned(), payload));
+        Ok(())
+    }
+}
+
+impl PhaseService {
+    /// A service over a throwaway database and a recording sink.
+    pub(crate) fn test_with_clock_and_sink(clock: Clock) -> (Arc<Self>, Arc<RecordingSink>) {
+        let (dir, db) = crate::db::test_support::fresh_db();
+        let sink = Arc::new(RecordingSink::default());
+        let events: SharedEventSink = sink.clone();
+        let db = Arc::new(db);
+        let mut svc = Self::with_clock(clock, Arc::clone(&db), events);
+        Arc::get_mut(&mut svc)
+            .expect("fresh service has one owner")
+            .test_state = Some((dir, db));
+        (svc, sink)
+    }
+
+    /// [`Self::with_clock`] for the tests that do not look at the outputs.
+    pub(crate) fn test_with_clock(clock: Clock) -> Arc<Self> {
+        Self::test_with_clock_and_sink(clock).0
+    }
+
+    /// [`Self::new`] for the tests that do not look at the outputs.
+    pub(crate) fn test_new() -> Arc<Self> {
+        Self::test_with_clock(Arc::new(|| 1_000_000))
+    }
+
+    /// The database the service writes `harness_events` to.
+    pub(crate) fn test_db(&self) -> Arc<Database> {
+        Arc::clone(&self.test_state.as_ref().expect("test service").1)
+    }
+
+    /// Wait until the output thread has handled everything queued so far.
+    pub(crate) fn flush_outputs(&self) {
+        let (tx, rx) = channel();
+        let sent = self
+            .inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .out
+            .send(OutMsg::Flush(tx))
+            .is_ok();
+        if sent {
+            rx.recv().expect("output thread answers the flush");
+        }
+    }
+}
 
 /// The epoch the fake clock starts at. Non-zero so a `0` timestamp in a
 /// record is distinguishable from "now".

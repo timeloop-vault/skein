@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { harnessActivity } from "./harnessActivity.ts";
 import type { HarnessInputTarget } from "./harnessInput.ts";
 import { harnessInput, insertText, sendPrompt } from "./harnessInput.ts";
+import { mirrorSet, SENDABLE } from "./phaseTestSupport.ts";
 import { SUBMIT_GAP_MS } from "./submitRetry.ts";
 
 const nextId = (() => {
@@ -29,11 +29,7 @@ describe("sendPrompt", () => {
 		};
 		// Bring a real store entry to the one state the gate allows:
 		// waiting, authoritative, heard-from, injected.
-		harnessActivity.spawned(id);
-		harnessActivity.attachAuthoritativeSource(id);
-		harnessActivity.adapterDelivered(id);
-		harnessActivity.setWaitingFromAdapter(id, "test");
-		harnessActivity.setInjected(id, true);
+		mirrorSet(id, "waiting", SENDABLE);
 	});
 
 	afterEach(() => {
@@ -60,7 +56,7 @@ describe("sendPrompt", () => {
 
 	it("re-checks the gate at call time rather than trusting a stale render", () => {
 		harnessInput.register(id, target);
-		harnessActivity.setRunningFromAdapter(id, "test");
+		mirrorSet(id, "running", SENDABLE);
 
 		const result = sendPrompt(id, "claude", "do the thing");
 		expect(result.ok).toBe(false);
@@ -101,11 +97,7 @@ describe("insertText", () => {
 		};
 		// Bring a real store entry to a state canInsertText allows —
 		// mid-turn (`running`), authoritative, heard-from, injected.
-		harnessActivity.spawned(id);
-		harnessActivity.attachAuthoritativeSource(id);
-		harnessActivity.adapterDelivered(id);
-		harnessActivity.setRunningFromAdapter(id, "test");
-		harnessActivity.setInjected(id, true);
+		mirrorSet(id, "running", SENDABLE);
 	});
 
 	it("pastes but never submits, when the gate allows it", () => {
@@ -125,7 +117,7 @@ describe("insertText", () => {
 
 	it("re-checks the gate at call time rather than trusting a stale render", () => {
 		harnessInput.register(id, target);
-		harnessActivity.exited(id, 0);
+		mirrorSet(id, "exited", { ...SENDABLE });
 
 		const result = insertText(id, "claude", "/tmp/dropped.txt ");
 		expect(result.ok).toBe(false);
