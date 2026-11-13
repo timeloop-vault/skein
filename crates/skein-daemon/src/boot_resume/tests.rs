@@ -260,3 +260,106 @@ fn first_load_prepares_stores_and_returns_later_loads_do_not() {
         serde_json::to_value(&first.rooms).unwrap()
     );
 }
+
+#[test]
+fn a_concurrent_load_waits_for_the_preparation_and_returns_prepared_rows() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let (_dir, db) = fresh_db();
+    let db = Arc::new(db);
+    let store = Arc::new(RoomStore::new(Arc::clone(&db), Arc::new(Quiet)));
+    let seed = vec![room(
+        "r1",
+        false,
+        vec![
+            harness(
+                "c",
+                "claude",
+                Some("c-sid"),
+                &["claude", "--session-id", "c-sid"],
+                &json!({}),
+            ),
+            harness("o", "opencode", Some("o-sid"), &["opencode"], &json!({})),
+        ],
+    )];
+    db.write_room_rows(&seed, &[], None).unwrap();
+    let boot = Arc::new(BootResume::detached());
+    let b_probes = Arc::new(AtomicUsize::new(0));
+    let picks = Arc::new(AtomicUsize::new(0));
+
+    let (entered_tx, entered_rx) = mpsc::channel::<()>();
+    // Dropping the sender releases every blocked `recv`.
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let a = {
+        let (boot, db, store, picks) = (
+            Arc::clone(&boot),
+            Arc::clone(&db),
+            Arc::clone(&store),
+            Arc::clone(&picks),
+        );
+        std::thread::spawn(move || {
+            let probe = move |_: &Harness| {
+                let _ = entered_tx.send(());
+                let _ = release_rx.recv();
+                Ok(true)
+            };
+            let pick = || {
+                picks.fetch_add(1, Ordering::SeqCst);
+                Ok(5000)
+            };
+            boot.load_rooms_with(&db, &store, probe, pick, || "m".to_owned())
+        })
+    };
+    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let b = {
+        let (boot, db, store, picks, b_probes) = (
+            Arc::clone(&boot),
+            Arc::clone(&db),
+            Arc::clone(&store),
+            Arc::clone(&picks),
+            Arc::clone(&b_probes),
+        );
+        std::thread::spawn(move || {
+            let probe = |_: &Harness| {
+                b_probes.fetch_add(1, Ordering::SeqCst);
+                Ok(true)
+            };
+            let pick = || {
+                picks.fetch_add(1, Ordering::SeqCst);
+                Ok(6000)
+            };
+            let out = boot.load_rooms_with(&db, &store, probe, pick, || "m2".to_owned());
+            done_tx.send(()).unwrap();
+            out
+        })
+    };
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(300)).is_err(),
+        "a concurrent load returned while the preparation was still running"
+    );
+
+    drop(release_tx);
+    let out_a = a.join().unwrap().unwrap();
+    let out_b = b.join().unwrap().unwrap();
+
+    let claude = sv(&["claude", "--resume", "c-sid"]);
+    let opencode = sv(&[
+        "opencode",
+        "--port",
+        "5000",
+        "--hostname",
+        "127.0.0.1",
+        "--session",
+        "o-sid",
+    ]);
+    for rooms in [out_a.rooms, out_b.rooms, store.rooms()] {
+        assert_eq!(find(&rooms, "c").cmd.as_ref().unwrap(), &claude);
+        assert_eq!(find(&rooms, "o").cmd.as_ref().unwrap(), &opencode);
+    }
+    assert_eq!(b_probes.load(Ordering::SeqCst), 0, "B must not prepare");
+    assert_eq!(picks.load(Ordering::SeqCst), 1, "one port, one preparation");
+}
