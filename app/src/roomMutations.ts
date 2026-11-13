@@ -55,15 +55,36 @@ export function deepEqual(a: unknown, b: unknown): boolean {
  */
 export const LOCAL_ONLY_HARNESS_KEYS = ["spawnGen"] as const;
 
-/** Harness equality that ignores the client-only keys. */
-export function harnessEqual(a: Harness, b: Harness): boolean {
+/**
+ * Harness fields the daemon owns since #755: it ignores them in a client's
+ * `putHarness` for an existing harness and writes them itself, and changes
+ * reach the client through `skein://rooms-changed`. A difference in them is
+ * never a local edit, and in a rebase the remote value always wins. A NEW
+ * harness is still sent whole, these fields included.
+ */
+export const DAEMON_OWNED_HARNESS_KEYS = ["sessionId", "opencodeVersion"] as const;
+
+function equalIgnoring(a: Harness, b: Harness, keys: readonly string[]): boolean {
 	const ra = { ...a } as Record<string, unknown>;
 	const rb = { ...b } as Record<string, unknown>;
-	for (const k of LOCAL_ONLY_HARNESS_KEYS) {
+	for (const k of keys) {
 		delete ra[k];
 		delete rb[k];
 	}
 	return deepEqual(ra, rb);
+}
+
+/**
+ * Equality for diffing: ignores the client-only and daemon-owned keys, so a
+ * difference in them alone is never a local edit and produces no `putHarness`.
+ */
+export function harnessEqual(a: Harness, b: Harness): boolean {
+	return equalIgnoring(a, b, [...LOCAL_ONLY_HARNESS_KEYS, ...DAEMON_OWNED_HARNESS_KEYS]);
+}
+
+/** Equality for applying remote state: ignores only the client-only keys. */
+export function harnessRemoteEqual(a: Harness, b: Harness): boolean {
+	return equalIgnoring(a, b, LOCAL_ONLY_HARNESS_KEYS);
 }
 
 function sameIds(a: readonly string[], b: readonly string[]): boolean {

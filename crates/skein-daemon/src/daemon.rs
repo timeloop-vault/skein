@@ -371,11 +371,11 @@ impl Daemon {
             session_probe: None,
         }));
         harness_runner.observe_store();
-        // #753: a retried boot preparation leaves a harness that has a
-        // process alone (the runner keeps an entry for each).
+        // #753/#755: a retried boot preparation leaves a harness that has a
+        // process, or a spawn in flight, alone (called under the store lock).
         let boot_resume = Arc::new(BootResume::new(boot_probe_env, {
             let runner = Arc::clone(&harness_runner);
-            Arc::new(move |id: &str| runner.pty_id(id).is_some())
+            Arc::new(move |id: &str| runner.is_busy(id))
         }));
         Ok(Self {
             phase,

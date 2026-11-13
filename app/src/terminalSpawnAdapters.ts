@@ -8,6 +8,7 @@ import {
 } from "./harnessEvents.ts";
 import { attachHermesEvents } from "./harnessEventsHermes.ts";
 import { isHermesProgram, markClaimed, startHermesCapture } from "./hermesCapture.ts";
+import { effectiveSessionId } from "./reportedSessions.ts";
 import type { HarnessKind } from "./types.ts";
 
 export interface AdapterAttach {
@@ -73,7 +74,7 @@ export function attachAdapters(a: AdapterAttach): (() => void) | null {
 			// #116: live, not the `sessionId` closed over above —
 			// this harness's session id can change under a
 			// long-lived adapter (`/new`, a `/sessions` pick).
-			() => a.sessionIdRef.current,
+			() => effectiveSessionId(harnessId, a.sessionIdRef.current),
 			a.onSessionFollowed,
 			v2Generation,
 		);
@@ -88,7 +89,7 @@ export function attachAdapters(a: AdapterAttach): (() => void) | null {
 					roomId,
 					hermesProfile: a.hermesProfile,
 					boundSessionId: bound,
-					getSessionId: () => a.sessionIdRef.current,
+					getSessionId: () => effectiveSessionId(harnessId, a.sessionIdRef.current),
 					onSessionCaptured: a.onSessionCaptured,
 				})
 			: null;

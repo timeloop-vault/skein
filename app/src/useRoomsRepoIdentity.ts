@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { type Dispatch, type MutableRefObject, type SetStateAction, useCallback } from "react";
 import { reportArgvFailure } from "./argvFailure.ts";
 import { harnessFreshCmd } from "./harnessArgvApi.ts";
+import { reportHarnessSession } from "./harnessSessionReport.ts";
 import { repointRoom } from "./missingFolder.ts";
 import type { FolderInfoDto } from "./NewRoomDialog.tsx";
 import type { RenameTarget } from "./RoomStrip.tsx";
@@ -89,7 +90,7 @@ export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 	// #164: "Pick another folder" on a MissingFolderCard. Unlike the
 	// worktree recreate above, the room's `cwd` itself changes, so every
 	// harness that resumed into the old folder needs `repointRoom`'s
-	// full treatment (dropped sessionId, fresh argv) — same port
+	// full treatment (session cleared through the daemon, #755; fresh argv) — same port
 	// allocation unarchive already does for opencode harnesses.
 	const pickMissingFolder = useCallback(
 		async (room: Room, newCwd: string) => {
@@ -124,7 +125,23 @@ export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 				reportArgvFailure("move the room to that folder", err, room);
 				return;
 			}
-			const { room: base, ports } = repointedRoom;
+			const { room: base, ports, clearSession } = repointedRoom;
+			// #755: the old folder's conversation id is the daemon's to drop;
+			// the spawn cannot rediscover that for opencode/Hermes. Await each
+			// before the state change that respawns. A failed report is logged
+			// and skipped (the spawn's session probe is the fallback).
+			await Promise.all(
+				clearSession.map(async (harnessId) => {
+					try {
+						await reportHarnessSession(room.id, harnessId, { mode: "clear" });
+					} catch (err) {
+						console.warn(
+							`[skein] harness_session_report clear failed for harness ${harnessId}:`,
+							err,
+						);
+					}
+				}),
+			);
 			if (ports.size > 0) setOpencodePorts((prev) => new Map([...prev, ...ports]));
 			// `exactOptionalPropertyTypes` forbids `repoRoot: undefined` —
 			// a plain (non-repo) folder, or one with no known root, must

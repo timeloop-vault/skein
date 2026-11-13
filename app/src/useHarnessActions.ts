@@ -38,6 +38,7 @@ import { canRestart, exitedRestartable } from "./harnessRestart.ts";
 import { mailHold } from "./mailHold.ts";
 import { type RestartSource, sendPhaseInput } from "./phaseInput.ts";
 import type { RenameTarget } from "./RoomStrip.tsx";
+import { forgetReported } from "./reportedSessions.ts";
 import { prepareRestart } from "./restartResume.ts";
 import { stillExists } from "./roomsStoreProbe.ts";
 import { pickerAfterHarnessSelect } from "./tempView.ts";
@@ -148,6 +149,7 @@ export function useHarnessActions(
 	const closeHarness = (roomId: string, harnessId: string) => {
 		const proceed = () => {
 			claudeVersionStore.forget(harnessId);
+			forgetReported(harnessId);
 			setRooms((prev) =>
 				prev.map((r) => {
 					if (r.id !== roomId) return r;
@@ -206,6 +208,7 @@ export function useHarnessActions(
 		if (!decision.ok) return decision;
 		const { phase } = decision.value;
 		claudeVersionStore.forget(harnessId);
+		forgetReported(harnessId);
 		setRooms((prev) =>
 			prev.map((r) => {
 				if (r.id !== roomId) return r;
@@ -221,17 +224,12 @@ export function useHarnessActions(
 
 	// Restart: replaces the stored cmd with a freshly built one (the tool's
 	// argv, never the shell's) so it persists and the next spawn uses it.
-	const updateHarnessCmd = (
-		roomId: string,
-		harnessId: string,
-		cmd: string[],
-		sessionId?: string,
-	) => {
+	const updateHarnessCmd = (roomId: string, harnessId: string, cmd: string[]) => {
 		// Every cmd change is a deliberate respawn (restart), so bump
 		// spawnGen too — that's what remounts the terminal when the new cmd
 		// equals the old one. #520: also drops any shell claim; #752: and
 		// any shell launch mode (Restart brings the tool back).
-		setRooms((prev) => withRespawnedCmd(prev, roomId, harnessId, cmd, sessionId));
+		setRooms((prev) => withRespawnedCmd(prev, roomId, harnessId, cmd));
 	};
 
 	// #752: Enter on an exited pane records the post-exit shell as the
@@ -316,7 +314,8 @@ export function useHarnessActions(
 			setOpencodePorts((prev) => new Map(prev).set(harnessId, port));
 		}
 		const next = applyResumedHarness(fresh, resumed.harness);
-		updateHarnessCmd(roomId, harnessId, next.cmd ?? [], next.sessionId);
+		// #755: no session id from the resume result; the spawn re-derives it.
+		updateHarnessCmd(roomId, harnessId, next.cmd ?? []);
 		// The daemon logs the new process's `spawning` row (source
 		// "user-restart" / "version-auto-restart") and resets its record.
 		sendPhaseInput(harnessId, { kind: "restartRequested", source });

@@ -275,12 +275,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				const { sidecarGeneration: generation, port } = applyEnsureResult({
 					result,
 					harnessId,
-					harnessKind,
-					sessionId,
 					opencodePort,
 					spawnStartedAt,
-					opencodeClaim,
-					onSessionCaptured,
 				});
 				sidecarGeneration = generation;
 				linkPolicy.mouseClicksDisabled = mouseClicksDisabled;

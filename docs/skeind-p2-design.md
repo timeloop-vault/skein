@@ -341,7 +341,7 @@ Wire types are in `crates/skein-proto/src/room_mutations.rs`.
 | `updateRoom` | Replaces the room-level fields. The payload's `harnesses` is ignored; the stored ones are kept |
 | `removeRoom` | Removes a room. Skipped as `absent` if it is not there |
 | `reorderRooms` | Listed ids take the listed order; unlisted rooms follow in their old order |
-| `putHarness` | Replaces a harness by id, or appends it if new |
+| `putHarness` | Replaces a harness by id, or appends it if new. Since #755 an existing harness keeps its stored `sessionId` and `opencodeVersion` |
 | `removeHarness` | Removes a harness. Skipped as `absent` if it is not there |
 | `reorderHarnesses` | Same rule as `reorderRooms`, within one room |
 
@@ -446,6 +446,11 @@ survive.
 `spawnGen` is the one Harness field the daemon does not store
 (`LOCAL_ONLY_HARNESS_KEYS` in `roomMutations.ts`). It is never sent on
 its own, and a remote change never overwrites it.
+
+Since #755 two more harness fields are not three-way merged: `sessionId`
+and `opencodeVersion` are daemon-owned (`DAEMON_OWNED_HARNESS_KEYS`).
+`diffRooms` ignores them and a rebase takes the remote value, so for these
+two the remote always wins. See "Daemon-owned fields (#755)".
 
 - A room removed locally and not yet synced is not brought back by a
   remote `roomPut`.
@@ -965,7 +970,10 @@ authoritative (non-normative).
    trusted, #679).
 3. The argv is spawned. Claude with no id mints one. opencode and Hermes
    with no live session start fresh.
-4. The minted or dropped session id is written back to the record.
+4. The minted or dropped session id is written back to the record. Since
+   #755 that is one field-level edit under the store lock, and only if
+   the stored id still equals what the spawn read (see "Daemon-owned
+   fields (#755)").
 
 Who writes `launch` (`{"mode":"tool"}` or `{"mode":"shell","argv":[..]}`;
 absent means the kind's own tool):
@@ -1004,6 +1012,9 @@ Restart harness returns a post-exit shell to its tool.
 Seams for the follow-ups: #754 replaces `stored_opencode_port` with a
 daemon-owned port; #755 and #754 together remove the stored `cmd` and the
 `expectCmd` check (#753 reduced boot preparation but did not remove it).
+#755 shipped the field-level write path and made `sessionId` daemon-owned,
+but `cmd` is still stored and client-written; see "Daemon-owned fields
+(#755)".
 
 ## Boot preparation after #753
 
@@ -1040,13 +1051,14 @@ logged, that load returns the unprepared rooms, and the next load tries
 again. A retry skips every harness that is running, checked through the
 runner, so a live process's record is never rewritten. The changes are
 saved through `RoomStore::apply` under origin `daemon-boot` as
-whole-harness `PutHarness` mutations, then flushed. The frontend still
+whole-harness `PutHarness` mutations, then flushed (since #755 they are
+field-level edits instead, see "Daemon-owned fields (#755)"). The frontend still
 reads the opencode ports from the stored `cmd` (`opencodePort.ts`), and
 unarchive still runs `rooms_resume_cmds`.
 
 Decision, 2026-11-13: full removal was deferred because the port and the
-claim have no spawn-time home yet. #755 replaces the whole-harness writes
-with field-level ones. #754 moves the port out of the stored `cmd` to the
+claim have no spawn-time home yet. #755 replaced the whole-harness writes
+with field-level ones (shipped). #754 moves the port out of the stored `cmd` to the
 runner at spawn, after which only `migrate_launch` and the claim step
 remain.
 
@@ -1061,7 +1073,10 @@ Known limits:
   process is on the old one, and a session id the spawn just wrote back
   lost. A retry only happens after an empty first load or a failed
   preparation, so this is rare, and it is the whole-harness-write class
-  that #755 removes.
+  that #755 removes. Since #755 this limit is closed: the check and the
+  write both happen under the store lock, and a stale plan is skipped.
+  What is left is the first limit above, and a leftover entry still reads
+  as busy.
 - A pane that mounted before a retry holds the old `cmd` as `expectCmd`,
   so its first ensure after the retry can be refused as `stale_record`
   until the client applies the `daemon-boot` change.
@@ -1081,7 +1096,7 @@ flowchart TD
     G --> J{"pick failed?"}
     I --> J
     J -->|yes| K["log, return unprepared rows, not done"]
-    J -->|no| L["apply under daemon-boot, then flush"]
+    J -->|no| L["apply under daemon-boot, per harness under the store lock (#755), then flush"]
     L --> M{"store refused?"}
     M -->|yes| K
     M -->|no| N["mark done"]
@@ -1091,6 +1106,166 @@ flowchart TD
 Figure 8: one rooms load through boot preparation. Renders this section
 and crates/skein-daemon/src/boot_resume.rs; the text is authoritative
 (non-normative).
+
+## Daemon-owned fields (#755)
+
+Before #755 the daemon wrote a harness record by sending a whole-harness
+`PutHarness` through `apply`, and so did the client. Two writers that each
+send the whole record overwrite each other's fields: a boot write could
+lose a session id the spawn had just recorded, and a stale client put
+could revert one. #755 gives the store a field-level edit path and makes
+two fields the daemon's alone.
+
+`RoomStore::edit_harnesses` and `RoomStore::edit_harness`
+(`room_store/edit.rs`) run a closure per harness under the store lock. The
+closure changes only the fields it means to. Everything after it is what
+`apply` does for a changed `PutHarness`: dirty marking, a structural
+persist when a key field changed, one `rooms-changed` event carrying the
+origin, and the observers. A closure that changes nothing emits nothing.
+No daemon code builds a whole-harness `PutHarness` any more.
+
+The daemon-owned fields are `sessionId` and `opencodeVersion`. In `apply`
+(`keep_daemon_owned`), a client `PutHarness` for an existing harness keeps
+the stored values of both. A new harness, and a new room, are taken as
+sent. On the client, `DAEMON_OWNED_HARNESS_KEYS` (`roomMutations.ts`)
+makes `diffRooms` ignore them and makes a rebase (`roomsRebase.ts`) take
+the daemon's value.
+
+```mermaid
+flowchart TD
+    A["client: rooms_apply, PutHarness"] --> E["apply: keep sessionId and opencodeVersion"]
+    B["client: harness_session_report"] --> F["report_session: capture, replace, clear"]
+    C["runner: write-back after a spawn"] --> G["edit_harness"]
+    D["boot preparation: plan applied per harness"] --> H["edit_harnesses"]
+    F --> G
+    E --> S["the store lock"]
+    G --> S
+    H --> S
+    S --> P["dirty rows, structural persist"]
+    S --> V["one rooms-changed event, origin says who"]
+    V --> X["every client: rebase, daemon value wins for the two fields"]
+```
+
+Figure 9: the write paths into a harness record after #755. Renders this
+section and crates/skein-daemon/src/room_store/{edit,apply}.rs; the text
+is authoritative (non-normative).
+
+1. The client sends a `PutHarness` through `rooms_apply`. For an existing
+   harness the two owned fields are replaced by the stored values before
+   the put is written.
+2. The client reports a session id it observed through
+   `harness_session_report`. It becomes one `edit_harness` call.
+3. The runner records the spawn outcome with one `edit_harness` call.
+4. Boot preparation applies its plan with one `edit_harnesses` call.
+5. All four meet at the store lock, one writer at a time.
+6. Dirty rows are written, at once for a structural change (`sessionId`
+   is in the harness key, so a changed session id is one) and debounced
+   otherwise.
+7. One event goes out. Every client, the sender too for the report, sees
+   the daemon's value arrive and the daemon's value wins.
+
+### Who writes what
+
+| Field | Written by | How |
+| --- | --- | --- |
+| `sessionId` | The runner, after a spawn | `edit_harness`, origin `daemon-runner`; only if the stored id still equals what the spawn read, else the newer id is kept (logged) |
+| `sessionId` | The client, for what it observed | `harness_session_report`, origin `daemon-session`; modes below |
+| `opencodeVersion` | The runner, at each opencode spawn | Same edit; the probed version, or none to clear a stale one |
+| `launch` | The client; boot preparation | Client: `PutHarness` (Enter on an exited pane, Restart harness). Boot: `migrate_launch` and a live shell claim, by edit |
+| `shellClaim` | The client; boot preparation | Client: `PutHarness` (#520). Boot: settles or clears it, by edit |
+| `cmd` | The client; boot preparation | Client: `PutHarness` on create, restart, unarchive. Boot: the fresh opencode `--port`, by edit |
+
+The `harness_session_report` command (`commands/harness_runner.rs`, over
+`HarnessRunner::report_session`, logic in `harness_runner/record.rs`)
+takes a room id, a harness id and a report with a `mode`:
+
+- `capture`: first writer wins. It sets the id only when the record has
+  none, or a blank one.
+- `replace`: authoritative. The conversation moved to this id (Claude's
+  hook, opencode's follow of its TUI, a post-exit-shell claim).
+- `clear`: the stored id no longer applies (a repointed folder).
+
+A blank id is ignored. It returns `true` when the record changed and
+`false` for an unknown harness or no change. Nothing is applied locally:
+the client's copy changes when `skein://rooms-changed` arrives, one round
+trip later (`harnessSessionReport.ts`, `useHarnessWriteBacks.ts`). A
+failed report is logged and not retried. The ensure-result write-backs of
+the session id and the opencode version, and the restart and unarchive
+writes of the session id, are gone from the client: the spawn derives and
+records them.
+
+### Boot preparation as edits
+
+The plan is still computed outside the lock, from the snapshot the load
+returned (`boot_resume/plan.rs`, `BootPlan`). It is applied under the
+store lock, per harness, by `edit_harnesses` under origin `daemon-boot`.
+For each harness, on the record as stored now, in this order:
+
+- The launch migration is applied whenever the stored `launch`, `cmd` and
+  `shellClaim` (what `migrate_launch` inferred it from) all still equal the
+  snapshot's, even for a stale or busy harness (so a legacy shell-mode
+  record whose spawn wrote a session id in between still gets its
+  `launch`). A client restart that rewrote `cmd` or removed the claim is
+  not migrated over.
+- Stale: `shellClaim`, `cmd` or `sessionId` differs from the snapshot, or
+  `launch` had already changed. Nothing more is written, the plan is
+  skipped (the harness counts as stale even if it got its migration).
+- Busy: the runner has an entry, or the harness's spawn gate is held
+  (`HarnessRunner::is_busy`). Only the `launch` migration is written.
+- Otherwise `launch`, `shellClaim` and `cmd` are written.
+
+It never writes another field, `sessionId` least of all. The preparation
+logs how many harnesses went each way. The earlier non-atomic running
+check is gone, because the check now runs under the lock.
+
+### Lock order
+
+The boot barrier comes first, then the store lock. Inside an edit the
+runner's `entries` and gate map are taken briefly, through `is_busy`,
+which only try-locks a spawn gate and never waits for one. The runner
+calls the store while holding a per-harness gate, but never while holding
+`entries` or the gate map. So the order has no cycle: an edit under the
+store lock never waits for a gate, and a gate holder never waits on
+`entries` while calling the store. An edit closure must not call back into
+the store and must not block.
+
+### Known limits
+
+- `cmd`, `launch` and `shellClaim` are still client-written through
+  `PutHarness`. A stale client put can overwrite a daemon write to those
+  three: the boot's fresh port in `cmd`, a cleared claim. The boot's stale
+  check protects the other direction only. #754 takes the port out of
+  `cmd` and #756 adds intent commands with a revision.
+- The window between a session report and its `rooms-changed` event is
+  narrowed by `app/src/reportedSessions.ts`: the client's capture/follow
+  decisions and the claimed-session set use a reported id until the
+  record catches up, the daemon refuses it, or 2 s after the daemon
+  accepted it. What is still possible: a report that fails is logged and
+  not retried, so that observation is lost until the next event.
+- The shell claim and the session id it names are two writes, a put and
+  a report. They are briefly inconsistent, and a failed report leaves a
+  claim whose session id does not match, which boot preparation just
+  drops.
+- A busy check that sees an exited process's leftover runner entry still
+  skips the harness (unchanged from #753).
+- Restarting a Claude harness that has no transcript yet writes a stored
+  `cmd` whose `--session-id` differs from the record's `sessionId` (seen
+  in the live check on 2026-11-13): the resume builder mints an id for
+  the `cmd` text, and the client no longer copies it into `sessionId`.
+  The spawn derives its argv from `sessionId`, never from the stored
+  `cmd`, so the process uses the record's id. It ends when the stored
+  `cmd` goes (#754 and after).
+
+### Seams for the follow-ups
+
+- #754 (C) moves the opencode port out of `cmd` to the runner; boot's port
+  step then has no write left (see "Boot preparation after #753").
+- #756 (E) adds intent commands, each with a revision. The edit path is
+  what they call: one closure per harness under the store lock, with the
+  event, persistence and observers already shared.
+- #758 (G) builds on the same edit path.
+- `harness_session_report` is the first intent-shaped command: the client
+  says what it saw, the daemon decides what the record becomes.
 
 ## Slice 4 as built (#732)
 
@@ -1363,7 +1538,7 @@ flowchart LR
     A -->|"9 phase and work reads"| S
 ```
 
-Figure 9: the daemon decides the phase, publishes it, and the webview
+Figure 10: the daemon decides the phase, publishes it, and the webview
 mirrors it. Renders section "Slice 4 as built" and
 crates/skein-daemon/src/harness_phase/; the text is authoritative
 (non-normative).

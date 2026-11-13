@@ -144,7 +144,7 @@ fn a_retry_skips_a_running_harness() {
     )];
     db.write_room_rows(&seed, &[], None).unwrap();
     let mut boot = BootResume::detached();
-    boot.running = Arc::new(|id| id == "up");
+    boot.busy = Arc::new(|id| id == "up");
 
     let out = boot
         .load_rooms_with(&db, &store, no_probe, || Ok(5300))

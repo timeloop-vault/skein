@@ -32,6 +32,7 @@ import {
 import type { CreateRoomArgs } from "./NewRoomDialog.tsx";
 import { captureOpencodeSessionId } from "./opencodeCapture.ts";
 import { buildRemoteSpec, type RemoteInput } from "./remoteCmd.ts";
+import { pendingSessionIds } from "./reportedSessions.ts";
 import { defaultRoomName } from "./roomName.ts";
 import type { Harness, HarnessKind, Room } from "./types.ts";
 import { useHarnessWriteBacks } from "./useHarnessWriteBacks.ts";
@@ -74,7 +75,9 @@ export function useHarnessCreation(
 	// All session ids any harness has already captured. captureOpencode
 	// excludes these so a fresh capture can't claim someone else's id
 	// when two opencode harnesses race in the same cwd.
-	const claimedSessionIds = (): Set<string> => claimedSessionIdsOf(roomsRef.current);
+	const claimedSessionIds = (): Set<string> =>
+		// #755: a just-reported id is in no record until its rooms-changed lands.
+		new Set([...claimedSessionIdsOf(roomsRef.current), ...pendingSessionIds()]);
 
 	// #49 phase A: harness creation, callable from both the + harness
 	// menu (pickHarness) and the Mod+E files jump. Kind-specific setup

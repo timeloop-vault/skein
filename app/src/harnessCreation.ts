@@ -4,7 +4,7 @@
 // owns the async/port/state wiring around these.
 
 import { HARNESS_KINDS } from "./data.tsx";
-import type { Harness, HarnessKind, OpencodeVersion, RemoteSpec, Room } from "./types.ts";
+import type { Harness, HarnessKind, RemoteSpec, Room } from "./types.ts";
 
 export const newId = (prefix: string): string => prefix + Math.random().toString(36).slice(2, 7);
 
@@ -125,45 +125,6 @@ export const claimedSessionIdsOf = (rooms: Room[]): Set<string> =>
 			.filter((id): id is string => typeof id === "string"),
 	);
 
-// Idempotent: first-writer wins. Epic #50 L2c-2 races the SSE adapter's
-// `session.created` against the chapter-5 sqlite poll; whichever fires
-// first sets sessionId, the other becomes a no-op. Without this guard,
-// the sqlite poll could find a *different* session (e.g. user ran
-// opencode in the same cwd from a shell alongside) and overwrite the
-// right id.
-export const withCapturedSessionId = (
-	rooms: Room[],
-	targetRoomId: string,
-	harnessId: string,
-	captured: string,
-): Room[] =>
-	rooms.map((r) => {
-		if (r.id !== targetRoomId) return r;
-		return {
-			...r,
-			harnesses: r.harnesses.map((h) => {
-				if (h.id !== harnessId) return h;
-				if (h.sessionId) return h;
-				return { ...h, sessionId: captured };
-			}),
-		};
-	});
-
-// Authoritative overwrite (see replaceHarnessSessionId in the hook).
-export const withReplacedSessionId = (
-	rooms: Room[],
-	targetRoomId: string,
-	harnessId: string,
-	sessionId: string,
-): Room[] =>
-	rooms.map((r) => {
-		if (r.id !== targetRoomId) return r;
-		return {
-			...r,
-			harnesses: r.harnesses.map((h) => (h.id === harnessId ? { ...h, sessionId } : h)),
-		};
-	});
-
 // Map one harness; the original array and room objects come back untouched
 // when `fn` returns the same harness (no churn for autosave/renders).
 const mapHarness = (
@@ -189,8 +150,9 @@ const mapHarness = (
 	return changed ? next : rooms;
 };
 
-// #520: the post-exit-shell claim. Writes `sessionId` AND the claim in one
-// update, so the invariant "claim.sessionId === sessionId" holds on the record.
+// #520: the post-exit-shell claim. Writes ONLY `shellClaim`: the session id
+// the claim names is daemon-owned since #755 and is reported separately
+// (`reportHarnessSession`, mode replace), so it is never set here.
 export const withShellClaim = (
 	rooms: Room[],
 	targetRoomId: string,
@@ -199,9 +161,9 @@ export const withShellClaim = (
 	port?: number,
 ): Room[] =>
 	mapHarness(rooms, targetRoomId, harnessId, (h) =>
-		h.sessionId === sessionId && h.shellClaim?.sessionId === sessionId && h.shellClaim.port === port
+		h.shellClaim?.sessionId === sessionId && h.shellClaim.port === port
 			? h
-			: { ...h, sessionId, shellClaim: port === undefined ? { sessionId } : { sessionId, port } },
+			: { ...h, shellClaim: port === undefined ? { sessionId } : { sessionId, port } },
 	);
 
 // #520: the claim was released; the key is removed, not set to undefined.
@@ -210,25 +172,6 @@ export const withoutShellClaim = (rooms: Room[], targetRoomId: string, harnessId
 		if (!("shellClaim" in h)) return h;
 		const { shellClaim: _released, ...rest } = h;
 		return rest;
-	});
-
-// #675: record the opencode version the last spawn ran under. null = the probe
-// failed (unknown, so v1) and removes the key. Unchanged = same rooms reference.
-export const withOpencodeVersion = (
-	rooms: Room[],
-	targetRoomId: string,
-	harnessId: string,
-	version: OpencodeVersion | null,
-): Room[] =>
-	mapHarness(rooms, targetRoomId, harnessId, (h) => {
-		if (version === null) {
-			if (!("opencodeVersion" in h)) return h;
-			const { opencodeVersion: _unknown, ...rest } = h;
-			return rest;
-		}
-		const cur = h.opencodeVersion;
-		if (cur && cur.major === version.major && cur.version === version.version) return h;
-		return { ...h, opencodeVersion: { major: version.major, version: version.version } };
 	});
 
 // The user renamed a harness from its tab. Display only: nothing keys on
@@ -255,22 +198,21 @@ export const withShellLaunch = (
 		return { ...rest, launch: { mode: "shell", argv }, spawnGen: (h.spawnGen ?? 0) + 1 };
 	});
 
-// A cmd replacement (restart) is a fresh process: bump spawnGen, optionally
-// set the session id, and drop any shell claim (#520) and shell launch
-// mode (#752: Restart brings the tool back).
+// A cmd replacement (restart) is a fresh process: bump spawnGen, and drop any
+// shell claim (#520) and shell launch mode (#752: Restart brings the tool
+// back). Never touches `sessionId` (#755): the daemon owns it and the spawn
+// derives resume-versus-fresh from the stored id itself.
 export const withRespawnedCmd = (
 	rooms: Room[],
 	targetRoomId: string,
 	harnessId: string,
 	cmd: string[],
-	sessionId?: string,
 ): Room[] =>
 	mapHarness(rooms, targetRoomId, harnessId, (h) => {
 		const { shellClaim: _dropped, launch: _launch, ...rest } = h;
 		return {
 			...rest,
 			cmd,
-			...(sessionId !== undefined ? { sessionId } : {}),
 			spawnGen: (h.spawnGen ?? 0) + 1,
 		};
 	});

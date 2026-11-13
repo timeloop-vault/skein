@@ -30,6 +30,7 @@ mod derived_boot;
 mod hermes_work;
 mod lifecycle;
 mod phase;
+mod record_race;
 mod refusals;
 mod stops;
 

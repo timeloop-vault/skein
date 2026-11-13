@@ -9,6 +9,7 @@
 //! lock so they leave in apply order.
 
 mod apply;
+mod edit;
 mod persist;
 mod structural;
 #[cfg(test)]
@@ -115,6 +116,8 @@ impl RoomStore {
     }
 
     /// Apply a batch in order. Refused wholesale until [`Self::fill`] ran.
+    /// Daemon-owned harness fields (see `apply::keep_daemon_owned`) are not
+    /// changed by a put; use [`Self::edit_harness`] for those.
     pub fn apply(
         &self,
         origin: &str,
@@ -122,11 +125,7 @@ impl RoomStore {
     ) -> Result<RoomsApplyOutcome, String> {
         let (outcome, snapshot) = self.apply_locked(origin, mutations)?;
         // The store lock is gone by here: an observer may block or re-enter.
-        if let Some(rooms) = snapshot {
-            for observer in self.observers.read().iter() {
-                observer(&rooms);
-            }
-        }
+        self.notify_observers(snapshot);
         Ok(outcome)
     }
 
@@ -200,6 +199,21 @@ impl RoomStore {
             }
             return Ok((outcome, None));
         }
+        let snapshot = self.commit_changes(&mut st, origin, changes, structural, now)?;
+        Ok((outcome, snapshot))
+    }
+
+    /// The shared tail of a batch that changed something, under the store
+    /// lock: the debounce mark, the observer snapshot, the one event, and
+    /// then an immediate persist (structural) or a wake of the driver.
+    fn commit_changes(
+        &self,
+        st: &mut persist::State,
+        origin: &str,
+        changes: Vec<RoomChange>,
+        structural: bool,
+        now: Instant,
+    ) -> Result<Option<Vec<Room>>, String> {
         st.mark_dirty(now);
         let snapshot = (!self.observers.read().is_empty()).then(|| st.rooms.clone());
         let payload = RoomsChanged {
@@ -211,11 +225,20 @@ impl RoomStore {
             tracing::warn!(error = %e, "room_store: rooms-changed emit failed");
         }
         if structural {
-            self.shared.persist_or_rearm(&mut st)?;
+            self.shared.persist_or_rearm(st)?;
         } else {
             self.shared.wake.notify_all();
         }
-        Ok((outcome, snapshot))
+        Ok(snapshot)
+    }
+
+    /// Run the observers on a snapshot, after the store lock is gone.
+    fn notify_observers(&self, snapshot: Option<Vec<Room>>) {
+        if let Some(rooms) = snapshot {
+            for observer in self.observers.read().iter() {
+                observer(&rooms);
+            }
+        }
     }
 
     /// Persist everything dirty now.

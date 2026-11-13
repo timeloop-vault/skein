@@ -21,6 +21,7 @@ use crate::event_sink::EventSink;
 
 mod failure;
 mod load;
+mod owned_fields;
 mod persistence;
 mod semantics;
 

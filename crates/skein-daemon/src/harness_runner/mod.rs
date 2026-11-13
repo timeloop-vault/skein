@@ -21,6 +21,9 @@
 //! on it, and the observer must not wait for a seconds-long spawn either.
 //! What it may miss (an `ensure_running` that has not recorded its entry yet)
 //! `ensure_running` repairs itself by re-checking the records afterwards.
+//! `is_busy` may be called under the store lock: it takes `entries` and the
+//! gate map only briefly and only try-locks a gate; no runner code holds
+//! `entries` or the gate map while calling the store.
 
 mod adapters;
 mod client_input;
@@ -28,6 +31,8 @@ mod events;
 mod gates;
 mod phase_tap;
 mod record;
+
+pub use self::record::{SESSION_REPORT_ORIGIN, SessionReport};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -257,6 +262,33 @@ impl HarnessRunner {
             .lock()
             .get(harness_id)
             .map(|r| r.pty_id.clone())
+    }
+
+    /// Is the harness up or being started right now? True when the runner
+    /// holds an entry for it, or when its spawn gate is held (a spawn or stop
+    /// in flight: the record it read must not be rewritten under it). Never
+    /// blocks and creates no gate.
+    #[must_use]
+    pub fn is_busy(&self, harness_id: &str) -> bool {
+        if self.entries.lock().contains_key(harness_id) {
+            return true;
+        }
+        let gate = self.spawns.lock().get(harness_id).cloned();
+        gate.is_some_and(|g| g.try_lock().is_none())
+    }
+
+    /// Record a client's session observation field-level (#755); see
+    /// [`SessionReport`]. `Ok(true)` when the record changed.
+    ///
+    /// # Errors
+    /// The store refused the edit.
+    pub fn report_session(
+        &self,
+        room_id: &str,
+        harness_id: &str,
+        report: SessionReport,
+    ) -> Result<bool, String> {
+        record::report_session(&self.store, room_id, harness_id, report)
     }
 
     /// Make sure the harness has a process, spawning one from its record when

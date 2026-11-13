@@ -152,13 +152,23 @@ fn harness_fields_flip_the_structural_classification() {
             let f = Fixture::with_rooms(&[room_with("r1", &["h1"])]);
             let next: Harness =
                 serde_json::from_value(patched(&harness("h1"), key, value.clone())).unwrap();
-            f.apply(
-                "a",
-                vec![M::PutHarness {
-                    room_id: "r1".into(),
-                    harness: next,
-                }],
-            );
+            if matches!(*key, "sessionId" | "opencodeVersion") {
+                // Daemon-owned (#755): a put cannot change them.
+                f.store
+                    .edit_harness("a", "r1", "h1", |h| {
+                        h.session_id = next.session_id.clone();
+                        h.opencode_version = next.opencode_version.clone();
+                    })
+                    .unwrap();
+            } else {
+                f.apply(
+                    "a",
+                    vec![M::PutHarness {
+                        room_id: "r1".into(),
+                        harness: next,
+                    }],
+                );
+            }
             let disk = json_of(&f.disk_room("r1").unwrap().harnesses[0]);
             let changed = disk.get(key) == Some(value);
             assert_eq!(

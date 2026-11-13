@@ -4,7 +4,12 @@
 // Keeps object identity for anything unchanged.
 
 import { applyRoomChanges } from "./roomChanges";
-import { deepEqual, LOCAL_ONLY_HARNESS_KEYS, type RoomChange } from "./roomMutations";
+import {
+	DAEMON_OWNED_HARNESS_KEYS,
+	deepEqual,
+	LOCAL_ONLY_HARNESS_KEYS,
+	type RoomChange,
+} from "./roomMutations";
 import type { Harness, Room } from "./types";
 
 function orderOf(rooms: readonly Room[], other: readonly Room[]): string[] {
@@ -20,20 +25,27 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
  * Per-key three-way merge over the union of keys. A local value that differs
  * from the baseline is a pending edit and wins; otherwise the remote value is
  * taken, and the key is dropped when the remote lacks it. `localOnly` keys
- * always keep the local value. Never assigns `undefined`.
+ * always keep the local value; `remoteOwned` keys (daemon-owned, #755) always
+ * take the remote value, even when local differs, and are dropped when the
+ * remote lacks them. Never assigns `undefined`.
  */
 function mergeKeys(
 	base: object,
 	local: object,
 	remote: object,
 	localOnly: readonly string[],
+	remoteOwned: readonly string[] = [],
 ): Record<string, unknown> {
 	const b = base as Record<string, unknown>;
 	const l = local as Record<string, unknown>;
 	const r = remote as Record<string, unknown>;
 	const out: Record<string, unknown> = {};
 	for (const k of new Set([...Object.keys(b), ...Object.keys(l), ...Object.keys(r)])) {
-		const v = localOnly.includes(k) || !deepEqual(l[k], b[k]) ? l[k] : r[k];
+		const v = remoteOwned.includes(k)
+			? r[k]
+			: localOnly.includes(k) || !deepEqual(l[k], b[k])
+				? l[k]
+				: r[k];
 		if (v !== undefined) out[k] = v;
 	}
 	return out;
@@ -60,7 +72,13 @@ function rebaseHarnesses(
 			out.push(lh);
 			continue;
 		}
-		const m = mergeKeys(bh, lh, rh, LOCAL_ONLY_HARNESS_KEYS) as unknown as Harness;
+		const m = mergeKeys(
+			bh,
+			lh,
+			rh,
+			LOCAL_ONLY_HARNESS_KEYS,
+			DAEMON_OWNED_HARNESS_KEYS,
+		) as unknown as Harness;
 		out.push(deepEqual(m, lh) ? lh : m);
 	}
 	// Pending local add: not in the baseline, so the remote cannot have dropped
