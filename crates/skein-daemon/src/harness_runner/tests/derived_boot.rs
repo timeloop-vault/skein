@@ -5,7 +5,8 @@
 use skein_proto::rooms::{LaunchMode, OpencodeVersion};
 
 use super::*;
-use crate::boot_resume::{changed_harnesses, prepare_with};
+use crate::boot_resume::plan::BootPlan;
+use crate::boot_resume::{BOOT_ORIGIN, prepare_with};
 use crate::harness_kind::HarnessKind;
 use crate::harness_runner::gates::{SpawnPlan, stored_opencode_port};
 
@@ -30,14 +31,20 @@ fn as_json(h: &Harness) -> Value {
 }
 
 /// What the daemon does at the first rooms load: prepare the stored rooms and
-/// write the changed harnesses through the store.
+/// write the plan through the store's field-level edit, as boot does (#755).
 fn boot_prepare(fx: &Fx, probe: impl Fn(&Harness) -> Result<bool, String>) {
     let before = fx.daemon.rooms.rooms();
     let out = prepare_with(before.clone(), probe, || Ok(4321), |_| false).unwrap();
-    let muts = changed_harnesses(&before, &out);
-    if !muts.is_empty() {
-        let res = fx.daemon.rooms.apply("daemon-boot", muts).unwrap();
-        assert!(res.skipped.is_empty(), "{:?}", res.skipped);
+    let plan = BootPlan::new(&before, &out);
+    if !plan.is_empty() {
+        fx.daemon
+            .rooms
+            .edit_harnesses(BOOT_ORIGIN, |_room, h| {
+                if let Some(p) = plan.get(&h.id) {
+                    p.apply(h, false);
+                }
+            })
+            .unwrap();
     }
 }
 

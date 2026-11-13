@@ -76,10 +76,14 @@ export function recoveryOptions(room: Room, repoInfo: RepoRootInfo | undefined):
  *  A resumed conversation is keyed to the OLD folder - Claude's own
  *  store is keyed by cwd - so a moved harness that can resume
  *  (`capabilities.resume`) can't resume into the new one: drop
- *  `sessionId` and ask the daemon for a fresh spawn argv (#730,
+ *  the session and ask the daemon for a fresh spawn argv (#730,
  *  `freshCmd`; crates/skein-daemon/src/harness_argv/), never by
- *  pattern-matching the old argv. The daemon allocates opencode's port,
- *  which comes back; Claude gets no new session id (a bare `claude`).
+ *  pattern-matching the old argv. Since #755 the session id is
+ *  daemon-owned, so this stays pure and does not strip it: it returns
+ *  `clearSession`, the ids of the harnesses whose session the caller must
+ *  clear (`reportHarnessSession` mode "clear", awaited) BEFORE applying
+ *  `room`. The daemon allocates opencode's port, which comes back; Claude
+ *  gets no new session id (a bare `claude`).
  *  A harness that can't resume anyway (copilot, a shell that may carry a
  *  user-swapped command) just moves - there's no conversation to lose,
  *  and rebuilding its argv from scratch would discard that
@@ -92,9 +96,10 @@ export async function repointRoom(
 	room: Room,
 	newCwd: string,
 	freshCmd: FreshCmdFn,
-): Promise<{ room: Room; ports: Map<string, number> }> {
+): Promise<{ room: Room; ports: Map<string, number>; clearSession: string[] }> {
 	const oldCwd = room.cwd;
 	const ports = new Map<string, number>();
+	const clearSession: string[] = [];
 	const harnesses = await Promise.all(
 		room.harnesses.map(async (h): Promise<Harness> => {
 			if (h.cwd !== oldCwd) return h;
@@ -103,10 +108,13 @@ export async function repointRoom(
 				return { ...h, cwd: newCwd, spawnGen: (h.spawnGen ?? 0) + 1 };
 			}
 			// `launch` goes too: the fresh cmd brings the tool back (#752).
-			const { sessionId: _old, launch: _launch, ...rest } = h;
+			// `sessionId` is NOT touched here (#755: the daemon owns it); the
+			// caller clears it through `clearSession` before applying `room`.
+			const { launch: _launch, ...rest } = h;
+			clearSession.push(h.id);
 			// No `newHarness`: a moved Claude starts a bare `claude`, as it
-			// always did, and the record keeps no session id, and a Hermes
-			// record's own profile (if any) is passed through unchanged.
+			// always did, and a Hermes record's own profile (if any) is
+			// passed through unchanged.
 			const fresh = await freshCmd({
 				kind: h.kind,
 				...(h.agent ? { agent: h.agent } : {}),
@@ -122,5 +130,5 @@ export async function repointRoom(
 			};
 		}),
 	);
-	return { room: { ...room, cwd: newCwd, harnesses }, ports };
+	return { room: { ...room, cwd: newCwd, harnesses }, ports, clearSession };
 }

@@ -140,7 +140,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   events + client requests + capture). No `tauri`
     │                                #   anywhere in it. #729 added room_store/ (the
     │                                #   in-memory authoritative RoomStore: apply, structural,
-    │                                #   persist) and db/room_rows (per-row writes).
+    │                                #   persist; #755 added edit, the field-level path) and
+    │                                #   db/room_rows (per-row writes).
     │                                #   #730 added harness_argv/ (cmd_for_kind, resume,
     │                                #   remote, agent_check, opencode_v2, plan: the argv
     │                                #   builders ported from the frontend, plus opencode
@@ -150,7 +151,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   attaches the adapters, stop_harness, detach_view,
     │                                #   reconcile on RoomStore::observe), boot_resume (the
     │                                #   retryable boot preparation, #753: launch, shell claim,
-    │                                #   opencode port; spawns nothing)
+    │                                #   opencode port; spawns nothing; plan.rs, #755, applies
+    │                                #   it as per-harness edits)
     │                                #   and pty/sink_slot (the replaceable output sink)
     │                                #   #752 added harness_argv/spawn.rs (`spawn_argv`) and
     │                                #   launch.rs (`migrate_launch`): `ensure_running` derives
@@ -582,7 +584,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   a wholesale load failure parks the autosave and shows a retry card;
   the store refuses every mutation before a successful load; WAL +
   `skein.db.bak` / `.bak.1` last-known-good snapshots rotate on the
-  first clean non-empty load per process. **Field policy: every field
+  first clean non-empty load per process. **Daemon-owned fields (#755):**
+  `Harness.sessionId` and `opencodeVersion` are written only by the
+  daemon, field-level (`RoomStore::edit_harness(es)`); a client
+  `PutHarness` for an existing harness keeps the stored values, and the
+  client reports what it observed through `harness_session_report`
+  (capture / replace / clear, origin `daemon-session`), seeing the result
+  on `rooms-changed`. `cmd`, `launch` and `shellClaim` are still
+  client-written (#754, #756). **Field policy: every field
   added to Room/Harness after v0.2.5 MUST be `#[serde(default)]` or
   `Option`** — a required field makes old blobs unparseable.
   `repoRoot` (the #76 group key) is set at create and re-derived at
@@ -649,9 +658,11 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   tool, a dead one is removed) and gives each opencode harness in tool
   mode a fresh port, so its stored cmd is
   `opencode --port <p> --hostname 127.0.0.1`. Stale session ids are the
-  spawn's business (it probes and writes the id back), so boot no longer
+  spawn's business (it probes and writes the id back, a field-level edit
+  since #755), so boot no longer
   drops them, mints Claude ids or writes resume forms. It saves under
-  origin `daemon-boot` and spawns nothing — a harness starts on its first
+  origin `daemon-boot`, per harness under the store lock and skipping a
+  record that changed since its snapshot (#755), and spawns nothing — a harness starts on its first
   request. The frontend reads the ports back from the cmds
   (`opencodePort.ts`). Reopening an archived room runs the resume
   rewrite (#153) through `rooms_resume_cmds` (#730), merged back by id

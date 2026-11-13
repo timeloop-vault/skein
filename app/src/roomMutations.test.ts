@@ -232,3 +232,48 @@ describe("two-client property (#729 acceptance)", () => {
 		expect(applyRoomChanges(bAfterA, batchB.changes)).toEqual(model);
 	});
 });
+
+describe("diffRooms: daemon-owned harness keys (#755)", () => {
+	const mk = (extra: Record<string, unknown>): Room => {
+		const r = room("r1");
+		r.harnesses = [harness("h1", extra as unknown as Partial<Harness>)];
+		return r;
+	};
+
+	it("a sessionId-only difference emits nothing", () => {
+		expect(diffRooms([mk({})], [mk({ sessionId: "s" })])).toEqual([]);
+		expect(diffRooms([mk({ sessionId: "a" })], [mk({ sessionId: "b" })])).toEqual([]);
+	});
+
+	it("an opencodeVersion-only difference emits nothing", () => {
+		expect(diffRooms([mk({})], [mk({ opencodeVersion: "2" })])).toEqual([]);
+	});
+
+	it("both together emit nothing", () => {
+		expect(diffRooms([mk({})], [mk({ sessionId: "s", opencodeVersion: "2" })])).toEqual([]);
+	});
+
+	it("a name change plus sessionId emits one putHarness", () => {
+		const next = mk({ name: "renamed", sessionId: "s" });
+		expect(diffRooms([mk({})], [next])).toEqual([
+			{ type: "putHarness", roomId: "r1", harness: next.harnesses[0] },
+		]);
+	});
+
+	it("a new harness is sent whole, sessionId included", () => {
+		const prev = room("r1");
+		const next = room("r1");
+		const added = harness("h2", { sessionId: "s2" } as unknown as Partial<Harness>);
+		next.harnesses = [...prev.harnesses, added];
+		const out = diffRooms([prev], [next]);
+		expect(out).toEqual([{ type: "putHarness", roomId: "r1", harness: added }]);
+		expect((out[0] as { harness: Harness }).harness.sessionId).toBe("s2");
+	});
+
+	it("createRoom carries its harnesses' sessionId", () => {
+		const r = mk({ sessionId: "s" });
+		const out = diffRooms([], [r]);
+		expect(out).toEqual([{ type: "createRoom", room: r }]);
+		expect((out[0] as { room: Room }).room.harnesses[0]?.sessionId).toBe("s");
+	});
+});

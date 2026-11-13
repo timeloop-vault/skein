@@ -9,7 +9,9 @@ use skein_proto::rooms::LaunchMode;
 use tauri::Manager;
 use tauri::ipc::Channel;
 
-use crate::harness_runner::{EnsureError, EnsureOutcome, EnsureRequest, HarnessRunner, Refusal};
+use crate::harness_runner::{
+    EnsureError, EnsureOutcome, EnsureRequest, HarnessRunner, Refusal, SessionReport,
+};
 use crate::pty::PtyEvent;
 use crate::pty::command::PtySpawnResult;
 use crate::tauri_stream_sink::TauriChannelSink;
@@ -119,6 +121,24 @@ pub(crate) async fn harness_stop(
     tauri::async_runtime::spawn_blocking(move || runner.stop_harness(&harness_id))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// The client observed a session id for a harness (#755): the daemon owns the
+/// field and writes it under the store lock. `true` when the record changed;
+/// `false` for an unknown harness or no change. Blocking (a db write).
+#[tauri::command]
+pub(crate) async fn harness_session_report(
+    room_id: String,
+    harness_id: String,
+    report: SessionReport,
+    runner: tauri::State<'_, Arc<HarnessRunner>>,
+) -> Result<bool, String> {
+    let runner = Arc::clone(&runner);
+    tauri::async_runtime::spawn_blocking(move || {
+        runner.report_session(&room_id, &harness_id, report)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The view went away: clear the terminal's sink. Never kills. `true` when a

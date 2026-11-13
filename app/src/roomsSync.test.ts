@@ -541,3 +541,61 @@ describe("createRoomsSync: hydrate buffering", () => {
 		expect(ids(up?.([r1()]) ?? [])).toEqual(["r1", "r3"]);
 	});
 });
+
+describe("createRoomsSync: daemon-owned sessionId (#755)", () => {
+	const ev = (origin: string, changes: RoomChange[]): RoomsChanged => ({ origin, changes });
+	const withHarness = (id: string, h: Record<string, unknown>): Room =>
+		room(id, { harnesses: [{ id: "h1", kind: "shell", name: "h1", ...h }] });
+	const sid = (r: Room | undefined) =>
+		(r?.harnesses[0] as unknown as Record<string, unknown> | undefined)?.sessionId;
+
+	it("reverse race: a daemon sessionId arriving mid-flight is kept, the rename converges", async () => {
+		const h = harnessFor();
+		h.sync.setBaseline([withHarness("a", {})]);
+		const mine = [withHarness("a", { name: "renamed" })];
+		h.sync.update(mine);
+		expect(h.calls).toHaveLength(1);
+
+		const up = h.sync.remote(ev("daemon-runner", [put(withHarness("a", { sessionId: "S" }))]));
+		expect(up).not.toBeNull();
+		const local = up?.(mine) ?? [];
+		expect(local[0]?.harnesses[0]?.name).toBe("renamed");
+		expect(sid(local[0])).toBe("S");
+
+		h.sync.update(local);
+		h.calls[0]?.resolve();
+		await settle();
+		// The event carried the OLD name, so the rename is re-sent, at most once.
+		expect(h.calls.length).toBeLessThanOrEqual(2);
+		h.calls[1]?.resolve();
+		await settle();
+		const before = h.calls.length;
+		h.sync.update(local);
+		await settle();
+		expect(h.calls).toHaveLength(before);
+
+		for (const c of h.calls) {
+			for (const m of c.mutations) {
+				if (m.type === "putHarness") {
+					const s = (m.harness as unknown as Record<string, unknown>).sessionId;
+					expect([undefined, "S"]).toContain(s);
+				}
+			}
+		}
+		for (const c of h.calls.slice(1)) {
+			for (const m of c.mutations) expect(m.type).toBe("putHarness");
+		}
+	});
+
+	it("a daemon-session event with no flight updates sessionId and sends nothing", async () => {
+		const h = harnessFor();
+		const a = withHarness("a", {});
+		h.sync.setBaseline([a]);
+		const up = h.sync.remote(ev("daemon-session", [put(withHarness("a", { sessionId: "S2" }))]));
+		const local = up?.([a]) ?? [];
+		expect(sid(local[0])).toBe("S2");
+		h.sync.update(local);
+		await settle();
+		expect(h.calls).toHaveLength(0);
+	});
+});

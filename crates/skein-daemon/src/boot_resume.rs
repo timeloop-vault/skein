@@ -1,6 +1,14 @@
 //! Boot preparation, owned by the daemon (#731, reduced by #753): at the first
 //! rooms load that returns rooms, three small steps over the stored rows,
-//! written through the `RoomStore` write path. Nothing is spawned here; that
+//! written through the `RoomStore` write path as field-level edits under the
+//! store lock (#755: `plan.rs`; only `launch`, `shell_claim` and `cmd`, and
+//! only where the record still matches what the plan was computed from, so a
+//! client put or the runner's session-id write-back made since the snapshot is
+//! never overwritten, and a harness with a process or a spawn in flight takes
+//! just the `launch` migration). The launch migration is applied whenever the
+//! stored `launch`, `cmd` and `shell_claim` still equal the snapshot's, even
+//! for a stale or busy harness; the other two fields need the record to match
+//! in full. Nothing is spawned here; that
 //! happens on first request, and `ensure_running` derives the argv from the
 //! record then (#752), so resume-versus-fresh, stale session ids and session
 //! minting are the spawn's business, not this module's.
@@ -19,13 +27,13 @@
 //! caller gets unprepared rows only when the preparation itself failed, and
 //! then the next load tries again.
 //! Lock order: this barrier is taken first, before the store lock and the db
-//! lock, and never while holding either.
+//! lock, and never while holding either; then the store lock, then, inside
+//! the edit, the runner's `entries`/gate map briefly via `is_busy`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use skein_proto::harness_kind::HarnessKind;
-use skein_proto::room_mutations::RoomMutation;
 use skein_proto::rooms::{Harness, Room};
 
 use crate::db::{Database, LoadOutcome};
@@ -33,6 +41,9 @@ use crate::harness_argv::{is_opencode_v2, migrate_launch, opencode_port_args, sh
 use crate::pty::opencode::pick_free_port;
 use crate::room_store::RoomStore;
 use crate::spawn_env::state::SpawnEnvState;
+
+pub mod plan;
+use plan::{BootPlan, Counts};
 
 /// The `origin` the preparation's `rooms-changed` event carries.
 pub const BOOT_ORIGIN: &str = "daemon-boot";
@@ -44,9 +55,9 @@ pub struct BootResume {
     done: Mutex<bool>,
     /// `None` only in tests; Hermes then reads as "can't tell".
     spawn_env: Option<Arc<SpawnEnvState>>,
-    /// Does the harness have a process right now? A retried preparation must
-    /// not touch a harness that is up.
-    running: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    /// Does the harness have a process, or one starting, right now? A retried
+    /// preparation must not rewrite a harness that is up.
+    busy: Arc<dyn Fn(&str) -> bool + Send + Sync>,
 }
 
 /// The `--port <p>` of an opencode argv: how a later step recovers the port
@@ -113,7 +124,9 @@ pub fn session_survives(h: &Harness, probe: &impl Fn(&Harness) -> Result<bool, S
 }
 
 /// The three boot steps over the stored rooms, with the probe, port picker
-/// and running check injected. `session_id` is read, never changed.
+/// and busy check injected. `session_id` is read, never changed. The busy
+/// check here only avoids picking a port for a harness that is up; the one
+/// under the store lock decides (see `prepare`).
 ///
 /// # Errors
 /// The port picker failed; nothing is returned then.
@@ -121,16 +134,16 @@ pub fn prepare_with(
     mut rooms: Vec<Room>,
     probe: impl Fn(&Harness) -> Result<bool, String>,
     mut pick: impl FnMut() -> Result<u16, String>,
-    is_running: impl Fn(&str) -> bool,
+    is_busy: impl Fn(&str) -> bool,
 ) -> Result<Vec<Room>, String> {
     for room in &mut rooms {
         // #752's one-time migration: records written before `launch` existed
-        // get it filled in here, and `changed_harnesses` persists it. It must
-        // run once per boot, before any spawn.
+        // get it filled in here, and the plan persists it (for a busy harness
+        // too). It must run once per boot, before any spawn.
         migrate_launch(room);
         let archived = room.archived.is_some();
         for h in &mut room.harnesses {
-            if h.cmd.is_none() || is_running(&h.id) {
+            if h.cmd.is_none() || is_busy(&h.id) {
                 continue;
             }
             let Some(kind) = HarnessKind::from_name(&h.kind) else {
@@ -176,38 +189,18 @@ fn settle_shell_claim(
     }
 }
 
-/// One `PutHarness` per harness that differs between `before` and `after`
-/// (same rooms, same harness order: preparation never adds or removes either).
-/// The whole-harness `PutHarness` is left for #755.
-#[must_use]
-pub fn changed_harnesses(before: &[Room], after: &[Room]) -> Vec<RoomMutation> {
-    let same =
-        |a: &Harness, b: &Harness| serde_json::to_value(a).ok() == serde_json::to_value(b).ok();
-    let mut out = Vec::new();
-    for (b, a) in before.iter().zip(after) {
-        for (hb, ha) in b.harnesses.iter().zip(&a.harnesses) {
-            if !same(hb, ha) {
-                out.push(RoomMutation::PutHarness {
-                    room_id: a.id.clone(),
-                    harness: ha.clone(),
-                });
-            }
-        }
-    }
-    out
-}
-
 impl BootResume {
-    /// `running` answers "does this harness id have a process right now".
+    /// `busy` answers "does this harness id have a process, or one starting,
+    /// right now". It is called under the store lock, so it must not block.
     #[must_use]
     pub fn new(
         spawn_env: Arc<SpawnEnvState>,
-        running: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+        busy: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     ) -> Self {
         Self {
             done: Mutex::new(false),
             spawn_env: Some(spawn_env),
-            running,
+            busy,
         }
     }
 
@@ -216,7 +209,7 @@ impl BootResume {
         Self {
             done: Mutex::new(false),
             spawn_env: None,
-            running: Arc::new(|_| false),
+            busy: Arc::new(|_| false),
         }
     }
 
@@ -255,7 +248,7 @@ impl BootResume {
         let mut done = self.done.lock().unwrap_or_else(PoisonError::into_inner);
         let mut outcome = crate::rooms::load_rooms(db, store)?;
         if !*done && !outcome.rooms.is_empty() {
-            match prepare(store, &mut outcome, probe, pick, &*self.running) {
+            match prepare(store, &mut outcome, probe, pick, &*self.busy) {
                 Ok(()) => *done = true,
                 Err(e) => {
                     tracing::error!(error = %e, "boot resume: preparation failed; rooms left unprepared");
@@ -271,10 +264,10 @@ fn prepare(
     outcome: &mut LoadOutcome,
     probe: impl Fn(&Harness) -> Result<bool, String>,
     pick: impl FnMut() -> Result<u16, String>,
-    is_running: impl Fn(&str) -> bool,
+    is_busy: impl Fn(&str) -> bool,
 ) -> Result<(), String> {
-    let prepared = prepare_with(outcome.rooms.clone(), probe, pick, is_running)?;
-    let mutations = changed_harnesses(&outcome.rooms, &prepared);
+    let prepared = prepare_with(outcome.rooms.clone(), probe, pick, &is_busy)?;
+    let plan = BootPlan::new(&outcome.rooms, &prepared);
     let ports_refreshed = outcome
         .rooms
         .iter()
@@ -284,19 +277,33 @@ fn prepare(
             hb.cmd != ha.cmd && ha.cmd.as_deref().and_then(opencode_port_from_cmd).is_some()
         })
         .count();
+    if plan.is_empty() {
+        tracing::info!(
+            rooms = outcome.rooms.len(),
+            harnesses_changed = 0,
+            ports_refreshed,
+            "boot resume: prepared the stored rooms"
+        );
+        return Ok(());
+    }
+    // One field-level edit under the store lock (#755): the stale and busy
+    // checks run on the record as stored now. Counts are logged after.
+    let mut counts = Counts::default();
+    store.edit_harnesses(BOOT_ORIGIN, |_room_id, h| {
+        if let Some(p) = plan.get(&h.id) {
+            let busy = is_busy(&h.id);
+            counts.record(p.apply(h, busy));
+        }
+    })?;
     tracing::info!(
         rooms = outcome.rooms.len(),
-        harnesses_changed = mutations.len(),
+        harnesses_changed = plan.len(),
+        applied = counts.applied,
+        stale = counts.stale,
+        busy = counts.busy,
         ports_refreshed,
         "boot resume: prepared the stored rooms"
     );
-    if mutations.is_empty() {
-        return Ok(());
-    }
-    let result = store.apply(BOOT_ORIGIN, mutations)?;
-    for s in &result.skipped {
-        tracing::warn!(index = s.index, reason = %s.reason, "boot resume: mutation skipped");
-    }
     // The store holds the prepared rooms from here on, so that is what the
     // client's baseline must be, whether or not the write below succeeds.
     outcome.rooms = store.rooms();

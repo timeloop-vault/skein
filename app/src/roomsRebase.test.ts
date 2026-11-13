@@ -184,11 +184,19 @@ describe("rebaseRemote: clears, concurrent edits and local-only keys", () => {
 	});
 
 	it("a remote clear of a locally edited harness field keeps the local value", () => {
+		const base = [room("a", [harness("h1", { agent: "x" })])];
+		const local = [room("a", [harness("h1", { agent: "mine" })])];
+		const out = rebaseRemote(base, local, [put(room("a"))]);
+		expect(hfield(out.local[0], "agent")).toBe("mine");
+		expect(diffRooms(out.baseline, out.local).map((m) => m.type)).toEqual(["putHarness"]);
+	});
+
+	it("a daemon-owned harness field takes the remote value even when edited locally (#755)", () => {
 		const base = [room("a", [harness("h1", { sessionId: "s" })])];
 		const local = [room("a", [harness("h1", { sessionId: "mine" })])];
 		const out = rebaseRemote(base, local, [put(room("a"))]);
-		expect(hfield(out.local[0], "sessionId")).toBe("mine");
-		expect(diffRooms(out.baseline, out.local).map((m) => m.type)).toEqual(["putHarness"]);
+		expect(hfield(out.local[0], "sessionId")).toBeUndefined();
+		expect(diffRooms(out.baseline, out.local)).toEqual([]);
 	});
 
 	it("spawnGen differing from the baseline is no pending edit and keeps the local value", () => {
@@ -315,5 +323,42 @@ describe("rebaseRemote: pending harness edits across a remote roomPut", () => {
 		const out = rebaseRemote(base, local, [put(room("a", hs("h1", "h2", "h3"), { task: "T" }))]);
 		expect(hidsOf(out.local)).toEqual(["h3", "h1", "h2"]);
 		expect(hidsOf(replay(out.baseline, out.local))).toEqual(["h3", "h1", "h2"]);
+	});
+});
+
+describe("rebaseRemote: daemon-owned harness keys (#755)", () => {
+	const hfield = (r: Room | undefined, k: string) =>
+		(r?.harnesses[0] as unknown as Record<string, unknown> | undefined)?.[k];
+
+	it("remote sets sessionId while local renamed: both survive", () => {
+		const base = [room("a")];
+		const local = [room("a", [harness("h1", { name: "mine" })])];
+		const out = rebaseRemote(base, local, [put(room("a", [harness("h1", { sessionId: "S" })]))]);
+		expect(hfield(out.local[0], "name")).toBe("mine");
+		expect(hfield(out.local[0], "sessionId")).toBe("S");
+	});
+
+	it("remote removing sessionId and opencodeVersion wins over a local value", () => {
+		const base = [room("a", [harness("h1", { sessionId: "s", opencodeVersion: "1" })])];
+		const local = [room("a", [harness("h1", { sessionId: "s", opencodeVersion: "1" })])];
+		const out = rebaseRemote(base, local, [put(room("a"))]);
+		const h = out.local[0]?.harnesses[0] as unknown as Record<string, unknown>;
+		expect("sessionId" in h).toBe(false);
+		expect("opencodeVersion" in h).toBe(false);
+	});
+
+	it("local-only spawnGen is still kept", () => {
+		const base = [room("a", [harness("h1", { sessionId: "s" })])];
+		const local = [room("a", [harness("h1", { sessionId: "s", spawnGen: 2 })])];
+		const out = rebaseRemote(base, local, [put(room("a", [harness("h1", { sessionId: "t" })]))]);
+		expect(hfield(out.local[0], "sessionId")).toBe("t");
+		expect(hfield(out.local[0], "spawnGen")).toBe(2);
+	});
+
+	it("a non-owned key edited on both sides still lets local win", () => {
+		const base = [room("a", [harness("h1", { agent: "x" })])];
+		const local = [room("a", [harness("h1", { agent: "mine" })])];
+		const out = rebaseRemote(base, local, [put(room("a", [harness("h1", { agent: "theirs" })]))]);
+		expect(hfield(out.local[0], "agent")).toBe("mine");
 	});
 });

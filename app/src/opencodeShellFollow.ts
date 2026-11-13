@@ -10,6 +10,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { attachOpencodeEvents } from "./harnessEventsOpencode.ts";
 import { createShellClaimTracker, type ShellClaimSink } from "./opencodeShellClaim.ts";
+import { effectiveSessionId } from "./reportedSessions.ts";
 import { runsKindProgram } from "./shellClaim.ts";
 
 /** Mirror of the Rust `OpencodeScan`. */
@@ -305,7 +306,7 @@ export function followOpencodeShell(
 	if (!isOpencodeShellSpawn(kind, program)) return null;
 	const follow: ReturnType<typeof startOpencodeShellFollow> = startOpencodeShellFollow({
 		ptyIdRef: p.ptyIdRef,
-		getSessionId: () => p.sessionIdRef.current,
+		getSessionId: () => effectiveSessionId(p.harnessId, p.sessionIdRef.current),
 		getPort: () => p.adapter.current?.port,
 		onSessionFollowed: p.onSessionFollowed,
 		claim: p.claim,
@@ -318,7 +319,7 @@ export function followOpencodeShell(
 				port,
 				p.sessionIdRef.current,
 				p.onSessionCaptured,
-				() => p.sessionIdRef.current,
+				() => effectiveSessionId(p.harnessId, p.sessionIdRef.current),
 				(sid) => follow.followed(sid),
 			);
 			p.adapter.current = { detach, port };

@@ -155,3 +155,26 @@ describe("applyRoomChanges", () => {
 		expect(out[0]?.harnesses[0]).toBe(h1);
 	});
 });
+
+describe("applyRoomChanges: daemon-owned harness keys (#755)", () => {
+	it.each(["sessionId", "opencodeVersion"])(
+		"a roomPut differing only in %s replaces the local harness",
+		(key) => {
+			const local = room("a", [harness("h1")]);
+			const remote = room("a", [harness("h1", { [key]: "v" })]);
+			const oldH = local.harnesses[0];
+			const out = applyRoomChanges([local], [{ type: "roomPut", room: remote }]);
+			const h = out[0]?.harnesses[0] as unknown as Record<string, unknown>;
+			expect(h[key]).toBe("v");
+			expect(out[0]?.harnesses[0]).not.toBe(oldH);
+		},
+	);
+
+	it("an identical remote harness keeps identity", () => {
+		const local = room("a", [harness("h1", { sessionId: "s", opencodeVersion: "1" })]);
+		const remote = room("a", [harness("h1", { sessionId: "s", opencodeVersion: "1" })]);
+		const oldH = local.harnesses[0];
+		const out = applyRoomChanges([local], [{ type: "roomPut", room: remote }]);
+		expect(out[0]?.harnesses[0]).toBe(oldH);
+	});
+});

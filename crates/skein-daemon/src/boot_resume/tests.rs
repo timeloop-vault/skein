@@ -2,6 +2,7 @@
 //! check (this file), then the load wiring (`load.rs`).
 
 mod load;
+mod race;
 
 use serde_json::json;
 use skein_proto::rooms::{Harness, LaunchMode, Room, ShellClaim};

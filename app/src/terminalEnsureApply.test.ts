@@ -30,12 +30,8 @@ const result = (over: Partial<EnsureResult> = {}): EnsureResult => ({
 const apply = (over: Partial<ApplyEnsure> = {}): ApplyEnsure => ({
 	result: result(),
 	harnessId: "h1",
-	harnessKind: "claude",
-	sessionId: "s0",
 	opencodePort: 4001,
 	spawnStartedAt: 1234,
-	opencodeClaim: undefined,
-	onSessionCaptured: undefined,
 	...over,
 });
 
@@ -57,35 +53,10 @@ describe("applyEnsureResult", () => {
 		expect(m.adoptionForget).not.toHaveBeenCalled();
 	});
 
-	it("an already-exited result registers nothing but the sink-independent record", () => {
-		// exited results are handled by the caller before this is reached; this
-		// pins that applying one does not touch the claim or session sinks.
-		const setOpencodeVersion = vi.fn();
-		const onSessionCaptured = vi.fn();
-		applyEnsureResult(
-			apply({
-				result: result({ started: false, exited: true, exitCode: 1 }),
-				opencodeClaim: { setOpencodeVersion } as never,
-				onSessionCaptured,
-			}),
-		);
-		expect(onSessionCaptured).not.toHaveBeenCalled();
-		expect(m.adoptionForget).not.toHaveBeenCalled();
-	});
-
-	it("reports the captured session id and the opencode version to the sinks", () => {
-		const setOpencodeVersion = vi.fn();
-		const onSessionCaptured = vi.fn();
+	it("writes nothing back from the result: the daemon recorded the session and version (#755)", () => {
 		const out = applyEnsureResult(
-			apply({
-				harnessKind: "opencode",
-				result: result({ sessionId: "s1", opencodeVersion: "v2" as never }),
-				opencodeClaim: { setOpencodeVersion } as never,
-				onSessionCaptured,
-			}),
+			apply({ result: result({ sessionId: "s1", opencodeVersion: "v2" as never }) }),
 		);
-		expect(onSessionCaptured).toHaveBeenCalledWith("s1");
-		expect(setOpencodeVersion).toHaveBeenCalledWith("v2");
 		expect(out).toEqual({ sidecarGeneration: undefined, port: 4001 });
 	});
 

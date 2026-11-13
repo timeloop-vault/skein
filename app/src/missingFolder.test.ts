@@ -125,7 +125,7 @@ describe("repointRoom", () => {
 		expect(next.harnesses[0]?.cwd).toBe("/new");
 	});
 
-	it("drops the old sessionId and starts a bare claude (plus --agent when set)", async () => {
+	it("clears the old session via clearSession and starts a bare claude (plus --agent when set)", async () => {
 		const r = room({
 			cwd: "/old",
 			harnesses: [
@@ -138,10 +138,11 @@ describe("repointRoom", () => {
 			],
 		});
 		const f = fake();
-		const { room: next } = await repointRoom(r, "/new", f.freshCmd);
+		const { room: next, clearSession } = await repointRoom(r, "/new", f.freshCmd);
 		const h = next.harnesses[0];
 		expect(f.calls[0]).toEqual({ kind: "claude" });
-		expect(h?.sessionId).toBeUndefined();
+		expect(h?.sessionId).toBe("sid-1");
+		expect(clearSession).toEqual(["h1"]);
 		expect(h?.cmd).toEqual(["claude"]);
 
 		const withAgent = room({
@@ -150,9 +151,10 @@ describe("repointRoom", () => {
 				harness({ id: "h2", cwd: "/old", cmd: ["claude"], sessionId: "s", agent: "rev" }),
 			],
 		});
-		const { room: n2 } = await repointRoom(withAgent, "/new", f.freshCmd);
+		const { room: n2, clearSession: c2 } = await repointRoom(withAgent, "/new", f.freshCmd);
 		expect(n2.harnesses[0]?.cmd).toEqual(["claude", "--agent", "rev"]);
-		expect(n2.harnesses[0]?.sessionId).toBeUndefined();
+		expect(n2.harnesses[0]?.sessionId).toBe("s");
+		expect(c2).toEqual(["h2"]);
 	});
 
 	it("re-passes the agent and returns the allocated port", async () => {
@@ -170,9 +172,10 @@ describe("repointRoom", () => {
 			],
 		});
 		const f = fake(4123);
-		const { room: next, ports } = await repointRoom(r, "/new", f.freshCmd);
+		const { room: next, ports, clearSession } = await repointRoom(r, "/new", f.freshCmd);
 		expect(f.calls[0]).toEqual({ kind: "opencode", agent: "build" });
-		expect(next.harnesses[0]?.sessionId).toBeUndefined();
+		expect(next.harnesses[0]?.sessionId).toBe("sid-1");
+		expect(clearSession).toEqual(["h1"]);
 		expect(ports.get("h1")).toBe(4123);
 	});
 
@@ -281,5 +284,43 @@ describe("repointRoom", () => {
 		});
 		const { room: next } = await repointRoom(r, "/new", fake().freshCmd);
 		expect(next.harnesses[0]?.cwd).toBe("/elsewhere");
+	});
+});
+
+describe("repointRoom: clearSession (#755)", () => {
+	it("lists exactly the harnesses that got a fresh cmd and leaves every sessionId alone", async () => {
+		const freshCmd: FreshCmdFn = async (input) => ({
+			cmd: [input.kind, "fresh"],
+			opencodePort: null,
+			sessionId: null,
+			hermesProfile: null,
+		});
+		const r = room({
+			cwd: "/old",
+			harnesses: [
+				harness({
+					id: "c",
+					kind: "claude",
+					cwd: "/old",
+					cmd: ["claude"],
+					sessionId: "s1",
+					launch: { mode: "shell", argv: ["bash"] },
+				}),
+				harness({ id: "o", kind: "opencode", cwd: "/old", cmd: ["opencode"], sessionId: "s2" }),
+				harness({ id: "sh", kind: "byoh", cwd: "/old", cmd: ["bash"], sessionId: "s3" }),
+				harness({ id: "f", kind: "files", cwd: "/old", sessionId: "s4" }),
+				harness({
+					id: "away",
+					kind: "claude",
+					cwd: "/elsewhere",
+					cmd: ["claude"],
+					sessionId: "s5",
+				}),
+			],
+		});
+		const { room: next, clearSession } = await repointRoom(r, "/new", freshCmd);
+		expect([...clearSession].sort()).toEqual(["c", "o"]);
+		expect(next.harnesses.map((h) => h.sessionId)).toEqual(["s1", "s2", "s3", "s4", "s5"]);
+		expect(next.harnesses[0]).not.toHaveProperty("launch");
 	});
 });

@@ -5,11 +5,8 @@ import {
 	claimedSessionIdsOf,
 	harnessDisplayName,
 	resolveAgentName,
-	withCapturedSessionId,
 	withHarnessName,
-	withOpencodeVersion,
 	withoutShellClaim,
-	withReplacedSessionId,
 	withRespawnedCmd,
 	withShellClaim,
 	withShellLaunch,
@@ -101,17 +98,6 @@ describe("harnessCreation", () => {
 		expect(bg).toMatchObject({ attention: true, branch: "b", repo: "x" });
 	});
 
-	it("captures a session id first-writer-wins, replaces authoritatively", () => {
-		const unset = [room()];
-		const captured = withCapturedSessionId(unset, "s1", "h1", "a");
-		expect(captured[0]?.harnesses[0]?.sessionId).toBe("a");
-		expect(withCapturedSessionId(captured, "s1", "h1", "b")[0]?.harnesses[0]?.sessionId).toBe("a");
-		expect(withReplacedSessionId(captured, "s1", "h1", "b")[0]?.harnesses[0]?.sessionId).toBe("b");
-		expect(withReplacedSessionId(captured, "nope", "h1", "b")[0]?.harnesses[0]?.sessionId).toBe(
-			"a",
-		);
-	});
-
 	it("collects claimed session ids", () => {
 		expect([...claimedSessionIdsOf([room("a"), room()])]).toEqual(["a"]);
 	});
@@ -125,9 +111,9 @@ describe("shell claim helpers (#520)", () => {
 	};
 	const h0 = (rooms: Room[]) => rooms[0]?.harnesses[0];
 
-	it("withShellClaim sets sessionId and the claim together", () => {
+	it("withShellClaim sets only the claim; the session id stays the daemon's (#755)", () => {
 		const out = withShellClaim([shellRoom("old")], "s1", "h1", "new");
-		expect(h0(out)?.sessionId).toBe("new");
+		expect(h0(out)?.sessionId).toBe("old");
 		expect(h0(out)?.shellClaim).toEqual({ sessionId: "new" });
 	});
 
@@ -152,18 +138,18 @@ describe("shell claim helpers (#520)", () => {
 		const once = withShellClaim([shellRoom()], "s1", "h1", "new");
 		const out = withoutShellClaim(once, "s1", "h1");
 		expect(h0(out)).not.toHaveProperty("shellClaim");
-		expect(h0(out)?.sessionId).toBe("new");
+		expect(h0(out)?.sessionId).toBe("old");
 		expect(withoutShellClaim(out, "s1", "h1")).toBe(out);
 		expect(withoutShellClaim(out, "nope", "h1")).toBe(out);
 	});
 
 	it("withRespawnedCmd replaces cmd, bumps spawnGen and drops the claim", () => {
 		const claimed = withShellClaim([shellRoom()], "s1", "h1", "new");
-		const out = withRespawnedCmd(claimed, "s1", "h1", ["claude"], "fresh");
+		const out = withRespawnedCmd(claimed, "s1", "h1", ["claude"]);
 		expect(h0(out)).not.toHaveProperty("shellClaim");
-		expect(h0(out)).toMatchObject({ cmd: ["claude"], sessionId: "fresh", spawnGen: 1 });
+		expect(h0(out)).toMatchObject({ cmd: ["claude"], sessionId: "old", spawnGen: 1 });
 		const keep = withRespawnedCmd(claimed, "s1", "h1", SHELL);
-		expect(h0(keep)?.sessionId).toBe("new");
+		expect(h0(keep)?.sessionId).toBe("old");
 		expect(h0(keep)?.spawnGen).toBe(1);
 	});
 
@@ -180,24 +166,9 @@ describe("shell claim helpers (#520)", () => {
 		expect(h0(out)).not.toHaveProperty("shellClaim");
 		expect(h0(out)?.launch).toEqual({ mode: "shell", argv: SHELL });
 		expect(h0(out)?.cmd).toEqual(before?.cmd);
-		expect(h0(out)?.sessionId).toBe("new");
+		expect(h0(out)?.sessionId).toBe("old");
 		expect(h0(out)?.spawnGen).toBe(1);
 		expect(h0(withShellLaunch(out, "s1", "h1", SHELL))?.spawnGen).toBe(2);
-	});
-});
-
-describe("withOpencodeVersion (#675)", () => {
-	const v = { major: 1, version: "1.19.5" };
-	it("sets the version, no-ops when unchanged, clears on null", () => {
-		const rooms = [room("sid")];
-		const set = withOpencodeVersion(rooms, "s1", "h1", v);
-		expect(set[0]?.harnesses[0]?.opencodeVersion).toEqual(v);
-		expect(withOpencodeVersion(set, "s1", "h1", { ...v })).toBe(set);
-		const changed = withOpencodeVersion(set, "s1", "h1", { major: 2, version: "2.0.1" });
-		expect(changed[0]?.harnesses[0]?.opencodeVersion?.major).toBe(2);
-		const cleared = withOpencodeVersion(set, "s1", "h1", null);
-		expect(cleared[0]?.harnesses[0] && "opencodeVersion" in cleared[0].harnesses[0]).toBe(false);
-		expect(withOpencodeVersion(cleared, "s1", "h1", null)).toBe(cleared);
 	});
 });
 

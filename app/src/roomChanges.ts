@@ -1,7 +1,12 @@
 // Applies daemon room changes (#729) to the local rooms state. Idempotent, and
 // keeps object identity for anything that did not change.
 
-import { deepEqual, harnessEqual, LOCAL_ONLY_HARNESS_KEYS, type RoomChange } from "./roomMutations";
+import {
+	deepEqual,
+	harnessRemoteEqual,
+	LOCAL_ONLY_HARNESS_KEYS,
+	type RoomChange,
+} from "./roomMutations";
 import type { Harness, Room } from "./types";
 
 function mergeHarnesses(local: readonly Harness[], remote: readonly Harness[]): Harness[] {
@@ -9,7 +14,7 @@ function mergeHarnesses(local: readonly Harness[], remote: readonly Harness[]): 
 	const merged = remote.map((h) => {
 		const old = localById.get(h.id);
 		if (old === undefined) return h;
-		if (harnessEqual(old, h)) return old;
+		if (harnessRemoteEqual(old, h)) return old;
 		// Replace: the remote harness is the truth, except the client-only keys.
 		const m: Record<string, unknown> = { ...h };
 		const o = old as unknown as Record<string, unknown>;

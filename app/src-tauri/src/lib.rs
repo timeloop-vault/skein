@@ -110,6 +110,7 @@ pub fn run() {
             commands::harness_runner::harness_ensure_running,
             commands::harness_runner::harness_stop,
             commands::harness_runner::harness_detach,
+            commands::harness_runner::harness_session_report,
             commands::pty::pty_write,
             commands::pty::pty_resize,
             commands::pty::pty_scan_opencode,

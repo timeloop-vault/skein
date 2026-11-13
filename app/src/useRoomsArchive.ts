@@ -21,6 +21,7 @@ import {
 	retireRooms as retireRoomsPure,
 	unretireRooms as unretireRoomsPure,
 } from "./reopenList.ts";
+import { forgetReported } from "./reportedSessions.ts";
 import { nextActiveAfterClose } from "./roomGroups.ts";
 import { checkProbe, dropUnwrittenSessions, probeFolder, stillExists } from "./roomsStoreProbe.ts";
 import type { Room } from "./types.ts";
@@ -91,7 +92,10 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 		// Chapter 6 phase 2: archive instead of delete. Tab strip filters
 		// archived out; reopen modal lists them.
 		setRooms((prev) => prev.map((r) => (r.id === id ? { ...r, archived: Date.now() } : r)));
-		for (const h of target?.harnesses ?? []) claudeVersionStore.forget(h.id);
+		for (const h of target?.harnesses ?? []) {
+			claudeVersionStore.forget(h.id);
+			forgetReported(h.id);
+		}
 		if (id === activeRoomId) {
 			const nextActive = nextActiveAfterClose(activeRooms, id, lastUsedByGroupRef.current);
 			setActiveRoomId(nextActive?.id ?? "");
@@ -124,8 +128,10 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 		);
 		if (!decision.ok) return decision;
 		const { closedBy: stamped } = decision.value;
-		for (const h of roomsRef.current.find((r) => r.id === roomId)?.harnesses ?? [])
+		for (const h of roomsRef.current.find((r) => r.id === roomId)?.harnesses ?? []) {
 			claudeVersionStore.forget(h.id);
+			forgetReported(h.id);
+		}
 		setRooms((prev) =>
 			prev.map((r) => (r.id === roomId ? { ...r, archived: stamped.at, closedBy: stamped } : r)),
 		);

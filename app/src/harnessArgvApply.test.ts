@@ -24,7 +24,7 @@ const r = (harnesses: Harness[], over: Partial<Room> = {}): Room => ({
 });
 
 describe("applyResumedHarness", () => {
-	it("takes cmd, sessionId and shellClaim only", () => {
+	it("takes cmd, launch and shellClaim only, never sessionId (#755)", () => {
 		const mine = h({ cmd: ["old"], sessionId: "old", name: "mine", model: "m", spawnGen: 3 });
 		const back = h({
 			cmd: ["claude", "--resume", "s"],
@@ -37,7 +37,7 @@ describe("applyResumedHarness", () => {
 		const out = applyResumedHarness(mine, back);
 		expect(out).toMatchObject({
 			cmd: ["claude", "--resume", "s"],
-			sessionId: "s",
+			sessionId: "old",
 			shellClaim: { sessionId: "s" },
 			name: "mine",
 			model: "m",
@@ -68,9 +68,9 @@ describe("applyResumedHarness", () => {
 		expect(out).not.toHaveProperty("cmd");
 	});
 
-	it("drops a sessionId the daemon did not return", () => {
+	it("keeps the local sessionId whether or not the daemon returned one (#755)", () => {
 		const out = applyResumedHarness(h({ sessionId: "stale", cmd: ["x"] }), h({ cmd: ["x"] }));
-		expect(out).not.toHaveProperty("sessionId");
+		expect(out.sessionId).toBe("stale");
 	});
 
 	it("keeps a field Rust does not know", () => {

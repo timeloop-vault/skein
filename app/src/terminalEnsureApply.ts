@@ -3,23 +3,17 @@
 
 import { claudeVersionStore } from "./claudeVersionStore.ts";
 import type { EnsureResult } from "./harnessEnsure.ts";
-import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { spawnOutcome } from "./ptySpawnOutcome.ts";
 import { shellClaim } from "./shellClaim.ts";
 import { forgetSpawnedProfile, recordSpawnedProfile } from "./spawnedEnvProfile.ts";
 import { startupAdoption } from "./startupAdoption.ts";
-import type { HarnessKind } from "./types.ts";
 
 export interface ApplyEnsure {
 	result: EnsureResult;
 	harnessId: string;
-	harnessKind: HarnessKind;
-	sessionId: string | undefined;
 	opencodePort: number | undefined;
 	/** Taken before the call: rows older than this are not the new process's. */
 	spawnStartedAt: number;
-	opencodeClaim: ShellClaimSink | undefined;
-	onSessionCaptured: ((sessionId: string) => void) | undefined;
 }
 
 /** Hands the daemon's answer to the view-side stores. Only a process this call
@@ -37,14 +31,9 @@ export function applyEnsureResult(a: ApplyEnsure): {
 	} else {
 		claudeVersionStore.markSpawned(harnessId, 0);
 	}
-	const outcome = spawnOutcome(result, a.harnessKind, {
-		sessionId: a.sessionId,
-		opencodePort: a.opencodePort,
-	});
-	if (outcome.opencodeVersion !== undefined) {
-		a.opencodeClaim?.setOpencodeVersion?.(outcome.opencodeVersion);
-	}
-	if (outcome.capturedSessionId) a.onSessionCaptured?.(outcome.capturedSessionId);
+	// #755: the daemon already wrote the session id and the opencode version
+	// into the record at spawn, so nothing is written back from the result.
+	const outcome = spawnOutcome(result, { opencodePort: a.opencodePort });
 	recordSpawnedProfile(harnessId, result.envProfile ?? null);
 	// #677: v2 attaches by sidecar generation, so `port` is undefined there.
 	return { sidecarGeneration: outcome.sidecarGeneration, port: outcome.port };

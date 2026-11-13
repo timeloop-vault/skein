@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use skein_proto::room_mutations::RoomMutation;
-use skein_proto::rooms::Room;
+use skein_proto::rooms::{Harness, Room};
 
 use super::structural::{harness_key_eq, room_key_eq};
 
@@ -68,10 +68,14 @@ pub(super) fn apply_one(
                 ..Applied::default()
             })
         }
-        RoomMutation::PutHarness { room_id, harness } => {
+        RoomMutation::PutHarness {
+            room_id,
+            mut harness,
+        } => {
             let room = find(rooms, &room_id)?;
             let structural =
                 if let Some(slot) = room.harnesses.iter_mut().find(|h| h.id == harness.id) {
+                    keep_daemon_owned(slot, &mut harness);
                     let s = !harness_key_eq(slot, &harness);
                     *slot = harness;
                     s
@@ -101,6 +105,14 @@ pub(super) fn apply_one(
             Ok(touched(room_id, true))
         }
     }
+}
+
+/// #755: `session_id` and `opencode_version` are daemon-owned. They are
+/// written only through `RoomStore::edit_harness(es)`; a client's whole-record
+/// put of an existing harness cannot change them, so the stored values win.
+fn keep_daemon_owned(slot: &Harness, incoming: &mut Harness) {
+    incoming.session_id.clone_from(&slot.session_id);
+    incoming.opencode_version.clone_from(&slot.opencode_version);
 }
 
 fn touched(id: String, structural: bool) -> Applied {
