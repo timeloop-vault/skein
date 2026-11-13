@@ -134,6 +134,40 @@ describe("diffRooms: client-only harness keys", () => {
 	});
 });
 
+describe("diffRooms: launch mode (#752)", () => {
+	const withLaunch = (launch?: Harness["launch"]): Room => {
+		const r = room("r1");
+		r.harnesses = [harness("h1", launch ? { launch } : {})];
+		return r;
+	};
+	const shell: Harness["launch"] = { mode: "shell", argv: ["bash"] };
+
+	it("setting launch emits putHarness, and a remote put applies it", () => {
+		const next = withLaunch(shell);
+		const out = diffRooms([withLaunch()], [next]);
+		expect(out).toEqual([{ type: "putHarness", roomId: "r1", harness: next.harnesses[0] }]);
+		const applied = applyRoomChanges([withLaunch()], [{ type: "roomPut", room: next }]);
+		expect(applied[0]?.harnesses[0]?.launch).toEqual(shell);
+	});
+
+	it("removing launch emits putHarness, and a remote put clears it", () => {
+		const next = withLaunch();
+		const out = diffRooms([withLaunch(shell)], [next]);
+		expect(out).toEqual([{ type: "putHarness", roomId: "r1", harness: next.harnesses[0] }]);
+		const applied = applyRoomChanges([withLaunch(shell)], [{ type: "roomPut", room: next }]);
+		expect(applied[0]?.harnesses[0]?.launch).toBeUndefined();
+	});
+
+	it("round trips through the reference store both ways", () => {
+		for (const [a, b] of [
+			[withLaunch(), withLaunch(shell)],
+			[withLaunch(shell), withLaunch()],
+		] as const) {
+			expect(applyMutations(clone([a]), diffRooms([a], [b])).rooms).toEqual([b]);
+		}
+	});
+});
+
 describe("round trip through the reference store", () => {
 	const cases: [string, Room[], Room[]][] = [
 		["create", [room("a")], [room("a"), room("b", ["x", "y"])]],

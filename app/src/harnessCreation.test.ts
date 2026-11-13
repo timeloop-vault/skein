@@ -12,6 +12,7 @@ import {
 	withReplacedSessionId,
 	withRespawnedCmd,
 	withShellClaim,
+	withShellLaunch,
 } from "./harnessCreation.ts";
 import type { Room } from "./types.ts";
 
@@ -164,6 +165,24 @@ describe("shell claim helpers (#520)", () => {
 		const keep = withRespawnedCmd(claimed, "s1", "h1", SHELL);
 		expect(h0(keep)?.sessionId).toBe("new");
 		expect(h0(keep)?.spawnGen).toBe(1);
+	});
+
+	it("withRespawnedCmd clears the shell launch mode (#752)", () => {
+		const shelled = withShellLaunch([shellRoom()], "s1", "h1", SHELL);
+		expect(h0(shelled)?.launch).toBeDefined();
+		expect(h0(withRespawnedCmd(shelled, "s1", "h1", ["claude"]))).not.toHaveProperty("launch");
+	});
+
+	it("withShellLaunch sets the launch mode, keeps cmd and sessionId, drops the claim, bumps spawnGen", () => {
+		const claimed = withShellClaim([shellRoom()], "s1", "h1", "new");
+		const before = h0(claimed);
+		const out = withShellLaunch(claimed, "s1", "h1", SHELL);
+		expect(h0(out)).not.toHaveProperty("shellClaim");
+		expect(h0(out)?.launch).toEqual({ mode: "shell", argv: SHELL });
+		expect(h0(out)?.cmd).toEqual(before?.cmd);
+		expect(h0(out)?.sessionId).toBe("new");
+		expect(h0(out)?.spawnGen).toBe(1);
+		expect(h0(withShellLaunch(out, "s1", "h1", SHELL))?.spawnGen).toBe(2);
 	});
 });
 

@@ -13,6 +13,17 @@
 
 const lastKey = new Map<string, string>();
 
+/** The terminal's mount key: harness id, spawnGen and the spawn argv (the
+ *  tool's, or the shell's in shell mode, #752). Value-equal across
+ *  content-identical renders. Pure. */
+export function mountKeyFor(
+	harnessId: string,
+	spawnGen: number | undefined,
+	argv: readonly string[],
+): string {
+	return `${harnessId}:${spawnGen ?? 0}:${argv.join("\x00")}`;
+}
+
 /** Whether the daemon must stop the running process first: only when a
  *  previous key was dispatched in this webview and differs. The first mount
  *  after a page load and a re-mount with the same key return false. Pure. */

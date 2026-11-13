@@ -224,14 +224,15 @@ fn resume_one_opencode_failed_pick_still_transforms() {
 }
 
 #[test]
-fn resume_one_shell_swapped_keeps_its_shell() {
+fn resume_one_shell_swapped_returns_to_its_tool() {
     let mut h = with("claude", &["/bin/zsh", "-l"], Some(SID));
     h.shell_claim = Some(ShellClaim {
         session_id: "other".to_owned(),
         port: None,
     });
     let out = resume_one_with(ResumeOneInput { harness: h }, no_pick, no_mint);
-    assert_eq!(out.harness.cmd, Some(shell()));
+    // #745/#752: restart is the one path that leaves the post-exit shell.
+    assert_eq!(out.harness.cmd, Some(sv(&["claude", "--resume", SID])));
     assert!(out.harness.shell_claim.is_none());
 }
 

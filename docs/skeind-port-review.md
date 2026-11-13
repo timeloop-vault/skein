@@ -250,6 +250,10 @@ deleted, so they are no safety net. Write the race test first.
 
 ### 5.2 Harness argv (#730)
 
+> Note 2026-11-13: #752 landed spawn-time argv derivation and the
+> `launch` mode; see "Spawn-time argv (#752)" in skeind-p2-design.md. The
+> review below is the record as written.
+
 **Verdict.** Pure builders: keep as is. Stored cmd, client write-back
 and port plumbing: rework (small).
 
@@ -517,6 +521,10 @@ use". Plausibly a symptom of the port's shape.
 - Whether the live repro was a dev or release build is unknown.
 
 ### The post-exit shell persisting as the harness cmd
+
+> Note 2026-11-13: #752 landed spawn-time argv derivation and the
+> `launch` mode: Enter now sets `launch` and leaves `cmd` alone. See
+> "Spawn-time argv (#752)" in skeind-p2-design.md.
 
 A symptom of the port's shape, but not a race (not reproduced).
 

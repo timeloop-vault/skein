@@ -26,7 +26,7 @@ export interface RoomHandlers {
 	switchHarness: (roomId: string, harnessId: string) => void;
 	closeHarness: (roomId: string, harnessId: string) => void;
 	renameHarness: (roomId: string, harnessId: string, name: string) => void;
-	cmdChange: (roomId: string, harnessId: string, cmd: string[]) => void;
+	shellRequest: (roomId: string, harnessId: string, argv: string[]) => void;
 	designEntry: (roomId: string, harnessId: string, entry: string) => void;
 	designDevice: (roomId: string, harnessId: string, device: DesignDevice | undefined) => void;
 	designDock: (roomId: string, harnessId: string, docked: boolean) => void;
@@ -172,7 +172,7 @@ export const LeftSlot = memo((p: LeftSlotProps) => {
 			onSwitchHarness={h.switchHarness}
 			onCloseHarness={h.closeHarness}
 			onRenameHarness={h.renameHarness}
-			onHarnessCmdChange={h.cmdChange}
+			onHarnessShellRequest={h.shellRequest}
 			onDesignEntryChange={h.designEntry}
 			onDesignDeviceChange={h.designDevice}
 			dockedDesign={p.dockedDesign}

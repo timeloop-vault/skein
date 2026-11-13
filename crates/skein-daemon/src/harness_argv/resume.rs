@@ -5,8 +5,9 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 
 use skein_proto::harness_kind::HarnessKind;
-use skein_proto::rooms::{Harness, Room};
+use skein_proto::rooms::{Harness, LaunchMode, Room};
 
+use super::launch::effective_shell_argv;
 use super::{hermes_base, opencode_port_args, remote_argv, with_agent};
 
 /// A random v4 uuid, the production minter for Claude session ids.
@@ -49,8 +50,9 @@ fn without_claim(mut h: Harness) -> Harness {
     h
 }
 
-/// #520: a harness whose stored argv is the user's shell (Enter after the
-/// child exited). Derived from the record, never the argv: a `shell_claim`
+/// #520: a harness running the user's shell (Enter after the child exited:
+/// launch mode `Shell` since #752, or a legacy record whose `cmd` is the
+/// shell). Derived from the record, never the argv: a `shell_claim`
 /// is LIVE when its `session_id` is non-empty and equals
 /// `h.session_id`. Hydrate/unarchive's existence probe drops a
 /// `session_id` whose transcript is gone, so a claim that no longer
@@ -64,11 +66,18 @@ fn resume_shell(
     cmd: Vec<String>,
     opencode_port: Option<u16>,
 ) -> Harness {
+    // #752: the shell the harness stays in, as an explicit launch mode. For a
+    // legacy record this is the migration; with no derivable argv (empty
+    // cmd) the launch field is left as it was.
+    let kept_launch = effective_shell_argv(&h)
+        .map(|argv| LaunchMode::Shell { argv })
+        .or_else(|| h.launch.clone());
     let claim_sid = match (&h.shell_claim, kind) {
         (Some(c), HarnessKind::Claude | HarnessKind::Opencode) => c.session_id.clone(),
         _ => {
             return Harness {
                 cmd: Some(cmd),
+                launch: kept_launch,
                 ..h
             };
         }
@@ -85,11 +94,13 @@ fn resume_shell(
         let argv = with_agent(argv, h.agent.as_deref());
         return Harness {
             cmd: Some(argv),
+            launch: None,
             ..without_claim(h)
         };
     }
     Harness {
         cmd: Some(cmd),
+        launch: kept_launch,
         ..without_claim(h)
     }
 }
@@ -133,13 +144,14 @@ pub fn resume_harness(
             ..h
         };
     }
-    // Only rebuild argvs Skein still owns. The app has exactly one
-    // cmd-mutation path, Enter-for-shell after a child exits, which
-    // replaces the whole argv with the user's shell, so argv[0] is a
-    // sufficient ownership test and, unlike argv-length matching, does not
-    // care how many flags Skein adds. A shell-swapped harness keeps its
-    // shell; rebuilding it would resurrect a harness the user retired.
-    if cmd.first().map(String::as_str) != kind.program() {
+    // Only rebuild argvs Skein still owns. Since #752 Enter-for-shell sets
+    // the explicit launch mode `Shell` and leaves `cmd` as the tool's argv;
+    // an older record instead has the user's shell in `cmd`, which the
+    // argv[0] test (exact, and unlike argv-length matching it does not care
+    // how many flags Skein adds) still recognises. A shell-swapped harness
+    // keeps its shell; rebuilding it would resurrect a harness the user
+    // retired.
+    if effective_shell_argv(&h).is_some() || cmd.first().map(String::as_str) != kind.program() {
         return resume_shell(h, kind, cmd, opencode_port);
     }
     if kind == HarnessKind::Claude && h.shell_claim.is_some() {

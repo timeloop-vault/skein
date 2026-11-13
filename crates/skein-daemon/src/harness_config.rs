@@ -322,8 +322,9 @@ impl HarnessConfig {
 /// Whether `program` really is the CLI this kind is about.
 ///
 /// The kind and the argv can legitimately disagree: a harness whose
-/// child exited offers "press Enter for shell", which rewrites `cmd`
-/// while the record stays `claude`. Appending `--plugin-dir` to a shell
+/// child exited offers "press Enter for shell", which records the shell as
+/// the harness's launch mode (#752) while the record stays `claude`, so the
+/// argv spawned is the shell's. Appending `--plugin-dir` to a shell
 /// would break the spawn outright, so this is a correctness gate and
 /// not a tidiness one.
 ///
@@ -644,8 +645,8 @@ mod tests {
 
     #[test]
     fn a_kind_whose_command_was_swapped_gets_no_args() {
-        // "Press Enter for shell" rewrites cmd but not the record, so
-        // the kind still says `claude`. Appending --plugin-dir to bash
+        // "Press Enter for shell" spawns the shell argv (launch mode,
+        // #752) but not a new kind, so the kind still says `claude`. Appending --plugin-dir to bash
         // would break the spawn outright.
         let (_tmp, config) = bundle();
         let injection = injection_for(

@@ -91,6 +91,7 @@ fn each_refusal_has_its_code_and_spawns_nothing() {
                     env_profile: None,
                     restart: false,
                     expect_cmd: None,
+                    expect_launch: None,
                 },
                 None,
             )
@@ -144,6 +145,7 @@ fn a_stale_expected_cmd_is_refused_and_leaves_the_process_alone() {
                 env_profile: None,
                 restart: true,
                 expect_cmd: expect,
+                expect_launch: None,
             },
             None,
         )

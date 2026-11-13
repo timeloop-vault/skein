@@ -26,7 +26,8 @@ use skein_proto::rooms::{Harness, Room};
 
 use crate::db::{Database, LoadOutcome};
 use crate::harness_argv::{
-    ResumeRoomsInput, ResumeRoomsOutput, is_opencode_v2, resume_rooms_with, uuid_session_id,
+    ResumeRoomsInput, ResumeRoomsOutput, is_opencode_v2, migrate_launch, resume_rooms_with,
+    uuid_session_id,
 };
 use crate::pty::opencode::pick_free_port;
 use crate::room_store::RoomStore;
@@ -50,6 +51,35 @@ pub struct BootResume {
 pub fn opencode_port_from_cmd(cmd: &[String]) -> Option<u16> {
     let at = cmd.iter().position(|a| a == "--port")?;
     cmd.get(at + 1)?.parse().ok()
+}
+
+/// The real "does this harness's session still exist" probe, shared by the
+/// boot check and the runner's spawn-time derivation (#752). Runs on a
+/// blocking thread, so the async probes are driven with the ambient runtime
+/// handle; with none, the probe errors (and the caller keeps the id). Hermes
+/// without a `spawn_env` reads as "can't tell" (`Ok(true)`).
+///
+/// # Errors
+/// No ambient runtime, or the underlying probe failed.
+pub fn probe_session(spawn_env: Option<&SpawnEnvState>, h: &Harness) -> Result<bool, String> {
+    let sid = h.session_id.clone().unwrap_or_default();
+    let handle = tokio::runtime::Handle::try_current().map_err(|e| e.to_string())?;
+    match HarnessKind::from_name(&h.kind) {
+        Some(HarnessKind::Claude) => handle.block_on(crate::resume::claude_session_exists(sid)),
+        Some(HarnessKind::Opencode) => handle.block_on(crate::resume::opencode_session_exists(sid)),
+        Some(HarnessKind::Hermes) => {
+            let Some(env) = spawn_env else {
+                return Ok(true);
+            };
+            let settings = env.snapshot();
+            let profile = h.hermes_profile.clone();
+            let resolve = move || -> Option<PathBuf> {
+                crate::resume::profile_db(&settings, profile.as_deref())
+            };
+            handle.block_on(crate::resume::hermes_session_exists(resolve, sid))
+        }
+        _ => Ok(true),
+    }
 }
 
 /// Does the harness's stored session id survive the boot check? `probe`
@@ -87,6 +117,10 @@ pub fn prepare_with(
     mint: impl FnMut() -> String,
 ) -> ResumeRoomsOutput {
     for room in &mut rooms {
+        // #752's one-time migration: records written before `launch` existed
+        // get it filled in here, and `changed_harnesses` persists it. Keep
+        // this first step if boot resume is reworked (#753).
+        migrate_launch(room);
         for h in &mut room.harnesses {
             if !session_survives(h, &probe) {
                 tracing::info!(kind = %h.kind, harness = %h.id, "boot resume: dropping stale sessionId");
@@ -145,26 +179,7 @@ impl BootResume {
     /// probes are driven with the ambient runtime handle; with none, the
     /// probe errors and the id is kept.
     fn probe(&self, h: &Harness) -> Result<bool, String> {
-        let sid = h.session_id.clone().unwrap_or_default();
-        let handle = tokio::runtime::Handle::try_current().map_err(|e| e.to_string())?;
-        match HarnessKind::from_name(&h.kind) {
-            Some(HarnessKind::Claude) => handle.block_on(crate::resume::claude_session_exists(sid)),
-            Some(HarnessKind::Opencode) => {
-                handle.block_on(crate::resume::opencode_session_exists(sid))
-            }
-            Some(HarnessKind::Hermes) => {
-                let Some(env) = &self.spawn_env else {
-                    return Ok(true);
-                };
-                let settings = env.snapshot();
-                let profile = h.hermes_profile.clone();
-                let resolve = move || -> Option<PathBuf> {
-                    crate::resume::profile_db(&settings, profile.as_deref())
-                };
-                handle.block_on(crate::resume::hermes_session_exists(resolve, sid))
-            }
-            _ => Ok(true),
-        }
+        probe_session(self.spawn_env.as_deref(), h)
     }
 
     /// [`crate::rooms::load_rooms`], then, on the first successful load of

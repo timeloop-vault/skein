@@ -368,6 +368,7 @@ impl Daemon {
             harness_config: state.harness_config.clone(),
             events: state.events.clone(),
             phase: Arc::clone(&phase),
+            session_probe: None,
         }));
         harness_runner.observe_store();
         Ok(Self {

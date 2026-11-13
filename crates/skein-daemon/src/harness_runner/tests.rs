@@ -25,6 +25,8 @@ use crate::transport::InProcessTransport;
 
 mod acceptance;
 mod client_input;
+mod derived;
+mod derived_boot;
 mod hermes_work;
 mod lifecycle;
 mod phase;
@@ -133,6 +135,15 @@ fn harness(id: &str, kind: &str, cmd: Option<Vec<String>>, session: Option<&str>
     .unwrap()
 }
 
+/// Put a tool-kind harness in shell launch mode over its stored `cmd`: the
+/// runner spawns the shell argv as given instead of deriving `claude ...`
+/// (#752), so a stand-in shell can play a managed kind.
+fn in_shell(mut h: Harness) -> Harness {
+    let argv = h.cmd.clone().expect("a stored cmd");
+    h.launch = Some(skein_proto::rooms::LaunchMode::Shell { argv });
+    h
+}
+
 fn room(id: &str, cwd: &Path, harnesses: Vec<Harness>) -> Room {
     let active = harnesses.first().map(|h| h.id.clone()).unwrap_or_default();
     let mut v: Value = json!({
@@ -227,6 +238,7 @@ impl Fx {
                 env_profile: None,
                 restart,
                 expect_cmd: None,
+                expect_launch: None,
             },
             sink.map(|s| Box::new(s.clone()) as Box<dyn StreamSink<PtyEvent>>),
         )

@@ -11,9 +11,9 @@
 //
 // When the child exits we keep the xterm and its scrollback alive
 // long enough to write a "[skein] x exited (N)" line + "Press Enter
-// for shell." footer. Pressing Enter calls `onCmdChange(shell)`,
-// which updates the harness's stored cmd. App.tsx's HarnessBody
-// derives the LiveTerminal mountKey from the cmd content, so a cmd
+// for shell." footer. Pressing Enter calls `onShellRequest(shell)`,
+// which records the shell as the harness's launch mode (#752). HarnessBody
+// derives the LiveTerminal mountKey from the spawn argv, so a launch
 // change triggers a React unmount + fresh remount: new xterm, new
 // PTY, no alt-screen state to reset, no scrollback to preserve. This
 // is the only path back to a usable pane after a TUI exits — there's
@@ -34,7 +34,7 @@ import type { GateResult } from "./harnessInput.ts";
 import { canInsertText, formatDroppedPaths, harnessInput, insertText } from "./harnessInput.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { fitTerminal } from "./terminalFit.ts";
-import type { HarnessKind } from "./types.ts";
+import type { HarnessKind, LaunchMode } from "./types.ts";
 import { OVERLAY_CLOSED_EVENT } from "./useFocusRestore.ts";
 import { useTerminalSpawn } from "./useTerminalSpawn.ts";
 import "./LiveTerminal.css";
@@ -112,9 +112,13 @@ interface LiveTerminalProps {
 	// true`) so keyboard-driven room/harness switches don't leave
 	// focus stranded on document.body. Issue #22.
 	visible: boolean;
-	// Persists a new cmd against this harness so a Skein restart
-	// re-spawns the shell instead of the dead CLI.
-	onCmdChange: (cmd: string[]) => void;
+	// Records the post-exit shell (#752) as this harness's launch mode, so a
+	// Skein restart re-spawns the shell instead of the dead CLI.
+	onShellRequest: (argv: string[]) => void;
+	// The STORED record's tool argv and launch mode, sent to the daemon as the
+	// record expectation (`cmd` above is what runs: the shell argv in shell mode).
+	expectCmd: string[];
+	expectLaunch: LaunchMode;
 }
 
 export const LiveTerminal = ({
@@ -136,7 +140,9 @@ export const LiveTerminal = ({
 	copyOnSelect,
 	defaultShell,
 	visible,
-	onCmdChange,
+	onShellRequest,
+	expectCmd,
+	expectLaunch,
 }: LiveTerminalProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	// #41: null while nothing is being dragged over this pane; a
@@ -187,13 +193,13 @@ export const LiveTerminal = ({
 
 	// Sync the latest props into refs so the long-lived effect's closure
 	// always reads current values. defaultShell starts empty and gets
-	// hydrated by the async `default_shell` invoke; onCmdChange is
+	// hydrated by the async `default_shell` invoke; onShellRequest is
 	// recreated on every App render. Refs avoid having to re-run the
 	// PTY-owning effect on those changes.
 	const defaultShellRef = useRef(defaultShell);
 	defaultShellRef.current = defaultShell;
-	const onCmdChangeRef = useRef(onCmdChange);
-	onCmdChangeRef.current = onCmdChange;
+	const onShellRequestRef = useRef(onShellRequest);
+	onShellRequestRef.current = onShellRequest;
 	// #158: same reasoning as defaultShellRef — the mouseup listener set
 	// up once per mountKey reads this at fire time, not at effect-setup
 	// time, so toggling the Settings checkbox takes effect immediately.
@@ -232,9 +238,11 @@ export const LiveTerminal = ({
 		sessionIdRef,
 		claudeAdapterRef,
 		defaultShellRef,
-		onCmdChangeRef,
+		onShellRequestRef,
 		copyOnSelectRef,
 		setHint,
+		expectCmd,
+		expectLaunch,
 	});
 
 	// Issue #22: focus the xterm whenever this pane becomes visible —

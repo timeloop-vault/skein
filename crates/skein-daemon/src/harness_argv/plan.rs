@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use skein_proto::harness_kind::HarnessKind;
 use skein_proto::rooms::{Harness, RemoteSpec, Room};
 
+use super::launch::effective_shell_argv;
 use super::{
     CmdParams, cmd_for_kind, resolve_hermes_profile, resume_harness, unarchive_room_transform,
     uuid_session_id, with_resume_cmds,
@@ -152,6 +153,24 @@ pub fn fresh_cmd(spawn_env: &SpawnEnvState, input: &FreshCmdInput) -> FreshCmdOu
     )
 }
 
+/// Restart is the one path that leaves a post-exit shell (#745 part 1, #752):
+/// the harness goes back on its kind's own tool. `launch` and the claim are
+/// cleared and `cmd` is reduced to the program, so `resume_harness` takes
+/// its ordinary tool arm (a stored session id resumes; Claude with none
+/// mints one). Boot, unarchive and the room-wide paths never call this.
+fn back_to_tool(mut h: Harness) -> Harness {
+    if effective_shell_argv(&h).is_none() {
+        return h;
+    }
+    let program = HarnessKind::from_name(&h.kind).and_then(HarnessKind::program);
+    if let Some(program) = program {
+        h.cmd = Some(vec![program.to_owned()]);
+        h.launch = None;
+        h.shell_claim = None;
+    }
+    h
+}
+
 /// [`resume_one`] with the picker and minter injected.
 pub fn resume_one_with(
     input: ResumeOneInput,
@@ -161,7 +180,7 @@ pub fn resume_one_with(
     let is_opencode = HarnessKind::from_name(&input.harness.kind) == Some(HarnessKind::Opencode);
     let opencode_port = if is_opencode { pick().ok() } else { None };
     ResumeOneOutput {
-        harness: resume_harness(input.harness, opencode_port, mint),
+        harness: resume_harness(back_to_tool(input.harness), opencode_port, mint),
         opencode_port,
     }
 }

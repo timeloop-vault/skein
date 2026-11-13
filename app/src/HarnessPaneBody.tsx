@@ -5,6 +5,8 @@ import { DesignDockedPlaceholder } from "./DesignDockedPlaceholder.tsx";
 import { DesignHarnessBody, type DeviceChangeHandler } from "./DesignHarnessBody.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
 import { FilesBody } from "./FilesBody.tsx";
+import { launchOf, spawnArgv } from "./harnessLaunch.ts";
+import { mountKeyFor } from "./harnessMounts.ts";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import type { Harness, Room } from "./types.ts";
@@ -18,7 +20,7 @@ interface HarnessBodyProps {
 	copyOnSelect: boolean;
 	defaultShell: string[];
 	visible: boolean;
-	onCmdChange: (cmd: string[]) => void;
+	onShellRequest: (argv: string[]) => void;
 	// Stamped on every `harness_actions` row this harness emits
 	// (issue #80). Threaded down to LiveTerminal → attachClaudeEvents.
 	roomId: string;
@@ -46,7 +48,7 @@ const HarnessBody = ({
 	copyOnSelect,
 	defaultShell,
 	visible,
-	onCmdChange,
+	onShellRequest,
 	roomId,
 	opencodePort,
 	onSessionCaptured,
@@ -54,18 +56,21 @@ const HarnessBody = ({
 	opencodeClaim,
 }: HarnessBodyProps) => {
 	if (harness.cmd && harness.cwd !== undefined) {
-		// mountKey changes on cmd content OR spawnGen — the trigger for a
-		// clean unmount + remount when the user picks Enter-for-shell
-		// after a child exits. spawnGen is the explicit respawn signal:
-		// the cmd-identity part alone misses a shell→shell respawn (new
-		// cmd == old cmd → no remount → #53). Joining the array gives a
-		// value-equal string across content-identical renders, so a
-		// re-render with the same cmd + spawnGen doesn't churn the PTY.
+		// mountKey changes on the spawn argv (the tool's cmd, or the shell's
+		// in shell mode, #752) OR spawnGen — the trigger for a clean unmount
+		// + remount when the user picks Enter-for-shell after a child exits.
+		// spawnGen is the explicit respawn signal: the argv alone misses a
+		// shell→shell respawn (#53). Joining the array gives a value-equal
+		// string across content-identical renders, so a re-render with the
+		// same argv + spawnGen doesn't churn the PTY.
+		const argv = spawnArgv(harness) ?? harness.cmd;
 		return (
 			<LiveTerminal
-				cmd={harness.cmd}
+				cmd={argv}
+				expectCmd={harness.cmd}
+				expectLaunch={launchOf(harness)}
 				cwd={harness.cwd}
-				mountKey={`${harness.id}:${harness.spawnGen ?? 0}:${harness.cmd.join("\x00")}`}
+				mountKey={mountKeyFor(harness.id, harness.spawnGen, argv)}
 				harnessId={harness.id}
 				roomId={roomId}
 				harnessKind={harness.kind}
@@ -81,7 +86,7 @@ const HarnessBody = ({
 				copyOnSelect={copyOnSelect}
 				defaultShell={defaultShell}
 				visible={visible}
-				onCmdChange={onCmdChange}
+				onShellRequest={onShellRequest}
 			/>
 		);
 	}

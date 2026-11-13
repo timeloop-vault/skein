@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use serde::Serialize;
+use skein_proto::rooms::LaunchMode;
 use tauri::Manager;
 use tauri::ipc::Channel;
 
@@ -80,6 +81,7 @@ pub(crate) async fn harness_ensure_running(
     env_profile: Option<String>,
     restart: bool,
     expect_cmd: Option<Vec<String>>,
+    expect_launch: Option<LaunchMode>,
     on_event: Channel<PtyEvent>,
     app: tauri::AppHandle,
 ) -> Result<EnsureRunningDto, String> {
@@ -95,6 +97,7 @@ pub(crate) async fn harness_ensure_running(
                     env_profile,
                     restart,
                     expect_cmd,
+                    expect_launch,
                 },
                 Some(Box::new(TauriChannelSink::new(on_event))),
             )

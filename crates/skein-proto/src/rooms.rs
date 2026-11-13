@@ -75,6 +75,21 @@ pub struct Harness {
     /// unknown / never probed, which means v1. Round-tripped only.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub opencode_version: Option<OpencodeVersion>,
+    /// How this harness is launched (#752). Absent means the tool, the
+    /// harness kind's own program; `Shell` is the post-exit shell the user
+    /// chose with Enter, replacing the old test of whether `cmd[0]` is the
+    /// kind's program.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub launch: Option<LaunchMode>,
+}
+
+/// What a harness runs: its tool, or the shell the user fell back to (#752).
+/// JSON: `{"mode":"tool"}` / `{"mode":"shell","argv":["pwsh.exe"]}`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+pub enum LaunchMode {
+    Tool,
+    Shell { argv: Vec<String> },
 }
 
 /// The opencode CLI version a harness last spawned under (#675, epic #674).
@@ -254,3 +269,6 @@ pub struct SkippedRoom {
     pub id: String,
     pub error: String,
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,13 +1,14 @@
 // The terminal's one start call (#731): `harness_ensure_running` makes the
 // daemon spawn the harness from its stored RECORD (or reuse the process it
 // already runs) and attaches this view's channel to it. The view passes the
-// cmd it mounted with only as `expectCmd`, an expectation the daemon refuses
-// with `stale_record` when the record differs.
+// cmd and launch mode it mounted with only as `expectCmd` / `expectLaunch`
+// (#752), an expectation the daemon refuses with `stale_record` when the
+// record differs - a launch mismatch uses the same code, so the same retry.
 
 import { type Channel, invoke } from "@tauri-apps/api/core";
 import { commitMount } from "./harnessMounts.ts";
 import { drainRoomsBounded } from "./roomsFlush.ts";
-import type { OpencodeVersion } from "./types.ts";
+import type { LaunchMode, OpencodeVersion } from "./types.ts";
 
 export type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
 
@@ -44,7 +45,9 @@ export interface EnsureArgs {
 	restart: boolean;
 	/** Recorded in `harnessMounts` once the daemon has acted on the call. */
 	mountKey: string;
+	/** The stored record's tool argv and launch mode (#752); `cmd` is never the shell's. */
 	expectCmd: string[];
+	expectLaunch: LaunchMode;
 	onEvent: Channel<PtyEvent>;
 }
 
@@ -108,6 +111,7 @@ export async function ensureRunning(
 				envProfile: a.envProfile ?? null,
 				restart: a.restart,
 				expectCmd: a.expectCmd,
+				expectLaunch: a.expectLaunch,
 				onEvent: a.onEvent,
 			});
 			commitMount(a.harnessId, a.mountKey);

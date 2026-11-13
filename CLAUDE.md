@@ -151,6 +151,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   reconcile on RoomStore::observe), boot_resume (the
     │                                #   once-per-process resume preparation; spawns nothing)
     │                                #   and pty/sink_slot (the replaceable output sink)
+    │                                #   #752 added harness_argv/spawn.rs (`spawn_argv`) and
+    │                                #   launch.rs (`migrate_launch`): `ensure_running` derives
+    │                                #   the argv at spawn from kind, session id, a spawn-time
+    │                                #   session-exists probe, agent and `Harness.launch`
     │                                #   #732 added harness_phase/ (the pure PhaseMachine,
     │                                #   translate/ for the Claude/opencode/Hermes events,
     │                                #   PhaseService the driver with the 1 s tick, stream.rs
@@ -273,8 +277,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   `harness_argv/` (cmd_for_kind, resume_harness,
     │   │   │                        #   with_resume_cmds, unarchive_room_transform), reached
     │   │   │                        #   through harnessArgvApi.ts / harnessArgvApply.ts.
-    │   │   │                        #   Rebuilt from the harness RECORD, never by matching
-    │   │   │                        #   the previous argv — that pattern-matching was
+    │   │   │                        #   Derived from the harness RECORD (at spawn, #752), never
+    │   │   │                        #   by matching the previous argv — that pattern-matching was
     │   │   │                        #   #153/#170. Add a spawn flag there and resume keeps
     │   │   │                        #   working (#247's `--agent` is the proof: one
     │   │   │                        #   `with_agent` per arm)
@@ -629,15 +633,23 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   query itself; a re-attached terminal starts blank and forces a repaint
   with a one-row resize (`terminalRepaint.ts`). PTYs survive room/harness
   tab switches: all active rooms and all their harnesses stay mounted,
-  hidden with `display:none`. PTYs die with the Skein process. Boot resume
-  is the daemon's too (`boot_resume.rs`): at the first successful rooms
+  hidden with `display:none`. PTYs die with the Skein process. Since #752
+  the spawn derives its argv from the record at spawn time
+  (`harness_argv/spawn.rs`): `--resume`/`--session` only when a probe run
+  then finds the session, never `--continue`, and the shell argv when
+  `Harness.launch` is a shell (Enter on an exited pane sets it and leaves
+  `cmd` alone; Restart harness clears it; boot and unarchive keep it).
+  Boot resume is the daemon's too (`boot_resume.rs`; first `migrate_launch`
+  fills `launch` for old records): at the first successful rooms
   load of the process it drops stale sessionIds (`resume.rs`, probes the
   tools' own stores) and rewrites each stored cmd to its resume form with
   a fresh opencode port (`resume_harness` in `harness_argv/`:
   `claude --resume <sid>`,
   `opencode --port <p> --hostname 127.0.0.1 --session <sid>`), saved
-  under origin `daemon-boot`; it spawns nothing — a harness starts on
-  its first request. The frontend reads the ports back from the cmds
+  under origin `daemon-boot`, though that is no longer what makes a
+  spawn resume (`cmd` now carries the opencode port, serves non-resuming
+  kinds and the `expectCmd` check); it spawns nothing — a harness starts
+  on its first request. The frontend reads the ports back from the cmds
   (`opencodePort.ts`). Reopening an archived room runs the same rewrite
   (#153) through `rooms_resume_cmds` (#730), merged back by id
   (`harnessArgvApply.ts`). See docs/skeind-p2-design.md, "Slice 3".
@@ -982,7 +994,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   there is no file in the review's own diff, no MCP trust prompt, and
   nothing left pointing at a dead port once a room is archived. The
   spawn path passes the harness *kind*, not a guess from `cmd`: the two
-  disagree the moment "press Enter for shell" rewrites an argv, and
+  disagree the moment "press Enter for shell" switches to a shell (a
+  `launch` mode since #752, formerly a rewritten argv), and
   `--plugin-dir` on a shell would break the spawn. Settings → Shell &
   environment shows what is injected and switches either off; turning
   the opencode one off is how `OPENCODE_CONFIG` becomes the user's
