@@ -9,7 +9,10 @@
 	font-size: var(--cfs, 12px);
 	display: flex;
 	flex-direction: column;
-	overflow: hidden;
+	/* #771: `hidden` is still a scroll container, so focusing a descendant
+	   (xterm's helper textarea) could scroll the whole app sideways. `clip`
+	   cannot be scrolled at all. */
+	overflow: clip;
 	letter-spacing: -0.005em;
 }
 

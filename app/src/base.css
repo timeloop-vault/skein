@@ -13,6 +13,7 @@ body {
 #root {
 	height: 100vh;
 	width: 100vw;
+	overflow: clip; /* #771: never a scroll container, see .sk-app */
 }
 
 /* #271: pointer-drag has no native "no-drop" cursor to fall back on —

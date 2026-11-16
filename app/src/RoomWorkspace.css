@@ -3,6 +3,7 @@
 	flex: 1;
 	display: flex;
 	min-height: 0;
+	overflow: clip; /* #771: never a scroll container, see .sk-app */
 	background: var(--bg-1);
 }
 
