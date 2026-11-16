@@ -31,6 +31,7 @@ pub mod opencode_sidecar;
 pub mod paths;
 pub mod perf_hist;
 pub mod perf_spans;
+pub mod prompt_delivery;
 pub mod pty;
 pub mod resume;
 pub mod review;

@@ -5,15 +5,15 @@
 // #362 introduced the seam for one narrow case: a `Channel.onmessage`
 // throw that would otherwise wedge silently (see `harnessEvents.ts`'s
 // `guardChannelHandler`). #404 widens it to the #238 seam's
-// `sendPrompt` decisions and the mail-delivery decisions in
-// `useMailDelivery.ts` — a devtools console is lost the moment a
+// `sendPrompt` decisions and the mail-display decisions in
+// `useMailDisplay.ts` — a devtools console is lost the moment a
 // release build's window closes, so a lost first delivery could only
 // ever be inferred after the fact, never reconstructed. `skein.log`
 // survives that.
 //
 // Deliberately imports nothing but `@tauri-apps/api/core` — this
 // module is imported from `harnessEvents.ts`, `harnessActivity.ts`,
-// `phaseMirror.ts`, `harnessInput.ts` and `useMailDelivery.ts`,
+// `phaseMirror.ts`, `harnessInput.ts` and `useMailDisplay.ts`,
 // so pulling in anything from this codebase here risks an import
 // cycle.
 

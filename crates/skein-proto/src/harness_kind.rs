@@ -108,6 +108,25 @@ impl HarnessKind {
             Self::Claude | Self::Opencode | Self::Hermes | Self::Remote
         )
     }
+
+    /// Whether the kind runs in a PTY at all (`files` and `design` do
+    /// not). Mirrors `HARNESS_KINDS[kind].capabilities.pty`.
+    pub fn has_pty(self) -> bool {
+        !matches!(self, Self::Files | Self::Design)
+    }
+
+    /// Whether a submit that did not land is worth retrying (#388).
+    /// Mirrors `capabilities.submitRetry` in `app/src/data.tsx`.
+    pub fn submit_retry(self) -> bool {
+        matches!(self, Self::Claude)
+    }
+
+    /// Whether the kind's TUI is only safe to paste into while the paste
+    /// is a real bracketed one (#625). Mirrors
+    /// `capabilities.bracketedPasteRequired` in `app/src/data.tsx`.
+    pub fn bracketed_paste_required(self) -> bool {
+        matches!(self, Self::Hermes)
+    }
 }
 
 impl fmt::Display for HarnessKind {
@@ -190,6 +209,17 @@ mod tests {
         for kind in ALL {
             let (program, agents, resume) = parse_data_tsx_entry(data_tsx, kind.as_str())
                 .unwrap_or_else(|| panic!("data.tsx: no HARNESS_KINDS entry for {kind}"));
+            for (field, rust) in [
+                ("pty", kind.has_pty()),
+                ("submitRetry", kind.submit_retry()),
+                ("bracketedPasteRequired", kind.bracketed_paste_required()),
+            ] {
+                assert_eq!(
+                    parse_data_tsx_bool(data_tsx, kind.as_str(), field),
+                    rust,
+                    "data.tsx `capabilities.{field}` for {kind} disagrees with the Rust method"
+                );
+            }
             assert_eq!(
                 program,
                 kind.program().map(str::to_owned),
@@ -205,6 +235,25 @@ mod tests {
                 kind.resumes(),
                 "data.tsx `capabilities.resume` for {kind} disagrees with HarnessKind::resumes()"
             );
+        }
+    }
+
+    /// One boolean capability of a `HARNESS_KINDS` entry, same scoping as
+    /// `parse_data_tsx_entry`; panics naming the kind when absent.
+    fn parse_data_tsx_bool(src: &str, kind: &str, field: &str) -> bool {
+        let marker = format!("id: \"{kind}\"");
+        let start = src
+            .find(&marker)
+            .unwrap_or_else(|| panic!("data.tsx: no entry for {kind}"))
+            + marker.len();
+        let rest = &src[start..];
+        let entry = &rest[..rest.find("id: \"").unwrap_or(rest.len())];
+        if entry.contains(&format!("{field}: true")) {
+            true
+        } else if entry.contains(&format!("{field}: false")) {
+            false
+        } else {
+            panic!("data.tsx: {kind} entry has no `{field}` field");
         }
     }
 

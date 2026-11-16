@@ -1,87 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessInputTarget } from "./harnessInput.ts";
-import { harnessInput, insertText, sendPrompt } from "./harnessInput.ts";
+import { harnessInput, insertText } from "./harnessInput.ts";
 import { mirrorSet, SENDABLE } from "./phaseTestSupport.ts";
-import { SUBMIT_GAP_MS } from "./submitRetry.ts";
 
 const nextId = (() => {
 	let n = 0;
 	return () => `h_${++n}`;
 })();
 
-describe("sendPrompt", () => {
-	let id: string;
-	let target: HarnessInputTarget;
-	let calls: string[];
-
-	beforeEach(() => {
-		// #380: paste and submit are no longer the same tick — every
-		// test here has to move the clock past `SUBMIT_GAP_MS` to see
-		// the submit land. Fake timers, not file-scope, so the rest of
-		// this file's describes (built well before #380) are untouched.
-		vi.useFakeTimers();
-		id = nextId();
-		calls = [];
-		target = {
-			paste: vi.fn(() => calls.push("paste")),
-			bracketedPaste: () => false,
-			submit: vi.fn(() => calls.push("submit")),
-		};
-		// Bring a real store entry to the one state the gate allows:
-		// waiting, authoritative, heard-from, injected.
-		mirrorSet(id, "waiting", SENDABLE);
-	});
-
-	afterEach(() => {
-		vi.useRealTimers();
-	});
-
-	it("pastes immediately, then submits only after the #380 gap — not in the same tick", () => {
-		harnessInput.register(id, target);
-
-		const result = sendPrompt(id, "claude", "do the thing");
-
-		expect(result).toEqual({ ok: true });
-		expect(calls).toEqual(["paste"]);
-
-		vi.advanceTimersByTime(SUBMIT_GAP_MS);
-		expect(calls).toEqual(["paste", "submit"]);
-	});
-
-	it("refuses — and never pastes — a harness that never registered", () => {
-		const result = sendPrompt(id, "claude", "do the thing");
-		expect(result.ok).toBe(false);
-		expect(target.paste).not.toHaveBeenCalled();
-	});
-
-	it("re-checks the gate at call time rather than trusting a stale render", () => {
-		harnessInput.register(id, target);
-		mirrorSet(id, "running", SENDABLE);
-
-		const result = sendPrompt(id, "claude", "do the thing");
-		expect(result.ok).toBe(false);
-		expect(target.paste).not.toHaveBeenCalled();
-	});
-
-	it("pastes a multi-line body as one paste call, then submits once, when bracketed paste is on", () => {
-		const bracketedTarget: HarnessInputTarget = {
-			paste: vi.fn(() => calls.push("paste")),
-			bracketedPaste: () => true,
-			submit: vi.fn(() => calls.push("submit")),
-		};
-		harnessInput.register(id, bracketedTarget);
-		const body = Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n");
-
-		const result = sendPrompt(id, "claude", body);
-		vi.advanceTimersByTime(SUBMIT_GAP_MS);
-
-		expect(result).toEqual({ ok: true });
-		expect(bracketedTarget.paste).toHaveBeenCalledTimes(1);
-		expect(bracketedTarget.paste).toHaveBeenCalledWith(body);
-		expect(bracketedTarget.submit).toHaveBeenCalledTimes(1);
-		expect(calls).toEqual(["paste", "submit"]);
-	});
-});
 describe("insertText", () => {
 	let id: string;
 	let target: HarnessInputTarget;
@@ -93,7 +19,6 @@ describe("insertText", () => {
 		target = {
 			paste: vi.fn(() => calls.push("paste")),
 			bracketedPaste: () => false,
-			submit: vi.fn(() => calls.push("submit")),
 		};
 		// Bring a real store entry to a state canInsertText allows —
 		// mid-turn (`running`), authoritative, heard-from, injected.
@@ -125,7 +50,7 @@ describe("insertText", () => {
 	});
 });
 
-// #386: `useMailDelivery.ts`'s seam-registered trigger — near the other
+// #386: `clientFacts`' once-per-registration trigger — near the other
 // `register` tests since this is the same call firing a second effect.
 describe("harnessInput.subscribeRegistered (#386)", () => {
 	it("fires with the harness id once register() has set the target", () => {
@@ -133,7 +58,6 @@ describe("harnessInput.subscribeRegistered (#386)", () => {
 		const target: HarnessInputTarget = {
 			paste: vi.fn(),
 			bracketedPaste: () => false,
-			submit: vi.fn(),
 		};
 		const seen: string[] = [];
 		const unsubscribe = harnessInput.subscribeRegistered((registeredId) => seen.push(registeredId));
@@ -149,7 +73,6 @@ describe("harnessInput.subscribeRegistered (#386)", () => {
 		const target: HarnessInputTarget = {
 			paste: vi.fn(),
 			bracketedPaste: () => false,
-			submit: vi.fn(),
 		};
 		const seen: string[] = [];
 		const unsubscribe = harnessInput.subscribeRegistered((registeredId) => seen.push(registeredId));
@@ -158,5 +81,29 @@ describe("harnessInput.subscribeRegistered (#386)", () => {
 		harnessInput.register(id, target);
 
 		expect(seen).toEqual([]);
+	});
+});
+
+// #733: what `clientFacts` listens to — any draft event or user-input bump.
+describe("harnessInput.subscribeFacts (#733)", () => {
+	it("fires for a draft event and for a user-input bump, and stops after unsubscribe", () => {
+		const id = nextId();
+		const seen: string[] = [];
+		const off = harnessInput.subscribeFacts((facts) => seen.push(facts));
+		harnessInput.noteDraftEvent(id, { type: "key", key: "a" });
+		harnessInput.noteUserInput(id);
+		expect(seen).toEqual([id, id]);
+		off();
+		harnessInput.noteUserInput(id);
+		expect(seen).toHaveLength(2);
+	});
+
+	it("a daemon seam event moves the draft without counting as user input", () => {
+		const id = nextId();
+		harnessInput.noteDraftEvent(id, { type: "seamPaste" });
+		expect(harnessInput.draft(id).kind).toBe("unknown");
+		harnessInput.noteDraftEvent(id, { type: "seamSubmit" });
+		expect(harnessInput.draft(id).kind).toBe("clean");
+		expect(harnessInput.userInputCount(id)).toBe(0);
 	});
 });

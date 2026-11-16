@@ -1503,7 +1503,8 @@ snapshot, and the listen, are retried for as long as the app runs (1 s
 apart for the first five attempts, then every 5 s) while live updates
 apply. The mirror drops any update whose `seq` is not above the last one
 applied for that harness. `onFirstSnapshot` fires once, when the first
-snapshot is applied. Mail delivery (`useMailDelivery.ts`) and the Claude
+snapshot is applied. Mail display (`useMailDisplay.ts`; delivery itself moved to the
+daemon in #733) and the Claude
 version watch (`useClaudeVersionWatch.ts`) re-run their checks on it,
 because a reload produces no transition for a harness that is already
 `waiting`.
@@ -1593,12 +1594,9 @@ it.
 
 ### Mail delivery
 
-Mail delivery (#329, #381) stays client-triggered until #733. It works
-through the mirror: transitions to `waiting`,
-`subscribeDelegationDeferred`, the `canSendPrompt` gate (it reads the
-mirrored record) and `recoverUnheardSilence`. That one is a
-fire-and-forget input now. The existing 2 s mail retry re-evaluates the
-gate once the mirror holds the daemon's answer.
+Mail delivery (#329, #381) was client-triggered through slice 4 and moved
+into the daemon in #733 part A: see "Slice 5 as built, part A". The
+webview no longer triggers it, gates it or writes its bytes.
 
 ### Agent verbs
 
@@ -1625,7 +1623,8 @@ violation evidence=...`). The facts for the tick come from
   session id changes, the harness is respawned, or the attach stops being
   Claude. They feed `tail_silent_file_growing`.
 
-`mail_held` still gets no facts. Mail moves in #733.
+`mail_held` still gets no facts: mail delivery moved in #733 part A, but
+the ticker's `SupervisorFacts` does not read the worker's held set yet.
 
 ### A behaviour change
 
@@ -1695,7 +1694,8 @@ crates/skein-daemon/src/harness_phase/; the text is authoritative
 - With no client attached, the Hermes screen phase reads `unknown`
   (#584). The machine treats "no client reporting" as an `unknown`
   reading.
-- `mail_held` gets no facts until #733.
+- `mail_held` still gets no facts after #733 part A (see its "Known
+  limits").
 - The shell claim reaches the daemon through debounced room saves
   (`shellClaim` and `cmd` are not in the structural key). A permission
   ping within that window can be gated against the old claim.
@@ -1840,6 +1840,130 @@ harness came back as a shell on relaunch and Restart harness also
 started the shell (both fixed by #752: see "Spawn-time argv"); New Room on a linked worktree's path resolved to the
 main checkout with a trailing slash and tailed the wrong transcript
 directory.
+
+## Slice 5 as built, part A (#733)
+
+Part A moved prompt and mail delivery out of the webview. The daemon's
+`prompt_delivery/` is now the one deliverer: the `skein-delivery` worker
+thread owns `DeliveryCore`, and every prompt write goes through it and
+`PtyManager::write`: the automatic mail nudge, the review nudge, a
+prompt-library item and deliver-now. The webview writes no prompt bytes.
+It keeps human keystrokes and `insertText` (a file drop).
+
+### The gate
+
+`gate.rs` ports `canSendPrompt` and adds the one check the webview never
+needed. A send is refused unless all of these hold:
+
+- the kind has the `pty` capability, and there is a live PTY and a phase
+  record;
+- the stored record `runs_its_tool` (#763): a post-exit shell gets nothing;
+- no permission dialog and no open question;
+- a safe stopping point: `waiting`, or `running` with a #277 deferral
+  armed (#381);
+- an authoritative, heard adapter that is not silent;
+- #215 injection, and the launch has settled (#404);
+- bracketed paste, for a multi-line body and for kinds that require it.
+  The daemon tracks it from DECSET 2004 in the PTY output.
+
+### Triggers and timers
+
+The worker re-checks on: mail stored (the `notify_mail_changed` hook,
+`AgentApiState::set_mail_hook`), phase transitions, a deferral armed, a
+spawn and a forget (the `PhaseService` listener,
+`harness_phase/listener.rs`), and a client facts report that is a
+Held-to-Clean draft or the first one since a spawn (every report is stored,
+but a keystroke alone triggers no check). The core's own
+timers: a 150 ms gap from paste to Enter, Claude Enter retries at 2 s,
+4.5 s and 8 s (#380), a 13 s settle and then a rollback (#388), and a 2 s
+retry for up to 60 s. Held mail goes out on the next `waiting`.
+`daemon.rs` (`start_delivery`) binds the three hooks: the listener, the
+runner's PTY output tap (`HarnessRunner::set_output_tap`, which feeds the
+paste-mode tracker and the quiet clock) and the mail hook.
+
+### What the client still reports
+
+Two facts only a client can see go to `harness_client_facts`: the
+composer-draft state and the user-input counter, each report carrying a
+rising per-harness number (seeded from the clock, so a reloaded page
+outranks the old one) so the daemon drops one that arrives out of order.
+While mail is held the client also re-reads the screen every 2 s
+(`heldRecheck.ts`), because that is what releases an unknown-draft latch.
+A client that never reports reads as clean and 0, so delivery works with no
+client attached.
+Two events go back: `skein://mail-held` (a harness's mail starts or stops
+being held by the draft guard) and `skein://delivery-seam` (a paste or an
+Enter the daemon wrote, which the client's draft tracker must hear and
+must not count as typing). The commands are `harness_send_prompt`,
+`mail_deliver_now`, `harness_client_facts` and `mail_held_snapshot`
+(`app/src-tauri/src/commands/delivery.rs`). The daemon records its own
+submit (`ClientPhaseInput::PromptSubmitted`, applied internally) and the
+#404 recovery (`RecoverUnheardSilence`).
+
+```mermaid
+flowchart LR
+    MAIL["Mail stored"]
+    LIS["Phase listener"]
+    CF["Client facts"]
+    W["Delivery worker"]
+    G["Gate"]
+    P["PTY write"]
+    H["Harness"]
+    UI["Webview"]
+    CMD["Tauri commands"]
+    MAIL -->|"1 notify_mail_changed"| W
+    LIS -->|"2 transitions, deferral, spawn, forget"| W
+    CF -->|"3 draft, input counter"| W
+    CMD -->|"4 send_prompt, deliver_now"| W
+    W -->|"5 can this go"| G
+    G -->|"6 allowed"| P
+    P -->|"7 paste, Enter"| H
+    W -->|"8 mail-held, delivery-seam"| UI
+    UI -->|"9 harness_client_facts"| CF
+    UI -->|"10 manual sends"| CMD
+```
+
+Figure 12: how a prompt reaches a harness after #733 part A. Renders
+section "Slice 5 as built, part A" and
+crates/skein-daemon/src/prompt_delivery/; the text is authoritative
+(non-normative).
+
+1. Storing a mailbox message calls the mail hook, which sends
+   `MailChanged` to the worker.
+2. The phase listener, which runs under the phase service's lock and only
+   sends on a channel, forwards transitions, an armed deferral, a spawn and
+   a forget.
+3. The client's facts (a draft, the input counter) change the worker's
+   shared state and wake it.
+4. A manual send and deliver-now arrive through the Tauri commands, which
+   block on the worker with a timeout and hold no daemon lock.
+5. Every send, automatic or manual, asks the gate first.
+6. If the gate allows it, the worker writes through `PtyPort` (the real
+   runner and `PtyManager`). A refusal is held (mail) or returned (manual),
+   and retried by the timers.
+7. The bracketed paste goes in, then Enter after the gap, with the retries
+   and the settle rollback described above.
+8. The worker emits `skein://mail-held` and `skein://delivery-seam` to the
+   webview.
+9. The webview reports the composer draft and the user-input counter.
+10. Buttons (Nudge, the actions menu, deliver-now) call the commands.
+
+### Not done, left for part B
+
+- The eight send-gate fields are still on `PhaseView`. The webview's
+  `canSendPrompt` survives only as a display hint for disabled-button
+  tooltips.
+- The `PromptSubmitted` and `RecoverUnheardSilence` client input variants
+  still exist on the wire, though the webview no longer sends them.
+
+### Known limits
+
+- Hermes reaches `waiting` only from a client's screen reading, so with no
+  client it gets no mail (#584).
+- A keystroke can reach the PTY slightly before its client-facts report,
+  so a draft that began a moment ago may not yet hold mail back.
+- The supervisor's `mail_held` invariant still gets no facts: part A did
+  not wire `SupervisorFacts` to the worker's held set.
 
 ## What #583 assumes of #584 and #585
 

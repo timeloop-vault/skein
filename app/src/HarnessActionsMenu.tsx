@@ -124,6 +124,8 @@ export const HarnessActionsMenu = ({
 		};
 	}, [open]);
 
+	// `canSendPrompt` below is a display hint for the disabled-item tooltips
+	// only; the daemon decides at send time (#733, leaves with part B).
 	// No terminal at all (e.g. `files`) — same rule the #238 Nudge
 	// button uses: hidden entirely, not disabled-and-unexplained.
 	if (!capabilities?.pty) return null;
@@ -165,14 +167,15 @@ export const HarnessActionsMenu = ({
 
 	const onChoose = (item: ActionsMenuItem) => {
 		if (!activeHarness || !item.gate.ok) return;
-		const result = sendPrompt(activeHarness.id, activeHarness.kind, item.body);
-		if (!result.ok) setError(result.reason);
+		void sendPrompt(activeHarness.id, item.body).then((result) => {
+			if (!result.ok) setError(result.reason);
+		});
 		setOpen(false);
 	};
 
 	// #410: independent of the nudge/skill items above — this doesn't
-	// paste a prompt into the terminal, it calls Rust directly, so it
-	// carries no `canSendPrompt` gate of its own. Shown only for the
+	// send a prompt, it calls Rust directly, so it carries no
+	// `canSendPrompt` gate of its own. Shown only for the
 	// harnesses `attachClaudeEvents` would ever attach to.
 	const canReattach = Boolean(
 		activeHarness && hasClaudeTranscriptTail(activeHarness.kind, activeHarness.sessionId),

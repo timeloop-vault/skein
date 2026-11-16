@@ -35,7 +35,7 @@ mod record;
 pub use self::record::{SESSION_REPORT_ORIGIN, SessionReport};
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 use skein_proto::rooms::{Harness, LaunchMode, Room};
@@ -43,6 +43,7 @@ use skein_proto::rooms::{Harness, LaunchMode, Room};
 use self::adapters::{Adapters, AttachSpec};
 pub use self::gates::{EnsureError, Refusal};
 use self::gates::{PortPicker, SpawnPlan, lookup, reported_port, wanted};
+pub use self::phase_tap::OutputTap;
 use self::phase_tap::RunnerObserver;
 use crate::agent_endpoint::AgentApiEndpoint;
 use crate::boot_resume::probe_session;
@@ -162,6 +163,8 @@ pub struct HarnessRunner {
     sidecar_exit: OnExit,
     adapters: Adapters,
     phase: Arc<PhaseService>,
+    /// Bound late by [`Self::set_output_tap`] (#733).
+    output_tap: Arc<OnceLock<OutputTap>>,
     session_probe: Mutex<SessionProbe>,
     port_picker: Mutex<PortPicker>,
     entries: Mutex<HashMap<String, Running>>,
@@ -249,6 +252,7 @@ impl HarnessRunner {
                 phase: Arc::clone(&phase),
             },
             phase,
+            output_tap: Arc::new(OnceLock::new()),
             spawn_env,
             endpoint,
             harness_config,
@@ -397,7 +401,12 @@ impl HarnessRunner {
         self.pause_point("before_spawn");
         // `spawned` is called from inside the spawn, before the child's
         // threads start (see `RunnerObserver`).
-        let observer = RunnerObserver::new(Arc::clone(&self.phase), &req.harness_id, &room_id);
+        let observer = RunnerObserver::new(
+            Arc::clone(&self.phase),
+            Arc::clone(&self.output_tap),
+            &req.harness_id,
+            &room_id,
+        );
         let spawn = match self.spawn(req, &room_id, &plan, sink, &observer) {
             Ok(spawn) => PtySpawnResult {
                 // A v2 spawn runs a sidecar on its own port: none to report.
@@ -508,6 +517,13 @@ impl HarnessRunner {
         }
         self.adapters.detach(harness_id);
         removed.is_some()
+    }
+
+    /// Bind the output tap (#733); a second call is ignored.
+    pub fn set_output_tap(&self, tap: OutputTap) {
+        if self.output_tap.set(tap).is_err() {
+            tracing::warn!("harness runner: output tap already bound");
+        }
     }
 
     /// The phase service this runner feeds (#732).

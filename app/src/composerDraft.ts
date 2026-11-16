@@ -198,28 +198,6 @@ export function describeDraftEvent(ev: DraftEvent): string {
 	}
 }
 
-/// True only for a transition that EMPTIED the composer without submitting
-/// it — `prev` held something, `next` reads clean, and the event that got
-/// it there was neither a submit (`"\r"` or `seamSubmit`) nor a `respawn`.
-/// The caller fires a "draft cleared" trigger on this so held mail can be
-/// delivered. A submit is excluded because the turn it starts is itself
-/// the next trigger (running → waiting); delivering right after Enter,
-/// before the adapter reports the turn, would paste on top of a prompt
-/// the CLI is already processing. A respawn is excluded for the same
-/// reason it resets to clean in the first place — a fresh PTY has no
-/// draft to have "cleared" at all.
-///
-/// #413: `screenEmpty` counts — `unknown` → `clean` by a confident screen
-/// read is an emptying with no submit, exactly what held mail waits for.
-export function draftClearedBy(prev: ComposerDraft, ev: DraftEvent, next: ComposerDraft): boolean {
-	if (prev.kind === "clean") return false;
-	if (next.kind !== "clean") return false;
-	if (ev.type === "respawn") return false;
-	if (ev.type === "seamSubmit") return false;
-	if (ev.type === "key" && ev.key === "\r") return false;
-	return true;
-}
-
 /// The gate an AUTOMATIC send adds on top of `canSendPrompt` (#238):
 /// `null` when the composer reads clean, a refusal for `typed` and
 /// `unknown` alike — the gate has no way to act on the difference between

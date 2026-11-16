@@ -18,6 +18,7 @@ use std::thread::JoinHandle;
 use serde::Serialize;
 
 use super::background_tasks::BackgroundTaskEntry;
+use super::listener::PhaseNotice;
 use super::service::Inner;
 use super::subagents::SubagentEntry;
 use super::types::{ActivityPhase, HarnessActivity, Transition, TurnSignal};
@@ -187,6 +188,10 @@ impl Inner {
         armed: Vec<String>,
     ) {
         let sweep = std::mem::take(&mut self.sweep);
+        let mut notices: Vec<PhaseNotice> = std::mem::take(&mut self.pending_spawns)
+            .into_iter()
+            .map(|harness_id| PhaseNotice::Spawned { harness_id })
+            .collect();
         let armed: BTreeSet<String> = armed.into_iter().collect();
         let mut ids: BTreeSet<String> = changed.into_iter().collect();
         ids.extend(transitions.keys().cloned());
@@ -201,6 +206,12 @@ impl Inner {
             let mut update = self.body(&id, &room_id, 0);
             update.transitions = transitions.remove(&id).unwrap_or_default();
             update.delegation_armed = armed.contains(&id);
+            notices.extend(update.transitions.iter().map(PhaseNotice::transition));
+            if update.delegation_armed {
+                notices.push(PhaseNotice::DeferralArmed {
+                    harness_id: id.clone(),
+                });
+            }
             let marked = !update.transitions.is_empty() || update.delegation_armed;
             if !marked
                 && let Some(last) = self.last_emitted.get(&id)
@@ -217,6 +228,9 @@ impl Inner {
             self.send(OutMsg::Update(Box::new(update)));
         }
         for (id, room_id) in std::mem::take(&mut self.pending_forgets) {
+            notices.push(PhaseNotice::Forgotten {
+                harness_id: id.clone(),
+            });
             self.last_emitted.remove(&id);
             self.seq += 1;
             let seq = self.seq;
@@ -230,6 +244,11 @@ impl Inner {
                 transitions: Vec::new(),
                 delegation_armed: false,
             })));
+        }
+        if let Some(listener) = &self.listener {
+            for n in notices {
+                listener(n);
+            }
         }
     }
 }

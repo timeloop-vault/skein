@@ -6,10 +6,17 @@
 // This module owns only the DISPLAY side: "how much unread mail does
 // this harness have right now, and who is it from" — enough to render
 // the tab marker. It never fetches or decides anything itself;
-// `useMailDelivery.ts` is what calls `mail_unread`, decides whether to
-// nudge, and writes the result in here via `mailStore.set`.
+// `useMailDisplay.ts` is what calls `mail_unread` and writes the result in
+// here via `mailStore.set`; the daemon decides about nudging (#733).
 
 import { useSyncExternalStore } from "react";
+
+/// DTO mirror of `agent_api::verbs::MailUnread` — see `mail_unread` in
+/// `app/src-tauri/src/agent_api/commands.rs`.
+export interface MailUnread {
+	count: number;
+	fromRoomNames: string[];
+}
 
 export interface UnreadMail {
 	count: number;

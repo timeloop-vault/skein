@@ -6,10 +6,11 @@ import { startScreenReadingFeed } from "./screenPhaseTick.ts";
 import { useAgentRequests } from "./useAgentRequests.ts";
 import type { useAppSettings } from "./useAppSettings.ts";
 import { useClaudeVersionWatch } from "./useClaudeVersionWatch.ts";
+import { useDaemonDelivery } from "./useDaemonDelivery.ts";
 import type { useHarnessActions } from "./useHarnessActions.ts";
 import { useHarnessContextSizes } from "./useHarnessContextSizes.ts";
 import type { useHarnessCreation } from "./useHarnessCreation.ts";
-import { useMailDelivery } from "./useMailDelivery.ts";
+import { useMailDisplay } from "./useMailDisplay.ts";
 import { useOpenRequests } from "./useOpenRequests.ts";
 import { useOsNotificationClicks } from "./useOsNotificationClicks.ts";
 import type { useRoomStripNav } from "./useRoomStripNav.ts";
@@ -57,10 +58,11 @@ export function useAppBackgroundWiring(a: {
 		loadedRef,
 	);
 
-	// #329: agent-mail delivery — nudges a waiting harness's mailbox and
-	// keeps the tab marker fresh. Scoped to active rooms only: an archived
-	// room's harnesses have no live PTY to nudge.
-	useMailDelivery(store.activeRooms);
+	// #329/#733: agent-mail display — the unread marker and the held mirror.
+	// The daemon delivers; `useDaemonDelivery` reports the client-only facts
+	// it needs. Scoped to active rooms only.
+	useMailDisplay(store.activeRooms);
+	useDaemonDelivery();
 	useHarnessContextSizes(store.activeRooms); // #368
 
 	// #491: Claude Code update notice — installed-version probe + auto policy.
@@ -79,7 +81,7 @@ export function useAppBackgroundWiring(a: {
 	}, []);
 
 	// #330: the `create_room` agent verb's frontend half — answers
-	// #328's `skein://agent-request` round trip. Unlike `useMailDelivery`
+	// #328's `skein://agent-request` round trip. Unlike `useMailDisplay`
 	// this isn't scoped to `activeRooms`: a request can name any folder
 	// on the machine, not just an already-open room.
 	useAgentRequests(

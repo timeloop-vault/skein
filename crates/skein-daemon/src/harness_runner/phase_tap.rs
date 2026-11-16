@@ -2,10 +2,16 @@
 //! process reports to.
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::harness_phase::PhaseService;
 use crate::pty::PtyObserver;
+
+/// Told every live chunk of a harness's PTY output, on the PTY's coalescer
+/// thread (#733): prompt delivery's paste-mode and quiet tracking. Bound
+/// once, after the runner exists; it must not block.
+pub type OutputTap = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
 /// Feeds one process of one harness into the [`PhaseService`].
 ///
@@ -20,15 +26,22 @@ use crate::pty::PtyObserver;
 /// nothing.
 pub(super) struct RunnerObserver {
     phase: Arc<PhaseService>,
+    tap: Arc<OnceLock<OutputTap>>,
     harness_id: String,
     room_id: String,
     retired: AtomicBool,
 }
 
 impl RunnerObserver {
-    pub(super) fn new(phase: Arc<PhaseService>, harness_id: &str, room_id: &str) -> Arc<Self> {
+    pub(super) fn new(
+        phase: Arc<PhaseService>,
+        tap: Arc<OnceLock<OutputTap>>,
+        harness_id: &str,
+        room_id: &str,
+    ) -> Arc<Self> {
         Arc::new(Self {
             phase,
+            tap,
             harness_id: harness_id.to_owned(),
             room_id: room_id.to_owned(),
             retired: AtomicBool::new(false),
@@ -56,6 +69,9 @@ impl PtyObserver for RunnerObserver {
     fn output(&self, chunk: &str) {
         if self.live() {
             self.phase.record_output(&self.harness_id, chunk);
+            if let Some(tap) = self.tap.get() {
+                tap(&self.harness_id, chunk);
+            }
         }
     }
 

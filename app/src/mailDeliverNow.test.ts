@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./confirmDialog.ts", () => ({ confirmDialog: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import type { ComposerDraft } from "./composerDraft.ts";
 import { CLEAN_DRAFT } from "./composerDraft.ts";
@@ -51,7 +53,6 @@ const register = (target: Partial<HarnessInputTarget>) => {
 	harnessInput.register(id, {
 		paste: vi.fn(),
 		bracketedPaste: () => false,
-		submit: vi.fn(),
 		...target,
 	});
 	return id;
@@ -86,25 +87,25 @@ describe("harnessInput.readComposerNow", () => {
 
 describe("requestDeliverNow", () => {
 	const confirm = vi.mocked(confirmDialog);
-	let release: Mock<(harnessId: string) => void>;
+	const invokeMock = vi.mocked(invoke);
 	beforeEach(() => {
 		confirm.mockReset();
-		release = vi.fn();
-		mailHold.onRelease(release);
+		invokeMock.mockReset();
+		invokeMock.mockResolvedValue({ ok: true });
 	});
 
 	it("delivers straight away on an empty reading", async () => {
 		const id = register({ kind: "claude", screen: () => EMPTY });
 		await requestDeliverNow(id);
-		expect(release).toHaveBeenCalledWith(id);
+		expect(invokeMock).toHaveBeenCalledWith("mail_deliver_now", { harnessId: id });
 		expect(confirm).not.toHaveBeenCalled();
 	});
 
-	it("refuses on text: sets the refusal, keeps held, does not release", async () => {
+	it("refuses on text: sets the refusal, keeps held, asks the daemon for nothing", async () => {
 		const id = register({ kind: "claude", screen: () => TEXT });
 		mailHold.set(id, true);
 		await requestDeliverNow(id);
-		expect(release).not.toHaveBeenCalled();
+		expect(invokeMock).not.toHaveBeenCalledWith("mail_deliver_now", expect.anything());
 		expect(mailHold.get(id)).toEqual({ held: true, releaseRefusal: DELIVER_NOW_REFUSAL });
 		expect(DELIVER_NOW_REFUSAL).toBe("Clear or send your draft first");
 	});
@@ -115,13 +116,25 @@ describe("requestDeliverNow", () => {
 		await requestDeliverNow(id);
 		expect(confirm).toHaveBeenCalledOnce();
 		expect(confirm.mock.calls[0]?.[0].message).toBe("The prompt may hold a draft; deliver anyway?");
-		expect(release).toHaveBeenCalledWith(id);
+		expect(invokeMock).toHaveBeenCalledWith("mail_deliver_now", { harnessId: id });
 	});
 
 	it("confirms on an unreadable screen: no does nothing", async () => {
 		confirm.mockResolvedValue(false);
 		const id = register({});
 		await requestDeliverNow(id);
-		expect(release).not.toHaveBeenCalled();
+		expect(invokeMock).not.toHaveBeenCalledWith("mail_deliver_now", expect.anything());
+	});
+
+	it("shows the daemon's refusal the way a client-side one is shown", async () => {
+		invokeMock.mockResolvedValue({
+			ok: false,
+			code: "not_ready",
+			reason: "the harness is mid-turn",
+		});
+		const id = register({ kind: "claude", screen: () => EMPTY });
+		mailHold.set(id, true);
+		await requestDeliverNow(id);
+		expect(mailHold.get(id)).toEqual({ held: true, releaseRefusal: "the harness is mid-turn" });
 	});
 });

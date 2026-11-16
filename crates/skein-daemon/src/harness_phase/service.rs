@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use super::client_input::{ClientPhaseInput, RestartSource};
 use super::constants::TICK_INTERVAL_MS;
+use super::listener::PhaseListener;
 use super::machine::PhaseMachine;
 use super::stream::{EventRow, OutMsg, PhaseUpdate, spawn_output_thread};
 use super::translate::claude::{ClaudeTranslator, apply_hook_permission};
@@ -66,6 +67,9 @@ pub(super) struct Inner {
     pub(super) sweep: bool,
     /// A send to the output thread has failed (and was logged, once).
     pub(super) send_failed: bool,
+    /// The one listener (#733) and the spawns it has not yet been told of.
+    pub(super) listener: Option<PhaseListener>,
+    pub(super) pending_spawns: Vec<String>,
 }
 
 impl Inner {
@@ -82,6 +86,8 @@ impl Inner {
             pending_forgets: Vec::new(),
             sweep: false,
             send_failed: false,
+            listener: None,
+            pending_spawns: Vec::new(),
         }
     }
 
@@ -132,6 +138,7 @@ impl Inner {
         self.forget_machine(id);
         self.machine.spawned(id, now);
         self.machine.set_injected(id, injected);
+        self.pending_spawns.push(id.to_owned());
         self.meta.insert(
             id.to_owned(),
             HarnessMeta {
@@ -213,6 +220,18 @@ impl PhaseService {
             #[cfg(test)]
             test_state: None,
         })
+    }
+
+    /// Register the one listener (#733), replacing any earlier one. It runs
+    /// under the service lock: see [`super::listener`].
+    pub fn set_listener(&self, listener: PhaseListener) {
+        self.lock().listener = Some(listener);
+    }
+
+    /// The clock this service reads, for callers that must share its time.
+    #[must_use]
+    pub fn clock(&self) -> Clock {
+        Arc::clone(&self.clock)
     }
 
     /// Run `f` on the state at one instant: read the clock first, then lock,

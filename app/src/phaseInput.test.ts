@@ -41,9 +41,7 @@ describe("store methods forward their phase input", () => {
 	});
 
 	it.each([
-		["notePromptSubmitted", "promptSubmitted"],
 		["muteInducedOutput", "muteInducedOutput"],
-		["recoverUnheardSilence", "recoverUnheardSilence"],
 		["noteLaunchSignal", "launchSignal"],
 	] as const)("%s", (method, kind) => {
 		harnessActivity[method]("b");

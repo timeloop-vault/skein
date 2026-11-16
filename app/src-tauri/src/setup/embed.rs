@@ -42,6 +42,7 @@ pub(super) fn daemon(
     app.manage(d.harness_runner);
     app.manage(d.pty);
     app.manage(d.phase);
+    app.manage(d.delivery);
     // #698: the Windows updater exits without RunEvent::Exit; this guard's
     // Drop (via cleanup_before_exit) stops the sidecars on that path.
     app.resources_table()

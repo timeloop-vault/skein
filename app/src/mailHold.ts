@@ -1,9 +1,8 @@
 // Per-harness "mail held by the draft guard" marker (#413), the same tiny
-// store + useSyncExternalStore shape as `mailStore.ts`. `useMailDelivery.ts`
-// writes it (the decision itself is `mailHeld` in mailNudge.ts); the tab
-// reads it and can ask for a "deliver now" via `release`, which
-// `useMailDelivery` subscribes to with `onRelease`. `get` is a plain
-// selector so a non-React view (#414) can read it too.
+// store + useSyncExternalStore shape as `mailStore.ts`. A MIRROR since #733:
+// the daemon decides what is held and `useMailDisplay.ts` writes it from
+// `mail_held_snapshot` / `skein://mail-held`; the tab reads it. `get` is a
+// plain selector so a non-React view (#414) can read it too.
 
 import { useSyncExternalStore } from "react";
 
@@ -18,7 +17,12 @@ const NOT_HELD: MailHold = { held: false };
 
 const holds = new Map<string, MailHold>();
 const listeners = new Map<string, Set<() => void>>();
-const releaseListeners = new Set<(harnessId: string) => void>();
+
+const heldListeners = new Set<(harnessId: string, held: boolean) => void>();
+
+const emitHeld = (harnessId: string, held: boolean): void => {
+	for (const cb of [...heldListeners]) cb(harnessId, held);
+};
 
 const emit = (harnessId: string): void => {
 	for (const cb of listeners.get(harnessId) ?? []) cb();
@@ -37,6 +41,16 @@ export const mailHold = {
 			holds.set(harnessId, { held: true });
 		}
 		emit(harnessId);
+		if ((cur?.held ?? false) !== held) emitHeld(harnessId, held);
+	},
+
+	/// `cb(id, held)` whenever a harness's held flag turns true or false
+	/// (not for a releaseRefusal-only change). Returns an unsubscribe.
+	subscribeHeld(cb: (harnessId: string, held: boolean) => void): () => void {
+		heldListeners.add(cb);
+		return () => {
+			heldListeners.delete(cb);
+		};
 	},
 
 	/// Record why a deliver-now attempt was refused (kept on the entry,
@@ -49,8 +63,10 @@ export const mailHold = {
 	},
 
 	forget(harnessId: string): void {
+		const cur = holds.get(harnessId);
 		if (!holds.delete(harnessId)) return;
 		emit(harnessId);
+		if (cur?.held) emitHeld(harnessId, false);
 	},
 
 	get(harnessId: string): MailHold {
@@ -69,18 +85,6 @@ export const mailHold = {
 			if (!s) return;
 			s.delete(cb);
 			if (s.size === 0) listeners.delete(harnessId);
-		};
-	},
-
-	/// Ask for held mail to be delivered now, bypassing only the draft guard.
-	release(harnessId: string): void {
-		for (const cb of [...releaseListeners]) cb(harnessId);
-	},
-
-	onRelease(cb: (harnessId: string) => void): () => void {
-		releaseListeners.add(cb);
-		return () => {
-			releaseListeners.delete(cb);
 		};
 	},
 };

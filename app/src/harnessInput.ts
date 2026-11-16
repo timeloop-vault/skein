@@ -13,11 +13,11 @@
 //     input counters and the #383/#413 composer-draft state;
 //   - `harnessInputGate.ts` — the pure `canSendPrompt` / `canInsertText`
 //     gates;
-//   - `harnessInputSend.ts` — `sendPrompt` / `insertText`, the
-//     paste/submit mechanics.
+//   - `harnessInputSend.ts` — `sendPrompt` / `deliverMailNow` (ask the daemon)
+//     and `insertText` (a paste for a file drop).
 
 export type { CanInsertTextInput, CanSendPromptInput, GateResult } from "./harnessInputGate.ts";
 export { canInsertText, canSendPrompt, formatDroppedPaths } from "./harnessInputGate.ts";
 export type { HarnessInputTarget } from "./harnessInputRegistry.ts";
 export { harnessInput, SCREEN_SETTLE_MS } from "./harnessInputRegistry.ts";
-export { insertText, sendPrompt } from "./harnessInputSend.ts";
+export { deliverMailNow, insertText, sendPrompt } from "./harnessInputSend.ts";

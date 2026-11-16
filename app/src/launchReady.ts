@@ -45,7 +45,7 @@ export const LAUNCH_QUIET_MS = 1500;
 /// output to keep resetting quiet (see the module header) — but either
 /// way, waiting longer only delays a paste that would otherwise never
 /// go out at all, so past the cap the gate lets it through and leans on
-/// #388's own paste/submit settlement (`mailSettle.ts`) to roll back a
+/// #388's own paste/submit settlement (the daemon's `prompt_delivery/mail_settle.rs`) to roll back a
 /// submit that still didn't land.
 export const LAUNCH_READY_CAP_MS = 15_000;
 

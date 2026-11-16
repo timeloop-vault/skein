@@ -167,6 +167,11 @@ pub fn run() {
             harness_actions_hermes::hermes_actions_turn_end,
             commands::harness_phase::harness_phase_input,
             commands::harness_phase::harness_phase_snapshot,
+            // Prompt and mail delivery (#733)
+            commands::delivery::harness_send_prompt,
+            commands::delivery::mail_deliver_now,
+            commands::delivery::harness_client_facts,
+            commands::delivery::mail_held_snapshot,
             commands::harness_argv::harness_fresh_cmd,
             commands::harness_argv::harness_resume_cmd,
             commands::harness_argv::rooms_resume_cmds,

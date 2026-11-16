@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { HarnessInputTarget } from "./harnessInput.ts";
-import { harnessInput, SCREEN_SETTLE_MS, sendPrompt } from "./harnessInput.ts";
-import { mirrorSet, SENDABLE } from "./phaseTestSupport.ts";
+import { harnessInput, SCREEN_SETTLE_MS } from "./harnessInput.ts";
 import type { ScreenCell, ScreenSnapshot } from "./promptScreen.ts";
 
 // #413 — the screen check that releases an `unknown` composer latch.
@@ -36,7 +35,6 @@ const setup = (screen?: () => ScreenSnapshot | null) => {
 	const target: HarnessInputTarget = {
 		paste: vi.fn(),
 		bracketedPaste: () => false,
-		submit: vi.fn(),
 		kind: "claude",
 		...(screen ? { screen } : {}),
 	};
@@ -52,10 +50,10 @@ const makeUnknown = (id: string) => {
 };
 
 describe("harnessInput.checkScreen", () => {
-	it("releases unknown to clean after the settle window and fires draftCleared", () => {
+	it("releases unknown to clean after the settle window and notifies the facts subscribers", () => {
 		const { id } = setup(() => EMPTY);
 		const cleared = vi.fn();
-		const unsub = harnessInput.subscribeDraftCleared(cleared);
+		const unsub = harnessInput.subscribeFacts(cleared);
 		makeUnknown(id);
 		vi.advanceTimersByTime(SCREEN_SETTLE_MS - 1);
 		expect(harnessInput.checkScreen(id)).toBe(false);
@@ -143,42 +141,5 @@ describe("harnessInput.checkScreen", () => {
 		expect(harnessInput.draftCause(id)?.event).toBe("printable");
 		key(id, "\x1b[A");
 		expect(harnessInput.draftCause(id)?.event).toBe("historyRecall");
-	});
-});
-
-describe("sendPrompt's automatic draft recheck (#413)", () => {
-	const sendable = (screen: () => ScreenSnapshot | null) => {
-		const id = nextId();
-		const target: HarnessInputTarget = {
-			paste: vi.fn(),
-			bracketedPaste: () => false,
-			submit: vi.fn(),
-			kind: "claude",
-			screen,
-		};
-		mirrorSet(id, "waiting", SENDABLE);
-		harnessInput.register(id, target);
-		return { id, target };
-	};
-
-	it("delivers when the settled screen reads empty", () => {
-		const { id, target } = sendable(() => EMPTY);
-		harnessInput.noteDraftEvent(id, { type: "userPaste" });
-		const r = sendPrompt(id, "claude", "hi", { automatic: true });
-		expect(r.ok).toBe(false); // still inside the settle window
-		vi.advanceTimersByTime(SCREEN_SETTLE_MS);
-		expect(harnessInput.draft(id).kind).toBe("clean");
-		const r2 = sendPrompt(id, "claude", "hi", { automatic: true });
-		expect(r2.ok).toBe(true);
-		expect(target.paste).toHaveBeenCalled();
-	});
-
-	it("still holds when the screen reads text", () => {
-		const { id, target } = sendable(() => TEXT);
-		harnessInput.noteDraftEvent(id, { type: "userPaste" });
-		vi.advanceTimersByTime(SCREEN_SETTLE_MS + 100);
-		const r = sendPrompt(id, "claude", "hi", { automatic: true });
-		expect(r.ok).toBe(false);
-		expect(target.paste).not.toHaveBeenCalled();
 	});
 });

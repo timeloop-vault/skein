@@ -50,19 +50,18 @@ export function readVisibleScreen(
 
 /** #238: publish this harness to the `harnessInput` seam now that its
  *  PTY is live. `paste`/`bracketedPaste` read xterm state directly;
- *  `submit` is a separate `pty_write` of a bare "\r" after the paste,
- *  per the seam's contract. Returns the unregister function. */
+ *  Only a file drop pastes through it; the daemon delivers prompts (#733),
+ *  so there is no submit. Returns the unregister function. */
 export function registerInputTarget(
 	term: Terminal,
 	harnessId: string,
 	harnessKind: HarnessKind,
-	id: string,
 	gate: OutputGate,
 ): () => void {
 	// One pending re-read per gate: once the flushed output has parsed, a null
 	// screen must not leave held mail waiting for some unrelated trigger.
-	// checkScreen → noteDraftEvent(screenEmpty) → subscribeDraftCleared →
-	// useMailDelivery's runSerialized (harnessInputRegistry.ts:225).
+	// checkScreen → noteDraftEvent(screenEmpty) → subscribeFacts → the daemon
+	// hears the draft cleared (clientFacts.ts, #733).
 	let recheckPending = false;
 	const recheckWhenSettled = () => {
 		gate.flush();
@@ -82,9 +81,6 @@ export function registerInputTarget(
 			if (gate.isSettled()) return term.modes.bracketedPasteMode;
 			gate.flush();
 			return false;
-		},
-		submit: () => {
-			void invoke("pty_write", { id, data: "\r" });
 		},
 		kind: harnessKind,
 		screen: () => {

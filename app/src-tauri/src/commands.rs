@@ -20,6 +20,8 @@
 //!   recent-rows queries.
 //! - `harness_phase` — client-only inputs to the daemon's phase
 //!   machine (#732).
+//! - `delivery` — the daemon's prompt and mail delivery (#733): manual
+//!   send, deliver-now, the client's draft facts, the held-mail snapshot.
 //! - `fs` — the Files overlay's list / read / write commands (#185, #409).
 //! - `git` — the git commands: repo inspection, worktrees, status, diff and
 //!   the two watchers.
@@ -29,6 +31,7 @@
 //!   agent discovery, and the default shell / home / cwd lookups.
 
 pub(crate) mod app;
+pub(crate) mod delivery;
 pub(crate) mod fs;
 pub(crate) mod git;
 pub(crate) mod harness_argv;

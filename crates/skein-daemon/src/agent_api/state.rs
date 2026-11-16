@@ -129,6 +129,9 @@ pub struct AgentApiState {
     /// Where the Claude permission and Hermes hooks are also fed to the
     /// daemon's phase machine (#732). `None` in a unit test.
     pub(crate) phase_tap: Option<super::phase_tap::PhaseTap>,
+    /// Told `(room id, harness id)` of every mailbox change, whatever the
+    /// path (#733): the daemon's prompt delivery. Bound late, once.
+    mail_hook: std::sync::OnceLock<MailHook>,
     /// Requests sent to the webview and not yet answered, keyed by a
     /// fresh id per request. Every insertion is matched by exactly one
     /// removal — on completion, on timeout, or immediately if the
@@ -237,6 +240,9 @@ pub struct HarnessSessionEnd {
     pub reason: Option<String>,
 }
 
+/// See [`AgentApiState::set_mail_hook`].
+pub type MailHook = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
 /// What [`AgentApiState::new`] is built from.
 pub struct AgentApiStateArgs {
     pub db: Arc<Database>,
@@ -258,6 +264,7 @@ impl AgentApiState {
             client: Some(args.client),
             capture: Some(args.capture),
             phase_tap: Some(args.phase_tap),
+            mail_hook: std::sync::OnceLock::new(),
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
             verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),
@@ -282,6 +289,7 @@ impl AgentApiState {
             client: None,
             capture: None,
             phase_tap: None,
+            mail_hook: std::sync::OnceLock::new(),
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
             verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),
@@ -355,11 +363,22 @@ impl AgentApiState {
         }
     }
 
+    /// Bind the one mailbox hook (#733); a second call is ignored. It runs
+    /// on the caller's thread and must not block.
+    pub fn set_mail_hook(&self, hook: MailHook) {
+        if self.mail_hook.set(hook).is_err() {
+            tracing::warn!("agent api: mail hook already bound");
+        }
+    }
+
     /// Tell the frontend that a harness's mailbox moved (#327) — a
     /// message just landed for it, or it just read some of its own.
     /// `room_id`/`harness_id` name whoever's inbox changed, which for a
     /// send is almost always a different room than the caller's.
     pub fn notify_mail_changed(&self, room_id: &str, harness_id: &str) {
+        if let Some(hook) = self.mail_hook.get() {
+            hook(room_id, harness_id);
+        }
         let Some(events) = self.events.as_ref() else {
             return;
         };

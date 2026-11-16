@@ -32,6 +32,7 @@ use crate::harness_runner::{HarnessRunner, RunnerDeps};
 use crate::harness_work_hermes::{HermesWorkAttacher, HermesWorkManager};
 use crate::opencode_sidecar::OpencodeSidecarManager;
 use crate::paths::Paths;
+use crate::prompt_delivery::{DaemonEnv, DeliveryHandle, DeliveryService, RunnerPty};
 use crate::pty::PtyManager;
 use crate::room_store::RoomStore;
 use crate::spawn_env::state::SpawnEnvState;
@@ -159,6 +160,10 @@ pub struct Daemon {
     pub boot_resume: Arc<BootResume>,
     /// Starts and stops harnesses from their records (#731).
     pub harness_runner: Arc<HarnessRunner>,
+    /// Prompt delivery (#733): mail reaches a waiting harness from the
+    /// daemon's own worker thread, with no client attached. The client's
+    /// calls (manual send, deliver now, draft reports) go through this.
+    pub delivery: DeliveryHandle,
     /// The harness phase machine, the phase authority (#732). The
     /// same `Arc` the runner and the hook routes feed; manage it so commands
     /// can reach it.
@@ -187,8 +192,8 @@ pub struct Daemon {
 ///
 /// The Claude transcript samples come from a `TranscriptSampler` (one stat per
 /// Claude harness every 15 s, on the ticker thread, with neither the phase lock
-/// nor the room-store lock held). The `mail` facts stay absent until #733, so
-/// `mail_held` cannot fire yet.
+/// nor the room-store lock held). The `mail` facts are still unwired after #733
+/// part A (left for part B), so `mail_held` cannot fire yet.
 ///
 /// The closure holds only a `Weak`: the ticker thread must not keep the
 /// service alive.
@@ -242,6 +247,52 @@ fn start_phase_ticker(phase: &Arc<PhaseService>, state: &SharedState, rooms: &Ar
     });
     // The handle is dropped: the thread ends on its own when the service does.
     drop(phase.start_ticker(facts));
+}
+
+/// Start prompt delivery (#733) and bind its three inputs: the phase
+/// service's listener, the runner's PTY output tap and the agent API's
+/// mailbox hook. The worker holds the real [`DaemonEnv`]; nothing here runs
+/// on the worker's thread except the env's own reads.
+///
+/// The hooks keep the worker alive for the life of the process: the phase
+/// service and the runner own a handle, and the env owns the service and
+/// the runner. That cycle is intended (the daemon lives as long as the
+/// process); a test that wants the worker to stop drops its own handles.
+fn start_delivery(
+    rooms: &Arc<RoomStore>,
+    phase: &Arc<PhaseService>,
+    state: &SharedState,
+    runner: &Arc<HarnessRunner>,
+    agent_api: Option<&AgentApiState>,
+) -> DeliveryHandle {
+    let shared = Arc::new(crate::prompt_delivery::Shared::default());
+    let env = DaemonEnv {
+        store: Arc::clone(rooms),
+        phase: Arc::clone(phase),
+        db: Arc::clone(&state.db),
+        events: state.events.clone(),
+        pty: Arc::new(RunnerPty {
+            runner: Arc::clone(runner),
+            pty: state.pty.clone(),
+        }),
+        shared: Arc::clone(&shared),
+    };
+    let handle = DeliveryService::start(Box::new(env), shared, phase.clock());
+    phase.set_listener(handle.phase_listener());
+    let tap = handle.clone();
+    let clock = phase.clock();
+    runner.set_output_tap(Arc::new(move |id, chunk| {
+        tap.note_output(id, chunk, clock());
+    }));
+    if let Some(api) = agent_api {
+        let mail = handle.clone();
+        api.set_mail_hook(Arc::new(move |_room_id, harness_id| {
+            mail.notify(crate::prompt_delivery::DeliveryEvent::MailChanged {
+                harness_id: harness_id.to_owned(),
+            });
+        }));
+    }
+    handle
 }
 
 /// Binds 127.0.0.1 on an ephemeral port, non-blocking, with the std
@@ -372,6 +423,13 @@ impl Daemon {
             port_picker: None,
         }));
         harness_runner.observe_store();
+        let delivery = start_delivery(
+            &rooms,
+            &phase,
+            &state,
+            &harness_runner,
+            agent_api.as_deref(),
+        );
         // #753/#755: a retried boot preparation leaves a harness that has a
         // process, or a spawn in flight, alone (called under the store lock).
         let boot_resume = Arc::new(BootResume::new(boot_probe_env, {
@@ -383,6 +441,7 @@ impl Daemon {
             harness_config: state.harness_config,
             rooms,
             harness_runner,
+            delivery,
             boot_resume,
             db: state.db,
             pty: state.pty,

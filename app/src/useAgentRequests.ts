@@ -1,6 +1,6 @@
 // #330: the frontend half of the `create_room` agent verb — the
 // listener for #328's `skein://agent-request` round trip. Mounted once
-// from App.tsx, alongside `useMailDelivery` (#329), which is the other
+// from App.tsx, alongside `useMailDisplay` (#329), which is the other
 // hook driven entirely off Tauri events rather than `rooms` props.
 //
 // Every request MUST be answered exactly once, `ok` or `error` — the

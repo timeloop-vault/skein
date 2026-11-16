@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ComposerDraft, DraftEvent } from "./composerDraft.ts";
-import {
-	CLEAN_DRAFT,
-	checkDraft,
-	describeDraftEvent,
-	draftClearedBy,
-	reduceDraft,
-} from "./composerDraft.ts";
+import { CLEAN_DRAFT, checkDraft, describeDraftEvent, reduceDraft } from "./composerDraft.ts";
 
 const clean = CLEAN_DRAFT;
 const typed = (chars: number): ComposerDraft => ({ kind: "typed", chars });
@@ -121,23 +115,20 @@ describe("reduceDraft — sequences", () => {
 		expect(afterBs1).toEqual(typed(1));
 		const afterBs2 = reduceDraft(afterBs1, key("\x7f"));
 		expect(afterBs2).toEqual(clean);
-		expect(draftClearedBy(afterBs1, key("\x7f"), afterBs2)).toBe(true);
 	});
 
-	it("type then Enter reaches clean, but is not reported as a draft-cleared trigger", () => {
+	it("type then Enter reaches clean", () => {
 		const afterA = reduceDraft(clean, key("a"));
 		const ev = key("\r");
 		const afterEnter = reduceDraft(afterA, ev);
 		expect(afterEnter).toEqual(clean);
-		expect(draftClearedBy(afterA, ev, afterEnter)).toBe(false);
 	});
 
-	it("type then Ctrl+C reaches clean and IS reported as a draft-cleared trigger", () => {
+	it("type then Ctrl+C reaches clean", () => {
 		const afterA = reduceDraft(clean, key("a"));
 		const ev = key("\x03");
 		const afterCtrlC = reduceDraft(afterA, ev);
 		expect(afterCtrlC).toEqual(clean);
-		expect(draftClearedBy(afterA, ev, afterCtrlC)).toBe(true);
 	});
 
 	it("Up on a clean composer goes to unknown", () => {
@@ -152,31 +143,19 @@ describe("reduceDraft — sequences", () => {
 		expect(afterBs).toEqual(unknown);
 	});
 
-	it("seamPaste then seamSubmit reaches clean, but is not reported as a draft-cleared trigger", () => {
+	it("seamPaste then seamSubmit reaches clean", () => {
 		const afterPaste = reduceDraft(clean, { type: "seamPaste" });
 		expect(afterPaste).toEqual(unknown);
 		const ev: DraftEvent = { type: "seamSubmit" };
 		const afterSubmit = reduceDraft(afterPaste, ev);
 		expect(afterSubmit).toEqual(clean);
-		expect(draftClearedBy(afterPaste, ev, afterSubmit)).toBe(false);
 	});
 
-	it("respawn from typed reaches clean, but is not reported as a draft-cleared trigger", () => {
+	it("respawn from typed reaches clean", () => {
 		const t = typed(4);
 		const ev: DraftEvent = { type: "respawn" };
 		const afterRespawn = reduceDraft(t, ev);
 		expect(afterRespawn).toEqual(clean);
-		expect(draftClearedBy(t, ev, afterRespawn)).toBe(false);
-	});
-});
-
-describe("draftClearedBy — additional edge cases", () => {
-	it("is false when prev was already clean", () => {
-		expect(draftClearedBy(clean, key("\r"), clean)).toBe(false);
-	});
-
-	it("is false when next isn't clean", () => {
-		expect(draftClearedBy(typed(2), key("\x1b[D"), unknown)).toBe(false);
 	});
 });
 
@@ -202,16 +181,14 @@ describe("checkDraft", () => {
 describe("screenEmpty (#413)", () => {
 	const ev: DraftEvent = { type: "screenEmpty" };
 
-	it("releases unknown to clean and reports it as a draft-cleared trigger", () => {
+	it("releases unknown to clean", () => {
 		const next = reduceDraft(unknown, ev);
 		expect(next).toEqual(clean);
-		expect(draftClearedBy(unknown, ev, next)).toBe(true);
 	});
 
 	it("never overrides typed, and leaves clean alone", () => {
 		expect(reduceDraft(typed(3), ev)).toEqual(typed(3));
 		expect(reduceDraft(clean, ev)).toEqual(clean);
-		expect(draftClearedBy(clean, ev, clean)).toBe(false);
 	});
 });
 

@@ -275,6 +275,17 @@ impl RoomStore {
         out
     }
 
+    /// A harness's room id and record by harness id alone, cloned (#733).
+    #[must_use]
+    pub fn find_harness(&self, harness_id: &str) -> Option<(String, Harness)> {
+        self.shared.lock().rooms.iter().find_map(|r| {
+            r.harnesses
+                .iter()
+                .find(|h| h.id == harness_id)
+                .map(|h| (r.id.clone(), h.clone()))
+        })
+    }
+
     /// One harness's record, cloned alone (not the room list).
     #[must_use]
     pub fn harness_record(&self, room_id: &str, harness_id: &str) -> Option<Harness> {

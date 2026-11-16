@@ -1517,8 +1517,8 @@ after a consent dialog that shows exactly what will be inserted. The
 insertion is byte-exact (the rest of the file is untouched) and it
 stays afterwards; outside Skein the variables are unset, so it is inert.
 
-The mail nudge (#625) reaches a Hermes harness through the same #238 gate
-as Claude and opencode: only while its hook telemetry is attached
+The mail nudge (#625) reaches a Hermes harness through the same gate (the
+daemon's, since #733) as Claude and opencode: only while its hook telemetry is attached
 (authoritative), the review entry is injected and the terminal is in
 bracketed-paste mode. A Hermes without hooks (screen-read only) is never
 nudged; it can still call `read_messages` itself.

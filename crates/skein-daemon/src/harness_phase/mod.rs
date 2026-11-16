@@ -19,6 +19,7 @@ mod deferral;
 pub mod invariants;
 mod io;
 mod lifecycle;
+pub mod listener;
 pub mod machine;
 pub mod patterns;
 mod permission;
@@ -45,6 +46,7 @@ pub use invariants::{
     Violation, ViolationRecord,
 };
 pub use lifecycle::SessionSwitch;
+pub use listener::{PhaseListener, PhaseNotice};
 pub use machine::{PhaseMachine, at_safe_stopping_point, is_decisive_input};
 pub use screen::ScreenReading;
 pub use service::PhaseService;

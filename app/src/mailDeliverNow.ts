@@ -4,11 +4,13 @@
 // The click skips the draft guard, but a nudge pasted at the cursor inside
 // a real user draft would submit both, so the click first takes a fresh
 // screen reading (no settle window: the user is clicking, not typing).
+// That reading is client-only; the delivery itself is the daemon's
+// (`mail_deliver_now`, #733).
 
 import type { ComposerDraft } from "./composerDraft.ts";
 import { confirmDialog } from "./confirmDialog.ts";
 import { logBoth } from "./frontendLog.ts";
-import { harnessInput } from "./harnessInput.ts";
+import { deliverMailNow, harnessInput } from "./harnessInput.ts";
 import { mailHold } from "./mailHold.ts";
 import type { ComposerReading } from "./promptScreen.ts";
 
@@ -54,5 +56,15 @@ export async function requestDeliverNow(harnessId: string): Promise<void> {
 		}
 		if (!ok) return;
 	}
-	mailHold.release(harnessId);
+	// The daemon delivers (it bypasses only the draft guard for this call) and
+	// answers with its own refusal, shown the way the client-side one is.
+	const result = await deliverMailNow(harnessId);
+	if (!result.ok) {
+		mailHold.setReleaseRefusal(harnessId, result.reason);
+		logBoth(
+			"info",
+			"skein::mail",
+			`[skein] deliver-now refused by the daemon — ${result.reason} (#413) (harness ${harnessId})`,
+		);
+	}
 }

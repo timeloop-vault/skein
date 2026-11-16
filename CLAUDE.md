@@ -165,6 +165,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   writes harness_events and emits skein://harness-phase,
     │                                #   transcript_sampler for the supervisor, tests/ folders)
     │                                #   and pty/observer (the tap on a PTY's output and exit).
+    │                                #   #733 added prompt_delivery/ (the ONE deliverer: the
+    │                                #   `skein-delivery` worker owns DeliveryCore; gate.rs is
+    │                                #   the send gate, a port of canSendPrompt; mail nudge,
+    │                                #   review nudge, prompt-library items and deliver-now all
+    │                                #   write through it and PtyManager::write; daemon_env.rs
+    │                                #   is the real DeliveryEnv). Fed by hooks: the phase
+    │                                #   listener, AgentApiState::set_mail_hook,
+    │                                #   HarnessRunner::set_output_tap (daemon.rs start_delivery)
     │                                #   It IS the phase authority: the webview only mirrors
     │                                #   it and sends the inputs only a client can see
     │                                #   (client_input.rs; harness_runner/client_input.rs is
@@ -306,14 +314,19 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   ├── harnessAgent.ts      # What agent a harness is on, honestly worded (#248):
     │   │   │                        #   "agent X" (Claude), "started as X" / "last message
     │   │   │                        #   to Y" (opencode, from SSE user messages)
-    │   │   ├── harnessInput.ts      # The #238 nudge seam (#41 reuses it): a per-harness
-    │   │   │                        #   paste/submit registry LiveTerminal fills in once its
-    │   │   │                        #   PTY is live, plus the pure gate `canSendPrompt` (in
-    │   │   │                        #   harnessInputGate.ts; reads the MIRRORED record) — pty
-    │   │   │                        #   capability, registered, phase===waiting, a proven L2c
-    │   │   │                        #   adapter, #215 config injection, and bracketed-paste
-    │   │   │                        #   for multi-line bodies. No nudge where safety can't be
-    │   │   │                        #   proven
+    │   │   ├── harnessInput.ts      # The #238 seam's webview remnant (#41 reuses it): a
+    │   │   │                        #   per-harness registry LiveTerminal fills in once its PTY
+    │   │   │                        #   is live, for `insertText` (file drop) and the composer
+    │   │   │                        #   draft state. Since #733 the webview writes no prompt
+    │   │   │                        #   bytes: `sendPrompt` / `deliverMailNow` ask the daemon
+    │   │   │                        #   (harness_send_prompt, mail_deliver_now), and the send
+    │   │   │                        #   gate is the daemon's (prompt_delivery/gate.rs).
+    │   │   │                        #   `canSendPrompt` survives only as a display hint for
+    │   │   │                        #   disabled-button tooltips. useDaemonDelivery.ts reports
+    │   │   │                        #   the client-only facts (clientFacts.ts) and relays
+    │   │   │                        #   skein://delivery-seam; mailHeldMirror.ts mirrors
+    │   │   │                        #   skein://mail-held; useMailDisplay.ts is the display
+    │   │   │                        #   half of the old useMailDelivery
     │   │   ├── types.ts             # Room / Harness / Status vocabulary
     │   │   ├── roomGroups.ts        # Pure room-group model (#76), a two-level strip: group
     │   │   │                        #   key = normalized Room.repoRoot, the main checkout;
@@ -692,9 +705,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   publishes a `PhaseUpdate` per changed harness on
   `skein://harness-phase` (`stream.rs`; its `view: PhaseView` is the
   wire type, never the machine's `HarnessActivity`: a display and
-  notifications group plus a send-gate group, `canSendPrompt` and mail
-  delivery still deciding in the webview, which leaves the wire with
-  #733; `PhaseView` lives in the daemon crate until the transport work
+  notifications group plus a send-gate group; since #733 part A the
+  daemon's `prompt_delivery/` decides every send, and the eight gate
+  fields stay on the wire only until #733 part B (the webview's
+  `canSendPrompt` is a display hint); `PhaseView` lives in the daemon crate until the transport work
   moves the phase wire types to `skein-proto`; the `skein-phase-out` thread
   writes the `harness_events` rows first, so the app writes none) and
   the webview mirrors it; badges, toasts and OS notifications stay in
@@ -824,7 +838,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   finished; it is what catches an unrecognised row shape disarming a
   deferral, as #440's queue-only rows once did. Held mail and nudges (#381)
   go out on either release through the ordinary transition-to-waiting
-  trigger. The supervisor's `ended_turn_not_waiting` and
+  trigger, which the daemon's delivery worker hears through the phase
+  listener (#733). The supervisor's `ended_turn_not_waiting` and
   `deferral_without_work` now guard on subagents plus background tasks
   (`backgroundWorking` in its snapshot).
   **Background tasks (#444/#445, epic #439):** a `Bash`/`PowerShell`
@@ -973,8 +988,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   Messaging is the `mail` tool group, switched in Settings
   (`toolGroups` in `settings.json`, default on) plus per-token
   rate and per-receiver unread caps. Delivering mail into a waiting
-  harness — the nudge through the #238 seam — is #329; this issue only
-  stores and serves the queue. **`create_room`** (#330) is the one verb
+  harness — the nudge (#329) — is the daemon's: storing a message calls
+  the `set_mail_hook` hook, and the `skein-delivery` worker
+  (`prompt_delivery/`, #733) gates and pastes it. This issue's part is
+  the queue and its verbs. **`create_room`** (#330) is the one verb
   that opens a whole new room and spawns a real harness in it, in the
   background (`activate: false`, so it never takes over the user's
   screen) — it round-trips twice through #328's Rust→frontend request

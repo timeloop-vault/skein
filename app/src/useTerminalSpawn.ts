@@ -289,7 +289,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				linkPolicy.mouseClicksDisabled = mouseClicksDisabled;
 				// #238: publish this harness to the `harnessInput` seam now
 				// that its PTY is live.
-				detachInputTarget = registerInputTarget(term, harnessId, harnessKind, id, gate);
+				detachInputTarget = registerInputTarget(term, harnessId, harnessKind, gate);
 				// L2c attach point — see terminalSpawnAdapters.ts.
 				const detach = attachAdapters({
 					harnessId,

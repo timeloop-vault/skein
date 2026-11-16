@@ -6,6 +6,10 @@
 // nudge where safety can't be proven": every refusal comes back as
 // a reason string a caller can show verbatim as a disabled-button
 // tooltip or a drag-overlay label, never a silent no-op.
+//
+// Since #733 the DAEMON decides whether a prompt is sent; `canSendPrompt`
+// survives only as the render-time hint behind disabled-button tooltips
+// (it leaves with #733 part B). `canInsertText` still guards a file drop.
 
 import type { HarnessCapabilities } from "./data.tsx";
 import type { HarnessActivity } from "./harnessActivity.ts";

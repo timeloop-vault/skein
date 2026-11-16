@@ -24,6 +24,7 @@ export const useReviewNudge = (
 	const activeActivity = useHarnessActivity(activeHarness?.id ?? null);
 	const nudgeOverrides = useNudgeOverrides();
 	const nudge = selectNudge(signoffState(signoff, headSha), unresolvedCount, nudgeOverrides);
+	// A display hint for the disabled button only; the daemon decides (#733).
 	const nudgeGate =
 		activeHarness && nudge
 			? canSendPrompt({
@@ -41,8 +42,9 @@ export const useReviewNudge = (
 			: undefined;
 	const onNudge = () => {
 		if (!activeHarness || !nudge) return;
-		const result = sendPrompt(activeHarness.id, activeHarness.kind, nudge.body);
-		if (!result.ok) setActionError(result.reason);
+		void sendPrompt(activeHarness.id, nudge.body).then((result) => {
+			if (!result.ok) setActionError(result.reason);
+		});
 	};
 	return { activeCapabilities, nudge, nudgeGate, nudgeDisabledReason, onNudge };
 };

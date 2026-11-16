@@ -43,10 +43,6 @@ export const harnessActivity = {
 		sendPhaseInput(id, { kind: "input", data, emptyComposer: opts?.emptyComposer ?? false });
 	},
 
-	notePromptSubmitted(id: string): void {
-		sendPhaseInput(id, { kind: "promptSubmitted" });
-	},
-
 	muteInducedOutput(id: string): void {
 		sendPhaseInput(id, { kind: "muteInducedOutput" });
 	},
@@ -58,10 +54,6 @@ export const harnessActivity = {
 
 	sessionSwitched(id: string, source: "clear" | "resume" | "fork" | "startup"): void {
 		sendPhaseInput(id, { kind: "sessionSwitched", switch: source });
-	},
-
-	recoverUnheardSilence(id: string): void {
-		sendPhaseInput(id, { kind: "recoverUnheardSilence" });
 	},
 
 	/// PTY output arrived. The daemon throttles `lastOutputAt`, so the local
@@ -93,11 +85,5 @@ export const harnessActivity = {
 	/// `(id, from, to, source)`. Returns an unsubscribe.
 	subscribeTransitions(cb: TransitionListener): () => void {
 		return phaseMirror.subscribeTransitions(cb);
-	},
-
-	/// #381: `cb(id)` fires when a harness's end-of-turn is deferred for
-	/// background work (a #277 deferral arming), never on disarm.
-	subscribeDelegationDeferred(cb: (id: string) => void): () => void {
-		return phaseMirror.subscribeDelegationDeferred(cb);
 	},
 };

@@ -51,8 +51,8 @@ pub struct SupervisorSnapshot {
     pub transcript: Option<Vec<TranscriptSample>>,
 }
 
-/// #423: what `useMailDelivery` knows about a harness's mail
-/// (`supervisor/mailFeed.ts`).
+/// #423: what the delivery worker knows about a harness's mail
+/// (`prompt_delivery/`; no fact source is wired yet, see `daemon.rs`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailState {
     pub unread: u32,

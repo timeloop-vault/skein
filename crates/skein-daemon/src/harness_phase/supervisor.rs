@@ -24,10 +24,10 @@ impl PhaseMachine {
     /// landed: #388's settlement rolls that nudge back, but by then the
     /// watchdog has already stripped authority from a harness that was
     /// never given a real prompt to answer, and nothing else would ever
-    /// call `adapter_delivered` for it again. `useMailDelivery.ts`'s
+    /// call `adapter_delivered` for it again. the delivery worker's
     /// rollback branch is the only caller, and only once it has also
     /// confirmed no human drove the harness in the meantime
-    /// (`mailSettle.ts`'s `shouldRecoverSilence`): a keystroke since the
+    /// (`prompt_delivery/mail_settle.rs`'s `should_recover_silence`): a keystroke since the
     /// nudge is evidence this diagnosis might be wrong.
     ///
     /// Recovers only when every one of these holds, deliberately as

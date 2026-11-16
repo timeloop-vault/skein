@@ -28,8 +28,10 @@ export interface HarnessCapabilities {
 	/// which cannot change) or has to say "started as X". Meaningless
 	/// without `agents`.
 	agentSwitchable: boolean;
-	/// Does `sendPrompt` (#238) get a second, delayed "\r" if the first
-	/// one doesn't appear to have landed (#380)? True only for `claude`
+	/// Does a prompt delivery (#238) get a second, delayed "\r" if the first
+	/// one doesn't appear to have landed (#380)? Read only by the daemon,
+	/// through `skein_proto::HarnessKind` (the Rust drift test parses this
+	/// file, so the field stays). True only for `claude`
 	/// — Claude Code 2.1.283 has a startup-timing bug (upstream
 	/// anthropics/claude-code#91205) where the Enter ending a first
 	/// bracketed paste into a freshly spawned harness can be dropped;
