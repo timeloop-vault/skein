@@ -4,10 +4,16 @@
 // horizontally. `direction="column"` stacks them; the divider drags
 // vertically. `size` is the pixel size of the *first* pane (width for
 // row, height for column); the second pane absorbs the remainder via
-// flex: 1.
+// flex: 1. The first pane is rendered clamped to the container
+// (splitterClamp.ts) so a saved size wider than the window never pushes the
+// divider off-screen; double-clicking the divider resets to `defaultSize`.
 
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import "./Splitter.css";
+import { clampSplit } from "./splitterClamp.ts";
+
+// Divider thickness in px; keep in sync with .sk-splitter-x/-y in Splitter.css.
+const DIVIDER_PX = 4;
 
 // Set on <body> for the length of a drag; Splitter.css turns iframe pointer
 // events off under it so the drag keeps following the pointer.
@@ -16,6 +22,7 @@ const DRAGGING_CLASS = "sk-dragging";
 interface SplitterProps {
 	direction: "row" | "column";
 	size: number;
+	defaultSize?: number;
 	onResize: (next: number) => void;
 	minFirst: number;
 	minSecond: number;
@@ -27,6 +34,7 @@ interface SplitterProps {
 export const Splitter = ({
 	direction,
 	size,
+	defaultSize,
 	onResize,
 	minFirst,
 	minSecond,
@@ -36,6 +44,20 @@ export const Splitter = ({
 }: SplitterProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const isRow = direction === "row";
+	const [containerSize, setContainerSize] = useState(0);
+	// Layout effect: the first paint already uses the measured size.
+	useLayoutEffect(() => {
+		const el = containerRef.current;
+		if (!el) return;
+		const measure = () => setContainerSize(isRow ? el.clientWidth : el.clientHeight);
+		measure();
+		const ro = new ResizeObserver(measure);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, [isRow]);
+	// Render-only clamp: onResize never gets the clamped value, so the saved
+	// preference survives a transient small window.
+	const rendered = clampSplit(size, containerSize, minFirst, minSecond, DIVIDER_PX);
 	// Ends a drag in flight if the splitter unmounts mid-drag.
 	const stopUnmount = useRef<(() => void) | null>(null);
 	useEffect(() => () => stopUnmount.current?.(), []);
@@ -45,15 +67,14 @@ export const Splitter = ({
 		const container = containerRef.current;
 		if (!container) return;
 		const startCoord = isRow ? e.clientX : e.clientY;
-		const startSize = size;
+		// Start from the rendered (clamped) size so the divider doesn't jump.
+		const startSize = rendered;
 		// Read container size at drag start so the max bound respects
 		// the current window dimensions; the user may have resized.
-		const containerSize = isRow ? container.clientWidth : container.clientHeight;
-		const max = Math.max(minFirst, containerSize - minSecond);
+		const liveSize = isRow ? container.clientWidth : container.clientHeight;
 		const onMove = (m: MouseEvent) => {
 			const delta = (isRow ? m.clientX : m.clientY) - startCoord;
-			const next = Math.min(max, Math.max(minFirst, startSize + delta));
-			onResize(next);
+			onResize(clampSplit(startSize + delta, liveSize, minFirst, minSecond, DIVIDER_PX));
 		};
 		const onUp = () => {
 			window.removeEventListener("mousemove", onMove);
@@ -90,7 +111,7 @@ export const Splitter = ({
 		>
 			<div
 				style={{
-					[sizeKey]: size,
+					[sizeKey]: rendered,
 					flex: "0 0 auto",
 					display: "flex",
 					flexDirection: "column",
@@ -101,7 +122,11 @@ export const Splitter = ({
 			>
 				{first}
 			</div>
-			<div className={isRow ? "sk-splitter-x" : "sk-splitter-y"} onMouseDown={onMouseDown} />
+			<div
+				className={isRow ? "sk-splitter-x" : "sk-splitter-y"}
+				onMouseDown={onMouseDown}
+				onDoubleClick={defaultSize === undefined ? undefined : () => onResize(defaultSize)}
+			/>
 			<div
 				style={{
 					flex: 1,

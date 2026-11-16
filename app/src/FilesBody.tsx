@@ -24,6 +24,8 @@ import { useFileBuffers } from "./useFileBuffers.ts";
 import "./FilesBody.css";
 import "./markdown.css";
 
+const DEFAULT_TREE_WIDTH = 280;
+
 interface FilesBodyProps {
 	harnessId: string;
 	cwd: string;
@@ -31,7 +33,7 @@ interface FilesBodyProps {
 }
 
 export const FilesBody = ({ harnessId, cwd, visible }: FilesBodyProps) => {
-	const [treeWidth, setTreeWidth] = usePersistedState<number>("filesTreeWidth", 280);
+	const [treeWidth, setTreeWidth] = usePersistedState<number>("filesTreeWidth", DEFAULT_TREE_WIDTH);
 	const {
 		tabs,
 		active,
@@ -59,6 +61,7 @@ export const FilesBody = ({ harnessId, cwd, visible }: FilesBodyProps) => {
 			<Splitter
 				direction="row"
 				size={treeWidth}
+				defaultSize={DEFAULT_TREE_WIDTH}
 				onResize={setTreeWidth}
 				minFirst={180}
 				minSecond={320}

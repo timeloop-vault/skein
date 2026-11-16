@@ -124,6 +124,7 @@ export const RoomWorkspace = (p: RoomWorkspaceProps) => {
 			className="sk-workspace"
 			direction="row"
 			size={s.harnessColWidth}
+			defaultSize={640}
 			onResize={s.setHarnessColWidth}
 			minFirst={320}
 			minSecond={320}
