@@ -49,6 +49,11 @@ pub struct PtySpawnResult {
     pub opencode_version: Option<OpencodeVersionDto>,
     /// Set when the daemon-started sidecar created or confirmed the session.
     pub session_id: Option<String>,
+    /// The `--port` the harness runner picked for an opencode v1 spawn
+    /// (#754); `None` for every other spawn and when no port could be picked.
+    /// Set by the runner, never by [`pty_spawn_with_sink`].
+    #[serde(default)]
+    pub opencode_port: Option<u16>,
 }
 
 /// The managed state a spawn reads, borrowed from wherever it is stored.
@@ -249,6 +254,7 @@ pub fn pty_spawn_with_sink(
         sidecar_generation,
         opencode_version,
         session_id: sidecar_session_id,
+        opencode_port: None,
     })
 }
 
@@ -299,6 +305,7 @@ mod tests {
                 version: "2.2.0".to_owned(),
             }),
             session_id: None,
+            opencode_port: Some(4096),
         })
         .expect("serialize");
         assert_eq!(
@@ -311,7 +318,8 @@ mod tests {
                 "envProfile": "proxy",
                 "sidecarGeneration": 4,
                 "opencodeVersion": {"major": 2, "version": "2.2.0"},
-                "sessionId": null
+                "sessionId": null,
+                "opencodePort": 4096
             })
         );
     }

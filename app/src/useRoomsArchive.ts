@@ -35,7 +35,6 @@ export interface RoomsArchiveDeps {
 	lastUsedByGroupRef: MutableRefObject<Map<string, string>>;
 	setRooms: Dispatch<SetStateAction<Room[]>>;
 	setActiveRoomId: Dispatch<SetStateAction<string>>;
-	setOpencodePorts: Dispatch<SetStateAction<Map<string, number>>>;
 	setRenaming: Dispatch<SetStateAction<RenameTarget | null>>;
 	setMismatch: (id: string, on: boolean) => void;
 	syncRepoMeta: (targets: Room[]) => void;
@@ -52,7 +51,6 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 		lastUsedByGroupRef,
 		setRooms,
 		setActiveRoomId,
-		setOpencodePorts,
 		setRenaming,
 		setMismatch,
 		syncRepoMeta,
@@ -172,8 +170,7 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 			}
 			const probed = await dropUnwrittenSessions(room, stillExists);
 			// #730: the daemon puts every harness's cmd in resume form, clears
-			// archived/retired/closedBy and allocates fresh opencode ports (the
-			// ones in sqlite are dead; a failed allocation resumes port-less).
+			// archived/retired/closedBy.
 			// The result merges into the CURRENT record by id below - never
 			// installed wholesale, since the Rust structs drop unknown fields.
 			// A rejection leaves the room archived and changes nothing.
@@ -204,8 +201,6 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 				setActiveRoomId(id);
 				return;
 			}
-			const ports = new Map(Object.entries(resumed.ports));
-			if (ports.size > 0) setOpencodePorts((prev) => new Map([...prev, ...ports]));
 			setRooms((prev) =>
 				prev.map((r) => (r.id === id ? applyResumedRoom(r, returned, { unarchive: true }) : r)),
 			);
@@ -218,7 +213,6 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 			void checkRoomFolder(transformed);
 		},
 		[
-			setOpencodePorts,
 			syncRepoMeta,
 			setMismatch,
 			checkRoomFolder,

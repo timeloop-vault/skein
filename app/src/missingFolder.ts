@@ -82,23 +82,19 @@ export function recoveryOptions(room: Room, repoInfo: RepoRootInfo | undefined):
  *  daemon-owned, so this stays pure and does not strip it: it returns
  *  `clearSession`, the ids of the harnesses whose session the caller must
  *  clear (`reportHarnessSession` mode "clear", awaited) BEFORE applying
- *  `room`. The daemon allocates opencode's port, which comes back; Claude
- *  gets no new session id (a bare `claude`).
+ *  `room`. Claude gets no new session id (a bare `claude`).
  *  A harness that can't resume anyway (copilot, a shell that may carry a
  *  user-swapped command) just moves - there's no conversation to lose,
  *  and rebuilding its argv from scratch would discard that
  *  customization. `spawnGen` is bumped either way so LiveTerminal
  *  remounts even when the argv is unchanged.
- *
- *  Returns the ports the daemon allocated (opencode harnesses only; a
- *  failed allocation is simply absent, as the argv is then port-less). */
+ */
 export async function repointRoom(
 	room: Room,
 	newCwd: string,
 	freshCmd: FreshCmdFn,
-): Promise<{ room: Room; ports: Map<string, number>; clearSession: string[] }> {
+): Promise<{ room: Room; clearSession: string[] }> {
 	const oldCwd = room.cwd;
-	const ports = new Map<string, number>();
 	const clearSession: string[] = [];
 	const harnesses = await Promise.all(
 		room.harnesses.map(async (h): Promise<Harness> => {
@@ -121,7 +117,6 @@ export async function repointRoom(
 				...(h.remote ? { remote: h.remote } : {}),
 				...(h.hermesProfile ? { hermesProfile: h.hermesProfile } : {}),
 			});
-			if (fresh.opencodePort !== null) ports.set(h.id, fresh.opencodePort);
 			return {
 				...rest,
 				cwd: newCwd,
@@ -130,5 +125,5 @@ export async function repointRoom(
 			};
 		}),
 	);
-	return { room: { ...room, cwd: newCwd, harnesses }, ports, clearSession };
+	return { room: { ...room, cwd: newCwd, harnesses }, clearSession };
 }

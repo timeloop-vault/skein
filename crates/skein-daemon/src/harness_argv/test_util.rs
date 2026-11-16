@@ -1,7 +1,5 @@
 //! Shared fixtures for the `harness_argv` tests (the vitest helpers
-//! `harness`, `room`, `ports`, `SID`, `SHELL`).
-
-use std::collections::HashMap;
+//! `harness`, `room`, `SID`, `SHELL`).
 
 use skein_proto::rooms::{Harness, Room};
 
@@ -72,10 +70,6 @@ pub fn room(harnesses: Vec<Harness>) -> Room {
         repo_identity: None,
         todos: None,
     }
-}
-
-pub fn ports(entries: &[(&str, u16)]) -> HashMap<String, u16> {
-    entries.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect()
 }
 
 /// A minter that must not be called.

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use skein_proto::rooms::{Harness, Room};
 
-use crate::boot_resume::{opencode_port_from_cmd, session_survives};
+use crate::boot_resume::session_survives;
 use crate::git::{IdentityCheck, check_identity};
 use crate::harness_argv::{SpawnArgv, shell_argv, spawn_argv, uuid_session_id};
 use crate::harness_kind::HarnessKind;
@@ -106,17 +106,25 @@ pub(super) fn wanted(rooms: &[Room], harness_id: &str) -> bool {
         .any(|r| r.archived.is_none() && r.harnesses.iter().any(|h| h.id == harness_id))
 }
 
-/// The `--port` the record's STORED cmd pins for opencode, which the derived
-/// argv re-passes; `None` in shell launch mode (the stored cmd then holds
-/// whatever the shell was, not a port Skein allocated).
-///
-/// This is the seam issue #754 replaces when the runner allocates the port
-/// itself instead of recovering it from the stored text.
-pub(super) fn stored_opencode_port(h: &Harness) -> Option<u16> {
-    if shell_argv(h).is_some() {
-        return None;
+/// Picks a free local port for an opencode v1 spawn (#754).
+pub type PortPicker = std::sync::Arc<dyn Fn() -> Result<u16, String> + Send + Sync>;
+
+/// Whether this spawn gets a `--port` of the runner's own picking: an
+/// opencode harness in tool mode. The stored `opencode_version` is only the
+/// last spawn's result, so it does not decide; a v2 spawn runs a sidecar and
+/// the runner drops the picked port afterwards.
+fn wants_port(h: &Harness, kind: HarnessKind) -> bool {
+    kind == HarnessKind::Opencode && shell_argv(h).is_none()
+}
+
+/// The port the spawn result reports: a v2 spawn (a sidecar generation) runs
+/// on the sidecar's own port, so the one picked for the argv is not reported.
+pub(super) fn reported_port(sidecar_generation: Option<u64>, picked: Option<u16>) -> Option<u16> {
+    if sidecar_generation.is_some() {
+        None
+    } else {
+        picked
     }
-    opencode_port_from_cmd(h.cmd.as_deref()?)
 }
 
 /// Everything a spawn takes from the record.
@@ -131,6 +139,9 @@ pub(super) struct SpawnPlan {
     pub session_id: Option<String>,
     pub env_profile: Option<String>,
     pub hermes_profile: Option<String>,
+    /// The port picked for this spawn's `--port` (#754); `None` when none was
+    /// wanted or the pick failed.
+    pub opencode_port: Option<u16>,
 }
 
 impl SpawnPlan {
@@ -144,6 +155,7 @@ impl SpawnPlan {
         kind: HarnessKind,
         request_profile: Option<&str>,
         probe: &dyn Fn(&Harness) -> Result<bool, String>,
+        pick_port: &dyn Fn() -> Result<u16, String>,
     ) -> Result<Self, Refusal> {
         // A record never given an argv is not spawnable, whatever it derives.
         harness
@@ -164,15 +176,31 @@ impl SpawnPlan {
         {
             return Err(Refusal::RepoMismatch);
         }
+        // As late as the gates allow: exactly one pick per spawn. A failed
+        // pick spawns without `--port` (no telemetry), never refuses.
+        let opencode_port = if wants_port(harness, kind) {
+            pick_port()
+                .inspect_err(|e| {
+                    tracing::warn!(
+                        harness = %harness.id,
+                        error = %e,
+                        "harness runner: no free port for opencode; spawning without --port"
+                    );
+                })
+                .ok()
+        } else {
+            None
+        };
         let SpawnArgv { cmd, session_id } = spawn_argv(
             harness,
             kind,
             || session_survives(harness, &probe),
-            stored_opencode_port(harness),
+            opencode_port,
             uuid_session_id,
         )
         .ok_or(Refusal::NoCmd)?;
         Ok(Self {
+            opencode_port,
             cmd,
             cwd,
             kind,

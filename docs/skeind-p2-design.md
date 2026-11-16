@@ -23,11 +23,11 @@ no client attached. Surviving the restart is #584.
 | --- | --- | --- |
 | Argv per kind, resume argv | Daemon since slice 2 (#730); before it, the frontend | `harness_argv/`; the app calls `harness_fresh_cmd`, `harness_resume_cmd`, `rooms_resume_cmds`. `harnessCmd.ts` keeps only `isOpencodeV2` and the Hermes profile constant |
 | Spawn defaults (shell, cwd, agent) | Daemon since slice 2 (#730); before it, the frontend held the agent | `default_agents` in the daemon's `settings.json`; `default_shell_impl`, `default_cwd_impl`. `prefs.ts` `defaultAgents` survives only as the legacy import source |
-| opencode port, sidecar | Daemon since slice 2 (#730); before it, the frontend | The port is allocated inside the argv commands; the spawn (`ensure_running` since slice 3, `pty_spawn` before) probes the version and starts the sidecar. `opencodeV2Spawn.ts` is gone |
+| opencode port, sidecar | Daemon since slice 2 (#730); before it, the frontend | Until #754 the port was allocated inside the argv commands; since #754 the argv commands pick none and the spawn picks it (`SpawnPlan::from_record`) and reports `opencodePort`. The spawn (`ensure_running` since slice 3, `pty_spawn` before) probes the version and starts the sidecar. `opencodeV2Spawn.ts` is gone |
 | Spawn and kill of the PTY | Daemon since slice 3 (#731); before it, the frontend | `harness_runner/`: spawns from the stored record on first request, stops when the record goes. `useTerminalSpawn.ts` asks, attaches and detaches |
 | PTY output | Replaceable sink per PTY | `pty/sink_slot.rs`. No ring buffer in the daemon (#584); with no sink attached output is dropped |
 | Room and harness records | Daemon since slice 1 (#729); before it, the frontend saved wholesale | `RoomStore` (`room_store/`); clients send mutations through `rooms_apply`. `db_save_rooms` and `roomsSaveScheduler.ts` are gone |
-| Boot resume | Daemon since slice 3 (#731); before it, the frontend | `boot_resume.rs`: launch migration, shell claims, a fresh opencode port; retried until it succeeds (#753), saved under origin `daemon-boot`. `useRoomsHydrate.ts` keeps the folder and identity gates |
+| Boot resume | Daemon since slice 3 (#731); before it, the frontend | `boot_resume.rs`: launch migration, shell claims, a legacy opencode cmd cleanup (a fresh opencode port until #754); retried until it succeeds (#753), saved under origin `daemon-boot`. `useRoomsHydrate.ts` keeps the folder and identity gates |
 | Adapters (Claude JSONL, opencode SSE, Hermes) | Daemon attaches them after a spawn (slice 3); the client still attaches its own Claude and opencode event channels, teed into the daemon's phase sink, for non-phase consumers (slice 4) | `harness_runner/adapters.rs`, `terminalSpawnAdapters.ts` |
 | Transition log (`harness_events`), action rows (`harness_actions`) | Daemon: action rows since slice 3, the transition log since slice 4 | `harness_phase/stream.rs`, `useHarnessActions.ts` |
 | Phase machine | Daemon since slice 4 (#732); before it, the frontend. The webview mirrors it | `harness_phase/`; `phaseMirror.ts`, `harnessActivity.ts`, `subagents.ts`, `backgroundTasks.ts` |
@@ -502,8 +502,8 @@ in `crates/skein-daemon/src/harness_argv/`:
 
 | Command | The app calls it | The daemon |
 | --- | --- | --- |
-| `harness_fresh_cmd` | A new harness, and repoint | Builds the first argv for the kind, allocates the opencode port, mints a Claude session id, takes the shell for a byoh harness from its own default |
-| `harness_resume_cmd` | Restart of one harness | Rebuilds the argv from the record in resume form, with a fresh opencode port |
+| `harness_fresh_cmd` | A new harness, and repoint | Builds the first argv for the kind, mints a Claude session id, takes the shell for a byoh harness from its own default (until #754 it also allocated the opencode port; since then the spawn picks it) |
+| `harness_resume_cmd` | Restart of one harness | Rebuilds the argv from the record in resume form, with a fresh opencode port (since #754 without one) |
 | `rooms_resume_cmds` | Boot, and unarchive | Does the same for every harness of the given rooms; unarchive also clears `archived`, `retired` and `closedBy` |
 
 `pty_spawn` changed too. It takes `agent` and `sessionId` from the
@@ -526,8 +526,8 @@ sequenceDiagram
     participant D as Daemon
     participant O as opencode
     C->>D: 1 harness_fresh_cmd
-    D->>D: 2 allocate port, build argv
-    D-->>C: 3 cmd and port
+    D->>D: 2 build argv, pre-754 also allocate port
+    D-->>C: 3 cmd, pre-754 also the port
     C->>D: 4 rooms_apply putHarness
     C->>D: 5 pty_spawn with agent
     D->>D: 6 probe version, v1 keeps argv
@@ -538,7 +538,10 @@ sequenceDiagram
 ```
 
 Figure 5: a fresh opencode harness on a v1 CLI, from asking for argv to
-a running PTY with SSE attached. The v2 differences are in step 6 to 10
+a running PTY with SSE attached, as slice 2 built it. Since #754 the
+fresh command picks and returns no port; the port comes from the spawn
+(see "Opencode port at spawn (#754)", Figure 10), so the port in steps 2,
+3 and 10 is historical. The v2 differences are in step 6 to 10
 below. Renders section "Slice 2 as built" and
 crates/skein-daemon/src/harness_argv/; the text is authoritative
 (non-normative).
@@ -549,10 +552,13 @@ crates/skein-daemon/src/harness_argv/; the text is authoritative
    daemon mints a Claude session id when none is given and defaults the
    Hermes profile; it is false for a repoint, where both pass through
    as given.
-2. The daemon binds a free port on `127.0.0.1` and builds the argv with
-   `cmd_for_kind`.
-3. It returns the argv and the port. The client keeps the port to attach
-   the SSE adapter later (v1 only).
+2. Until #754: the daemon bound a free port on `127.0.0.1` and built the
+   argv with `cmd_for_kind`. Since #754 it only builds the argv and picks
+   no port.
+3. Until #754: it returned the argv and the port, and the client kept the
+   port to attach the SSE adapter later (v1 only). Since #754 it returns
+   `{cmd, sessionId, hermesProfile}` and no port; the port is picked at
+   spawn and arrives as `opencodePort` in the ensure result.
 4. The client records the harness through `rooms_apply`, as in slice 1.
 5. The client calls `pty_spawn` with the argv, the `agent` and the
    `sessionId` of the record.
@@ -565,7 +571,8 @@ crates/skein-daemon/src/harness_argv/; the text is authoritative
 9. The client asks the daemon to attach the SSE adapter
    (`opencode_events_attach`).
 10. The daemon connects to opencode's event stream on the port from
-    step 3.
+    step 3 (until #754; since then the port the spawn picked, reported
+    as `opencodePort`).
 
 Steps 4 and 5 may happen in either order in the code; the figure shows
 the usual one.
@@ -574,8 +581,9 @@ On a v2 CLI, step 6 also starts a sidecar for the agent and session
 inside `pty_spawn`, swaps in `opencode --server <url> --session <id>`
 and binds the sidecar to the PTY. The result's `sidecarGeneration` is
 set, and steps 9 and 10 attach by sidecar generation with no port
-(`ptySpawnOutcome.ts`); the port from step 2 goes unused. The live check
-exercised the v1 path.
+(`ptySpawnOutcome.ts`); the port from step 2 goes unused (until #754; since
+then no port exists before the spawn). The live check exercised the v1
+path.
 
 ### The merge rule
 
@@ -744,8 +752,8 @@ crates/skein-daemon/src/harness_runner/; the text is authoritative
 
 1. At the first successful rooms load of the daemon process, boot
    preparation runs the launch migration per room, the shell-claim step and
-   a fresh opencode port, and is retried until it succeeds (#753). It
-   spawns nothing. (As built in #731 it also probed sessions and rewrote
+   a legacy opencode `cmd` cleanup (a fresh opencode port until #754), and
+   is retried until it succeeds (#753). It spawns nothing. (As built in #731 it also probed sessions and rewrote
    every `cmd` to resume form; #753 reduced it, see "Boot preparation
    after #753". Since #752 the spawn derives its argv itself.)
 2. A view asks for the harness with `harness_ensure_running`. Before it
@@ -783,8 +791,8 @@ first successful load with at least one room in this daemon process it:
 - probes each stored session id (Claude, opencode, Hermes) and clears the
   stale ones. A probe error keeps the id. An opencode v2 id is trusted
   and not probed;
-- rewrites each `cmd` to resume form with a fresh opencode port, using
-  the slice 2 builders (#752: first it runs `migrate_launch`, and the
+- rewrites each `cmd` to resume form with a fresh opencode port (no port
+  since #754), using the slice 2 builders (#752: first it runs `migrate_launch`, and the
   rewrite keeps a shell `launch`; the spawn does not depend on the
   rewritten `cmd`);
 - saves the changed harnesses through `RoomStore::apply` under origin
@@ -799,10 +807,11 @@ the stored rows, already prepared, and does not prepare again. A load that
 starts while the preparation is running waits for it and then returns the
 prepared rows (#744): the preparation holds a mutex, taken before the store
 and db locks. A failed preparation is logged, the unprepared rooms are
-returned and it is not retried. The frontend no longer probes at boot
+returned and it is not retried (since #753 the next load retries it). The
+frontend no longer probes at boot
 and no longer calls `rooms_resume_cmds` at boot. It takes the opencode
-ports from the stored `cmd` (`opencodePort.ts`). `rooms_resume_cmds`
-remains for unarchive.
+ports from the stored `cmd` (`opencodePort.ts`; since #754 from the ensure
+result, and the file is gone). `rooms_resume_cmds` remains for unarchive.
 
 ### The output sink
 
@@ -836,8 +845,9 @@ disabled; that check was run by hand and is not an automated assertion.
 After a spawn the daemon attaches the adapters itself. They write the
 `harness_actions` rows, and since slice 4 their events feed the daemon's
 phase machine. opencode
-attaches by the `--port` in the stored `cmd`, or by sidecar generation on
-v2. The client still attaches its own event channels for the consumers
+attaches by the `--port` in the stored `cmd` (since #754: the port the
+spawn picked, kept in the runner's running entry), or by sidecar generation
+on v2. The client still attaches its own event channels for the consumers
 that are not phase (see "Slice 4 as built"). Its attach replaces the
 daemon's, with the daemon's phase sink teed in. When the client detaches (`claude_events_detach` and the
 opencode one), the app calls `release_events`: the runner puts its own
@@ -945,7 +955,9 @@ flowchart TD
     F -->|Claude| G{"transcript exists?"}
     G -->|yes| H["claude --resume sid"]
     G -->|no or no id| I["claude --session-id sid, minted if none"]
-    F -->|opencode, Hermes| J{"session exists?"}
+    F -->|Hermes| J{"session exists?"}
+    F -->|opencode| P["pick a free port, just before the argv (#754)"]
+    P --> J
     J -->|yes| K["resume this session"]
     J -->|no| L["fresh, never --continue"]
     F -->|"shell, remote, other"| M["remote argv or the stored cmd"]
@@ -968,6 +980,12 @@ authoritative (non-normative).
    runs at most once and only for a non-blank session id of a Claude,
    opencode or Hermes harness (opencode v2 excepted: its stored id is
    trusted, #679).
+   Since #754, an opencode harness in tool mode gets a free port picked
+   right before `spawn_argv` and `--port <p> --hostname 127.0.0.1` is added
+   to the argv (see "Opencode port at spawn (#754)"). The pick comes after
+   the gates and after the reuse of a running process, so one spawn picks
+   once. The figure draws it before the session check; in the code it is
+   one step ahead of `spawn_argv`, whatever the probe says.
 3. The argv is spawned. Claude with no id mints one. opencode and Hermes
    with no live session start fresh.
 4. The minted or dropped session id is written back to the record. Since
@@ -987,11 +1005,13 @@ absent means the kind's own tool):
 | `migrate_launch` (`launch.rs`, first in boot preparation) | Infers shell once for old records whose `cmd[0]` is not the kind's program |
 
 `cmd` is still stored. The client writes it on create, restart and
-unarchive, and since #753 boot preparation writes it only to give an
-opencode harness a fresh `--port` (or to reduce it to the program when a
-shell claim goes back to its tool). It carries the opencode `--port`
-(`stored_opencode_port` in `gates.rs`), is the argv for kinds that do not
-resume, and feeds the `expectCmd` staleness check.
+unarchive, and boot preparation writes it only to reduce it to the program
+when a shell claim goes back to its tool, and (since #754) to strip legacy
+opencode arguments. Since #754 it never carries an opencode port: the
+stored opencode `cmd` is `opencode` plus `--session <id>` and `--agent <x>`
+when there are such. It is the argv for kinds that do not resume, and
+feeds the `expectCmd` staleness check. (Before #754 it carried the
+`--port`, and `stored_opencode_port` in `gates.rs` read it back.)
 
 Two facts from the live check on 2026-11-13, both fixed by #753 on the same
 day (see "Boot preparation after #753"):
@@ -1001,20 +1021,20 @@ day (see "Boot preparation after #753"):
   each app start. Boot preparation no longer touches session ids.
 - Boot resume wrote `--continue` into an opencode harness's STORED `cmd`
   when no session id was known, though the spawned argv never carried it.
-  Boot preparation writes no `--continue` now; restart and unarchive
-  (`resume_harness`) still can write it into the stored `cmd`, and the
-  spawn never passes it.
+  Boot preparation writes no `--continue` now, and since #754
+  `resume_harness` does not either; boot strips one a legacy `cmd` still
+  holds. The spawn never passes it.
 
 User decisions, 2026-11-13: Enter-for-shell is a launch mode, not a
 rewritten `cmd`; boot and unarchive keep a post-exit shell (#745 part 1);
 Restart harness returns a post-exit shell to its tool.
 
-Seams for the follow-ups: #754 replaces `stored_opencode_port` with a
-daemon-owned port; #755 and #754 together remove the stored `cmd` and the
-`expectCmd` check (#753 reduced boot preparation but did not remove it).
-#755 shipped the field-level write path and made `sessionId` daemon-owned,
-but `cmd` is still stored and client-written; see "Daemon-owned fields
-(#755)".
+Seams for the follow-ups: #754 shipped: the port is picked at spawn and
+`stored_opencode_port` is gone (see "Opencode port at spawn (#754)").
+Removing the stored `cmd` and the `expectCmd` check is left (#756; #753
+reduced boot preparation but did not remove it). #755 shipped the
+field-level write path and made `sessionId` daemon-owned, but `cmd` is
+still stored and client-written; see "Daemon-owned fields (#755)".
 
 ## Boot preparation after #753
 
@@ -1033,10 +1053,15 @@ is unchanged. The preparation is now only this:
    the only probe boot still runs, and a probe error counts as existing. A
    claim that is not live is removed and the shell is kept. A Claude
    harness in tool mode just loses a leftover claim.
-3. Each opencode harness in tool mode, in a room that is not archived, gets
-   a fresh free port. Its stored `cmd` becomes exactly
-   `opencode --port <p> --hostname 127.0.0.1`. The spawn
-   (`harness_argv/spawn.rs`) adds `--session` and `--agent` from the
+3. Since #754, a cleanup that picks nothing. #753 gave each opencode
+   harness in tool mode a fresh free port here and stored `cmd` as
+   `opencode --port <p> --hostname 127.0.0.1`. Now, for each opencode
+   harness in tool mode (archived rooms included),
+   `strip_legacy_opencode_args` removes `--port`, `--hostname` (both the
+   `X v` and the `X=v` form) and `--continue` from a legacy stored `cmd`.
+   It is idempotent (nothing to strip, nothing written), and goes through
+   the same plan and apply path with the same stale and busy rules. The
+   spawn picks the port itself and adds `--session` and `--agent` from the
    record.
 
 It no longer probes and drops stale session ids (the spawn does that and
@@ -1046,21 +1071,22 @@ Claude harness therefore keeps its session id across restarts.
 
 The preparation counts as done only after it succeeded on a load that
 returned at least one room, so an empty load does not mark it done. A
-failure (a port could not be picked, or the store refused the write) is
-logged, that load returns the unprepared rooms, and the next load tries
+failure (since #754 only the store refusing the write; boot picks no port)
+is logged, that load returns the unprepared rooms, and the next load tries
 again. A retry skips every harness that is running, checked through the
 runner, so a live process's record is never rewritten. The changes are
 saved through `RoomStore::apply` under origin `daemon-boot` as
 whole-harness `PutHarness` mutations, then flushed (since #755 they are
-field-level edits instead, see "Daemon-owned fields (#755)"). The frontend still
-reads the opencode ports from the stored `cmd` (`opencodePort.ts`), and
-unarchive still runs `rooms_resume_cmds`.
+field-level edits instead, see "Daemon-owned fields (#755)"). Unarchive
+still runs `rooms_resume_cmds`. (As #753 shipped, the frontend read the
+opencode ports from the stored `cmd` with `opencodePort.ts`; since #754 it
+reads the port from the ensure result and that file is gone.)
 
 Decision, 2026-11-13: full removal was deferred because the port and the
 claim have no spawn-time home yet. #755 replaced the whole-harness writes
-with field-level ones (shipped). #754 moves the port out of the stored `cmd` to the
-runner at spawn, after which only `migrate_launch` and the claim step
-remain.
+with field-level ones (shipped). #754 (shipped) moved the port out of the
+stored `cmd` to the runner at spawn, so what remains in boot preparation is
+`migrate_launch`, the claim step and the legacy cleanup.
 
 Known limits:
 
@@ -1070,8 +1096,8 @@ Known limits:
 - The running check and the write are not atomic. A harness that spawns
   between a retry's snapshot and its `RoomStore::apply` can have its
   record overwritten by the snapshot: a new port in `cmd` while the
-  process is on the old one, and a session id the spawn just wrote back
-  lost. A retry only happens after an empty first load or a failed
+  process is on the old one (#753 only; since #754 boot writes no port),
+  and a session id the spawn just wrote back lost. A retry only happens after an empty first load or a failed
   preparation, so this is rare, and it is the whole-harness-write class
   that #755 removes. Since #755 this limit is closed: the check and the
   write both happen under the store lock, and a stale plan is skipped.
@@ -1092,13 +1118,11 @@ flowchart TD
     E --> F{"per harness: running?"}
     F -->|yes| G["skip this harness"]
     F -->|no| H["claim step, Claude and opencode"]
-    H --> I["port step, opencode in tool mode"]
-    G --> J{"pick failed?"}
-    I --> J
-    J -->|yes| K["log, return unprepared rows, not done"]
-    J -->|no| L["apply under daemon-boot, per harness under the store lock (#755), then flush"]
+    H --> I["legacy cleanup: strip --port, --hostname, --continue, opencode in tool mode (#754)"]
+    G --> L
+    I --> L["apply under daemon-boot, per harness under the store lock (#755), then flush"]
     L --> M{"store refused?"}
-    M -->|yes| K
+    M -->|yes| K["log, return unprepared rows, not done"]
     M -->|no| N["mark done"]
     N --> O["return the prepared rows"]
 ```
@@ -1173,7 +1197,7 @@ is authoritative (non-normative).
 | `opencodeVersion` | The runner, at each opencode spawn | Same edit; the probed version, or none to clear a stale one |
 | `launch` | The client; boot preparation | Client: `PutHarness` (Enter on an exited pane, Restart harness). Boot: `migrate_launch` and a live shell claim, by edit |
 | `shellClaim` | The client; boot preparation | Client: `PutHarness` (#520). Boot: settles or clears it, by edit |
-| `cmd` | The client; boot preparation | Client: `PutHarness` on create, restart, unarchive. Boot: the fresh opencode `--port`, by edit |
+| `cmd` | The client; boot preparation | Client: `PutHarness` on create, restart, unarchive. Boot: the program-only reduction after a live shell claim and, since #754, the legacy opencode argument strip, by edit (#753 wrote a fresh opencode `--port` here) |
 
 The `harness_session_report` command (`commands/harness_runner.rs`, over
 `HarnessRunner::report_session`, logic in `harness_runner/record.rs`)
@@ -1233,9 +1257,10 @@ the store and must not block.
 
 - `cmd`, `launch` and `shellClaim` are still client-written through
   `PutHarness`. A stale client put can overwrite a daemon write to those
-  three: the boot's fresh port in `cmd`, a cleared claim. The boot's stale
-  check protects the other direction only. #754 takes the port out of
-  `cmd` and #756 adds intent commands with a revision.
+  three: the boot's `cmd` cleanup, a cleared claim. The boot's stale
+  check protects the other direction only. #754 took the port out of
+  `cmd` (it was the boot's fresh port in #755's own time); #756 adds
+  intent commands with a revision.
 - The window between a session report and its `rooms-changed` event is
   narrowed by `app/src/reportedSessions.ts`: the client's capture/follow
   decisions and the claimed-session set use a reported id until the
@@ -1254,18 +1279,113 @@ the store and must not block.
   the `cmd` text, and the client no longer copies it into `sessionId`.
   The spawn derives its argv from `sessionId`, never from the stored
   `cmd`, so the process uses the record's id. It ends when the stored
-  `cmd` goes (#754 and after).
+  `cmd` goes (#756 and after). Since #754 the resume builder mints no
+  port; the `--session-id` mismatch for Claude is unchanged.
 
 ### Seams for the follow-ups
 
-- #754 (C) moves the opencode port out of `cmd` to the runner; boot's port
-  step then has no write left (see "Boot preparation after #753").
+- #754 (C) shipped: the opencode port moved out of `cmd` to the spawn, and
+  boot's port step became the legacy cleanup (see "Opencode port at spawn
+  (#754)").
 - #756 (E) adds intent commands, each with a revision. The edit path is
   what they call: one closure per harness under the store lock, with the
   event, persistence and observers already shared.
 - #758 (G) builds on the same edit path.
 - `harness_session_report` is the first intent-shaped command: the client
   says what it saw, the daemon decides what the record becomes.
+
+## Opencode port at spawn (#754)
+
+An opencode v1 harness in tool mode needs a `--port`, because the daemon's
+SSE adapter and the post-exit shell follow find its event stream by that
+port. Until #754 the port was allocated by the argv builders and by boot
+preparation and then stored in `cmd`, where the frontend parsed it back
+(`opencodePort.ts`). Since #754 the port belongs to the spawn: it is picked
+when the process is started and reported in the spawn result.
+
+```mermaid
+flowchart TD
+    A["ensure_running"] --> B["gates: lookup, expectCmd and expectLaunch"]
+    B --> C{"process already running?"}
+    C -->|yes| R["return the running entry, with its stored port"]
+    C -->|no| D["SpawnPlan::from_record: cmd, folder, identity gates"]
+    D --> E{"opencode in tool mode?"}
+    E -->|no| G["spawn_argv, no port"]
+    E -->|yes| F["PortPicker: pick_free_port"]
+    F -->|ok| H["spawn_argv adds --port and --hostname"]
+    F -->|"failed: warn"| I["spawn_argv, no --port, no telemetry"]
+    H --> S["spawn PTY, v1 or v2 sidecar"]
+    G --> S
+    I --> S
+    S --> T["result: PtySpawnResult.opencodePort, none for a v2 sidecar"]
+    T --> U["runner entry keeps the port"]
+    T --> V["daemon SSE adapter attach reads it"]
+    T --> W["client: EnsureResult.opencodePort, adapter attach"]
+```
+
+Figure 10: where the opencode port comes from and who reads it. Renders
+this section and crates/skein-daemon/src/harness_runner/gates.rs; the text
+is authoritative (non-normative).
+
+1. `ensure_running` runs the gates. A running process is reused and
+   nothing is picked, so a re-ensure returns the port the process was
+   started with.
+2. `SpawnPlan::from_record` runs its own gates (a stored argv, the folder,
+   repository identity). Then, if `wants_port` holds (kind opencode, launch
+   not a shell), it calls the injectable `PortPicker` (default
+   `pick_free_port`) once, right before `spawn_argv`. A failed pick is
+   logged at warn and the harness spawns without `--port`, so without
+   telemetry; it does not fail the spawn.
+3. `spawn_argv` adds `--port <p> --hostname 127.0.0.1` for the picked port.
+4. The spawn result carries it as `PtySpawnResult.opencode_port` (JSON
+   `opencodePort`). It is none when the spawn went the v2 sidecar way
+   (`reported_port`), which runs on the sidecar's own port.
+5. The runner's running entry keeps the port, so a later ensure of the same
+   process returns the same one. The daemon's own SSE adapter attach reads
+   it from there.
+
+Who reads the port: the daemon's adapter attach (from the running entry);
+the client's adapter attach (`EnsureResult.opencodePort`, through
+`ptySpawnOutcome.ts`, `terminalEnsureApply.ts`, `useTerminalSpawn.ts` and
+`terminalSpawnAdapters.ts`). Nothing parses a port from a `cmd` any more:
+`stored_opencode_port` (`gates.rs`) and `opencode_port_from_cmd`
+(`boot_resume.rs`) are deleted, and so are `app/src/opencodePort.ts` and
+the `opencodePorts` map in `useRoomsStore.ts` with its prop chain. The
+#517 post-exit-shell follow still takes its port from the process scan, and
+`Harness.shellClaim.port` is still recorded and never reused. Restart no
+longer refuses an opencode harness for a missing port.
+
+The stored-argv builders (`cmd_for_kind`, `resume_harness`,
+`with_resume_cmds`, `unarchive_room_transform`, and `fresh_cmd`,
+`resume_one`, `resume_rooms` in `plan.rs`) pick no port and never write
+`--port`, `--hostname` or `--continue`. A stored opencode `cmd` is
+`opencode`, plus `--session <id>` when there is one and `--agent <x>` when
+set. Their outputs lost the port fields (`FreshCmdOutput.opencodePort`, the
+port in `ResumeOneOutput`, `ResumeRoomsOutput.ports`). Boot preparation's
+third step is the cleanup described in "Boot preparation after #753".
+
+Decision, 2026-11-13: the port is deliberately not a stored or
+daemon-owned record field. It belongs to a live process; a persisted one is
+stale after every restart and would need a boot step to clear it, which is
+the problem this change removes. Any client that ensures a running harness
+gets the port from the result.
+
+Known limits:
+
+- The pick binds a socket and drops it, as `pick_free_port` always did.
+  The gap before opencode binds its own is now only the spawn itself:
+  small, not zero. A lost race shows as a harness with no telemetry.
+- After a #517 re-point from the post-exit shell the daemon's running entry
+  still holds the spawn-time port (pre-existing; see
+  `harness_runner/events.rs`).
+- `cmd`, `launch` and `shellClaim` are still client-written (#756).
+- A busy legacy harness keeps its old `cmd` text, with the old `--port`,
+  until its next process start. That is harmless, since nothing reads a
+  port from it and the spawn builds its argv from the record.
+
+Seams for the follow-ups: #756 removes the stored `cmd` and the
+`expectCmd` check; with the port gone from it, the only reason left to
+store an opencode `cmd` at all is the legacy shape the cleanup removes.
 
 ## Slice 4 as built (#732)
 
@@ -1538,7 +1658,7 @@ flowchart LR
     A -->|"9 phase and work reads"| S
 ```
 
-Figure 10: the daemon decides the phase, publishes it, and the webview
+Figure 11: the daemon decides the phase, publishes it, and the webview
 mirrors it. Renders section "Slice 4 as built" and
 crates/skein-daemon/src/harness_phase/; the text is authoritative
 (non-normative).

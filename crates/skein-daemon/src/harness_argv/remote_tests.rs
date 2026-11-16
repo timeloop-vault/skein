@@ -192,9 +192,9 @@ fn resume_rebuilds_from_the_record_ignoring_a_stale_ssh_argv() {
     let expected = remote_argv(&s).unwrap();
     let mut h = with("remote", &["ssh", "-t", "--", "old-host", "x"], None);
     h.remote = Some(s);
-    let once = resume_harness(h, None, super::test_util::no_mint);
+    let once = resume_harness(h, super::test_util::no_mint);
     assert_eq!(once.cmd.as_ref(), Some(&expected));
-    let twice = resume_harness(once, None, super::test_util::no_mint);
+    let twice = resume_harness(once, super::test_util::no_mint);
     assert_eq!(twice.cmd, Some(expected));
 }
 
@@ -202,13 +202,13 @@ fn resume_rebuilds_from_the_record_ignoring_a_stale_ssh_argv() {
 fn remote_keeps_a_shell_swapped_cmd() {
     let mut h = with("remote", &["pwsh.exe"], None);
     h.remote = Some(kind_spec());
-    let out = resume_harness(h, None, super::test_util::no_mint);
+    let out = resume_harness(h, super::test_util::no_mint);
     assert_eq!(out.cmd, Some(sv(&["pwsh.exe"])));
 }
 
 #[test]
 fn remote_leaves_cmd_unchanged_when_remote_is_missing() {
     let cmd = ["ssh", "-t", "--", "devbox", "x"];
-    let out = resume_harness(with("remote", &cmd, None), None, super::test_util::no_mint);
+    let out = resume_harness(with("remote", &cmd, None), super::test_util::no_mint);
     assert_eq!(out.cmd, Some(sv(&cmd)));
 }

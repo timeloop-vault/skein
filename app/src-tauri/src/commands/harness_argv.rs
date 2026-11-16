@@ -1,5 +1,5 @@
-//! Argv construction commands (#730): the daemon builds the argv and
-//! allocates the opencode port, so the webview no longer does either.
+//! Argv construction commands (#730): the daemon builds the argv, so the
+//! webview no longer does. It picks no opencode port: the spawn does (#754).
 
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use tauri::Manager;
 
 use super::spawn_env::SpawnEnvState;
 
-/// Argv for a brand-new harness; binds a socket (opencode) and probes the
+/// Argv for a brand-new harness; probes the
 /// default shell, hence `spawn_blocking`.
 #[tauri::command]
 pub(crate) async fn harness_fresh_cmd(
@@ -26,7 +26,7 @@ pub(crate) async fn harness_fresh_cmd(
     .map_err(|e| e.to_string())
 }
 
-/// One harness rebuilt into resume form (restart), with its port.
+/// One harness rebuilt into resume form (restart).
 #[tauri::command]
 pub(crate) async fn harness_resume_cmd(input: ResumeOneInput) -> Result<ResumeOneOutput, String> {
     tauri::async_runtime::spawn_blocking(move || resume_one(input))
@@ -34,7 +34,7 @@ pub(crate) async fn harness_resume_cmd(input: ResumeOneInput) -> Result<ResumeOn
         .map_err(|e| e.to_string())
 }
 
-/// Rooms rebuilt into resume form (boot, or unarchive), with their ports.
+/// Rooms rebuilt into resume form (boot, or unarchive).
 #[tauri::command]
 pub(crate) async fn rooms_resume_cmds(
     input: ResumeRoomsInput,

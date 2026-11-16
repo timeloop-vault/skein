@@ -30,7 +30,6 @@ const result = (over: Partial<EnsureResult> = {}): EnsureResult => ({
 const apply = (over: Partial<ApplyEnsure> = {}): ApplyEnsure => ({
 	result: result(),
 	harnessId: "h1",
-	opencodePort: 4001,
 	spawnStartedAt: 1234,
 	...over,
 });
@@ -55,13 +54,29 @@ describe("applyEnsureResult", () => {
 
 	it("writes nothing back from the result: the daemon recorded the session and version (#755)", () => {
 		const out = applyEnsureResult(
-			apply({ result: result({ sessionId: "s1", opencodeVersion: "v2" as never }) }),
+			apply({
+				result: result({ sessionId: "s1", opencodeVersion: "v2" as never, opencodePort: 4001 }),
+			}),
 		);
 		expect(out).toEqual({ sidecarGeneration: undefined, port: 4001 });
 	});
 
+	it("takes the port from the ensure result's opencodePort (#754)", () => {
+		const out = applyEnsureResult(apply({ result: result({ opencodePort: 4777 }) }));
+		expect(out.port).toBe(4777);
+	});
+
+	it("a null or absent opencodePort yields no port", () => {
+		expect(
+			applyEnsureResult(apply({ result: result({ opencodePort: null }) })).port,
+		).toBeUndefined();
+		expect(applyEnsureResult(apply()).port).toBeUndefined();
+	});
+
 	it("attaches by sidecar generation (no port) when the daemon started one", () => {
-		const out = applyEnsureResult(apply({ result: result({ sidecarGeneration: 3 }) }));
+		const out = applyEnsureResult(
+			apply({ result: result({ sidecarGeneration: 3, opencodePort: 4001 }) }),
+		);
 		expect(out).toEqual({ sidecarGeneration: 3, port: undefined });
 	});
 });

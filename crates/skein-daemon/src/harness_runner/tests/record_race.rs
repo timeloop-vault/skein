@@ -122,6 +122,7 @@ fn spawn_result(version: Option<OpencodeVersionDto>) -> PtySpawnResult {
         sidecar_generation: None,
         opencode_version: version,
         session_id: None,
+        opencode_port: None,
     }
 }
 

@@ -1,16 +1,18 @@
 //! #755: boot preparation plans from the snapshot the load returned and writes
-//! field by field under the store lock. The injected `pick` (and `busy`) run
+//! field by field under the store lock. The injected probe (and `busy`) run
 //! between the snapshot and the write, so they are where these tests make a
-//! client, the runner or a spawn get in first.
+//! client, the runner or a spawn get in first. Every fixture holds a harness
+//! "p" with a live #517 claim, which is what makes the probe run, and an
+//! opencode "o" with a legacy cmd, so a plan exists for it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 use skein_proto::room_mutations::RoomMutation;
-use skein_proto::rooms::{Harness, LaunchMode, ShellClaim};
+use skein_proto::rooms::{Harness, LaunchMode, Room, ShellClaim};
 
-use super::{find, harness, opencode_cmd, room, sv};
+use super::{find, harness, hooked_room, legacy_opencode_cmd, room, sv};
 use crate::boot_resume::{BOOT_ORIGIN, BootResume};
 use crate::db::test_support::fresh_db;
 use crate::event_sink::EventSink;
@@ -53,22 +55,13 @@ fn setup() -> (
     (dir, db, store, sink)
 }
 
-fn no_probe(_: &Harness) -> Result<bool, String> {
-    panic!("no claim, so no probe")
-}
-
-fn one_opencode() -> Vec<skein_proto::rooms::Room> {
-    vec![room(
-        "r1",
-        false,
-        vec![harness(
-            "o",
-            "opencode",
-            Some("o-sid"),
-            &["opencode"],
-            &json!({}),
-        )],
-    )]
+/// A probe that runs `f` (the interleaved write) and says the claim is live.
+fn hook(f: impl FnMut()) -> impl Fn(&Harness) -> Result<bool, String> {
+    let f = Mutex::new(f);
+    move |_| {
+        (f.lock().unwrap())();
+        Ok(true)
+    }
 }
 
 /// A whole-harness client put of the stored record after `f`.
@@ -87,10 +80,9 @@ fn client_put(store: &RoomStore, room_id: &str, id: &str, f: impl FnOnce(&mut Ha
     assert!(res.skipped.is_empty(), "{:?}", res.skipped);
 }
 
-/// A second load must not prepare again: the first one counted as done.
-fn assert_done(boot: &BootResume, db: &Arc<crate::db::Database>, store: &RoomStore) {
-    boot.load_rooms_with(db, store, no_probe, || panic!("prepared again"))
-        .unwrap();
+/// The preparation counted as done: a later load would not prepare again.
+fn assert_done(boot: &BootResume) {
+    assert!(*boot.done.lock().unwrap(), "the preparation was not done");
 }
 
 // Failed before #755: the whole-harness PutHarness wrote the snapshot's name
@@ -98,21 +90,21 @@ fn assert_done(boot: &BootResume, db: &Arc<crate::db::Database>, store: &RoomSto
 #[test]
 fn a_client_put_between_snapshot_and_apply_survives() {
     let (_dir, db, store, _sink) = setup();
-    db.write_room_rows(&one_opencode(), &[], None).unwrap();
+    db.write_room_rows(&hooked_room(), &[], None).unwrap();
     let boot = BootResume::detached();
-    let pick = || {
+    let probe = hook(|| {
         client_put(&store, "r1", "o", |h| {
             h.name = "renamed".into();
             h.agent = Some("build".into());
         });
-        Ok(5000)
-    };
-    let out = boot.load_rooms_with(&db, &store, no_probe, pick).unwrap();
+    });
+    let out = boot.load_rooms_with(&db, &store, probe).unwrap();
     for rooms in [out.rooms, store.rooms(), db.load_all().unwrap().rooms] {
         let o = find(&rooms, "o");
         assert_eq!(o.name, "renamed");
         assert_eq!(o.agent.as_deref(), Some("build"));
-        assert_eq!(o.cmd, Some(opencode_cmd("5000")));
+        // The client's put carried the legacy cmd, so the plan still matched.
+        assert_eq!(o.cmd, Some(sv(&["opencode"])));
     }
 }
 
@@ -121,44 +113,44 @@ fn a_client_put_between_snapshot_and_apply_survives() {
 #[test]
 fn a_runner_session_write_makes_the_plan_stale_but_still_counts_as_done() {
     let (_dir, db, store, _sink) = setup();
-    db.write_room_rows(&one_opencode(), &[], None).unwrap();
+    db.write_room_rows(&hooked_room(), &[], None).unwrap();
     let boot = BootResume::detached();
-    let pick = || {
+    let probe = hook(|| {
         let found = store
             .edit_harness("runner", "r1", "o", |h| {
                 h.session_id = Some("minted".into());
             })
             .unwrap();
         assert!(found);
-        Ok(5000)
-    };
-    let out = boot.load_rooms_with(&db, &store, no_probe, pick).unwrap();
+    });
+    let out = boot.load_rooms_with(&db, &store, probe).unwrap();
     let o = find(&out.rooms, "o");
     assert_eq!(o.session_id.as_deref(), Some("minted"));
-    assert_eq!(o.cmd, Some(sv(&["opencode"])), "the stale plan is skipped");
     assert_eq!(
-        find(&store.rooms(), "o").cmd,
-        Some(sv(&["opencode"])),
+        o.cmd,
+        Some(legacy_opencode_cmd()),
         "the stale plan is skipped"
     );
-    assert_done(&boot, &db, &store);
+    assert_eq!(
+        find(&store.rooms(), "o").cmd,
+        Some(legacy_opencode_cmd()),
+        "the stale plan is skipped"
+    );
+    assert_done(&boot);
 }
 
 // Failed before #755: the planned cmd overwrote the client's.
 #[test]
 fn a_client_cmd_change_makes_the_plan_stale() {
     let (_dir, db, store, _sink) = setup();
-    db.write_room_rows(&one_opencode(), &[], None).unwrap();
+    db.write_room_rows(&hooked_room(), &[], None).unwrap();
     let boot = BootResume::detached();
     let mine = sv(&["opencode", "--port", "9"]);
-    let pick = || {
-        client_put(&store, "r1", "o", |h| h.cmd = Some(mine.clone()));
-        Ok(5000)
-    };
-    let out = boot.load_rooms_with(&db, &store, no_probe, pick).unwrap();
+    let probe = hook(|| client_put(&store, "r1", "o", |h| h.cmd = Some(mine.clone())));
+    let out = boot.load_rooms_with(&db, &store, probe).unwrap();
     assert_eq!(find(&out.rooms, "o").cmd, Some(mine.clone()));
     assert_eq!(find(&db.load_all().unwrap().rooms, "o").cmd, Some(mine));
-    assert_done(&boot, &db, &store);
+    assert_done(&boot);
 }
 
 /// "l": a pre-#752 shell record with a live #517 claim, so a full apply puts
@@ -172,15 +164,11 @@ fn legacy_claimed() -> Harness {
     l
 }
 
-fn busy_fixture() -> Vec<skein_proto::rooms::Room> {
-    vec![room(
-        "r1",
-        false,
-        vec![
-            legacy_claimed(),
-            harness("o", "opencode", Some("o-sid"), &["opencode"], &json!({})),
-        ],
-    )]
+/// "o" (legacy cmd) is planned before "l", whose probe is the hook.
+fn busy_fixture() -> Vec<Room> {
+    let mut o = harness("o", "opencode", Some("o-sid"), &["opencode"], &json!({}));
+    o.cmd = Some(legacy_opencode_cmd());
+    vec![room("r1", false, vec![o, legacy_claimed()])]
 }
 
 // Failed before #755: a harness that became busy after the plan was made
@@ -193,17 +181,11 @@ fn a_harness_busy_at_write_time_takes_only_the_launch_migration() {
     let mut boot = BootResume::detached();
     let f = Arc::clone(&flag);
     boot.busy = Arc::new(move |_| f.load(Ordering::SeqCst));
-    // "l" is checked before "o" asks for its port, so both look idle at plan
-    // time and busy when the write happens.
-    let pick = || {
-        flag.store(true, Ordering::SeqCst);
-        Ok(5000)
-    };
-    let out = boot
-        .load_rooms_with(&db, &store, |_| Ok(true), pick)
-        .unwrap();
+    // Both look idle at plan time and busy when the write happens.
+    let probe = hook(|| flag.store(true, Ordering::SeqCst));
+    let out = boot.load_rooms_with(&db, &store, probe).unwrap();
     let o = find(&out.rooms, "o");
-    assert_eq!(o.cmd, Some(sv(&["opencode"])));
+    assert_eq!(o.cmd, Some(legacy_opencode_cmd()));
     let l = find(&out.rooms, "l");
     assert_eq!(l.cmd, Some(sv(&["pwsh.exe"])));
     assert!(l.shell_claim.is_some(), "the claim is left as stored");
@@ -218,23 +200,19 @@ fn a_harness_busy_at_write_time_takes_only_the_launch_migration() {
         serde_json::to_value(&out.rooms).unwrap(),
         serde_json::to_value(db.load_all().unwrap().rooms).unwrap()
     );
-    assert_done(&boot, &db, &store);
+    assert_done(&boot);
 }
 
 #[test]
 fn a_harness_busy_at_plan_time_but_idle_at_write_time_gets_nothing_extra() {
     let (_dir, db, store, _sink) = setup();
     db.write_room_rows(&busy_fixture(), &[], None).unwrap();
-    let flag = Arc::new(AtomicBool::new(true));
     let mut boot = BootResume::detached();
-    let f = Arc::clone(&flag);
-    boot.busy = Arc::new(move |id| id == "l" && f.load(Ordering::SeqCst));
-    let pick = || {
-        flag.store(false, Ordering::SeqCst);
-        Ok(5000)
-    };
+    // "l" is busy for the plan only: the first answer is true, then idle.
+    let first = AtomicBool::new(true);
+    boot.busy = Arc::new(move |id| id == "l" && first.swap(false, Ordering::SeqCst));
     let out = boot
-        .load_rooms_with(&db, &store, |_| Ok(true), pick)
+        .load_rooms_with(&db, &store, |_| panic!("a busy harness is not probed"))
         .unwrap();
     let l = find(&out.rooms, "l");
     // Planned while busy: only the migrated launch was planned, so that is
@@ -247,7 +225,7 @@ fn a_harness_busy_at_plan_time_but_idle_at_write_time_gets_nothing_extra() {
             argv: sv(&["pwsh.exe"])
         })
     );
-    assert_eq!(find(&out.rooms, "o").cmd, Some(opencode_cmd("5000")));
+    assert_eq!(find(&out.rooms, "o").cmd, Some(sv(&["opencode"])));
 }
 
 // Failed before #755: one harness's put failing or being stale was not
@@ -255,49 +233,23 @@ fn a_harness_busy_at_plan_time_but_idle_at_write_time_gets_nothing_extra() {
 #[test]
 fn a_skipped_harness_does_not_block_the_others_and_one_boot_event_is_emitted() {
     let (_dir, db, store, sink) = setup();
-    let seed = vec![
-        room(
-            "r1",
-            false,
-            vec![harness(
-                "o",
-                "opencode",
-                Some("o-sid"),
-                &["opencode"],
-                &json!({}),
-            )],
-        ),
-        room(
-            "r2",
-            false,
-            vec![harness(
-                "o2",
-                "opencode",
-                Some("o2-sid"),
-                &["opencode"],
-                &json!({}),
-            )],
-        ),
-    ];
+    let legacy = |id: &str| {
+        let mut h = harness(id, "opencode", Some("sid"), &["opencode"], &json!({}));
+        h.cmd = Some(legacy_opencode_cmd());
+        h
+    };
+    let mut seed = hooked_room();
+    seed.push(room("r2", false, vec![legacy("o2")]));
     db.write_room_rows(&seed, &[], None).unwrap();
     let boot = BootResume::detached();
-    let mut first = true;
-    let pick = || {
-        if first {
-            first = false;
-            client_put(&store, "r1", "o", |h| h.cmd = Some(sv(&["opencode", "-x"])));
-            Ok(5000)
-        } else {
-            Ok(5001)
-        }
-    };
-    let out = boot.load_rooms_with(&db, &store, no_probe, pick).unwrap();
+    let probe = hook(|| client_put(&store, "r1", "o", |h| h.cmd = Some(sv(&["opencode", "-x"]))));
+    let out = boot.load_rooms_with(&db, &store, probe).unwrap();
     assert_eq!(
         find(&out.rooms, "o").cmd,
         Some(sv(&["opencode", "-x"])),
         "stale: the client's cmd stays"
     );
-    assert_eq!(find(&out.rooms, "o2").cmd, Some(opencode_cmd("5001")));
+    assert_eq!(find(&out.rooms, "o2").cmd, Some(sv(&["opencode"])));
     let boot_events = sink
         .origins()
         .into_iter()
@@ -311,29 +263,28 @@ fn a_skipped_harness_does_not_block_the_others_and_one_boot_event_is_emitted() {
 #[test]
 fn boot_never_writes_fields_outside_the_plan() {
     let (_dir, db, store, _sink) = setup();
-    db.write_room_rows(&one_opencode(), &[], None).unwrap();
+    db.write_room_rows(&hooked_room(), &[], None).unwrap();
     let boot = BootResume::detached();
-    let pick = || {
+    let probe = hook(|| {
         client_put(&store, "r1", "o", |h| {
             h.tokens = "999".into();
             h.model = "fast".into();
             h.status = "running".into();
         });
-        Ok(5000)
-    };
-    let out = boot.load_rooms_with(&db, &store, no_probe, pick).unwrap();
+    });
+    let out = boot.load_rooms_with(&db, &store, probe).unwrap();
     for rooms in [out.rooms, db.load_all().unwrap().rooms] {
         let o = find(&rooms, "o");
         assert_eq!(o.tokens, "999");
         assert_eq!(o.model, "fast");
         assert_eq!(o.status, "running");
-        assert_eq!(o.cmd, Some(opencode_cmd("5000")), "the plan still applies");
+        assert_eq!(o.cmd, Some(sv(&["opencode"])), "the plan still applies");
     }
 }
 
 /// "l": a pre-#752 shell-mode record (no `launch`, cmd not the kind's program)
-/// with a live claim, next to an opencode harness whose `pick` runs.
-fn legacy_shell_fixture() -> Vec<skein_proto::rooms::Room> {
+/// with a live claim, next to an opencode harness.
+fn legacy_shell_fixture() -> Vec<Room> {
     busy_fixture()
 }
 
@@ -349,17 +300,14 @@ fn a_stale_legacy_shell_record_still_gets_its_launch_migrated() {
     db.write_room_rows(&legacy_shell_fixture(), &[], None)
         .unwrap();
     let boot = BootResume::detached();
-    let pick = || {
+    let probe = hook(|| {
         assert!(
             store
                 .edit_harness("runner", "r1", "l", |h| h.session_id = Some("other".into()))
                 .unwrap()
         );
-        Ok(5000)
-    };
-    let out = boot
-        .load_rooms_with(&db, &store, |_| Ok(true), pick)
-        .unwrap();
+    });
+    let out = boot.load_rooms_with(&db, &store, probe).unwrap();
     for rooms in [out.rooms, store.rooms(), db.load_all().unwrap().rooms] {
         let l = find(&rooms, "l");
         assert_eq!(l.session_id.as_deref(), Some("other"));
@@ -371,7 +319,7 @@ fn a_stale_legacy_shell_record_still_gets_its_launch_migrated() {
             "the migration is independent"
         );
     }
-    assert_done(&boot, &db, &store);
+    assert_done(&boot);
 }
 
 #[test]
@@ -379,17 +327,19 @@ fn a_record_both_stale_and_busy_takes_only_the_launch_migration() {
     let (_dir, db, store, _sink) = setup();
     db.write_room_rows(&legacy_shell_fixture(), &[], None)
         .unwrap();
+    let flag = Arc::new(AtomicBool::new(false));
     let mut boot = BootResume::detached();
-    boot.busy = Arc::new(|id| id == "l");
-    let pick = || {
+    let f = Arc::clone(&flag);
+    boot.busy = Arc::new(move |id| id == "l" && f.load(Ordering::SeqCst));
+    // The plan sees "l" idle (the probe is only called for an idle one); by
+    // the write it is busy and stale.
+    let probe = hook(|| {
+        flag.store(true, Ordering::SeqCst);
         store
             .edit_harness("runner", "r1", "l", |h| h.session_id = Some("other".into()))
             .unwrap();
-        Ok(5000)
-    };
-    let out = boot
-        .load_rooms_with(&db, &store, |_| Ok(true), pick)
-        .unwrap();
+    });
+    let out = boot.load_rooms_with(&db, &store, probe).unwrap();
     for rooms in [out.rooms, db.load_all().unwrap().rooms] {
         let l = find(&rooms, "l");
         assert_eq!(l.session_id.as_deref(), Some("other"));
@@ -397,7 +347,7 @@ fn a_record_both_stale_and_busy_takes_only_the_launch_migration() {
         assert!(l.shell_claim.is_some());
         assert_eq!(l.launch, Some(shell_launch()));
     }
-    assert_done(&boot, &db, &store);
+    assert_done(&boot);
 }
 
 #[test]
@@ -406,23 +356,20 @@ fn a_client_restart_to_the_tool_is_not_migrated_to_a_shell() {
     db.write_room_rows(&legacy_shell_fixture(), &[], None)
         .unwrap();
     let boot = BootResume::detached();
-    let pick = || {
+    let probe = hook(|| {
         client_put(&store, "r1", "l", |h| {
             h.cmd = Some(sv(&["claude"]));
             h.shell_claim = None;
         });
-        Ok(5000)
-    };
-    let out = boot
-        .load_rooms_with(&db, &store, |_| Ok(true), pick)
-        .unwrap();
+    });
+    let out = boot.load_rooms_with(&db, &store, probe).unwrap();
     for rooms in [out.rooms, store.rooms(), db.load_all().unwrap().rooms] {
         let l = find(&rooms, "l");
         assert_eq!(l.launch, None, "boot wrote nothing to the restarted record");
         assert_eq!(l.cmd, Some(sv(&["claude"])), "the client's cmd stays");
         assert!(l.shell_claim.is_none());
     }
-    assert_done(&boot, &db, &store);
+    assert_done(&boot);
 }
 
 #[test]
@@ -431,20 +378,15 @@ fn a_client_claim_removal_alone_blocks_the_migration() {
     db.write_room_rows(&legacy_shell_fixture(), &[], None)
         .unwrap();
     let boot = BootResume::detached();
-    let pick = || {
-        client_put(&store, "r1", "l", |h| h.shell_claim = None);
-        Ok(5000)
-    };
-    let out = boot
-        .load_rooms_with(&db, &store, |_| Ok(true), pick)
-        .unwrap();
+    let probe = hook(|| client_put(&store, "r1", "l", |h| h.shell_claim = None));
+    let out = boot.load_rooms_with(&db, &store, probe).unwrap();
     for rooms in [out.rooms, store.rooms(), db.load_all().unwrap().rooms] {
         let l = find(&rooms, "l");
         assert_eq!(l.launch, None, "the claim was an input of the migration");
         assert_eq!(l.cmd, Some(sv(&["pwsh.exe"])));
         assert!(l.shell_claim.is_none());
     }
-    assert_done(&boot, &db, &store);
+    assert_done(&boot);
 }
 
 #[test]
@@ -454,18 +396,13 @@ fn a_client_launch_change_is_not_migrated_over() {
         .unwrap();
     let boot = BootResume::detached();
     let mine = Some(LaunchMode::Shell { argv: sv(&["zsh"]) });
-    let pick = || {
-        client_put(&store, "r1", "l", |h| h.launch = mine.clone());
-        Ok(5000)
-    };
-    let out = boot
-        .load_rooms_with(&db, &store, |_| Ok(true), pick)
-        .unwrap();
+    let probe = hook(|| client_put(&store, "r1", "l", |h| h.launch = mine.clone()));
+    let out = boot.load_rooms_with(&db, &store, probe).unwrap();
     for rooms in [out.rooms, store.rooms(), db.load_all().unwrap().rooms] {
         let l = find(&rooms, "l");
         assert_eq!(l.launch, mine, "the client's launch wins");
         assert_eq!(l.cmd, Some(sv(&["pwsh.exe"])), "stale: cmd untouched");
         assert!(l.shell_claim.is_some());
     }
-    assert_done(&boot, &db, &store);
+    assert_done(&boot);
 }

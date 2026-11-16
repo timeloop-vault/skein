@@ -144,14 +144,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   db/room_rows (per-row writes).
     │                                #   #730 added harness_argv/ (cmd_for_kind, resume,
     │                                #   remote, agent_check, opencode_v2, plan: the argv
-    │                                #   builders ported from the frontend, plus opencode
-    │                                #   port allocation) and spawn_env/default_agents.
+    │                                #   builders ported from the frontend; since #754 they
+    │                                #   pick no opencode port) and spawn_env/default_agents.
     │                                #   #731 added harness_runner/ (HarnessRunner:
     │                                #   ensure_running spawns from the stored record and
     │                                #   attaches the adapters, stop_harness, detach_view,
     │                                #   reconcile on RoomStore::observe), boot_resume (the
     │                                #   retryable boot preparation, #753: launch, shell claim,
-    │                                #   opencode port; spawns nothing; plan.rs, #755, applies
+    │                                #   legacy opencode cmd cleanup, #754; spawns nothing; plan.rs, #755, applies
     │                                #   it as per-harness edits)
     │                                #   and pty/sink_slot (the replaceable output sink)
     │                                #   #752 added harness_argv/spawn.rs (`spawn_argv`) and
@@ -655,18 +655,22 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   returns the unprepared rooms and the next one retries, skipping
   running harnesses). It runs `migrate_launch` (fills `launch` for old
   records), settles each #517 shell claim (a live claim goes back to its
-  tool, a dead one is removed) and gives each opencode harness in tool
-  mode a fresh port, so its stored cmd is
-  `opencode --port <p> --hostname 127.0.0.1`. Stale session ids are the
+  tool, a dead one is removed) and strips `--port`, `--hostname` and
+  `--continue` from a legacy stored opencode cmd (#754; boot picks no
+  port). The opencode port is picked at spawn (`SpawnPlan::from_record`,
+  `PortPicker`) and reported in the spawn result
+  (`PtySpawnResult.opencodePort`, kept in the runner's running entry);
+  a failed pick spawns without `--port`. A stored opencode cmd is
+  `opencode` plus `--session`/`--agent`. Stale session ids are the
   spawn's business (it probes and writes the id back, a field-level edit
   since #755), so boot no longer
   drops them, mints Claude ids or writes resume forms. It saves under
   origin `daemon-boot`, per harness under the store lock and skipping a
   record that changed since its snapshot (#755), and spawns nothing — a harness starts on its first
-  request. The frontend reads the ports back from the cmds
-  (`opencodePort.ts`). Reopening an archived room runs the resume
+  request. The frontend takes the port from the ensure result
+  (`EnsureResult.opencodePort`). Reopening an archived room runs the resume
   rewrite (#153) through `rooms_resume_cmds` (#730), merged back by id
-  (`harnessArgvApply.ts`). See docs/skeind-p2-design.md, "Slice 3".
+  (`harnessArgvApply.ts`). See docs/skeind-p2-design.md, "Slice 3" and "Opencode port at spawn (#754)".
 - **Watchers** (`WatcherManager`, notify-debouncer-mini, 200 ms,
   `.git/` deliberately unfiltered) push `()` over a Channel; the
   active room's Live Context re-fetches `git_diff` and the status-bar

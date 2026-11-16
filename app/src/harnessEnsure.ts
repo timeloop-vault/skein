@@ -26,6 +26,9 @@ export interface EnsureResult {
 	/** #615: the env profile actually applied (`null` = none). */
 	envProfile: string | null;
 	sidecarGeneration: number | null;
+	/** #754: the port the daemon picked for this spawn of an opencode v1 harness;
+	 *  null/absent otherwise (other kinds, shell launch, v2, failed pick). */
+	opencodePort?: number | null;
 	opencodeVersion: OpencodeVersion | null;
 	sessionId: string | null;
 	/** The process was already dead: its `exit` event comes through the channel. */

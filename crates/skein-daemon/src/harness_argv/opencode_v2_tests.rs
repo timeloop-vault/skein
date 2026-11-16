@@ -52,16 +52,15 @@ fn is_opencode_v2_is_major_2_or_later_only() {
 fn cmds() -> Vec<Vec<String>> {
     let sh = sv(&["sh"]);
     let port = |agent| CmdParams {
-        opencode_port: Some(4100),
         agent,
         ..CmdParams::default()
     };
     vec![
         cmd_for_kind(HarnessKind::Opencode, &sh, &port(None)),
         cmd_for_kind(HarnessKind::Opencode, &sh, &port(Some("build"))),
-        resume_cmd(oc(&["opencode"], Some("ses_1"), None), Some(4100)),
-        resume_cmd(oc(&["opencode"], None, None), Some(4100)),
-        resume_cmd(oc(&["opencode"], Some("ses_1"), Some("plan")), Some(4100)),
+        resume_cmd(oc(&["opencode"], Some("ses_1"), None)),
+        resume_cmd(oc(&["opencode"], None, None)),
+        resume_cmd(oc(&["opencode"], Some("ses_1"), Some("plan"))),
     ]
 }
 

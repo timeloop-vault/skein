@@ -42,10 +42,10 @@ use skein_proto::rooms::{Harness, LaunchMode, Room};
 
 use self::adapters::{Adapters, AttachSpec};
 pub use self::gates::{EnsureError, Refusal};
-use self::gates::{SpawnPlan, lookup, wanted};
+use self::gates::{PortPicker, SpawnPlan, lookup, reported_port, wanted};
 use self::phase_tap::RunnerObserver;
 use crate::agent_endpoint::AgentApiEndpoint;
-use crate::boot_resume::{opencode_port_from_cmd, probe_session};
+use crate::boot_resume::probe_session;
 use crate::db::Database;
 use crate::event_sink::{self, SharedEventSink};
 use crate::harness_actions_hermes::HermesActionsManager;
@@ -58,6 +58,7 @@ use crate::harness_work_hermes::HermesWorkAttacher;
 use crate::opencode_sidecar::start::{EXIT_EVENT, SidecarExitPayload};
 use crate::opencode_sidecar::{OnExit, OpencodeSidecarManager};
 use crate::pty::command::{PtySpawnArgs, PtySpawnDeps, PtySpawnResult, pty_spawn_with_sink};
+use crate::pty::opencode::pick_free_port;
 use crate::pty::{AttachOutcome, ExitRecord, PtyEvent, PtyManager, PtyObserver};
 use crate::room_store::RoomStore;
 use crate::spawn_env::state::SpawnEnvState;
@@ -93,6 +94,9 @@ pub struct RunnerDeps {
     /// The session-existence probe; `None` = the real one over the tools'
     /// own stores ([`probe_session`]). Tests inject.
     pub session_probe: Option<SessionProbe>,
+    /// Picks the free port an opencode v1 spawn gets (#754); `None` = the
+    /// real one ([`pick_free_port`]). Tests inject.
+    pub port_picker: Option<PortPicker>,
 }
 
 #[derive(Debug, Clone)]
@@ -142,7 +146,6 @@ struct Running {
     /// argv[0] as spawned.
     program: Option<String>,
     hermes_profile: Option<String>,
-    opencode_port: Option<u16>,
     /// Retired when this process is stopped or replaced (#732).
     observer: Arc<RunnerObserver>,
 }
@@ -159,6 +162,7 @@ pub struct HarnessRunner {
     adapters: Adapters,
     phase: Arc<PhaseService>,
     session_probe: Mutex<SessionProbe>,
+    port_picker: Mutex<PortPicker>,
     entries: Mutex<HashMap<String, Running>>,
     spawns: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Test-only pause points: name -> a closure run when the code reaches it.
@@ -219,13 +223,16 @@ impl HarnessRunner {
             events,
             phase,
             session_probe,
+            port_picker,
         } = deps;
+        let port_picker = port_picker.unwrap_or_else(|| Arc::new(pick_free_port));
         let session_probe = session_probe.unwrap_or_else(|| {
             let env = Arc::clone(&spawn_env);
             Arc::new(move |h: &Harness| probe_session(Some(&env), h))
         });
         Self {
             session_probe: Mutex::new(session_probe),
+            port_picker: Mutex::new(port_picker),
             store,
             db,
             sidecar_exit: sidecar_exit_hook(pty.clone(), events),
@@ -363,12 +370,14 @@ impl HarnessRunner {
         }
 
         let probe = Arc::clone(&self.session_probe.lock());
+        let port_picker = Arc::clone(&self.port_picker.lock());
         let plan = match SpawnPlan::from_record(
             room,
             harness,
             kind,
             req.env_profile.as_deref(),
             &*probe,
+            &*port_picker,
         ) {
             Ok(plan) => plan,
             Err(refusal) => {
@@ -389,7 +398,11 @@ impl HarnessRunner {
         // threads start (see `RunnerObserver`).
         let observer = RunnerObserver::new(Arc::clone(&self.phase), &req.harness_id, &room_id);
         let spawn = match self.spawn(req, &room_id, &plan, sink, &observer) {
-            Ok(spawn) => spawn,
+            Ok(spawn) => PtySpawnResult {
+                // A v2 spawn runs a sidecar on its own port: none to report.
+                opencode_port: reported_port(spawn.sidecar_generation, plan.opencode_port),
+                ..spawn
+            },
             Err(e) => {
                 // A restart that failed leaves no process for the record.
                 self.phase.forget(&req.harness_id);
@@ -406,7 +419,6 @@ impl HarnessRunner {
             cwd: plan.cwd.clone(),
             program,
             hermes_profile: plan.hermes_profile.clone(),
-            opencode_port: opencode_port_from_cmd(&plan.cmd),
             observer,
         };
         self.entries
@@ -604,7 +616,7 @@ impl HarnessRunner {
         .map_err(EnsureError::SpawnFailed)
     }
 
-    /// The adapters for a running harness: v1 opencode by the stored `--port`,
+    /// The adapters for a running harness: v1 opencode by the spawn's port,
     /// v2 by the sidecar generation the spawn reported.
     fn attach_adapters(
         &self,
@@ -622,7 +634,7 @@ impl HarnessRunner {
             opencode_port: if run.spawn.sidecar_generation.is_some() {
                 None
             } else {
-                run.opencode_port
+                run.spawn.opencode_port
             },
             sidecar_generation: run.spawn.sidecar_generation,
             program: run.program.as_deref(),
@@ -652,6 +664,12 @@ impl HarnessRunner {
         {
             spawns.remove(harness_id);
         }
+    }
+
+    /// Test-only: replace the opencode port picker.
+    #[cfg(test)]
+    fn set_port_picker(&self, picker: PortPicker) {
+        *self.port_picker.lock() = picker;
     }
 
     /// Test-only: replace the session probe.

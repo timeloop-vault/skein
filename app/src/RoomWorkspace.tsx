@@ -152,7 +152,6 @@ export const RoomWorkspace = (p: RoomWorkspaceProps) => {
 							defaultShell={p.defaultShell}
 							defaultAgents={s.defaultAgents}
 							dockedDesign={s.dockedDesign}
-							opencodePorts={p.store.opencodePorts}
 							versionNoticeModes={s.versionNoticeModes}
 							draggedHarnessId={dragHere ? dragHere.id : null}
 							dropTargetHarnessId={dropHere ? dropHere.id : null}

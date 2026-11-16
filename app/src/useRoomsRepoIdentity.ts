@@ -29,7 +29,6 @@ export interface RoomsRepoIdentityDeps {
 	setMissingFolders: Dispatch<SetStateAction<Set<string>>>;
 	setMismatch: (id: string, on: boolean) => void;
 	syncRepoMeta: (targets: Room[]) => void;
-	setOpencodePorts: Dispatch<SetStateAction<Map<string, number>>>;
 }
 
 export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
@@ -47,7 +46,6 @@ export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 		setMissingFolders,
 		setMismatch,
 		syncRepoMeta,
-		setOpencodePorts,
 	} = d;
 
 	// #164: "Recreate worktree" on a MissingFolderCard. Only ever called
@@ -90,8 +88,7 @@ export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 	// #164: "Pick another folder" on a MissingFolderCard. Unlike the
 	// worktree recreate above, the room's `cwd` itself changes, so every
 	// harness that resumed into the old folder needs `repointRoom`'s
-	// full treatment (session cleared through the daemon, #755; fresh argv) — same port
-	// allocation unarchive already does for opencode harnesses.
+	// full treatment (session cleared through the daemon, #755; fresh argv).
 	const pickMissingFolder = useCallback(
 		async (room: Room, newCwd: string) => {
 			// The picked folder may belong to a different repo (or none at
@@ -115,8 +112,8 @@ export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 				identityCheck = checkProbe(room.repoIdentity, probe);
 				if (!room.repoIdentity && isStorable(probe.identity)) adopted = probe.identity;
 			}
-			// #730: the daemon builds each moved harness's fresh argv and
-			// allocates its port, before anything below changes state.
+			// #730: the daemon builds each moved harness's fresh argv
+			// before anything below changes state.
 			// A rejection leaves the room (and its missing-folder card) as it was.
 			let repointedRoom: Awaited<ReturnType<typeof repointRoom>>;
 			try {
@@ -125,7 +122,7 @@ export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 				reportArgvFailure("move the room to that folder", err, room);
 				return;
 			}
-			const { room: base, ports, clearSession } = repointedRoom;
+			const { room: base, clearSession } = repointedRoom;
 			// #755: the old folder's conversation id is the daemon's to drop;
 			// the spawn cannot rediscover that for opencode/Hermes. Await each
 			// before the state change that respawns. A failed report is logged
@@ -142,7 +139,6 @@ export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 					}
 				}),
 			);
-			if (ports.size > 0) setOpencodePorts((prev) => new Map([...prev, ...ports]));
 			// `exactOptionalPropertyTypes` forbids `repoRoot: undefined` —
 			// a plain (non-repo) folder, or one with no known root, must
 			// drop the key entirely rather than set it to undefined.
@@ -166,7 +162,6 @@ export function useRoomsRepoIdentity(d: RoomsRepoIdentityDeps) {
 			});
 		},
 		[
-			setOpencodePorts,
 			setMismatch,
 			identityTriedRef,
 			mismatchedRef,

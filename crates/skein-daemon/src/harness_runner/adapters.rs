@@ -30,7 +30,7 @@ pub(super) struct AttachSpec<'a> {
     pub cwd: &'a str,
     /// The harness record's session id, as it stands now.
     pub session_id: Option<&'a str>,
-    /// v1 opencode: the `--port` of the stored argv. Unused with a sidecar.
+    /// v1 opencode: the port the spawn picked and reported. Unused with a sidecar.
     pub opencode_port: Option<u16>,
     /// v2 opencode: the sidecar generation the PTY is bound to.
     pub sidecar_generation: Option<u64>,

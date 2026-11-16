@@ -11,7 +11,6 @@ import { startupAdoption } from "./startupAdoption.ts";
 export interface ApplyEnsure {
 	result: EnsureResult;
 	harnessId: string;
-	opencodePort: number | undefined;
 	/** Taken before the call: rows older than this are not the new process's. */
 	spawnStartedAt: number;
 }
@@ -33,7 +32,7 @@ export function applyEnsureResult(a: ApplyEnsure): {
 	}
 	// #755: the daemon already wrote the session id and the opencode version
 	// into the record at spawn, so nothing is written back from the result.
-	const outcome = spawnOutcome(result, { opencodePort: a.opencodePort });
+	const outcome = spawnOutcome(result);
 	recordSpawnedProfile(harnessId, result.envProfile ?? null);
 	// #677: v2 attaches by sidecar generation, so `port` is undefined there.
 	return { sidecarGeneration: outcome.sidecarGeneration, port: outcome.port };

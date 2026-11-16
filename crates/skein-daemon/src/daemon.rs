@@ -369,6 +369,7 @@ impl Daemon {
             events: state.events.clone(),
             phase: Arc::clone(&phase),
             session_probe: None,
+            port_picker: None,
         }));
         harness_runner.observe_store();
         // #753/#755: a retried boot preparation leaves a harness that has a

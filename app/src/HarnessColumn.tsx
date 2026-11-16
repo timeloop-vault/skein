@@ -136,10 +136,6 @@ export interface HarnessColumnProps {
 	onDesignDock: (harnessId: string, docked: boolean) => void;
 	/** Reveal a docked design harness in the right pane. */
 	onDesignShow: (harnessId: string) => void;
-	// Epic #50 L2c-2: per-opencode-harness embedded-server port. The
-	// column pulls each harness's port out of this map (keyed by
-	// harnessId) and forwards it to the corresponding LiveTerminal.
-	opencodePorts: Map<string, number>;
 	// SSE-captured opencode session-id callback (per harness, room
 	// scope already bound by App).
 	onOpencodeSessionCaptured: (harnessId: string, sessionId: string) => void;
@@ -180,7 +176,6 @@ const HarnessColumnImpl = ({
 	dockedDesign,
 	onDesignDock,
 	onDesignShow,
-	opencodePorts,
 	onOpencodeSessionCaptured,
 	onOpencodeSessionFollowed,
 	opencodeShellClaim,
@@ -331,7 +326,6 @@ const HarnessColumnImpl = ({
 							copyOnSelect={copyOnSelect}
 							defaultShell={defaultShell}
 							docked={dockedDesign[h.id] === true}
-							opencodePort={opencodePorts.get(h.id)}
 							onShellRequest={(argv) => onHarnessShellRequest(room.id, h.id, argv)}
 							onSessionCaptured={(sid) => onOpencodeSessionCaptured(h.id, sid)}
 							onSessionFollowed={(sid) => onOpencodeSessionFollowed(h.id, sid)}

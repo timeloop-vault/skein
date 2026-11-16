@@ -17,8 +17,9 @@
 //! 2. The #517 shell claim: a live claim turns a shell-mode Claude/opencode
 //!    harness back into its tool (`launch` and claim cleared, `cmd` reset to
 //!    the bare program); a stale one is just cleared.
-//! 3. A fresh opencode port: the spawn re-passes the `--port` parsed from the
-//!    stored cmd, so each process start needs a new free one in it.
+//! 3. Legacy opencode cmds (#754): an opencode harness in tool mode loses the
+//!    `--port`, `--hostname` and `--continue` older builds stored in `cmd`.
+//!    The spawn picks the port itself; boot allocates and parses none.
 //!
 //! The preparation is a barrier (#744). A mutex is held across the load and
 //! the preparation, so a load that starts meanwhile (a reload, a double
@@ -37,8 +38,7 @@ use skein_proto::harness_kind::HarnessKind;
 use skein_proto::rooms::{Harness, Room};
 
 use crate::db::{Database, LoadOutcome};
-use crate::harness_argv::{is_opencode_v2, migrate_launch, opencode_port_args, shell_argv};
-use crate::pty::opencode::pick_free_port;
+use crate::harness_argv::{is_opencode_v2, migrate_launch, shell_argv};
 use crate::room_store::RoomStore;
 use crate::spawn_env::state::SpawnEnvState;
 
@@ -58,14 +58,6 @@ pub struct BootResume {
     /// Does the harness have a process, or one starting, right now? A retried
     /// preparation must not rewrite a harness that is up.
     busy: Arc<dyn Fn(&str) -> bool + Send + Sync>,
-}
-
-/// The `--port <p>` of an opencode argv: how a later step recovers the port
-/// this module allocated, without a side map.
-#[must_use]
-pub fn opencode_port_from_cmd(cmd: &[String]) -> Option<u16> {
-    let at = cmd.iter().position(|a| a == "--port")?;
-    cmd.get(at + 1)?.parse().ok()
 }
 
 /// The real "does this harness's session still exist" probe, shared by the
@@ -123,25 +115,20 @@ pub fn session_survives(h: &Harness, probe: &impl Fn(&Harness) -> Result<bool, S
     }
 }
 
-/// The three boot steps over the stored rooms, with the probe, port picker
-/// and busy check injected. `session_id` is read, never changed. The busy
-/// check here only avoids picking a port for a harness that is up; the one
-/// under the store lock decides (see `prepare`).
-///
-/// # Errors
-/// The port picker failed; nothing is returned then.
+/// The three boot steps over the stored rooms, with the probe and busy check
+/// injected. `session_id` is read, never changed. The busy check here only
+/// skips a harness that is up; the one under the store lock decides (see
+/// `prepare`).
 pub fn prepare_with(
     mut rooms: Vec<Room>,
     probe: impl Fn(&Harness) -> Result<bool, String>,
-    mut pick: impl FnMut() -> Result<u16, String>,
     is_busy: impl Fn(&str) -> bool,
-) -> Result<Vec<Room>, String> {
+) -> Vec<Room> {
     for room in &mut rooms {
         // #752's one-time migration: records written before `launch` existed
         // get it filled in here, and the plan persists it (for a busy harness
         // too). It must run once per boot, before any spawn.
         migrate_launch(room);
-        let archived = room.archived.is_some();
         for h in &mut room.harnesses {
             if h.cmd.is_none() || is_busy(&h.id) {
                 continue;
@@ -152,15 +139,40 @@ pub fn prepare_with(
             if matches!(kind, HarnessKind::Claude | HarnessKind::Opencode) {
                 settle_shell_claim(h, kind, &probe);
             }
-            if kind == HarnessKind::Opencode && !archived && shell_argv(h).is_none() {
-                let port = pick()?;
-                let mut cmd = vec!["opencode".to_owned()];
-                cmd.extend(opencode_port_args(port));
-                h.cmd = Some(cmd);
+            if kind == HarnessKind::Opencode
+                && shell_argv(h).is_none()
+                && let Some(cleaned) = h.cmd.as_deref().and_then(strip_legacy_opencode_args)
+            {
+                h.cmd = Some(cleaned);
             }
         }
     }
-    Ok(rooms)
+    rooms
+}
+
+/// `cmd` without the arguments older builds stored for opencode: `--port <n>`,
+/// `--port=<n>`, `--hostname <h>`, `--hostname=<h>` and `--continue` (the spawn
+/// picks the port and the resume form itself now, #754). Everything else keeps
+/// its order; the program (first element) is never touched. `None` when there
+/// is nothing to strip, so applying it again changes nothing.
+#[must_use]
+pub fn strip_legacy_opencode_args(cmd: &[String]) -> Option<Vec<String>> {
+    let mut out = Vec::with_capacity(cmd.len());
+    let mut args = cmd.iter().enumerate().peekable();
+    while let Some((i, a)) = args.next() {
+        if i > 0 {
+            if a == "--continue" || a.starts_with("--port=") || a.starts_with("--hostname=") {
+                continue;
+            }
+            if a == "--port" || a == "--hostname" {
+                // The value goes too, unless there is none or it is a flag.
+                let _ = args.next_if(|(_, v)| !v.starts_with('-'));
+                continue;
+            }
+        }
+        out.push(a.clone());
+    }
+    (out.len() != cmd.len()).then_some(out)
 }
 
 /// The #517 claim: live (same non-blank session, which still exists) puts a
@@ -233,7 +245,7 @@ impl BootResume {
     /// # Errors
     /// The underlying load failed.
     pub fn load_rooms(&self, db: &Arc<Database>, store: &RoomStore) -> Result<LoadOutcome, String> {
-        self.load_rooms_with(db, store, |h| self.probe(h), pick_free_port)
+        self.load_rooms_with(db, store, |h| self.probe(h))
     }
 
     fn load_rooms_with(
@@ -241,14 +253,13 @@ impl BootResume {
         db: &Arc<Database>,
         store: &RoomStore,
         probe: impl Fn(&Harness) -> Result<bool, String>,
-        pick: impl FnMut() -> Result<u16, String>,
     ) -> Result<LoadOutcome, String> {
         // Held to the end: see the module doc for the lock order. A poisoned
         // guard is recovered, since the flag is always valid.
         let mut done = self.done.lock().unwrap_or_else(PoisonError::into_inner);
         let mut outcome = crate::rooms::load_rooms(db, store)?;
         if !*done && !outcome.rooms.is_empty() {
-            match prepare(store, &mut outcome, probe, pick, &*self.busy) {
+            match prepare(store, &mut outcome, probe, &*self.busy) {
                 Ok(()) => *done = true,
                 Err(e) => {
                     tracing::error!(error = %e, "boot resume: preparation failed; rooms left unprepared");
@@ -263,25 +274,14 @@ fn prepare(
     store: &RoomStore,
     outcome: &mut LoadOutcome,
     probe: impl Fn(&Harness) -> Result<bool, String>,
-    pick: impl FnMut() -> Result<u16, String>,
     is_busy: impl Fn(&str) -> bool,
 ) -> Result<(), String> {
-    let prepared = prepare_with(outcome.rooms.clone(), probe, pick, &is_busy)?;
+    let prepared = prepare_with(outcome.rooms.clone(), probe, &is_busy);
     let plan = BootPlan::new(&outcome.rooms, &prepared);
-    let ports_refreshed = outcome
-        .rooms
-        .iter()
-        .zip(&prepared)
-        .flat_map(|(b, a)| b.harnesses.iter().zip(&a.harnesses))
-        .filter(|(hb, ha)| {
-            hb.cmd != ha.cmd && ha.cmd.as_deref().and_then(opencode_port_from_cmd).is_some()
-        })
-        .count();
     if plan.is_empty() {
         tracing::info!(
             rooms = outcome.rooms.len(),
             harnesses_changed = 0,
-            ports_refreshed,
             "boot resume: prepared the stored rooms"
         );
         return Ok(());
@@ -301,7 +301,6 @@ fn prepare(
         applied = counts.applied,
         stale = counts.stale,
         busy = counts.busy,
-        ports_refreshed,
         "boot resume: prepared the stored rooms"
     );
     // The store holds the prepared rooms from here on, so that is what the

@@ -7,7 +7,7 @@
 //! `rooms_resume_cmds` and `pty_spawn` commands.
 //!
 //! Every property Skein decides *before* the child starts lives here:
-//! Claude's pre-allocated `--session-id`, opencode's pinned `--port`, and
+//! Claude's pre-allocated `--session-id`, and
 //! the `--agent` both CLIs bind at launch (#247). The argv is rebuilt
 //! from the harness RECORD, never by matching the shape of the argv it
 //! replaces: that pattern-matching was #153 and #170, and a new spawn
@@ -114,9 +114,9 @@ pub fn resolve_hermes_profile(kind: HarnessKind, profile: Option<&str>) -> Optio
 /// `--session-id <uuid>`; storing the same id on the record is what lets
 /// resume skip the picker.
 ///
-/// `opencode_port`: opencode embeds an HTTP server, so Skein allocates a
-/// free port up front and passes `--port <N> --hostname 127.0.0.1` for
-/// the SSE adapter. Fresh per spawn, never persisted.
+/// There is no opencode port here: opencode embeds an HTTP server whose
+/// `--port <N> --hostname 127.0.0.1` exist only at spawn (`spawn_argv`),
+/// never in the stored argv (#754).
 ///
 /// `agent` (#247): the third spawn-time-locked decision. `None` means "no
 /// flag", so the tool's own `agent` setting decides, which is a real
@@ -124,7 +124,6 @@ pub fn resolve_hermes_profile(kind: HarnessKind, profile: Option<&str>) -> Optio
 #[derive(Debug, Clone, Default)]
 pub struct CmdParams<'a> {
     pub session_id: Option<&'a str>,
-    pub opencode_port: Option<u16>,
     pub agent: Option<&'a str>,
     pub remote: Option<&'a RemoteSpec>,
     pub hermes_profile: Option<&'a str>,
@@ -147,14 +146,8 @@ pub fn cmd_for_kind(
             with_agent(args, params.agent)
         }
         HarnessKind::Opencode => {
-            // No port = the SSE adapter can't attach, but the harness
-            // still runs. Letting opencode pick port 0 would look
-            // identical and break telemetry.
-            let mut args = vec!["opencode".to_owned()];
-            if let Some(port) = params.opencode_port {
-                args.extend(opencode_port_args(port));
-            }
-            with_agent(args, params.agent)
+            // The port is added at spawn (#754), not stored.
+            with_agent(vec!["opencode".to_owned()], params.agent)
         }
         HarnessKind::Copilot => ["gh", "copilot", "suggest"].map(str::to_owned).to_vec(),
         // `--tui` explicit: otherwise the front-end depends on the user's

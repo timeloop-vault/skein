@@ -18,6 +18,12 @@ pub fn break_room_writes(db: &Database) {
         .unwrap();
 }
 
+/// Undo `break_room_writes`: the table is back, empty.
+#[allow(dead_code)] // used by the boot-resume tests only
+pub fn repair_room_writes(db: &Database) {
+    Database::init_schema(&db.conn.lock()).unwrap();
+}
+
 #[allow(dead_code)] // used by the db tests only, not by the `test-support` feature
 pub(super) fn room(id: &str) -> Room {
     Room {

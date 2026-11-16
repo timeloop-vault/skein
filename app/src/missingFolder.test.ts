@@ -91,7 +91,7 @@ describe("recoveryOptions", () => {
 
 describe("repointRoom", () => {
 	// A fake daemon: records every request, answers per kind (#730).
-	const fake = (opencodePort: number | null = 4123) => {
+	const fake = () => {
 		const calls: FreshCmdInput[] = [];
 		const freshCmd: FreshCmdFn = async (input) => {
 			calls.push(input);
@@ -104,7 +104,6 @@ describe("repointRoom", () => {
 								...(input.newHarness ? ["--session-id", "minted"] : []),
 							]
 						: [input.kind, "fresh"],
-				opencodePort: input.kind === "opencode" ? opencodePort : null,
 				sessionId: input.kind === "claude" && input.newHarness ? "minted" : null,
 				hermesProfile:
 					input.kind === "hermes"
@@ -157,7 +156,7 @@ describe("repointRoom", () => {
 		expect(c2).toEqual(["h2"]);
 	});
 
-	it("re-passes the agent and returns the allocated port", async () => {
+	it("re-passes the agent and keeps the session id", async () => {
 		const r = room({
 			cwd: "/old",
 			harnesses: [
@@ -171,21 +170,11 @@ describe("repointRoom", () => {
 				}),
 			],
 		});
-		const f = fake(4123);
-		const { room: next, ports, clearSession } = await repointRoom(r, "/new", f.freshCmd);
+		const f = fake();
+		const { room: next, clearSession } = await repointRoom(r, "/new", f.freshCmd);
 		expect(f.calls[0]).toEqual({ kind: "opencode", agent: "build" });
 		expect(next.harnesses[0]?.sessionId).toBe("sid-1");
 		expect(clearSession).toEqual(["h1"]);
-		expect(ports.get("h1")).toBe(4123);
-	});
-
-	it("a failed port allocation leaves the port out", async () => {
-		const r = room({
-			cwd: "/old",
-			harnesses: [harness({ id: "h1", kind: "opencode", cwd: "/old", cmd: ["opencode"] })],
-		});
-		const { ports } = await repointRoom(r, "/new", fake(null).freshCmd);
-		expect(ports.size).toBe(0);
 	});
 
 	it("passes a remote spec and a hermes profile through", async () => {
@@ -291,7 +280,6 @@ describe("repointRoom: clearSession (#755)", () => {
 	it("lists exactly the harnesses that got a fresh cmd and leaves every sessionId alone", async () => {
 		const freshCmd: FreshCmdFn = async (input) => ({
 			cmd: [input.kind, "fresh"],
-			opencodePort: null,
 			sessionId: null,
 			hermesProfile: null,
 		});

@@ -13,7 +13,6 @@ import {
 	useEffect,
 } from "react";
 import { hydrateFailure } from "./hydrateFailure.ts";
-import { opencodePortsFromRooms } from "./opencodePort.ts";
 import { isStorable, nextRepoRoot } from "./repoIdentity.ts";
 import {
 	checkProbe,
@@ -30,7 +29,6 @@ export interface RoomsHydrateDeps {
 	loadFailed: string | null;
 	setRooms: Dispatch<SetStateAction<Room[]>>;
 	setActiveRoomId: Dispatch<SetStateAction<string>>;
-	setOpencodePorts: Dispatch<SetStateAction<Map<string, number>>>;
 	setLoaded: Dispatch<SetStateAction<boolean>>;
 	setLoadFailed: Dispatch<SetStateAction<string | null>>;
 	setQuarantinedCount: Dispatch<SetStateAction<number>>;
@@ -50,7 +48,6 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 		loadFailed,
 		setRooms,
 		setActiveRoomId,
-		setOpencodePorts,
 		setLoaded,
 		setLoadFailed,
 		setQuarantinedCount,
@@ -135,12 +132,11 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 				}
 				if (rows.length > 0) {
 					// #731, #753: the daemon already prepared the rows in this load
-					// (launch filled, shell claims settled, a fresh port in each
-					// opencode cmd), so they are mounted as they are. The spawn
-					// derives resume from the record. The ports the SSE attach
-					// reads come from those cmds.
+					// (launch filled, shell claims settled, legacy opencode
+					// ports stripped, none picked), so they are mounted as they are. The spawn
+					// derives resume from the record and the mount gets the SSE
+					// port from the ensure result.
 					const withResume = rows;
-					setOpencodePorts(opencodePortsFromRooms(rows));
 					// #164: check every active room's folder in parallel and
 					// have the full missing-set ready BEFORE rooms mount, so
 					// a vanished folder never gets even one spawn attempt.
@@ -217,7 +213,6 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 		setLoadFailed,
 		setMismatchedRooms,
 		setMissingFolders,
-		setOpencodePorts,
 		setQuarantinedCount,
 		setRooms,
 	]);

@@ -75,11 +75,6 @@ interface LiveTerminalProps {
 	envProfile: string | undefined;
 	/** #627: Hermes profile, read at spawn time only (capture scoping). */
 	hermesProfile: string | undefined;
-	// Epic #50 L2c-2: opencode embedded-server port. Required for
-	// kind === "opencode" to attach the SSE adapter; `undefined`
-	// means the adapter is disabled for this harness and L2a takes
-	// over.
-	opencodePort: number | undefined;
 	// Fired when the L2c-2 adapter observes a `session.created`
 	// event from opencode's SSE stream. Caller wires this to
 	// persist the captured sessionId on the harness for resume.
@@ -132,7 +127,6 @@ export const LiveTerminal = ({
 	agent,
 	envProfile,
 	hermesProfile,
-	opencodePort,
 	onSessionCaptured,
 	onSessionFollowed,
 	opencodeClaim,
@@ -224,7 +218,6 @@ export const LiveTerminal = ({
 		agent,
 		envProfile,
 		hermesProfile,
-		opencodePort,
 		onSessionCaptured,
 		onSessionFollowed,
 		opencodeClaim,

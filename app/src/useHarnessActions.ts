@@ -55,7 +55,6 @@ export function useHarnessActions(
 	setShowPicker: Dispatch<SetStateAction<string | null>>,
 	setRenaming: Dispatch<SetStateAction<RenameTarget | null>>,
 	roomsRef: MutableRefObject<Room[]>,
-	setOpencodePorts: Dispatch<SetStateAction<Map<string, number>>>,
 ) {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: setRenaming is a plain useState setter passed in from App.tsx (#19) — stable across renders like any local useState, but biome can't prove that through a function parameter.
 	const startRenameRoom = useCallback(
@@ -299,19 +298,13 @@ export function useHarnessActions(
 		// #730: the daemon builds the resume argv (see restartResume.ts).
 		const prep = await prepareRestart(pre, gone && pre.sessionId === h.sessionId, harnessResumeCmd);
 		if (!prep.ok) return prep;
-		const { resumed, port } = prep;
+		const { resumed } = prep;
 		const second = gate();
 		if (!second.ok) return second;
 		const fresh = findHarness(roomId, harnessId);
 		if (!fresh) return { ok: false, reason: "that harness no longer exists" };
 		if (fresh.sessionId !== pre.sessionId) {
 			return { ok: false, reason: "its conversation changed while restarting - try again" };
-		}
-		// Both updates below must land in the same render (React batches
-		// them in this tick); otherwise LiveTerminal remounts on the
-		// spawnGen bump with the OLD port.
-		if (port !== null) {
-			setOpencodePorts((prev) => new Map(prev).set(harnessId, port));
 		}
 		const next = applyResumedHarness(fresh, resumed.harness);
 		// #755: no session id from the resume result; the spawn re-derives it.

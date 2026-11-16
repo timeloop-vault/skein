@@ -3,7 +3,7 @@
 use skein_proto::rooms::{Harness, LaunchMode, ShellClaim};
 
 use super::launch::{effective_shell_argv, infer_launch};
-use super::test_util::{SID, no_mint, ports, room, sv, with};
+use super::test_util::{SID, no_mint, room, sv, with};
 use super::{ResumeOneInput, resume_harness, resume_one_with, with_resume_cmds};
 
 fn shell_mode(argv: &[&str]) -> LaunchMode {
@@ -48,7 +48,7 @@ fn helper_sees_both_shapes_and_no_other() {
 fn stale_or_no_claim_keeps_the_shell_and_migrates() {
     for h in [legacy("claude", Some("a")), legacy("opencode", Some("a"))] {
         let cmd = h.cmd.clone();
-        let out = resume_harness(h, Some(1), no_mint);
+        let out = resume_harness(h, no_mint);
         assert_eq!(out.cmd, cmd);
         assert_eq!(out.launch, Some(shell_mode(&["pwsh.exe", "-NoLogo"])));
     }
@@ -56,7 +56,7 @@ fn stale_or_no_claim_keeps_the_shell_and_migrates() {
         shell_claim: claim("other"),
         ..legacy("claude", Some("a"))
     };
-    let out = resume_harness(stale, None, no_mint);
+    let out = resume_harness(stale, no_mint);
     assert_eq!(out.launch, Some(shell_mode(&["pwsh.exe", "-NoLogo"])));
     assert!(out.shell_claim.is_none());
     assert_eq!(out.cmd, Some(sv(&["pwsh.exe", "-NoLogo"])));
@@ -74,7 +74,7 @@ fn live_claim_returns_to_the_tool_and_clears_launch() {
             ..new_shape("claude", Some(SID))
         },
     ] {
-        let out = resume_harness(h, None, no_mint);
+        let out = resume_harness(h, no_mint);
         assert_eq!(out.cmd, Some(sv(&["claude", "--resume", SID])));
         assert_eq!(out.launch, None);
         assert!(out.shell_claim.is_none());
@@ -84,84 +84,59 @@ fn live_claim_returns_to_the_tool_and_clears_launch() {
 #[test]
 fn new_shape_without_claim_keeps_shell_and_cmd() {
     let h = new_shape("claude", Some("x"));
-    let out = resume_harness(h.clone(), None, no_mint);
+    let out = resume_harness(h.clone(), no_mint);
     assert_eq!(out.cmd, h.cmd);
     assert_eq!(out.launch, h.launch);
 }
 
 #[test]
 fn empty_cmd_still_takes_the_shell_path() {
-    let out = resume_harness(with("claude", &[], Some("a")), None, no_mint);
+    let out = resume_harness(with("claude", &[], Some("a")), no_mint);
     assert_eq!(out.cmd, Some(vec![]));
     assert_eq!(out.launch, None);
 }
 
 #[test]
 fn restart_returns_to_the_tool() {
-    type Case<'a> = (&'a str, Harness, Option<u16>, Vec<String>, Option<&'a str>);
+    type Case<'a> = (&'a str, Harness, Vec<String>, Option<&'a str>);
     let cases: Vec<Case> = vec![
         (
             "claude legacy with session",
             legacy("claude", Some("sid1")),
-            None,
             sv(&["claude", "--resume", "sid1"]),
             Some("sid1"),
         ),
         (
             "claude new shape with session",
             new_shape("claude", Some("sid1")),
-            None,
             sv(&["claude", "--resume", "sid1"]),
             Some("sid1"),
         ),
         (
             "claude legacy without session",
             legacy("claude", None),
-            None,
             sv(&["claude", "--session-id", "minted"]),
             Some("minted"),
         ),
         (
-            "opencode legacy with port",
+            "opencode legacy",
             legacy("opencode", Some("o1")),
-            Some(5000),
-            sv(&[
-                "opencode",
-                "--port",
-                "5000",
-                "--hostname",
-                "127.0.0.1",
-                "--session",
-                "o1",
-            ]),
+            sv(&["opencode", "--session", "o1"]),
             Some("o1"),
         ),
         (
-            "opencode new shape with port",
+            "opencode new shape",
             new_shape("opencode", Some("o1")),
-            Some(5000),
-            sv(&[
-                "opencode",
-                "--port",
-                "5000",
-                "--hostname",
-                "127.0.0.1",
-                "--session",
-                "o1",
-            ]),
+            sv(&["opencode", "--session", "o1"]),
             Some("o1"),
         ),
     ];
-    for (name, h, port, cmd, sid) in cases {
+    for (name, h, cmd, sid) in cases {
         let h = Harness {
             shell_claim: claim("whatever"),
             ..h
         };
-        let out = resume_one_with(
-            ResumeOneInput { harness: h },
-            move || port.ok_or_else(|| "none".to_owned()),
-            || "minted".to_owned(),
-        );
+        let out = resume_one_with(ResumeOneInput { harness: h }, || "minted".to_owned());
         assert_eq!(out.harness.cmd, Some(cmd), "{name}");
         assert_eq!(out.harness.launch, None, "{name}");
         assert!(out.harness.shell_claim.is_none(), "{name}");
@@ -173,11 +148,7 @@ fn restart_returns_to_the_tool() {
 #[test]
 fn restart_leaves_a_tool_harness_alone() {
     let h = with("claude", &["claude", "--resume", "s"], Some("s"));
-    let out = resume_one_with(
-        ResumeOneInput { harness: h },
-        || Err("x".into()),
-        || "m".into(),
-    );
+    let out = resume_one_with(ResumeOneInput { harness: h }, || "m".into());
     assert_eq!(out.harness.cmd, Some(sv(&["claude", "--resume", "s"])));
     assert_eq!(out.harness.launch, None);
 }
@@ -194,7 +165,7 @@ fn room_wide_resume_keeps_the_shell_for_both_shapes() {
             ..new_shape("claude", Some("s"))
         },
     ]);
-    let out = with_resume_cmds(r, &ports(&[]), no_mint);
+    let out = with_resume_cmds(r, no_mint);
     assert_eq!(out.harnesses[0].cmd, Some(sv(&["pwsh.exe", "-NoLogo"])));
     assert_eq!(
         out.harnesses[0].launch,

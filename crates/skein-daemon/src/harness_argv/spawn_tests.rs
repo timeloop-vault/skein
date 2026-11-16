@@ -383,15 +383,19 @@ fn fresh_forms_equal_cmd_for_kind() {
             assert_eq!(run(&h, "claude", false, None).unwrap().cmd, want);
         }
         for port in [None, Some(4100)] {
-            let want = cmd_for_kind(
+            // The stored-form builder has no port; spawn inserts it after
+            // the program.
+            let mut want = cmd_for_kind(
                 HarnessKind::Opencode,
                 &fallback,
                 &CmdParams {
-                    opencode_port: port,
                     agent,
                     ..CmdParams::default()
                 },
             );
+            if let Some(p) = port {
+                want.splice(1..1, super::opencode_port_args(p));
+            }
             assert_eq!(
                 run(&base("opencode"), "opencode", false, port).unwrap().cmd,
                 want

@@ -8,7 +8,7 @@ use super::*;
 use crate::boot_resume::plan::BootPlan;
 use crate::boot_resume::{BOOT_ORIGIN, prepare_with};
 use crate::harness_kind::HarnessKind;
-use crate::harness_runner::gates::{SpawnPlan, stored_opencode_port};
+use crate::harness_runner::gates::SpawnPlan;
 
 const SID: &str = "7f3c0a52-0000-4000-8000-000000000752";
 
@@ -34,7 +34,7 @@ fn as_json(h: &Harness) -> Value {
 /// write the plan through the store's field-level edit, as boot does (#755).
 fn boot_prepare(fx: &Fx, probe: impl Fn(&Harness) -> Result<bool, String>) {
     let before = fx.daemon.rooms.rooms();
-    let out = prepare_with(before.clone(), probe, || Ok(4321), |_| false).unwrap();
+    let out = prepare_with(before.clone(), probe, |_| false);
     let plan = BootPlan::new(&before, &out);
     if !plan.is_empty() {
         fx.daemon
@@ -120,7 +120,7 @@ fn a_probe_error_keeps_the_id_and_writes_nothing_back() {
 }
 
 #[test]
-fn opencode_v1_with_a_stale_id_starts_fresh_on_the_stored_port() {
+fn opencode_v1_with_a_stale_id_starts_fresh_on_the_picked_port() {
     let fx = fx_with(harness(
         "h1",
         "opencode",
@@ -137,19 +137,22 @@ fn opencode_v1_with_a_stale_id_starts_fresh_on_the_stored_port() {
     ));
     fx.runner().set_stand_in(shell_cmd());
     fx.runner().set_session_probe(Arc::new(|_| Ok(false)));
+    fx.runner().set_port_picker(Arc::new(|| Ok(4777)));
 
     fx.ensure(false, None).unwrap();
     let argv = fx.runner().spawned_argv().pop().unwrap();
     assert_eq!(
         argv,
-        sv(&["opencode", "--port", "4555", "--hostname", "127.0.0.1"])
+        sv(&["opencode", "--port", "4777", "--hostname", "127.0.0.1"])
     );
     assert!(!argv.iter().any(|a| a == "--session" || a == "--continue"));
     assert_eq!(stored(&fx).session_id, None);
 }
 
 /// Tested at `SpawnPlan::from_record`: a v2 spawn starts a sidecar, which the
-/// stand-in cannot stand in for.
+/// stand-in cannot stand in for. The stored version does not decide the port
+/// pick (it is only the last spawn's result); a v2 spawn drops it afterwards
+/// (`reported_port`).
 #[test]
 fn opencode_v2_is_not_probed_and_keeps_its_id() {
     let fx = Fx::new();
@@ -164,11 +167,25 @@ fn opencode_v2_is_not_probed_and_keeps_its_id() {
         version: "2.0.1".to_owned(),
     });
     let r = room("r1", &fx.work, vec![h.clone()]);
-    let plan = SpawnPlan::from_record(&r, &h, HarnessKind::Opencode, None, &|_| {
-        panic!("a v2 session is not probed")
-    })
+    let plan = SpawnPlan::from_record(
+        &r,
+        &h,
+        HarnessKind::Opencode,
+        None,
+        &|_| panic!("a v2 session is not probed"),
+        &|| Ok(4777),
+    )
     .unwrap();
     assert_eq!(plan.session_id.as_deref(), Some("v2-sid"));
+    assert_eq!(plan.opencode_port, Some(4777));
+}
+
+#[test]
+fn a_v2_spawn_reports_no_port() {
+    use super::super::gates::reported_port;
+    assert_eq!(reported_port(Some(3), Some(4777)), None);
+    assert_eq!(reported_port(None, Some(4777)), Some(4777));
+    assert_eq!(reported_port(None, None), None);
 }
 
 #[test]
@@ -247,15 +264,4 @@ fn a_tool_record_with_no_launch_accepts_an_expected_tool_and_refuses_a_shell() {
         .expect("refused");
     assert_eq!(err.code(), "stale_record");
     assert!(ask(Some(LaunchMode::Tool)).unwrap().started);
-}
-
-#[test]
-fn the_stored_opencode_port_is_ignored_in_shell_mode_and_passed_in_tool_mode() {
-    let cmd = sv(&["opencode", "--port", "4555", "--hostname", "127.0.0.1"]);
-    let mut h = harness("h1", "opencode", Some(cmd.clone()), None);
-    assert_eq!(stored_opencode_port(&h), Some(4555));
-    h.launch = Some(LaunchMode::Tool);
-    assert_eq!(stored_opencode_port(&h), Some(4555));
-    h.launch = Some(LaunchMode::Shell { argv: cmd });
-    assert_eq!(stored_opencode_port(&h), None);
 }

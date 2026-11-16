@@ -24,8 +24,8 @@ interface MissingFolderCardProps {
 
 /** Just the room-body card; the folder picker dialog itself is invoked
  *  here (same call the New Room dialog makes) but the resulting
- *  cwd move is the caller's job — it needs `defaultShell` and the
- *  opencode port allocator that live in App.tsx. */
+ *  cwd move is the caller's job — it needs `defaultShell`, which
+ *  lives in App.tsx. */
 export const MissingFolderCard = ({
 	room,
 	onRecreateWorktree,

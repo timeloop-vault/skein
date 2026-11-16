@@ -73,7 +73,6 @@ export interface LeftSlotProps {
 	defaultShell: string[];
 	defaultAgents: DefaultAgents;
 	dockedDesign: DockedDesign;
-	opencodePorts: Map<string, number>;
 	versionNoticeModes: VersionNoticeModes;
 	draggedHarnessId: string | null;
 	dropTargetHarnessId: string | null;
@@ -176,7 +175,6 @@ export const LeftSlot = memo((p: LeftSlotProps) => {
 			dockedDesign={p.dockedDesign}
 			onDesignDock={onDesignDock}
 			onDesignShow={onDesignShow}
-			opencodePorts={p.opencodePorts}
 			onOpencodeSessionCaptured={onOpencodeSessionCaptured}
 			onOpencodeSessionFollowed={onOpencodeSessionFollowed}
 			opencodeShellClaim={opencodeShellClaim}

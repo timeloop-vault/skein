@@ -2,9 +2,9 @@
 // pure move, no behaviour change. Owns the `rooms` array itself (hydrate
 // from sqlite on boot, autosave on every change, #167 quarantine/backup
 // surfacing), the active-room/harness selection, per-room folder-missing
-// tracking (#164), opencode embedded-server port allocation, and the
-// close/unarchive/delete/restore room lifecycle. App.tsx destructures the
-// return value at the spot this state used to be declared.
+// tracking (#164), and the close/unarchive/delete/restore room lifecycle.
+// App.tsx destructures the return value at the spot this state used to be
+// declared.
 //
 // #459: the state and refs stay here; the behaviour is split by the
 // question a reader has — useRoomsHydrate (boot load, autosave, repo
@@ -38,12 +38,6 @@ export function useRoomsStore(
 	const [activeRoomId, setActiveRoomId] = useState<string>("");
 	const activeRoomIdRef = useRef(activeRoomId);
 	activeRoomIdRef.current = activeRoomId;
-	// Epic #50 L2c-2: per-opencode-harness embedded-server port.
-	// Ephemeral — each spawn gets a fresh port from the daemon (#730),
-	// kept here so LiveTerminal can pass it to attachOpencodeEvents
-	// without re-allocating. Not persisted: a port is meaningless
-	// after the process that bound it dies.
-	const [opencodePorts, setOpencodePorts] = useState<Map<string, number>>(new Map());
 
 	// Chapter 6 phase 2: split rooms into active (rendered as tabs) and
 	// archived (hidden, listed in the reopen modal). Tab strip, command
@@ -122,7 +116,7 @@ export function useRoomsStore(
 	// pre-load).
 	const hydratedOnceRef = useRef(false);
 	// #294: mirrors `loaded`, set at the exact same call site — unlike
-	// `hydratedOnceRef` (flipped earlier, before the resume/port-alloc
+	// `hydratedOnceRef` (flipped earlier, before the resume
 	// await chain), this is only true once `rooms` actually holds
 	// the hydrated set. A live click-listener poke that lands in that
 	// gap must not drain against the still-empty `roomsRef`.
@@ -161,7 +155,6 @@ export function useRoomsStore(
 		loadFailed,
 		setRooms,
 		setActiveRoomId,
-		setOpencodePorts,
 		setLoaded,
 		setLoadFailed,
 		setQuarantinedCount,
@@ -210,7 +203,6 @@ export function useRoomsStore(
 		lastUsedByGroupRef,
 		setRooms,
 		setActiveRoomId,
-		setOpencodePorts,
 		setRenaming,
 		setMismatch,
 		syncRepoMeta,
@@ -232,7 +224,6 @@ export function useRoomsStore(
 			setMissingFolders,
 			setMismatch,
 			syncRepoMeta,
-			setOpencodePorts,
 		});
 
 	return {
@@ -246,8 +237,6 @@ export function useRoomsStore(
 		activeRoomId,
 		setActiveRoomId,
 		activeRoomIdRef,
-		opencodePorts,
-		setOpencodePorts,
 		loaded,
 		loadedRef,
 		loadFailed,

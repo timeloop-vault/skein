@@ -4,7 +4,7 @@
 use skein_proto::harness_kind::HarnessKind;
 use skein_proto::rooms::Harness;
 
-use super::test_util::{SID, no_mint, ports, room, shell, sv, with};
+use super::test_util::{SID, no_mint, room, shell, sv, with};
 use super::{CmdParams, cmd_for_kind, resume_cmd, unarchive_room_transform, with_resume_cmds};
 
 fn agent_h(kind: &str, cmd: &[&str], sid: Option<&str>, agent: &str) -> Harness {
@@ -26,13 +26,13 @@ fn re_passes_the_records_agent_for_claude() {
         "reviewer",
     );
     assert_eq!(
-        resume_cmd(h, None),
+        resume_cmd(h),
         sv(&["claude", "--resume", SID, "--agent", "reviewer"])
     );
 }
 
 #[test]
-fn re_passes_the_records_agent_for_opencode_with_a_fresh_port() {
+fn re_passes_the_records_agent_for_opencode_and_drops_a_legacy_port() {
     let h = agent_h(
         "opencode",
         &[
@@ -48,30 +48,20 @@ fn re_passes_the_records_agent_for_opencode_with_a_fresh_port() {
         "plan",
     );
     assert_eq!(
-        resume_cmd(h, Some(5150)),
-        sv(&[
-            "opencode",
-            "--port",
-            "5150",
-            "--hostname",
-            "127.0.0.1",
-            "--session",
-            "ses_abc",
-            "--agent",
-            "plan"
-        ])
+        resume_cmd(h),
+        sv(&["opencode", "--session", "ses_abc", "--agent", "plan"])
     );
 }
 
 #[test]
 fn is_idempotent_with_an_agent_so_every_boot_can_run_it() {
     let h = agent_h("claude", &["claude"], Some(SID), "reviewer");
-    let once = resume_cmd(h.clone(), None);
+    let once = resume_cmd(h.clone());
     let again = Harness {
         cmd: Some(once.clone()),
         ..h
     };
-    assert_eq!(resume_cmd(again, None), once);
+    assert_eq!(resume_cmd(again), once);
 }
 
 #[test]
@@ -80,22 +70,21 @@ fn keeps_a_shell_swapped_harness_on_its_shell_agent_or_not() {
     // leaves `agent` set, and the shell must not grow a flag it does
     // not understand.
     let h = agent_h("claude", &["pwsh.exe"], Some(SID), "reviewer");
-    assert_eq!(resume_cmd(h, None), sv(&["pwsh.exe"]));
+    assert_eq!(resume_cmd(h), sv(&["pwsh.exe"]));
 }
 
 #[test]
 fn ignores_an_agent_on_a_kind_that_has_no_agent_concept() {
     let copilot = agent_h("copilot", &["gh", "copilot", "suggest"], None, "reviewer");
-    assert_eq!(resume_cmd(copilot, None), sv(&["gh", "copilot", "suggest"]));
+    assert_eq!(resume_cmd(copilot), sv(&["gh", "copilot", "suggest"]));
     let byoh = agent_h("byoh", &["/bin/zsh", "-l"], None, "reviewer");
-    assert_eq!(resume_cmd(byoh, None), shell());
+    assert_eq!(resume_cmd(byoh), shell());
 }
 
 fn fresh_h(kind: HarnessKind, agent: &str) -> Harness {
     let claude = kind == HarnessKind::Claude;
     let params = CmdParams {
         session_id: claude.then_some(SID),
-        opencode_port: Some(4096),
         agent: Some(agent),
         ..CmdParams::default()
     };
@@ -114,11 +103,7 @@ fn the_selection_survives_a_skein_restart_for_claude_and_opencode() {
         (HarnessKind::Claude, "reviewer"),
         (HarnessKind::Opencode, "plan"),
     ] {
-        let out = with_resume_cmds(
-            room(vec![fresh_h(kind, agent)]),
-            &ports(&[("h1", 5150)]),
-            no_mint,
-        );
+        let out = with_resume_cmds(room(vec![fresh_h(kind, agent)]), no_mint);
         let cmd = out.harnesses[0].cmd.clone().unwrap_or_default();
         let at = cmd.iter().position(|a| a == "--agent");
         assert!(at.is_some(), "{kind}: {cmd:?}");
@@ -134,7 +119,7 @@ fn the_selection_survives_a_skein_restart_for_claude_and_opencode() {
 fn the_selection_survives_archive_then_reopen() {
     let mut r = room(vec![fresh_h(HarnessKind::Claude, "reviewer")]);
     r.archived = Some(1_700_000_000_000);
-    let out = unarchive_room_transform(r, &ports(&[]), no_mint);
+    let out = unarchive_room_transform(r, no_mint);
     assert_eq!(
         out.harnesses[0].cmd,
         Some(sv(&["claude", "--resume", SID, "--agent", "reviewer"]))

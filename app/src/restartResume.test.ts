@@ -14,16 +14,12 @@ const h = (over: Partial<Harness> = {}): Harness => ({
 	...over,
 });
 
-const ok = (port: number | null): ((x: Harness) => Promise<ResumedHarness>) => {
-	return async (x) => ({ harness: x, opencodePort: port });
-};
-
 describe("prepareRestart (#730)", () => {
 	it("passes the record through, or without its session id when dropId", async () => {
 		const seen: Harness[] = [];
 		const spy = async (x: Harness): Promise<ResumedHarness> => {
 			seen.push(x);
-			return { harness: x, opencodePort: null };
+			return { harness: x };
 		};
 		await prepareRestart(h(), false, spy);
 		await prepareRestart(h(), true, spy);
@@ -38,9 +34,9 @@ describe("prepareRestart (#730)", () => {
 		expect(r).toEqual({ ok: false, reason: "couldn't prepare the restarted harness" });
 	});
 
-	it("refuses an opencode restart with no port, accepts one with", async () => {
+	it("returns the daemon's resumed record", async () => {
 		const oc = h({ kind: "opencode" });
-		expect(await prepareRestart(oc, false, ok(null))).toMatchObject({ ok: false });
-		expect(await prepareRestart(oc, false, ok(4100))).toMatchObject({ ok: true, port: 4100 });
+		const r = await prepareRestart(oc, false, async (x) => ({ harness: x }));
+		expect(r).toEqual({ ok: true, resumed: { harness: oc } });
 	});
 });

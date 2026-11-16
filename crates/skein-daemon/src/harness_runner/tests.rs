@@ -29,6 +29,7 @@ mod derived;
 mod derived_boot;
 mod hermes_work;
 mod lifecycle;
+mod opencode_port;
 mod phase;
 mod record_race;
 mod refusals;

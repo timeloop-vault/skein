@@ -76,7 +76,6 @@ export default function App() {
 		activeRoomId,
 		setActiveRoomId,
 		activeRoomIdRef,
-		setOpencodePorts,
 		loaded,
 		loadFailed,
 		setLoadFailed,
@@ -140,7 +139,6 @@ export default function App() {
 		setShowPicker,
 		setRenaming,
 		roomsRef,
-		setOpencodePorts,
 	);
 	const {
 		startRenameRoom,
@@ -164,7 +162,6 @@ export default function App() {
 	const creation = useHarnessCreation(
 		roomsRef,
 		setRooms,
-		setOpencodePorts,
 		setActiveRoomId,
 		activeRoomIdRef,
 		defaultCwd,

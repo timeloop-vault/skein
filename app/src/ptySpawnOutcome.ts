@@ -9,19 +9,18 @@ export interface SpawnOutcome {
 	/** The sidecar the daemon started for this PTY, if any (#676). */
 	sidecarGeneration: number | undefined;
 	/** SSE port for the adapters: none when attaching by sidecar generation
-	 *  (#677), the record's pre-allocated port otherwise. */
+	 *  (#677), the port the daemon picked for this spawn (#754) otherwise. */
 	port: number | undefined;
 }
 
 // #755: the session id and the opencode version the spawn produced are written
 // by the daemon itself, so only what the adapters need is read back.
 export function spawnOutcome(
-	result: Pick<EnsureResult, "sidecarGeneration">,
-	record: { opencodePort: number | undefined },
+	result: Pick<EnsureResult, "sidecarGeneration" | "opencodePort">,
 ): SpawnOutcome {
 	const sidecarGeneration = result.sidecarGeneration ?? undefined;
 	return {
 		sidecarGeneration,
-		port: sidecarGeneration === undefined ? record.opencodePort : undefined,
+		port: sidecarGeneration === undefined ? (result.opencodePort ?? undefined) : undefined,
 	};
 }

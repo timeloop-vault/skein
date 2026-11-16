@@ -20,8 +20,6 @@ export interface FreshCmdInput {
 export interface FreshCmdResult {
 	/** Empty for kinds without a process (files/design) or an unusable remote. */
 	cmd: string[];
-	/** null = no port (not opencode, or the allocation failed: a bare argv). */
-	opencodePort: number | null;
 	sessionId: string | null;
 	hermesProfile: string | null;
 }
@@ -33,8 +31,6 @@ export const harnessFreshCmd: FreshCmdFn = (input) =>
 
 export interface ResumedHarness {
 	harness: Harness;
-	/** null for opencode = allocation failed; other kinds always null. */
-	opencodePort: number | null;
 }
 
 export const harnessResumeCmd = (harness: Harness): Promise<ResumedHarness> =>
@@ -42,7 +38,6 @@ export const harnessResumeCmd = (harness: Harness): Promise<ResumedHarness> =>
 
 export interface ResumedRooms {
 	rooms: Room[];
-	ports: Record<string, number>;
 }
 
 export const roomsResumeCmds = (rooms: Room[], unarchive = false): Promise<ResumedRooms> =>

@@ -14,6 +14,7 @@ vi.mock("./hermesCapture.ts", () => ({
 }));
 
 import { attachOpencodeEvents } from "./harnessEvents.ts";
+import { spawnOutcome } from "./ptySpawnOutcome.ts";
 import { type AdapterAttach, attachAdapters } from "./terminalSpawnAdapters.ts";
 
 const attach = (over: Partial<AdapterAttach>): AdapterAttach => ({
@@ -68,6 +69,36 @@ describe("attachAdapters for opencode (#677)", () => {
 		const args = vi.mocked(attachOpencodeEvents).mock.calls[0];
 		expect(args?.[3]).toBe(0);
 		expect(args?.[8]).toBe(7);
+	});
+
+	it("attaches on the ensure result's opencodePort (#754)", () => {
+		const o = spawnOutcome({ sidecarGeneration: null, opencodePort: 4555 });
+		attachAdapters(
+			opencode({ opencodePort: o.port, opencodeSidecarGeneration: o.sidecarGeneration }),
+		);
+		const args = vi.mocked(attachOpencodeEvents).mock.calls[0];
+		expect(args?.[3]).toBe(4555);
+		expect(args?.[8]).toBeUndefined();
+	});
+
+	it("an ensure result with sidecarGeneration still attaches by generation (#754)", () => {
+		const o = spawnOutcome({ sidecarGeneration: 9, opencodePort: 4555 });
+		attachAdapters(
+			opencode({ opencodePort: o.port, opencodeSidecarGeneration: o.sidecarGeneration }),
+		);
+		const args = vi.mocked(attachOpencodeEvents).mock.calls[0];
+		expect(args?.[3]).toBe(0);
+		expect(args?.[8]).toBe(9);
+	});
+
+	it("a null ensure port attaches nothing", () => {
+		const o = spawnOutcome({ sidecarGeneration: null, opencodePort: null });
+		expect(
+			attachAdapters(
+				opencode({ opencodePort: o.port, opencodeSidecarGeneration: o.sidecarGeneration }),
+			),
+		).toBeNull();
+		expect(attachOpencodeEvents).not.toHaveBeenCalled();
 	});
 
 	it("attaches nothing with neither", () => {

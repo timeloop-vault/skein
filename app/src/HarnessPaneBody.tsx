@@ -24,11 +24,6 @@ interface HarnessBodyProps {
 	// Stamped on every `harness_actions` row this harness emits
 	// (issue #80). Threaded down to LiveTerminal → attachClaudeEvents.
 	roomId: string;
-	// Epic #50 L2c-2: opencode embedded-server port allocated by App.
-	// `undefined` for non-opencode harnesses and for opencode harnesses
-	// where the daemon's port allocation failed — in the latter case the adapter
-	// can't attach and the harness falls back to L2a.
-	opencodePort: number | undefined;
 	// SSE-capture callback: L2c-2 captures opencode's auto-allocated
 	// sessionID from the `session.created` event. App.tsx wires it
 	// to setHarnessSessionId; `undefined` for non-opencode harnesses.
@@ -50,7 +45,6 @@ const HarnessBody = ({
 	visible,
 	onShellRequest,
 	roomId,
-	opencodePort,
 	onSessionCaptured,
 	onSessionFollowed,
 	opencodeClaim,
@@ -78,7 +72,6 @@ const HarnessBody = ({
 				agent={harness.agent}
 				envProfile={harness.envProfile}
 				hermesProfile={harness.hermesProfile}
-				opencodePort={opencodePort}
 				onSessionCaptured={onSessionCaptured}
 				onSessionFollowed={onSessionFollowed}
 				opencodeClaim={opencodeClaim}
