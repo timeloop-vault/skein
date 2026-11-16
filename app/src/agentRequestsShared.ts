@@ -1,21 +1,8 @@
-// #330/#411: what every `skein://agent-request` kind's parser shares —
-// the result type, the loose-JSON helpers and the attribution shape.
-// Pure and DOM-free. `agentRequests.ts` re-exports the public pieces.
-
-import { HARNESS_ORDER } from "./data.tsx";
-import type { HarnessKind } from "./types.ts";
+// What every `skein://agent-request` kind's parser shares (the design.*
+// requests, since #734) — the result type and the loose-JSON helpers.
+// Pure and DOM-free.
 
 export type RequestResult<T> = { ok: true; value: T } | { ok: false; error: string };
-
-export const isHarnessKind = (value: unknown): value is HarnessKind =>
-	typeof value === "string" && (HARNESS_ORDER as readonly string[]).includes(value);
-
-/** #568: an agent has no way to supply a host, so it cannot ask
- *  for a remote harness. null when `kind` is fine. */
-export const remoteRefusal = (kind: unknown): string | null =>
-	kind === "remote"
-		? "remote harnesses need a host only the user can enter; add one from + harness (#568)"
-		: null;
 
 export const asRecord = (raw: unknown): Record<string, unknown> | null =>
 	typeof raw === "object" && raw !== null && !Array.isArray(raw)
@@ -30,28 +17,3 @@ export const asRecord = (raw: unknown): Record<string, unknown> | null =>
  *  fields still carried `kind: null, agent: null, ...` and was rejected
  *  as "kind must be a string". */
 export const isOmitted = (value: unknown): boolean => value === undefined || value === null;
-
-/** `{roomId, harnessId?}` — the attribution shape shared by
- *  `close_room`'s `closedBy` (see `CloseRoomAttribution` below,
- *  structurally identical), `open_harness`'s `createdBy`, and
- *  `close_harness`'s `closedBy`. `harnessId` follows the same
- *  "absent means omitted" rule as everywhere else (`isOmitted`'s doc
- *  comment) — Rust sends JSON `null` for a `None`, not a missing key. */
-export type AgentAttribution = { roomId: string; harnessId?: string };
-
-export function parseAttribution(raw: unknown, field: string): RequestResult<AgentAttribution> {
-	const r = asRecord(raw);
-	if (!r || typeof r.roomId !== "string" || !r.roomId) {
-		return { ok: false, error: `${field} must be {roomId, harnessId?}` };
-	}
-	if (!isOmitted(r.harnessId) && typeof r.harnessId !== "string") {
-		return { ok: false, error: `${field}.harnessId must be a string` };
-	}
-	return {
-		ok: true,
-		value: {
-			roomId: r.roomId,
-			...(typeof r.harnessId === "string" ? { harnessId: r.harnessId } : {}),
-		},
-	};
-}

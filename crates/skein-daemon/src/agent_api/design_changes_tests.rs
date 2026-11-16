@@ -251,6 +251,24 @@ async fn no_changes_answers_without_asking_the_frontend() {
 }
 
 #[tokio::test]
+async fn with_no_client_show_changes_refuses_no_client() {
+    let f = fixture();
+    let dir = folder();
+    git_repo_with_commit(dir.path());
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    commit_file(dir.path(), "src/App.jsx", "line1\nline2\n", "add app");
+    std::fs::write(dir.path().join("src/App.jsx"), "line1\nCHANGED\n").unwrap();
+    save(&f.db, &[design_room("A", &dir, &["d1"])]);
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let state = super::tests::agent_api_state(&f);
+    let e = verbs::show_changes(&state, &caller, &args(json!({})), true)
+        .await
+        .unwrap_err();
+    assert!(is_refused(&e, "no_client:"), "{e:?}");
+    assert_eq!(e.status(), 403);
+}
+
+#[tokio::test]
 async fn the_branch_scope_sends_changed_lines_and_the_answer_comes_back_tagged() {
     let f = fixture();
     let dir = folder();

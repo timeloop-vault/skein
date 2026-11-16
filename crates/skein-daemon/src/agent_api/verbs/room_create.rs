@@ -4,24 +4,26 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use super::close_apply::store_of;
 use super::find_rooms::group_key_for_match;
+use super::harness_build::{NewHarness, build_harness, resolve, spawn_without_client};
 use super::mail::MailContext;
 use super::mail_routing::{mail_refusal_for, record_and_emit};
-use super::shared::{
-    MAX_MESSAGE_BYTES, RESOLVE_TIMEOUT, first_non_empty_line, frontend_error, is_known_kind,
-    known_kind_names,
-};
+use super::room_naming::derive_prompt_first_line;
+use super::shared::{MAX_MESSAGE_BYTES, is_known_kind, known_kind_names};
 use super::{VerbError, VerbResult, internal};
 use crate::agent_api::auth::Caller;
 use crate::agent_api::state::AgentApiState;
-use crate::db::{Database, HarnessMessageRow, Room};
+use crate::db::{CreatedBy, Database, HarnessMessageRow, Room};
 use crate::git::repo_root_for_path;
 use crate::review::now_ms;
 
-/// How long to wait for the frontend to actually create the room —
-/// generous because worktree mode runs `git worktree add`, which can be
-/// slow on a large repo or a cold disk cache.
-pub(super) const CREATE_ROOM_TIMEOUT: Duration = Duration::from_secs(60);
+mod record;
+mod worktree;
+
+pub use record::{AGENT_ROOM_CREATED_EVENT, AgentRoomCreated};
+use record::{FIRST_HARNESS_NAME, NewRoom, emit_created, leave_note, store_room};
+use worktree::{BranchMode, CheckoutSpec, prepare};
 
 /// How many `create_room` attempts (successful or refused past this
 /// point) one calling room may make in [`ROOM_CREATION_WINDOW`] — a
@@ -61,20 +63,18 @@ pub struct CreateRoomArgs {
     /// New Room dialog offers.
     #[serde(default)]
     pub branch_mode: Option<String>,
-    /// Worktree mode only. Omitted → the frontend's own branch template
-    /// applied to `task`.
+    /// Worktree mode only. Omitted → `skein/<slug of task>`.
     #[serde(default)]
     pub branch: Option<String>,
     /// Worktree mode only. Omitted → the repo's HEAD.
     #[serde(default)]
     pub base_branch: Option<String>,
     pub task: String,
-    /// Omitted → the frontend applies the user's own default for the
-    /// folder. When given, must name a known harness kind.
+    /// Omitted → `claude`. When given, must name a known harness kind.
     #[serde(default)]
     pub kind: Option<String>,
-    /// Omitted → the tool's own default, or the folder's remembered
-    /// agent (#247/#248) — the same rule the New Room dialog follows.
+    /// Omitted → the user's default agent for the kind (#248). An empty
+    /// string means no agent.
     #[serde(default)]
     pub agent: Option<String>,
     /// Queue this as the new harness's first message (#327's mailbox),
@@ -112,47 +112,6 @@ pub struct CreateRoomOut {
     pub base_behind_upstream: Option<u32>,
 }
 
-/// The frontend's answer to a `"create_room.resolve"` request — the
-/// `(kind, agent)` it would actually spawn for `path`, after applying
-/// the user's default kind, the per-kind default agent (#248), the
-/// folder's own remembered agent, and #247's agent validation.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ResolveOut {
-    pub(super) kind: String,
-    #[serde(default)]
-    pub(super) agent: Option<String>,
-}
-
-/// The frontend's answer to a `"create_room"` request — the room it
-/// actually made. `cwd`/`repo`/`branch`/`agent`/`session_id` are
-/// nullable: a non-git folder has no repo or branch, and an opencode
-/// harness's session id is only captured asynchronously after spawn
-/// (see `useHarnessCreation.ts`), so it may still be unknown when this
-/// answers.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreatedRoomOut {
-    room_id: String,
-    name: String,
-    #[serde(default)]
-    cwd: Option<String>,
-    #[serde(default)]
-    repo: Option<String>,
-    #[serde(default)]
-    branch: Option<String>,
-    harness_id: String,
-    kind: String,
-    #[serde(default)]
-    agent: Option<String>,
-    #[serde(default)]
-    session_id: Option<String>,
-    /// #367: forwarded from `createRoomArgs`'s outcome, only when the
-    /// worktree's LOCAL base branch is behind its upstream.
-    #[serde(default)]
-    base_behind_upstream: Option<u32>,
-}
-
 /// Open a whole new room — a new worktree, a new spawned harness, and
 /// optionally a queued first prompt (#330).
 ///
@@ -161,24 +120,19 @@ struct CreatedRoomOut {
 /// in this file: the Rooms tool group's Settings switch
 /// (`tool_groups.rooms`), a per-room rate cap, and a per-
 /// repository-group ceiling on how many agent-opened rooms Skein will
-/// hold at once (see [`MAX_OPEN_ROOMS_PER_GROUP`]) — on top of the
-/// frontend round trips themselves, which can refuse for reasons only
-/// the UI knows (an unreadable folder, a colliding branch name, …).
+/// hold at once (see [`MAX_OPEN_ROOMS_PER_GROUP`]).
 ///
-/// Two round trips to the webview, via [`AgentApiState::request_frontend`]:
-/// `"create_room.resolve"` first asks what `(kind, agent)` would
-/// actually spawn for `path` — the same folder-memory and validation
-/// logic `useNewRoomForm.tsx` runs — and only once that answer is in
-/// hand does `"create_room"` ask for the room itself, so a prompt that
-/// could never be delivered (an unreachable kind, injection turned off)
-/// is caught *before* anything is created, never partially.
+/// Once those pass, the daemon does the rest itself (#734, no round trip to
+/// a webview): it resolves `(kind, agent)`, refuses a `prompt` that could
+/// never be delivered *before* anything exists, cuts the worktree, stores
+/// the room with its first harness, tells clients about it
+/// ([`AGENT_ROOM_CREATED_EVENT`]) and, with no client attached to mount it,
+/// starts the harness.
 ///
 /// `room_creation_enabled` is the Rooms tool group off the live
 /// `SpawnSettings`, read by the caller (`mcp.rs`/`http.rs`) the same way
 /// `mail.policy` is — passed in rather than read from `state` here, so
-/// this verb stays testable with a plain bool and no managed
-/// `SpawnEnvState`, the one piece of Tauri-only state `AgentApiState::
-/// for_test` has no way to fake.
+/// this verb stays testable with a plain bool.
 #[allow(clippy::too_many_lines)]
 pub async fn create_room(
     state: &AgentApiState,
@@ -195,8 +149,8 @@ pub async fn create_room(
     }
 
     let branch_mode = match args.branch_mode.as_deref() {
-        None | Some("worktree") => "worktree",
-        Some("current") => "current",
+        None | Some("worktree") => BranchMode::Worktree,
+        Some("current") => BranchMode::Current,
         Some(other) => {
             return Err(VerbError::Refused(format!(
                 "unknown branchMode {other:?} — use worktree or current"
@@ -264,7 +218,7 @@ pub async fn create_room(
             "path does not exist or is not a directory: {path:?}"
         )));
     }
-    if branch_mode == "worktree" && !skein_git::Repo::is_repo(path_buf) {
+    if branch_mode == BranchMode::Worktree && !skein_git::Repo::is_repo(path_buf) {
         return Err(VerbError::Refused(format!(
             "{path} is not a git checkout, so branchMode \"worktree\" cannot be used \
              (try \"current\")"
@@ -301,6 +255,8 @@ pub async fn create_room(
                 && r.repo_root.as_deref().map(group_key_for_match) == new_group_key
         })
         .count();
+    // A snapshot: concurrent creates can overshoot this ceiling slightly. It
+    // was never atomic, and the locked apply below does not change that.
     if scoped_open_count >= MAX_OPEN_ROOMS_PER_GROUP {
         let msg = if let Some(root) = &new_repo_root {
             format!(
@@ -318,33 +274,18 @@ pub async fn create_room(
         return Err(VerbError::Refused(msg));
     }
 
-    let resolved = state
-        .request_frontend(
-            "create_room.resolve",
-            serde_json::json!({
-                "path": path,
-                "kind": args.kind,
-                "agent": args.agent,
-            }),
-            RESOLVE_TIMEOUT,
-        )
-        .await
-        .map_err(|e| frontend_error(&e))?;
-    let resolved: ResolveOut = serde_json::from_value(resolved).map_err(|e| {
-        VerbError::Unavailable(format!(
-            "the app returned an unexpected answer for create_room.resolve: {e}"
-        ))
-    })?;
-    if !is_known_kind(&resolved.kind) {
-        return Err(VerbError::Unavailable(format!(
-            "the app resolved an unknown harness kind {:?}",
-            resolved.kind
-        )));
-    }
+    let resolved = resolve(
+        state,
+        args.kind.as_deref(),
+        args.agent.as_deref(),
+        Some(&path),
+    )
+    .await?;
+    let kind = resolved.kind.as_str();
 
     if args.prompt.is_some()
         && let Some(reason) = mail_refusal_for(
-            &resolved.kind,
+            kind,
             resolved.agent.as_deref(),
             Some(&path),
             mail.policy,
@@ -356,53 +297,61 @@ pub async fn create_room(
         )));
     }
 
-    let created = state
-        .request_frontend(
-            "create_room",
-            serde_json::json!({
-                "path": path,
-                "branchMode": branch_mode,
-                "branch": args.branch,
-                "baseBranch": args.base_branch,
-                "task": task,
-                "kind": resolved.kind,
-                "agent": resolved.agent,
-                "createdBy": {
-                    "roomId": caller.room_id,
-                    // A `String`, never `null` — the frontend's
-                    // `createdBy` contract only requires `roomId`, but
-                    // `harnessId` still has to be *a string* to satisfy
-                    // its type check when the caller's own
-                    // `X-Skein-Harness` was absent, same fallback
-                    // `queue_first_prompt`/`send_message` use elsewhere
-                    // in this file.
-                    "harnessId": caller.harness_id.clone().unwrap_or_default(),
+    let store = store_of(state)?;
+    let checkout = {
+        let db = std::sync::Arc::clone(db);
+        let path = path.clone();
+        let task = task.to_owned();
+        let branch = args.branch.clone();
+        let base_branch = args.base_branch.clone();
+        tokio::task::spawn_blocking(move || {
+            prepare(
+                &db,
+                &CheckoutSpec {
+                    path: &path,
+                    mode: branch_mode,
+                    task: &task,
+                    branch: branch.as_deref(),
+                    base_branch: base_branch.as_deref(),
                 },
-                "requesterRoomName": caller_room.name,
-                // #356: a top-level field, not nested under `createdBy`
-                // — `parseCreateArgs` (`app/src/agentRequests.ts`) reads
-                // it there, alongside `prompt`. The frontend has no
-                // other way to learn what this room was asked to do —
-                // `task` above is only the tab's short label, and
-                // `prompt` itself is never otherwise sent to the
-                // webview (it is queued straight into `harness_messages`
-                // by `queue_first_prompt`, below, once the room exists).
-                // `None` when no `prompt` was given.
-                "promptFirstLine": args
-                    .prompt
-                    .as_deref()
-                    .map(first_non_empty_line)
-                    .filter(|s| !s.is_empty()),
-            }),
-            CREATE_ROOM_TIMEOUT,
-        )
+            )
+        })
         .await
-        .map_err(|e| frontend_error(&e))?;
-    let created: CreatedRoomOut = serde_json::from_value(created).map_err(|e| {
-        VerbError::Unavailable(format!(
-            "the app returned an unexpected answer for create_room: {e}"
-        ))
-    })?;
+        .map_err(|e| internal(format!("creating the worktree panicked: {e}")))??
+    };
+
+    // From here a failure leaves the worktree in place, so each says where.
+    let harness = build_harness(
+        state,
+        store,
+        NewHarness {
+            kind: resolved.kind,
+            agent: resolved.agent.clone(),
+            name: FIRST_HARNESS_NAME.to_owned(),
+            cwd: Some(checkout.cwd.clone()),
+            created_by: None,
+        },
+    )
+    .await
+    .map_err(|e| leave_note(e, &checkout))?;
+    let created_by = CreatedBy {
+        room_id: caller.room_id.clone(),
+        // A `String`, never absent, like `queue_first_prompt`'s fallback
+        // when the request carried no `X-Skein-Harness`.
+        harness_id: caller.harness_id.clone().unwrap_or_default(),
+        prompt_first_line: derive_prompt_first_line(None, args.prompt.as_deref()),
+        base_sha: checkout.base_sha.clone(),
+    };
+    let new_room = store_room(state, NewRoom { task, created_by }, &checkout, harness)
+        .await
+        .map_err(|e| leave_note(e, &checkout))?;
+    emit_created(state, &new_room, &caller_room.name);
+    let harness = new_room
+        .harnesses
+        .first()
+        .cloned()
+        .ok_or_else(|| VerbError::Internal("the new room has no first harness".to_owned()))?;
+    spawn_without_client(state, &new_room.id, &harness).await;
 
     let message_id = args.prompt.as_deref().and_then(|prompt| {
         queue_first_prompt(
@@ -410,33 +359,33 @@ pub async fn create_room(
             state,
             caller,
             &caller_room,
-            &created.room_id,
-            &created.name,
-            &created.harness_id,
-            &created.kind,
-            &created.kind,
+            &new_room.id,
+            &new_room.name,
+            &harness.id,
+            kind,
+            kind,
             prompt,
         )
     });
 
     Ok(CreateRoomOut {
-        room_id: created.room_id,
-        name: created.name,
-        cwd: created.cwd,
-        repo: created.repo,
-        branch: created.branch,
-        harness_id: created.harness_id,
-        kind: created.kind,
-        agent: created.agent,
-        session_id: created.session_id,
+        room_id: new_room.id,
+        name: new_room.name,
+        cwd: new_room.cwd,
+        repo: new_room.repo,
+        branch: new_room.branch,
+        harness_id: harness.id,
+        kind: kind.to_owned(),
+        agent: harness.agent,
+        session_id: harness.session_id,
         message_id,
-        base_behind_upstream: created.base_behind_upstream,
+        base_behind_upstream: checkout.base_behind_upstream,
     })
 }
 
 /// Queue `prompt` as a harness's first mailbox message (#327), once the
-/// frontend round trip that made (`create_room`) or opened
-/// (`open_harness`, #411) it has actually answered. Returns the message
+/// daemon has stored the harness that `create_room` made or `open_harness`
+/// (#411) opened (#734: no client round trip). Returns the message
 /// id, or `None` if the insert itself failed — a caller must never see
 /// a `messageId` in the response for a message that does not exist in
 /// `harness_messages`.
@@ -453,9 +402,8 @@ pub async fn create_room(
 /// the request already paid its own rate cap, and the new harness's
 /// unread count is trivially zero. Mirrors [`record_mail_actions`]'s
 /// payload shape, built by hand rather than reusing that helper: it
-/// takes real `Room`/`Harness` rows for the recipient, and a
-/// freshly-`create_room`d room is not yet one — the frontend has not
-/// autosaved it (see the module docs on why that is safe).
+/// takes real `Room`/`Harness` rows for the recipient, while this
+/// takes the plain fields both verbs have to hand.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn queue_first_prompt(
     db: &Database,

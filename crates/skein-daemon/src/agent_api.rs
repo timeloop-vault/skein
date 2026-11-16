@@ -44,6 +44,7 @@
 
 pub mod auth;
 pub mod client;
+pub mod daemon_handles;
 mod element;
 mod element_source;
 pub use crate::tool_groups as groups;
@@ -53,8 +54,11 @@ pub mod mcp;
 pub mod phase_tap;
 mod render;
 pub mod state;
+pub mod token_lifecycle;
 pub mod verbs;
 
+#[cfg(test)]
+mod client_attached_tests;
 #[cfg(test)]
 mod close_harness_tests;
 #[cfg(test)]
@@ -62,7 +66,9 @@ mod close_room_tests;
 #[cfg(test)]
 mod create_room_ceiling_tests;
 #[cfg(test)]
-mod create_room_frontend_tests;
+mod create_room_spawn_tests;
+#[cfg(test)]
+mod create_room_stored_tests;
 #[cfg(test)]
 mod create_room_tests;
 #[cfg(test)]
@@ -98,6 +104,8 @@ mod mail_send_tests;
 #[cfg(test)]
 mod mcp_protocol_tests;
 #[cfg(test)]
+mod open_harness_spawn_tests;
+#[cfg(test)]
 mod open_harness_tests;
 #[cfg(test)]
 mod refusal_tests;
@@ -111,5 +119,7 @@ mod tests;
 mod token_tests;
 #[cfg(test)]
 mod tool_groups_tests;
+#[cfg(test)]
+mod verb_atomicity_tests;
 
 pub use state::AgentApiState;

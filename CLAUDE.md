@@ -138,7 +138,14 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   constructs every piece and returns the two server
     │                                #   futures) and transport.rs (`InProcessTransport`:
     │                                #   events + client requests + capture). No `tauri`
-    │                                #   anywhere in it. #729 added room_store/ (the
+    │                                #   anywhere in it. #734 made create_room, close_room,
+    │                                #   open_harness and close_harness run in the daemon
+    │                                #   (verbs/{room_create/,room_close,harness_control,
+    │                                #   harness_build,close_apply,room_naming}.rs; no webview
+    │                                #   round trip), added agent_api/token_lifecycle.rs (a
+    │                                #   RoomStore observer revoking a room's token on
+    │                                #   archive or removal) and daemon_handles.rs (store,
+    │                                #   runner, harness config). #729 added room_store/ (the
     │                                #   in-memory authoritative RoomStore: apply, structural,
     │                                #   persist; #755 added edit, the field-level path) and
     │                                #   db/room_rows (per-row writes).
@@ -973,7 +980,11 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   to be agreed in advance. **The token is the scope** — no request names
   a room — and `X-Skein-Harness` is attribution only, never authority.
   Tokens are revoked wholesale on every boot: PTYs die with the app, so
-  a token that leaked into an old log stops working. The agent gets
+  a token that leaked into an old log stops working. Since #734 a
+  room's token is also revoked when the room is archived or removed
+  (a `RoomStore` observer, `agent_api/token_lifecycle.rs`); a reopened
+  room mints a fresh one at its next spawn, and the old one reads 403,
+  not 410. The agent gets
   read, `reply` and `mark_addressed`; **`resolve` is refused by name**,
   because an agent that can close its own comments removes the loop's
   only gate. Writes emit `skein://review-changed` — a comment touches
@@ -994,14 +1005,19 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   the queue and its verbs. **`create_room`** (#330) is the one verb
   that opens a whole new room and spawns a real harness in it, in the
   background (`activate: false`, so it never takes over the user's
-  screen) — it round-trips twice through #328's Rust→frontend request
-  mechanism (`AgentApiState::request_frontend` in skein-daemon, which goes through
-  the `ClientRequests` seam since #582; a webview-must-answer
-  counterpart to the one-way `notify_*` events elsewhere in this
-  module): once to resolve `(kind, agent)` the way `useNewRoomForm.tsx`
-  would for a human typing into New Room, once to actually create it,
-  so a `prompt` that could never be delivered refuses before anything
-  exists. The new `Room` carries `createdBy`, naming the calling room
+  screen) — since #734 the daemon does it itself over the `RoomStore`
+  (origin `daemon-agent`) and the `HarnessRunner`, with no webview
+  round trip: it resolves `(kind, agent)` (claude and the daemon's
+  per-kind default agent unless given; the per-folder memory and the
+  branch template in webview localStorage are not used) so a `prompt`
+  that could never be delivered refuses before anything exists, then
+  emits the one-way `skein://agent-room-created` for the toast. With no
+  client attached (in the app: no webview window) the daemon spawns the
+  harness; with one, its view does. `request_frontend` (the `ClientRequests` seam since #582) now
+  carries only the design verbs (`design.*`, which refuse `no_client`
+  without a client) and `files.dirty`, the question
+  `close_room`/`close_harness` put to a client about unsaved Files
+  buffers. The new `Room` carries `createdBy`, naming the calling room
   and harness. It is guarded harder than any other verb —
   the `rooms` tool group switch in Settings (default on), a
   per-room rate cap, an open-room ceiling. Since #411 it is no longer

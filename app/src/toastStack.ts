@@ -20,7 +20,8 @@ export interface ToastEntry {
 	// the receipt for a room an agent's `create_room` call opened in the
 	// background — not a harness-activity transition at all, so it never
 	// comes from `harnessActivity.subscribeTransitions` the way every
-	// other variant does; `useAgentRequests.ts` pushes it directly.
+	// other variant does; `useAgentRoomCreated.ts` pushes it from the daemon's
+	// `skein://agent-room-created` event.
 	// "info" (#410) is the same kind of direct push, for a message
 	// that doesn't reduce to a phase word — see `message` below.
 	state: "idle" | "exited" | "waiting" | "error" | "permission" | "created" | "info";

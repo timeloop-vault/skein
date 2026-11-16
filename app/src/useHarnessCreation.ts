@@ -34,7 +34,7 @@ import { captureOpencodeSessionId } from "./opencodeCapture.ts";
 import { buildRemoteSpec, type RemoteInput } from "./remoteCmd.ts";
 import { pendingSessionIds } from "./reportedSessions.ts";
 import { defaultRoomName } from "./roomName.ts";
-import type { Harness, HarnessKind, Room } from "./types.ts";
+import type { HarnessKind, Room } from "./types.ts";
 import { useHarnessWriteBacks } from "./useHarnessWriteBacks.ts";
 
 export type { CreateHarnessResult, CreateRoomResult };
@@ -79,26 +79,15 @@ export function useHarnessCreation(
 	// menu (pickHarness) and the Mod+E files jump. Kind-specific setup
 	// branches on capabilities — `files` is a surface, not a process:
 	// no session id, no cmd, and it starts (and stays) idle.
-	//
-	// #411: `opts.activate` (default true, same default/shape as
-	// `createRoom`'s below) is what lets `open_harness` add a harness in
-	// the background — the agent verb's contract is that it never steals
-	// focus or switches the room's own active harness, unlike every
-	// human-driven caller of this function. `opts.createdBy` is stamped
-	// onto the new harness record at construction, same as `createRoom`
-	// stamps `Room.createdBy` — never written after the fact.
 	const createHarnessInRoom = async (
 		targetRoomId: string,
 		kind: HarnessKind,
 		agent?: string,
 		opts?: {
-			activate?: boolean;
-			createdBy?: Harness["createdBy"];
 			remote?: RemoteInput;
 			hermesProfile?: string;
 		},
 	): Promise<CreateHarnessResult | undefined> => {
-		const activate = opts?.activate ?? true;
 		const targetRoom = roomsRef.current.find((r) => r.id === targetRoomId);
 		if (!targetRoom) return undefined;
 		const caps = HARNESS_KINDS[kind].capabilities;
@@ -150,12 +139,11 @@ export function useHarnessCreation(
 					agentName,
 					hermesProfile,
 					remote,
-					createdBy: opts?.createdBy,
 				});
 				return {
 					...r,
 					harnesses: [...r.harnesses, newH],
-					...(activate ? { activeHarnessId: id } : {}),
+					activeHarnessId: id,
 				};
 			}),
 		);
@@ -235,31 +223,18 @@ export function useHarnessCreation(
 		});
 	};
 
-	// #328: `opts.activate` (default true) is what lets a caller create a
-	// room without switching to it — #330's incoming request handler is
-	// the first one that needs this. `activate: false` leaves
-	// `activeRoomId`/`showNewRoom` alone and marks the room `attention`
-	// instead (see the field's doc in types.ts), which is what puts a
-	// dot on its tab until the user visits it. Returns the new room's
-	// identifying fields (#330: the `create_room` agent verb reports
-	// these back to the caller), not just the id — every field a caller
-	// can't otherwise reconstruct (kind/agent are on the record but
-	// `sessionId` for an opencode room isn't settled until the async
+	// Returns the new room's identifying fields, not just the id
+	// (`sessionId` for an opencode room isn't settled until the async
 	// capture below lands).
-	const createRoom = async (
-		{
-			cwd,
-			task,
-			harness,
-			agent,
-			hermesProfile: profileArg,
-			branch,
-			repoRoot,
-			createdBy,
-		}: CreateRoomArgs,
-		opts?: { activate?: boolean },
-	): Promise<CreateRoomResult> => {
-		const activate = opts?.activate ?? true;
+	const createRoom = async ({
+		cwd,
+		task,
+		harness,
+		agent,
+		hermesProfile: profileArg,
+		branch,
+		repoRoot,
+	}: CreateRoomArgs): Promise<CreateRoomResult> => {
 		const sid = newId("s");
 		const hid = newId("h");
 		// Display name from the trailing path component — `D:\code\skein`
@@ -305,14 +280,10 @@ export function useHarnessCreation(
 			branch,
 			repoRoot,
 			folderName,
-			activate,
-			createdBy,
 		});
 		setRooms((prev) => [...prev, newRoom]);
-		if (activate) {
-			setActiveRoomId(sid);
-			setShowNewRoom(false);
-		}
+		setActiveRoomId(sid);
+		setShowNewRoom(false);
 		// Phase 2b sqlite-poll fallback (see pickHarness comment for
 		// the relationship with L2c-2's SSE capture).
 		if (harness === "opencode") {
@@ -337,12 +308,9 @@ export function useHarnessCreation(
 	};
 
 	// The New Room dialog awaits the outcome to clear its busy flag.
-	const createRoomForUser = (
-		args: CreateRoomArgs,
-		opts?: { activate?: boolean },
-	): Promise<CreationOutcome> =>
+	const createRoomForUser = (args: CreateRoomArgs): Promise<CreationOutcome> =>
 		runUserCreation(
-			() => createRoom(args, opts),
+			() => createRoom(args),
 			(err) => reportCreationFailure("create the room", err),
 		);
 

@@ -1,23 +1,28 @@
 //! `create_room` (#330): argument validation, kill switch and rate cap. Also hosts the `create_room` fixtures its siblings share.
 
-use serde_json::json;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
 use tempfile::TempDir;
 
 use super::auth::Caller;
 use super::review_tests::git_repo_with_commit;
-use super::tests::{Fixture, agent_api_state, caller_for, fixture, harness, room, save};
+use super::state::AgentApiState;
+use super::tests::{
+    Fixture, agent_api_state, agent_api_state_with_room_records, caller_for, fixture, harness,
+    room, save,
+};
 use super::verbs::{self, MailContext, VerbError};
 use crate::db::{CreatedBy, Room};
+use crate::event_sink::EventSink;
+use crate::room_store::RoomStore;
 
 // ── opening a room (issue #330) ──────────────────────────────────────
 //
 // `create_room` is exercised as a plain function (`verbs::create_room`),
-// not through `mcp::call_tool` — the properties under test here are the
-// verb's own guards and round trips, already covered end to end for the
-// dispatch layer by `destroying_a_room_is_refused_by_name` and the tool
-// list test above. `AgentApiState::set_test_frontend` (test-only) stands
-// in for the webview: `create_room.resolve` and `create_room` answer
-// from a closure instead of a real `AppHandle` emit.
+// not through `mcp::call_tool`: the properties under test are the verb's
+// own guards and what it stores. Since #734 it needs no webview, so none of
+// these tests attaches a client, and every repository is built with `git2`.
 
 pub(super) fn create_room_args(task: &str) -> verbs::CreateRoomArgs {
     verbs::CreateRoomArgs {
@@ -48,16 +53,116 @@ pub(super) fn agent_opened_room(id: &str, repo_root: Option<&str>) -> Room {
     r
 }
 
-/// A caller room whose folder is a real git checkout with one commit —
-/// what the default (worktree) `branchMode` needs at minimum.
-pub(super) fn git_room(f: &Fixture) -> (TempDir, Caller) {
+/// A repository with one commit at `<tmp>/repo`. Nested so the worktrees
+/// `create_room` cuts (`<tmp>/repo-wt/<leaf>`) land inside the temp dir and
+/// are removed with it.
+pub(super) fn init_repo(tmp: &TempDir) -> String {
+    let dir = tmp.path().join("repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    git_repo_with_commit(&dir);
+    dir.to_str().unwrap().to_owned()
+}
+
+/// Every event a state emitted, as `(name, payload)`. Each one also records
+/// whether `watch` already held the room it names, which is what "after the
+/// store applied it" means to a listener.
+pub(super) struct Captured {
+    pub(super) events: Mutex<Vec<(String, String)>>,
+    watch: Mutex<Option<Arc<RoomStore>>>,
+    pub(super) room_was_stored: Mutex<Vec<bool>>,
+}
+
+impl Captured {
+    pub(super) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            events: Mutex::new(Vec::new()),
+            watch: Mutex::new(None),
+            room_was_stored: Mutex::new(Vec::new()),
+        })
+    }
+
+    pub(super) fn named(&self, name: &str) -> Vec<serde_json::Value> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, p)| serde_json::from_str(p).unwrap())
+            .collect()
+    }
+}
+
+impl EventSink for Captured {
+    fn emit_json(&self, event: &str, payload: String) -> Result<(), String> {
+        if event == verbs::AGENT_ROOM_CREATED_EVENT
+            && let Some(store) = self.watch.lock().unwrap().as_ref()
+        {
+            let id = serde_json::from_str::<serde_json::Value>(&payload)
+                .ok()
+                .and_then(|v| v["roomId"].as_str().map(str::to_owned));
+            let stored = id.is_some_and(|id| store.rooms().iter().any(|r| r.id == id));
+            self.room_was_stored.lock().unwrap().push(stored);
+        }
+        self.events
+            .lock()
+            .unwrap()
+            .push((event.to_owned(), payload));
+        Ok(())
+    }
+}
+
+/// A caller room `r1` (harness `h1`) whose folder is a real git checkout, in
+/// a state with a room store, no client and no runner.
+pub(super) struct Env {
+    pub(super) f: Fixture,
+    pub(super) tmp: TempDir,
+    pub(super) state: AgentApiState,
+    pub(super) store: Arc<RoomStore>,
+    pub(super) caller: Caller,
+    pub(super) repo: String,
+    pub(super) captured: Arc<Captured>,
+}
+
+impl Env {
+    pub(super) fn repo_path(&self) -> PathBuf {
+        PathBuf::from(&self.repo)
+    }
+
+    /// The rooms in the store other than `r1`, plus whatever was seeded.
+    pub(super) fn room_ids(&self) -> Vec<String> {
+        self.store.rooms().into_iter().map(|r| r.id).collect()
+    }
+}
+
+/// [`env_with`] with no extra rooms.
+pub(super) fn git_env() -> Env {
+    env_with(|_| Vec::new())
+}
+
+/// `r1` in a fresh repository, plus the rooms `extra` makes from the
+/// repository's path.
+pub(super) fn env_with(extra: impl FnOnce(&str) -> Vec<Room>) -> Env {
+    let f = fixture();
     let tmp = TempDir::new().unwrap();
-    git_repo_with_commit(tmp.path());
-    let mut r = room("r1", vec![harness("h1", "claude", "main")]);
-    r.cwd = Some(tmp.path().to_str().unwrap().to_owned());
-    save(&f.db, &[r]);
+    let repo = init_repo(&tmp);
+    let mut r1 = room("r1", vec![harness("h1", "claude", "main")]);
+    r1.cwd = Some(repo.clone());
+    let mut rooms = vec![r1];
+    rooms.extend(extra(&repo));
+    let (mut state, store) = agent_api_state_with_room_records(&f, rooms);
+    let captured = Captured::new();
+    *captured.watch.lock().unwrap() = Some(Arc::clone(&store));
+    state.events = Some(captured.clone());
     let caller = caller_for(&f.db, "r1", Some("h1"));
-    (tmp, caller)
+    Env {
+        f,
+        tmp,
+        state,
+        store,
+        caller,
+        repo,
+        captured,
+    }
 }
 
 #[tokio::test]
@@ -180,37 +285,45 @@ async fn create_room_worktree_mode_refuses_a_non_checkout_folder() {
 
 #[tokio::test]
 async fn create_room_current_mode_is_allowed_on_a_non_git_folder() {
-    let f = fixture();
-    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
-    let caller = caller_for(&f.db, "r1", Some("h1"));
-    let state = agent_api_state(&f);
-    let tmp = TempDir::new().unwrap();
-    state.set_test_frontend(|kind, _args| match kind {
-        "create_room.resolve" => Ok(json!({ "kind": "byoh", "agent": null })),
-        "create_room" => Ok(json!({
-            "roomId": "r2", "name": "n", "harnessId": "h2", "kind": "byoh",
-        })),
-        other => Err(format!("unexpected request_frontend kind {other:?}")),
-    });
+    let env = git_env();
+    let plain = env.tmp.path().join("plain");
+    std::fs::create_dir(&plain).unwrap();
+    let path = plain.to_str().unwrap().to_owned();
     let args = verbs::CreateRoomArgs {
-        path: Some(tmp.path().to_str().unwrap().to_owned()),
+        path: Some(path.clone()),
         branch_mode: Some("current".to_owned()),
+        kind: Some("byoh".to_owned()),
         ..create_room_args("hi")
     };
-    let out = verbs::create_room(&state, &caller, &args, &MailContext::permissive(), true)
-        .await
-        .unwrap();
-    assert_eq!(out.room_id, "r2");
+    let out = verbs::create_room(
+        &env.state,
+        &env.caller,
+        &args,
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap();
+    let stored = env
+        .store
+        .rooms()
+        .into_iter()
+        .find(|r| r.id == out.room_id)
+        .expect("the room is in the store");
+    assert_eq!(stored.cwd.as_deref(), Some(path.as_str()));
+    assert_eq!(
+        (stored.branch, stored.repo, stored.repo_root),
+        (None, None, None)
+    );
+    assert_eq!(out.branch, None);
 }
 
 #[tokio::test]
 async fn create_room_is_refused_when_the_kill_switch_is_off() {
-    let f = fixture();
-    let (_tmp, caller) = git_room(&f);
-    let state = agent_api_state(&f);
+    let env = git_env();
     let err = verbs::create_room(
-        &state,
-        &caller,
+        &env.state,
+        &env.caller,
         &create_room_args("hi"),
         &MailContext::permissive(),
         false,
@@ -221,34 +334,66 @@ async fn create_room_is_refused_when_the_kill_switch_is_off() {
         matches!(&err, VerbError::Refused(m) if m.contains("Settings")),
         "{err:?}"
     );
+    assert_eq!(env.room_ids(), vec!["r1".to_owned()]);
 }
 
 #[tokio::test]
 async fn create_room_is_rate_limited_to_five_attempts_a_minute() {
-    let f = fixture();
-    let (_tmp, caller) = git_room(&f);
-    let state = agent_api_state(&f);
-    // No frontend hook wired: each attempt clears the local guards and
-    // only then fails at the (unanswerable) round trip — proof the rate
-    // counter is charged before that point, not after.
+    let env = git_env();
+    // Five creations pass (each its own task, so its own branch), and the
+    // sixth meets the wall before anything is created.
     for n in 0..5 {
+        verbs::create_room(
+            &env.state,
+            &env.caller,
+            &create_room_args(&format!("task {n}")),
+            &MailContext::permissive(),
+            true,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("attempt {n}: {e:?}"));
+    }
+    let err = verbs::create_room(
+        &env.state,
+        &env.caller,
+        &create_room_args("one too many"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("rate limit")),
+        "{err:?}"
+    );
+    assert_eq!(env.room_ids().len(), 6);
+}
+
+#[tokio::test]
+async fn a_refused_attempt_still_counts_against_the_rate_cap() {
+    let env = git_env();
+    for n in 0..5 {
+        let args = verbs::CreateRoomArgs {
+            base_branch: Some("no-such-branch".to_owned()),
+            ..create_room_args(&format!("task {n}"))
+        };
         let err = verbs::create_room(
-            &state,
-            &caller,
-            &create_room_args("hi"),
+            &env.state,
+            &env.caller,
+            &args,
             &MailContext::permissive(),
             true,
         )
         .await
         .unwrap_err();
         assert!(
-            matches!(&err, VerbError::Unavailable(_)),
-            "attempt {n}: expected the guards to pass, got {err:?}"
+            matches!(&err, VerbError::Refused(m) if m == "unknown base branch"),
+            "attempt {n}: {err:?}"
         );
     }
     let err = verbs::create_room(
-        &state,
-        &caller,
+        &env.state,
+        &env.caller,
         &create_room_args("hi"),
         &MailContext::permissive(),
         true,

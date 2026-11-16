@@ -1,7 +1,5 @@
 //! Constants and helpers more than one verb family uses.
 
-use std::time::Duration;
-
 use super::VerbError;
 use crate::harness_kind::{ALL, HarnessKind};
 
@@ -22,11 +20,6 @@ pub(super) fn is_known_kind(kind: &str) -> bool {
 pub(super) fn known_kind_names() -> Vec<&'static str> {
     ALL.iter().map(|k| k.as_str()).collect()
 }
-
-/// How long to wait for the frontend to resolve a `(kind, agent)` — a
-/// folder lookup plus a couple of `localStorage` reads, so this should
-/// never be close.
-pub(super) const RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Map a [`AgentApiState::request_frontend`] error string to the right
 /// [`VerbError`]. Infrastructure problems — no webview, a timeout, a

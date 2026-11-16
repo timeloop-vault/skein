@@ -5,7 +5,7 @@
 //! properties — room scoping, the resolve prohibition, attribution —
 //! testable without a server or a Tauri runtime. [`create_room`] (#330)
 //! is the one exception that needs more than that: opening a room means
-//! asking the webview to do it (#328's `request_frontend`), so it also
+//! cutting a worktree and storing the room (#734, no webview round trip), so it also
 //! takes an [`super::state::AgentApiState`] — itself usable with no
 //! Tauri runtime via `AgentApiState::for_test`, so the "no server
 //! needed" property still holds in tests.
@@ -44,10 +44,12 @@
 //! This file keeps [`VerbError`] and re-exports every verb, argument
 //! and result type, so callers keep writing `verbs::X`.
 
+mod close_apply;
 mod design;
 mod design_changes;
 mod design_screenshot;
 mod find_rooms;
+mod harness_build;
 mod harness_control;
 mod info;
 mod list_rooms;
@@ -58,6 +60,7 @@ mod review_ctx;
 mod room_close;
 mod room_create;
 mod room_listing;
+mod room_naming;
 mod shared;
 
 pub use design::*;

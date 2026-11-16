@@ -8,8 +8,8 @@ import type { Harness, HarnessKind, RemoteSpec, Room } from "./types.ts";
 
 export const newId = (prefix: string): string => prefix + Math.random().toString(36).slice(2, 7);
 
-// #330: what `createRoom` hands back — everything the `create_room`
-// agent verb reports to the caller. `null`, not an absent key, for
+// #330: what `createRoom` hands back — what the New Room flow gets back. (The
+// `create_room` agent verb runs in the daemon since #734.) `null`, not an absent key, for
 // every field that has no value right now: this crosses into a
 // `serde_json::Value` on its way back to Rust, where an absent object
 // key and an explicit JSON `null` are NOT the same "I don't know" the
@@ -26,8 +26,8 @@ export interface CreateRoomResult {
 	sessionId: string | null;
 }
 
-// #411: what `createHarnessInRoom` hands back for the `open_harness`
-// agent verb to report — everything the caller can't otherwise
+// #411: what `createHarnessInRoom` hands back
+// (the `open_harness` verb runs in the daemon since #734) — everything the caller can't otherwise
 // reconstruct from the request it sent (the resolved `agent` and the
 // name Skein picked). `undefined` when the target room didn't exist by
 // the time this ran, mirroring `createHarnessInRoom`'s existing no-op
@@ -59,7 +59,6 @@ export interface NewHarnessFields {
 	/** #627: only ever set for kind `hermes`. */
 	hermesProfile?: string | undefined;
 	remote?: RemoteSpec | undefined;
-	createdBy?: Harness["createdBy"] | undefined;
 }
 
 // `files` is a surface, not a process: no cmd, and it starts (and
@@ -80,7 +79,6 @@ export function buildHarness(f: NewHarnessFields): Harness {
 		...(f.agentName ? { agent: f.agentName } : {}),
 		...(f.hermesProfile ? { hermesProfile: f.hermesProfile } : {}),
 		...(f.remote ? { remote: f.remote } : {}),
-		...(f.createdBy ? { createdBy: f.createdBy } : {}),
 	};
 }
 
@@ -92,8 +90,6 @@ export interface NewRoomFields {
 	branch?: string | undefined;
 	repoRoot?: string | undefined;
 	folderName: string;
-	activate: boolean;
-	createdBy?: Room["createdBy"] | undefined;
 }
 
 export function buildRoom(f: NewRoomFields): Room {
@@ -112,8 +108,6 @@ export function buildRoom(f: NewRoomFields): Room {
 		...(f.repoRoot ? { repoRoot: f.repoRoot } : {}),
 		harnesses: [f.harness],
 		activeHarnessId: f.harness.id,
-		...(f.activate ? {} : { attention: true }),
-		...(f.createdBy ? { createdBy: f.createdBy } : {}),
 	};
 }
 

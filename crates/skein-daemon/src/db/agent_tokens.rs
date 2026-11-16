@@ -75,6 +75,18 @@ impl Database {
         .map_err(|e| e.to_string())
     }
 
+    /// Every room id that holds at least one unrevoked token, once each.
+    pub fn rooms_with_live_tokens(&self) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT room_id FROM agent_tokens WHERE revoked_ms IS NULL")
+            .map_err(|e| e.to_string())?;
+        stmt.query_map([], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
     /// Resolve a bearer token. The three outcomes are deliberately
     /// distinct — "revoked" and "never existed" mean different things
     /// to whoever is holding it.
@@ -93,5 +105,25 @@ impl Database {
             Some((_, Some(_))) => TokenLookup::Revoked,
             Some((room_id, None)) => TokenLookup::Active { room_id },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rooms_with_live_tokens_skips_revoked_and_lists_a_room_once() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = Database::open(&dir.path().join("skein.db")).unwrap();
+        db.ensure_room_token("only-revoked", 1).unwrap();
+        db.revoke_agent_tokens(Some("only-revoked"), 2).unwrap();
+        db.ensure_room_token("mixed", 1).unwrap();
+        db.revoke_agent_tokens(Some("mixed"), 2).unwrap();
+        db.ensure_room_token("mixed", 3).unwrap();
+        db.ensure_room_token("live", 1).unwrap();
+        let mut got = db.rooms_with_live_tokens().unwrap();
+        got.sort();
+        assert_eq!(got, vec!["live".to_owned(), "mixed".to_owned()]);
     }
 }

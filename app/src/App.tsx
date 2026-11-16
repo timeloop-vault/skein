@@ -231,7 +231,7 @@ export default function App() {
 	});
 
 	// Also registers the #559 OS-wide Control Center shortcut; `failed` = it could not.
-	const failed = useAppBackgroundWiring({ store, nav, actions, creation, settings, pushToast, cc });
+	const failed = useAppBackgroundWiring({ store, nav, actions, settings, cc, pushToast });
 
 	const titlebarProps: TitlebarProps = {
 		activeRoomLabel: room ? room.name : null,

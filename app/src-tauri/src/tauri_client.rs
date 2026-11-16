@@ -8,16 +8,26 @@ use crate::agent_api::client::{ClientRequests, Rect, Shot, WebviewCapture};
 use crate::agent_api::state::{AGENT_REQUEST_EVENT, AgentRequest};
 
 /// Emits [`AGENT_REQUEST_EVENT`] to the webview.
-pub struct TauriClientRequests(crate::tauri_event_sink::TauriEventSink);
+pub struct TauriClientRequests(crate::tauri_event_sink::TauriEventSink, AppHandle);
 
 impl TauriClientRequests {
     #[must_use]
     pub fn new(app: AppHandle) -> Self {
-        Self(crate::tauri_event_sink::TauriEventSink::new(app))
+        Self(
+            crate::tauri_event_sink::TauriEventSink::new(app.clone()),
+            app,
+        )
     }
 }
 
 impl ClientRequests for TauriClientRequests {
+    /// Attached while the app has at least one webview window: with none
+    /// (the main window closed, the process still running) nothing could
+    /// answer, and the event would only be dropped.
+    fn is_attached(&self) -> bool {
+        !self.1.webview_windows().is_empty()
+    }
+
     fn send(&self, request: &AgentRequest) -> Result<(), String> {
         crate::event_sink::emit(&self.0, AGENT_REQUEST_EVENT, request)
     }

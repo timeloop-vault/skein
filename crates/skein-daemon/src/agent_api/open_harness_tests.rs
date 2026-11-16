@@ -1,13 +1,16 @@
 //! `open_harness` (#411): guards and happy paths.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use serde_json::{Value, json};
-
+use super::auth::Caller;
 use super::close_room_tests::room_created_by;
-use super::tests::{agent_api_state, caller_for, fixture, harness, room, save};
+use super::state::AgentApiState;
+use super::tests::{
+    Fixture, agent_api_state, agent_api_state_with_room_records, caller_for, fixture, harness,
+    room, save,
+};
 use super::verbs::{self, MailContext, VerbError};
 use crate::db::Harness;
+use crate::room_store::RoomStore;
+use skein_proto::rooms::Room;
 
 // ── opening a harness (issue #411) ──────────────────────────────────────
 //
@@ -211,12 +214,42 @@ async fn open_harness_refuses_once_the_harness_ceiling_is_hit() {
     );
 }
 
+/// An open room with a store behind it, and the caller that lives in `r1`.
+fn with_store(f: &Fixture, rooms: Vec<Room>) -> (AgentApiState, std::sync::Arc<RoomStore>, Caller) {
+    let (state, store) = agent_api_state_with_room_records(f, rooms);
+    let caller = caller_for(&f.db, "r1", Some("h1"));
+    (state, store, caller)
+}
+
+fn kind_args(room: &str, kind: &str) -> verbs::OpenHarnessArgs {
+    verbs::OpenHarnessArgs {
+        kind: Some(kind.to_owned()),
+        ..open_harness_args(room)
+    }
+}
+
+fn harnesses_of(store: &RoomStore, room: &str) -> Vec<Harness> {
+    store
+        .rooms()
+        .into_iter()
+        .find(|r| r.id == room)
+        .unwrap()
+        .harnesses
+}
+
+fn made_by(store: &RoomStore, room: &str, id: &str) -> Harness {
+    harnesses_of(store, room)
+        .into_iter()
+        .find(|h| h.id == id)
+        .expect("the harness is in the store")
+}
+
 #[tokio::test]
-async fn open_harness_maps_a_missing_webview_to_unavailable() {
+async fn open_harness_without_a_store_is_unavailable() {
     let f = fixture();
     save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
     let caller = caller_for(&f.db, "r1", Some("h1"));
-    let state = agent_api_state(&f); // no test_frontend hook, no AppHandle
+    let state = agent_api_state(&f); // no daemon handles
     let err = verbs::open_harness(
         &state,
         &caller,
@@ -226,143 +259,92 @@ async fn open_harness_maps_a_missing_webview_to_unavailable() {
     )
     .await
     .unwrap_err();
-    assert!(
-        matches!(&err, VerbError::Unavailable(m) if m.contains("no webview")),
-        "{err:?}"
-    );
-}
-
-#[tokio::test]
-async fn open_harness_maps_a_frontend_resolve_refusal_to_refused() {
-    let f = fixture();
-    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
-    let caller = caller_for(&f.db, "r1", Some("h1"));
-    let state = agent_api_state(&f);
-    state.set_test_frontend(|kind, _args| match kind {
-        "open_harness.resolve" => Err("unknown kind \"bogus\"".to_owned()),
-        other => Err(format!("unexpected request_frontend kind {other:?}")),
-    });
-    let err = verbs::open_harness(
-        &state,
-        &caller,
-        &open_harness_args("r1"),
-        &MailContext::permissive(),
-        true,
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        matches!(&err, VerbError::Refused(m) if m.contains("bogus")),
-        "{err:?}"
-    );
-}
-
-#[tokio::test]
-async fn open_harness_with_a_prompt_refuses_an_unreachable_resolved_kind_before_opening_anything() {
-    // Same shape as `create_room`'s own version of this test: the
-    // resolve round trip has to run to learn the kind is unreachable,
-    // but the second (opening) round trip must never be asked for.
-    let f = fixture();
-    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
-    let caller = caller_for(&f.db, "r1", Some("h1"));
-    let state = agent_api_state(&f);
-    let round2_called = std::sync::Arc::new(AtomicBool::new(false));
-    let round2_flag = std::sync::Arc::clone(&round2_called);
-    state.set_test_frontend(move |kind, _args| match kind {
-        "open_harness.resolve" => Ok(json!({ "kind": "copilot", "agent": null })),
-        "open_harness" => {
-            round2_flag.store(true, Ordering::SeqCst);
-            Ok(json!({}))
-        }
-        other => Err(format!("unexpected request_frontend kind {other:?}")),
-    });
-    let args = verbs::OpenHarnessArgs {
-        prompt: Some("go".to_owned()),
-        ..open_harness_args("r1")
-    };
-    let err = verbs::open_harness(&state, &caller, &args, &MailContext::permissive(), true)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(&err, VerbError::Refused(m) if m.contains("copilot")),
-        "{err:?}"
-    );
-    assert!(
-        !round2_called.load(Ordering::SeqCst),
-        "round-trip 2 must never be requested once the prompt is unreachable"
-    );
+    assert!(matches!(&err, VerbError::Unavailable(_)), "{err:?}");
 }
 
 #[tokio::test]
 async fn open_harness_refuses_an_unknown_kind_naming_hermes_among_the_known() {
     let f = fixture();
-    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
-    let caller = caller_for(&f.db, "r1", Some("h1"));
-    let state = agent_api_state(&f);
-    let args = verbs::OpenHarnessArgs {
-        kind: Some("bogus".to_owned()),
-        ..open_harness_args("r1")
-    };
-    let err = verbs::open_harness(&state, &caller, &args, &MailContext::permissive(), true)
-        .await
-        .unwrap_err();
+    let (state, store, caller) =
+        with_store(&f, vec![room("r1", vec![harness("h1", "claude", "main")])]);
+    let err = verbs::open_harness(
+        &state,
+        &caller,
+        &kind_args("r1", "bogus"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
     assert!(
         matches!(&err, VerbError::Refused(m) if m.contains("bogus") && m.contains("hermes")),
         "{err:?}"
     );
+    assert_eq!(harnesses_of(&store, "r1").len(), 1);
 }
 
 #[tokio::test]
-async fn open_harness_accepts_hermes_with_no_agent() {
+async fn open_harness_refuses_the_remote_kind() {
     let f = fixture();
-    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
-    let caller = caller_for(&f.db, "r1", Some("h1"));
-    let state = agent_api_state(&f);
-    state.set_test_frontend(|kind, args| match kind {
-        "open_harness.resolve" => {
-            assert_eq!(args["kind"], json!("hermes"));
-            Ok(json!({ "kind": "hermes", "agent": null }))
-        }
-        "open_harness" => Ok(json!({
-            "harnessId": "h2",
-            "kind": "hermes",
-            "agent": null,
-            "name": "hermes",
-        })),
-        other => Err(format!("unexpected request_frontend kind {other:?}")),
-    });
-    let args = verbs::OpenHarnessArgs {
-        kind: Some("hermes".to_owned()),
-        ..open_harness_args("r1")
-    };
-    let out = verbs::open_harness(&state, &caller, &args, &MailContext::permissive(), true)
-        .await
-        .unwrap();
-    assert_eq!(out.kind, "hermes");
+    let (state, store, caller) =
+        with_store(&f, vec![room("r1", vec![harness("h1", "claude", "main")])]);
+    let err = verbs::open_harness(
+        &state,
+        &caller,
+        &kind_args("r1", "remote"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("only the user can enter")),
+        "{err:?}"
+    );
+    assert_eq!(harnesses_of(&store, "r1").len(), 1);
+}
+
+#[tokio::test]
+async fn open_harness_stores_the_harness_and_leaves_the_active_one_alone() {
+    let f = fixture();
+    let (state, store, caller) =
+        with_store(&f, vec![room("r1", vec![harness("h1", "claude", "main")])]);
+    assert!(!state.has_client(), "this test runs with no client");
+    let out = verbs::open_harness(
+        &state,
+        &caller,
+        &kind_args("r1", "opencode"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.room_id, "r1");
+    assert_eq!(out.kind, "opencode");
     assert_eq!(out.agent, None);
+    assert_eq!(out.name, "oc-2");
+    assert_eq!(out.message_id, None, "no prompt was given");
+
+    let room = store.rooms().into_iter().find(|r| r.id == "r1").unwrap();
+    assert_eq!(room.active_harness_id, "h1", "a verb never takes a screen");
+    assert_eq!(room.harnesses.len(), 2);
+    let made = made_by(&store, "r1", &out.harness_id);
+    assert!(made.id.starts_with('h') && made.id != "h1");
+    assert_eq!(made.kind, "opencode");
+    assert_eq!(made.name, "oc-2");
+    assert_eq!(made.status, "running");
+    assert_eq!(made.live, Some(true));
+    assert!(made.cmd.as_ref().is_some_and(|c| !c.is_empty()));
+    let by = made.created_by.as_ref().expect("attributed to the caller");
+    assert_eq!(by.room_id, "r1");
+    assert_eq!(by.harness_id.as_deref(), Some("h1"));
 }
 
 #[tokio::test]
-async fn open_harness_happy_path_in_its_own_room() {
+async fn open_harness_defaults_to_claude_with_a_conversation_id() {
     let f = fixture();
-    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
-    let caller = caller_for(&f.db, "r1", Some("h1"));
-    let state = agent_api_state(&f);
-    let opened_args = std::sync::Arc::new(std::sync::Mutex::new(None::<Value>));
-    let opened_clone = std::sync::Arc::clone(&opened_args);
-    state.set_test_frontend(move |kind, args| match kind {
-        "open_harness.resolve" => Ok(json!({ "kind": "opencode", "agent": null })),
-        "open_harness" => {
-            *opened_clone.lock().unwrap() = Some(args.clone());
-            Ok(json!({
-                "harnessId": "h2",
-                "kind": "opencode",
-                "agent": null,
-                "name": "opencode",
-            }))
-        }
-        other => Err(format!("unexpected request_frontend kind {other:?}")),
-    });
+    let (state, store, caller) =
+        with_store(&f, vec![room("r1", vec![harness("h1", "claude", "main")])]);
     let out = verbs::open_harness(
         &state,
         &caller,
@@ -372,45 +354,84 @@ async fn open_harness_happy_path_in_its_own_room() {
     )
     .await
     .unwrap();
-    assert_eq!(out.room_id, "r1");
-    assert_eq!(out.harness_id, "h2");
-    assert_eq!(out.kind, "opencode");
-    assert_eq!(out.agent, None);
-    assert_eq!(out.name, "opencode");
-    assert_eq!(out.message_id, None, "no prompt was given");
+    assert_eq!(out.kind, "claude");
+    assert_eq!(out.name, "CC-2");
+    let made = made_by(&store, "r1", &out.harness_id);
+    let sid = made.session_id.expect("a minted Claude session id");
+    assert!(made.cmd.unwrap().contains(&sid));
+}
 
-    let sent = opened_args
-        .lock()
-        .unwrap()
-        .clone()
-        .expect("open_harness requested");
-    assert_eq!(sent["roomId"], json!("r1"));
-    assert_eq!(sent["createdBy"]["roomId"], json!("r1"));
-    assert_eq!(sent["createdBy"]["harnessId"], json!("h1"));
+#[tokio::test]
+async fn open_harness_with_an_empty_agent_runs_no_agent() {
+    let f = fixture();
+    let (state, store, caller) =
+        with_store(&f, vec![room("r1", vec![harness("h1", "claude", "main")])]);
+    let args = verbs::OpenHarnessArgs {
+        agent: Some(String::new()),
+        ..open_harness_args("r1")
+    };
+    let out = verbs::open_harness(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap();
+    assert_eq!(out.agent, None);
+    let made = made_by(&store, "r1", &out.harness_id);
+    assert_eq!(made.agent, None);
+    assert!(!made.cmd.unwrap().iter().any(|a| a == "--agent"));
+}
+
+#[tokio::test]
+async fn open_harness_accepts_hermes_with_the_skein_profile() {
+    let f = fixture();
+    let (state, store, caller) =
+        with_store(&f, vec![room("r1", vec![harness("h1", "claude", "main")])]);
+    let out = verbs::open_harness(
+        &state,
+        &caller,
+        &kind_args("r1", "hermes"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.kind, "hermes");
+    assert_eq!(out.agent, None);
+    assert!(
+        made_by(&store, "r1", &out.harness_id)
+            .hermes_profile
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn open_harness_files_is_a_surface_with_no_argv() {
+    let f = fixture();
+    let (state, store, caller) =
+        with_store(&f, vec![room("r1", vec![harness("h1", "claude", "main")])]);
+    let out = verbs::open_harness(
+        &state,
+        &caller,
+        &kind_args("r1", "files"),
+        &MailContext::permissive(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.name, "files-2");
+    let made = made_by(&store, "r1", &out.harness_id);
+    assert_eq!(made.status, "idle");
+    assert!(made.cmd.is_none() && made.live.is_none());
 }
 
 #[tokio::test]
 async fn open_harness_happy_path_in_a_room_it_created() {
     let f = fixture();
-    save(
-        &f.db,
-        &[
+    let (state, store, caller) = with_store(
+        &f,
+        vec![
             room("r1", vec![harness("h1", "claude", "main")]),
             room_created_by("r2", vec![harness("h2a", "claude", "main")], "r1"),
         ],
     );
-    let caller = caller_for(&f.db, "r1", Some("h1"));
-    let state = agent_api_state(&f);
-    state.set_test_frontend(|kind, _args| match kind {
-        "open_harness.resolve" => Ok(json!({ "kind": "claude", "agent": null })),
-        "open_harness" => Ok(json!({
-            "harnessId": "h2b",
-            "kind": "claude",
-            "agent": null,
-            "name": "claude 2",
-        })),
-        other => Err(format!("unexpected request_frontend kind {other:?}")),
-    });
     let out = verbs::open_harness(
         &state,
         &caller,
@@ -421,25 +442,40 @@ async fn open_harness_happy_path_in_a_room_it_created() {
     .await
     .unwrap();
     assert_eq!(out.room_id, "r2");
-    assert_eq!(out.harness_id, "h2b");
+    assert_eq!(harnesses_of(&store, "r2").len(), 2);
+    assert_eq!(
+        harnesses_of(&store, "r1").len(),
+        1,
+        "the caller's room is untouched"
+    );
+    let made = made_by(&store, "r2", &out.harness_id);
+    assert_eq!(made.created_by.as_ref().unwrap().room_id, "r1");
 }
 
 #[tokio::test]
-async fn open_harness_happy_path_with_a_prompt_queues_the_first_message() {
+async fn open_harness_with_a_prompt_refuses_an_unreachable_kind_before_opening_anything() {
     let f = fixture();
-    save(&f.db, &[room("r1", vec![harness("h1", "claude", "main")])]);
-    let caller = caller_for(&f.db, "r1", Some("h1"));
-    let state = agent_api_state(&f);
-    state.set_test_frontend(|kind, _args| match kind {
-        "open_harness.resolve" => Ok(json!({ "kind": "claude", "agent": null })),
-        "open_harness" => Ok(json!({
-            "harnessId": "h2",
-            "kind": "claude",
-            "agent": null,
-            "name": "claude 2",
-        })),
-        other => Err(format!("unexpected request_frontend kind {other:?}")),
-    });
+    let (state, store, caller) =
+        with_store(&f, vec![room("r1", vec![harness("h1", "claude", "main")])]);
+    let args = verbs::OpenHarnessArgs {
+        prompt: Some("go".to_owned()),
+        ..kind_args("r1", "copilot")
+    };
+    let err = verbs::open_harness(&state, &caller, &args, &MailContext::permissive(), true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, VerbError::Refused(m) if m.contains("copilot")),
+        "{err:?}"
+    );
+    assert_eq!(harnesses_of(&store, "r1").len(), 1, "nothing was stored");
+}
+
+#[tokio::test]
+async fn open_harness_with_a_prompt_queues_the_first_message() {
+    let f = fixture();
+    let (state, store, caller) =
+        with_store(&f, vec![room("r1", vec![harness("h1", "claude", "main")])]);
     let args = verbs::OpenHarnessArgs {
         prompt: Some("start working on the thing".to_owned()),
         ..open_harness_args("r1")
@@ -451,8 +487,9 @@ async fn open_harness_happy_path_with_a_prompt_queues_the_first_message() {
         .message_id
         .clone()
         .expect("a prompt should queue a message");
+    made_by(&store, "r1", &out.harness_id);
 
-    let messages = f.db.all_harness_messages("r1", "h2").unwrap();
+    let messages = f.db.all_harness_messages("r1", &out.harness_id).unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].id, message_id);
     assert_eq!(messages[0].body, "start working on the thing");

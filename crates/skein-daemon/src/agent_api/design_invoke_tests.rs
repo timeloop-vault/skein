@@ -20,6 +20,34 @@ fn answer(_: &str, _: &Value) -> Result<Value, String> {
 }
 
 #[tokio::test]
+async fn with_no_client_invoke_element_refuses_no_client() {
+    let f = fixture();
+    let dir = folder();
+    save(&f.db, &[design_room("A", &dir, &["d1"])]);
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let state = super::tests::agent_api_state(&f);
+    let e = verbs::invoke_element(
+        &state,
+        &caller,
+        &args(json!({ "selector": "button" })),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(is_refused(&e, "no_client:"), "{e:?}");
+    assert_eq!(e.status(), 403);
+    // Argument checks and the kill switch still come first.
+    let e = verbs::invoke_element(&state, &caller, &args(json!({})), true)
+        .await
+        .unwrap_err();
+    assert!(is_refused(&e, "bad_arguments:"), "{e:?}");
+    let e = verbs::invoke_element(&state, &caller, &args(json!({ "selector": "b" })), false)
+        .await
+        .unwrap_err();
+    assert!(is_refused(&e, "disabled:"), "{e:?}");
+}
+
+#[tokio::test]
 async fn bad_arguments_are_refused_before_any_guard_or_frontend_call() {
     let f = fixture();
     let dir = folder();

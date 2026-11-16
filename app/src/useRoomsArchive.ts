@@ -9,7 +9,6 @@ import {
 	useCallback,
 	useRef,
 } from "react";
-import { type CloseRoomAttribution, decideCloseRoom, type RequestResult } from "./agentRequests.ts";
 import { reportArgvFailure } from "./argvFailure.ts";
 import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { confirmDialog } from "./confirmDialog.ts";
@@ -30,7 +29,6 @@ export interface RoomsArchiveDeps {
 	activeRoomId: string;
 	activeRooms: Room[];
 	roomsRef: MutableRefObject<Room[]>;
-	activeRoomIdRef: MutableRefObject<string>;
 	mismatchedRef: MutableRefObject<Set<string>>;
 	lastUsedByGroupRef: MutableRefObject<Map<string, string>>;
 	setRooms: Dispatch<SetStateAction<Room[]>>;
@@ -46,7 +44,6 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 		activeRoomId,
 		activeRooms,
 		roomsRef,
-		activeRoomIdRef,
 		mismatchedRef,
 		lastUsedByGroupRef,
 		setRooms,
@@ -105,42 +102,6 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 		// commit, which would otherwise write the room's name right back
 		// onto an archived room no tab shows any more.
 		setRenaming((cur) => (cur?.roomId === id ? null : cur));
-	};
-
-	// #411: `close_room` agent verb — same archive `closeRoom` above
-	// performs, but never prompts (there's no dialog for an agent call
-	// to answer) and refuses outright instead of asking. The refusal
-	// ladder (unknown room / already archived / unsaved Files buffers)
-	// lives in the pure `decideCloseRoom` so it's unit-tested without
-	// this hook; this is only the state mutation once decided.
-	const closeRoomForAgent = (
-		roomId: string,
-		closedBy: CloseRoomAttribution,
-	): RequestResult<{ roomId: string; archived: number }> => {
-		const decision = decideCloseRoom(
-			roomsRef.current,
-			roomId,
-			closedBy,
-			(ids) => filesRegistry.anyDirty(ids),
-			Date.now(),
-		);
-		if (!decision.ok) return decision;
-		const { closedBy: stamped } = decision.value;
-		for (const h of roomsRef.current.find((r) => r.id === roomId)?.harnesses ?? []) {
-			claudeVersionStore.forget(h.id);
-			forgetReported(h.id);
-		}
-		setRooms((prev) =>
-			prev.map((r) => (r.id === roomId ? { ...r, archived: stamped.at, closedBy: stamped } : r)),
-		);
-		if (roomId === activeRoomIdRef.current) {
-			const nextActive = nextActiveAfterClose(activeRooms, roomId, lastUsedByGroupRef.current);
-			setActiveRoomId(nextActive?.id ?? "");
-		}
-		// Same reasoning as the user's close, above: archiving can remove
-		// a room out from under an in-progress rename.
-		setRenaming((cur) => (cur?.roomId === roomId ? null : cur));
-		return { ok: true, value: { roomId, archived: stamped.at } };
 	};
 
 	// #153 / #170: un-archiving a room re-mounts it, which re-spawns
@@ -269,7 +230,6 @@ export function useRoomsArchive(d: RoomsArchiveDeps) {
 
 	return {
 		closeRoom,
-		closeRoomForAgent,
 		unarchiveRoom,
 		unarchiveRoomRef,
 		deleteRoomForever,

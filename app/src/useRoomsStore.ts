@@ -24,6 +24,7 @@ import {
 import type { RenameTarget } from "./RoomStrip.tsx";
 import { inspectFolderMissing } from "./roomsStoreProbe.ts";
 import type { Room } from "./types.ts";
+import { useRemoteRoomRepair } from "./useRemoteRoomRepair.ts";
 import { useRoomsArchive } from "./useRoomsArchive.ts";
 import { useRoomsHydrate } from "./useRoomsHydrate.ts";
 import { useRoomsRepoIdentity } from "./useRoomsRepoIdentity.ts";
@@ -185,7 +186,6 @@ export function useRoomsStore(
 
 	const {
 		closeRoom,
-		closeRoomForAgent,
 		unarchiveRoom,
 		unarchiveRoomRef,
 		deleteRoomForever,
@@ -198,7 +198,6 @@ export function useRoomsStore(
 		activeRoomId,
 		activeRooms,
 		roomsRef,
-		activeRoomIdRef,
 		mismatchedRef,
 		lastUsedByGroupRef,
 		setRooms,
@@ -208,6 +207,15 @@ export function useRoomsStore(
 		syncRepoMeta,
 		checkRoomFolder,
 	});
+
+	useRemoteRoomRepair(
+		rooms,
+		loaded,
+		activeRoomId,
+		lastUsedByGroupRef,
+		setActiveRoomId,
+		setRenaming,
+	);
 
 	const { recreateMissingWorktree, pickMissingFolder, confirmSameRepo, retireMismatchedRoom } =
 		useRoomsRepoIdentity({
@@ -264,7 +272,6 @@ export function useRoomsStore(
 		deleteRoomForever,
 		restoreRoom,
 		closeRoom,
-		closeRoomForAgent,
 		switchRoom,
 		roomSelectSeq,
 	};

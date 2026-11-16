@@ -103,6 +103,14 @@ PTY dies with the app, so nothing legitimate is still holding one after
 a restart — and a token that ended up in an old transcript stops working
 at the next boot.
 
+It also lives no longer than its room stays open (#734). A room-store
+observer revokes a room's token the moment the room is archived or
+removed, whoever did it: an agent's `close_room`, the user closing the
+tab, or Delete forever. A reopened room mints a fresh token at its next
+spawn, so a harness started before the archive keeps a dead token and
+needs a restart. The caller then sees `403` (revoked), not `410`: the
+revoked check runs before the archived one (see "Errors").
+
 ## Tool groups (#534)
 
 Skein's MCP tools come in five groups. Each has one global on/off
@@ -523,11 +531,11 @@ see "Caps" just below.
 | :-- | :-- |
 | `path` | the calling room's own repo root, falling back to its cwd |
 | `branchMode` | `"worktree"` (the other choice is `"current"`) |
-| `branch` | the user's own branch-name template, applied to a slug of `task` |
+| `branch` | the built-in template `skein/{slug}`, applied to a slug of `task` (the user's own template lives in the webview and is not used) |
 | `baseBranch` | the repo's current branch guess. May name a local branch or a remote-tracking ref (e.g. `"origin/main"`), read as of Skein's last fetch — Skein never fetches on its own; a local branch of the same name wins if both exist |
 | `task` | required — short label for the room's tab |
-| `kind` | the user's own default harness kind for this folder |
-| `agent` | the user's own default agent for that kind, or the folder's remembered agent (#247/#248) — omit rather than guessing a name, since an unresolvable one refuses the whole call |
+| `kind` | `claude`. `remote` is refused: it needs a host only the user can enter (#568) |
+| `agent` | the user's default agent for that kind from Settings (#248; none if unset) — the folder's remembered agent is not consulted. Omit rather than guessing a name, since an unresolvable one refuses the whole call (#247) |
 | `prompt` | omitted → the room opens idle. Given → queued as the new harness's first mailbox message the moment it exists |
 
 Returns `roomId`, `name`, `cwd`, `repo`, `branch`, `harnessId`, `kind`,
@@ -550,32 +558,39 @@ gotten for the same folder:
    one of the two known values, `kind` one of the known harness kinds,
    `path` absolute and a real directory, a git checkout when
    `branchMode` is `"worktree"` — then checks the guards below.
-2. It round-trips `"create_room.resolve"` to the webview (#328's
-   `AgentApiState::request_frontend`): the frontend applies the user's
-   own default kind for the folder, the per-kind default agent (#248),
-   the folder's own remembered agent, and #247's agent validation —
-   the same defaulting `useNewRoomForm.tsx` runs for a human typing
-   into New Room.
+2. The daemon resolves `(kind, agent)` itself (#734): `claude` unless
+   `kind` is given, the per-kind default agent (#248) unless `agent` is
+   given, and #247's agent validation. The per-folder memory the New Room
+   dialog keeps lives in the webview and is not consulted.
 3. If a `prompt` was given, the #327 mailbox "who can read mail" rule
    is checked against the *resolved* `(kind, agent)` — before anything
    is created, so a prompt that could never be delivered (an
    unreachable kind, injection turned off) is refused as
    `"cannot queue the prompt: the new harness …"` rather than leaving
    an idle room behind.
-4. Only then does it round-trip `"create_room"`, which runs the New
-   Room dialog's own shared worktree-creation path with
-   `activate: false` — the room opens in the background and does not
-   take over the user's screen.
+4. Only then does it create the room, with no round trip to the webview:
+   in worktree mode a worktree on `branch` (default `skein/<slug of
+   task>`) cut from `baseBranch` (default HEAD); then the room record with
+   its first harness `main`, stored in the daemon's room store (origin
+   `daemon-agent`); a one-way `skein://agent-room-created` event
+   (`{roomId, roomName, harnessName, harnessId, kind, requesterRoomName}`) for
+   clients, which raise the "room created" toast (the room opens in the
+   background and does not take over the user's screen); and the spawn.
+   With no client attached the daemon starts the harness itself, at 24x80;
+   with one attached the client's view mounts it and spawns it at the real
+   terminal size. ("Attached" is whether the daemon has a client that
+   reports itself attached; in the Skein app that means at least one
+   window is open.)
 5. If `prompt` was given, it is queued as a mailbox message *from the
    calling harness* once the room exists, and delivered the way any
-   mailbox message is delivered: #329's nudge, once the new harness is
-   `waiting`.
+   mailbox message is delivered: the daemon's nudge (#733), once the new
+   harness is `waiting`, with or without a client attached.
 
 Refused, with the exact reason as text (a representative, not
 exhaustive, list):
 
 - `"task can't be empty"`
-- `"unknown branchMode …"` / `"unknown kind …"`
+- `"unknown branchMode …"` / `"unknown kind …"` / the `remote` kind
 - `"the Rooms tools (create_room) are turned off in Skein's Settings for every harness. Ask the user if you need them."` — the dispatcher's wording; see "Tool groups". A call that gets past it with the group off (defence in depth) is refused `"the Rooms tools are turned off in Skein's Settings"`
 - `"rate limit: this room has attempted 5 room creations in the last minute (cap 5)"`
 - `"agents have already opened N open rooms in the repository group <repoRoot> (cap 20 per group); close or archive some before opening another"`
@@ -583,7 +598,7 @@ exhaustive, list):
 - `"{path} is not a git checkout, so branchMode \"worktree\" cannot be used (try \"current\")"`
 - `"a prompt was given, but the Mail tools are turned off in Skein's Settings, so it could never be delivered"`
 - `"cannot queue the prompt: the new harness …"` — the #327 "who can read mail" check, run against the resolved kind/agent
-- whatever the frontend round trip itself refuses for — an unresolvable folder, a colliding branch name, an unknown agent name — surfaces verbatim
+- the folder and branch refusals, verbatim: `"folder not found"`, `"not a git repo"`, `"no base branch available"`, `"unknown base branch"`, a bad or colliding branch name (`"branch already exists"`, `"worktree folder already exists"`, …) and an unknown agent name; a failure after the worktree was cut says where it was left
 
 ### Caps
 
@@ -653,13 +668,19 @@ see "What it will not do" below.
 
 Guards run cheapest first: the Settings switch, the rate cap, then a
 chain of facts about the *target* room that must all hold before
-anything is asked of the frontend — it exists, it isn't the caller's
-own room, the caller is the room named in its `createdBy`, it isn't
-already archived, and its reviewer sign-off is approved and not stale
-for its current HEAD. Only then does this ask the webview to archive
-it exactly like the user's own close — no confirm dialog, and refused
-as `unsaved_files` if any harness in the room has a dirty `files`
-buffer.
+anything changes — it exists, it isn't the caller's own room, the
+caller is the room named in its `createdBy`, it isn't already archived,
+and its reviewer sign-off is approved and not stale for its current
+HEAD. Only then does the daemon archive it in the room store (origin
+`daemon-agent`), exactly like the user's own close — no confirm dialog,
+and no webview needed (#734). The one thing only a client can know is
+whether a `files` harness holds unsaved buffers, so when the room has
+one and a client is attached, the daemon asks it (`files.dirty`, 5 s)
+and refuses `unsaved_files` if any buffer is dirty. With no client
+attached nothing can be unsaved and the close proceeds; a client that
+is attached but does not answer refuses the close. A room with no
+`files` harness asks nothing. The archive also revokes the room's token
+(see Identity).
 
 Returns `roomId`, `archived` (the archive timestamp, epoch ms, mirroring
 `Room.archived`), and `closedBy` (`{ roomId, harnessId? }`, echoing the
@@ -681,19 +702,21 @@ calling room per rolling minute, its own bucket, separate from
 a room this room opened with `create_room`, the way "+ harness" does:
 in the background, `activate: false`, never switching the target
 room's own active harness. `kind` and `agent` default the same way
-`create_room`'s do — omitted, they resolve to the user's own defaults
-for that folder; given, an unresolvable `agent` refuses the whole call
-rather than guessing. `prompt`, if given, is queued as the new
+`create_room`'s do — omitted, `kind` is `claude` and `agent` is the
+user's per-kind default from Settings; given, an unresolvable `agent`
+refuses the whole call rather than guessing, and `remote` is refused. `prompt`, if given, is queued as the new
 harness's first mailbox message the moment it exists.
 
-The flow mirrors `create_room`'s own two-step round trip: guards run
-first (Settings switch, the shared rate cap below, then the target
-room — exists, in scope, not archived, under the 8-harness ceiling),
-then `"open_harness.resolve"` learns what `(kind, agent)` would
-actually spawn, so a `prompt` that could never be delivered is caught
-as `"cannot queue the prompt: the new harness …"` *before* anything
-opens, exactly as `create_room` catches it. Only then does
-`"open_harness"` actually add the harness.
+The flow mirrors `create_room`'s own: guards run first (Settings
+switch, the shared rate cap below, then the target room — exists, in
+scope, not archived, same repository, under the 8-harness ceiling),
+then the daemon resolves `(kind, agent)` itself, so a `prompt` that
+could never be delivered is caught as `"cannot queue the prompt: the
+new harness …"` *before* anything opens, exactly as `create_room`
+catches it. Only then does it put the harness record in the room store
+(origin `daemon-agent`); no webview is involved. With no client
+attached the daemon also starts the harness (at 24x80); with one, the
+client's view mounts and spawns it at the real terminal size.
 
 Returns `roomId`, `harnessId`, `kind`, `agent` (when resolved), `name`,
 and `messageId` (present only when `prompt` was given and successfully
@@ -719,9 +742,13 @@ merely *created* can never be closing itself, so neither check applies
 there. Then the target room being archived (`archived`), and the
 target being the room's only harness (`last_harness` — that's
 `close_room`'s job). Only once all of those pass does this ask the
-webview to actually remove it, exactly like the user's own close (no
-confirm dialog) — where it can still refuse as `permission_open` (an
-open permission dialog) or `unsaved_files` (a dirty `files` buffer).
+daemon to remove it from the room store, exactly like the user's own
+close (no confirm dialog) — where it can still refuse as
+`permission_open` (the daemon's own phase machine says the harness is
+in `permission`) or `unsaved_files`. The unsaved-buffer question is the
+same `files.dirty` one as in `close_room`, asked only when the target
+is a `files` harness: no client attached means proceed, an attached
+client that does not answer within 5 s means refuse.
 Closing a Claude or opencode harness mid-turn is otherwise allowed —
 there is no "is it a good time" check — and the reply says which phase
 it was in, so the caller knows whether it interrupted anything.
@@ -731,9 +758,8 @@ immediately before it closed, `"unknown"` when this process could not
 vouch for it), and `closedBy` (`{ roomId, harnessId? }`, echoing the
 caller). Unlike `close_room`, this attribution is **not** written to
 any database row — there is no `Harness.closedBy` field, and
-`harness_events` is filled exclusively from the frontend's own
-activity-transition stream, which a Rust-originated close does not go
-through. The one durable record is a `tracing::info!` line in Skein's
+`harness_events` is filled exclusively from the daemon's phase machine,
+which an agent-originated close does not go through. The one durable record is a `tracing::info!` line in Skein's
 own log (#176) naming caller, target and outcome — the same one every
 guard above also logs on refusal. HTTP route:
 `POST /api/harnesses/{harness_id}/close`, no body.
@@ -775,7 +801,9 @@ a thread, resolves one, or writes source.
   `device` is `Harness.designDevice` as stored (both `null` when unset;
   `get_design_state` likewise reports `entry: null` when unset),
   `entries` is what the toolbar picker lists. `mounted`/`ready` come from
-  the webview and are `null` when it cannot answer within 3 s. A room
+  the webview and are `null` when no client is attached (no window) or it cannot
+  answer within 3 s. This is the one design verb that answers with no
+  client (see `no_client` below). A room
   with no design harness gets an empty list.
 - **`get_design_state`** — the pane's live state plus `harnessId`:
   `entry`, `device`, `ready`, `loadFailed`, `errors[]`, `selected` (an
@@ -942,19 +970,25 @@ Refusals (a code, then a reason):
 | `bad_arguments` | `show_changes` | unknown `scope`; `commit` without `commit_sha`; `commit_sha` without `commit`; `reveal` not a boolean (before the guards, so no rate budget is spent) |
 | `bad_arguments` | `invoke_element` | the `show_element` target rules; `action` not `tap`/`swipe`; `swipe` without `direction`, or an unknown one; `direction`/`distance` with `tap`; `distance` not an integer in 8-2000; `reveal` not a boolean (all checked before the guards, so no rate budget is spent) |
 | `bad_arguments` | `set_design_device` | `device` missing or not an object/`null` (checked before the guards); an unknown key, bad preset or out-of-range value (reported by the webview) |
+| `no_client` (403) | every design verb except `list_design_harnesses` | no client is attached to the daemon (#734): the verb needs the live pane, which only a client has (see below for what "attached" means). Checked after the argument checks, kill switch, rate cap and harness lookup, so those refuse first |
 | `not_mounted` | `get_design_state`, `show_element`, `invoke_element`, `show_changes`, `show_design_pane` | reported by the webview: the pane is not mounted |
 | `not_ready` | `show_element`, `invoke_element`, `show_changes` | reported by the webview: the preview has not loaded (`get_design_state` answers `ready: false` instead) |
 | `not_visible` | `invoke_element` | reported by the webview, swipe only: the matched element has no layout. Usually the design pane is hidden: pass `reveal: true` (works when the user is in this room and no harness picker is open) or ask the user to show the design harness. It is also returned when the element itself is not rendered (zero size) on a visible pane. When `reveal: true` was passed but could not take effect (the user is in another room or has a harness picker open), the message says so instead of suggesting `reveal` |
 | `not_visible` | `get_design_screenshot` | the pane is not painted (`other_room`, `hidden_tab`, `not_laid_out`, `no_pane`); call `show_design_pane`, then retry |
 | `too_large` | `get_design_screenshot` | the PNG is over 4 MiB; pass a smaller `maxEdge` |
-| `capture_failed` | `get_design_screenshot` | the capture timed out (5 s), or the window is missing (409) |
+| `capture_failed` | `get_design_screenshot` | the capture timed out (5 s), or the window did not answer (409; with no window at all the verb refuses `no_client` first) |
 | `busy` | `invoke_element` | reported by the webview: the user is picking an element in this design pane; try again once they finish |
 | `disabled` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes`, `get_design_screenshot`, `show_design_pane` | the Design tools are off: `disabled: the Design tools are turned off in Skein's Settings` (the dispatcher refuses first, with its own wording; see "Tool groups") |
 | `rate_limited` | `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes`, `get_design_screenshot`, `show_design_pane` | more than 10 combined calls per calling room per minute (own bucket, `design_control`, separate from `open_harness`/`close_harness`); the guard runs before harness/entry validation, so refused attempts count against the budget |
 
-A webview that is absent, times out or drops the request is a 409
-(unavailable), like the other frontend-backed verbs. The frontend
-request kinds are `design.panes`, `design.state`, `design.open_entry`,
+"No client" means the daemon has no client seam to ask, or the seam
+reports itself not attached; the Skein app reports attached while it has
+at least one window, so with every window closed the design verbs
+refuse `no_client`. A window that exists but times out or drops the
+request is still a 409 (unavailable). Since #734 the
+design verbs are the only agent verbs that ask a client, besides the
+`files.dirty` question `close_room`/`close_harness` can put (see
+above). The frontend request kinds are `design.panes`, `design.state`, `design.open_entry`,
 `design.set_device`, `design.show_element`, `design.invoke_element` (see `agent_api/verbs/design.rs`) and
 `design.show_changes` (`{roomId, harnessId, scope, files: [{path, lines, deleted}],
 truncated?, reveal?}`, see `agent_api/verbs/design_changes.rs`),
@@ -1415,10 +1449,10 @@ Loud, and distinguishable (#176):
 | :-- | :-- |
 | `400` | malformed JSON, an `MCP-Protocol-Version` we do not speak, or (on the permission and session-start routes only) a missing/unknown `X-Skein-Harness` |
 | `401` | no bearer token, or one that was never minted |
-| `403` | a revoked token, a non-localhost `Origin`, or `resolve` / `approve` |
-| `404` | the token's room is gone |
+| `403` | a revoked token — including the token of a room that was archived or removed, which is revoked with it (#734) — a non-localhost `Origin`, `resolve` / `approve`, or a design verb with no client (`no_client`) |
+| `404` | the token's room is gone, with its token still active |
 | `405` | `GET`/`DELETE /mcp` — no stream, no sessions |
-| `410` | the room was archived while the agent held the review open |
+| `410` | the token is still active but its room is archived. The room-store observer revokes the token when the room is archived, so a caller normally sees `403` first; `410` is what is left for an archive the observer has not yet processed |
 
 A *tool* that ran and refused is different: it comes back inside a
 successful JSON-RPC result with `isError: true` and the reason as text.
@@ -1532,8 +1566,10 @@ Since #582 the `agent_api/` and `review_surface/` files below live in
 | file | what it owns |
 | :-- | :-- |
 | `agent_api/state.rs` | shared state, the `skein://review-changed`, `skein://harness-permission`, `skein://harness-session-start` and `skein://mail-changed` (#327) events, `HarnessIdentity` |
-| `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked |
-| `agent_api/verbs.rs` + `verbs/` | the twenty-two verbs — the whole testable core, including the mailbox (#327, plus `message_history`, #364), the cross-room reads (#354, #356), `close_room`/`open_harness`/`close_harness` (#411) and the design-pane verbs (#512) |
+| `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked (revoked is checked first) |
+| `agent_api/token_lifecycle.rs` | the room-store observer that revokes a room's token when it is archived or removed (#734) |
+| `agent_api/daemon_handles.rs` | how the verbs reach the room store, the harness runner and the harness config (#734) |
+| `agent_api/verbs.rs` + `verbs/` | the twenty-two verbs — the whole testable core, including the mailbox (#327, plus `message_history`, #364), the cross-room reads (#354, #356), `create_room`/`close_room`/`open_harness`/`close_harness` (#330, #411; run in the daemon since #734 by `room_create/`, `room_close.rs`, `harness_control.rs`, `harness_build.rs`, `close_apply.rs` and `room_naming.rs`) and the design-pane verbs (#512) |
 | `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve/approve refusals, and the `archive_room`/`remove_worktree`/`delete_room` refusals (#411) |
 | `agent_api/http.rs` + `http/` | the routes, including `/api/messages` and `/api/messages/history` (#327, #364), `/api/rooms`/`/api/rooms/{id}`/`/api/harnesses` (#356), `/api/harness/permission` (#86), `/api/harness/session-start` (#273) and the Hermes hook routes (`http/hermes_hooks.rs`, `hermes_event.rs`, #625) |
 | `agent_api/tests.rs` + `*_tests.rs` | `tests.rs` holds the shared fixtures; the `*_tests.rs` siblings hold the tests by concern: scoping, both prohibitions (`refusal_tests.rs`), lifecycle, real HTTP |

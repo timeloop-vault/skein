@@ -44,8 +44,9 @@
 //!
 //! Most verbs are plain, synchronous functions over a
 //! [`crate::db::Database`] — [`call_tool`] only needed to be async once
-//! `create_room` landed, since opening a room means round-tripping to
-//! the webview (`AgentApiState::request_frontend`). #356's `list_rooms`,
+//! `create_room` landed (it awaits the daemon's worktree and spawn work;
+//! the design verbs and `files.dirty` still round-trip to the webview
+//! through `AgentApiState::request_frontend`). #356's `list_rooms`,
 //! `get_room` and `list_harnesses` are async too, but read a live
 //! harness's activity phase from the daemon's `PhaseService` (#732), with
 //! no webview round trip.

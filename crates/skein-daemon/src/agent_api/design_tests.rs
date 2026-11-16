@@ -276,20 +276,72 @@ async fn not_mounted_and_not_ready_surface_as_refusals_with_their_code() {
 }
 
 #[tokio::test]
-async fn a_missing_webview_is_unavailable() {
+async fn with_no_client_the_design_verbs_refuse_no_client() {
     let f = fixture();
     let dir = folder();
     save(&f.db, &[design_room("A", &dir, &["d1"])]);
     let caller = caller_for(&f.db, "A", Some("A-claude"));
-    let state = agent_api_state(&f); // no test frontend, no AppHandle
-    let e = verbs::get_design_state(&state, &caller, &target(None))
+    let state = agent_api_state(&f); // no test frontend, no client
+    let mut errs = vec![
+        verbs::get_design_state(&state, &caller, &target(None))
+            .await
+            .unwrap_err(),
+        verbs::open_design_entry(&state, &caller, &open_args(None, "a.html"), true)
+            .await
+            .unwrap_err(),
+        verbs::set_design_device(&state, &caller, &device_args(None, Some(json!(null))), true)
+            .await
+            .unwrap_err(),
+        verbs::show_element(&state, &caller, &show_args(None, Some("p"), None), true)
+            .await
+            .unwrap_err(),
+    ];
+    errs.push(
+        verbs::show_design_pane(&state, &caller, &target(None), true)
+            .await
+            .unwrap_err(),
+    );
+    for e in &errs {
+        assert!(is_refused(e, "no_client:"), "{e:?}");
+        assert_eq!(e.status(), 403);
+    }
+}
+
+#[tokio::test]
+async fn no_client_comes_after_the_guards_and_argument_checks() {
+    let f = fixture();
+    let dir = folder();
+    save(&f.db, &[design_room("A", &dir, &["d1"])]);
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let state = agent_api_state(&f);
+    let e = verbs::get_design_state(&state, &caller, &target(Some("nope")))
         .await
         .unwrap_err();
-    assert!(matches!(e, VerbError::Unavailable(_)), "{e:?}");
-    let e = verbs::show_element(&state, &caller, &show_args(None, Some("p"), None), true)
+    assert!(matches!(e, VerbError::NotFound(_)), "{e:?}");
+    let e = verbs::open_design_entry(&state, &caller, &open_args(None, "zzz.html"), true)
         .await
         .unwrap_err();
-    assert!(matches!(e, VerbError::Unavailable(_)), "{e:?}");
+    assert!(is_refused(&e, "unknown_entry:"), "{e:?}");
+    let e = verbs::show_element(&state, &caller, &show_args(None, Some("p"), None), false)
+        .await
+        .unwrap_err();
+    assert!(is_refused(&e, "disabled:"), "{e:?}");
+}
+
+#[tokio::test]
+async fn list_with_no_client_answers_null_status_without_waiting() {
+    let f = fixture();
+    let dir = folder();
+    save(&f.db, &[design_room("A", &dir, &["d1"])]);
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let state = agent_api_state(&f);
+    let started = std::time::Instant::now();
+    let out = verbs::list_design_harnesses(&state, &caller).await.unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(out.harnesses.len(), 1);
+    assert_eq!(out.harnesses[0].mounted, None);
+    assert_eq!(out.harnesses[0].ready, None);
+    assert_eq!(out.harnesses[0].entries, ["a.html", "b.html"]);
 }
 
 // ── list ────────────────────────────────────────────────────────────────

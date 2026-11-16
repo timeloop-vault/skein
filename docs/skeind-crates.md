@@ -160,6 +160,18 @@ seams from phases 1a to 1c: `event_sink`, `stream_sink` and `paths`.
   only transport until sockets (#585).
 - `build_info` gained `set_commit`/`commit` and `profile_for_identifier`.
 
+### Added by #734
+
+- `agent_api/verbs/`: `create_room`, `close_room`, `open_harness` and
+  `close_harness` run in the daemon (`room_create/`, `room_close.rs`,
+  `harness_control.rs`, `harness_build.rs`, `close_apply.rs`,
+  `room_naming.rs`) over `RoomStore` and `HarnessRunner`, with no
+  `request_frontend` round trip.
+- `agent_api/token_lifecycle.rs`: a `RoomStore` observer that revokes a
+  room's token when the room is archived or removed.
+- `agent_api/daemon_handles.rs`: how the agent API reaches the store, the
+  runner and the harness config (set once by `Daemon::build`).
+
 ## What stayed in the app, and why
 
 - Every `#[tauri::command]` wrapper: `commands/*`, `resume.rs`,
@@ -222,8 +234,8 @@ flowchart LR
 2. The wrapper calls the daemon's state directly; there is no wire.
 3. The daemon pushes broadcast events (`skein://review-changed`,
    `skein://rooms-changed` and the rest) through `EventSink`.
-4. When the agent API needs the webview to act or answer
-   (`request_frontend`, for `create_room` and similar), it goes through
+4. When the agent API needs the webview to answer (`request_frontend`,
+   since #734 only for the design verbs and `files.dirty`), it goes through
    `ClientRequests`, which the Tauri impl emits as `skein://agent-request`.
 5. The webview answers through the `agent_request_complete` command, which
    resolves the pending request in `AgentApiState`.

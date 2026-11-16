@@ -430,6 +430,19 @@ impl Daemon {
             &harness_runner,
             agent_api.as_deref(),
         );
+        // #734: a room's agent token ends with the room being open.
+        crate::agent_api::token_lifecycle::revoke_tokens_of_closed_rooms(&rooms, &state.db);
+        if let Some(api) = &agent_api {
+            let handles = crate::agent_api::daemon_handles::DaemonHandles {
+                rooms: Arc::clone(&rooms),
+                runner: Some(Arc::clone(&harness_runner)),
+                harness_config: Some(state.harness_config.clone()),
+                verb_lock: tokio::sync::Mutex::new(()),
+            };
+            if api.set_daemon_handles(handles).is_err() {
+                tracing::error!("agent api: daemon handles were already set");
+            }
+        }
         // #753/#755: a retried boot preparation leaves a harness that has a
         // process, or a spawn in flight, alone (called under the store lock).
         let boot_resume = Arc::new(BootResume::new(boot_probe_env, {

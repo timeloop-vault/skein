@@ -28,7 +28,6 @@ const room = (sessionId?: string): Room =>
 		cwd: "/x",
 		task: "t",
 		folderName: "x",
-		activate: true,
 	});
 
 describe("harnessCreation", () => {
@@ -41,7 +40,6 @@ describe("harnessCreation", () => {
 			cmd: ["claude"],
 			sessionId: "sid",
 			agentName: "a",
-			createdBy: { roomId: "r", harnessId: "q" } as never,
 		});
 		expect(h).toMatchObject({
 			status: "running",
@@ -50,7 +48,6 @@ describe("harnessCreation", () => {
 			sessionId: "sid",
 			agent: "a",
 		});
-		expect(h.createdBy).toBeDefined();
 		const bare = buildHarness({
 			id: "h",
 			kind: "files",
@@ -61,8 +58,7 @@ describe("harnessCreation", () => {
 			agentName: undefined,
 		});
 		expect(bare).toMatchObject({ status: "idle", model: "" });
-		for (const k of ["live", "cmd", "sessionId", "agent", "createdBy"])
-			expect(k in bare).toBe(false);
+		for (const k of ["live", "cmd", "sessionId", "agent"]) expect(k in bare).toBe(false);
 	});
 
 	it("names harnesses by kind label, files/design by kind", () => {
@@ -74,28 +70,6 @@ describe("harnessCreation", () => {
 		expect(resolveAgentName("claude", "  ")).toBeUndefined();
 		expect(resolveAgentName("byoh", "x")).toBeUndefined();
 		expect(resolveAgentName("claude", "x")).toBe("x");
-	});
-
-	it("marks a background room as attention and leaves it off when activated", () => {
-		expect(room().attention).toBeUndefined();
-		const bg = buildRoom({
-			roomId: "s",
-			harness: buildHarness({
-				id: "h",
-				kind: "claude",
-				name: "main",
-				cwd: "/x",
-				cmd: undefined,
-				sessionId: undefined,
-				agentName: undefined,
-			}),
-			cwd: "/x",
-			task: "t",
-			branch: "b",
-			folderName: "x",
-			activate: false,
-		});
-		expect(bg).toMatchObject({ attention: true, branch: "b", repo: "x" });
 	});
 
 	it("collects claimed session ids", () => {

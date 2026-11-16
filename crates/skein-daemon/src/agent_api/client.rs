@@ -39,6 +39,14 @@ pub trait WebviewCapture: Send + Sync {
 
 /// Delivery of a request only the client can answer.
 pub trait ClientRequests: Send + Sync {
+    /// True when at least one client is able to receive and answer a request
+    /// right now (for the app: a window exists), not merely when this seam
+    /// object exists. Defaults to true, which is what every impl meant
+    /// before this method existed.
+    fn is_attached(&self) -> bool {
+        true
+    }
+
     /// Deliver one request to the client. Err = it could not be delivered.
     ///
     /// # Errors

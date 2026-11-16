@@ -258,7 +258,17 @@ pub(super) fn guard_write(
     Ok(())
 }
 
+/// The refusal for a verb that needs the Skein window when none is
+/// attached (D4, #734). `Refused` (403), like the other "the pane cannot
+/// answer" refusals (`not_visible`, `not_mounted`).
+fn no_client() -> VerbError {
+    VerbError::Refused("no_client: this verb needs the Skein window, and none is attached".into())
+}
+
 /// Ask the frontend, mapping its error string the way `open_harness` does.
+/// With no client attached it refuses `no_client` without asking, so this
+/// is the one shared point for that rule; callers have already run their
+/// argument checks, kill switch, rate cap and harness resolution.
 pub(super) async fn ask(
     state: &AgentApiState,
     verb: &str,
@@ -268,6 +278,10 @@ pub(super) async fn ask(
     args: Value,
     timeout: Duration,
 ) -> VerbResult<Value> {
+    if !state.has_client() {
+        log_outcome(verb, &caller.room_id, harness_id, "no_client");
+        return Err(no_client());
+    }
     match state.request_frontend(kind, args, timeout).await {
         Ok(v) => {
             log_outcome(verb, &caller.room_id, harness_id, "ok");
@@ -297,6 +311,9 @@ pub(super) fn with_harness_id(mut answer: Value, harness_id: &str) -> VerbResult
 
 /// Mounted/ready per harness, or `None` when the webview can't say.
 async fn pane_status(state: &AgentApiState, room_id: &str) -> Option<Vec<(String, bool, bool)>> {
+    if !state.has_client() {
+        return None;
+    }
     let v = state
         .request_frontend("design.panes", json!({ "roomId": room_id }), PANES_TIMEOUT)
         .await

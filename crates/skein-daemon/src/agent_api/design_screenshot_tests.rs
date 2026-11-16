@@ -153,6 +153,33 @@ async fn a_hidden_pane_refuses_without_capturing_or_changing_the_ui() {
 }
 
 #[tokio::test]
+async fn with_no_client_the_screenshot_verbs_refuse_no_client() {
+    let f = fixture();
+    let dir = folder();
+    save(&f.db, &[design_room("A", &dir, &["d1"])]);
+    let caller = caller_for(&f.db, "A", Some("A-claude"));
+    let state = super::tests::agent_api_state(&f);
+    let e = verbs::get_design_screenshot(&state, &caller, &args(json!({})), true)
+        .await
+        .unwrap_err();
+    assert!(is_refused(&e, "no_client:"), "{e:?}");
+    assert_eq!(e.status(), 403);
+    let e = verbs::show_design_pane(
+        &state,
+        &caller,
+        &serde_json::from_value(json!({})).unwrap(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(is_refused(&e, "no_client:"), "{e:?}");
+    let e = verbs::get_design_screenshot(&state, &caller, &args(json!({})), false)
+        .await
+        .unwrap_err();
+    assert!(is_refused(&e, "disabled:"), "{e:?}");
+}
+
+#[tokio::test]
 async fn a_visible_pane_without_a_window_fails_the_capture() {
     // The test state has no AppHandle, so the native step reports it.
     let f = fixture();

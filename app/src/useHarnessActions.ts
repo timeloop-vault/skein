@@ -22,7 +22,6 @@
 
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { useCallback } from "react";
-import { decideCloseHarness, type RequestResult } from "./agentRequests.ts";
 import { claudeVersionStore } from "./claudeVersionStore.ts";
 import { confirmDialog } from "./confirmDialog.ts";
 import { HARNESS_KINDS } from "./data.tsx";
@@ -182,45 +181,6 @@ export function useHarnessActions(
 		proceed();
 	};
 
-	// #411: `close_harness` agent verb — same removal `closeHarness` above
-	// performs, but never confirms (there's no dialog for an agent call
-	// to answer) and refuses outright instead of asking. The refusal
-	// ladder (unknown harness / the room's last harness / an open
-	// permission dialog / unsaved Files buffers) lives in the pure
-	// `decideCloseHarness` so it's unit-tested without this hook; this is
-	// only the state mutation once decided, matching `proceed` above
-	// harness-for-harness — including its "always land on the first
-	// remaining harness" behaviour, since that's what "remove it exactly
-	// like closing its tab" means here.
-	const closeHarnessForAgent = (
-		roomId: string,
-		harnessId: string,
-	): RequestResult<{ harnessId: string; phase: string }> => {
-		const phases = harnessActivity.phaseSnapshot();
-		const decision = decideCloseHarness(
-			activeRooms,
-			roomId,
-			harnessId,
-			(hid) => phases[hid],
-			filesRegistry.dirtyNames,
-		);
-		if (!decision.ok) return decision;
-		const { phase } = decision.value;
-		claudeVersionStore.forget(harnessId);
-		forgetReported(harnessId);
-		setRooms((prev) =>
-			prev.map((r) => {
-				if (r.id !== roomId) return r;
-				const remaining = r.harnesses.filter((h) => h.id !== harnessId);
-				if (remaining.length === 0) return r;
-				const first = remaining[0];
-				if (!first) return r;
-				return { ...r, harnesses: remaining, activeHarnessId: first.id };
-			}),
-		);
-		return { ok: true, value: { harnessId, phase } };
-	};
-
 	// Restart: replaces the stored cmd with a freshly built one (the tool's
 	// argv, never the shell's) so it persists and the next spawn uses it.
 	const updateHarnessCmd = (roomId: string, harnessId: string, cmd: string[]) => {
@@ -367,7 +327,6 @@ export function useHarnessActions(
 		cycleAlertedRoom,
 		cycleAlertedHarness,
 		closeHarness,
-		closeHarnessForAgent,
 		updateHarnessCmd,
 		startShell,
 		restartHarness,

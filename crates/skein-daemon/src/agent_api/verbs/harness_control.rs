@@ -6,13 +6,20 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use skein_proto::room_mutations::RoomMutation;
+use skein_proto::rooms::HarnessCreatedBy;
+
+use super::close_apply::{apply_all, current_room, lock_verbs, refuse_unsaved_files, store_of};
+use super::harness_build::{
+    NewHarness, build_harness, harness_display_name, open_room, resolve, spawn_without_client,
+    store_harness,
+};
 use super::mail::MailContext;
 use super::mail_routing::mail_refusal_for;
 use super::room_close::AgentClosedBy;
-use super::room_create::{CREATE_ROOM_TIMEOUT, ResolveOut, queue_first_prompt};
-use super::shared::{
-    MAX_MESSAGE_BYTES, RESOLVE_TIMEOUT, frontend_error, is_known_kind, known_kind_names,
-};
+use super::room_create::queue_first_prompt;
+use super::room_listing::harness_snapshots;
+use super::shared::{MAX_MESSAGE_BYTES, is_known_kind, known_kind_names};
 use super::{VerbError, VerbResult, internal};
 use crate::agent_api::auth::Caller;
 use crate::agent_api::state::AgentApiState;
@@ -37,13 +44,11 @@ const MAX_HARNESSES_PER_ROOM: usize = 8;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpenHarnessArgs {
     pub room: String,
-    /// Omitted → the frontend applies the user's own default for the
-    /// folder, the same as `create_room`. When given, must be one of
-    /// a known harness kind.
+    /// Omitted: `claude`. When given, must be a known harness kind.
     #[serde(default)]
     pub kind: Option<String>,
-    /// Omitted → the tool's own default, or the folder's remembered
-    /// agent (#247/#248).
+    /// Omitted: the user's default agent for the kind (#248). An empty
+    /// string means no agent.
     #[serde(default)]
     pub agent: Option<String>,
     /// Queue this as the new harness's first message (#327's mailbox),
@@ -68,17 +73,6 @@ pub struct OpenHarnessOut {
     pub message_id: Option<String>,
 }
 
-/// The frontend's answer to an `"open_harness"` request.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct OpenedHarnessOut {
-    harness_id: String,
-    kind: String,
-    #[serde(default)]
-    agent: Option<String>,
-    name: String,
-}
-
 /// One `tracing::info!` per call outcome (#176), the same shape as
 /// [`log_close_room_outcome`].
 fn log_open_harness_outcome(caller_room: &str, target_room: &str, outcome: &str) {
@@ -98,11 +92,11 @@ fn log_open_harness_outcome(caller_room: &str, target_room: &str, outcome: &str)
 /// Guards run in order, cheapest first: the Settings kill switch, the
 /// shared `harness_control` rate cap, then facts about the TARGET room
 /// — unknown, out of scope, archived, already at the harness ceiling.
-/// Only once every one of those passes does this round-trip to the
-/// webview twice, the same two-step `create_room` uses and for the same
-/// reason: `"open_harness.resolve"` learns what `(kind, agent)` would
-/// actually spawn *before* `"open_harness"` is asked to add anything, so
-/// a `prompt` that could never be delivered is caught first.
+/// Only once every one of those passes does the daemon resolve `(kind,
+/// agent)`, check that a `prompt` could be delivered to that harness, and
+/// only then store the record (#734: no round trip to a webview). With no
+/// client attached it also starts the harness; with one, the client's view
+/// does at the real terminal size.
 pub async fn open_harness(
     state: &AgentApiState,
     caller: &Caller,
@@ -217,41 +211,33 @@ pub async fn open_harness(
         )));
     }
 
-    let resolved = match state
-        .request_frontend(
-            "open_harness.resolve",
-            serde_json::json!({
-                "roomId": target.id,
-                "kind": args.kind,
-                "agent": args.agent,
-                "prompt": args.prompt.is_some(),
-            }),
-            RESOLVE_TIMEOUT,
-        )
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            let err = frontend_error(&e);
+    let store = store_of(state)?;
+    let room = match open_room(store, &target.id) {
+        Ok(room) => room,
+        Err(err) => {
             log_open_harness_outcome(&caller.room_id, room_id, err.message());
             return Err(err);
         }
     };
-    let resolved: ResolveOut = serde_json::from_value(resolved).map_err(|e| {
-        VerbError::Unavailable(format!(
-            "the app returned an unexpected answer for open_harness.resolve: {e}"
-        ))
-    })?;
-    if !is_known_kind(&resolved.kind) {
-        return Err(VerbError::Unavailable(format!(
-            "the app resolved an unknown harness kind {:?}",
-            resolved.kind
-        )));
-    }
+    let resolved = match resolve(
+        state,
+        args.kind.as_deref(),
+        args.agent.as_deref(),
+        room.cwd.as_deref(),
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            log_open_harness_outcome(&caller.room_id, room_id, err.message());
+            return Err(err);
+        }
+    };
+    let kind = resolved.kind.as_str();
 
     if args.prompt.is_some()
         && let Some(reason) = mail_refusal_for(
-            &resolved.kind,
+            kind,
             resolved.agent.as_deref(),
             target.cwd.as_deref(),
             mail.policy,
@@ -264,39 +250,32 @@ pub async fn open_harness(
         )));
     }
 
-    let opened = match state
-        .request_frontend(
-            "open_harness",
-            serde_json::json!({
-                "roomId": target.id,
-                "kind": resolved.kind,
-                "agent": resolved.agent,
-                "createdBy": {
-                    "roomId": caller.room_id,
-                    // A `String`, never `null` — see `create_room`'s
-                    // identical comment on its own `createdBy.harnessId`.
-                    "harnessId": caller.harness_id.clone().unwrap_or_default(),
-                },
+    let harness = build_harness(
+        state,
+        store,
+        NewHarness {
+            kind: resolved.kind,
+            agent: resolved.agent.clone(),
+            name: harness_display_name(resolved.kind, room.harnesses.len()),
+            cwd: room.cwd.clone(),
+            created_by: Some(HarnessCreatedBy {
+                room_id: caller.room_id.clone(),
+                harness_id: caller.harness_id.clone(),
             }),
-            CREATE_ROOM_TIMEOUT,
-        )
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            let err = frontend_error(&e);
+        },
+    )
+    .await?;
+    let harness = match store_harness(state, &target.id, harness, MAX_HARNESSES_PER_ROOM).await {
+        Ok(stored) => stored,
+        Err(err) => {
             log_open_harness_outcome(&caller.room_id, room_id, err.message());
             return Err(err);
         }
     };
-    let opened: OpenedHarnessOut = serde_json::from_value(opened).map_err(|e| {
-        VerbError::Unavailable(format!(
-            "the app returned an unexpected answer for open_harness: {e}"
-        ))
-    })?;
+    spawn_without_client(state, &target.id, &harness).await;
 
     let message_id = args.prompt.as_deref().and_then(|prompt| {
-        let label = format!("{} · {}", opened.kind, opened.name);
+        let label = format!("{kind} · {}", harness.name);
         queue_first_prompt(
             db,
             state,
@@ -304,9 +283,9 @@ pub async fn open_harness(
             &caller_room,
             &target.id,
             &target.name,
-            &opened.harness_id,
+            &harness.id,
             &label,
-            &opened.kind,
+            kind,
             prompt,
         )
     });
@@ -314,20 +293,13 @@ pub async fn open_harness(
     log_open_harness_outcome(&caller.room_id, room_id, "ok");
     Ok(OpenHarnessOut {
         room_id: target.id.clone(),
-        harness_id: opened.harness_id,
-        kind: opened.kind,
-        agent: opened.agent,
-        name: opened.name,
+        harness_id: harness.id,
+        kind: kind.to_owned(),
+        agent: harness.agent,
+        name: harness.name,
         message_id,
     })
 }
-
-/// How long to wait for the frontend to actually remove the harness.
-/// Same reasoning as [`CLOSE_ROOM_TIMEOUT`] — this touches no git
-/// worktree machinery either, only a phase read, a `filesRegistry`
-/// check and the same in-memory removal the user's own tab-close
-/// performs.
-const CLOSE_HARNESS_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -345,14 +317,6 @@ pub struct CloseHarnessOut {
     /// whether it interrupted anything.
     pub phase: String,
     pub closed_by: AgentClosedBy,
-}
-
-/// The frontend's answer to a `"close_harness"` request.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClosedHarnessOut {
-    harness_id: String,
-    phase: String,
 }
 
 /// One `tracing::info!` per call outcome (#176), the same shape as
@@ -380,9 +344,11 @@ fn log_close_harness_outcome(caller_room: &str, target_harness: &str, outcome: &
 /// inside the caller's OWN room, where "not itself" needs proving) an
 /// unidentified caller or a self-close, then archived, then the room's
 /// last harness (that's `close_room`'s job). Only once every one of
-/// those passes does this ask the webview to actually remove it,
-/// exactly like the user's own close (no confirm dialog, respecting
-/// `filesRegistry` and an open permission dialog).
+/// those passes does the daemon remove it from the store itself (#734),
+/// exactly like the user's own close (no confirm dialog, refusing on
+/// unsaved Files buffers and an open permission dialog). Only the
+/// unsaved-buffers check asks a client (`files.dirty`), and only when one
+/// is attached.
 ///
 /// Unlike `close_room`, no database row records the attribution:
 /// `harness_events` is filled exclusively from the daemon's phase
@@ -490,39 +456,83 @@ pub async fn close_harness(
         room_id: caller.room_id.clone(),
         harness_id: caller.harness_id.clone(),
     };
-    let reply = match state
-        .request_frontend(
-            "close_harness",
-            serde_json::json!({
-                "roomId": target_room.id,
-                "harnessId": harness_id,
-                "closedBy": {
-                    "roomId": closed_by.room_id,
-                    "harnessId": closed_by.harness_id,
-                },
-            }),
-            CLOSE_HARNESS_TIMEOUT,
-        )
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            let err = frontend_error(&e);
-            log_close_harness_outcome(&caller.room_id, harness_id, err.message());
-            return Err(err);
+    match remove(state, &target_room.id, harness_id).await {
+        Ok(phase) => {
+            log_close_harness_outcome(&caller.room_id, harness_id, "ok");
+            Ok(CloseHarnessOut {
+                room_id: target_room.id.clone(),
+                harness_id: harness_id.to_owned(),
+                phase,
+                closed_by,
+            })
         }
-    };
-    let closed: ClosedHarnessOut = serde_json::from_value(reply).map_err(|e| {
-        VerbError::Unavailable(format!(
-            "the app returned an unexpected answer for close_harness: {e}"
-        ))
-    })?;
+        Err(err) => {
+            log_close_harness_outcome(&caller.room_id, harness_id, err.message());
+            Err(err)
+        }
+    }
+}
 
-    log_close_harness_outcome(&caller.room_id, harness_id, "ok");
-    Ok(CloseHarnessOut {
-        room_id: target_room.id.clone(),
-        harness_id: closed.harness_id,
-        phase: closed.phase,
-        closed_by,
-    })
+/// The checks the webview used to make, in their old order (unknown, last
+/// harness, open permission dialog, unsaved Files buffers), then the removal
+/// against the store. Returns the phase the harness was in when it went.
+async fn remove(state: &AgentApiState, room_id: &str, harness_id: &str) -> VerbResult<String> {
+    let store = store_of(state)?;
+    let room = current_room(store, room_id)
+        .filter(|r| r.archived.is_none())
+        .ok_or_else(|| VerbError::NotFound(format!("not_found: room \"{room_id}\" not found")))?;
+    let Some(harness) = room.harnesses.iter().find(|h| h.id == harness_id) else {
+        return Err(VerbError::NotFound(format!(
+            "not_found: harness \"{harness_id}\" not found"
+        )));
+    };
+    if room.harnesses.len() == 1 {
+        return Err(VerbError::Refused(format!(
+            "last_harness: \"{harness_id}\" is the only harness in room \"{room_id}\" — use \
+             close_room instead"
+        )));
+    }
+    let phase = harness_snapshots(state, &[harness_id.to_owned()])
+        .remove(harness_id)
+        .map_or_else(|| "unknown".to_owned(), |s| s.phase);
+    if phase == "permission" {
+        return Err(VerbError::Refused(format!(
+            "permission_open: harness \"{harness_id}\" has an open permission dialog"
+        )));
+    }
+    refuse_unsaved_files(state, std::slice::from_ref(harness)).await?;
+
+    // The question above may have taken seconds: re-check and build the
+    // mutations from the room as it is now, under the lock, so a concurrent
+    // close cannot empty the room and no client change is written back over.
+    let (_guard, store) = lock_verbs(state).await?;
+    let room = open_room(store, room_id)?;
+    if !room.harnesses.iter().any(|h| h.id == harness_id) {
+        return Err(VerbError::NotFound(format!(
+            "not_found: harness \"{harness_id}\" not found"
+        )));
+    }
+    if room.harnesses.len() <= 1 {
+        return Err(VerbError::Refused(format!(
+            "last_harness: \"{harness_id}\" is the only harness in room \"{room_id}\" — use \
+             close_room instead"
+        )));
+    }
+    let mut mutations = Vec::with_capacity(2);
+    if room.active_harness_id == harness_id {
+        let mut updated = room.clone();
+        updated.active_harness_id = room
+            .harnesses
+            .iter()
+            .find(|h| h.id != harness_id)
+            .map(|h| h.id.clone())
+            .unwrap_or_default();
+        mutations.push(RoomMutation::UpdateRoom { room: updated });
+    }
+    mutations.push(RoomMutation::RemoveHarness {
+        room_id: room_id.to_owned(),
+        harness_id: harness_id.to_owned(),
+    });
+    apply_all(store, mutations, &format!("harness \"{harness_id}\""))?;
+    Ok(phase)
 }

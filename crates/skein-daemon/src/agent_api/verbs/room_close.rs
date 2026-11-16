@@ -4,8 +4,12 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use skein_proto::room_mutations::RoomMutation;
+use skein_proto::rooms::ClosedBy;
+
+use super::close_apply::{apply_all, lock_verbs, refuse_unsaved_files, store_of};
+use super::harness_build::open_room;
 use super::review::signoff_block;
-use super::shared::frontend_error;
 use super::{VerbError, VerbResult, internal};
 use crate::agent_api::auth::Caller;
 use crate::agent_api::state::AgentApiState;
@@ -18,12 +22,6 @@ use crate::agent_api::state::AgentApiState;
 /// never share a budget.
 const CLOSE_ROOM_RATE_LIMIT: usize = 5;
 const CLOSE_ROOM_WINDOW: Duration = Duration::from_secs(60);
-
-/// How long to wait for the frontend to actually archive the room.
-/// Shorter than `create_room`'s own [`CREATE_ROOM_TIMEOUT`] — archiving
-/// touches no git worktree machinery, only a `filesRegistry` check and
-/// the same in-memory archive the user's own close performs.
-const CLOSE_ROOM_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,14 +53,6 @@ pub struct CloseRoomOut {
     pub closed_by: AgentClosedBy,
 }
 
-/// The frontend's answer to a `"close_room"` request.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClosedRoomOut {
-    room_id: String,
-    archived: i64,
-}
-
 /// One `tracing::info!` per call outcome (#176) — an archive triggered
 /// through the agent API is exactly the shape of action a later
 /// incident would need reconstructed from the log, not the database.
@@ -87,13 +77,11 @@ fn log_close_room_outcome(caller_room: &str, target_room: &str, outcome: &str) {
 /// room that must all hold before anything is asked of the frontend —
 /// unknown, self, not the creator, archived, not signed off, a stale
 /// sign-off. Only once every one of those passes does this ask the
-/// webview to actually archive it, exactly like the user's own close
-/// (no confirm dialog, respecting `filesRegistry`).
+/// daemon to archive it in the room store, exactly like the user's own
+/// close (no confirm dialog, refusing on unsaved Files buffers).
 ///
 /// Every refusal message starts with a stable `snake_case` code (see
-/// `docs/agent-api.md`), so a frontend refusal — `"unsaved_files: …"`,
-/// forwarded verbatim by [`frontend_error`] — and a guard refused here
-/// read the same way to the caller.
+/// `docs/agent-api.md`).
 pub async fn close_room(
     state: &AgentApiState,
     caller: &Caller,
@@ -190,37 +178,50 @@ pub async fn close_room(
         room_id: caller.room_id.clone(),
         harness_id: caller.harness_id.clone(),
     };
-    let reply = match state
-        .request_frontend(
-            "close_room",
-            serde_json::json!({
-                "roomId": target.id,
-                "closedBy": {
-                    "roomId": closed_by.room_id,
-                    "harnessId": closed_by.harness_id,
-                },
-            }),
-            CLOSE_ROOM_TIMEOUT,
-        )
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            let err = frontend_error(&e);
-            log_close_room_outcome(&caller.room_id, room_id, err.message());
-            return Err(err);
+    match archive(state, &target.id, &closed_by).await {
+        Ok(archived) => {
+            log_close_room_outcome(&caller.room_id, room_id, "ok");
+            Ok(CloseRoomOut {
+                room_id: target.id.clone(),
+                archived,
+                closed_by,
+            })
         }
-    };
-    let closed: ClosedRoomOut = serde_json::from_value(reply).map_err(|e| {
-        VerbError::Unavailable(format!(
-            "the app returned an unexpected answer for close_room: {e}"
-        ))
-    })?;
+        Err(err) => {
+            log_close_room_outcome(&caller.room_id, room_id, err.message());
+            Err(err)
+        }
+    }
+}
 
-    log_close_room_outcome(&caller.room_id, room_id, "ok");
-    Ok(CloseRoomOut {
-        room_id: closed.room_id,
-        archived: closed.archived,
-        closed_by,
-    })
+/// The checks the webview used to make (unknown, already archived, unsaved
+/// Files buffers), then the archive itself against the store. Returns the
+/// archive timestamp.
+async fn archive(
+    state: &AgentApiState,
+    room_id: &str,
+    closed_by: &AgentClosedBy,
+) -> VerbResult<i64> {
+    let store = store_of(state)?;
+    let room = open_room(store, room_id)?;
+    refuse_unsaved_files(state, &room.harnesses).await?;
+
+    // The question above may have taken seconds: re-read under the lock so a
+    // client change made meanwhile (a rename, a badge) is not written back
+    // over, and a concurrent verb's result is seen.
+    let (_guard, store) = lock_verbs(state).await?;
+    let mut room = open_room(store, room_id)?;
+    let now = crate::review::now_ms();
+    room.archived = Some(now);
+    room.closed_by = Some(ClosedBy {
+        room_id: closed_by.room_id.clone(),
+        harness_id: closed_by.harness_id.clone(),
+        at: now,
+    });
+    apply_all(
+        store,
+        vec![RoomMutation::UpdateRoom { room }],
+        &format!("room \"{room_id}\""),
+    )?;
+    Ok(now)
 }

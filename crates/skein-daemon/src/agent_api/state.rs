@@ -54,8 +54,8 @@ pub const MAIL_CHANGED_EVENT: &str = "skein://mail-changed";
 /// module is one-way (Skein tells the UI something changed); this one
 /// is a call the UI is expected to reply to via `agent_request_complete`,
 /// which is why it is paired with a pending-request map rather than
-/// just another `notify_*` emit. #330's `create_room` verb is the first
-/// caller, with `kind`s `"create_room.resolve"` and `"create_room"`.
+/// just another `notify_*` emit. Its callers are the design-pane verbs
+/// (`design.*`) and `files.dirty`.
 pub const AGENT_REQUEST_EVENT: &str = "skein://agent-request";
 
 /// Payload of [`AGENT_REQUEST_EVENT`]. Frontend contract — do not
@@ -132,6 +132,8 @@ pub struct AgentApiState {
     /// Told `(room id, harness id)` of every mailbox change, whatever the
     /// path (#733): the daemon's prompt delivery. Bound late, once.
     mail_hook: std::sync::OnceLock<MailHook>,
+    /// The room store and runner, set once by `Daemon::build` (#734).
+    pub(super) daemon_handles: std::sync::OnceLock<super::daemon_handles::DaemonHandles>,
     /// Requests sent to the webview and not yet answered, keyed by a
     /// fresh id per request. Every insertion is matched by exactly one
     /// removal — on completion, on timeout, or immediately if the
@@ -161,7 +163,7 @@ pub struct AgentApiState {
     /// code never populates this; only [`Self::set_test_frontend`] does,
     /// and that is `#[cfg(test)]` too.
     #[cfg(test)]
-    test_frontend: parking_lot::Mutex<Option<TestFrontend>>,
+    pub(super) test_frontend: parking_lot::Mutex<Option<TestFrontend>>,
     /// Test seam: stands in for the live `SpawnSettings.tool_groups`,
     /// which a `for_test` state (no app, no managed settings) cannot read.
     #[cfg(test)]
@@ -265,6 +267,7 @@ impl AgentApiState {
             capture: Some(args.capture),
             phase_tap: Some(args.phase_tap),
             mail_hook: std::sync::OnceLock::new(),
+            daemon_handles: std::sync::OnceLock::new(),
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
             verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),
@@ -290,6 +293,7 @@ impl AgentApiState {
             capture: None,
             phase_tap: None,
             mail_hook: std::sync::OnceLock::new(),
+            daemon_handles: std::sync::OnceLock::new(),
             pending_requests: parking_lot::Mutex::new(HashMap::new()),
             room_creation_attempts: parking_lot::Mutex::new(HashMap::new()),
             verb_rate_attempts: parking_lot::Mutex::new(HashMap::new()),

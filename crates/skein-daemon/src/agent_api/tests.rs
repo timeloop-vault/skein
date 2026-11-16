@@ -19,10 +19,11 @@
 //!
 //! | file | covers |
 //! | :-- | :-- |
-//! | `close_harness_tests.rs` | `close_harness` (#411): guards and happy paths |
-//! | `close_room_tests.rs` | `close_room` (#411): guards, sign-off requirements and the frontend archive |
+//! | `close_harness_tests.rs` | `close_harness` (#411): guards and the daemon-side removal (#734) |
+//! | `close_room_tests.rs` | `close_room` (#411): guards, sign-off requirements and the daemon-side archive (#734) |
 //! | `create_room_ceiling_tests.rs` | `create_room` (#330): the open-room ceiling and its per-repository grouping |
-//! | `create_room_frontend_tests.rs` | `create_room` (#330): the prompt guard, frontend round trips and happy paths |
+//! | `create_room_spawn_tests.rs` | `create_room` (#734): with a real daemon and no client, the new harness is started |
+//! | `create_room_stored_tests.rs` | `create_room` (#330, #734): the stored room, worktree, refusals, prompt and the created event |
 //! | `create_room_tests.rs` | `create_room` (#330): argument validation, kill switch and rate cap, plus the shared fixtures |
 //! | `element_tests.rs` | element threads through the agent verbs (#435) |
 //! | `find_rooms_tests.rs` | `find_rooms_for_path` (#354): matching, `safe_to_remove` and the MCP call |
@@ -46,10 +47,12 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::auth::{self, Caller};
+use super::daemon_handles::DaemonHandles;
 use super::mcp;
 use super::state::AgentApiState;
 use super::verbs::MailContext;
 use crate::db::{Database, Harness, ReviewCommentRow, ReviewThreadRow, Room};
+use crate::room_store::RoomStore;
 
 // ── fixtures ──────────────────────────────────────────────────────
 
@@ -169,4 +172,71 @@ pub(super) async fn handled(state: &AgentApiState, caller: &Caller, body: &Value
 }
 pub(super) fn agent_api_state(f: &Fixture) -> AgentApiState {
     AgentApiState::for_test(Arc::clone(&f.db))
+}
+
+struct NoEvents;
+
+impl crate::event_sink::EventSink for NoEvents {
+    fn emit_json(&self, _event: &str, _payload: String) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// A loaded [`RoomStore`] over `db` holding one open room per id, which are
+/// also saved to the db (so `authenticate` finds them). Its debounced write
+/// is set far out so it cannot fire mid-assertion.
+pub(super) fn store_with(db: &Arc<Database>, ids: &[&str]) -> Arc<RoomStore> {
+    let rooms: Vec<Room> = ids.iter().map(|id| room(id, vec![])).collect();
+    store_of_rooms(db, rooms)
+}
+
+/// [`store_with`] for rooms the test built itself.
+pub(super) fn store_of_rooms(db: &Arc<Database>, rooms: Vec<Room>) -> Arc<RoomStore> {
+    save(db, &rooms);
+    let store = RoomStore::with_delays(
+        Arc::clone(db),
+        Arc::new(NoEvents),
+        std::time::Duration::from_secs(3600),
+        std::time::Duration::from_secs(3600),
+    );
+    store.fill(rooms).unwrap();
+    store
+}
+
+/// [`agent_api_state`] with a filled room store attached through the daemon
+/// handles (no runner, no client), plus that store.
+pub(super) fn agent_api_state_with_rooms(
+    f: &Fixture,
+    ids: &[&str],
+) -> (AgentApiState, Arc<RoomStore>) {
+    let state = agent_api_state(f);
+    let store = store_with(&f.db, ids);
+    attach(&state, &store);
+    (state, store)
+}
+
+/// [`agent_api_state_with_rooms`] over rooms the test built, saved to the db
+/// and the store alike, with the token-revoking observer registered.
+pub(super) fn agent_api_state_with_room_records(
+    f: &Fixture,
+    rooms: Vec<Room>,
+) -> (AgentApiState, Arc<RoomStore>) {
+    let state = agent_api_state(f);
+    let store = store_of_rooms(&f.db, rooms);
+    super::token_lifecycle::revoke_tokens_of_closed_rooms(&store, &f.db);
+    attach(&state, &store);
+    (state, store)
+}
+
+fn attach(state: &AgentApiState, store: &Arc<RoomStore>) {
+    assert!(
+        state
+            .set_daemon_handles(DaemonHandles {
+                rooms: Arc::clone(store),
+                runner: None,
+                harness_config: None,
+                verb_lock: tokio::sync::Mutex::new(()),
+            })
+            .is_ok()
+    );
 }

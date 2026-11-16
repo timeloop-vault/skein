@@ -3,13 +3,14 @@ import { useGlobalControlCenterShortcut } from "./controlCenter/useGlobalShortcu
 import { startPhaseMirror } from "./phaseMirror.ts";
 import { versionNoticeModeFor } from "./prefs.ts";
 import { startScreenReadingFeed } from "./screenPhaseTick.ts";
+import type { NewToast } from "./toastStack.ts";
 import { useAgentRequests } from "./useAgentRequests.ts";
+import { useAgentRoomCreated } from "./useAgentRoomCreated.ts";
 import type { useAppSettings } from "./useAppSettings.ts";
 import { useClaudeVersionWatch } from "./useClaudeVersionWatch.ts";
 import { useDaemonDelivery } from "./useDaemonDelivery.ts";
 import type { useHarnessActions } from "./useHarnessActions.ts";
 import { useHarnessContextSizes } from "./useHarnessContextSizes.ts";
-import type { useHarnessCreation } from "./useHarnessCreation.ts";
 import { useMailDisplay } from "./useMailDisplay.ts";
 import { useOpenRequests } from "./useOpenRequests.ts";
 import { useOsNotificationClicks } from "./useOsNotificationClicks.ts";
@@ -25,12 +26,11 @@ export function useAppBackgroundWiring(a: {
 	store: Store;
 	nav: ReturnType<typeof useRoomStripNav>;
 	actions: ReturnType<typeof useHarnessActions>;
-	creation: ReturnType<typeof useHarnessCreation>;
 	settings: ReturnType<typeof useAppSettings>;
-	pushToast: Parameters<typeof useAgentRequests>[4];
 	cc: { openPopout: () => void };
+	pushToast: (entry: NewToast) => void;
 }) {
-	const { store, nav, actions, creation, settings } = a;
+	const { store, nav, actions, settings } = a;
 	const { roomsRef, activeRoomIdRef, unarchiveRoomRef, loaded, loadedRef } = store;
 	// #19: OS-notification click handling — see useOsNotificationClicks.ts.
 	const switchRoomRef = useRef(store.switchRoom);
@@ -80,20 +80,11 @@ export function useAppBackgroundWiring(a: {
 		return startScreenReadingFeed();
 	}, []);
 
-	// #330: the `create_room` agent verb's frontend half — answers
-	// #328's `skein://agent-request` round trip. Unlike `useMailDisplay`
-	// this isn't scoped to `activeRooms`: a request can name any folder
-	// on the machine, not just an already-open room.
+	// The webview's half of #328's `skein://agent-request` round trip: the
+	// design-pane requests only (the room and harness verbs run in the
+	// daemon since #734).
 	useAgentRequests(
-		creation.createRoom,
-		nav.newRoomMemory,
-		settings.defaultAgents,
-		settings.branchTemplate,
-		a.pushToast,
-		store.closeRoomForAgent,
 		roomsRef,
-		creation.createHarnessInRoom,
-		actions.closeHarnessForAgent,
 		actions.setHarnessDesignEntry,
 		actions.setHarnessDesignDevice,
 		activeRoomIdRef,
@@ -102,6 +93,9 @@ export function useAppBackgroundWiring(a: {
 		settings.showDockedDesign,
 		store.switchRoom,
 	);
+
+	// #734: the daemon creates the room for `create_room`; this shows the toast.
+	useAgentRoomCreated(a.pushToast);
 
 	// #559: OS-wide raise of the Control Center pop-out. App renders only in
 	// the main window (main.tsx swaps in ControlCenterPopout for the pop-out),

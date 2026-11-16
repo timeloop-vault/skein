@@ -68,7 +68,7 @@ pub(super) fn mail_refusal(
 /// than a `Harness` — [`create_room`] (#330) needs the identical rule
 /// applied to a harness that does not exist yet: the prompt-messaging
 /// check has to run *before* the room (and so the harness row) is
-/// created, using the kind/agent the frontend resolved.
+/// created, using the kind/agent the daemon resolved.
 pub(super) fn mail_refusal_for(
     kind: &str,
     agent: Option<&str>,

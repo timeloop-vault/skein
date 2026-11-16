@@ -32,8 +32,8 @@ no client attached. Surviving the restart is #584.
 | Transition log (`harness_events`), action rows (`harness_actions`) | Daemon: action rows since slice 3, the transition log since slice 4 | `harness_phase/stream.rs`, `useHarnessActions.ts` |
 | Phase machine | Daemon since slice 4 (#732); before it, the frontend. The webview mirrors it | `harness_phase/`; `phaseMirror.ts`, `harnessActivity.ts`, `subagents.ts`, `backgroundTasks.ts` |
 | Mail and nudge delivery | Frontend | `useMailDelivery.ts`, `harnessInput*.ts`, xterm `term.paste()` |
-| Agent API verbs | Daemon, some ask the webview | `request_frontend`, 3 to 60 s timeouts |
-| Agent tokens | Daemon | `agent_tokens` table; all revoked at `Daemon::build` |
+| Agent API verbs | Daemon since slice 6 (#734); before it, `create_room`, `open_harness`, `close_harness` and `close_room` asked the webview (3 to 60 s timeouts). Only the design verbs and `files.dirty` still ask | `agent_api/verbs/`, `request_frontend`; see "Slice 6 as built" |
+| Agent tokens | Daemon; since slice 6 also revoked per room on archive or removal | `agent_tokens` table; all revoked at `Daemon::build`, a room's at its archive (`agent_api/token_lifecycle.rs`) |
 
 Four facts matter most.
 
@@ -128,7 +128,8 @@ harness's tools working and still bounds a leaked token.
 
 **Consequences.** For #584: the daemon restart path must re-spawn with
 resume, which mints fresh env anyway. Archive and close must call the
-per-room revoke (slice 6).
+per-room revoke (slice 6; as built, a store observer does it, see "Slice
+6 as built").
 
 ### D2. Phase machine
 
@@ -212,7 +213,8 @@ rooms.
 **Consequences.** Today's `request_frontend` kinds for these four verbs
 (`create_room.resolve`, `create_room`, `open_harness.resolve`,
 `open_harness`, `close_harness`, `close_room`) are retired. The design
-kinds stay.
+kinds stay. (As built: see "Slice 6 as built". One new kind,
+`files.dirty`, carries the unsaved-buffer question.)
 
 ## Lifecycle across a UI restart
 
@@ -464,7 +466,8 @@ two the remote always wins. See "Daemon-owned fields (#755)".
 - No sequence number and no reattach yet. A client that misses an event
   has no way to catch up. That is #584.
 - The agent API verbs (`create_room`, `open_harness`, `close_harness`,
-  `close_room`) still go through the frontend until slice 6.
+  `close_room`) still went through the frontend until slice 6; they run
+  in the daemon since #734 ("Slice 6 as built").
 - `Database::save_all` survives for migration and tests only.
 - The event goes out before a structural write. If that write fails,
   `rooms_apply` returns an error, the rows stay dirty and the writer
@@ -899,7 +902,9 @@ archived meanwhile, which covers what `reconcile` could not see yet.
 - An unbound Hermes session capture stays client-side. The daemon tails
   Hermes actions only when the session id is already bound and the status
   hooks work. The `hermes_work` poller is the daemon's since slice 4.
-- No agent API verb reaches `ensure_running` yet (slice 6).
+- No agent API verb reached `ensure_running` until slice 6: `create_room`
+  and `open_harness` now call it, when no client is attached to mount
+  the harness ("Slice 6 as built").
 - `release_events` re-attaches an opencode v1 adapter with the port of
   the spawn-time argv. After an opencode restarted from the post-exit
   shell (#517) was re-pointed by the client, a client letting go leaves
@@ -1964,6 +1969,165 @@ crates/skein-daemon/src/prompt_delivery/; the text is authoritative
   so a draft that began a moment ago may not yet hold mail back.
 - The supervisor's `mail_held` invariant still gets no facts: part A did
   not wire `SupervisorFacts` to the worker's held set.
+
+## Slice 6 as built (#734)
+
+The daemon now executes `create_room`, `close_room`, `open_harness` and
+`close_harness` itself (D4), over slice 1's `RoomStore` and slice 3's
+`HarnessRunner`, and a room's agent token follows the room's lifecycle
+(D1). Nothing here asks a webview to create, archive or remove a record.
+The code is in `crates/skein-daemon/src/agent_api/`:
+
+- `verbs/room_create.rs` with `room_create/worktree.rs` (inspect the
+  folder, name the branch, cut the worktree: a port of `createRoomArgs`)
+  and `room_create/record.rs` (the `Room` record, a port of `buildRoom`,
+  and the `skein://agent-room-created` event).
+- `verbs/harness_control.rs` (`open_harness`, `close_harness`),
+  `verbs/harness_build.rs` (resolve `(kind, agent)`, build the harness
+  record, `spawn_without_client`), `verbs/room_close.rs` (`close_room`),
+  `verbs/close_apply.rs` (the `files.dirty` question and the store
+  mutation) and `verbs/room_naming.rs` (room names, the branch template).
+- `token_lifecycle.rs` (the revoking observer) and `daemon_handles.rs`
+  (how the agent API reaches the store, the runner and the harness
+  config; `Daemon::build` sets them once after both exist).
+
+The verbs write to the store under origin `daemon-agent`. The old
+webview handlers and the `agentRequests*.ts` helpers are gone. The four
+verbs serialise their final step: `DaemonHandles.verb_lock` (a tokio
+`Mutex`, taken by `lock_verbs` in `verbs/close_apply.rs`) is held across
+re-reading the room from the store, re-checking it (`not_found`,
+archived, `last_harness`, `room_full`, name numbering) and applying the
+mutation, so two verbs cannot both pass a check against the same state.
+
+```mermaid
+flowchart LR
+    A["Agent verb"]
+    V["Verb guards"]
+    S["RoomStore"]
+    R["HarnessRunner"]
+    C["Client"]
+    A -->|"1 call"| V
+    V -->|"2 apply, origin daemon-agent"| S
+    S -->|"3 rooms-changed, agent-room-created"| C
+    V -->|"4a no client: ensure_running"| R
+    C -->|"4b client: view mounts, spawns"| R
+    V -.->|"5 files.dirty, design.*"| C
+```
+
+Figure 13: a slice 6 verb. Renders this section and
+crates/skein-daemon/src/agent_api/verbs/; the text is authoritative
+(non-normative).
+
+1. The call passes the same guards as before: the tool group switch, the
+   rate cap, scope, the sign-off for `close_room`.
+2. The daemon resolves `(kind, agent)`, checks that a `prompt` could be
+   delivered, then applies the mutations to the store. Nothing exists
+   before the checks pass.
+3. The store broadcasts `rooms-changed`. `create_room` also emits the
+   one-way `skein://agent-room-created`, with the payload `{roomId,
+   roomName, harnessName, harnessId, kind, requesterRoomName}`, which the
+   webview turns into the "room created" toast (`useAgentRoomCreated.ts`).
+4. The spawn rule. "Attached" is `AgentApiState::has_client()`: a
+   `ClientRequests` was supplied and its `is_attached()` is true (the
+   default; the Tauri app answers true while it has at least one webview
+   window). With no client attached the daemon calls
+   `ensure_running` itself, at 24x80 (the runner's default for a request
+   with no size). With a client attached it does not: the client's view
+   mounts the new harness and spawns it at the real terminal size. Only
+   PTY kinds spawn; `files` and `design` have no process. A failed spawn
+   does not undo the record; the harness reads as exited, as a failed
+   spawn from a view does.
+5. The only questions that still reach a client are the design verbs
+   and `files.dirty`.
+
+### What the verbs resolve
+
+`kind` defaults to `claude`; `remote` is refused (it needs a host only
+the user can type). `agent` defaults to the daemon's per-kind default
+(`settings.json` `defaultAgents`, slice 2) and is checked against the
+CLI's own listing as before. A new room's branch is the built-in
+`skein/{slug}` unless the caller gives `branch`. The room opens in the
+background and the active room and harness are never changed.
+
+### The unsaved-buffer question
+
+Unsaved Files text lives only in a client (`filesRegistry`). When
+`close_harness` closes a `files` harness, or `close_room` archives a room
+that has one, and a client is attached, the daemon sends one request kind,
+`files.dirty`, with `{harnessIds}` and a 5 s timeout. The answer is
+`{dirty: [{harnessId, names}]}`, only harnesses with a dirty buffer
+(`agentRequestsFiles.ts`). Any name refuses with `unsaved_files`. Nothing
+is asked when no `files` harness is involved, and with no client
+attached there is nothing unsaved, so the close proceeds. A client that
+is attached but does not answer refuses the close: an unanswered question
+is never a yes. `permission_open` is no longer a client's call: the
+daemon reads the harness's phase from its own machine (slice 4).
+
+### `no_client`
+
+Every design verb except `list_design_harnesses` refuses with
+`no_client` when no client is attached (HTTP 403, one `no_client()` in
+`verbs/design.rs`). It runs after the verb's argument checks, kill switch,
+rate cap and harness lookup, so those refuse first.
+`list_design_harnesses` still answers, with `mounted` and `ready` null.
+The `request_frontend` seam now carries only `design.*` and `files.dirty`.
+
+### Token lifecycle
+
+One `RoomStore` observer sees every applied batch, whoever made it (an
+agent verb, a client's `rooms_apply`, `RemoveRoom`), and revokes the
+tokens of each room that holds a live token
+(`Database::rooms_with_live_tokens`) and is not open in the store's
+current rooms (archived or removed) through `revoke_agent_tokens(Some(room))`.
+The observer keeps no state and does not trust the batch it is handed. A reopened room mints a fresh token at
+its next spawn. The boot-time revoke of every token stays. One effect on
+the caller: `authenticate` checks revoked before archived, so a call
+with an archived room's token now gets 403 (revoked), where 410
+(archived) was the answer before. 410 is left for a token that is still
+active on an archived room.
+
+### Client side
+
+Rooms can now change under a client that did not ask for it.
+`useRemoteRoomRepair.ts` (with `remoteRoomEffects.ts`) moves the active
+room when a remote change archives it, and forgets per-harness client
+state for harnesses that disappeared, which `closeRoomForAgent` and
+`closeHarnessForAgent` used to do.
+
+### Known limits
+
+- Per-folder defaults are dropped for agent-created rooms. The folder's
+  remembered kind and agent, and the custom branch-name template, live in
+  webview localStorage and the daemon cannot read them. The daemon's
+  per-kind default agent and the built-in `skein/{slug}` apply instead.
+- One client seam. `has_client` means the daemon was given a
+  `ClientRequests` and it reports itself attached; D4's "each attached
+  client" is therefore one client until the transport work (#584, #585).
+  In the app that is "at least one webview window exists", so with no
+  window the design verbs refuse `no_client`, `files.dirty` is skipped
+  and the daemon spawns a new harness itself. A window that exists but
+  does not answer still times out or drops the request, a 409
+  (unavailable).
+- Two writers can still interleave with the verbs. A client's
+  `rooms_apply` does not take `verb_lock`, and `create_room`'s open-room
+  ceiling is checked on a snapshot taken before the lock.
+- With no client attached nothing captures an opencode harness's session
+  id: the capture is the webview's (`harnessEventsOpencode.ts`), reported
+  through `harness_session_report`. Such a harness has no stored session
+  to resume until a client has observed it.
+- If a step after the worktree was cut fails, the worktree is left in
+  place and the refusal says where it is.
+- The new room has no `repoIdentity` until the next hydrate backfills it.
+- The daemon builds room and harness ids, names and tab labels in Rust
+  (ports of the webview's), so they must be kept in step with
+  `data.tsx` and `harnessCreation.ts`.
+- A harness spawned without a client has no view, so its output is
+  dropped until one attaches (#584 adds the buffer).
+- A queued first prompt is stored through the same mail path as
+  `send_message` (it calls `notify_mail_changed`), so the daemon's
+  delivery (#733) sends it when the harness reaches `waiting`, with no
+  client attached. A Hermes harness reaches `waiting` only from a client's
+  screen reading, so there the prompt waits for a client (#584).
 
 ## What #583 assumes of #584 and #585
 
