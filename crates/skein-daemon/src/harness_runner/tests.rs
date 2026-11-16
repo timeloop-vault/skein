@@ -33,6 +33,7 @@ mod opencode_port;
 mod phase;
 mod record_race;
 mod refusals;
+mod shell_tail;
 mod stops;
 
 struct NoEvents;
@@ -139,11 +140,26 @@ fn harness(id: &str, kind: &str, cmd: Option<Vec<String>>, session: Option<&str>
 
 /// Put a tool-kind harness in shell launch mode over its stored `cmd`: the
 /// runner spawns the shell argv as given instead of deriving `claude ...`
-/// (#752), so a stand-in shell can play a managed kind.
+/// (#752). Such a harness runs the post-exit shell, so it gets no Claude
+/// tail (#763).
 fn in_shell(mut h: Harness) -> Harness {
     let argv = h.cmd.clone().expect("a stored cmd");
     h.launch = Some(skein_proto::rooms::LaunchMode::Shell { argv });
     h
+}
+
+/// A Claude harness in tool mode, played by `stand_in` (which must be a
+/// long-lived or exiting shell) with every session reported as existing, so
+/// its record's session id is the one the tail follows.
+fn claude_stand_in(fx: &Fx, stand_in: Vec<String>, session: &str) -> Harness {
+    fx.runner().set_stand_in(stand_in);
+    fx.runner().set_session_probe(Arc::new(|_| Ok(true)));
+    harness(
+        "h1",
+        "claude",
+        Some(vec!["claude".to_owned()]),
+        Some(session),
+    )
 }
 
 fn room(id: &str, cwd: &Path, harnesses: Vec<Harness>) -> Room {

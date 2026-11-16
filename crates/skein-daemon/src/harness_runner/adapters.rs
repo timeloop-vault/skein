@@ -42,6 +42,9 @@ pub(super) struct AttachSpec<'a> {
     /// The attach right after a spawn (#336); false for a re-attach to a
     /// process that has lived on.
     pub fresh_process: bool,
+    /// From the record at attach time. False = the PTY runs the post-exit
+    /// shell, which has no transcript of its own (#763).
+    pub runs_tool: bool,
 }
 
 /// The three adapter managers, shared with the managed state.
@@ -99,6 +102,9 @@ impl Adapters {
 
     /// `hasClaudeTranscriptTail`: a Claude harness that owns a session id.
     fn attach_claude(&self, spec: &AttachSpec<'_>) {
+        if !spec.runs_tool {
+            return;
+        }
         let Some(session_id) = spec.session_id.filter(|s| !s.is_empty()) else {
             return;
         };

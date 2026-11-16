@@ -31,12 +31,7 @@ fn start_failed_for_a_running_harness_changes_nothing() {
     fx.create(room(
         "r1",
         &fx.work,
-        vec![in_shell(harness(
-            "h1",
-            "claude",
-            Some(shell_cmd()),
-            Some("sess-732"),
-        ))],
+        vec![claude_stand_in(&fx, shell_cmd(), "sess-732")],
     ));
     fx.ensure(false, None).unwrap();
     assert_eq!(phase_of(&fx, "h1"), Some(ActivityPhase::Spawning));

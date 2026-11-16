@@ -50,6 +50,7 @@ fn hermes_spec(session: Option<&'static str>) -> AttachSpec<'static> {
         hermes_profile: None,
         hermes_hooks: true,
         fresh_process: false,
+        runs_tool: true,
     }
 }
 

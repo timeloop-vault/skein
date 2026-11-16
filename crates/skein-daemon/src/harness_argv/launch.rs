@@ -17,6 +17,14 @@ pub fn shell_argv(h: &Harness) -> Option<&[String]> {
     }
 }
 
+/// Whether the PTY runs the harness's own tool rather than the post-exit
+/// shell: true unless the launch mode is `Shell` and no shell claim
+/// (#517/#520) says the tool was restarted from that shell (#763).
+#[must_use]
+pub fn runs_its_tool(h: &Harness) -> bool {
+    shell_argv(h).is_none() || h.shell_claim.is_some()
+}
+
 /// The launch mode an old record implies, or `None` to leave it alone.
 /// `Shell` only for a harness with no explicit mode, of a resuming kind with
 /// a managed program, whose stored `cmd[0]` is something else.

@@ -114,6 +114,11 @@ interface LiveTerminalProps {
 	// record expectation (`cmd` above is what runs: the shell argv in shell mode).
 	expectCmd: string[];
 	expectLaunch: LaunchMode;
+	// #763: false in the post-exit shell with no claim; the tool's transcript
+	// is not live then, so no Claude adapter. `claimSessionId` is the shell
+	// claim's session (shell mode only): attaching waits for it.
+	runsTool: boolean;
+	claimSessionId: string | undefined;
 }
 
 export const LiveTerminal = ({
@@ -137,6 +142,8 @@ export const LiveTerminal = ({
 	onShellRequest,
 	expectCmd,
 	expectLaunch,
+	runsTool,
+	claimSessionId,
 }: LiveTerminalProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	// #41: null while nothing is being dragged over this pane; a
@@ -236,6 +243,8 @@ export const LiveTerminal = ({
 		setHint,
 		expectCmd,
 		expectLaunch,
+		runsTool,
+		claimSessionId,
 	});
 
 	// Issue #22: focus the xterm whenever this pane becomes visible —

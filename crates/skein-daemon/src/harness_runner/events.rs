@@ -4,6 +4,7 @@
 
 use super::HarnessRunner;
 use super::gates::lookup;
+use crate::harness_argv::runs_its_tool;
 use crate::harness_phase::sinks::{ClaudePhaseSink, OpencodePhaseSink};
 
 impl HarnessRunner {
@@ -55,15 +56,19 @@ impl HarnessRunner {
         }
         self.pause_point("release_events");
         let rooms = self.store.rooms();
-        let session = lookup(&rooms, &run.room_id, harness_id)
-            .ok()
-            .and_then(|(_, h, _)| h.session_id.clone());
+        let record = lookup(&rooms, &run.room_id, harness_id).ok();
+        let session = record.as_ref().and_then(|(_, h, _)| h.session_id.clone());
+        let runs_tool = record.as_ref().is_some_and(|(_, h, _)| runs_its_tool(h));
         // Known limit: a v1 opencode uses the port of the spawn-time argv. If
         // the client re-pointed its adapter after an opencode restarted from
         // the post-exit shell (#517), the runner never learns the new port and
         // this re-attach tails the old one; the client re-points again on its
-        // next attach.
-        self.attach_adapters(harness_id, &run, session.as_deref(), false);
+        // next attach. Likewise `shellClaim` is client-written and reaches the
+        // store through the debounced autosave, so `runs_tool` may see a claim
+        // that is not saved yet (no daemon tail until the next ensure/release;
+        // a view's tee covers the phase meanwhile) or one already released
+        // (the old transcript is tailed for the debounce window).
+        self.attach_adapters(harness_id, &run, session.as_deref(), false, runs_tool);
         // `reconcile` takes no gate and may have stopped it meanwhile.
         if !self.entries.lock().contains_key(harness_id) {
             self.adapters.detach_for_good(harness_id);

@@ -108,12 +108,11 @@ fn a_release_racing_a_stop_leaves_no_adapter_behind() {
     fx.create(room(
         "r1",
         &fx.work,
-        vec![in_shell(harness(
-            "h1",
-            "claude",
-            Some(shell_cmd()),
-            Some("7f3c0a52-0000-4000-8000-000000000732"),
-        ))],
+        vec![claude_stand_in(
+            &fx,
+            shell_cmd(),
+            "7f3c0a52-0000-4000-8000-000000000732",
+        )],
     ));
     fx.ensure(false, None).unwrap();
     let (paused, entered) = std::sync::mpsc::channel::<()>();
@@ -145,12 +144,11 @@ fn releasing_events_of_an_exited_process_attaches_nothing() {
     fx.create(room(
         "r1",
         &fx.work,
-        vec![in_shell(harness(
-            "h1",
-            "claude",
-            Some(exit_3_cmd()),
-            Some("7f3c0a52-0000-4000-8000-000000000733"),
-        ))],
+        vec![claude_stand_in(
+            &fx,
+            exit_3_cmd(),
+            "7f3c0a52-0000-4000-8000-000000000733",
+        )],
     ));
     let out = fx.ensure(false, None).unwrap();
     assert!(wait_until(|| fx

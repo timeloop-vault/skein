@@ -5,7 +5,7 @@ vi.mock("./harnessEventsHermes.ts", () => ({ attachHermesEvents }));
 vi.mock("./harnessEvents.ts", () => ({
 	attachClaudeEvents: vi.fn(),
 	attachOpencodeEvents: vi.fn(),
-	hasClaudeTranscriptTail: () => false,
+	hasClaudeTranscriptTail: (kind: string, id: string | undefined) => kind === "claude" && !!id,
 }));
 vi.mock("./hermesCapture.ts", () => ({
 	isHermesProgram: (p: string | undefined) => p === "hermes",
@@ -13,7 +13,7 @@ vi.mock("./hermesCapture.ts", () => ({
 	startHermesCapture: vi.fn(() => () => {}),
 }));
 
-import { attachOpencodeEvents } from "./harnessEvents.ts";
+import { attachClaudeEvents, attachOpencodeEvents } from "./harnessEvents.ts";
 import { spawnOutcome } from "./ptySpawnOutcome.ts";
 import { type AdapterAttach, attachAdapters } from "./terminalSpawnAdapters.ts";
 
@@ -24,6 +24,7 @@ const attach = (over: Partial<AdapterAttach>): AdapterAttach => ({
 	harnessKind: "hermes",
 	program: "hermes",
 	sessionId: undefined,
+	runsTool: true,
 	freshProcess: true,
 	opencodePort: undefined,
 	onSessionCaptured: undefined,
@@ -31,6 +32,33 @@ const attach = (over: Partial<AdapterAttach>): AdapterAttach => ({
 	sessionIdRef: { current: undefined },
 	claudeAdapterRef: { current: null },
 	...over,
+});
+
+describe("attachAdapters for Claude (#763)", () => {
+	const claude = (over: Partial<AdapterAttach>) =>
+		attach({
+			harnessKind: "claude",
+			program: "claude",
+			sessionId: "s",
+			sessionIdRef: { current: "s" },
+			...over,
+		});
+
+	beforeEach(() => vi.mocked(attachClaudeEvents).mockClear());
+
+	it("attaches the transcript tail when the pane runs the tool", () => {
+		const a = claude({});
+		attachAdapters(a);
+		expect(attachClaudeEvents).toHaveBeenCalledOnce();
+		expect(a.claudeAdapterRef.current?.sessionId).toBe("s");
+	});
+
+	it("skips it in the unclaimed post-exit shell", () => {
+		const a = claude({ runsTool: false });
+		attachAdapters(a);
+		expect(attachClaudeEvents).not.toHaveBeenCalled();
+		expect(a.claudeAdapterRef.current).toBeNull();
+	});
 });
 
 describe("attachAdapters for Hermes", () => {

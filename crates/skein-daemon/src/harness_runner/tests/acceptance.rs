@@ -29,12 +29,7 @@ fn a_daemon_with_no_client_runs_a_harness_and_records_its_actions() {
     fx.create(room(
         "r1",
         &fx.work,
-        vec![in_shell(harness(
-            "h1",
-            "claude",
-            Some(shell_cmd()),
-            Some(SESSION),
-        ))],
+        vec![claude_stand_in(&fx, shell_cmd(), SESSION)],
     ));
 
     // No sink, no view, no frontend: the daemon starts it from the record.

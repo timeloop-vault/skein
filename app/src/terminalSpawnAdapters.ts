@@ -23,6 +23,8 @@ export interface AdapterAttach {
 	/** #625: `harness_ensure_running` reported working Hermes status hooks. */
 	hermesHooks?: boolean;
 	sessionId: string | undefined;
+	/** #763: the pane runs its tool; false = unclaimed post-exit shell. */
+	runsTool: boolean;
 	/** #731: the daemon started the process for this mount (`started`); false
 	 *  = re-attached to a running one, which may genuinely be mid-turn (#336). */
 	freshProcess: boolean;
@@ -47,7 +49,8 @@ export function attachAdapters(a: AdapterAttach): (() => void) | null {
 	// The translator marks the activity store authoritative
 	// once Rust confirms attach; until then L2a keeps
 	// ticking, so a slow attach is a graceful degradation.
-	if (hasClaudeTranscriptTail(harnessKind, a.sessionIdRef.current)) {
+	// #763: not in the post-exit shell — the old session's transcript is not live.
+	if (a.runsTool && hasClaudeTranscriptTail(harnessKind, a.sessionIdRef.current)) {
 		const attachedSessionId = a.sessionIdRef.current;
 		a.claudeAdapterRef.current = {
 			// #336: a process just spawned cannot be mid-turn; a re-attached one can.

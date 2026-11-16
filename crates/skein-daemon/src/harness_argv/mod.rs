@@ -52,7 +52,7 @@ mod spawn_tests;
 mod test_util;
 
 pub use agent_check::{AgentListReply, AgentVerdict, validate_agent, with_verdict};
-pub use launch::{effective_shell_argv, infer_launch, migrate_launch, shell_argv};
+pub use launch::{effective_shell_argv, infer_launch, migrate_launch, runs_its_tool, shell_argv};
 pub use opencode_v2::{OpencodeMode, is_opencode_v2, opencode_spawn_plan, opencode_v2_argv};
 pub use plan::{
     FreshCmdInput, FreshCmdOutput, ResumeOneInput, ResumeOneOutput, ResumeRoomsInput,

@@ -133,12 +133,7 @@ fn the_daemons_own_claude_sink_moves_the_phase_with_no_client() {
     fx.create(room(
         "r1",
         &fx.work,
-        vec![in_shell(harness(
-            "h1",
-            "claude",
-            Some(shell_cmd()),
-            Some("sess-732"),
-        ))],
+        vec![claude_stand_in(&fx, shell_cmd(), "sess-732")],
     ));
     fx.ensure(false, None).unwrap();
     assert_eq!(phase_of(&fx, "h1"), Some(ActivityPhase::Spawning));
@@ -162,12 +157,7 @@ fn releasing_events_of_an_exited_process_detaches_the_phase_source() {
     fx.create(room(
         "r1",
         &fx.work,
-        vec![in_shell(harness(
-            "h1",
-            "claude",
-            Some(exit_3_cmd()),
-            Some("sess-732"),
-        ))],
+        vec![claude_stand_in(&fx, exit_3_cmd(), "sess-732")],
     ));
     fx.ensure(false, None).unwrap();
     assert!(wait_until(

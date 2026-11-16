@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { launchOf, spawnArgv } from "./harnessLaunch.ts";
+import { launchOf, runsItsTool, spawnArgv } from "./harnessLaunch.ts";
+import type { LaunchMode } from "./types.ts";
 
 describe("harnessLaunch", () => {
 	it("launchOf defaults to the tool", () => {
@@ -17,5 +18,13 @@ describe("harnessLaunch", () => {
 			"bash",
 		]);
 		expect(spawnArgv({})).toBeUndefined();
+	});
+
+	it("runsItsTool is false only in the shell without a claim (#763)", () => {
+		const shell: LaunchMode = { mode: "shell", argv: ["bash"] };
+		expect(runsItsTool({})).toBe(true);
+		expect(runsItsTool({ launch: { mode: "tool" } })).toBe(true);
+		expect(runsItsTool({ launch: shell })).toBe(false);
+		expect(runsItsTool({ launch: shell, shellClaim: { sessionId: "s" } })).toBe(true);
 	});
 });

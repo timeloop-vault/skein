@@ -49,6 +49,7 @@ use crate::boot_resume::probe_session;
 use crate::db::Database;
 use crate::event_sink::{self, SharedEventSink};
 use crate::harness_actions_hermes::HermesActionsManager;
+use crate::harness_argv::runs_its_tool;
 use crate::harness_config::HarnessConfig;
 use crate::harness_events_claude::ClaudeEventsManager;
 use crate::harness_events_opencode::OpencodeEventsManager;
@@ -428,7 +429,13 @@ impl HarnessRunner {
         // The derived id (minted, or the stale one dropped); opencode v2 may
         // have created or confirmed a different session, and that wins.
         let session_now = spawn.session_id.clone().or(plan.session_id.clone());
-        self.attach_adapters(&req.harness_id, &run, session_now.as_deref(), true);
+        self.attach_adapters(
+            &req.harness_id,
+            &run,
+            session_now.as_deref(),
+            true,
+            runs_its_tool(harness),
+        );
         record::write_back(
             &self.store,
             &room_id,
@@ -624,6 +631,7 @@ impl HarnessRunner {
         run: &Running,
         session_id: Option<&str>,
         fresh_process: bool,
+        runs_tool: bool,
     ) {
         self.adapters.attach(&AttachSpec {
             harness_id,
@@ -641,6 +649,7 @@ impl HarnessRunner {
             hermes_profile: run.hermes_profile.as_deref(),
             hermes_hooks: run.spawn.hermes_hooks,
             fresh_process,
+            runs_tool,
         });
     }
 

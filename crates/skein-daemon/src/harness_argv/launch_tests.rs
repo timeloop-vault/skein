@@ -1,6 +1,6 @@
 use skein_proto::rooms::{Harness, LaunchMode};
 
-use super::launch::{infer_launch, migrate_launch, shell_argv};
+use super::launch::{infer_launch, migrate_launch, runs_its_tool, shell_argv};
 use super::test_util::{harness, room, sv, with};
 
 fn shell_mode(argv: &[&str]) -> LaunchMode {
@@ -80,6 +80,31 @@ fn shell_argv_follows_the_field_not_cmd() {
         ..with("claude", &["claude"], None)
     };
     assert_eq!(shell_argv(&shell), Some(&sv(&["pwsh.exe", "-NoLogo"])[..]));
+}
+
+#[test]
+fn runs_its_tool_is_false_only_for_an_unclaimed_shell() {
+    use skein_proto::rooms::ShellClaim;
+    let none = with("claude", &["claude"], None);
+    assert!(runs_its_tool(&none));
+    let tool = Harness {
+        launch: Some(LaunchMode::Tool),
+        ..with("claude", &["claude"], None)
+    };
+    assert!(runs_its_tool(&tool));
+    let shell = Harness {
+        launch: Some(shell_mode(&["pwsh.exe"])),
+        ..with("claude", &["claude"], None)
+    };
+    assert!(!runs_its_tool(&shell));
+    let claimed = Harness {
+        shell_claim: Some(ShellClaim {
+            session_id: "s".into(),
+            port: None,
+        }),
+        ..shell
+    };
+    assert!(runs_its_tool(&claimed));
 }
 
 /// Pins today's behaviour, not an endorsement: `cmd[0]` is compared to the

@@ -5,7 +5,7 @@ import { DesignDockedPlaceholder } from "./DesignDockedPlaceholder.tsx";
 import { DesignHarnessBody, type DeviceChangeHandler } from "./DesignHarnessBody.tsx";
 import { HARNESS_KINDS } from "./data.tsx";
 import { FilesBody } from "./FilesBody.tsx";
-import { launchOf, spawnArgv } from "./harnessLaunch.ts";
+import { launchOf, runsItsTool, spawnArgv } from "./harnessLaunch.ts";
 import { mountKeyFor } from "./harnessMounts.ts";
 import { LiveTerminal } from "./LiveTerminal.tsx";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
@@ -69,6 +69,10 @@ const HarnessBody = ({
 				roomId={roomId}
 				harnessKind={harness.kind}
 				sessionId={harness.sessionId}
+				runsTool={runsItsTool(harness)}
+				claimSessionId={
+					harness.launch?.mode === "shell" ? harness.shellClaim?.sessionId : undefined
+				}
 				agent={harness.agent}
 				envProfile={harness.envProfile}
 				hermesProfile={harness.hermesProfile}

@@ -8,6 +8,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { useEffect } from "react";
+import { claimSettled } from "./claudeRepointPlan.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { harnessActivity } from "./harnessActivity.ts";
 import { defaultEnsureDeps, detachHarness, ensureRunning, type PtyEvent } from "./harnessEnsure.ts";
@@ -34,6 +35,7 @@ import {
 	registerInputTarget,
 } from "./terminalSpawnInput.ts";
 import type { HarnessKind, LaunchMode } from "./types.ts";
+import { useAttachGate } from "./useAttachGate.ts";
 import { useClaudeRepoint } from "./useClaudeRepoint.ts";
 
 export interface UseTerminalSpawnParams {
@@ -68,6 +70,9 @@ export interface UseTerminalSpawnParams {
 	/** The stored record's tool argv + launch mode: the daemon's expectation (#752). */
 	expectCmd: string[];
 	expectLaunch: LaunchMode;
+	/** #763: the harness runs its tool (not an unclaimed post-exit shell). */
+	runsTool: boolean;
+	claimSessionId: string | undefined;
 	copyOnSelectRef: { current: boolean };
 	setHint: (hint: string | null) => void;
 }
@@ -108,7 +113,10 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		setHint,
 		expectCmd,
 		expectLaunch,
+		runsTool,
+		claimSessionId,
 	} = params;
+	const { runsToolRef, claimRef, liveRef } = useAttachGate(runsTool, claimSessionId);
 
 	// Run only on mountKey changes. cmd / cwd / fontSize are consumed once at
 	// first mount (fontSize has its own retune effect); listing them re-ran the
@@ -198,6 +206,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		const handleExit = (code: number | null) => {
 			if (cancelled) return;
 			phase = "exited";
+			liveRef.current = false;
 			shellFollow?.dispose();
 			if (ptyIdRef.current) forgetLatency(ptyIdRef.current); // #639
 			detachInputTarget?.();
@@ -264,6 +273,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				const { id, hermesHooks, mouseClicksDisabled, started } = result;
 				attached = { attachId: result.attachId };
 				ptyIdRef.current = id;
+				liveRef.current = !result.exited;
 				if (result.exited) {
 					// The `exit` event comes through the channel (exit line + shell
 					// prompt); nothing live to feed, so register no input/adapter/repaint.
@@ -290,6 +300,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					hermesProfile,
 					hermesHooks,
 					sessionId,
+					runsTool: runsToolRef.current && claimSettled(claimRef.current, sessionIdRef.current),
 					freshProcess: started, // #336: a re-attached process may be mid-turn
 					opencodePort: port,
 					opencodeSidecarGeneration: sidecarGeneration,
@@ -369,9 +380,20 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			fitRef.current = null;
 			spawnedRef.current = null;
 			ptyIdRef.current = null;
+			liveRef.current = false;
 			forgetViewState(harnessId);
 		};
 	}, [mountKey]);
 	// #116 re-point effect: see useClaudeRepoint.ts.
-	useClaudeRepoint({ sessionId, harnessId, roomId, cwd, claudeAdapterRef });
+	useClaudeRepoint({
+		sessionId,
+		harnessKind,
+		runsTool,
+		claimSessionId,
+		liveRef,
+		harnessId,
+		roomId,
+		cwd,
+		claudeAdapterRef,
+	});
 }
