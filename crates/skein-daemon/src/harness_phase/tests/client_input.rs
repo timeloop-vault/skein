@@ -182,10 +182,6 @@ fn wire_shape_is_camel_case_tagged() {
 #[test]
 fn every_frontend_shape_deserializes() {
     assert!(matches!(
-        parse(r#"{"kind":"promptSubmitted"}"#),
-        ClientPhaseInput::PromptSubmitted
-    ));
-    assert!(matches!(
         parse(r#"{"kind":"muteInducedOutput"}"#),
         ClientPhaseInput::MuteInducedOutput
     ));
@@ -210,8 +206,9 @@ fn every_frontend_shape_deserializes() {
         let i = parse(&format!(r#"{{"kind":"sessionSwitched","switch":"{s}"}}"#));
         assert!(matches!(i, ClientPhaseInput::SessionSwitched { switch } if switch == want));
     }
-    assert!(matches!(
-        parse(r#"{"kind":"recoverUnheardSilence"}"#),
-        ClientPhaseInput::RecoverUnheardSilence
-    ));
+    // The daemon's own delivery drives these two now; the wire refuses them.
+    for kind in ["promptSubmitted", "recoverUnheardSilence"] {
+        let r = serde_json::from_str::<ClientPhaseInput>(&format!(r#"{{"kind":"{kind}"}}"#));
+        assert!(r.is_err(), "{kind} must not deserialize");
+    }
 }

@@ -43,8 +43,8 @@ export const CLEAN_DRAFT: ComposerDraft = { kind: "clean" };
 export type DraftEvent =
 	| { type: "key"; key: string } // a user keystroke from onKey
 	| { type: "userPaste" } // the user pasted (Ctrl+V path, or a bracketed paste seen in onData)
-	| { type: "seamPaste" } // harnessInput.sendPrompt pasted a body
-	| { type: "seamSubmit" } // harnessInput.sendPrompt wrote its "\r"
+	| { type: "seamPaste" } // the daemon delivered a paste (skein://delivery-seam)
+	| { type: "seamSubmit" } // the daemon delivered its Enter (skein://delivery-seam)
 	| { type: "respawn" } // a fresh PTY registered for this harness
 	| { type: "screenEmpty" }; // #413: the screen positively reads an empty composer
 
@@ -198,7 +198,7 @@ export function describeDraftEvent(ev: DraftEvent): string {
 	}
 }
 
-/// The gate an AUTOMATIC send adds on top of `canSendPrompt` (#238):
+/// The gate an AUTOMATIC send adds on top of the daemon's send gate (`prompt_delivery/gate.rs` `can_send`, #238):
 /// `null` when the composer reads clean, a refusal for `typed` and
 /// `unknown` alike — the gate has no way to act on the difference between
 /// "definitely holds text" and "might", so both are held the same way.

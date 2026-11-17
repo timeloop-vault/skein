@@ -3,7 +3,7 @@
 //! stream.
 //!
 //! These are the inputs only the client can observe: keystrokes in the
-//! xterm, the rendered Hermes screen, a seam-submitted prompt. The daemon
+//! xterm, the rendered Hermes screen. The daemon
 //! sees the PTY bytes and the adapter events itself. One tagged enum keeps
 //! the wire to a single Tauri command and the mapping in one `match`.
 
@@ -22,8 +22,6 @@ use super::{ScreenReading, SessionSwitch};
 pub enum ClientPhaseInput {
     /// A keystroke or paste written to the PTY (`recordInput`).
     Input { data: String, empty_composer: bool },
-    /// A prompt submitted through the #238 seam (`notePromptSubmitted`).
-    PromptSubmitted,
     /// The client is about to cause an induced redraw (`muteInducedOutput`).
     MuteInducedOutput,
     /// The client read the rendered screen (`setScreenReading`, #623);
@@ -37,8 +35,6 @@ pub enum ClientPhaseInput {
     LaunchSignal,
     /// The tail was re-pointed onto a different session (#116, #539).
     SessionSwitched { switch: SessionSwitch },
-    /// A mail nudge's lost first paste (#404).
-    RecoverUnheardSilence,
     /// A start that produced no process (a refused agent, a failed ensure
     /// call): the record is created or replaced and reads `exited`. Only
     /// acted on for a stored harness with no live process, and under the

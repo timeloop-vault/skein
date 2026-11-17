@@ -433,7 +433,8 @@ impl PhaseMachine {
 }
 
 /// #381: is this harness at a point where pasting and submitting a
-/// prompt through the #238 seam (`canSendPrompt`/`sendPrompt`) is safe?
+/// prompt is safe? (The delivery gate's own `at_safe_stopping_point` in
+/// `prompt_delivery/gate.rs` makes this call over `PhaseFacts`.)
 /// `waiting` (end of turn) always is. So is `running` with an armed
 /// #277 delegation deferral: the main session already ended its own
 /// turn and only stayed `running` because background subagents were

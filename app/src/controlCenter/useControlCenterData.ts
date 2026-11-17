@@ -42,16 +42,17 @@ interface Remote {
 	branch: string | null;
 }
 
-/// When something meaningful last happened. `lastOutputAt` is deliberately
+/// When something meaningful last happened. PTY output time is deliberately
 /// not used: every PTY chunk bumps it, including cursor/prompt redraws and
-/// the resize redraw when the workspace is shown or hidden. An agent
-/// (authoritative adapter) has real turn signals and phase changes; a shell
-/// or other non-adapter PTY only has a submitted line (its phase also flips
-/// idle -> running on a bare redraw, so phaseSince lies) or its spawn/exit.
-function meaningfulActivityAt(activity: HarnessActivity | null | undefined): number | null {
+/// the resize redraw when the workspace is shown or hidden. An agent (one
+/// that has delivered a turn signal, `lastTurnSignal !== null`) has real
+/// turn signals and phase changes; a shell or other PTY without one only has
+/// a submitted line (its phase also flips idle -> running on a bare redraw,
+/// so phaseSince lies) or its spawn/exit.
+export function meaningfulActivityAt(activity: HarnessActivity | null | undefined): number | null {
 	if (!activity) return null;
 	const stamps: (number | null)[] = [activity.lastSubmitAt];
-	if (activity.authoritative) {
+	if (activity.lastTurnSignal !== null) {
 		stamps.push(activity.lastTurnSignal?.at ?? null, activity.phaseSince);
 	} else {
 		stamps.push(activity.spawnedAt, activity.phase === "exited" ? activity.phaseSince : null);

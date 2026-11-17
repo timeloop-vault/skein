@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { HarnessInputTarget } from "./harnessInput.ts";
-import { harnessInput, SCREEN_SETTLE_MS } from "./harnessInput.ts";
+import { type HarnessInputTarget, harnessInput, SCREEN_SETTLE_MS } from "./harnessInputRegistry.ts";
 import type { ScreenCell, ScreenSnapshot } from "./promptScreen.ts";
 
 // #413 — the screen check that releases an `unknown` composer latch.

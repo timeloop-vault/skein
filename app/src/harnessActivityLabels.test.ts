@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
 	activityToStatus,
 	aggregateRoomStatus,
-	atSafeStoppingPoint,
 	delegationSummary,
 	effectiveStatus,
 	higherPriorityStatus,
@@ -120,34 +119,4 @@ describe("aggregateRoomStatus (#290)", () => {
 		const refs = [{ id: "a", pendingNotifications: 1 }];
 		expect(aggregateRoomStatus(refs, (id) => records.get(id))).toBe("waiting");
 	});
-});
-
-// #381: the pure predicate behind the #238 seam treating a #277
-// delegation-deferred `running` the same as `waiting`.
-describe("atSafeStoppingPoint", () => {
-	it("waiting is always a stopping point", () => {
-		expect(atSafeStoppingPoint(mkActivity("waiting"))).toBe(true);
-	});
-
-	it("running with an armed deferral is a stopping point", () => {
-		expect(atSafeStoppingPoint(mkActivity("running", { delegationDeferredAt: 123 }))).toBe(true);
-	});
-
-	it("running with no deferral armed is not a stopping point", () => {
-		expect(atSafeStoppingPoint(mkActivity("running"))).toBe(false);
-	});
-
-	it("permission is never a stopping point, even with a deferral armed underneath it", () => {
-		expect(atSafeStoppingPoint(mkActivity("permission", { delegationDeferredAt: 123 }))).toBe(
-			false,
-		);
-	});
-
-	it.each(["spawning", "idle", "exited"] as const)(
-		"phase %s is not a stopping point, deferral or not",
-		(phase) => {
-			expect(atSafeStoppingPoint(mkActivity(phase))).toBe(false);
-			expect(atSafeStoppingPoint(mkActivity(phase, { delegationDeferredAt: 123 }))).toBe(false);
-		},
-	);
 });

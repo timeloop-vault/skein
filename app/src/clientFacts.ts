@@ -10,9 +10,9 @@ import type { ComposerDraft } from "./composerDraft.ts";
 import { checkDraft } from "./composerDraft.ts";
 
 /// The `draft` argument of `harness_client_facts`. `reason` only when held.
-export type DraftFact = { held: false } | { held: true; reason: string };
+type DraftFact = { held: false } | { held: true; reason: string };
 
-export interface ClientFacts {
+interface ClientFacts {
 	draft: DraftFact;
 	userInputSeq: number;
 }
@@ -25,7 +25,7 @@ export function clientFacts(draft: ComposerDraft, userInputSeq: number): ClientF
 	};
 }
 
-export function sameFacts(a: ClientFacts, b: ClientFacts): boolean {
+function sameFacts(a: ClientFacts, b: ClientFacts): boolean {
 	return (
 		a.userInputSeq === b.userInputSeq &&
 		a.draft.held === b.draft.held &&

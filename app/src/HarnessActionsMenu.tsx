@@ -22,7 +22,7 @@ import { useEnvProfiles } from "./envProfileStore.ts";
 import { type ActionsMenuItem, actionsButtonState } from "./harnessActionsMenu.ts";
 import { useHarnessActivity } from "./harnessActivity.ts";
 import { hasClaudeTranscriptTail } from "./harnessEvents.ts";
-import { canSendPrompt, type GateResult, harnessInput, sendPrompt } from "./harnessInput.ts";
+import { type GateResult, harnessInput, sendPrompt } from "./harnessInput.ts";
 import { canRestart, exitedRestartable } from "./harnessRestart.ts";
 import { useMailHold } from "./mailHold.ts";
 import { actionNudges } from "./nudgeRegistry.ts";
@@ -30,6 +30,7 @@ import { useNudgeOverrides } from "./nudgeStore.ts";
 import { loadRepoSkills, type RepoSkill } from "./repoSkills.ts";
 import { effectiveProfile, useSpawnedProfile } from "./spawnedEnvProfile.ts";
 import type { Harness } from "./types.ts";
+import { useSendGateHint } from "./useSendGateHint.ts";
 import "./HarnessActionsMenu.css";
 
 interface TextDto {
@@ -68,6 +69,9 @@ export const HarnessActionsMenu = ({
 	const rootRef = useRef<HTMLDivElement | null>(null);
 
 	const activity = useHarnessActivity(activeHarness?.id ?? null);
+	// A display hint for the disabled-item tooltips only (the daemon decides
+	// at send time, #733); asked only while the menu is open.
+	const sendHint = useSendGateHint(activeHarness?.id ?? null, open);
 	const versionNotice = useVersionNotice(activeHarness?.id ?? "").notice;
 	const mailHeld = useMailHold(activeHarness?.id ?? "").held;
 	// The composer draft has no change subscription (only "cleared"), so
@@ -124,8 +128,6 @@ export const HarnessActionsMenu = ({
 		};
 	}, [open]);
 
-	// `canSendPrompt` below is a display hint for the disabled-item tooltips
-	// only; the daemon decides at send time (#733, leaves with part B).
 	// No terminal at all (e.g. `files`) — same rule the #238 Nudge
 	// button uses: hidden entirely, not disabled-and-unexplained.
 	if (!capabilities?.pty) return null;
@@ -134,16 +136,7 @@ export const HarnessActionsMenu = ({
 		true,
 		actionNudges(),
 		overrides,
-		(body) =>
-			activeHarness
-				? canSendPrompt({
-						capabilities,
-						activity,
-						registered: harnessInput.isRegistered(activeHarness.id),
-						bracketedPasteOn: harnessInput.bracketedPaste(activeHarness.id),
-						body,
-					})
-				: { ok: false, reason: "no active harness" },
+		(body) => (activeHarness ? sendHint(body) : { ok: false, reason: "no active harness" }),
 		skills,
 		skillInvocation,
 		activeHarness && capabilities.pty && capabilities.resume
@@ -175,7 +168,7 @@ export const HarnessActionsMenu = ({
 
 	// #410: independent of the nudge/skill items above — this doesn't
 	// send a prompt, it calls Rust directly, so it carries no
-	// `canSendPrompt` gate of its own. Shown only for the
+	// send gate of its own. Shown only for the
 	// harnesses `attachClaudeEvents` would ever attach to.
 	const canReattach = Boolean(
 		activeHarness && hasClaudeTranscriptTail(activeHarness.kind, activeHarness.sessionId),

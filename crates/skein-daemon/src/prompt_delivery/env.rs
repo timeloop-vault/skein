@@ -37,8 +37,8 @@ pub trait DeliveryEnv {
     fn draft(&self, harness_id: &str) -> DraftState;
     /// Write to the PTY. `false` when the write failed.
     fn write_pty(&mut self, harness_id: &str, bytes: &[u8]) -> bool;
-    /// The daemon records its own submit (`PromptSubmitted`; TS
-    /// `notePromptSubmitted`).
+    /// The daemon records its own submit (`PhaseService::prompt_submitted`;
+    /// formerly TS `notePromptSubmitted`).
     fn note_prompt_submitted(&mut self, harness_id: &str);
     /// TS `harnessActivity.recoverUnheardSilence` (#404). The send machine
     /// never calls it (the TS send flow doesn't either: the mail layer

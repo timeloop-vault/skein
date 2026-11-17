@@ -28,7 +28,7 @@ beforeEach(() => {
 
 describe("tickScreenReadings", () => {
 	it("forwards a reading once while it is unchanged", () => {
-		applyUpdate(phaseUpdate("a", { view: wireActivity("running", { authoritative: false }) }));
+		applyUpdate(phaseUpdate("a", { view: wireActivity("running") }));
 		tickScreenReadings();
 		tickScreenReadings();
 		expect(sent()).toEqual([{ kind: "screenReading", reading: "waiting" }]);
@@ -37,13 +37,13 @@ describe("tickScreenReadings", () => {
 	it("re-sends an unchanged reading after a respawn (new spawnedAt, same id)", () => {
 		applyUpdate(
 			phaseUpdate("a", {
-				view: wireActivity("running", { authoritative: false, spawnedAt: 1 }),
+				view: wireActivity("running", { spawnedAt: 1 }),
 			}),
 		);
 		tickScreenReadings();
 		applyUpdate(
 			phaseUpdate("a", {
-				view: wireActivity("running", { authoritative: false, spawnedAt: 2 }),
+				view: wireActivity("running", { spawnedAt: 2 }),
 			}),
 		);
 		tickScreenReadings();
@@ -52,7 +52,7 @@ describe("tickScreenReadings", () => {
 	});
 
 	it("tells the daemon to drop the reading of a harness it forgot", () => {
-		applyUpdate(phaseUpdate("a", { view: wireActivity("running", { authoritative: false }) }));
+		applyUpdate(phaseUpdate("a", { view: wireActivity("running") }));
 		tickScreenReadings();
 		applyUpdate(phaseUpdate("a", { view: null }));
 		tickScreenReadings();

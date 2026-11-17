@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clientFacts, createFactsDiffer, createReportCounter, sameFacts } from "./clientFacts.ts";
+import { clientFacts, createFactsDiffer, createReportCounter } from "./clientFacts.ts";
 import { CLEAN_DRAFT } from "./composerDraft.ts";
 
 describe("clientFacts", () => {
@@ -15,15 +15,6 @@ describe("clientFacts", () => {
 			expect(facts.draft.held && facts.draft.reason).toMatch(/composer holds unsent text/);
 		},
 	);
-});
-
-describe("sameFacts", () => {
-	it("compares held, reason and the counter", () => {
-		const held = clientFacts({ kind: "typed", chars: 1 }, 1);
-		expect(sameFacts(held, clientFacts({ kind: "unknown" }, 1))).toBe(true);
-		expect(sameFacts(held, clientFacts({ kind: "typed", chars: 1 }, 2))).toBe(false);
-		expect(sameFacts(held, clientFacts(CLEAN_DRAFT, 1))).toBe(false);
-	});
 });
 
 describe("createFactsDiffer", () => {

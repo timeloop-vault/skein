@@ -134,7 +134,8 @@ pub struct HarnessActivity {
     pub permission_agent_id: Option<String>,
     /// An opencode `question` prompt is outstanding (#672). The phase
     /// reads `waiting` (the user's turn) but the turn has not ended, so
-    /// `canSendPrompt` refuses while this is set. Not a phase: never
+    /// the daemon's send gate (`prompt_delivery/gate.rs` `can_send`)
+    /// refuses while this is set. Not a phase: never
     /// logged as a transition. Reset on every spawn.
     pub question_open: bool,
     /// Has the L2c adapter delivered at least one event since spawn?

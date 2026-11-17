@@ -179,59 +179,6 @@ describe("applyUpdate", () => {
 		expect([...phaseMirror.permissionIds()]).toEqual([]);
 		expect(calls).toBe(2);
 	});
-
-	it("does not notify for an update that only moves lastOutputAt", () => {
-		applyUpdate(phaseUpdate("a", { view: wireActivity("running", { lastOutputAt: 100 }) }));
-		let calls = 0;
-		phaseMirror.subscribe("a", () => calls++);
-		applyUpdate(phaseUpdate("a", { view: wireActivity("running", { lastOutputAt: 900 }) }));
-		expect(calls).toBe(0);
-		expect(harnessActivity.get("a")?.lastOutputAt).toBe(900);
-	});
-});
-
-describe("lastOutputAt", () => {
-	it("recordOutput stamps the mirrored record in place, silently; nothing without a record", () => {
-		harnessActivity.recordOutput("a", "chunk");
-		expect(harnessActivity.get("a")).toBeNull();
-		applyUpdate(phaseUpdate("a", { view: wireActivity("running") }));
-		let calls = 0;
-		phaseMirror.subscribe("a", () => calls++);
-		const before = Date.now();
-		harnessActivity.recordOutput("a", "chunk");
-		expect(harnessActivity.get("a")?.lastOutputAt).toBeGreaterThanOrEqual(before);
-		expect(calls).toBe(0);
-	});
-
-	it("does not stamp an exited record", () => {
-		applyUpdate(phaseUpdate("a", { view: wireActivity("exited", { lastOutputAt: 100 }) }));
-		harnessActivity.recordOutput("a");
-		expect(harnessActivity.get("a")?.lastOutputAt).toBe(100);
-	});
-
-	it("keeps the larger of the incoming and the local value", () => {
-		applyUpdate(phaseUpdate("a", { view: wireActivity("running", { lastOutputAt: 100 }) }));
-		harnessActivity.recordOutput("a");
-		const local = harnessActivity.get("a")?.lastOutputAt ?? 0;
-		applyUpdate(phaseUpdate("a", { view: wireActivity("waiting", { lastOutputAt: 200 }) }));
-		expect(harnessActivity.get("a")?.lastOutputAt).toBe(local);
-		const far = local + 10_000;
-		applyUpdate(phaseUpdate("a", { view: wireActivity("running", { lastOutputAt: far }) }));
-		expect(harnessActivity.get("a")?.lastOutputAt).toBe(far);
-	});
-
-	it("does not carry a previous spawn's local stamp into a respawn", () => {
-		applyUpdate(
-			phaseUpdate("a", { view: wireActivity("running", { spawnedAt: 1, lastOutputAt: 100 }) }),
-		);
-		harnessActivity.recordOutput("a");
-		applyUpdate(
-			phaseUpdate("a", {
-				view: wireActivity("spawning", { spawnedAt: 2, lastOutputAt: null }),
-			}),
-		);
-		expect(harnessActivity.get("a")?.lastOutputAt).toBeNull();
-	});
 });
 
 describe("applySnapshot", () => {

@@ -97,11 +97,6 @@ function addTo<K, V>(map: Map<K, Set<V>>, key: K, cb: V): () => void {
 
 const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
-/// Everything but `lastOutputAt` equal.
-function sameApartFromOutput(a: HarnessActivity, b: HarnessActivity): boolean {
-	return sameJson({ ...a, lastOutputAt: null }, { ...b, lastOutputAt: null });
-}
-
 function recomputePermissionIds(): void {
 	const next = new Set<string>();
 	for (const [id, a] of records) if (a.phase === "permission") next.add(id);
@@ -144,14 +139,7 @@ export function applyUpdate(u: PhaseUpdate): boolean {
 		announcedOverdue.delete(id);
 	} else {
 		const next: HarnessActivity = { ...u.view };
-		// The daemon throttles `lastOutputAt`; the local stamp may be newer.
-		if (prev && prev.spawnedAt === next.spawnedAt && prev.lastOutputAt !== null) {
-			next.lastOutputAt = Math.max(prev.lastOutputAt, next.lastOutputAt ?? 0);
-		}
-		if (prev && sameApartFromOutput(prev, next)) {
-			// Output-only: stamp in place, silently, as the old machine did.
-			prev.lastOutputAt = next.lastOutputAt;
-		} else {
+		if (!prev || !sameJson(prev, next)) {
 			records.set(id, next);
 			changed = true;
 		}
@@ -181,13 +169,6 @@ export function applyUpdate(u: PhaseUpdate): boolean {
 
 export function applySnapshot(us: readonly PhaseUpdate[]): void {
 	for (const u of us) applyUpdate(u);
-}
-
-/// Stamp the local PTY output time on a mirrored record. Silent. An exited
-/// record is left alone.
-export function stampOutput(id: string, at: number): void {
-	const rec = records.get(id);
-	if (rec && rec.phase !== "exited") rec.lastOutputAt = at;
 }
 
 export const phaseMirror = {

@@ -169,6 +169,7 @@ pub fn run() {
             commands::harness_phase::harness_phase_snapshot,
             // Prompt and mail delivery (#733)
             commands::delivery::harness_send_prompt,
+            commands::delivery::harness_gate_check,
             commands::delivery::mail_deliver_now,
             commands::delivery::harness_client_facts,
             commands::delivery::mail_held_snapshot,

@@ -75,7 +75,7 @@ impl OpencodeTranslator {
     }
 
     /// #672: mirror "a question prompt is open" into the activity record,
-    /// which `canSendPrompt` reads. Call after every pending mutation.
+    /// which the daemon's send gate (`prompt_delivery/gate.rs`) reads. Call after every pending mutation.
     fn sync_question(&self, m: &mut PhaseMachine, id: &str) {
         m.set_question_open(id, self.pending.has_question());
     }

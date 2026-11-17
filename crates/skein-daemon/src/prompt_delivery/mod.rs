@@ -1,12 +1,15 @@
 //! Daemon-side prompt delivery (#733): the pure building blocks for
 //! pasting and submitting a prompt into a harness's PTY from the daemon,
-//! namely the send gate (a port of the webview's `canSendPrompt`), the
+//! namely the send gate (the only one; it began as the webview's
+//! `canSendPrompt`) and its insert variant, the
 //! bytes a paste becomes, and a tracker of the terminal's bracketed-paste
 //! mode. Those are pure; `service` is the one worker thread that drives
 //! them and `daemon_env` the real environment it reads and writes.
 
 #[cfg(test)]
 mod accept_tests;
+#[cfg(test)]
+mod check_tests;
 pub mod core;
 pub mod daemon_env;
 pub mod env;
@@ -34,7 +37,7 @@ pub use daemon_env::{
 };
 pub use env::{DeliveryEnv, DraftState, UnreadMail};
 pub use facts::{GateFacts, PhaseFacts};
-pub use gate::{Refusal, RefusalCode, at_safe_stopping_point, can_send};
+pub use gate::{GateMode, Refusal, RefusalCode, at_safe_stopping_point, can_insert, can_send};
 pub use paste::{SUBMIT, paste_bytes};
 pub use paste_mode::PasteModeTracker;
 pub use runner_pty::RunnerPty;

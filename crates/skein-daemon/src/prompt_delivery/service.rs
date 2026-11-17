@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use super::core::{DeliveryCore, DeliveryEvent, Reply};
 use super::env::{DeliveryEnv, DraftState};
-use super::gate::{Refusal, RefusalCode};
+use super::gate::{GateMode, Refusal, RefusalCode};
 use super::shared::Shared;
 use crate::harness_phase::PhaseNotice;
 use crate::harness_phase::service::Clock;
@@ -101,6 +101,34 @@ impl DeliveryHandle {
             CALL_TIMEOUT,
         )? {
             Reply::Manual(r) => r,
+            other => Err(unexpected(&other)),
+        }
+    }
+
+    /// Read-only: what the gate would answer for this harness right now
+    /// (`Send`: what [`send_manual`](Self::send_manual) would, including
+    /// `Busy` while a prompt is in flight; `Insert`: the file-drop gate).
+    /// Writes nothing and records nothing. `body: None` is an empty
+    /// single-line body. Runs on the worker, which owns the in-flight state.
+    ///
+    /// # Errors
+    /// The gate's refusal, or `Busy` / `NotReady` when the worker does not
+    /// answer in time or is gone.
+    pub fn check(
+        &self,
+        harness_id: &str,
+        body: Option<&str>,
+        mode: GateMode,
+    ) -> Result<(), Refusal> {
+        match self.call(
+            DeliveryEvent::Check {
+                harness_id: harness_id.to_owned(),
+                body: body.map(str::to_owned),
+                mode,
+            },
+            CALL_TIMEOUT,
+        )? {
+            Reply::Check(r) => r,
             other => Err(unexpected(&other)),
         }
     }

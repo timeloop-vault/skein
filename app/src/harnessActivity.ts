@@ -10,13 +10,12 @@
 
 import type { ActivityPhase, HarnessActivity, TransitionListener } from "./harnessActivityTypes.ts";
 import { sendPhaseInput } from "./phaseInput.ts";
-import { phaseMirror, stampOutput } from "./phaseMirror.ts";
+import { phaseMirror } from "./phaseMirror.ts";
 
 export type { RoomHarnessRef } from "./harnessActivityLabels.ts";
 export {
 	activityToStatus,
 	aggregateRoomStatus,
-	atSafeStoppingPoint,
 	delegationSummary,
 	effectiveStatus,
 	harnessDisplayStatus,
@@ -54,12 +53,6 @@ export const harnessActivity = {
 
 	sessionSwitched(id: string, source: "clear" | "resume" | "fork" | "startup"): void {
 		sendPhaseInput(id, { kind: "sessionSwitched", switch: source });
-	},
-
-	/// PTY output arrived. The daemon throttles `lastOutputAt`, so the local
-	/// stamp (silent, as it always was) keeps it fresh between updates.
-	recordOutput(id: string, _chunk?: string): void {
-		stampOutput(id, Date.now());
 	},
 
 	get(id: string): HarnessActivity | null {

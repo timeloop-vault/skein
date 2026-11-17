@@ -5,7 +5,7 @@
 //! `&mut self`, deliveries are serialized (TS `runSerialized`) for free.
 
 use super::env::DeliveryEnv;
-use super::gate::Refusal;
+use super::gate::{GateMode, Refusal};
 use super::mail::Mail;
 use super::send::{SendOpts, SendStart, Sender};
 use crate::harness_phase::ActivityPhase;
@@ -32,6 +32,12 @@ pub enum DeliveryEvent {
     /// A review nudge / prompt-library item: not automatic, so no draft
     /// check, no hold, no retry.
     Manual { harness_id: String, body: String },
+    /// Read-only: would the gate allow this now? Writes and records nothing.
+    Check {
+        harness_id: String,
+        body: Option<String>,
+        mode: GateMode,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +46,7 @@ pub enum Reply {
     /// Answered at paste time.
     Manual(Result<(), Refusal>),
     DeliverNow(Result<(), Refusal>),
+    Check(Result<(), Refusal>),
 }
 
 #[derive(Debug, Default)]
@@ -100,6 +107,17 @@ impl DeliveryCore {
                     SendStart::Pasted => Reply::Manual(Ok(())),
                 }
             }
+            DeliveryEvent::Check {
+                harness_id,
+                body,
+                mode,
+            } => Reply::Check(self.sender.check(
+                env,
+                &harness_id,
+                body.as_deref().unwrap_or(""),
+                mode,
+                now_ms,
+            )),
         }
     }
 

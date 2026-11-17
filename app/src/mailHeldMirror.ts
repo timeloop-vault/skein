@@ -5,7 +5,7 @@
 // and replayed on top of it, since an event is newer than a snapshot request
 // made after the listener was attached.
 
-export interface MailHeldEvent {
+interface MailHeldEvent {
 	harnessId: string;
 	held: boolean;
 }

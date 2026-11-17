@@ -2,7 +2,7 @@
 //! send, "deliver held mail now", the client-only facts the gate needs
 //! (composer draft, keystroke counter) and the held-mail snapshot.
 
-use skein_daemon::prompt_delivery::{DeliveryHandle, DraftState, Refusal, RefusalCode};
+use skein_daemon::prompt_delivery::{DeliveryHandle, DraftState, GateMode, Refusal, RefusalCode};
 use tauri::Manager;
 
 /// The outcome of a send, as the webview reads it.
@@ -75,6 +75,21 @@ pub(crate) async fn harness_send_prompt(
     app: tauri::AppHandle,
 ) -> Result<SendResult, String> {
     blocking(&app, move |d| d.send_manual(&harness_id, &body).into()).await
+}
+
+/// Read-only: would the send gate (`send`) or the file-drop gate (`insert`)
+/// allow this now? Never writes to the PTY or changes delivery state.
+#[tauri::command]
+pub(crate) async fn harness_gate_check(
+    harness_id: String,
+    body: Option<String>,
+    mode: GateMode,
+    app: tauri::AppHandle,
+) -> Result<SendResult, String> {
+    blocking(&app, move |d| {
+        d.check(&harness_id, body.as_deref(), mode).into()
+    })
+    .await
 }
 
 /// Delivers the harness's held mail now, past the draft guard.

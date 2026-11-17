@@ -18,18 +18,10 @@ import type { SubagentEntry } from "./subagents.ts";
 
 const activity = (over: Partial<HarnessActivity> = {}): HarnessActivity => ({
 	phase: "waiting",
-	lastOutputAt: null,
 	spawnedAt: 0,
 	hasUserInput: false,
-	authoritative: true,
 	permissionTool: null,
 	permissionAgentType: null,
-	questionOpen: false,
-	adapterHeard: true,
-	adapterSilent: false,
-	launchSignalAt: null,
-	injected: true,
-	delegationDeferredAt: null,
 	delegatedCount: 0,
 	phaseSince: 0,
 	lastTurnSignal: null,

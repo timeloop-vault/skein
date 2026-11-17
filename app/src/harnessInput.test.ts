@@ -1,7 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HarnessInputTarget } from "./harnessInput.ts";
-import { harnessInput, insertText } from "./harnessInput.ts";
-import { mirrorSet, SENDABLE } from "./phaseTestSupport.ts";
+
+const invokeMock = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({
+	Channel: class {
+		onmessage: (e: unknown) => void = () => {};
+	},
+	invoke: invokeMock,
+}));
+vi.mock("./frontendLog.ts", () => ({ logBoth: vi.fn(), logToRust: vi.fn() }));
+
+import { insertText } from "./harnessInput.ts";
+import { type HarnessInputTarget, harnessInput } from "./harnessInputRegistry.ts";
+import { mirrorSet } from "./phaseTestSupport.ts";
 
 const nextId = (() => {
 	let n = 0;
@@ -16,36 +26,43 @@ describe("insertText", () => {
 	beforeEach(() => {
 		id = nextId();
 		calls = [];
+		invokeMock.mockReset();
 		target = {
 			paste: vi.fn(() => calls.push("paste")),
 			bracketedPaste: () => false,
 		};
-		// Bring a real store entry to a state canInsertText allows —
-		// mid-turn (`running`), authoritative, heard-from, injected.
-		mirrorSet(id, "running", SENDABLE);
+		// A live store entry, so the local activity-record check passes.
+		mirrorSet(id, "running");
 	});
 
-	it("pastes but never submits, when the gate allows it", () => {
+	it("pastes but never submits, when the daemon allows it", async () => {
+		invokeMock.mockResolvedValue({ ok: true });
 		harnessInput.register(id, target);
 
-		const result = insertText(id, "claude", "/tmp/dropped.txt ");
+		const result = await insertText(id, "claude", "/tmp/dropped.txt ");
 
 		expect(result).toEqual({ ok: true });
 		expect(calls).toEqual(["paste"]);
+		expect(invokeMock).toHaveBeenCalledWith("harness_gate_check", {
+			harnessId: id,
+			body: null,
+			mode: "insert",
+		});
 	});
 
-	it("refuses — and never pastes — a harness that never registered", () => {
-		const result = insertText(id, "claude", "/tmp/dropped.txt ");
+	it("refuses — and never pastes — a harness that never registered", async () => {
+		const result = await insertText(id, "claude", "/tmp/dropped.txt ");
 		expect(result.ok).toBe(false);
 		expect(target.paste).not.toHaveBeenCalled();
+		expect(invokeMock).not.toHaveBeenCalled();
 	});
 
-	it("re-checks the gate at call time rather than trusting a stale render", () => {
+	it("never pastes when the daemon refuses", async () => {
+		invokeMock.mockResolvedValue({ ok: false, code: "permission", reason: "dialog open" });
 		harnessInput.register(id, target);
-		mirrorSet(id, "exited", { ...SENDABLE });
 
-		const result = insertText(id, "claude", "/tmp/dropped.txt ");
-		expect(result.ok).toBe(false);
+		const result = await insertText(id, "claude", "/tmp/dropped.txt ");
+		expect(result).toEqual({ ok: false, reason: "dialog open", code: "permission" });
 		expect(target.paste).not.toHaveBeenCalled();
 	});
 });

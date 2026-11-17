@@ -21,14 +21,6 @@ export function wireActivity(phase: ActivityPhase, over: Partial<WireActivity> =
 		delegatedCount: 0,
 		lastTurnSignal: null,
 		lastSubmitAt: null,
-		authoritative: false,
-		adapterHeard: false,
-		adapterSilent: false,
-		launchSignalAt: null,
-		lastOutputAt: null,
-		questionOpen: false,
-		delegationDeferredAt: null,
-		injected: false,
 		...over,
 	};
 }
@@ -103,11 +95,3 @@ export function mirrorSet(
 export function mirrorForget(id: string): void {
 	applyUpdate(phaseUpdate(id, { view: null }));
 }
-
-/// The one state `canSendPrompt` allows once the phase is right: authoritative,
-/// heard-from and injected.
-export const SENDABLE: Partial<WireActivity> = {
-	authoritative: true,
-	adapterHeard: true,
-	injected: true,
-};

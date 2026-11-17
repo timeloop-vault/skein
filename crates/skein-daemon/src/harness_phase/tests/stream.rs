@@ -65,12 +65,11 @@ fn parse(payload: &str) -> PhaseUpdate {
         harness_id: v["harnessId"].as_str().unwrap().to_owned(),
         room_id: v["roomId"].as_str().unwrap().to_owned(),
         view: view.map(|a| {
-            let mut rec = crate::harness_phase::types::HarnessActivity::fresh(
+            let rec = crate::harness_phase::types::HarnessActivity::fresh(
                 serde_json::from_value(a["phase"].clone()).unwrap(),
                 None,
                 a["spawnedAt"].as_i64().unwrap(),
             );
-            rec.last_output_at = a["lastOutputAt"].as_i64();
             PhaseView::from(&rec)
         }),
         subagents: Vec::new(),
@@ -204,7 +203,7 @@ fn forget_emits_a_final_update_with_null_view() {
 }
 
 #[test]
-fn an_output_time_only_change_waits_for_the_tick() {
+fn pty_output_alone_emits_no_update() {
     let r = Rig::new();
     r.svc.spawned("h", "room-1", false);
     r.svc.record_output("h", "a");
@@ -212,19 +211,11 @@ fn an_output_time_only_change_waits_for_the_tick() {
 
     r.advance(300);
     r.svc.record_output("h", "b");
+    assert_eq!(r.svc.get("h").unwrap().last_output_at, Some(T0 + 300));
     assert_eq!(r.updates().len(), before, "an ordinary call must not emit");
 
     r.tick();
-    let updates = r.updates();
-    assert_eq!(updates.len(), before + 1, "the tick emits it");
-    let last = updates.last().unwrap();
-    assert_eq!(last.transitions.len(), 0);
-    assert_eq!(last.view.as_ref().unwrap().last_output_at, Some(T0 + 300));
-
-    // Nothing changed since: the next tick is silent.
-    r.advance(10);
-    r.tick();
-    assert_eq!(r.updates().len(), before + 1);
+    assert_eq!(r.updates().len(), before, "nor does the tick");
 }
 
 #[test]
@@ -323,15 +314,6 @@ fn the_emitted_view_has_exactly_the_wire_keys() {
         "delegatedCount",
         "lastTurnSignal",
         "lastSubmitAt",
-        // The send gate (leaves with #733).
-        "authoritative",
-        "adapterHeard",
-        "adapterSilent",
-        "launchSignalAt",
-        "lastOutputAt",
-        "questionOpen",
-        "delegationDeferredAt",
-        "injected",
     ];
     expected.sort_unstable();
     assert_eq!(keys, expected);

@@ -169,7 +169,7 @@ fn client_input_input_records_user_input() {
 fn client_input_prompt_submitted_stamps_the_submit() {
     let r = Rig::new();
     r.spawn("h");
-    r.input("h", ClientPhaseInput::PromptSubmitted);
+    r.svc.prompt_submitted("h");
     assert_eq!(r.svc.get("h").unwrap().last_submit_at, Some(T0));
 }
 
@@ -244,11 +244,11 @@ fn client_input_recover_unheard_silence_regrants_authority() {
     r.spawn("h");
     r.input("h", ClientPhaseInput::LaunchSignal);
     r.svc.claude_attached("h");
-    r.input("h", ClientPhaseInput::PromptSubmitted);
+    r.svc.prompt_submitted("h");
     r.run(ADAPTER_SILENT_AFTER_MS + TICK_INTERVAL_MS);
     let degraded = r.svc.get("h").unwrap();
     assert!(degraded.adapter_silent && !degraded.authoritative);
-    r.input("h", ClientPhaseInput::RecoverUnheardSilence);
+    r.svc.recover_unheard_silence("h");
     let a = r.svc.get("h").unwrap();
     assert!(a.authoritative && a.silence_recovered && !a.adapter_silent);
 }

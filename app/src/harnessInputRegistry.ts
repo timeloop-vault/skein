@@ -92,8 +92,9 @@ const drafts = new Map<string, ComposerDraft>();
 
 /// #413: why a draft is `unknown`, so the screen check can tell the user's
 /// own doing from the seam's. A `seamPaste` also sets `unknown`, but the
-/// screen then shows the NUDGE's pasted body, not the user's text — and its
-/// own `seamSubmit` (or the user's next event) resolves that. Reading an
+/// screen then shows the delivery's pasted body, not the user's text — and
+/// the daemon's Enter (heard as `seamSubmit` over `skein://delivery-seam`,
+/// see `deliverySeam.ts`) or the user's next event resolves that. Reading an
 /// empty screen mid-flight (paste not yet echoed) must never release it, so
 /// the check runs only for a "user"-caused unknown.
 const unknownCause = new Map<string, "user" | "seam">();

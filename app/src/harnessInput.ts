@@ -11,13 +11,12 @@
 //
 //   - `harnessInputRegistry.ts` — the per-harness target registry, user
 //     input counters and the #383/#413 composer-draft state;
-//   - `harnessInputGate.ts` — the pure `canSendPrompt` / `canInsertText`
-//     gates;
+//   - `harnessInputGate.ts` — the `GateResult` type and the local
+//     registration check (the daemon owns the rest of the gate, #733);
 //   - `harnessInputSend.ts` — `sendPrompt` / `deliverMailNow` (ask the daemon)
 //     and `insertText` (a paste for a file drop).
 
-export type { CanInsertTextInput, CanSendPromptInput, GateResult } from "./harnessInputGate.ts";
-export { canInsertText, canSendPrompt, formatDroppedPaths } from "./harnessInputGate.ts";
-export type { HarnessInputTarget } from "./harnessInputRegistry.ts";
-export { harnessInput, SCREEN_SETTLE_MS } from "./harnessInputRegistry.ts";
+export type { GateResult } from "./harnessInputGate.ts";
+export { formatDroppedPaths } from "./harnessInputGate.ts";
+export { harnessInput } from "./harnessInputRegistry.ts";
 export { deliverMailNow, insertText, sendPrompt } from "./harnessInputSend.ts";

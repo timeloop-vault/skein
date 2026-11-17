@@ -10,7 +10,6 @@ import type { Terminal } from "@xterm/xterm";
 import { useEffect } from "react";
 import { claimSettled } from "./claudeRepointPlan.ts";
 import { HARNESS_KINDS } from "./data.tsx";
-import { harnessActivity } from "./harnessActivity.ts";
 import { defaultEnsureDeps, detachHarness, ensureRunning, type PtyEvent } from "./harnessEnsure.ts";
 import { restartFor } from "./harnessMounts.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
@@ -171,9 +170,6 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			if (ev.kind === "data") {
 				gate.write(ev.chunk);
 				recordEcho(ptyIdRef.current, performance.now()); // #639
-				// Keep the mirror's last-output stamp fresh with every chunk,
-				// gated or not (the daemon hears the PTY itself, #732).
-				harnessActivity.recordOutput(harnessId, ev.chunk);
 				shellFollow?.onOutput(); // #517
 			} else {
 				handleExit(ev.code);

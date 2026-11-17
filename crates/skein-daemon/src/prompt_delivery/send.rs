@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use skein_proto::harness_kind::HarnessKind;
 
 use super::env::{DeliveryEnv, DraftState};
-use super::gate::{Refusal, RefusalCode, at_safe_stopping_point, can_send};
+use super::gate::{GateMode, Refusal, RefusalCode, at_safe_stopping_point, can_insert, can_send};
 use super::paste::{SUBMIT, paste_bytes};
 use super::submit_retry::{
     RetryDecision, RetryInput, SUBMIT_GAP_MS, SUBMIT_RETRY_SCHEDULE_MS, decide_submit_retry,
@@ -105,6 +105,30 @@ impl Sender {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// What [`begin`](Self::begin) (manual) or the insert gate would answer
+    /// now, without pasting, arming or recording anything.
+    pub fn check(
+        &self,
+        env: &dyn DeliveryEnv,
+        harness_id: &str,
+        body: &str,
+        mode: GateMode,
+        now_ms: i64,
+    ) -> Result<(), Refusal> {
+        match mode {
+            GateMode::Send => {
+                if self.flights.contains_key(harness_id) {
+                    return Err(Refusal {
+                        code: RefusalCode::Busy,
+                        reason: "a prompt is already being delivered".to_owned(),
+                    });
+                }
+                can_send(&env.gate_facts(harness_id, now_ms), body)
+            }
+            GateMode::Insert => can_insert(&env.gate_facts(harness_id, now_ms)),
+        }
     }
 
     /// Re-check the gate at call time, paste, and arm the submit.

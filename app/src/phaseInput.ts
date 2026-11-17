@@ -8,13 +8,11 @@ export type RestartSource = "user-restart" | "version-auto-restart";
 
 export type PhaseInput =
 	| { kind: "input"; data: string; emptyComposer: boolean }
-	| { kind: "promptSubmitted" }
 	| { kind: "muteInducedOutput" }
 	| { kind: "screenReading"; reading: "waiting" | "running" | "unknown" | null }
 	| { kind: "hermesLaunchPoll"; screenWaiting: boolean }
 	| { kind: "launchSignal" }
 	| { kind: "sessionSwitched"; switch: "clear" | "resume" | "fork" | "startup" }
-	| { kind: "recoverUnheardSilence" }
 	/// A start produced no process (agent refused, the daemon returned no child).
 	| { kind: "startFailed" }
 	/// The user (or the version auto-restart) asked to restart the harness.

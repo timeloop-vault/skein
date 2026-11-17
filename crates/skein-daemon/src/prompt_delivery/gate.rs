@@ -1,8 +1,9 @@
-//! The safety gate for sending a prompt into a harness's PTY: a port of
-//! `canSendPrompt` in `app/src/harnessInputGate.ts` (with `launchSettled`
-//! from `launchReady.ts`), plus one check the webview never needed: a
-//! post-exit shell gets no prompt. Refusal strings are the TS ones,
-//! verbatim.
+//! The safety gate for sending a prompt into a harness's PTY, and the
+//! looser one for inserting text without submitting it. This is the only
+//! gate: the webview's `canSendPrompt` / `canInsertText` are gone and ask
+//! the daemon (`harness_gate_check`). It began as a port of them (with
+//! `launchSettled`), plus one check the webview never had: a post-exit
+//! shell gets no prompt. Refusal strings are the old TS ones, verbatim.
 
 use skein_proto::harness_kind::HarnessKind;
 
@@ -71,6 +72,74 @@ fn launch_settled(p: &PhaseFacts, last_output_at: Option<i64>, now_ms: i64) -> b
     now_ms - quiet_since >= LAUNCH_QUIET_MS || now_ms - signal >= LAUNCH_READY_CAP_MS
 }
 
+/// The two checks a send and an insert share: a confirmed adapter is
+/// watching, and the review tools were injected at spawn.
+fn watched_and_injected(p: &PhaseFacts) -> Result<(), Refusal> {
+    if !p.authoritative || (!p.adapter_heard && p.launch_signal_at.is_none()) || p.adapter_silent {
+        return refuse(
+            RefusalCode::NotWatched,
+            "no confirmed adapter is watching this harness",
+        );
+    }
+    if !p.injected {
+        return refuse(
+            RefusalCode::NotInjected,
+            "this harness wasn't started with the review tools wired up",
+        );
+    }
+    Ok(())
+}
+
+/// Which gate a read-only check asks about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GateMode {
+    /// Paste and submit ([`can_send`]).
+    Send,
+    /// Paste without submitting, e.g. a dropped file path ([`can_insert`]).
+    Insert,
+}
+
+/// Whether text may be pasted WITHOUT submitting it now (a file drop).
+/// Looser than [`can_send`]: no settling, question or paste-mode checks,
+/// and the phase may be `running`/`idle`/`waiting`.
+///
+/// # Errors
+/// The first failing check.
+pub fn can_insert(facts: &GateFacts) -> Result<(), Refusal> {
+    if !facts.kind.has_pty() {
+        return refuse(
+            RefusalCode::NoTerminal,
+            "this harness has no terminal to paste into",
+        );
+    }
+    let Some(p) = facts.phase.as_ref().filter(|_| facts.pty_live) else {
+        return refuse(
+            RefusalCode::NotReady,
+            "this harness's terminal isn't ready yet",
+        );
+    };
+    match p.phase {
+        ActivityPhase::Permission => {
+            return refuse(
+                RefusalCode::Permission,
+                "the harness is waiting on a permission dialog \u{2014} a dropped path could answer it",
+            );
+        }
+        ActivityPhase::Spawning | ActivityPhase::Exited => {
+            return refuse(
+                RefusalCode::NotReady,
+                format!(
+                    "the harness isn't ready to receive input (currently {})",
+                    p.phase.as_str()
+                ),
+            );
+        }
+        _ => {}
+    }
+    watched_and_injected(p)
+}
+
 /// Whether `body` may be pasted and submitted now.
 ///
 /// # Errors
@@ -116,18 +185,7 @@ pub fn can_send(facts: &GateFacts, body: &str) -> Result<(), Refusal> {
             ),
         );
     }
-    if !p.authoritative || (!p.adapter_heard && p.launch_signal_at.is_none()) || p.adapter_silent {
-        return refuse(
-            RefusalCode::NotWatched,
-            "no confirmed adapter is watching this harness",
-        );
-    }
-    if !p.injected {
-        return refuse(
-            RefusalCode::NotInjected,
-            "this harness wasn't started with the review tools wired up",
-        );
-    }
+    watched_and_injected(p)?;
     if !launch_settled(p, facts.last_output_at, facts.now_ms) {
         return refuse(
             RefusalCode::Settling,

@@ -1,15 +1,15 @@
 // The review header's Nudge button (#238). Target is always the room's
 // active harness — no picker — and which prompt applies is a pure
 // function of the review's own state (sign-off, then unresolved
-// threads). `useHarnessActivity` keeps enablement live as the harness's
-// phase moves, without the pane polling anything itself. Split out of
+// threads). `useSendGateHint` keeps enablement live as the harness's
+// phase moves, asking the daemon's gate. Split out of
 // ReviewPane.tsx (#460).
 
 import { HARNESS_KINDS } from "../data.tsx";
-import { useHarnessActivity } from "../harnessActivity.ts";
-import { canSendPrompt, harnessInput, sendPrompt } from "../harnessInput.ts";
+import { sendPrompt } from "../harnessInput.ts";
 import { useNudgeOverrides } from "../nudgeStore.ts";
 import type { Harness } from "../types.ts";
+import { useSendGateHint } from "../useSendGateHint.ts";
 import { selectNudge } from "./nudges.ts";
 import { type SignoffStatus, signoffState } from "./signoff.ts";
 
@@ -21,20 +21,11 @@ export const useReviewNudge = (
 	setActionError: (message: string | undefined) => void,
 ) => {
 	const activeCapabilities = activeHarness ? HARNESS_KINDS[activeHarness.kind].capabilities : null;
-	const activeActivity = useHarnessActivity(activeHarness?.id ?? null);
 	const nudgeOverrides = useNudgeOverrides();
 	const nudge = selectNudge(signoffState(signoff, headSha), unresolvedCount, nudgeOverrides);
 	// A display hint for the disabled button only; the daemon decides (#733).
-	const nudgeGate =
-		activeHarness && nudge
-			? canSendPrompt({
-					capabilities: HARNESS_KINDS[activeHarness.kind].capabilities,
-					activity: activeActivity,
-					registered: harnessInput.isRegistered(activeHarness.id),
-					bracketedPasteOn: harnessInput.bracketedPaste(activeHarness.id),
-					body: nudge.body,
-				})
-			: undefined;
+	const sendHint = useSendGateHint(activeHarness?.id ?? null, Boolean(activeHarness && nudge));
+	const nudgeGate = activeHarness && nudge ? sendHint(nudge.body) : undefined;
 	const nudgeDisabledReason = !nudge
 		? "Nothing to nudge about"
 		: nudgeGate && !nudgeGate.ok

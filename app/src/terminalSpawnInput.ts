@@ -116,9 +116,9 @@ export function attachPtyInput(term: Terminal, harnessId: string, id: string): {
 		// #383: a bracketed paste (middle-click, a right-click/
 		// menu paste) never reaches `onKey` below, so it's the
 		// only paste path this store would otherwise miss
-		// entirely. The seam's own `term.paste()` lands here
-		// too — harmless, since the composer read is `unknown`
-		// either way and its own `seamSubmit` clears it.
+		// entirely. The daemon's delivery paste is written to the
+		// PTY directly and never lands here; the webview hears it
+		// via `skein://delivery-seam` (`deliverySeam.ts`).
 		if (data.startsWith("\x1b[200~")) {
 			harnessInput.noteDraftEvent(harnessId, { type: "userPaste" });
 		}

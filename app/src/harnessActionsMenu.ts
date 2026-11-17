@@ -5,8 +5,8 @@
 // in the registry (#358's worktree sweep is the first), always the
 // room's active harness, chosen by the user rather than by review
 // state. Reuses the same seam — `nudgeRegistry.ts` for the list + body
-// resolution, `harnessInput.ts`'s `canSendPrompt` for the per-body
-// safety gate — so a nudge that isn't safe to send right now is
+// resolution, the daemon's send gate (`useSendGateHint.ts`) for the
+// per-body hint — so a nudge that isn't safe to send right now is
 // disabled with the same reason a caller would show anywhere else, not
 // a special case.
 //

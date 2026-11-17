@@ -406,7 +406,6 @@ impl PhaseService {
                 data,
                 empty_composer,
             } => s.machine.record_input(id, &data, empty_composer, now),
-            ClientPhaseInput::PromptSubmitted => s.machine.note_prompt_submitted(id, now),
             ClientPhaseInput::MuteInducedOutput => s.machine.mute_induced_output(id, now),
             ClientPhaseInput::ScreenReading { reading } => {
                 s.machine.set_screen_reading(id, reading);
@@ -423,9 +422,6 @@ impl PhaseService {
             ClientPhaseInput::SessionSwitched { switch } => {
                 s.machine.session_switched(id, switch, now);
             }
-            ClientPhaseInput::RecoverUnheardSilence => {
-                s.machine.recover_unheard_silence(id, now);
-            }
             // These two need the stored room and a liveness check, which only
             // the runner has (`HarnessRunner::client_phase_input`).
             ClientPhaseInput::StartFailed | ClientPhaseInput::RestartRequested { .. } => {
@@ -436,6 +432,16 @@ impl PhaseService {
                 );
             }
         });
+    }
+
+    /// A prompt the daemon's own delivery submitted (#733).
+    pub(crate) fn prompt_submitted(&self, id: &str) {
+        self.with(|s, now| s.machine.note_prompt_submitted(id, now));
+    }
+
+    /// A mail nudge's lost first paste (#404).
+    pub(crate) fn recover_unheard_silence(&self, id: &str) {
+        self.with(|s, now| s.machine.recover_unheard_silence(id, now));
     }
 
     /// `StartFailed` for a harness the caller has verified is stored in

@@ -339,3 +339,82 @@ mod settling {
         assert_eq!(can_send(&f, "x"), Ok(()));
     }
 }
+
+fn insert_code(f: &GateFacts) -> RefusalCode {
+    can_insert(f).expect_err("should refuse").code
+}
+
+#[test]
+fn insert_refuses_permission_spawning_and_exited_with_the_exact_strings() {
+    let f = with_phase(|p| p.phase = ActivityPhase::Permission);
+    let r = can_insert(&f).expect_err("refuse");
+    assert_eq!(r.code, RefusalCode::Permission);
+    assert_eq!(
+        r.reason,
+        "the harness is waiting on a permission dialog \u{2014} a dropped path could answer it"
+    );
+    for (phase, name) in [
+        (ActivityPhase::Spawning, "spawning"),
+        (ActivityPhase::Exited, "exited"),
+    ] {
+        let r = can_insert(&with_phase(|p| p.phase = phase)).expect_err("refuse");
+        assert_eq!(r.code, RefusalCode::NotReady);
+        assert_eq!(
+            r.reason,
+            format!("the harness isn't ready to receive input (currently {name})")
+        );
+    }
+}
+
+#[test]
+fn insert_passes_running_idle_and_waiting_when_watched_and_injected() {
+    for phase in [
+        ActivityPhase::Running,
+        ActivityPhase::Idle,
+        ActivityPhase::Waiting,
+    ] {
+        assert_eq!(
+            can_insert(&with_phase(|p| p.phase = phase)),
+            Ok(()),
+            "{phase:?}"
+        );
+    }
+}
+
+#[test]
+fn insert_skips_the_send_only_checks() {
+    // Not at a stopping point, a question open, a multi-line-free insert
+    // with no paste mode: none of these refuse an insert.
+    let f = with_phase(|p| {
+        p.phase = ActivityPhase::Running;
+        p.question_open = true;
+        p.launch_signal_at = Some(999_999);
+        p.adapter_heard = false;
+    });
+    assert_eq!(can_insert(&f), Ok(()));
+    assert_eq!(code(&f, "x"), RefusalCode::QuestionOpen);
+}
+
+#[test]
+fn insert_needs_a_watched_injected_harness_with_a_terminal() {
+    assert_eq!(
+        insert_code(&with_phase(|p| p.adapter_silent = true)),
+        RefusalCode::NotWatched
+    );
+    assert_eq!(
+        insert_code(&with_phase(|p| p.injected = false)),
+        RefusalCode::NotInjected
+    );
+    assert_eq!(
+        insert_code(&facts(|f| f.kind = HarnessKind::Files)),
+        RefusalCode::NoTerminal
+    );
+    assert_eq!(
+        insert_code(&facts(|f| f.pty_live = false)),
+        RefusalCode::NotReady
+    );
+    assert_eq!(
+        insert_code(&facts(|f| f.phase = None)),
+        RefusalCode::NotReady
+    );
+}

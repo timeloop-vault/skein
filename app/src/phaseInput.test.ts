@@ -66,9 +66,8 @@ describe("store methods forward their phase input", () => {
 });
 
 describe("screen reading feed", () => {
-	it("forwards on change only, for running or waiting non-authoritative harnesses, and null on forget", () => {
+	it("forwards on change only, for running or waiting harnesses, and null on forget", () => {
 		mirrorSet("s", "running");
-		mirrorSet("auth", "running", { authoritative: true });
 		mirrorSet("idle", "idle");
 		let reading: "waiting" | "running" | "unknown" = "running";
 		setScreenPhaseReader(() => reading);

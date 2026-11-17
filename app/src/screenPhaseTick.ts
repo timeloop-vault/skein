@@ -2,9 +2,10 @@
 // (Hermes redraws a clock and a spinner constantly) can't reach L2a idle or
 // an L2b tail match, so the daemon's phase machine moves it between running
 // and waiting from what its rendered screen says. Only the webview has the
-// xterm buffer, so once a second this reads it for every non-authoritative
-// harness that is running or waiting and forwards a CHANGED reading to the
-// daemon, which owns the debounce and every transition.
+// xterm buffer, so once a second this reads it for every harness that is
+// running or waiting and forwards a CHANGED reading to the daemon, which owns
+// the debounce and every transition (and ignores a reading for a harness whose
+// adapter is authoritative). A kind without a screen reader reads "unknown".
 
 import { type PhaseInput, sendPhaseInput } from "./phaseInput.ts";
 import { phaseMirror } from "./phaseMirror.ts";
@@ -45,7 +46,7 @@ export function tickScreenReadings(): void {
 	for (const id of [...forwarded.keys()]) if (!live.has(id)) forward(id, null);
 	for (const id of live) {
 		const a = phaseMirror.get(id);
-		if (!a || a.authoritative) continue;
+		if (!a) continue;
 		if (a.phase !== "running" && a.phase !== "waiting") continue;
 		let reading: ScreenPhase;
 		try {

@@ -84,8 +84,9 @@ impl PhaseMachine {
     /// dialog is simply still open, not silent, and never clears
     /// `permission` or moves phase either way: #86 established that only
     /// a decisive user keystroke is proof a dialog was answered, and a
-    /// programmatic submit is not one. `canSendPrompt` already refuses to
-    /// send into `permission`, but this method doesn't lean on that; it
+    /// programmatic submit is not one. the daemon's send gate
+    /// (`prompt_delivery/gate.rs` `can_send`) already refuses to send into
+    /// `permission`, but this method doesn't lean on that; it
     /// makes the same call on its own terms, independently, since nothing
     /// stops a future caller from invoking it directly. No emit, matching
     /// `record_input`'s own arm path: `prompt_submitted_at` is bookkeeping

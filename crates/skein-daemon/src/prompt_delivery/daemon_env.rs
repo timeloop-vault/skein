@@ -21,7 +21,7 @@ use crate::agent_api::verbs::unread_mail_impl;
 use crate::db::Database;
 use crate::event_sink::{self, SharedEventSink};
 use crate::harness_argv::runs_its_tool;
-use crate::harness_phase::{ClientPhaseInput, PhaseService};
+use crate::harness_phase::PhaseService;
 use crate::room_store::RoomStore;
 
 /// Broadcast when a harness's mail starts or stops being held by the draft
@@ -118,13 +118,11 @@ impl DeliveryEnv for DaemonEnv {
     }
 
     fn note_prompt_submitted(&mut self, harness_id: &str) {
-        self.phase
-            .client_input(harness_id, ClientPhaseInput::PromptSubmitted);
+        self.phase.prompt_submitted(harness_id);
     }
 
     fn recover_unheard_silence(&mut self, harness_id: &str) {
-        self.phase
-            .client_input(harness_id, ClientPhaseInput::RecoverUnheardSilence);
+        self.phase.recover_unheard_silence(harness_id);
     }
 
     fn unread(&self, harness_id: &str) -> Option<UnreadMail> {

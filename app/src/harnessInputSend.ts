@@ -8,16 +8,17 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { HARNESS_KINDS } from "./data.tsx";
+import { checkGate } from "./gateCheck.ts";
 import { harnessActivity } from "./harnessActivity.ts";
 import type { GateResult } from "./harnessInputGate.ts";
-import { canInsertText } from "./harnessInputGate.ts";
+import { checkRegistered } from "./harnessInputGate.ts";
 import { harnessInput } from "./harnessInputRegistry.ts";
 import { mapDeliveryError, mapDeliveryResult } from "./promptDelivery.ts";
 import type { HarnessKind } from "./types.ts";
 
 /// Ask the daemon to send `body` to `harnessId` as a manual prompt (the
 /// review Nudge button, a prompt-library item). The daemon re-checks its own
-/// gate; the `canSendPrompt` a caller rendered is only a display hint.
+/// gate; the `useSendGateHint` a caller rendered is only a display hint.
 export async function sendPrompt(harnessId: string, body: string): Promise<GateResult> {
 	try {
 		return mapDeliveryResult(await invoke("harness_send_prompt", { harnessId, body }));
@@ -37,20 +38,26 @@ export async function deliverMailNow(harnessId: string): Promise<GateResult> {
 }
 
 /// Paste `text` into `harnessId`'s terminal — and only that, never
-/// `submit` — after re-checking `canInsertText` against the *current*
-/// state. #41's drop-a-file caller: a path dropped mid-turn seeds the
-/// input for whatever the user types next, it does not send anything on
-/// the harness's behalf.
-export function insertText(harnessId: string, kind: HarnessKind, text: string): GateResult {
-	const target = harnessInput.target(harnessId);
-	const gate = canInsertText({
+/// `submit` — after the local registration check and the daemon's
+/// `insert` answer for the *current* state. #41's drop-a-file caller: a
+/// path dropped mid-turn seeds the input for whatever the user types next,
+/// it does not send anything on the harness's behalf.
+export async function insertText(
+	harnessId: string,
+	kind: HarnessKind,
+	text: string,
+): Promise<GateResult> {
+	const local = checkRegistered({
 		capabilities: HARNESS_KINDS[kind].capabilities,
 		activity: harnessActivity.get(harnessId),
-		registered: target !== undefined,
+		registered: harnessInput.target(harnessId) !== undefined,
 	});
+	if (local) return local;
+	const gate = await checkGate(harnessId, null, "insert");
 	if (!gate.ok) return gate;
-	// A passing gate required `registered: target !== undefined`, so
-	// `target` is set here by construction.
-	target?.paste(text);
+	// The await may have outlived the terminal; re-read the target.
+	const target = harnessInput.target(harnessId);
+	if (!target) return { ok: false, reason: "this harness's terminal isn't ready yet" };
+	target.paste(text);
 	return gate;
 }

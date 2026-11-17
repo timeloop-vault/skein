@@ -23,19 +23,14 @@
 // bug class.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { PhysicalPosition } from "@tauri-apps/api/dpi";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
-import { HARNESS_KINDS } from "./data.tsx";
-import { harnessActivity } from "./harnessActivity.ts";
-import type { GateResult } from "./harnessInput.ts";
-import { canInsertText, formatDroppedPaths, harnessInput, insertText } from "./harnessInput.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { fitTerminal } from "./terminalFit.ts";
 import type { HarnessKind, LaunchMode } from "./types.ts";
 import { OVERLAY_CLOSED_EVENT } from "./useFocusRestore.ts";
+import { useTerminalDrop } from "./useTerminalDrop.ts";
 import { useTerminalSpawn } from "./useTerminalSpawn.ts";
 import "./LiveTerminal.css";
 
@@ -146,11 +141,6 @@ export const LiveTerminal = ({
 	claimSessionId,
 }: LiveTerminalProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
-	// #41: null while nothing is being dragged over this pane; a
-	// `GateResult` while it is — `ok: true` renders the "will insert"
-	// label, `ok: false` renders the refusal reason. Driven by the
-	// drag-drop effect below, which only subscribes while `visible`.
-	const [dropGate, setDropGate] = useState<GateResult | null>(null);
 	// #158: transient copy/paste feedback — "Copied", "Nothing
 	// selected — …", "Paste failed", etc. `null` renders nothing.
 	// Cleared, and its auto-dismiss timer reset, on every new hint; the
@@ -302,81 +292,8 @@ export const LiveTerminal = ({
 		if (id) void invoke("pty_resize", { id, rows: term.rows, cols: term.cols });
 	}, [fontSize]);
 
-	// #41: native OS file drop, visible-pane only. `dragDropEnabled` in
-	// tauri.conf.json (#271) routes real paths through the webview's own
-	// `onDragDropEvent` instead of the browser's `drop` event, which
-	// carries no paths at all. Subscribed only while `visible` — a
-	// hidden pane (display:none, PTY still alive) shouldn't steal a drop
-	// meant for whichever pane the user is actually looking at.
-	//
-	// `capabilities.pty` is checked here too even though App.tsx only
-	// ever mounts LiveTerminal for pty-capable kinds (`files` renders
-	// FilesBody instead) — belt and suspenders against this component
-	// ever being reused for a non-PTY kind.
-	useEffect(() => {
-		if (!visible || !HARNESS_KINDS[harnessKind].capabilities.pty) return;
-		let cancelled = false;
-		let unlisten: (() => void) | null = null;
-
-		const evaluateGate = (): GateResult =>
-			canInsertText({
-				capabilities: HARNESS_KINDS[harnessKind].capabilities,
-				activity: harnessActivity.get(harnessId),
-				registered: harnessInput.isRegistered(harnessId),
-			});
-
-		// Tauri's drag-drop position is a PhysicalPosition (physical
-		// pixels); getBoundingClientRect() is in CSS (logical) pixels,
-		// so divide by devicePixelRatio before comparing. NOTE: macOS's
-		// reported units for this event are unverified — if drops land
-		// off-target on a Retina display, this hit-test is where to
-		// look first.
-		const insidePane = (position: PhysicalPosition): boolean => {
-			const host = containerRef.current;
-			if (!host) return false;
-			const dpr = window.devicePixelRatio || 1;
-			const x = position.x / dpr;
-			const y = position.y / dpr;
-			const rect = host.getBoundingClientRect();
-			return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
-		};
-
-		void getCurrentWebview()
-			.onDragDropEvent((event) => {
-				if (cancelled) return;
-				const payload = event.payload;
-				if (payload.type === "leave") {
-					setDropGate(null);
-					return;
-				}
-				if (payload.type === "drop") {
-					if (insidePane(payload.position) && payload.paths.length > 0) {
-						const gate = evaluateGate();
-						if (gate.ok) {
-							insertText(harnessId, harnessKind, formatDroppedPaths(payload.paths));
-							termRef.current?.focus();
-						}
-					}
-					setDropGate(null);
-					return;
-				}
-				// `enter` / `over`: show or clear the overlay per hit-test.
-				setDropGate(insidePane(payload.position) ? evaluateGate() : null);
-			})
-			.then((fn) => {
-				if (cancelled) {
-					fn();
-					return;
-				}
-				unlisten = fn;
-			});
-
-		return () => {
-			cancelled = true;
-			unlisten?.();
-			setDropGate(null);
-		};
-	}, [visible, harnessId, harnessKind]);
+	// #41: file drop onto the pane (visible only); the overlay shows the gate answer.
+	const dropGate = useTerminalDrop(harnessId, harnessKind, visible, containerRef, termRef);
 
 	return (
 		<div className="sk-terminal-drop-host">

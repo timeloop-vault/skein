@@ -37,40 +37,6 @@ export interface HarnessActivity {
 	/// #423: epoch ms of the user's last Enter/submit in this PTY. `null`
 	/// until the first.
 	lastSubmitAt: number | null;
-
-	// The send gate: `canSendPrompt` and mail delivery still decide here. This
-	// whole group leaves the wire with #733, which moves those decisions into
-	// the daemon.
-
-	/// True when a harness-native adapter (epic #50 L2c) is wired up. While
-	/// set, only the adapter (plus PTY exit) writes phase transitions.
-	authoritative: boolean;
-	/// Has the L2c adapter delivered at least one event since spawn? Proof it
-	/// is reading the right file / stream. #259.
-	adapterHeard: boolean;
-	/// The watchdog gave up on this harness's adapter and handed phase back
-	/// to L2a. Cleared the moment the adapter does deliver. #259.
-	adapterSilent: boolean;
-	/// #273: epoch ms at which the harness's own CLI reported its launch
-	/// (Claude's `SessionStart` hook). `null` until then; permanent for a
-	/// spawn with injection off. A separate fact from `adapterHeard`: that
-	/// one proves the transcript tail is reading the right file, this one
-	/// does not.
-	launchSignalAt: number | null;
-	/// Epoch ms of the most recent PTY output, `null` until the first chunk.
-	/// The daemon throttles it; the mirror keeps a newer local stamp.
-	lastOutputAt: number | null;
-	/// An opencode `question` prompt is outstanding (#672): the phase reads
-	/// `waiting` but the turn has not ended, so `canSendPrompt` refuses.
-	questionOpen: boolean;
-	/// #277: epoch ms the main transcript's end of turn was deferred because
-	/// subagents or background tasks were still working, or `null` when no
-	/// deferral is armed. Arming changes no phase.
-	delegationDeferredAt: number | null;
-	/// Did #215's config injection happen for this spawn? Without it there
-	/// is no proof the CLI has the review tools wired up, so the #238 nudge
-	/// gate refuses.
-	injected: boolean;
 }
 
 /// Global transition callback: receives every real phase change
