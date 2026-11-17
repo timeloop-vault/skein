@@ -20,10 +20,17 @@
 //! - `user` — a typed prompt or a tool result. When the result is
 //!   the `Agent` tool launching a subagent, `toolUseResult.agentId`
 //!   names the subagent transcript it will write to.
-//! - `cost-state` — Claude's own cumulative roll-up for the session
-//!   (since 2.1.246): total USD, per-model tokens and cost, durations,
-//!   lines changed. Rewritten a handful of times per session; the
-//!   newest row wins, they must never be summed.
+//! - `cost-state` — a PARTIAL SNAPSHOT of Claude's running totals at a
+//!   point in the session (since 2.1.246), not a session roll-up. Written
+//!   at only a few points (apparently on resume after an idle gap;
+//!   inferred), many sessions have none, a row misses every API call
+//!   after it, and the running total restarts in a new process
+//!   (`startTime`). Its `modelUsage` includes subagent models (it covers
+//!   the delegation tree, not the main transcript) and cannot be split
+//!   per node, so per-response attribution comes from the transcripts
+//!   ([`responses`]). Its 5m/1h cache-write split is unreliable; do not
+//!   price from it. Newest row wins within one `startTime`; never sum
+//!   rows of one process.
 //! - `agent-setting` — the agent definition the session runs as
 //!   (`claude --agent <name>` or the `agent` setting). Absent for a
 //!   plain session.
@@ -45,6 +52,9 @@ use crate::time::parse_iso8601_ms;
 pub mod background;
 pub mod cli_version;
 pub mod local_command;
+pub mod responses;
+
+pub use responses::{ResponseFold, responses};
 
 // ── paths ─────────────────────────────────────────────────────────
 
@@ -574,10 +584,11 @@ impl AssistantRow {
         stop_reason_is_terminal(self.stop_reason.as_deref())
     }
 
-    /// Key for collapsing the streamed chunks of one response, which
-    /// each repeat the response's usage. Sum usage over distinct keys,
-    /// not over rows, or cached tokens are counted several times.
-    /// `None` when the row identifies neither message nor request.
+    /// Key shared by the streamed chunks of one response. Every chunk
+    /// repeats the input and cache usage; `output` may grow across
+    /// chunks, so do not keep the first one: fold them with
+    /// [`ResponseFold`]. `None` when the row identifies neither message
+    /// nor request.
     pub fn dedupe_key(&self) -> Option<String> {
         match (&self.message_id, &self.request_id) {
             (Some(m), Some(r)) => Some(format!("{m}:{r}")),
@@ -625,8 +636,14 @@ pub struct ModelUsage {
     pub cost_usd: f64,
 }
 
-/// A `cost-state` row: Claude's own cumulative session totals.
-/// Missing fields read as zero — older Claude versions wrote fewer.
+/// A `cost-state` row: a partial snapshot of Claude's running totals,
+/// NOT a session roll-up. Written at only a few points, so it misses
+/// every API call after it; the total restarts in a new process
+/// (`start_time_ms`); `model_usage` covers the delegation tree
+/// (subagent models included) and cannot be split per node; its 5m/1h
+/// cache-write split is unreliable. Newest row wins within one
+/// `start_time_ms`; never sum rows of one process. Missing fields read
+/// as zero — older Claude versions wrote fewer.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CostState {
@@ -779,30 +796,31 @@ pub struct TranscriptSummary {
     pub agent_setting: Option<String>,
 }
 
-/// Fold rows into a [`TranscriptSummary`]. Usage is summed once per
-/// [`AssistantRow::dedupe_key`]; rows without a key are counted
-/// individually.
+fn count_response(out: &mut TranscriptSummary, a: AssistantRow) {
+    let model = a.model.unwrap_or_else(|| "unknown".to_owned());
+    *out.responses_by_model.entry(model.clone()).or_default() += 1;
+    out.usage_by_model.entry(model).or_default().add(&a.usage);
+}
+
+/// Fold rows into a [`TranscriptSummary`]. Usage is counted once per
+/// API response, folded by [`ResponseFold`]; rows without a key are
+/// counted individually.
 pub fn summarize<I: IntoIterator<Item = Row>>(rows: I) -> TranscriptSummary {
     let mut out = TranscriptSummary::default();
-    let mut seen = HashSet::new();
+    let mut fold = ResponseFold::default();
     for row in rows {
         if let Some(ts) = row.timestamp_ms() {
             out.first_timestamp_ms = Some(out.first_timestamp_ms.map_or(ts, |f| f.min(ts)));
             out.last_timestamp_ms = Some(out.last_timestamp_ms.map_or(ts, |l| l.max(ts)));
         }
+        if let Some(closed) = fold.push(&row) {
+            count_response(&mut out, closed);
+        }
         match row {
             Row::Assistant(a) => {
                 if out.cwd.is_none() {
-                    out.cwd.clone_from(&a.cwd);
+                    out.cwd = a.cwd;
                 }
-                if let Some(key) = a.dedupe_key()
-                    && !seen.insert(key)
-                {
-                    continue;
-                }
-                let model = a.model.unwrap_or_else(|| "unknown".to_owned());
-                *out.responses_by_model.entry(model.clone()).or_default() += 1;
-                out.usage_by_model.entry(model).or_default().add(&a.usage);
             }
             Row::User(u) => {
                 if let Some(spawned) = u.spawned_agent {
@@ -813,6 +831,9 @@ pub fn summarize<I: IntoIterator<Item = Row>>(rows: I) -> TranscriptSummary {
             Row::AgentSetting(name) => out.agent_setting = Some(name),
             Row::Other { .. } => {}
         }
+    }
+    if let Some(closed) = fold.finish() {
+        count_response(&mut out, closed);
     }
     out
 }
