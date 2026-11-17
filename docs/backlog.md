@@ -81,6 +81,33 @@ there). Parked because each is real product surface, not a quick win.
   reloads render scrollback without keeping xterm.js mounted per
   harness. Do after the 16 ms output-coalescing issue lands.
 
+## Reading aids
+
+- **Text highlighting as a reading aid** — Skein is mostly reading
+  (agent output, diffs, the feed, files), and a dense screen makes it
+  easy to lose your place. Two features, kept apart: *reading
+  highlights* (private, throwaway marks, nothing attached) and *comment
+  highlights* (a comment on an exact character span; review comments
+  already anchor on text, but only whole lines can be picked today, so
+  this needs a sub-line anchor model in `skein-review`'s `anchor.rs`).
+  Surfaces surveyed:
+
+  | Surface | Take | Open questions |
+  |---|---|---|
+  | Review diff (`DiffBody`) | Easiest; fits both features | Store per room/file? Re-anchor reading highlights like comments? |
+  | Files editor (CodeMirror 6) | Mark decorations are built in; cheap | Survive edits and reloads? Persist or memory only? |
+  | Live Context feed | Easy to render, but rows scroll away fast | Worth it for short-lived rows? |
+  | Terminals (xterm.js) | Most reading happens here; hardest place | Decorations tie to buffer markers and the CLIs redraw the whole screen, so marks drift or vanish |
+  | Palette, modals, popovers | Probably not worth it | Short text; drop |
+
+  The **reader view** idea: since terminal marks can't be trusted, a
+  separate reader view of the transcript, built from the JSONL/SSE data
+  already ingested, may be the real answer for terminals. Adjacent: a
+  reading ruler / focus mode dimming all but the current line or block,
+  and keyboard-driven highlighting (bindings via `shortcuts.ts`, agreed
+  first). Was issue #302, closed as parked on 2026-11-17; it comes back
+  as an issue if it becomes real.
+
 ## Migration candidates
 
 - **React → Preact** — Preact is ~3 kB vs React's ~45 kB with a
