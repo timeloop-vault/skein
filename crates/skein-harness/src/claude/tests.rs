@@ -12,6 +12,17 @@ fn encode_cwd_matches_claude_scheme() {
     assert_eq!(encode_cwd("D:\\"), "D--");
 }
 
+#[test]
+fn encode_cwd_ignores_trailing_separators() {
+    // #746: a stored trailing separator must not change the dir name.
+    assert_eq!(encode_cwd("C:\\git\\skein\\"), "C--git-skein");
+    assert_eq!(encode_cwd("C:/git/skein/"), "C--git-skein");
+    assert_eq!(encode_cwd("/Users/foo/bar/"), "-Users-foo-bar");
+    // Roots keep their separator.
+    assert_eq!(encode_cwd("/"), "-");
+    assert_eq!(encode_cwd("D:/"), "D--");
+}
+
 // #259: the vectors below come from running Claude Code 2.1.270's
 // own encoder, lifted from its binary, over the same inputs.
 

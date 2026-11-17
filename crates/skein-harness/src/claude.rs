@@ -78,6 +78,15 @@ const MAX_ENCODED_LEN: usize = 200;
 /// `/foo/bar/baz` collide), which is why [`session_exists`] scans
 /// rather than recomputes.
 pub fn encode_cwd(cwd: &str) -> String {
+    // Claude Code records the cwd without a trailing separator, so a
+    // stored `C:/git/skein/` must encode like `C:/git/skein` (#746). A
+    // root (`/`, `C:\`) keeps its separator.
+    let trimmed = cwd.trim_end_matches(['/', '\\']);
+    let cwd = if trimmed.is_empty() || trimmed.ends_with(':') {
+        cwd
+    } else {
+        trimmed
+    };
     let mut out = String::with_capacity(cwd.len());
     for c in cwd.chars() {
         if c.is_ascii_alphanumeric() {
