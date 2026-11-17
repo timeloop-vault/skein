@@ -22,6 +22,7 @@ const room = (
 		activeHarnessId: hs[0]?.id ?? "",
 		...extra,
 	}) as unknown as Room;
+const clone = <T>(v: T): T => structuredClone(v);
 const put = (r: Room): RoomChange => ({ type: "roomPut", room: r });
 const ids = (rs: readonly Room[]) => rs.map((r) => r.id);
 const hids = (r: Room | undefined) => r?.harnesses.map((h) => h.id);
@@ -360,5 +361,31 @@ describe("rebaseRemote: daemon-owned harness keys (#755)", () => {
 		const local = [room("a", [harness("h1", { agent: "mine" })])];
 		const out = rebaseRemote(base, local, [put(room("a", [harness("h1", { agent: "theirs" })]))]);
 		expect(hfield(out.local[0], "agent")).toBe("mine");
+	});
+});
+
+describe("rebaseRemote: daemon-owned room keys (#756)", () => {
+	it("remote revision wins while local has a pending rename", () => {
+		const base = [room("a", [harness("h1")], { revision: 1 })];
+		const local = [room("a", [harness("h1")], { revision: 1, name: "mine" })];
+		const out = rebaseRemote(base, local, [put(room("a", [harness("h1")], { revision: 5 }))]);
+		expect(out.local[0]?.name).toBe("mine");
+		expect(out.local[0]?.revision).toBe(5);
+	});
+
+	it("remote revision wins even when local's differs from the baseline", () => {
+		const base = [room("a", [harness("h1")], { revision: 1 })];
+		const local = [room("a", [harness("h1")], { revision: 2, name: "mine" })];
+		const out = rebaseRemote(base, local, [put(room("a", [harness("h1")], { revision: 7 }))]);
+		expect(out.local[0]?.name).toBe("mine");
+		expect(out.local[0]?.revision).toBe(7);
+	});
+
+	it("with no pending edits the remote room is taken, revision included", () => {
+		const base = [room("a", [harness("h1")], { revision: 1 })];
+		const remote = room("a", [harness("h1")], { revision: 3, name: "theirs" });
+		const out = rebaseRemote(base, clone(base), [put(remote)]);
+		expect(out.local[0]).toEqual(remote);
+		expect(out.baseline[0]).toEqual(remote);
 	});
 });

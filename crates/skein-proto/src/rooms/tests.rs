@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::{Harness, LaunchMode};
+use super::{Harness, LaunchMode, Room};
 
 fn blob(extra: &serde_json::Value) -> serde_json::Value {
     let mut v = json!({
@@ -48,4 +48,23 @@ fn the_tool_form_is_just_a_mode_tag() {
     );
     let back: LaunchMode = serde_json::from_value(json!({"mode": "tool"})).expect("parse");
     assert_eq!(back, LaunchMode::Tool);
+}
+
+#[test]
+fn a_room_blob_without_revision_parses_as_zero() {
+    let v = json!({"id":"r1","name":"r","task":"","status":"idle","badge":0,
+        "harnesses":[],"activeHarnessId":""});
+    let r: Room = serde_json::from_value(v).expect("parse");
+    assert_eq!(r.revision, 0);
+    let back = serde_json::to_value(&r).expect("serialize");
+    assert_eq!(back["revision"], 0, "always serialized");
+}
+
+#[test]
+fn a_room_revision_round_trips_under_its_camel_case_key() {
+    let v = json!({"id":"r1","name":"r","task":"","status":"idle","badge":0,
+        "harnesses":[],"activeHarnessId":"","revision":7});
+    let r: Room = serde_json::from_value(v).expect("parse");
+    assert_eq!(r.revision, 7);
+    assert_eq!(serde_json::to_value(&r).unwrap()["revision"], 7);
 }

@@ -9,6 +9,7 @@
 //! lock so they leave in apply order.
 
 mod apply;
+mod commands;
 mod edit;
 mod persist;
 mod structural;
@@ -18,6 +19,7 @@ mod tests;
 use std::sync::Arc;
 use std::time::Instant;
 
+use skein_proto::room_commands::{RefusedCommand, RoomCommand, RoomRevision, RoomsExecuteOutcome};
 use skein_proto::room_mutations::{
     ROOMS_CHANGED_EVENT, RoomChange, RoomMutation, RoomsApplyOutcome, RoomsChanged, SkippedMutation,
 };
@@ -32,6 +34,16 @@ use persist::{Shared, spawn_driver};
 /// Called after a batch that changed something, with the rooms as that batch
 /// left them, and never under the store lock (see [`RoomStore::observe`]).
 type Observer = Box<dyn Fn(&[Room]) + Send + Sync>;
+
+/// What [`RoomStore::run_batch`] reports back to `apply` and `execute`.
+struct Batch {
+    /// `(index, reason)` of each item that was not applied.
+    refused: Vec<(usize, &'static str)>,
+    /// Each touched room's revision after the batch.
+    revisions: Vec<(String, u64)>,
+    /// The rooms to show the observers.
+    snapshot: Option<Vec<Room>>,
+}
 
 pub struct RoomStore {
     shared: Arc<Shared>,
@@ -137,22 +149,73 @@ impl RoomStore {
         origin: &str,
         mutations: Vec<RoomMutation>,
     ) -> Result<(RoomsApplyOutcome, Option<Vec<Room>>), String> {
+        let batch = self.run_batch(origin, mutations, apply::apply_one)?;
+        let skipped = batch
+            .refused
+            .into_iter()
+            .map(|(index, reason)| SkippedMutation {
+                index,
+                reason: reason.to_owned(),
+            })
+            .collect();
+        Ok((RoomsApplyOutcome { skipped }, batch.snapshot))
+    }
+
+    /// Execute a batch of intent commands in order (#756). Refused wholesale
+    /// until the store is loaded; a refused command is reported by index and
+    /// the rest still run. One `RoomsChanged` event, structural persist or
+    /// debounce and observers as in [`Self::apply`].
+    pub fn execute(
+        &self,
+        origin: &str,
+        commands: Vec<RoomCommand>,
+    ) -> Result<RoomsExecuteOutcome, String> {
+        let ctx = commands::Ctx {
+            now_ms: commands::now_ms(),
+        };
+        let batch = self.run_batch(origin, commands, |rooms, c| {
+            commands::execute_one(rooms, c, &ctx)
+        })?;
+        self.notify_observers(batch.snapshot);
+        Ok(RoomsExecuteOutcome {
+            refused: batch
+                .refused
+                .into_iter()
+                .map(|(index, reason)| RefusedCommand {
+                    index,
+                    reason: reason.to_owned(),
+                })
+                .collect(),
+            revisions: batch
+                .revisions
+                .into_iter()
+                .map(|(room_id, revision)| RoomRevision { room_id, revision })
+                .collect(),
+        })
+    }
+
+    /// The batch loop shared by `apply` and `execute`: runs `one` per item
+    /// under the store lock, bumps the revision of every touched room once,
+    /// emits the one event and persists.
+    fn run_batch<T>(
+        &self,
+        origin: &str,
+        items: Vec<T>,
+        mut one: impl FnMut(&mut Vec<Room>, T) -> Result<apply::Applied, &'static str>,
+    ) -> Result<Batch, String> {
         let mut st = self.shared.lock();
         if !st.loaded {
             return Err("rooms store not ready: no rooms load has succeeded yet".into());
         }
         let now = Instant::now();
-        let mut skipped = Vec::new();
+        let mut refused: Vec<(usize, &'static str)> = Vec::new();
         let mut touched: Vec<String> = Vec::new();
         let mut removed: Vec<String> = Vec::new();
         let mut order = false;
         let mut structural = false;
-        for (index, m) in mutations.into_iter().enumerate() {
-            match apply::apply_one(&mut st.rooms, m) {
-                Err(reason) => skipped.push(SkippedMutation {
-                    index,
-                    reason: reason.to_owned(),
-                }),
+        for (index, m) in items.into_iter().enumerate() {
+            match one(&mut st.rooms, m) {
+                Err(reason) => refused.push((index, reason)),
                 Ok(a) => {
                     order |= a.order;
                     structural |= a.structural;
@@ -178,8 +241,13 @@ impl RoomStore {
             .into_iter()
             .map(|room_id| RoomChange::RoomRemoved { room_id })
             .collect();
+        let mut revisions = Vec::with_capacity(touched.len());
         for id in &touched {
-            if let Some(room) = st.rooms.iter().find(|r| r.id == *id) {
+            // The one bump per touched room per batch, before the clone, so
+            // the event and the persisted row carry the new revision.
+            if let Some(room) = st.rooms.iter_mut().find(|r| r.id == *id) {
+                room.revision += 1;
+                revisions.push((id.clone(), room.revision));
                 changes.push(RoomChange::RoomPut { room: room.clone() });
             }
         }
@@ -189,7 +257,6 @@ impl RoomStore {
                 room_ids: st.rooms.iter().map(|r| r.id.clone()).collect(),
             });
         }
-        let outcome = RoomsApplyOutcome { skipped };
         if changes.is_empty() {
             // A retry of mutations whose first attempt failed to persist is
             // answered as skipped; an Ok must still mean the earlier change
@@ -197,10 +264,18 @@ impl RoomStore {
             if st.is_dirty() {
                 self.shared.persist_or_rearm(&mut st)?;
             }
-            return Ok((outcome, None));
+            return Ok(Batch {
+                refused,
+                revisions,
+                snapshot: None,
+            });
         }
         let snapshot = self.commit_changes(&mut st, origin, changes, structural, now)?;
-        Ok((outcome, snapshot))
+        Ok(Batch {
+            refused,
+            revisions,
+            snapshot,
+        })
     }
 
     /// The shared tail of a batch that changed something, under the store

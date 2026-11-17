@@ -1264,8 +1264,10 @@ the store and must not block.
   `PutHarness`. A stale client put can overwrite a daemon write to those
   three: the boot's `cmd` cleanup, a cleared claim. The boot's stale
   check protects the other direction only. #754 took the port out of
-  `cmd` (it was the boot's fresh port in #755's own time); #756 adds
-  intent commands with a revision.
+  `cmd` (it was the boot's fresh port in #755's own time); #756 added
+  intent commands with a revision (see "Intent commands and a per-room
+  revision (#756)"), but the webview does not send them yet (#758), so
+  this window stays until it does.
 - The window between a session report and its `rooms-changed` event is
   narrowed by `app/src/reportedSessions.ts`: the client's capture/follow
   decisions and the claimed-session set use a reported id until the
@@ -1292,9 +1294,10 @@ the store and must not block.
 - #754 (C) shipped: the opencode port moved out of `cmd` to the spawn, and
   boot's port step became the legacy cleanup (see "Opencode port at spawn
   (#754)").
-- #756 (E) adds intent commands, each with a revision. The edit path is
-  what they call: one closure per harness under the store lock, with the
-  event, persistence and observers already shared.
+- #756 (E) shipped: intent commands and a per-room revision (see "Intent
+  commands and a per-room revision (#756)"). The edit path got the same
+  revision bump, and `RestartHarness` and the ensure `run_shell` option
+  are the launch writes.
 - #758 (G) builds on the same edit path.
 - `harness_session_report` is the first intent-shaped command: the client
   says what it saw, the daemon decides what the record becomes.
@@ -1391,6 +1394,211 @@ Known limits:
 Seams for the follow-ups: #756 removes the stored `cmd` and the
 `expectCmd` check; with the port gone from it, the only reason left to
 store an opencode `cmd` at all is the legacy shape the cleanup removes.
+
+## Intent commands and a per-room revision (#756)
+
+`RoomMutation` (slice 1) says what a record should look like: a whole room,
+a whole harness. Two clients that each send the whole record overwrite each
+other's fields, and every rule about what a change means (what archiving
+clears, which harness becomes active when one closes) lived in TypeScript,
+so a second client or the daemon itself had to copy it. #756 adds the other
+shape: a `RoomCommand` says what the caller means, and the daemon works out
+the record. It also gives every room a revision, which a field patch uses to
+refuse a write made against stale data.
+
+The wire types are in `crates/skein-proto/src/room_commands.rs`
+(`RoomCommand`, `ClosedByRef`, `RoomsExecuteOutcome`). The logic is
+`room_store/commands.rs` (`execute_one`) and `RoomStore::execute`
+(`room_store/mod.rs`). `execute` and `apply` share one batch loop,
+`run_batch`: commands run in order under the store lock, a refused one is
+reported by index and the rest still run, and the batch ends with one
+`rooms-changed` event, a structural persist or a debounce, and the
+observers. The store must have loaded, as for `apply`.
+
+```mermaid
+flowchart TD
+    A["client: rooms_apply, legacy"] --> S["the store lock"]
+    B["client: rooms_execute, commands"] --> S
+    C["four agent verbs: execute_all"] --> S
+    D["runner, boot, session report: edits"] --> S
+    E["ensure with run_shell"] --> D
+    S --> R["revision +1 per touched room"]
+    R --> P["persist rows"]
+    R --> V["one rooms-changed event"]
+    V --> X["every client: skip own echo, rebase"]
+```
+
+Figure 15: the write paths into the room store after #756. Renders this
+section and crates/skein-daemon/src/room_store/{mod,commands,apply,edit}.rs;
+the text is authoritative (non-normative).
+
+1. The webview still sends whole-record mutations through `rooms_apply`.
+2. `rooms_execute` takes a batch of commands. No webview code calls it yet.
+3. The four agent verbs send commands through `execute_all`.
+4. The runner write-back, boot preparation and the session report write
+   field-level edits (`edit_harness`, `edit_harnesses`). Ensure with
+   `run_shell` is one such edit, made by the runner.
+5. All of them meet at the store lock.
+6. Each room the batch or call touched gets its revision raised by one,
+   before the room is cloned into the change.
+7. Rows are persisted (at once for a structural change, debounced
+   otherwise) and one event goes out, carrying the new revision.
+8. Every client applies it; the sender skips its own echo.
+
+### The commands
+
+An unknown room is refused as `unknown_room` by every command that names
+one (all but `CreateRoom` and `ReorderRooms`).
+
+| Command | What it changes | Refused as |
+| --- | --- | --- |
+| `CreateRoom` | Appends a whole room with its harnesses. The revision in the payload is ignored | `exists` |
+| `RenameRoom` | `name` | none |
+| `ArchiveRoom` | `archived` = the daemon's clock (epoch ms, read once per batch); `closedBy` = the given `{roomId, harnessId?}` with `at` the same ms, or cleared when none is given | `already_archived` |
+| `UnarchiveRoom` | Clears `archived`, `retired` and `closedBy` | `not_archived` |
+| `ReorderRooms` | Room order; named ids first in the given order, unknown ids ignored, the rest keep their relative order after them | none |
+| `AddHarness` | Appends a harness; `activate` also sets `activeHarnessId` | `exists` (the id is used by a harness in any room) |
+| `CloseHarness` | Removes the harness; if it was active, the first remaining one becomes active, or `""` | `absent` |
+| `RestartHarness` | Clears `launch` and `shellClaim` (the record half of Restart harness) | `unknown_harness` |
+| `SetHarnessAgent` | `agent`; none means the tool's own default; takes effect at the next spawn | `unknown_harness` |
+| `ReorderHarnesses` | Harness order in the room, same rule as `ReorderRooms` | none |
+| `PatchRoom` | Room-level fields by key, see below | `owned_field`, `stale_revision`, `invalid_patch` |
+| `PatchHarness` | One harness's fields by key | `owned_field`, `unknown_harness`, `stale_revision`, `invalid_patch` |
+
+A command that leaves the room JSON-identical (a rename to the same name,
+a restart of a harness with no launch or claim) touches nothing: no bump,
+no event.
+
+### Patches
+
+`PatchRoom` and `PatchHarness` carry `fields`, a map of top-level camelCase
+keys, and an `expectedRevision`. Each key replaces that key of the
+serialized record; a JSON `null` removes the key, which clears an optional
+field. The result must parse back into a `Room` or `Harness`; if it does
+not, or if a key is not a field of the record, the patch is refused as
+`invalid_patch` and nothing changes. Keys the
+patch may not set make the whole patch `owned_field`: for a room `id`,
+`harnesses` and `revision`, for a harness `id`, `kind`, `sessionId` and
+`opencodeVersion` (the daemon's, #755; a running process must not disagree
+with its record about the kind). An empty `fields` map is a no-op,
+not a refusal.
+
+The checks run in this order: the room exists, the owned keys, for a
+harness patch that the harness exists, the revision, then the merge. A
+revision that is not the room's current one is `stale_revision`: the patch
+is refused, not merged, even if the fields it names were not the ones that
+changed. The current revision is the one the batch started with, because
+the bump happens after the batch, so two patches in one batch that name the
+same revision both pass.
+
+### The revision
+
+`Room.revision` is a `u64`, `#[serde(default)]`, so old blobs read as 0. It
+is stored in the room's row.
+
+- The store bumps it by one for each room a write touched, once per batch
+  or call: `apply`, `execute` and `edit_harness(es)` all do. The bump is
+  under the lock, before the room is cloned into the `RoomPut`, so the
+  event and the persisted row carry the new value. A command or an edit
+  that changes nothing bumps nothing (a legacy mutation is the exception,
+  see the known limits).
+- No client can set it. A legacy `UpdateRoom` keeps the stored value. A new
+  room, by `CreateRoom` through `apply` or `execute`, starts from 0 whatever
+  the payload says, so it is at 1 after the batch that created it. Loading
+  keeps what the rows carry.
+- It is not part of the structural key: a bump alone does not force an
+  immediate persist.
+- `RoomsExecuteOutcome.revisions` lists the new revision of every room the
+  batch touched. A client uses it to know that the event for its own batch
+  carries nothing it lacks, so it can skip its own echo.
+
+Intents carry no revision. A rename, an archive or an agent change is a
+field-level write, so two clients sending different intents for one room
+both land and neither is refused. The test is
+`two_clients_editing_different_fields_both_land` (`room_store/tests/revision.rs`);
+the patch and command cases are in `tests/commands.rs` and `tests/patches.rs`.
+Only a patch, which replaces a field's value on the strength of what the
+caller last read, needs the revision.
+
+### The first users
+
+The four agent verbs write through `execute_all`
+(`agent_api/verbs/close_apply.rs`), one batch each, origin `daemon-agent`:
+`create_room` sends `CreateRoom`, `open_harness` sends `AddHarness`,
+`close_harness` sends `CloseHarness` and `close_room` sends `ArchiveRoom`
+with the `closedBy` of its caller. A refused command is a `not_found`
+refusal of the verb, never a success. The store now stamps the archive time
+from its own clock; the verb no longer reads one.
+
+`rooms_execute` (`app/src-tauri/src/commands/rooms.rs`) hands a batch to
+`RoomStore::execute` and returns the outcome. It is registered in
+`lib.rs`, and the webview does not call it yet (#758).
+
+### Run shell as an ensure option
+
+"Press Enter for shell" was a client `PutHarness` that set `launch` and
+cleared `shellClaim`, then an ensure. `EnsureRequest.run_shell`
+(`Option<Vec<String>>`, wire name `runShell`;
+`harness_runner/run_shell.rs`) asks for both in one call. Under the
+harness's spawn gate, the runner makes one field-level edit (origin
+`daemon-runner`) that sets `launch = Shell { argv }` and clears
+`shellClaim`. `cmd` and `sessionId` are not written. The request then
+proceeds as a restart whatever `restart` says: a running process is stopped
+and the shell is spawned.
+
+- `expect_cmd` is still checked, before anything is written, and a
+  mismatch is `stale_record`.
+- `expect_launch` is not checked with `run_shell`: the launch the caller
+  expects is the one it asks for.
+- An empty argv is refused as `empty_shell_argv` (`Refusal::EmptyShellArgv`).
+- A refused request writes nothing. Before the edit, the runner builds the
+  spawn plan on a copy of the record as it would be after the switch, so
+  `folder_missing`, `repo_mismatch` and `no_cmd` are found first. A spawn
+  that fails after the plan was accepted (the OS could not start the
+  process) is not a refusal and leaves the record in shell mode, as a
+  failed tool spawn leaves its record.
+
+### Client side in this step
+
+Only `revision`. `DAEMON_OWNED_ROOM_KEYS` (`roomMutations.ts`) makes
+`diffRooms` ignore it, and the rebase (`roomsRebase.ts`) takes the daemon's
+value. `Room.revision` is optional in `types.ts`. Nothing else changed in
+the webview.
+
+### Known limits
+
+- The webview still sends whole-record `RoomMutation`s through
+  `rooms_apply`, so the lost-update windows the #755 section lists remain
+  until #758 moves it onto the commands.
+- A legacy `UpdateRoom`, `PutHarness` or `ReorderHarnesses` counts as a
+  touch even when it changes nothing, as it did before #756, so it bumps
+  the revision and a patch built just before it is refused as
+  `stale_revision` for no real change. It ends with the legacy path (#758).
+- A room removed and created again under the same id starts at revision 1
+  again, so a patch held from the old room could pass the check.
+- `RoomsChanged` has no sequence number, so a client cannot tell that it
+  missed an event or that two arrived out of order (#757).
+- `RestartHarness` is the record half only. The process restart is still
+  the ensure `restart` flag; a restart generation is #759.
+- A client's own copy of `revision` lags, because it skips its own echo and
+  learns the value only from the outcome or the next event. A patch built
+  from a lagging copy is refused as `stale_revision`.
+- `UnarchiveRoom` through the command clears the three fields and does not
+  run the resume rewrite (`rooms_resume_cmds`). It does not need to for
+  correctness, since the spawn derives its argv from the record (#752).
+
+### Seams for the follow-ups
+
+- #757 adds a sequence number to `RoomsChanged`; the revision is per room
+  and does not replace it.
+- #758 moves the webview onto `rooms_execute` and removes the whole-record
+  path from it; its patches carry `expectedRevision`, taken from the
+  outcome and the events.
+- #759 adds a restart generation, so that `RestartHarness` and the process
+  restart are one intent.
+- Boot preparation still writes `launch`, `shellClaim` and `cmd` by edit.
+  The follow-up that removes that can rely on `RestartHarness` and
+  `run_shell` for the launch writes.
 
 ## Slice 4 as built (#732)
 

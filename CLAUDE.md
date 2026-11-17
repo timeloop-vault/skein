@@ -105,7 +105,8 @@ will tell you:
     ├── crates/skein-proto/          # Wire types skeind and its clients share (#580, epic #575).
     │   └── src/lib.rs               #   Pure data, serde only: the Room/Harness family (rooms),
     │                                #   RoomMutation/RoomChange/RoomsChanged (room_mutations,
-    │                                #   #729), HarnessEvent/HarnessAction (harness_log), HarnessKind,
+    │                                #   #729), RoomCommand/RoomsExecuteOutcome (room_commands,
+    │                                #   #756), HarnessEvent/HarnessAction (harness_log), HarnessKind,
     │                                #   PendingDto/TranscriptStatDto (resume), DropReason
     │                                #   (spawn_env), and PROTO_VERSION. No handshake (#584), no
     │                                #   framing (transport phase, #585/#582)
@@ -151,7 +152,9 @@ will tell you:
     │                                #   archive or removal) and daemon_handles.rs (store,
     │                                #   runner, harness config). #729 added room_store/ (the
     │                                #   in-memory authoritative RoomStore: apply, structural,
-    │                                #   persist; #755 added edit, the field-level path) and
+    │                                #   persist; #755 added edit, the field-level path; #756
+    │                                #   added commands, the intent path behind
+    │                                #   `RoomStore::execute`, and the per-room revision) and
     │                                #   db/room_rows (per-row writes).
     │                                #   #730 added harness_argv/ (cmd_for_kind, resume,
     │                                #   remote, agent_check, opencode_v2, plan: the argv
@@ -628,7 +631,18 @@ will tell you:
   client reports what it observed through `harness_session_report`
   (capture / replace / clear, origin `daemon-session`), seeing the result
   on `rooms-changed`. `cmd`, `launch` and `shellClaim` are still
-  client-written (#754, #756). **Field policy: every field
+  written by the webview through `PutHarness` (#754; the daemon has
+  `run_shell` on ensure and the `RestartHarness` command for `launch` and
+  `shellClaim`; the client moves in #758). **Per-room revision and
+  intent commands (#756):** `Room.revision` is daemon-owned: every write
+  path (`apply`, `execute`, `edit_harness(es)`) bumps it once per touched
+  room, a client value is ignored (`DAEMON_OWNED_ROOM_KEYS` in the diff
+  and the rebase), and a new room starts at 1. `rooms_execute` /
+  `RoomStore::execute` take `RoomCommand`s (rename, archive, add/close
+  harness, patches, ...); `PatchRoom`/`PatchHarness` are refused, never
+  merged, on a stale `expectedRevision`; other intents carry none. The
+  four agent verbs write through them; the webview still syncs through
+  `rooms_apply` until #758. See docs/skeind-p2-design.md. **Field policy: every field
   added to Room/Harness after v0.2.5 MUST be `#[serde(default)]` or
   `Option`** — a required field makes old blobs unparseable.
   `repoRoot` (the #76 group key) is set at create and re-derived at
@@ -1028,7 +1042,7 @@ will tell you:
   that opens a whole new room and spawns a real harness in it, in the
   background (`activate: false`, so it never takes over the user's
   screen) — since #734 the daemon does it itself over the `RoomStore`
-  (origin `daemon-agent`) and the `HarnessRunner`, with no webview
+  as commands (#756, origin `daemon-agent`) and the `HarnessRunner`, with no webview
   round trip: it resolves `(kind, agent)` (claude and the daemon's
   per-kind default agent unless given; the per-folder memory and the
   branch template in webview localStorage are not used) so a `prompt`
@@ -1261,9 +1275,9 @@ the agent API from a shell harness); macOS isn't covered yet.
 - **Tests live with the code that owns them.**
   `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `crates/skein-review` has 45; `crates/skein-daemon` has 2,218
+  `crates/skein-review` has 45; `crates/skein-daemon` has 2,285
   in-module tests on Windows (db persistence, spawn-env merging, resume
-  probes, harness JSONL/SSE parsers, pty, the agent API, …); `crates/skein-proto` has the 4 harness_kind tests;
+  probes, harness JSONL/SSE parsers, pty, the agent API, …); `crates/skein-proto` has 22 (harness_kind, the room wire types);
   `app/src-tauri` has ~70 in-module unit tests that run on Windows
   (the client-only code: open requests, CLI shim, updater proxy, terminal paths, perf); in both, more sit
   in source `cfg`-gated per OS (#202). All run in the hook

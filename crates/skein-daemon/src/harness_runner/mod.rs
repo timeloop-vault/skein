@@ -31,6 +31,7 @@ mod events;
 mod gates;
 mod phase_tap;
 mod record;
+mod run_shell;
 
 pub use self::record::{SESSION_REPORT_ORIGIN, SessionReport};
 
@@ -118,6 +119,19 @@ pub struct EnsureRequest {
     /// record reads as `Tool`). When set and different, the request is
     /// refused as `stale_record`, like `expect_cmd`.
     pub expect_launch: Option<LaunchMode>,
+    /// "Press Enter for shell" (#756; wire name `runShell`). When `Some(argv)`
+    /// the daemon switches the harness to the post-exit shell: one field-level
+    /// edit (origin `daemon-runner`) sets `launch = Shell { argv }` and clears
+    /// `shell_claim`, under the spawn gate, and the request then proceeds as a
+    /// restart whatever `restart` says (a running process is stopped and the
+    /// shell spawned). `cmd` and `session_id` are not written. An empty argv is
+    /// refused (`empty_shell_argv`). `expect_launch` is not checked: the launch
+    /// the caller expects is the one it asks for. `expect_cmd` still is.
+    /// A request refused for any reason (the lookup, `expect_cmd`, `no_cmd`,
+    /// `folder_missing`, `repo_mismatch`, `empty_shell_argv`) writes nothing.
+    /// A spawn that fails after the edit (`spawn_failed`) is not a refusal and
+    /// leaves the record in shell mode.
+    pub run_shell: Option<Vec<String>>,
 }
 
 /// "Does this harness's stored session still exist?" The runner asks it at
@@ -327,6 +341,11 @@ impl HarnessRunner {
         let gate = self.spawn_gate(&req.harness_id);
         let _one_at_a_time = gate.lock();
 
+        if let Some(argv) = &req.run_shell {
+            self.switch_to_shell(req, argv)?;
+        }
+        let restart = req.restart || req.run_shell.is_some();
+
         let rooms = self.store.rooms();
         let (room, harness, kind) =
             lookup(&rooms, &req.room_id, &req.harness_id).map_err(EnsureError::Refused)?;
@@ -336,7 +355,8 @@ impl HarnessRunner {
         {
             return Err(EnsureError::Refused(Refusal::StaleRecord));
         }
-        if let Some(expect) = &req.expect_launch
+        if req.run_shell.is_none()
+            && let Some(expect) = &req.expect_launch
             && harness.launch.clone().unwrap_or(LaunchMode::Tool) != *expect
         {
             return Err(EnsureError::Refused(Refusal::StaleRecord));
@@ -345,7 +365,7 @@ impl HarnessRunner {
         let existing = self.entries.lock().get(&req.harness_id).cloned();
         let mut sink = sink;
         if let Some(run) = existing {
-            if !req.restart && self.pty_known(&run.pty_id) {
+            if !restart && self.pty_known(&run.pty_id) {
                 let mut attach_id = None;
                 let exit = match sink.take() {
                     Some(s) => {

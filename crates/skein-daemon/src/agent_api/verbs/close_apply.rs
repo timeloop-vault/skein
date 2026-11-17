@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use serde::Deserialize;
-use skein_proto::room_mutations::RoomMutation;
+use skein_proto::room_commands::RoomCommand;
 use skein_proto::rooms::Room;
 
 use super::shared::frontend_error;
@@ -100,15 +100,16 @@ pub(super) async fn lock_verbs(
     Ok((lock.lock().await, store))
 }
 
-/// Apply `mutations` as one batch; any entry the store skips is a refusal
-/// (`not_found`), never a success. `what` names the thing for the message.
-pub(super) fn apply_all(
+/// Run `commands` as one batch (#756); any command the store refuses is a
+/// refusal of the verb (`not_found`), never a success. `what` names the thing
+/// for the message.
+pub(super) fn execute_all(
     store: &RoomStore,
-    mutations: Vec<RoomMutation>,
+    commands: Vec<RoomCommand>,
     what: &str,
 ) -> VerbResult<()> {
-    let outcome = store.apply(ORIGIN, mutations).map_err(super::internal)?;
-    if let Some(skipped) = outcome.skipped.first() {
+    let outcome = store.execute(ORIGIN, commands).map_err(super::internal)?;
+    if let Some(skipped) = outcome.refused.first() {
         return Err(VerbError::NotFound(format!(
             "not_found: {what} could not be changed ({})",
             skipped.reason

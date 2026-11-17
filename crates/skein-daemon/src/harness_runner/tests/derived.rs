@@ -80,6 +80,7 @@ fn an_unexpected_launch_mode_is_refused_as_stale() {
                 restart: false,
                 expect_cmd: None,
                 expect_launch,
+                run_shell: None,
             },
             None,
         )

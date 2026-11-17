@@ -69,6 +69,7 @@ pub fn room(harnesses: Vec<Harness>) -> Room {
         retired: None,
         repo_identity: None,
         todos: None,
+        revision: 0,
     }
 }
 

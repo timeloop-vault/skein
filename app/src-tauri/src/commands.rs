@@ -25,7 +25,7 @@
 //! - `fs` — the Files overlay's list / read / write commands (#185, #409).
 //! - `git` — the git commands: repo inspection, worktrees, status, diff and
 //!   the two watchers.
-//! - `rooms` — `db_load_rooms` / `rooms_apply` / `rooms_flush`.
+//! - `rooms` — `db_load_rooms` / `rooms_apply` / `rooms_execute` / `rooms_flush`.
 //! - `todos` — `db_load_global_todos` / `db_save_global_todos` (#335).
 //! - `spawn_env` — `SpawnEnvState`, the Settings environment commands,
 //!   agent discovery, and the default shell / home / cwd lookups.

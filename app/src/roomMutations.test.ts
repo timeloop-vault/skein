@@ -277,3 +277,18 @@ describe("diffRooms: daemon-owned harness keys (#755)", () => {
 		expect((out[0] as { room: Room }).room.harnesses[0]?.sessionId).toBe("s");
 	});
 });
+
+describe("diffRooms: daemon-owned room keys (#756)", () => {
+	it("a revision-only difference emits nothing", () => {
+		expect(diffRooms([room("r1")], [room("r1", ["h1"], { revision: 4 })])).toEqual([]);
+		expect(
+			diffRooms([room("r1", ["h1"], { revision: 1 })], [room("r1", ["h1"], { revision: 2 })]),
+		).toEqual([]);
+	});
+
+	it("a name change plus revision emits one updateRoom", () => {
+		const next = room("r1", ["h1"], { name: "renamed", revision: 2 });
+		const ms = diffRooms([room("r1", ["h1"], { revision: 1 })], [next]);
+		expect(types(ms)).toEqual(["updateRoom"]);
+	});
+});

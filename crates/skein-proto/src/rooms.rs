@@ -208,6 +208,11 @@ pub struct Room {
     /// unknown keys survive a round trip and Rust never needs a schema.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub todos: Option<Vec<serde_json::Value>>,
+    /// #756: bumped by the daemon's store once per batch that touches this
+    /// room. No client can set it: a legacy update keeps the stored value
+    /// and a create starts from 0. Old blobs parse as 0.
+    #[serde(default)]
+    pub revision: u64,
 }
 
 /// What stays the same about a repository across clones and worktrees

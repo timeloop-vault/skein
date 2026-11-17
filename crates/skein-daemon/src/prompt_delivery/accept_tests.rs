@@ -96,6 +96,7 @@ fn room(id: &str, harnesses: Vec<Harness>) -> Room {
         created_by: None,
         closed_by: None,
         todos: None,
+        revision: 0,
         retired: None,
         repo_identity: None,
     }

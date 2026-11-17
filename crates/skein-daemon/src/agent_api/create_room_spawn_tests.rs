@@ -101,9 +101,16 @@ async fn create_room_with_no_client_spawns_a_harness_whose_phase_and_events_upda
         .into_iter()
         .find(|r| r.id == out.room_id)
         .map(|r| r.harnesses.iter().any(|h| h.id == out.harness_id));
+    let revision = daemon
+        .rooms
+        .rooms()
+        .into_iter()
+        .find(|r| r.id == out.room_id)
+        .map(|r| r.revision);
     daemon.harness_runner.stop_harness(&out.harness_id);
 
     assert_eq!(stored, Some(true), "the new room is not in the store");
+    assert!(revision > Some(0), "went through the intent path");
     assert!(alive, "the new room's harness has no live process");
     assert!(moved, "the phase never left spawning: {phase:?}");
     assert!(!rows.is_empty(), "no harness_events row was written");

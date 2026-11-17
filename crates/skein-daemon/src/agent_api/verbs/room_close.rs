@@ -4,10 +4,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use skein_proto::room_mutations::RoomMutation;
-use skein_proto::rooms::ClosedBy;
+use skein_proto::room_commands::{ClosedByRef, RoomCommand};
 
-use super::close_apply::{apply_all, lock_verbs, refuse_unsaved_files, store_of};
+use super::close_apply::{current_room, execute_all, lock_verbs, refuse_unsaved_files, store_of};
 use super::harness_build::open_room;
 use super::review::signoff_block;
 use super::{VerbError, VerbResult, internal};
@@ -210,18 +209,20 @@ async fn archive(
     // client change made meanwhile (a rename, a badge) is not written back
     // over, and a concurrent verb's result is seen.
     let (_guard, store) = lock_verbs(state).await?;
-    let mut room = open_room(store, room_id)?;
-    let now = crate::review::now_ms();
-    room.archived = Some(now);
-    room.closed_by = Some(ClosedBy {
-        room_id: closed_by.room_id.clone(),
-        harness_id: closed_by.harness_id.clone(),
-        at: now,
-    });
-    apply_all(
+    open_room(store, room_id)?;
+    execute_all(
         store,
-        vec![RoomMutation::UpdateRoom { room }],
+        vec![RoomCommand::ArchiveRoom {
+            room_id: room_id.to_owned(),
+            closed_by: Some(ClosedByRef {
+                room_id: closed_by.room_id.clone(),
+                harness_id: closed_by.harness_id.clone(),
+            }),
+        }],
         &format!("room \"{room_id}\""),
     )?;
-    Ok(now)
+    // The store stamped the time; read it back so the reply cannot disagree.
+    current_room(store, room_id)
+        .and_then(|r| r.archived)
+        .ok_or_else(|| VerbError::NotFound(format!("not_found: room \"{room_id}\" not found")))
 }

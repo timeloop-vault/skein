@@ -108,7 +108,8 @@ impl RoomStore {
         for id in &touched {
             st.unmark_removed(id);
             st.mark_room(id);
-            if let Some(room) = st.rooms.iter().find(|r| r.id == *id) {
+            if let Some(room) = st.rooms.iter_mut().find(|r| r.id == *id) {
+                room.revision += 1; // once per touched room per call (#756)
                 changes.push(RoomChange::RoomPut { room: room.clone() });
             }
         }

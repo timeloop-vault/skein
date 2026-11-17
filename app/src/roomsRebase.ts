@@ -6,6 +6,7 @@
 import { applyRoomChanges } from "./roomChanges";
 import {
 	DAEMON_OWNED_HARNESS_KEYS,
+	DAEMON_OWNED_ROOM_KEYS,
 	deepEqual,
 	LOCAL_ONLY_HARNESS_KEYS,
 	type RoomChange,
@@ -121,6 +122,7 @@ function rebaseRoom(base: Room | undefined, local: Room, remote: Room): Room {
 		{ ...rest },
 		{ ...remote, harnesses: undefined },
 		[],
+		DAEMON_OWNED_ROOM_KEYS,
 	);
 	merged.harnesses = rebaseHarnesses(base.harnesses, local.harnesses, remote.harnesses);
 	const room = merged as unknown as Room;

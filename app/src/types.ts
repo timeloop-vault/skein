@@ -154,6 +154,8 @@ export interface Room {
 	badge: number;
 	harnesses: Harness[];
 	activeHarnessId: string;
+	// Daemon-owned per-room revision (#756): bumped by the daemon on every change, never written by the client.
+	revision?: number;
 	cwd?: string;
 	// Branch and repo display label are present only for git-backed
 	// rooms (chapter 6 phase 3). When `branch` is set the room renders

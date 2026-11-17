@@ -33,13 +33,17 @@ mod opencode_port;
 mod phase;
 mod record_race;
 mod refusals;
+mod run_shell;
 mod shell_tail;
 mod stops;
 
-struct NoEvents;
+/// Keeps every event emitted, oldest first, as (name, JSON payload).
+#[derive(Default)]
+struct NoEvents(Mutex<Vec<(String, String)>>);
 
 impl EventSink for NoEvents {
-    fn emit_json(&self, _event: &str, _payload: String) -> Result<(), String> {
+    fn emit_json(&self, event: &str, payload: String) -> Result<(), String> {
+        self.0.lock().push((event.to_owned(), payload));
         Ok(())
     }
 }
@@ -179,6 +183,7 @@ struct Fx {
     work: PathBuf,
     /// Stands in for the user's home: Claude transcripts live under it.
     home: PathBuf,
+    events: Arc<NoEvents>,
 }
 
 impl Fx {
@@ -196,12 +201,13 @@ impl Fx {
         };
         let env = Arc::new(spawn_env(&paths, Probe::Skip).unwrap());
         let client = Arc::new(NoClient);
+        let events = Arc::new(NoEvents::default());
         let daemon = Daemon::build(
             &paths,
             env,
             "skein.test".to_owned(),
             InProcessTransport {
-                events: Arc::new(NoEvents),
+                events: events.clone(),
                 client: client.clone(),
                 capture: client,
             },
@@ -214,6 +220,7 @@ impl Fx {
             daemon,
             work,
             home,
+            events,
         }
     }
 
@@ -257,6 +264,7 @@ impl Fx {
                 restart,
                 expect_cmd: None,
                 expect_launch: None,
+                run_shell: None,
             },
             sink.map(|s| Box::new(s.clone()) as Box<dyn StreamSink<PtyEvent>>),
         )

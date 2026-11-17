@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use skein_proto::room_mutations::RoomMutation;
+use skein_proto::room_commands::RoomCommand;
 use skein_proto::rooms::HarnessCreatedBy;
 
-use super::close_apply::{apply_all, current_room, lock_verbs, refuse_unsaved_files, store_of};
+use super::close_apply::{current_room, execute_all, lock_verbs, refuse_unsaved_files, store_of};
 use super::harness_build::{
     NewHarness, build_harness, harness_display_name, open_room, resolve, spawn_without_client,
     store_harness,
@@ -518,21 +518,13 @@ async fn remove(state: &AgentApiState, room_id: &str, harness_id: &str) -> VerbR
              close_room instead"
         )));
     }
-    let mut mutations = Vec::with_capacity(2);
-    if room.active_harness_id == harness_id {
-        let mut updated = room.clone();
-        updated.active_harness_id = room
-            .harnesses
-            .iter()
-            .find(|h| h.id != harness_id)
-            .map(|h| h.id.clone())
-            .unwrap_or_default();
-        mutations.push(RoomMutation::UpdateRoom { room: updated });
-    }
-    mutations.push(RoomMutation::RemoveHarness {
-        room_id: room_id.to_owned(),
-        harness_id: harness_id.to_owned(),
-    });
-    apply_all(store, mutations, &format!("harness \"{harness_id}\""))?;
+    execute_all(
+        store,
+        vec![RoomCommand::CloseHarness {
+            room_id: room_id.to_owned(),
+            harness_id: harness_id.to_owned(),
+        }],
+        &format!("harness \"{harness_id}\""),
+    )?;
     Ok(phase)
 }

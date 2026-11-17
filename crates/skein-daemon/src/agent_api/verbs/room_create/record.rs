@@ -6,9 +6,9 @@
 use std::collections::HashSet;
 
 use serde::Serialize;
-use skein_proto::room_mutations::RoomMutation;
+use skein_proto::room_commands::RoomCommand;
 
-use super::super::close_apply::{apply_all, lock_verbs};
+use super::super::close_apply::{execute_all, lock_verbs};
 use super::super::harness_build::mint_room_id;
 use super::super::room_naming::default_room_name;
 use super::super::{VerbError, VerbResult};
@@ -75,6 +75,7 @@ pub(super) fn build_room(
         retired: None,
         repo_identity: None,
         todos: None,
+        revision: 0,
     }
 }
 
@@ -89,9 +90,9 @@ pub(super) async fn store_room(
 ) -> VerbResult<Room> {
     let (_guard, store) = lock_verbs(state).await?;
     let room = build_room(store, spec, checkout, harness);
-    apply_all(
+    execute_all(
         store,
-        vec![RoomMutation::CreateRoom { room: room.clone() }],
+        vec![RoomCommand::CreateRoom { room: room.clone() }],
         "the new room",
     )?;
     Ok(room)

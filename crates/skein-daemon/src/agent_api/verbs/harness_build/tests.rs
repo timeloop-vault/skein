@@ -205,6 +205,7 @@ mod store_step {
     use super::super::*;
     use super::spec;
     use crate::agent_api::tests::{agent_api_state_with_room_records, fixture, harness, room};
+    use skein_proto::room_mutations::RoomMutation;
 
     fn stored_harnesses(store: &RoomStore, id: &str) -> Vec<Harness> {
         store

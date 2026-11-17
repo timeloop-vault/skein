@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 use serde_json::{Value, json};
+use skein_proto::room_commands::{RoomCommand, RoomsExecuteOutcome};
 use skein_proto::room_mutations::{
     ROOMS_CHANGED_EVENT, RoomChange, RoomMutation, RoomsApplyOutcome, RoomsChanged,
 };
@@ -19,10 +20,13 @@ use crate::db::Database;
 use crate::db::test_support::fresh_db;
 use crate::event_sink::EventSink;
 
+mod commands;
 mod failure;
 mod load;
 mod owned_fields;
+mod patches;
 mod persistence;
+mod revision;
 mod semantics;
 
 /// A debounce that cannot fire within a test run.
@@ -128,6 +132,19 @@ impl Fixture {
         self.store.apply(origin, ms).unwrap()
     }
 
+    fn execute(&self, origin: &str, cs: Vec<RoomCommand>) -> RoomsExecuteOutcome {
+        self.store.execute(origin, cs).unwrap()
+    }
+
+    /// The stored room, by id.
+    fn stored_room(&self, id: &str) -> Room {
+        self.store
+            .rooms()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap_or_else(|| panic!("no room {id}"))
+    }
+
     fn events(&self) -> Vec<RoomsChanged> {
         self.sink
             .0
@@ -185,4 +202,12 @@ impl Fixture {
     fn store_ids(&self) -> Vec<String> {
         self.store.rooms().into_iter().map(|r| r.id).collect()
     }
+}
+
+/// `(index, reason)` of each refused command.
+fn refusals(out: &RoomsExecuteOutcome) -> Vec<(usize, &str)> {
+    out.refused
+        .iter()
+        .map(|r| (r.index, r.reason.as_str()))
+        .collect()
 }

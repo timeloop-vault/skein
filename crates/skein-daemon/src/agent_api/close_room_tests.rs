@@ -286,6 +286,7 @@ async fn close_room_archives_in_the_store_and_revokes_the_token() {
     let (_tmp, state, store) = signed_off_room(&f, vec![harness("h2", "claude", "main")]);
     let r2_token = f.db.ensure_room_token("r2", 1).unwrap();
     let caller = caller_for(&f.db, "r1", Some("h1"));
+    let revision_before = stored(&store, "r2").revision;
 
     let out = verbs::close_room(&state, &caller, &close_room_args("r2"), true)
         .await
@@ -295,6 +296,10 @@ async fn close_room_archives_in_the_store_and_revokes_the_token() {
     assert_eq!(out.closed_by.harness_id.as_deref(), Some("h1"));
 
     let r2 = stored(&store, "r2");
+    assert!(
+        r2.revision > revision_before,
+        "went through the intent path"
+    );
     assert_eq!(r2.archived, Some(out.archived));
     assert!(out.archived > 0);
     let closed_by = r2.closed_by.expect("closedBy is stamped");

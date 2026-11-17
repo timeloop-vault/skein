@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::db::{Database, LoadOutcome};
 use skein_daemon::boot_resume::BootResume;
 use skein_daemon::room_store::RoomStore;
+use skein_proto::room_commands::{RoomCommand, RoomsExecuteOutcome};
 use skein_proto::room_mutations::{RoomMutation, RoomsApplyOutcome};
 
 /// Returns every room currently in the DB, plus any rows that failed
@@ -52,6 +53,21 @@ pub(crate) async fn rooms_apply(
 ) -> Result<RoomsApplyOutcome, String> {
     let store = Arc::clone(&store);
     tauri::async_runtime::spawn_blocking(move || store.apply(&client_id, mutations))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Carries out intent commands through the daemon's `RoomStore` (#756): the
+/// intent path, beside the legacy `rooms_apply`. The webview does not call it
+/// yet (#758). Blocking pool and ordering as for `rooms_apply`.
+#[tauri::command]
+pub(crate) async fn rooms_execute(
+    client_id: String,
+    commands: Vec<RoomCommand>,
+    store: tauri::State<'_, Arc<RoomStore>>,
+) -> Result<RoomsExecuteOutcome, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.execute(&client_id, commands))
         .await
         .map_err(|e| e.to_string())?
 }

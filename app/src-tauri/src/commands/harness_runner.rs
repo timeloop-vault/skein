@@ -57,6 +57,7 @@ fn refusal_message(refusal: Refusal) -> String {
         Refusal::FolderMissing => "the room's folder does not exist",
         Refusal::RepoMismatch => "the folder holds a different repository than the room recorded",
         Refusal::StaleRecord => "the harness's command changed since the caller read it",
+        Refusal::EmptyShellArgv => "the shell to run has no command",
     };
     format!("{}: {sentence}", refusal.code())
 }
@@ -84,6 +85,7 @@ pub(crate) async fn harness_ensure_running(
     restart: bool,
     expect_cmd: Option<Vec<String>>,
     expect_launch: Option<LaunchMode>,
+    run_shell: Option<Vec<String>>,
     on_event: Channel<PtyEvent>,
     app: tauri::AppHandle,
 ) -> Result<EnsureRunningDto, String> {
@@ -100,6 +102,7 @@ pub(crate) async fn harness_ensure_running(
                     restart,
                     expect_cmd,
                     expect_launch,
+                    run_shell,
                 },
                 Some(Box::new(TauriChannelSink::new(on_event))),
             )

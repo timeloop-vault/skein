@@ -27,6 +27,8 @@ pub enum Refusal {
     RepoMismatch,
     /// The caller expected a different argv than the record now holds.
     StaleRecord,
+    /// `run_shell` was given an empty argv: there is nothing to spawn.
+    EmptyShellArgv,
 }
 
 impl Refusal {
@@ -40,6 +42,7 @@ impl Refusal {
             Self::FolderMissing => "folder_missing",
             Self::RepoMismatch => "repo_mismatch",
             Self::StaleRecord => "stale_record",
+            Self::EmptyShellArgv => "empty_shell_argv",
         }
     }
 }

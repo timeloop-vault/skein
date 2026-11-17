@@ -26,10 +26,11 @@ pub(super) fn apply_one(
     mutation: RoomMutation,
 ) -> Result<Applied, &'static str> {
     match mutation {
-        RoomMutation::CreateRoom { room } => {
+        RoomMutation::CreateRoom { mut room } => {
             if rooms.iter().any(|r| r.id == room.id) {
                 return Err("exists");
             }
+            room.revision = 0; // the store owns it (#756)
             let id = room.id.clone();
             rooms.push(room);
             Ok(Applied {
@@ -43,6 +44,7 @@ pub(super) fn apply_one(
             let slot = find(rooms, &room.id)?;
             let mut next = room;
             next.harnesses = std::mem::take(&mut slot.harnesses);
+            next.revision = slot.revision; // the store owns it (#756)
             let structural = !room_key_eq(slot, &next);
             let id = next.id.clone();
             *slot = next;
@@ -123,13 +125,13 @@ fn touched(id: String, structural: bool) -> Applied {
     }
 }
 
-fn find<'a>(rooms: &'a mut [Room], id: &str) -> Result<&'a mut Room, &'static str> {
+pub(super) fn find<'a>(rooms: &'a mut [Room], id: &str) -> Result<&'a mut Room, &'static str> {
     rooms.iter_mut().find(|r| r.id == id).ok_or("unknown_room")
 }
 
 /// Listed ids take the listed order; unknown ids are ignored; unlisted
 /// items keep their relative order after the listed ones.
-fn reorder<T>(items: &mut [T], ids: &[String], id_of: impl Fn(&T) -> &str) {
+pub(super) fn reorder<T>(items: &mut [T], ids: &[String], id_of: impl Fn(&T) -> &str) {
     let mut rank: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     let mut seen = HashSet::new();
     for id in ids {

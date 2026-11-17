@@ -221,6 +221,7 @@ fn expect_launch_is_compared_to_the_record() {
                 restart: false,
                 expect_cmd: None,
                 expect_launch,
+                run_shell: None,
             },
             None,
         )
@@ -255,6 +256,7 @@ fn a_tool_record_with_no_launch_accepts_an_expected_tool_and_refuses_a_shell() {
                 restart: false,
                 expect_cmd: None,
                 expect_launch,
+                run_shell: None,
             },
             None,
         )

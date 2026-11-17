@@ -114,6 +114,7 @@ async fn open_harness_with_no_client_leaves_the_new_harness_running() {
         .apply("test", vec![RoomMutation::CreateRoom { room: r1 }])
         .unwrap();
 
+    let revision_before = daemon.rooms.rooms()[0].revision;
     let state = clientless_state(&daemon);
     let caller = caller_for(&daemon.db, "r1", Some("h1"));
 
@@ -130,6 +131,16 @@ async fn open_harness_with_no_client_leaves_the_new_harness_running() {
         Ok(out) => out,
         Err(e) => panic!("open_harness failed: {e:?}"),
     };
+    let revision_after = daemon
+        .rooms
+        .rooms()
+        .into_iter()
+        .find(|r| r.id == "r1")
+        .map(|r| r.revision);
+    assert!(
+        revision_after > Some(revision_before),
+        "went through the intent path"
+    );
     let pty_id = daemon.harness_runner.pty_id(&out.harness_id);
     let alive = pty_id
         .as_deref()

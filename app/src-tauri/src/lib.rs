@@ -128,6 +128,7 @@ pub fn run() {
             commands::spawn_env::default_cwd,
             commands::rooms::db_load_rooms,
             commands::rooms::rooms_apply,
+            commands::rooms::rooms_execute,
             commands::rooms::rooms_flush,
             commands::todos::db_load_global_todos,
             commands::todos::db_save_global_todos,

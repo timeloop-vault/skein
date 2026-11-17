@@ -91,10 +91,23 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
 	return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 
+/**
+ * Room-level fields the daemon owns (#756): it bumps `revision` on every change
+ * and ignores a client's value. A difference in them is never a local edit, and
+ * in a rebase the remote value always wins.
+ */
+export const DAEMON_OWNED_ROOM_KEYS = ["revision"] as const;
+
 function roomLevelEqual(a: Room, b: Room): boolean {
 	const { harnesses: _a, ...ra } = a;
 	const { harnesses: _b, ...rb } = b;
-	return deepEqual(ra, rb);
+	const xa = ra as Record<string, unknown>;
+	const xb = rb as Record<string, unknown>;
+	for (const k of DAEMON_OWNED_ROOM_KEYS) {
+		delete xa[k];
+		delete xb[k];
+	}
+	return deepEqual(xa, xb);
 }
 
 function diffHarnesses(prev: Room, next: Room, out: RoomMutation[]): void {

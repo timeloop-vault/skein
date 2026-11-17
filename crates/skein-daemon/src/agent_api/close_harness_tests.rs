@@ -323,10 +323,15 @@ async fn close_harness_removes_it_in_its_own_room() {
     let f = fixture();
     let (state, store) = own_room(&f, vec![harness("h2", "claude", "second")]);
     let caller = caller_for(&f.db, "r1", Some("h1"));
+    let revision_before = stored(&store, "r1").revision;
 
     let out = verbs::close_harness(&state, &caller, &close_harness_args("h2"), true)
         .await
         .unwrap();
+    assert!(
+        stored(&store, "r1").revision > revision_before,
+        "went through the intent path"
+    );
     assert_eq!(out.room_id, "r1");
     assert_eq!(out.harness_id, "h2");
     assert_eq!(

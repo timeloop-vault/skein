@@ -11,10 +11,10 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use skein_proto::room_mutations::RoomMutation;
+use skein_proto::room_commands::RoomCommand;
 use skein_proto::rooms::{HarnessCreatedBy, Room};
 
-use super::close_apply::{apply_all, current_room, lock_verbs};
+use super::close_apply::{current_room, execute_all, lock_verbs};
 use super::{VerbError, VerbResult, internal};
 use crate::agent_api::state::AgentApiState;
 use crate::db::Harness;
@@ -318,11 +318,12 @@ pub(super) async fn store_harness(
         }
         harness.name = harness_display_name(kind, existing);
     }
-    apply_all(
+    execute_all(
         store,
-        vec![RoomMutation::PutHarness {
+        vec![RoomCommand::AddHarness {
             room_id: room_id.to_owned(),
             harness: harness.clone(),
+            activate: false,
         }],
         "the new harness",
     )?;
@@ -351,6 +352,7 @@ pub(super) async fn spawn_without_client(state: &AgentApiState, room_id: &str, h
         restart: false,
         expect_cmd: None,
         expect_launch: None,
+        run_shell: None,
     };
     match tokio::task::spawn_blocking(move || runner.ensure_running(&req, None)).await {
         Ok(Ok(_)) => {}

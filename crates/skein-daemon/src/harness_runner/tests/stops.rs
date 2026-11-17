@@ -85,6 +85,7 @@ fn a_stop_during_a_spawn_waits_for_it_and_stops_what_it_made() {
                         restart: false,
                         expect_cmd: None,
                         expect_launch: None,
+                        run_shell: None,
                     },
                     None,
                 )

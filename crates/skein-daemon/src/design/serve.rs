@@ -343,6 +343,7 @@ mod tests {
             created_by: None,
             closed_by: None,
             todos: None,
+            revision: 0,
             retired: None,
             repo_identity: None,
         }
