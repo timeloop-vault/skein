@@ -337,6 +337,11 @@ pub(super) struct SubagentTail {
     /// broken file either. Set on the transition into failing, cleared
     /// (with a debug! line) the moment an open succeeds again.
     pub(super) open_failure_logged: bool,
+    /// Folds this transcript's assistant chunks into whole responses, one
+    /// `api_usage` row each (#341), attributed to the delegating harness.
+    /// A subagent file has no row after its last response, so the tick
+    /// calls `finish()` once the lifecycle reports it finished.
+    pub(super) responses: skein_harness::claude::ResponseFold,
 }
 
 /// Mutable state shared with the watcher callback. The callback runs

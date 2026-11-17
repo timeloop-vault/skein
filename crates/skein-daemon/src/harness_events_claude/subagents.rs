@@ -6,6 +6,7 @@ use super::background_tasks::{BackgroundOut, BackgroundState, now_ms, reconcile_
 use super::merge::Stream;
 use super::persist::persist_extracted;
 use crate::harness_actions_claude::ExtractedAction;
+use crate::harness_actions_claude::api_usage::api_usage_action;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
@@ -134,6 +135,7 @@ pub(super) fn tick_subagents(
                     started_ms_resolved: false,
                     last_ts_ms: 0,
                     open_failure_logged: false,
+                    responses: skein_harness::claude::ResponseFold::default(),
                 },
             );
         }
@@ -168,6 +170,18 @@ pub(super) fn tick_subagents(
         if let Ok(meta) = fs::metadata(&tail.path)
             && meta.len() == tail.last_pos
         {
+            // A subagent's last response has no row after it, so its exit
+            // closes it, but only on a quiet tick (nothing new read) so
+            // every chunk of that response is already in the fold. The
+            // fold stays usable if a new prompt re-opens the subagent.
+            if tail.lifecycle.is_finished()
+                && let Some(resp) = tail.responses.finish()
+            {
+                subagent_end_actions.push(api_usage_action(
+                    &resp,
+                    Some((&agent_id, tail.agent_type.as_deref())),
+                ));
+            }
             continue;
         }
 
@@ -288,6 +302,16 @@ pub(super) fn tick_subagents(
                     rows: background_rows,
                 }),
             );
+            // #341: one `api_usage` row per closed response, for the
+            // delegating harness (this tail's harness id).
+            if let Some(row) = skein_harness::claude::row_from_value(&value)
+                && let Some(resp) = tail.responses.push(&row)
+            {
+                subagent_end_actions.push(api_usage_action(
+                    &resp,
+                    Some((&agent_id, tail.agent_type.as_deref())),
+                ));
+            }
             match tail.lifecycle.observe(&value) {
                 Some(skein_harness::claude::SubagentTransition::Finished) => {
                     stream.events.push(ClaudeEvent::SubagentEnd {

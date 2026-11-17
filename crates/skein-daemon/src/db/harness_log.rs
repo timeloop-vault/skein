@@ -69,6 +69,13 @@ pub mod action_kind {
     /// The sender's side of a #327 mailbox `send_message` (#329). See
     /// [`MESSAGE_IN`].
     pub const MESSAGE_OUT: &str = "message_out";
+    /// One row per Claude API response (one `message.id`), from the main
+    /// and the subagent transcripts alike; `source` is that `message.id`.
+    /// Idempotent per (harness, `source`) through the unique index
+    /// `idx_harness_actions_api_usage`, so a replay inserts nothing. This
+    /// is the cost source (epic #257), unlike [`TURN_COST`], which is only
+    /// the end-of-turn marker.
+    pub const API_USAGE: &str = "api_usage";
 }
 
 fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<HarnessEvent> {
@@ -191,6 +198,10 @@ impl Database {
     /// the Rust side per extracted action; the canonical payload
     /// shape per `kind` is documented in the design brief. We don't
     /// validate `payload` here — it's stored verbatim.
+    ///
+    /// Returns `Some(id)` for a new row and `None` when the insert was
+    /// ignored by a unique index (an `api_usage` row already recorded for
+    /// this harness and `source`); callers must not broadcast a `None`.
     #[allow(clippy::too_many_arguments)]
     pub fn record_harness_action(
         &self,
@@ -201,24 +212,25 @@ impl Database {
         payload: &str,
         source: Option<&str>,
         harness_kind: Option<&str>,
-    ) -> Result<i64, String> {
+    ) -> Result<Option<i64>, String> {
         let conn = self.conn.lock();
-        conn.execute(
-            "INSERT INTO harness_actions \
+        let changed = conn
+            .execute(
+                "INSERT OR IGNORE INTO harness_actions \
              (harness_id, room_id, timestamp_ms, kind, payload, source, harness_kind) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                harness_id,
-                room_id,
-                timestamp_ms,
-                kind,
-                payload,
-                source,
-                harness_kind
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(conn.last_insert_rowid())
+                params![
+                    harness_id,
+                    room_id,
+                    timestamp_ms,
+                    kind,
+                    payload,
+                    source,
+                    harness_kind
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok((changed > 0).then(|| conn.last_insert_rowid()))
     }
 
     /// The highest Hermes `state.db` `messages.id` already recorded for
@@ -306,7 +318,9 @@ impl Database {
     /// opens a single transaction, reuses one prepared statement for
     /// every row, and commits — `harness_id`/`room_id` are stamped on
     /// every row (as is `harness_kind`) exactly like the per-call path.
-    /// Empty `rows` is a no-op (no lock taken). Returns the number of rows inserted.
+    /// Empty `rows` is a no-op (no lock taken). Returns the number of
+    /// rows inserted (an `api_usage` row already recorded is ignored and
+    /// not counted).
     pub fn record_harness_actions(
         &self,
         harness_id: &str,
@@ -319,29 +333,50 @@ impl Database {
         }
         let mut conn = self.conn.lock();
         let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let mut inserted = 0;
         {
             let mut stmt = tx
                 .prepare(
-                    "INSERT INTO harness_actions \
+                    "INSERT OR IGNORE INTO harness_actions \
                      (harness_id, room_id, timestamp_ms, kind, payload, source, harness_kind) \
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 )
                 .map_err(|e| e.to_string())?;
             for row in rows {
-                stmt.execute(params![
-                    harness_id,
-                    room_id,
-                    row.timestamp_ms,
-                    row.kind,
-                    row.payload,
-                    row.source,
-                    harness_kind
-                ])
-                .map_err(|e| e.to_string())?;
+                inserted += stmt
+                    .execute(params![
+                        harness_id,
+                        room_id,
+                        row.timestamp_ms,
+                        row.kind,
+                        row.payload,
+                        row.source,
+                        harness_kind
+                    ])
+                    .map_err(|e| e.to_string())?;
             }
         }
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(rows.len())
+        Ok(inserted)
+    }
+
+    /// Largest `timestamp_ms` among a harness's rows whose `kind` is not
+    /// `excluded_kind`; 0 when there are none. The transcript backfill
+    /// watermark uses it to ignore `api_usage` rows, which can be written
+    /// out of transcript order (a subagent response) and would otherwise
+    /// push the watermark past unpersisted main-transcript rows.
+    pub fn max_action_ts_excluding_kind(
+        &self,
+        harness_id: &str,
+        excluded_kind: &str,
+    ) -> Result<i64, String> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT COALESCE(MAX(timestamp_ms), 0) FROM harness_actions              WHERE harness_id = ?1 AND kind != ?2",
+            params![harness_id, excluded_kind],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())
     }
 
     /// Most recent actions for a single harness with
@@ -370,7 +405,10 @@ impl Database {
     }
 
     /// Most recent actions across every harness in a room. Newest-first.
-    /// Backs the Activity card's unified per-room timeline.
+    /// Backs the Activity card's unified per-room timeline, so it leaves
+    /// out `api_usage` (one row per API response, #341): they are cost
+    /// data, not feed rows, and would crowd the newest-N backfill. Read
+    /// them with `recent_harness_actions_by_room_and_kind`.
     pub fn recent_harness_actions_by_room(
         &self,
         room_id: &str,
@@ -382,7 +420,7 @@ impl Database {
             .prepare(
                 "SELECT id, harness_id, room_id, timestamp_ms, kind, payload, source, harness_kind \
                  FROM harness_actions \
-                 WHERE room_id = ?1 AND timestamp_ms > ?2 \
+                 WHERE room_id = ?1 AND timestamp_ms > ?2 AND kind != 'api_usage' \
                  ORDER BY timestamp_ms DESC, id DESC \
                  LIMIT ?3",
             )

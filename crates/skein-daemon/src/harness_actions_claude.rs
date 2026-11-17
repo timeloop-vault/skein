@@ -29,6 +29,8 @@
 //! - `api_error` — system subtype `api_error`.
 //! - `turn_cost` — terminal assistant row (`end_turn` / `stop_sequence`
 //!   / `max_tokens`); payload carries the row's `message.usage` + model.
+//! - `api_usage` — one per API response (streamed chunks folded), see
+//!   `api_usage.rs`; emitted when the row after the response arrives.
 //! - `cost_state` — `cost-state` row: the session's cumulative cost /
 //!   token / line totals. A snapshot, not an event — newest wins.
 //! - `permission_mode` — `permission-mode` row.
@@ -85,6 +87,8 @@ pub struct ActionExtractor {
     /// happens on a session that opens with those rows, which we
     /// haven't observed).
     last_ts_ms: i64,
+    /// Folds streamed chunks into whole API responses (`api_usage`).
+    responses: skein_harness::claude::ResponseFold,
 }
 
 #[derive(Debug)]
@@ -119,6 +123,15 @@ impl ActionExtractor {
         let row_ts = parse_timestamp_ms(value);
         if row_ts > 0 {
             self.last_ts_ms = row_ts;
+        }
+        // Every row feeds the fold, even the types skipped below: any
+        // non-chunk row is what closes a response. A pending response
+        // is never flushed at end of a backfill scan (it may still be
+        // streaming); this same extractor carries on into the live tail.
+        if let Some(row) = skein_harness::claude::row_from_value(value)
+            && let Some(resp) = self.responses.push(&row)
+        {
+            out.push(api_usage::api_usage_action(&resp, None));
         }
         let Some(ty) = value.get("type").and_then(Value::as_str) else {
             return out;
@@ -180,10 +193,11 @@ impl ActionExtractor {
             }
         }
 
-        // Terminal stop_reason rows close the turn — emit turn_cost
-        // with the usage telemetry on the row. We don't try to
-        // aggregate across the streamed chunks of the turn; Claude
-        // writes the cumulative usage on the terminal row already.
+        // Terminal stop_reason rows close the turn — emit turn_cost,
+        // the end-of-turn marker (Activity hair-lines, context size).
+        // It is NOT a cost: every tool_use response is its own API call
+        // with its own usage, so nothing may sum turn_cost rows for
+        // cost. Per-response cost comes from `api_usage` rows.
         let stop_reason = message.get("stop_reason").and_then(Value::as_str);
         let terminal = matches!(
             stop_reason,
@@ -650,5 +664,9 @@ fn parse_timestamp_ms(value: &Value) -> i64 {
     skein_harness::claude::timestamp_ms(value).unwrap_or(0)
 }
 
+pub(crate) mod api_usage;
+
+#[cfg(test)]
+mod api_usage_tests;
 #[cfg(test)]
 mod tests;

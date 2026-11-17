@@ -397,3 +397,83 @@ fn batch_insert_round_trips_harness_kind() {
     let by_harness = db.recent_harness_actions_by_harness("h1", 0, 10).unwrap();
     assert_eq!(by_harness[0].harness_kind.as_deref(), Some("claude"));
 }
+
+fn api_usage(db: &Database, harness: &str, ts: i64, source: &str) -> Option<i64> {
+    db.record_harness_action(
+        harness,
+        "r1",
+        ts,
+        action_kind::API_USAGE,
+        "{}",
+        Some(source),
+        Some("claude"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn api_usage_is_idempotent_per_harness_and_source() {
+    let (_dir, db) = fresh_db();
+    assert!(api_usage(&db, "h1", 100, "msg_1").is_some());
+    assert_eq!(api_usage(&db, "h1", 100, "msg_1"), None);
+    // A different harness (or a different response) still inserts.
+    assert!(api_usage(&db, "h2", 100, "msg_1").is_some());
+    assert!(api_usage(&db, "h1", 100, "msg_2").is_some());
+    assert_eq!(
+        db.recent_harness_actions_by_harness("h1", -1, 10)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        db.recent_harness_actions_by_harness("h2", -1, 10)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn other_kinds_with_equal_source_still_insert_twice() {
+    let (_dir, db) = fresh_db();
+    for _ in 0..2 {
+        let id = db
+            .record_harness_action("h1", "r1", 5, action_kind::TOOL_CALL, "{}", Some("s"), None)
+            .unwrap();
+        assert!(id.is_some());
+    }
+    assert_eq!(
+        db.recent_harness_actions_by_harness("h1", -1, 10)
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn batch_insert_skips_duplicate_api_usage_and_counts_inserted() {
+    let (_dir, db) = fresh_db();
+    let row = |source: &str| NewHarnessAction {
+        timestamp_ms: 10,
+        kind: action_kind::API_USAGE,
+        payload: "{}".into(),
+        source: Some(source.into()),
+    };
+    let rows = vec![row("a"), row("b"), row("a")];
+    assert_eq!(
+        db.record_harness_actions("h1", "r1", Some("claude"), &rows)
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.record_harness_actions("h1", "r1", Some("claude"), &rows)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.recent_harness_actions_by_harness("h1", -1, 10)
+            .unwrap()
+            .len(),
+        2
+    );
+}

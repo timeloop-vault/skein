@@ -141,7 +141,8 @@ pub(super) fn record_and_emit(
         action.source.as_deref(),
         Some(HarnessKind::Opencode.as_str()),
     ) {
-        Ok(id) => {
+        Ok(None) => {}
+        Ok(Some(id)) => {
             if action.kind == crate::db::action_kind::PATCH {
                 crate::review::note_patch(db, room_id, cwd, harness_id, &action.payload);
             }

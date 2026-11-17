@@ -222,3 +222,79 @@ fn live_tail_persists_rows_appended_after_attach() {
     let actions = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
     assert_eq!(actions[0].kind, crate::db::action_kind::TOOL_CALL);
 }
+
+// ── api_usage idempotency (#341) ──────────────────────────────
+
+fn usage(ts: i64, source: &str) -> crate::harness_actions_claude::ExtractedAction {
+    crate::harness_actions_claude::ExtractedAction {
+        kind: crate::db::action_kind::API_USAGE,
+        timestamp_ms: ts,
+        payload: "{}".into(),
+        source: Some(source.into()),
+    }
+}
+
+fn persistence(db: Arc<crate::db::Database>) -> ActionPersistence {
+    ActionPersistence {
+        extractor: ActionExtractor::new(),
+        db,
+        harness_id: "h1".into(),
+        room_id: "r1".into(),
+        cwd: String::new(),
+        events: None,
+    }
+}
+
+/// A response older than the watermark lands once, and replaying the
+/// same batch (a re-attach or resync) adds nothing.
+#[test]
+fn api_usage_older_than_watermark_lands_once_and_replays_add_nothing() {
+    let dir = TempDir::new().unwrap();
+    let db = Arc::new(crate::db::Database::open(&dir.path().join("t.db")).unwrap());
+    db.record_harness_action("h1", "r1", 1_000, "tool_call", "{}", None, None)
+        .unwrap();
+    assert_eq!(super::persist::max_persisted_ts_ms(&db, "h1"), 1_000);
+    let ap = persistence(Arc::clone(&db));
+    for _ in 0..2 {
+        super::persist::persist_extracted_batch(
+            &ap,
+            vec![usage(500, "msg_a"), usage(600, "msg_b")],
+        );
+    }
+    let rows = db
+        .recent_harness_actions_by_room_and_kind("r1", crate::db::action_kind::API_USAGE, 0, 10)
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+}
+
+/// An `api_usage` row newer than the last real row must not raise the
+/// watermark, or older unpersisted main-transcript rows never backfill.
+#[test]
+fn api_usage_row_does_not_raise_the_backfill_watermark() {
+    let dir = TempDir::new().unwrap();
+    let db = Arc::new(crate::db::Database::open(&dir.path().join("t.db")).unwrap());
+    db.record_harness_action("h1", "r1", 1_000, "tool_call", "{}", None, None)
+        .unwrap();
+    let ap = persistence(Arc::clone(&db));
+    super::persist::persist_extracted_batch(&ap, vec![usage(5_000, "msg_sub")]);
+    assert_eq!(super::persist::max_persisted_ts_ms(&db, "h1"), 1_000);
+    let older_main = crate::harness_actions_claude::ExtractedAction {
+        kind: "tool_call",
+        timestamp_ms: 2_000,
+        payload: "{}".into(),
+        source: None,
+    };
+    super::persist::persist_extracted_batch(&ap, vec![older_main]);
+    assert_eq!(super::persist::max_persisted_ts_ms(&db, "h1"), 2_000);
+}
+
+/// The live path reports nothing new for an ignored duplicate.
+#[test]
+fn live_persist_ignores_duplicate_api_usage() {
+    let dir = TempDir::new().unwrap();
+    let db = Arc::new(crate::db::Database::open(&dir.path().join("t.db")).unwrap());
+    let ap = persistence(Arc::clone(&db));
+    super::persist::persist_extracted(&ap, vec![usage(10, "msg_a"), usage(10, "msg_a")], true);
+    let rows = db.recent_harness_actions_by_harness("h1", -1, 10).unwrap();
+    assert_eq!(rows.len(), 1);
+}

@@ -523,6 +523,7 @@ fn subagent_shrink_reseeds_without_replay() {
                 started_ms_resolved: true,
                 last_ts_ms: 0,
                 open_failure_logged: false,
+                responses: skein_harness::claude::ResponseFold::default(),
             },
         );
     }

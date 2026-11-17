@@ -140,6 +140,16 @@ impl Database {
             [],
         )
         .map_err(|e| e.to_string())?;
+        // #341: one `api_usage` row per (harness, API response). `source`
+        // is the response's `message.id`; the inserts are `OR IGNORE`, so
+        // a replayed transcript adds nothing. Partial, so no other kind is
+        // constrained and no existing row can violate it.
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_harness_actions_api_usage \
+             ON harness_actions(harness_id, source) WHERE kind = 'api_usage'",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
 
         // Issue #211 (epic #52 D3): the review baseline — the content
         // of each touched file as the user last reviewed it. A sibling

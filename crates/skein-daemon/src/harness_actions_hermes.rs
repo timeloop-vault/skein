@@ -264,9 +264,9 @@ impl Tail {
         kind: &str,
         payload: &Value,
         live: bool,
-    ) -> Result<i64, String> {
+    ) -> Result<(), String> {
         let text = payload.to_string();
-        let id = self.db.record_harness_action(
+        let Some(id) = self.db.record_harness_action(
             &self.harness_id,
             &self.room_id,
             timestamp_ms,
@@ -274,9 +274,12 @@ impl Tail {
             &text,
             Some(SOURCE),
             Some(HARNESS_KIND),
-        )?;
+        )?
+        else {
+            return Ok(());
+        };
         if !live {
-            return Ok(id);
+            return Ok(());
         }
         if kind == crate::db::action_kind::PATCH {
             self.note_patch(&text);
@@ -294,7 +297,7 @@ impl Tail {
                 Some(HARNESS_KIND),
             );
         }
-        Ok(id)
+        Ok(())
     }
 
     fn note_patch(&self, payload: &str) {

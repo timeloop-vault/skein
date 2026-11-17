@@ -5,6 +5,7 @@ use super::adapter::ActionPersistence;
 use super::background_tasks::BackgroundState;
 use super::parse::apply_initial_state_row;
 use crate::db::Database;
+use crate::db::action_kind::API_USAGE;
 use crate::harness_kind::HarnessKind;
 use skein_harness::claude::local_command::LocalCommandTracker;
 
@@ -25,7 +26,9 @@ use skein_harness::claude::local_command::LocalCommandTracker;
 /// the second element of the return is always empty. When present,
 /// returns every extracted action whose timestamp is newer than the
 /// largest one already persisted for this harness
-/// (`max_persisted_ts_ms`) — that's how a re-attach after Skein
+/// (`max_persisted_ts_ms`), plus every `api_usage` row, which bypasses the
+/// watermark (a response closed after a restart can be older than it; the
+/// unique index dedupes) — that's how a re-attach after Skein
 /// restart avoids duplicating rows. On first attach the max is 0, so
 /// every row is fresh. Persistence itself is the caller's job
 /// (`persist_extracted_batch`), so this function stays a pure scan.
@@ -58,7 +61,11 @@ pub(super) fn scan_history(
         background.feed(&value, None, None);
         if let Some(ap) = actions.as_mut() {
             let extracted = ap.extractor.ingest(&value);
-            fresh.extend(extracted.into_iter().filter(|a| a.timestamp_ms > max_ts));
+            fresh.extend(
+                extracted
+                    .into_iter()
+                    .filter(|a| a.timestamp_ms > max_ts || a.kind == API_USAGE),
+            );
         }
     }
     (last, fresh)
@@ -85,7 +92,10 @@ pub(super) fn persist_extracted(
             action.source.as_deref(),
             Some(HarnessKind::Claude.as_str()),
         ) {
-            Ok(id) => {
+            // Ignored by the unique index: already recorded, nothing new to
+            // broadcast.
+            Ok(None) => {}
+            Ok(Some(id)) => {
                 if emit {
                     // Live only. Capturing a baseline while replaying
                     // history would read a HEAD that has already moved
@@ -166,8 +176,6 @@ pub(super) fn persist_extracted_batch(
 /// attach). Read errors fall back to 0 — re-inserting rows is
 /// recoverable, missing the backfill entirely is not.
 pub(super) fn max_persisted_ts_ms(db: &Database, harness_id: &str) -> i64 {
-    db.recent_harness_actions_by_harness(harness_id, -1, 1)
-        .ok()
-        .and_then(|rows| rows.into_iter().next())
-        .map_or(0, |r| r.timestamp_ms)
+    db.max_action_ts_excluding_kind(harness_id, crate::db::action_kind::API_USAGE)
+        .unwrap_or(0)
 }

@@ -231,6 +231,8 @@ mod subagent_tail_tests;
 #[cfg(test)]
 mod subagent_tests;
 #[cfg(test)]
+mod subagent_usage_tests;
+#[cfg(test)]
 mod tail_tests;
 #[cfg(test)]
 mod tests;

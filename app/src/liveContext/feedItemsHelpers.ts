@@ -12,7 +12,7 @@ import type { HarnessAction } from "./store.ts";
 /// an event: it is consumed by the card head via `sessionTotals`, and a
 /// row for it would be an invisible item that breaks bursts and inflates
 /// the unseen counter.
-export const SKIP_KINDS = new Set(["away_summary", "reasoning", "cost_state"]);
+export const SKIP_KINDS = new Set(["away_summary", "reasoning", "cost_state", "api_usage"]);
 
 /// Burst fold rule: consecutive emitted items from the same harness,
 /// same normalized tool, gap < 5 s. Scope renders as the constituents'

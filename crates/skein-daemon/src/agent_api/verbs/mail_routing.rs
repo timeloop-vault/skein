@@ -211,7 +211,8 @@ pub(super) fn record_and_emit(
         None,
         harness_kind,
     ) {
-        Ok(id) => {
+        Ok(None) => {}
+        Ok(Some(id)) => {
             if let Some(events) = events {
                 crate::harness_action_event::emit(
                     events,

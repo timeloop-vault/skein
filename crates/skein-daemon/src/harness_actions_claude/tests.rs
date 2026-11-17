@@ -3,7 +3,11 @@ use serde_json::json;
 
 #[allow(clippy::needless_pass_by_value)]
 fn ingest_one(extractor: &mut ActionExtractor, value: Value) -> Vec<ExtractedAction> {
-    extractor.ingest(&value)
+    // These tests are about the row-local actions; `api_usage` has its
+    // own file (`api_usage_tests.rs`).
+    let mut out = extractor.ingest(&value);
+    out.retain(|a| a.kind != action_kind::API_USAGE);
+    out
 }
 
 // ISO-8601 parsing itself is tested in skein-harness (#209); the
