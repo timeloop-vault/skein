@@ -1,9 +1,12 @@
 //! The shared fake `DeliveryEnv` for the prompt-delivery tests.
 
+use std::sync::Arc;
+
 use skein_proto::harness_kind::HarnessKind;
 
-use super::env::{DeliveryEnv, DraftState, UnreadMail};
+use super::env::{DeliveryEnv, DraftState, MailFacts, UnreadMail};
 use super::facts::{GateFacts, PhaseFacts};
+use super::shared::Shared;
 use crate::harness_phase::ActivityPhase;
 
 pub const T0: i64 = 1_000_000;
@@ -20,6 +23,8 @@ pub struct Fake {
     pub unread: Option<UnreadMail>,
     /// Every `publish_held` call, in order.
     pub held_log: Vec<bool>,
+    /// What `publish_mail_facts` wrote, as the real env does.
+    pub shared: Arc<Shared>,
 }
 
 pub fn sendable_phase() -> PhaseFacts {
@@ -55,6 +60,7 @@ pub fn fake(kind: HarnessKind) -> Fake {
         recovered: 0,
         unread: None,
         held_log: Vec::new(),
+        shared: Arc::default(),
     }
 }
 
@@ -101,5 +107,8 @@ impl DeliveryEnv for Fake {
     }
     fn publish_held(&mut self, _: &str, held: bool) {
         self.held_log.push(held);
+    }
+    fn publish_mail_facts(&mut self, id: &str, facts: MailFacts) {
+        self.shared.set_mail_facts(id, facts);
     }
 }

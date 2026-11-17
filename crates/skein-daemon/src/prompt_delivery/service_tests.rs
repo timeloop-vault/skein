@@ -157,6 +157,9 @@ impl super::env::DeliveryEnv for Counting {
     fn publish_held(&mut self, i: &str, h: bool) {
         self.inner.publish_held(i, h);
     }
+    fn publish_mail_facts(&mut self, i: &str, f: super::env::MailFacts) {
+        self.inner.publish_mail_facts(i, f);
+    }
 }
 
 fn counting_service() -> (super::service::DeliveryHandle, Arc<AtomicU32>) {
@@ -317,6 +320,9 @@ fn a_call_that_expired_before_the_worker_reached_it_is_skipped() {
         }
         fn publish_held(&mut self, i: &str, h: bool) {
             self.inner.publish_held(i, h);
+        }
+        fn publish_mail_facts(&mut self, i: &str, f: crate::prompt_delivery::env::MailFacts) {
+            self.inner.publish_mail_facts(i, f);
         }
     }
     let (gate_tx, gate_rx) = channel::<()>();

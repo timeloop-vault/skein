@@ -57,6 +57,20 @@ pub trait PtyPort: Send + Sync {
     fn write(&self, pty_id: &str, bytes: &[u8]) -> bool;
 }
 
+/// A harness's unread mail, read fresh from the database (never marks
+/// read). The delivery env and the supervisor's mail facts (#733 part B)
+/// read it through this one function. `None` when the harness is unknown
+/// or the lookup failed.
+#[must_use]
+pub fn unread_for(store: &RoomStore, db: &Database, harness_id: &str) -> Option<UnreadMail> {
+    let (room_id, _) = store.find_harness(harness_id)?;
+    let m = unread_mail_impl(db, &room_id, harness_id).ok()?;
+    Some(UnreadMail {
+        count: u32::try_from(m.count).unwrap_or(u32::MAX),
+        from: m.from_room_names,
+    })
+}
+
 pub struct DaemonEnv {
     pub store: Arc<RoomStore>,
     pub phase: Arc<PhaseService>,
@@ -126,12 +140,11 @@ impl DeliveryEnv for DaemonEnv {
     }
 
     fn unread(&self, harness_id: &str) -> Option<UnreadMail> {
-        let (room_id, _) = self.store.find_harness(harness_id)?;
-        let m = unread_mail_impl(&self.db, &room_id, harness_id).ok()?;
-        Some(UnreadMail {
-            count: u32::try_from(m.count).unwrap_or(u32::MAX),
-            from: m.from_room_names,
-        })
+        unread_for(&self.store, &self.db, harness_id)
+    }
+
+    fn publish_mail_facts(&mut self, harness_id: &str, facts: super::env::MailFacts) {
+        self.shared.set_mail_facts(harness_id, facts);
     }
 
     fn publish_held(&mut self, harness_id: &str, held: bool) {

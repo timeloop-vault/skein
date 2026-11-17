@@ -145,6 +145,7 @@ fn translate(m: &mut PhaseMachine, id: &str, event: &ClaudeEvent, now_ms: i64) {
                 *initial,
                 now_ms,
             );
+            m.emit(id); // a registry change reaches the stream (#761)
             // #277: only a LIVE start counts toward `delegated_count` and as
             // proof of life for the ceiling; an attach-time replay belongs to
             // a PTY that is already dead and must not look like fresh activity.
@@ -161,9 +162,11 @@ fn translate(m: &mut PhaseMachine, id: &str, event: &ClaudeEvent, now_ms: i64) {
         } => {
             m.subagents_mut()
                 .relabel(id, agent_id, agent_type.clone(), description.clone());
+            m.emit(id);
         }
         ClaudeEvent::SubagentEnd { agent_id, .. } => {
             m.subagents_mut().finish(id, agent_id);
+            m.emit(id);
             m.note_subagent_activity(id, now_ms);
         }
         // The one narrow phase effect a subagent's own tool result may have:
@@ -207,6 +210,7 @@ fn translate(m: &mut PhaseMachine, id: &str, event: &ClaudeEvent, now_ms: i64) {
                 *initial,
                 now_ms,
             );
+            m.emit(id);
             // A live subagent's row is proof of life; an attach replay is not.
             if !*initial && agent_id.is_some() {
                 m.note_subagent_activity(id, now_ms);
@@ -219,6 +223,7 @@ fn translate(m: &mut PhaseMachine, id: &str, event: &ClaudeEvent, now_ms: i64) {
             task_id, agent_id, ..
         } => {
             m.background_tasks_mut().finish(id, task_id);
+            m.emit(id);
             if agent_id.is_some() {
                 m.note_subagent_activity(id, now_ms);
             }

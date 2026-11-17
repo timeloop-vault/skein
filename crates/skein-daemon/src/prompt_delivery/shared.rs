@@ -28,11 +28,25 @@ struct ClientEntry {
     report: u64,
 }
 
+/// What the daemon's supervisor reads about a harness's mail (#733 part B):
+/// the worker publishes it, the supervisor thread reads it without ever
+/// asking the worker.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MailFacts {
+    /// Epoch ms of the last mail nudge actually pasted (a rolled-back one
+    /// is taken back out).
+    pub last_nudge_at: Option<i64>,
+    /// Why mail is still undelivered (the gate or draft refusal); `None`
+    /// once nothing is pending.
+    pub last_refusal: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct Shared {
     output: Mutex<HashMap<String, OutputEntry>>,
     client: Mutex<HashMap<String, ClientEntry>>,
     held: Mutex<BTreeSet<String>>,
+    mail: Mutex<HashMap<String, MailFacts>>,
 }
 
 impl Shared {
@@ -111,5 +125,31 @@ impl Shared {
 
     pub fn held_snapshot(&self) -> Vec<String> {
         self.held.lock().iter().cloned().collect()
+    }
+
+    /// Stores a harness's mail facts; an all-empty value removes the entry,
+    /// so the map holds only harnesses the worker still tracks.
+    pub fn set_mail_facts(&self, harness_id: &str, facts: MailFacts) {
+        let mut map = self.mail.lock();
+        if facts == MailFacts::default() {
+            map.remove(harness_id);
+        } else {
+            map.insert(harness_id.to_owned(), facts);
+        }
+    }
+
+    /// Never published (or forgotten) = all `None`.
+    pub fn mail_facts(&self, harness_id: &str) -> MailFacts {
+        self.mail
+            .lock()
+            .get(harness_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// How many harnesses have a mail entry (a bound check for tests).
+    #[cfg(test)]
+    pub fn mail_entries(&self) -> usize {
+        self.mail.lock().len()
     }
 }

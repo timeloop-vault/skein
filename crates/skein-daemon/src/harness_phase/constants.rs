@@ -20,11 +20,16 @@ pub const PATTERN_WAITING_AFTER_MS: i64 = 500;
 /// arrive in one PTY read (xterm splits at no fixed boundary) but
 /// cap so a chatty shell session doesn't grow memory unbounded.
 pub const TAIL_MAX_CHARS: usize = 2_048;
-/// How often the driver calls `PhaseMachine::tick`. A faster tick gives
-/// tighter detection latency; 1s strikes a sensible balance: at worst the
-/// user sees "idle" up to a second late, which is below the perceptual
-/// threshold for a status dot. Nothing in this module schedules the tick.
+/// The screen-sampling cadence: the Hermes screen rule counts samples, one
+/// per interval, not time, so `PhaseMachine::tick` steps it at most this
+/// often (`deadline.rs`). It is no longer how often the tick runs: the
+/// deadline driver ticks only when `next_deadline` says something changes.
 pub const TICK_INTERVAL_MS: i64 = 1_000;
+/// How often the supervisor pass runs. It only compares timestamps against
+/// `now`, so its cadence adds detection latency and nothing else; 5 s keeps
+/// its two repairs under about 15 s and divides the 15 s transcript-sample
+/// gate and the 30 s recovery throttle.
+pub const SUPERVISE_INTERVAL_MS: i64 = 5_000;
 /// Window during which PTY output is treated as "our fault, not the
 /// child's." Triggered explicitly by callers (e.g. LiveTerminal on
 /// visibility flip: `term.focus()` sends a focus-in event to the

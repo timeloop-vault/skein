@@ -160,6 +160,11 @@ impl BackgroundTasks {
         out
     }
 
+    /// The harness's live tasks, in no particular order, without copying.
+    pub(super) fn iter(&self, harness_id: &str) -> impl Iterator<Item = &BackgroundTaskEntry> {
+        self.live.get(harness_id).into_iter().flatten()
+    }
+
     /// Tasks that count as working for the deferral: not attach-only
     /// orphans, not overdue.
     #[must_use]

@@ -22,7 +22,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, channel, s
 use std::time::{Duration, Instant};
 
 use super::core::{DeliveryCore, DeliveryEvent, Reply};
-use super::env::{DeliveryEnv, DraftState};
+use super::env::{DeliveryEnv, DraftState, MailFacts};
 use super::gate::{GateMode, Refusal, RefusalCode};
 use super::shared::Shared;
 use crate::harness_phase::PhaseNotice;
@@ -188,6 +188,14 @@ impl DeliveryHandle {
     #[must_use]
     pub fn held_snapshot(&self) -> Vec<String> {
         self.shared.held_snapshot()
+    }
+
+    /// The mail facts the supervisor reads (#733 part B): the last nudge's
+    /// time and the refusal holding pending mail. A shared read, never a
+    /// worker round trip.
+    #[must_use]
+    pub fn supervisor_mail(&self, harness_id: &str) -> MailFacts {
+        self.shared.mail_facts(harness_id)
     }
 
     /// The shared facts, for the real env to be built over.

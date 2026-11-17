@@ -257,12 +257,14 @@ impl HermesTranslator {
                     *initial,
                     now_ms,
                 );
+                m.emit(id); // a registry change reaches the stream (#761)
                 if !initial {
                     m.reclaim_delegation_from_adapter(id, now_ms);
                 }
             }
             HermesWorkEvent::BackgroundEnd { task_id } => {
                 m.background_tasks_mut().finish(id, task_id);
+                m.emit(id);
             }
             HermesWorkEvent::DelegationsIdle => {
                 for s in m.subagents().live(id) {
@@ -302,6 +304,7 @@ impl HermesTranslator {
             initial,
             now_ms,
         );
+        m.emit(id);
         if initial || already_live {
             return;
         }
@@ -317,6 +320,7 @@ impl HermesTranslator {
     fn end_subagent(&mut self, m: &mut PhaseMachine, id: &str, agent_id: &str, now_ms: i64) {
         self.ended_at.insert(agent_id.to_owned(), now_ms);
         m.subagents_mut().finish(id, agent_id);
+        m.emit(id);
         m.note_subagent_activity(id, now_ms);
     }
 
@@ -327,6 +331,7 @@ impl HermesTranslator {
         self.ended_at.clear();
         m.subagents_mut().forget(id);
         m.background_tasks_mut().forget(id);
+        m.emit(id);
     }
 
     /// Hermes fires no hook at launch (the first is at the first prompt), so

@@ -28,6 +28,7 @@ pub mod service;
 mod service_tests;
 pub mod shared;
 pub mod submit_retry;
+pub mod supervisor_facts;
 #[cfg(test)]
 pub(crate) mod test_support;
 

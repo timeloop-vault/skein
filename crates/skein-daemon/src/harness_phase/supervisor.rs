@@ -160,7 +160,8 @@ impl PhaseMachine {
     }
 
     /// #423: the runtime around the pure supervisor (`runtime.ts`'s `tick`).
-    /// The driver calls this after [`Self::tick`]. It snapshots every harness
+    /// The supervisor pass calls this every `SUPERVISE_INTERVAL_MS`, apart
+    /// from the tick (#761). It snapshots every harness
     /// in the store, evaluates the six invariants, logs the effects and
     /// applies the two recoveries; it never writes to a PTY and never touches
     /// the mail or input seams. Returns every line the TS runtime would have

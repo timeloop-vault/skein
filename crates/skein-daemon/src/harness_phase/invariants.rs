@@ -52,7 +52,8 @@ pub struct SupervisorSnapshot {
 }
 
 /// #423: what the delivery worker knows about a harness's mail
-/// (`prompt_delivery/`; no fact source is wired yet, see `daemon.rs`).
+/// (`prompt_delivery/`; built by `supervisor_facts::mail_state_for`, #733
+/// part B: the published nudge time and refusal plus a fresh unread count).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailState {
     pub unread: u32,

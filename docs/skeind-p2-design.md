@@ -1419,7 +1419,7 @@ The code is `crates/skein-daemon/src/harness_phase/`. Tests sit in
 | `patterns.rs` | Does the screen tail end in a waiting prompt? |
 | `constants.rs`, `types.rs` | The thresholds and the vocabulary (phase, source, transition) |
 | `translate/` | What does one Claude, opencode or Hermes event mean for the machine? |
-| `service.rs` | Who owns the clock, the lock and the tick thread? (`PhaseService`) |
+| `service.rs` | Who owns the clock and the lock? (`PhaseService`; the tick thread became the deadline driver in #761: `driver.rs`, `deadline.rs`, see "Slice 5 as built, part B") |
 | `stream.rs` | What does the service publish, and who writes the log rows? (`PhaseUpdate`, the `skein-phase-out` thread) |
 | `transcript_sampler.rs` | How often is a Claude transcript statted for the supervisor? (`TranscriptSampler`) |
 | `sinks.rs` | How do adapter events reach the service beside a client's own sink? (phase sinks, `Tee`) |
@@ -1430,7 +1430,7 @@ Pieces outside it: `pty/observer.rs` (`PtyObserver`),
 `harness_runner/events.rs` (the phase sinks the app tees, and
 `release_events`), `agent_api/phase_tap.rs` (the hook routes),
 `harness_work_hermes/attacher.rs` (the Hermes work poller) and
-`daemon.rs` (the facts closure for the tick). In the app,
+`daemon.rs` (the facts closure for the supervisor). In the app,
 `commands/harness_phase.rs` has the two commands, `harness_phase_input`
 and `harness_phase_snapshot`.
 
@@ -1458,7 +1458,9 @@ gathered before the lock is taken. A poisoned lock is taken over. One std
 thread, `skein-phase-tick`, calls `tick_once` every 1 s: the machine's
 tick, then the supervisor. It holds only a `Weak` and ends when the
 service is dropped, and a panic in one pass is logged and the next one
-runs.
+runs. (#761 replaced this thread with the deadline driver and a separate
+supervisor thread: see "Slice 5 as built, part B (#733), and the deadline
+driver (#761)". The "every second" below is history.)
 
 ### The output side
 
@@ -1483,22 +1485,24 @@ panic in the event sink or the database layer is logged (target
 `skein::phase`) and the thread keeps going. A failed channel send is
 logged once.
 
-`PhaseView` has two groups of fields. Display and notifications:
-`phase`, `phaseSince`, `spawnedAt`, `hasUserInput`, `permissionTool`,
-`permissionAgentType`, `delegatedCount`, `lastTurnSignal`,
-`lastSubmitAt`. The send gate: `authoritative`, `adapterHeard`,
-`adapterSilent`, `launchSignalAt`, `lastOutputAt`, `questionOpen`,
-`delegationDeferredAt`, `injected`. The second group exists only
-because `canSendPrompt` and mail delivery still decide in the webview;
-it leaves the wire with #733, which moves them into the daemon. A test
-pins the exact key set, so adding a field is a deliberate act. Today
-`PhaseView` lives in the daemon crate (`stream.rs`); moving the phase
-wire types to `skein-proto` belongs with the transport work.
+`PhaseView` had two groups of fields in this slice. Display and
+notifications: `phase`, `phaseSince`, `spawnedAt`, `hasUserInput`,
+`permissionTool`, `permissionAgentType`, `delegatedCount`,
+`lastTurnSignal`, `lastSubmitAt`. The send gate: `authoritative`,
+`adapterHeard`, `adapterSilent`, `launchSignalAt`, `lastOutputAt`,
+`questionOpen`, `delegationDeferredAt`, `injected`. The second group
+existed only because `canSendPrompt` still decided in the webview; #733
+part B removed it, and the view is the display set alone (see "Slice 5 as
+built, part B"). A test pins the exact key set, so adding a field is a
+deliberate act. Today `PhaseView` lives in the daemon crate (`stream.rs`);
+moving the phase wire types to `skein-proto` belongs with the transport
+work.
 
 The throttle compares views, so a change to a field that is not on the
-wire makes no update. An update that differs from the last one only in
-`lastOutputAt` waits for the tick. Anything with a transition or an armed deferral goes out
-at once.
+wire makes no update. In this slice an update that differed from the last
+one only in `lastOutputAt` waited for the tick; with that field gone, PTY
+output alone makes no update. Anything with a transition or an armed
+deferral goes out at once.
 
 `harness_phase_snapshot` gives a freshly loaded webview the current
 state, one update per known harness at the current `seq`. The mirror
@@ -1514,10 +1518,11 @@ version watch (`useClaudeVersionWatch.ts`) re-run their checks on it,
 because a reload produces no transition for a harness that is already
 `waiting`.
 
-The mirror stamps `lastOutputAt` locally from its own PTY output
-(`stampOutput`), so the send gate does not read the throttled value. It
-does not stamp an `exited` record. The screen-reading feed
-(`screenPhaseTick.ts`) re-sends an unchanged reading after a respawn.
+In this slice the mirror stamped `lastOutputAt` locally from its own PTY
+output (`stampOutput`), so the webview's send gate did not read the
+throttled value. Part B deleted both the gate and the stamp. The
+screen-reading feed (`screenPhaseTick.ts`) re-sends an unchanged reading
+after a respawn.
 
 The app writes no `harness_events` rows. `db_record_harness_event` and
 `useTransitionLog.ts` are gone. The `user-restart` and
@@ -1539,20 +1544,22 @@ changes no state and is not on the stream.
 
 The variants of `ClientPhaseInput` go through `harness_phase_input`
 (`{harnessId, input}`), one tagged enum. Each is something only the
-client can know. The call is fire-and-forget: `phaseInput.ts` swallows
+client can know. (Ten variants in this slice; part B removed
+`promptSubmitted` and `recoverUnheardSilence`, leaving eight.) The call is
+fire-and-forget: `phaseInput.ts` swallows
 any failure. The command is `async` so a keystroke does not run on the
 main thread.
 
 | Variant | Sent when | Why only a client knows |
 | --- | --- | --- |
 | `input` | A keystroke in the xterm, with the empty-composer flag | The daemon sees PTY bytes, not xterm's `onKey`, and not whether the composer was empty |
-| `promptSubmitted` | A prompt goes through the #238 seam | The seam is a webview paste |
+| `promptSubmitted` (removed in part B) | A prompt goes through the #238 seam | The seam is a webview paste |
 | `muteInducedOutput` | The client is about to cause a redraw (focus) | Only the client knows it caused the output |
 | `screenReading` | The rendered Hermes screen reads `waiting`, `running`, `unknown`, or null to clear (#623) | Only the xterm buffer has the rendered screen |
 | `hermesLaunchPoll` | One 500 ms Hermes launch poll, with whether the screen read `waiting` (#625) | Same: it reads the screen |
 | `launchSignal` | The Claude CLI reported its own launch (`SessionStart`) | The hook decision depends on shell-claim and session-follow state that stays client-side |
 | `sessionSwitched` | The tail was re-pointed: `clear`, `resume`, `fork` or `startup` (#116, #539) | Same |
-| `recoverUnheardSilence` | A mail nudge's lost first paste (#404) | The paste was the webview's |
+| `recoverUnheardSilence` (removed in part B) | A mail nudge's lost first paste (#404) | The paste was the webview's |
 | `startFailed` | A start produced no process (a refused agent, a failed ensure call). Wire: `{"kind":"startFailed"}` | The client holds the agent verdict check. The record becomes `exited` |
 | `restartRequested` | The user or the version auto-restart asks for a respawn. Wire: `{"kind":"restartRequested","source":"user-restart"\|"version-auto-restart"}` | The client decides to restart. The daemon writes the row |
 
@@ -1613,13 +1620,14 @@ webview.
 
 ### The supervisor
 
-The supervisor runs in the daemon on the tick. Its effects log under
+The supervisor runs in the daemon on the tick (since #761, on its own
+thread every 5 s: see "Slice 5 as built, part B"). Its effects log under
 `skein::supervisor` at the invariant's own severity: a violation at info,
 warn or error as the invariant defines, `cleared` at info, a recovery at
 info, and its outcome at info when applied and warn when not. The line
 shape is the TypeScript supervisor's (`supervisor harness=<id> code=<code>
 violation evidence=...`). The facts for the tick come from
-`daemon.rs` (`start_phase_ticker`):
+`daemon.rs` (`start_phase_ticker` then, `start_phase_driver` now):
 
 - Whether an adapter is attached, per harness, from the three adapter
   registries.
@@ -1628,8 +1636,8 @@ violation evidence=...`). The facts for the tick come from
   session id changes, the harness is respawned, or the attach stops being
   Claude. They feed `tail_silent_file_growing`.
 
-`mail_held` still gets no facts: mail delivery moved in #733 part A, but
-the ticker's `SupervisorFacts` does not read the worker's held set yet.
+`mail_held` got no facts in this slice. #733 part B added them: see "Mail
+facts for the supervisor" in "Slice 5 as built, part B".
 
 ### A behaviour change
 
@@ -1675,7 +1683,9 @@ crates/skein-daemon/src/harness_phase/; the text is authoritative
    through the phase sinks (the webview's teed Claude and opencode
    channels reach the same sinks), the Claude permission hook (gated on
    shell mode and the stored shell claim) and the Hermes hooks and work
-   poller. A tick every second runs the machine and the supervisor.
+   poller. A tick every second runs the machine and the supervisor (since
+   #761 a deadline driver ticks the machine when something is due, and a
+   separate thread runs the supervisor every 5 s: Figure 14).
 3. After each call and each tick the service hands one `PhaseUpdate` per
    changed harness to the output thread, under the lock and in order.
 4. The thread writes one `harness_events` row per transition. The
@@ -1699,15 +1709,16 @@ crates/skein-daemon/src/harness_phase/; the text is authoritative
 - With no client attached, the Hermes screen phase reads `unknown`
   (#584). The machine treats "no client reporting" as an `unknown`
   reading.
-- `mail_held` still gets no facts after #733 part A (see its "Known
-  limits").
+- `mail_held` got no facts at the end of this slice; resolved by #733
+  part B.
 - The shell claim reaches the daemon through debounced room saves
   (`shellClaim` and `cmd` are not in the structural key). A permission
   ping within that window can be gated against the old claim.
 - The mirror lags the daemon by one update. A read straight after a
   forwarded input sees the old record.
-- An update that changes only `lastOutputAt` reaches the mirror within
-  about 1 s.
+- An update that changes only `lastOutputAt` reached the mirror within
+  about 1 s. Gone with the field (#733 part B): output alone makes no
+  update.
 - The screen reading is forwarded only while the webview samples it, and
   only when it changes (`screenPhaseTick.ts`).
 - `startFailed` and the restart row depend on a client. With none, a
@@ -1729,8 +1740,8 @@ crates/skein-daemon/src/harness_phase/; the text is authoritative
   transcript row for the awaiting tool counts as later work). It only
   logs.
 - A resumed harness reads `waiting` from the replayed end of turn before
-  its TUI is ready. The launch-settle rule (`launchReady.ts`) guards the
-  send gate.
+  its TUI is ready. The launch-settle rule guards the send gate (it was
+  `launchReady.ts`; the daemon's gate holds it since #733 part B).
 
 ### Live verification
 
@@ -1902,8 +1913,10 @@ Enter the daemon wrote, which the client's draft tracker must hear and
 must not count as typing). The commands are `harness_send_prompt`,
 `mail_deliver_now`, `harness_client_facts` and `mail_held_snapshot`
 (`app/src-tauri/src/commands/delivery.rs`). The daemon records its own
-submit (`ClientPhaseInput::PromptSubmitted`, applied internally) and the
-#404 recovery (`RecoverUnheardSilence`).
+submit and the #404 recovery itself, by calling `PhaseService::prompt_submitted`
+and `recover_unheard_silence` from `prompt_delivery/daemon_env.rs`. Part A
+left both as client input variants; part B removed them (see "Slice 5 as
+built, part B"). Part B also added a read-only command, `harness_gate_check`.
 
 ```mermaid
 flowchart LR
@@ -1926,10 +1939,13 @@ flowchart LR
     W -->|"8 mail-held, delivery-seam"| UI
     UI -->|"9 harness_client_facts"| CF
     UI -->|"10 manual sends"| CMD
+    UI -->|"11 gate check: tooltips, file drop"| CMD
+    CMD -->|"12 read-only check"| G
 ```
 
-Figure 12: how a prompt reaches a harness after #733 part A. Renders
-section "Slice 5 as built, part A" and
+Figure 12: how a prompt reaches a harness after #733 part A, plus the
+read-only gate check of part B. Renders sections "Slice 5 as built, part A"
+and "Slice 5 as built, part B" and
 crates/skein-daemon/src/prompt_delivery/; the text is authoritative
 (non-normative).
 
@@ -1952,14 +1968,14 @@ crates/skein-daemon/src/prompt_delivery/; the text is authoritative
    webview.
 9. The webview reports the composer draft and the user-input counter.
 10. Buttons (Nudge, the actions menu, deliver-now) call the commands.
+11. Part B: a disabled-button tooltip and the file drop ask whether a send
+    or an insert would be allowed now. They call `harness_gate_check`.
+12. That command asks the same gate, through the worker, and changes
+    nothing.
 
 ### Not done, left for part B
 
-- The eight send-gate fields are still on `PhaseView`. The webview's
-  `canSendPrompt` survives only as a display hint for disabled-button
-  tooltips.
-- The `PromptSubmitted` and `RecoverUnheardSilence` client input variants
-  still exist on the wire, though the webview no longer sends them.
+Done: see "Slice 5 as built, part B (#733), and the deadline driver (#761)".
 
 ### Known limits
 
@@ -1967,8 +1983,6 @@ crates/skein-daemon/src/prompt_delivery/; the text is authoritative
   client it gets no mail (#584).
 - A keystroke can reach the PTY slightly before its client-facts report,
   so a draft that began a moment ago may not yet hold mail back.
-- The supervisor's `mail_held` invariant still gets no facts: part A did
-  not wire `SupervisorFacts` to the worker's held set.
 
 ## Slice 6 as built (#734)
 
@@ -2128,6 +2142,235 @@ state for harnesses that disappeared, which `closeRoomForAgent` and
   delivery (#733) sends it when the harness reaches `waiting`, with no
   client attached. A Hermes harness reaches `waiting` only from a client's
   screen reading, so there the prompt waits for a client (#584).
+
+## Slice 5 as built, part B (#733), and the deadline driver (#761)
+
+Part B took the send gate off the wire. The daemon's gate was already the
+only one that decided a send; what was left in the webview was a copy kept
+for tooltips and the file drop, fed by eight extra fields on `PhaseView`.
+Both are gone: the webview now asks the daemon. #761 replaced the 1 s tick
+thread of slice 4 with a driver that sleeps until the machine has something
+to do, so the daemon does no periodic work for an idle harness.
+
+### What left the wire
+
+`PhaseView` (`harness_phase/stream.rs`) carries only the display and
+notification fields: `phase`, `phaseSince`, `spawnedAt`, `hasUserInput`,
+`permissionTool`, `permissionAgentType`, `delegatedCount`, `lastTurnSignal`
+and `lastSubmitAt`. The eight gate fields (`authoritative`, `adapterHeard`,
+`adapterSilent`, `launchSignalAt`, `lastOutputAt`, `questionOpen`,
+`delegationDeferredAt`, `injected`) are not serialized, and the webview
+mirror (`harnessActivityTypes.ts`, `phaseMirror.ts`) has no field for them.
+With `lastOutputAt` gone, PTY output alone emits no phase update, and the
+throttle that held back an output-only change is deleted. The mirror no
+longer stamps output either. `canSendPrompt`, `canInsertText`,
+`launchReady.ts` and the webview's `atSafeStoppingPoint` are deleted.
+
+`ClientPhaseInput` has eight variants left, each a fact only a client can
+see:
+
+| Variant | Why only a client knows |
+| --- | --- |
+| `input` | A keystroke (xterm's `onKey`) and whether the composer was empty |
+| `muteInducedOutput` | Only the client knows it is about to cause a redraw |
+| `screenReading` | Only the xterm buffer has the rendered Hermes screen |
+| `hermesLaunchPoll` | It reads the same screen |
+| `launchSignal` | The hook decision depends on shell-claim and session-follow state kept in the client |
+| `sessionSwitched` | Same |
+| `startFailed` | The client holds the agent verdict check |
+| `restartRequested` | The client decides to restart |
+
+`promptSubmitted` and `recoverUnheardSilence` are gone. The daemon writes
+the paste itself, so `prompt_delivery/daemon_env.rs` calls
+`PhaseService::prompt_submitted` and `recover_unheard_silence` directly.
+
+### The gate check
+
+`harness_gate_check {harnessId, body, mode}` is a Tauri command in
+`app/src-tauri/src/commands/delivery.rs`. `mode` is `"send"` or `"insert"`.
+It goes through `DeliveryHandle::check` to the worker, which asks
+`gate.rs`: `can_send` for `send`, and the new `can_insert` for `insert`.
+`insert` is looser: it needs a terminal and a live PTY with a phase record,
+and refuses a permission dialog and a `spawning` or `exited` harness, but it
+has no settling, question or paste-mode check, and it allows `running`,
+`idle` and `waiting`. The check is read-only. It writes nothing to the PTY,
+arms no timer and records nothing; a `send` check answers `busy` while a
+prompt is in flight for the harness. A worker
+that does not answer in time reads as `busy` or `not_ready`.
+
+A tooltip needs a synchronous answer, so `sendGateHint.ts` keeps the last
+daemon answer and `useSendGateHint.ts` wraps it. The only body-dependent
+rule is that a multi-line body needs paste mode, so each refresh asks twice
+(a one-line and a two-line probe) and `get` picks by newline. It refreshes
+on every phase-mirror change for the harness. While a refusal clears by
+time (`settling`, `busy`) it asks again every 2 s, and while any other
+refusal stands every 5 s, because the facts behind it are no longer on the
+wire. An `ok` answer does not poll. The call helper is `gateCheck.ts`.
+
+The file drop (`terminalDrop.ts`, `useTerminalDrop.ts`) shows its local
+answer at once and asks the daemon's `insert` answer once per drag. An
+answer that lands after the drag ended is dropped. The drop itself goes
+through `insertText` (`harnessInputSend.ts`), and the daemon's gate decides
+at that moment too.
+
+### The two substitutes for `authoritative`
+
+Two webview readers used `authoritative`. Both now use what is still on the
+wire, with a small change in behaviour.
+
+- The control centre's last-activity stamp
+  (`app/src/controlCenter/useControlCenterData.ts`) keys on
+  `lastTurnSignal`. A harness that has had a turn signal uses the
+  signal's time and `phaseSince`. One that has not uses `spawnedAt` (and
+  `phaseSince` once exited). So an authoritative harness with no turn signal
+  yet shows its spawn time, where it used `phaseSince` before. A harness that
+  lost authority after a turn signal still uses `phaseSince`.
+- `screenPhaseTick.ts` forwards screen readings for every running or
+  waiting harness. The daemon ignores a reading for an authoritative one,
+  so the extra reports cost a message and change nothing.
+
+### Mail facts for the supervisor
+
+The supervisor's `mail_held` invariant now gets facts. The delivery worker
+publishes the last nudge time and the last refusal into `Shared`
+(`prompt_delivery/shared.rs`, `MailFacts`). The facts closure in `daemon.rs`
+adds a fresh unread count for each harness in `waiting`, through
+`mail_state_for` in `prompt_delivery/supervisor_facts.rs`. The count is read
+at the time, so a harness that has read its mail does not look held. For any
+other phase the invariant cannot fire, so nothing is read. A failed unread
+lookup gives no facts, and the supervisor stays silent.
+
+### The deadline driver
+
+`PhaseMachine::next_deadline(now)` (`harness_phase/deadline.rs`) is the
+earliest instant at which `tick` would change any state, assuming no input
+arrives first. `harness_deadline` is the same for one harness. It mirrors
+`tick`, `tick_work` and the screen rule branch for branch. The contract:
+
+- Soundness: if it returns `None` or a time after `t`, a tick at any
+  instant up to `t` changes nothing observable.
+- Liveness: if a tick at `d` would change something and no input arrives,
+  it returns a time at or before `d`.
+
+A value at or before `now` means tick now. That happens when a deadline has
+passed, when an armed deferral with no outstanding work has no settle mark
+yet (the tick stamps it), when a stale settle mark has to be cleared, and
+when a screen step is due. Any input can move the answer earlier, so the
+driver asks again after each one.
+
+`tick` is safe at arbitrary instants. The screen rule counts samples, not
+time, so `tick_screen_gated` steps it at most once per `TICK_INTERVAL_MS`
+(1 s) per harness and reuses the last verdict in between, except that a
+gated tick also counts the harness as claimed when the pending step would
+claim it (a reading that arrived since the last step), so L2a/L2b cannot fire
+ahead of a step the old 1 Hz tick would have taken first; the deadline then
+reports the step's instant, not the L2 one. That constant is now only the
+sampling gate, not how often the tick runs.
+
+`harness_phase/driver.rs` runs two threads, both holding a `Weak` to the
+service. `skein-phase-deadline` finds the earliest deadline under the lock,
+ticks if it is due, and otherwise sleeps on a condvar until it (a sleep is
+cut to 30 s and then planned again, since a monotonic clock may not count
+suspended time). With no deadline pending it waits for a wake. It records the
+instant it sleeps until in `driver_armed`, under the lock. An input that
+creates an earlier deadline wakes it: `PhaseService::with_for` checks only
+the touched harness's `harness_deadline` against `driver_armed`, and only
+while the driver sleeps. A deadline that moves later needs no wake; the
+driver wakes at the stale instant, finds nothing due and plans again. The
+cost on the PTY-output path, which runs through `with_for` on every chunk,
+is one per-harness deadline computation under a lock the call already holds,
+and no whole-machine scan. A call that names no harness (`with`) does scan
+the whole machine. A deadline that is still due after three passes in a row
+is logged once and the driver backs off for 1 s; a panic is logged and also
+backs off. Registry changes (subagents, background tasks) are marked when
+the event arrives, so they reach the stream without a periodic sweep.
+`with_for` also marks the touched harness whenever its record differs from
+the last view sent, which covers a display field that changes with no phase
+transition (`lastTurnSignal`, `delegatedCount`, `lastSubmitAt`,
+`hasUserInput`). A tick pass and a supervisor pass each sweep every harness
+once.
+
+Both threads end when the service is dropped: `Drop` closes the shared
+`Wake`, which both wait on, so neither polls to find out.
+
+`skein-phase-supervisor` runs the supervisor every `SUPERVISE_INTERVAL_MS`
+(5 s), with facts gathered outside the lock by the closure `daemon.rs`
+passes (`start_phase_driver`). 5 s is safe because the supervisor compares
+timestamps against `now` and keeps no per-pass count, so its cadence adds
+detection latency and nothing else. It still divides the 15 s transcript
+sample gate and the 30 s recovery throttle. The worst-case latency of its
+two repairs grows: the authority regrant from about 6-7 s to about 10-15 s,
+and the stuck-waiting repair from about 21 s to about 25-30 s. A repair can
+create a deadline, so the supervisor pass goes through `with`, which wakes
+the driver for it.
+
+```mermaid
+flowchart LR
+    IN["Inputs: PTY output, adapter events, client inputs"]
+    SVC["PhaseService lock and machine"]
+    CHK["Deadline check, touched harness"]
+    DRV["skein-phase-deadline"]
+    SUP["skein-phase-supervisor"]
+    FAC["Facts closure in daemon.rs"]
+    ATT["Live attaches, transcript samples"]
+    DEL["Delivery worker, mail facts"]
+    OUT["Output thread"]
+    EV["skein://harness-phase"]
+    IN -->|"1 each input"| SVC
+    SVC -->|"2 harness_deadline"| CHK
+    CHK -->|"3 earlier than armed: poke"| DRV
+    DRV -->|"4 sleep to deadline, then tick"| SVC
+    ATT -->|"5 facts"| FAC
+    DEL -->|"5 facts"| FAC
+    FAC -->|"6 every 5 s"| SUP
+    SUP -->|"7 supervise"| SVC
+    SVC -->|"8 PhaseUpdate"| OUT
+    OUT -->|"9 emit"| EV
+```
+
+Figure 14: what runs the phase machine after #761. Renders section "Slice 5
+as built, part B (#733), and the deadline driver (#761)" and
+crates/skein-daemon/src/harness_phase/driver.rs and deadline.rs; the text is
+authoritative (non-normative).
+
+1. Every input takes the service lock through `with_for` (one harness) or
+   `with` (none named): PTY output and exit, adapter events and client
+   inputs.
+2. After the input, and only while the driver sleeps, the service computes
+   that harness's `harness_deadline`.
+3. If it is earlier than the instant the driver sleeps until
+   (`driver_armed`), the service pokes the driver.
+4. The driver sleeps until the earliest deadline, then ticks the machine
+   under the lock. A tick that changes a harness leaves a `PhaseUpdate`.
+5. The facts closure collects what only the daemon can see: which adapters
+   are attached, the Claude transcript samples, and the mail facts the
+   delivery worker published.
+6. The supervisor thread calls the closure every 5 s, outside the lock.
+7. It runs the supervisor under the lock. A repair it makes can create a
+   deadline, which wakes the driver.
+8. Each call that changed a harness hands a `PhaseUpdate` to the output
+   thread, under the lock and in order.
+9. The output thread writes the `harness_events` rows, then emits
+   `skein://harness-phase`.
+
+### Known limits
+
+- The send hint can be up to one poll interval stale (2 s or 5 s while
+  refused, and until the next phase-mirror change otherwise). Before its
+  first answer it reads as allowed. The daemon decides at click time, so a
+  stale hint never sends anything it would not otherwise.
+- `at_safe_stopping_point` in `harness_phase/machine.rs` is now used only by
+  tests.
+- An off-grid screen reading may be sampled up to a second sooner than under
+  the old tick, because the gate counts from the last step, not from a fixed
+  second boundary.
+- `mail_held` reports (a debug-level log, no repair) for any waiting harness
+  with unread mail and no nudge since it started waiting, including mail the
+  worker will never nudge (the `mail` tool group switched off, a kind that
+  cannot receive nudges).
+- Every PTY chunk recomputes that one harness's deadline while the driver
+  sleeps (one prompt-pattern match over the tail), instead of nothing per
+  chunk under the old tick.
 
 ## What #583 assumes of #584 and #585
 

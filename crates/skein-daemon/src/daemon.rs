@@ -32,6 +32,8 @@ use crate::harness_runner::{HarnessRunner, RunnerDeps};
 use crate::harness_work_hermes::{HermesWorkAttacher, HermesWorkManager};
 use crate::opencode_sidecar::OpencodeSidecarManager;
 use crate::paths::Paths;
+use crate::prompt_delivery::daemon_env::unread_for;
+use crate::prompt_delivery::supervisor_facts::mail_state_for;
 use crate::prompt_delivery::{DaemonEnv, DeliveryHandle, DeliveryService, RunnerPty};
 use crate::pty::PtyManager;
 use crate::room_store::RoomStore;
@@ -186,19 +188,33 @@ pub struct Daemon {
     pub preview_server: Option<ServerFuture>,
 }
 
-/// Start the phase service's tick thread (#732). The facts closure answers
+/// Start the phase service's two threads (#732, #761): the deadline driver,
+/// which ticks the machine only when it has a deadline, and the supervisor
+/// pass every `SUPERVISE_INTERVAL_MS`. The facts closure (the supervisor's)
+/// answers
 /// `live_attach` from the three adapter registries, which the client's own
 /// attach replaces in place (same key), so one answer covers both.
 ///
 /// The Claude transcript samples come from a `TranscriptSampler` (one stat per
-/// Claude harness every 15 s, on the ticker thread, with neither the phase lock
-/// nor the room-store lock held). The `mail` facts are still unwired after #733
-/// part A (left for part B), so `mail_held` cannot fire yet.
+/// Claude harness every 15 s, on the supervisor thread, with neither the phase lock
+/// nor the room-store lock held). The `mail` facts (#733 part B) come from
+/// the delivery worker's published nudge time and refusal
+/// (`DeliveryHandle::supervisor_mail`, a shared read) plus the unread count,
+/// read fresh from the database only for a harness that is `Waiting` (the
+/// only phase `mail_held` fires in); any other harness has `mail: None`.
 ///
-/// The closure holds only a `Weak`: the ticker thread must not keep the
-/// service alive.
-fn start_phase_ticker(phase: &Arc<PhaseService>, state: &SharedState, rooms: &Arc<RoomStore>) {
+/// The closure holds a `Weak` of the service: the threads must not keep it
+/// alive. (The delivery handle it also holds is the same one the service's
+/// own listener keeps.)
+fn start_phase_driver(
+    phase: &Arc<PhaseService>,
+    state: &SharedState,
+    rooms: &Arc<RoomStore>,
+    delivery: &DeliveryHandle,
+) {
     let weak = Arc::downgrade(phase);
+    let delivery = delivery.clone();
+    let db = Arc::clone(&state.db);
     let (claude, opencode, hermes) = (
         state.claude.clone(),
         state.opencode.clone(),
@@ -212,6 +228,7 @@ fn start_phase_ticker(phase: &Arc<PhaseService>, state: &SharedState, rooms: &Ar
             return facts;
         };
         let spawned = phase.spawned_at_snapshot();
+        let phases = phase.phase_snapshot();
         let ids: HashSet<String> = spawned.keys().cloned().collect();
         sampler.prune(&ids);
         let claude_ids: HashSet<String> = ids
@@ -234,19 +251,28 @@ fn start_phase_ticker(phase: &Arc<PhaseService>, state: &SharedState, rooms: &Ar
                 .filter(|_| is_claude)
                 .map(|(sid, cwd)| (sid.as_str(), cwd.as_str()));
             let transcript = sampler.sample(&id, spawned_at, source, now);
+            let mail = phases.get(&id).and_then(|p| {
+                mail_state_for(
+                    &id,
+                    *p,
+                    || delivery.supervisor_mail(&id),
+                    || unread_for(&rooms, &db, &id).map(|m| m.count),
+                )
+            });
             facts.harnesses.insert(
                 id,
                 HarnessFacts {
                     live_attach: Some(live),
                     transcript,
-                    ..HarnessFacts::default()
+                    mail,
                 },
             );
         }
         facts
     });
-    // The handle is dropped: the thread ends on its own when the service does.
-    drop(phase.start_ticker(facts));
+    // The handles are dropped: the threads end on their own when the service does.
+    drop(phase.start_deadline_driver());
+    drop(phase.start_supervisor(facts));
 }
 
 /// Start prompt delivery (#733) and bind its three inputs: the phase
@@ -328,7 +354,6 @@ impl Daemon {
         let rooms = RoomStore::new(Arc::clone(&state.db), state.events.clone());
         // #732: the phase machine, fed by the runner and the hooks.
         let phase = PhaseService::new(Arc::clone(&state.db), state.events.clone());
-        start_phase_ticker(&phase, &state, &rooms);
         // #732: the daemon polls a Hermes harness's delegated work itself.
         let hermes_work = Arc::new(HermesWorkAttacher::new(
             state.hermes_work.clone(),
@@ -430,6 +455,8 @@ impl Daemon {
             &harness_runner,
             agent_api.as_deref(),
         );
+        // After the delivery worker: the supervisor's mail facts read it.
+        start_phase_driver(&phase, &state, &rooms, &delivery);
         // #734: a room's agent token ends with the room being open.
         crate::agent_api::token_lifecycle::revoke_tokens_of_closed_rooms(&rooms, &state.db);
         if let Some(api) = &agent_api {

@@ -65,6 +65,21 @@ impl From<&HarnessActivity> for PhaseView {
     }
 }
 
+impl PhaseView {
+    /// Whether `a` reads the same as this view, without building one.
+    fn matches(&self, a: &HarnessActivity) -> bool {
+        self.phase == a.phase
+            && self.phase_since == a.phase_since
+            && self.spawned_at == a.spawned_at
+            && self.has_user_input == a.has_user_input
+            && self.permission_tool == a.permission_tool
+            && self.permission_agent_type == a.permission_agent_type
+            && self.delegated_count == a.delegated_count
+            && self.last_turn_signal == a.last_turn_signal
+            && self.last_submit_at == a.last_submit_at
+    }
+}
+
 /// One harness's phase state at one instant, as sent to clients.
 ///
 /// `seq` is one process-wide counter, so a client that listens first and then
@@ -141,6 +156,25 @@ impl Inner {
         ids.into_iter()
             .map(|id| self.body(id, &self.meta[id].room_id, self.seq))
             .collect()
+    }
+
+    /// Mark `id` for [`Self::publish`] when its record no longer reads as the
+    /// last update sent. The machine's rules write the record's fields in
+    /// many places and not all of them mark the harness (a no-op
+    /// `set_phase` does not), and with no periodic sweep nothing else would
+    /// catch a silent change to the wire view. Cheap: no allocation.
+    pub(super) fn mark_if_view_changed(&mut self, id: &str) {
+        let same = match (
+            self.machine.get(id),
+            self.last_emitted.get(id).and_then(|u| u.view.as_ref()),
+        ) {
+            (None, None) => true,
+            (Some(a), Some(v)) => v.matches(a),
+            _ => false,
+        };
+        if !same {
+            self.machine.emit(id);
+        }
     }
 
     /// Runs under the lock after every call. An update goes out only when its

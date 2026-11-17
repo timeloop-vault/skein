@@ -2,7 +2,7 @@
 //!
 //! The machine takes the time as an argument and queues its transitions in an
 //! outbox; this is the part that owns the clock, the per-harness translators,
-//! and the tick thread. It is shared by reference
+//! and (in `driver.rs`) the deadline driver and supervisor threads. It is shared by reference
 //! (`Arc<PhaseService>`), every method takes `&self`, and all state sits
 //! behind one `std::sync::Mutex` that is never held across a callback or any
 //! I/O: the clock is read and the facts are gathered before the lock is
@@ -15,14 +15,11 @@
 //! database write or emit happens under the mutex.
 
 use std::collections::{BTreeMap, HashMap};
-use std::panic::AssertUnwindSafe;
 use std::sync::mpsc::{Sender, channel};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use std::thread::JoinHandle;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::client_input::{ClientPhaseInput, RestartSource};
-use super::constants::TICK_INTERVAL_MS;
+use super::driver::{NOT_SLEEPING, Wake};
 use super::listener::PhaseListener;
 use super::machine::PhaseMachine;
 use super::stream::{EventRow, OutMsg, PhaseUpdate, spawn_output_thread};
@@ -63,8 +60,13 @@ pub(super) struct Inner {
     pub(super) last_emitted: HashMap<String, PhaseUpdate>,
     /// `(id, room id)` of harnesses forgotten since the last `after`.
     pub(super) pending_forgets: Vec<(String, String)>,
-    /// Set by the tick: the next `after` also considers unmarked harnesses.
+    /// Set by the deadline driver's tick: the next `after` also considers
+    /// unmarked harnesses (a whole-machine pass, run on a wake, never on a
+    /// timer). Registry changes made by events are marked, not swept.
     pub(super) sweep: bool,
+    /// The instant the deadline driver sleeps until (`driver::NOT_SLEEPING`
+    /// when it is not asleep): an input with an earlier deadline wakes it.
+    pub(super) driver_armed: i64,
     /// A send to the output thread has failed (and was logged, once).
     pub(super) send_failed: bool,
     /// The one listener (#733) and the spawns it has not yet been told of.
@@ -85,6 +87,7 @@ impl Inner {
             last_emitted: HashMap::new(),
             pending_forgets: Vec::new(),
             sweep: false,
+            driver_armed: NOT_SLEEPING,
             send_failed: false,
             listener: None,
             pending_spawns: Vec::new(),
@@ -187,10 +190,18 @@ impl Inner {
 /// See the module docs.
 pub struct PhaseService {
     pub(super) inner: Mutex<Inner>,
-    clock: Clock,
+    pub(super) clock: Clock,
+    /// What the driver and supervisor threads sleep on; closed on drop.
+    pub(super) wake: Arc<Wake>,
     /// A test service's database and the directory it lives in.
     #[cfg(test)]
     pub(super) test_state: Option<(tempfile::TempDir, Arc<Database>)>,
+    /// Driver passes that ran the machine tick.
+    #[cfg(test)]
+    pub(super) driver_ticks: std::sync::atomic::AtomicUsize,
+    /// Whole-machine `next_deadline` scans.
+    #[cfg(test)]
+    pub(super) deadline_scans: std::sync::atomic::AtomicUsize,
 }
 
 fn system_now_ms() -> i64 {
@@ -217,8 +228,13 @@ impl PhaseService {
         Arc::new(Self {
             inner: Mutex::new(Inner::new(tx)),
             clock,
+            wake: Arc::new(Wake::default()),
             #[cfg(test)]
             test_state: None,
+            #[cfg(test)]
+            driver_ticks: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            deadline_scans: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -237,15 +253,40 @@ impl PhaseService {
     /// Run `f` on the state at one instant: read the clock first, then lock,
     /// mutate, run [`Inner::after`], unlock. A panic in another caller must
     /// not stop phase tracking for good, so a poisoned lock is taken over.
+    ///
+    /// For a call that concerns no single harness: when the deadline driver
+    /// is asleep this scans the whole machine for an earlier deadline and
+    /// wakes it. Calls that name a harness use [`Self::with_for`].
     pub(super) fn with<R>(&self, f: impl FnOnce(&mut Inner, i64) -> R) -> R {
         let now = (self.clock)();
         let mut g = self.lock();
         let r = f(&mut g, now);
         g.after();
+        if g.driver_armed != NOT_SLEEPING {
+            let d = self.scan_deadline(&g, now);
+            self.wake_if_earlier(&mut g, d);
+        }
         r
     }
 
-    fn lock(&self) -> MutexGuard<'_, Inner> {
+    /// [`Self::with`] for an input about one harness: only that harness's
+    /// deadline can have moved earlier, so only it is compared with the
+    /// instant the driver sleeps until. No whole-machine scan: the PTY output
+    /// path runs through here on every chunk.
+    pub(super) fn with_for<R>(&self, id: &str, f: impl FnOnce(&mut Inner, i64) -> R) -> R {
+        let now = (self.clock)();
+        let mut g = self.lock();
+        let r = f(&mut g, now);
+        g.mark_if_view_changed(id);
+        g.after();
+        if g.driver_armed != NOT_SLEEPING {
+            let d = g.machine.harness_deadline(id, now);
+            self.wake_if_earlier(&mut g, d);
+        }
+        r
+    }
+
+    pub(super) fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -256,14 +297,14 @@ impl PhaseService {
     /// old process's record, registries, mute window, screen state and
     /// adapter state are all dropped first.
     pub fn spawned(&self, id: &str, room_id: &str, injected: bool) {
-        self.with(|s, now| s.spawn_record(id, room_id, injected, now));
+        self.with_for(id, |s, now| s.spawn_record(id, room_id, injected, now));
     }
 
     /// Ignored for an id the service does not know, so a late exit cannot
     /// resurrect a forgotten harness. (The pure machine still records one, as
     /// TS does.)
     pub fn exited(&self, id: &str, code: Option<i32>) {
-        self.with(|s, now| {
+        self.with_for(id, |s, now| {
             if s.meta.contains_key(id) {
                 s.machine.exited(id, code, now);
             }
@@ -273,7 +314,7 @@ impl PhaseService {
     /// Drop every trace of a harness: record, registries, translators and
     /// its `meta`.
     pub fn forget(&self, id: &str) {
-        self.with(|s, _| {
+        self.with_for(id, |s, _| {
             s.forget_machine(id);
             if let Some(m) = s.meta.remove(id) {
                 s.pending_forgets.push((id.to_owned(), m.room_id));
@@ -284,13 +325,13 @@ impl PhaseService {
     // ---- PTY ------------------------------------------------------------
 
     pub fn record_output(&self, id: &str, chunk: &str) {
-        self.with(|s, now| s.machine.record_output(id, Some(chunk), now));
+        self.with_for(id, |s, now| s.machine.record_output(id, Some(chunk), now));
     }
 
     // ---- adapters -------------------------------------------------------
 
     pub fn claude_attached(&self, id: &str) {
-        self.with(|s, now| {
+        self.with_for(id, |s, now| {
             s.claude
                 .entry(id.to_owned())
                 .or_default()
@@ -300,7 +341,7 @@ impl PhaseService {
 
     pub fn claude_event(&self, id: &str, event: &ClaudeEvent) {
         // No attached translator: the event is dropped, never creates one.
-        self.with(|s, now| {
+        self.with_for(id, |s, now| {
             if let Some(t) = s.claude.get_mut(id) {
                 t.apply(&mut s.machine, id, event, now);
             }
@@ -308,7 +349,7 @@ impl PhaseService {
     }
 
     pub fn claude_detached(&self, id: &str) {
-        self.with(|s, now| {
+        self.with_for(id, |s, now| {
             if let Some(t) = s.claude.get_mut(id) {
                 t.detached(&mut s.machine, id, now);
             }
@@ -316,7 +357,7 @@ impl PhaseService {
     }
 
     pub fn opencode_attached(&self, id: &str) {
-        self.with(|s, now| {
+        self.with_for(id, |s, now| {
             s.opencode
                 .entry(id.to_owned())
                 .or_default()
@@ -325,7 +366,7 @@ impl PhaseService {
     }
 
     pub fn opencode_event(&self, id: &str, event: &OpencodeEvent) {
-        self.with(|s, now| {
+        self.with_for(id, |s, now| {
             if let Some(t) = s.opencode.get_mut(id) {
                 t.apply(&mut s.machine, id, event, now);
             }
@@ -333,7 +374,7 @@ impl PhaseService {
     }
 
     pub fn opencode_detached(&self, id: &str) {
-        self.with(|s, now| {
+        self.with_for(id, |s, now| {
             if let Some(t) = s.opencode.get_mut(id) {
                 t.detached(&mut s.machine, id, now);
             }
@@ -344,7 +385,7 @@ impl PhaseService {
     /// `createHermesBinding` does: the old binding is disposed first
     /// (permission released, authority detached, work cleared).
     pub fn hermes_attached(&self, id: &str, bound_session_id: Option<String>) {
-        self.with(|s, now| {
+        self.with_for(id, |s, now| {
             if let Some(old) = s.hermes.get_mut(id) {
                 old.detached(&mut s.machine, id, now);
             }
@@ -359,7 +400,7 @@ impl PhaseService {
     /// Dropped (default outcome) when no binding is attached, as TS's
     /// `bindings.get(id)?.handle`.
     pub fn hermes_hook(&self, id: &str, hook: &HarnessHermesHook) -> HermesHookOutcome {
-        self.with(|s, now| {
+        self.with_for(id, |s, now| {
             s.hermes
                 .get_mut(id)
                 .map(|t| t.apply_hook(&mut s.machine, id, hook, now))
@@ -368,7 +409,7 @@ impl PhaseService {
     }
 
     pub fn hermes_work(&self, id: &str, event: &HermesWorkEvent) {
-        self.with(|s, now| {
+        self.with_for(id, |s, now| {
             if let Some(t) = s.hermes.get_mut(id) {
                 t.apply_work(&mut s.machine, id, event, now);
             }
@@ -376,7 +417,7 @@ impl PhaseService {
     }
 
     pub fn hermes_detached(&self, id: &str) {
-        self.with(|s, now| {
+        self.with_for(id, |s, now| {
             if let Some(t) = s.hermes.get_mut(id) {
                 t.detached(&mut s.machine, id, now);
             }
@@ -392,7 +433,7 @@ impl PhaseService {
         agent_type: Option<&str>,
         agent_id: Option<&str>,
     ) {
-        self.with(|s, now| {
+        self.with_for(id, |s, now| {
             apply_hook_permission(&mut s.machine, id, tool_name, agent_type, agent_id, now);
         });
     }
@@ -401,7 +442,7 @@ impl PhaseService {
 
     /// One input only the webview can observe. See [`ClientPhaseInput`].
     pub fn client_input(&self, id: &str, input: ClientPhaseInput) {
-        self.with(|s, now| match input {
+        self.with_for(id, |s, now| match input {
             ClientPhaseInput::Input {
                 data,
                 empty_composer,
@@ -436,30 +477,34 @@ impl PhaseService {
 
     /// A prompt the daemon's own delivery submitted (#733).
     pub(crate) fn prompt_submitted(&self, id: &str) {
-        self.with(|s, now| s.machine.note_prompt_submitted(id, now));
+        self.with_for(id, |s, now| s.machine.note_prompt_submitted(id, now));
     }
 
     /// A mail nudge's lost first paste (#404).
     pub(crate) fn recover_unheard_silence(&self, id: &str) {
-        self.with(|s, now| s.machine.recover_unheard_silence(id, now));
+        self.with_for(id, |s, now| s.machine.recover_unheard_silence(id, now));
     }
 
     /// `StartFailed` for a harness the caller has verified is stored in
     /// `room_id` and has no live process.
     pub(crate) fn start_failed(&self, id: &str, room_id: &str) {
-        self.with(|s, now| s.start_failed(id, room_id, now));
+        self.with_for(id, |s, now| s.start_failed(id, room_id, now));
     }
 
     /// `RestartRequested` for a harness the caller has verified is stored in
     /// `room_id`.
     pub(crate) fn restart_requested(&self, id: &str, room_id: &str, source: RestartSource) {
-        self.with(|s, now| s.restart_requested(id, room_id, source, now));
+        self.with_for(id, |s, now| s.restart_requested(id, room_id, source, now));
     }
 
     // ---- tick -----------------------------------------------------------
 
-    /// One pass of the background scan: the machine's tick, then the supervisor.
-    /// `facts` is what only the caller knows (live attaches, mail, transcript samples); gather it before
+    /// One synchronous pass of the whole background scan: the machine's tick,
+    /// then the supervisor, with a stream sweep. The running service does not
+    /// call this: the deadline driver ticks at deadlines and the supervisor
+    /// pass runs on its own thread (`driver.rs`). It is the way a test drives
+    /// both at an instant of its choosing. `facts` is what only the caller
+    /// knows (live attaches, mail, transcript samples); gather it before
     /// calling, it is not read under the lock.
     pub fn tick_once(&self, facts: &SupervisorFacts) {
         self.with(|s, now| {
@@ -469,49 +514,6 @@ impl PhaseService {
                 tracing::debug!(target: "skein::supervisor", violation = ?v, "supervisor");
             }
         });
-    }
-
-    /// Spawn the one tick thread (every [`TICK_INTERVAL_MS`]). It holds only a
-    /// `Weak`, so it ends within one interval of the last `Arc` being
-    /// dropped. A std thread, not a task: the PTYs already use them and the
-    /// daemon must not need a tokio runtime for this. `None` if the OS
-    /// refused the thread (logged; the machine then just never ticks).
-    #[must_use]
-    pub fn start_ticker(
-        self: &Arc<Self>,
-        facts: Arc<dyn Fn() -> SupervisorFacts + Send + Sync>,
-    ) -> Option<JoinHandle<()>> {
-        let ms = u64::try_from(TICK_INTERVAL_MS).unwrap_or(1_000);
-        self.start_ticker_every(Duration::from_millis(ms), facts)
-    }
-
-    pub(super) fn start_ticker_every(
-        self: &Arc<Self>,
-        every: Duration,
-        facts: Arc<dyn Fn() -> SupervisorFacts + Send + Sync>,
-    ) -> Option<JoinHandle<()>> {
-        let weak: Weak<Self> = Arc::downgrade(self);
-        std::thread::Builder::new()
-            .name("skein-phase-tick".to_owned())
-            .spawn(move || {
-                loop {
-                    std::thread::sleep(every);
-                    let Some(svc) = weak.upgrade() else {
-                        break;
-                    };
-                    // A panic (a bad facts closure) must not end phase
-                    // tracking for good: log it and keep ticking.
-                    let step = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                        let f = facts();
-                        svc.tick_once(&f);
-                    }));
-                    if step.is_err() {
-                        tracing::error!(target: "skein::phase", "phase tick panicked; continuing");
-                    }
-                }
-            })
-            .map_err(|e| tracing::error!("phase ticker: cannot start thread: {e}"))
-            .ok()
     }
 
     // ---- reads ----------------------------------------------------------

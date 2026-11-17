@@ -12,7 +12,8 @@
 //!
 //! * Time is injected. Every method that reads `Date.now()` in TS takes
 //!   `now_ms` as its last parameter. Nothing here schedules the tick: the
-//!   driver calls [`PhaseMachine::tick`] once per `TICK_INTERVAL_MS`.
+//!   deadline driver calls [`PhaseMachine::tick`] when
+//!   [`PhaseMachine::next_deadline`] says something changes (#761).
 //! * Listeners are an outbox. [`PhaseMachine::drain_transitions`] yields what
 //!   `transitionListeners` would have been called with (only on a real phase
 //!   change); [`PhaseMachine::drain_changed`] yields the ids TS `emit`ted to
@@ -58,7 +59,7 @@ pub struct PhaseMachine {
     pub(super) store: HashMap<String, HarnessActivity>,
     /// Ids in `Map` insertion order (re-setting an existing id keeps its
     /// place; deleting and re-adding moves it to the end).
-    order: Vec<String>,
+    pub(super) order: Vec<String>,
     /// Per-harness end of the induced-output mute window (epoch ms).
     pub(super) mute_until: HashMap<String, i64>,
     transitions: Vec<Transition>,
@@ -351,8 +352,9 @@ impl PhaseMachine {
         );
     }
 
-    /// One tick of the background scan: the driver calls this once per
-    /// `TICK_INTERVAL_MS` with the current time. Walks every harness in
+    /// One tick of the background scan: the driver calls this at the
+    /// instants [`Self::next_deadline`] names (the screen rule is sampled at
+    /// most once per `TICK_INTERVAL_MS` whichever way it is driven). Walks every harness in
     /// insertion order and applies, in order, the work-deferral rules, the
     /// silent-adapter watchdogs (authoritative harnesses only), the screen
     /// phase, then the L2b pattern and L2a idle heuristics.
@@ -395,7 +397,7 @@ impl PhaseMachine {
             }
             // #623: a screen-read phase (Hermes) outranks the byte-stream
             // heuristics whenever the screen is recognised.
-            if self.tick_screen_phase(&id, now_ms) {
+            if self.tick_screen_gated(&id, now_ms) {
                 continue;
             }
             let Some(last_output_at) = a.last_output_at else {

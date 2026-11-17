@@ -45,24 +45,52 @@ pub enum ScreenReading {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Debounce {
-    reading: ScreenReading,
-    count: u32,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Debounce {
+    pub(super) reading: ScreenReading,
+    /// Saturates at `CONFIRM_READS`: only `count < CONFIRM_READS` is ever
+    /// tested, so a settled screen's step is a true no-op (`deadline.rs`).
+    pub(super) count: u32,
     /// The activity phase this count was taken in; a change resets it.
-    phase: ActivityPhase,
+    pub(super) phase: ActivityPhase,
+}
+
+impl Debounce {
+    /// The entry one more identical sample leaves behind. Shared by the
+    /// step and by the deadline forecast, so the two cannot drift apart.
+    pub(super) fn next(prev: Option<&Self>, reading: ScreenReading, phase: ActivityPhase) -> Self {
+        let count = match prev {
+            Some(p) if p.reading == reading && p.phase == phase => (p.count + 1).min(CONFIRM_READS),
+            _ => 1,
+        };
+        Self {
+            reading,
+            count,
+            phase,
+        }
+    }
+
+    /// Does this entry confirm the reading (`count >= CONFIRM_READS`)?
+    pub(super) fn confirmed(self) -> bool {
+        self.count >= CONFIRM_READS
+    }
 }
 
 /// The module-level maps of `screenPhaseTick.ts` plus the stored readings.
 #[derive(Debug, Default)]
 pub(super) struct ScreenState {
     /// The client's latest reading per harness (the injected reader's value).
-    readings: HashMap<String, ScreenReading>,
-    debounce: HashMap<String, Debounce>,
+    pub(super) readings: HashMap<String, ScreenReading>,
+    pub(super) debounce: HashMap<String, Debounce>,
     /// `phase_since` of the waiting the screen rule set, per harness.
-    waiting_since: HashMap<String, i64>,
+    pub(super) waiting_since: HashMap<String, i64>,
     /// Consecutive unrecognised ticks while the screen owns a waiting.
-    unknown_ticks: HashMap<String, u32>,
+    pub(super) unknown_ticks: HashMap<String, u32>,
+    /// When the screen step last ran per harness, and whether it claimed the
+    /// harness (its return value). The rule counts one sample per
+    /// `TICK_INTERVAL_MS`, so `tick` steps it at most that often and reuses
+    /// the claim in between (`deadline.rs`).
+    pub(super) last_step: HashMap<String, (i64, bool)>,
 }
 
 impl ScreenState {
@@ -102,6 +130,7 @@ impl PhaseMachine {
         self.screen.debounce.remove(id);
         self.screen.waiting_since.remove(id);
         self.screen.unknown_ticks.remove(id);
+        self.screen.last_step.remove(id);
     }
 
     #[cfg(test)]
@@ -161,19 +190,9 @@ impl PhaseMachine {
             return true;
         }
         self.screen.unknown_ticks.remove(id);
-        let count = match self.screen.debounce.get(id) {
-            Some(prev) if prev.reading == reading && prev.phase == a_phase => prev.count + 1,
-            _ => 1,
-        };
-        self.screen.debounce.insert(
-            id.to_owned(),
-            Debounce {
-                reading,
-                count,
-                phase: a_phase,
-            },
-        );
-        if count < CONFIRM_READS {
+        let next = Debounce::next(self.screen.debounce.get(id), reading, a_phase);
+        self.screen.debounce.insert(id.to_owned(), next);
+        if !next.confirmed() {
             return true;
         }
         if a_phase == ActivityPhase::Running && reading == ScreenReading::Waiting {

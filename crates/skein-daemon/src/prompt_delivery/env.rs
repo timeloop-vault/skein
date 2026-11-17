@@ -2,6 +2,7 @@
 //! trait: tests fake it, the delivery driver implements it.
 
 use super::facts::GateFacts;
+pub use super::shared::MailFacts;
 
 /// The client's last reported composer draft (TS `checkDraft`'s input,
 /// already judged by the client).
@@ -50,4 +51,8 @@ pub trait DeliveryEnv {
     /// The UI's "mail held by the draft guard" marker. Called only when
     /// the held flag changes.
     fn publish_held(&mut self, harness_id: &str, held: bool);
+    /// What the daemon's supervisor reads about this harness's mail (#733
+    /// part B): the time of the last nudge pasted and the refusal that
+    /// holds pending mail. All-`None` means the worker forgot the harness.
+    fn publish_mail_facts(&mut self, harness_id: &str, facts: MailFacts);
 }

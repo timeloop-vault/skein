@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use super::env::{DeliveryEnv, DraftState};
+use super::env::{DeliveryEnv, DraftState, MailFacts};
 use super::gate::{Refusal, RefusalCode, at_safe_stopping_point, can_send};
 use super::mail_nudge::{
     decide_mail_nudge, mail_held, mail_nudge_text, mail_pending, release_refusal,
@@ -46,6 +46,11 @@ struct MailState {
     held: bool,
     /// The last logged refusal reason, so a 2 s retry doesn't repeat it.
     last_refusal: Option<String>,
+    /// When the last nudge was pasted (#733 part B: the supervisor's
+    /// `last_nudge_at`). Provisional until its settlement confirms.
+    nudge_at: Option<i64>,
+    /// `nudge_at` before the nudge now settling, put back on a rollback.
+    prev_nudge_at: Option<i64>,
 }
 
 #[derive(Debug, Default)]
@@ -97,6 +102,7 @@ fn settle_pending(
         SettleOutcome::Rollback => {
             if let Some(v) = d.restore_last_nudged {
                 st.last_nudged = v;
+                st.nudge_at = st.prev_nudge_at;
             }
             st.settle = None;
             tracing::info!(
@@ -127,10 +133,11 @@ impl Mail {
     /// A new process or a removed harness: drop every bit of state (a
     /// respawned harness starts at `last_nudged = 0`) and clear the marker.
     pub fn reset(&mut self, env: &mut dyn DeliveryEnv, id: &str) {
-        if let Some(st) = self.states.remove(id)
-            && st.held
-        {
-            env.publish_held(id, false);
+        if let Some(st) = self.states.remove(id) {
+            if st.held {
+                env.publish_held(id, false);
+            }
+            env.publish_mail_facts(id, MailFacts::default());
         }
     }
 
@@ -269,6 +276,13 @@ impl Mail {
         let Some(st) = self.states.get_mut(id) else {
             return sent;
         };
+        env.publish_mail_facts(
+            id,
+            MailFacts {
+                last_nudge_at: st.nudge_at,
+                last_refusal: st.last_refusal.clone(),
+            },
+        );
         let prior = st.retry.take();
         let armed_at = match source {
             Source::Event => now_ms,
@@ -416,6 +430,10 @@ impl Mail {
                 set_held(st, env, id, false);
                 st.last_refusal = None;
                 st.last_nudged = d.last_nudged;
+                if st.settle.is_none() {
+                    st.prev_nudge_at = st.nudge_at;
+                }
+                st.nudge_at = Some(now_ms);
                 let pre_nudge = st
                     .settle
                     .map_or(last_nudged, |s| s.pre_nudge.min(last_nudged));

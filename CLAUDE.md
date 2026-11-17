@@ -167,17 +167,25 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │                                #   session-exists probe, agent and `Harness.launch`
     │                                #   #732 added harness_phase/ (the pure PhaseMachine,
     │                                #   translate/ for the Claude/opencode/Hermes events,
-    │                                #   PhaseService the driver with the 1 s tick, stream.rs
+    │                                #   PhaseService the lock + clock, driven (#761) by
+    │                                #   driver.rs: `skein-phase-deadline` sleeps until
+    │                                #   deadline.rs's `next_deadline` (no 1 s tick) and
+    │                                #   `skein-phase-supervisor` runs the supervisor every
+    │                                #   5 s, stream.rs
     │                                #   = PhaseUpdate + the skein-phase-out thread that
     │                                #   writes harness_events and emits skein://harness-phase,
     │                                #   transcript_sampler for the supervisor, tests/ folders)
     │                                #   and pty/observer (the tap on a PTY's output and exit).
     │                                #   #733 added prompt_delivery/ (the ONE deliverer: the
     │                                #   `skein-delivery` worker owns DeliveryCore; gate.rs is
-    │                                #   the send gate, a port of canSendPrompt; mail nudge,
+    │                                #   the send gate, a port of canSendPrompt, with
+    │                                #   `can_insert` for the file drop and a read-only check
+    │                                #   (`harness_gate_check`, #733 part B); mail nudge,
     │                                #   review nudge, prompt-library items and deliver-now all
     │                                #   write through it and PtyManager::write; daemon_env.rs
-    │                                #   is the real DeliveryEnv). Fed by hooks: the phase
+    │                                #   is the real DeliveryEnv; supervisor_facts.rs gives
+    │                                #   the supervisor's `mail_held` its facts from the
+    │                                #   worker's published `MailFacts`). Fed by hooks: the phase
     │                                #   listener, AgentApiState::set_mail_hook,
     │                                #   HarnessRunner::set_output_tap (daemon.rs start_delivery)
     │                                #   It IS the phase authority: the webview only mirrors
@@ -266,7 +274,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   attach + L2c adapter attach; harnessEnsure.ts,
     │   │   │                        #   harnessMounts.ts, terminalRepaint.ts), terminalInteractions.ts
     │   │   │                        #   (keys/clipboard/post-exit shell gate), terminalSetup.ts
-    │   │   │                        #   (xterm.js Terminal + addon construction)
+    │   │   │                        #   (xterm.js Terminal + addon construction),
+    │   │   │                        #   useTerminalDrop.ts + terminalDrop.ts (the file-drop
+    │   │   │                        #   overlay, asking the daemon's `insert` gate)
     │   │   ├── opencodeShellFollow.ts # Follows an opencode restarted from the post-exit
     │   │   │                        #   shell (#517): re-binds sessionId, re-points the SSE port
     │   │   ├── harnessActivity.ts   # The MIRROR of harness phase (spawning/running/idle/
@@ -328,8 +338,11 @@ not a roadmap. Two standing decisions that no issue body will tell you:
     │   │   │                        #   bytes: `sendPrompt` / `deliverMailNow` ask the daemon
     │   │   │                        #   (harness_send_prompt, mail_deliver_now), and the send
     │   │   │                        #   gate is the daemon's (prompt_delivery/gate.rs).
-    │   │   │                        #   `canSendPrompt` survives only as a display hint for
-    │   │   │                        #   disabled-button tooltips. useDaemonDelivery.ts reports
+    │   │   │                        #   There is no webview gate: the read-only
+    │   │   │                        #   `harness_gate_check` answers disabled-button tooltips
+    │   │   │                        #   and the file drop (gateCheck.ts, sendGateHint.ts,
+    │   │   │                        #   useSendGateHint.ts; re-asked on phase-mirror changes
+    │   │   │                        #   and while refused). useDaemonDelivery.ts reports
     │   │   │                        #   the client-only facts (clientFacts.ts) and relays
     │   │   │                        #   skein://delivery-seam; mailHeldMirror.ts mirrors
     │   │   │                        #   skein://mail-held; useMailDisplay.ts is the display
@@ -702,7 +715,10 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   server's `/event` SSE stream. **Since #732 the machine, the #277/#446
   deferral, the subagent and background-task registries, the watchdogs
   and the supervisor live in `crates/skein-daemon/src/harness_phase/`
-  (`PhaseService`, one 1 s tick thread); the webview runs none of it.
+  (`PhaseService`, driven since #761 by `skein-phase-deadline`, which
+  sleeps until `PhaseMachine::next_deadline` and ticks then, and by
+  `skein-phase-supervisor`, every 5 s; no 1 s tick); the webview runs none
+  of it.
   The frontend names in the paragraphs below (`deferral.ts`, `tickWork`,
   `harnessActivityCore.ts`, `harnessActivity.clearPermission`, the
   `subagents.ts`/`backgroundTasks.ts` "registries", "the frontend
@@ -711,17 +727,17 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   reads and subscriptions, the mirror (`phaseMirror.ts`).** The daemon
   publishes a `PhaseUpdate` per changed harness on
   `skein://harness-phase` (`stream.rs`; its `view: PhaseView` is the
-  wire type, never the machine's `HarnessActivity`: a display and
-  notifications group plus a send-gate group; since #733 part A the
-  daemon's `prompt_delivery/` decides every send, and the eight gate
-  fields stay on the wire only until #733 part B (the webview's
-  `canSendPrompt` is a display hint); `PhaseView` lives in the daemon crate until the transport work
+  wire type, never the machine's `HarnessActivity`: the nine display
+  and notification fields only; the daemon's `prompt_delivery/` decides
+  every send and the webview asks it through `harness_gate_check`;
+  `PhaseView` lives in the daemon crate until the transport work
   moves the phase wire types to `skein-proto`; the `skein-phase-out` thread
   writes the `harness_events` rows first, so the app writes none) and
   the webview mirrors it; badges, toasts and OS notifications stay in
   the frontend, driven by the mirrored transitions. The inputs only a
-  client can see (keystroke, screen reading, submitted prompt, launch
-  hook decisions, startFailed, restartRequested) go back through
+  client can see (keystroke, screen reading, focus mute, launch
+  hook decisions, startFailed, restartRequested; eight inputs, the
+  daemon records its own prompt submits) go back through
   `harness_phase_input`. Each source feeds two consumers:
   (a) semantic events → the daemon's phase sinks (the adapter's own, and
   the webview's teed channel, which `harnessEvents.ts` keeps for the
@@ -824,8 +840,8 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   `fromAttach` and never count, since a missing `.output` trailer does not
   mean running, and an `overdue` flag keeps a task listed after a ceiling
   released it but stops it counting, so it cannot re-defer the next turn.
-  Ceilings are per kind and driven by the daemon's 1 s tick (the adapter's
-  own deadline sweep only runs on transcript ticks): a Monitor with a timeout ends at
+  Ceilings are per kind and driven by the daemon's deadline driver (#761;
+  the adapter's own deadline sweep only runs on transcript ticks): a Monitor with a timeout ends at
   startedAt + timeout (`expireDue`) and the ordinary settle rule follows;
   Bash/PowerShell and persistent or timeout-less Monitors get
   `BACKGROUND_TASK_CEILING_MS` (15 min, from the later of deferral armed
@@ -848,7 +864,9 @@ not a roadmap. Two standing decisions that no issue body will tell you:
   trigger, which the daemon's delivery worker hears through the phase
   listener (#733). The supervisor's `ended_turn_not_waiting` and
   `deferral_without_work` now guard on subagents plus background tasks
-  (`backgroundWorking` in its snapshot).
+  (`backgroundWorking` in its snapshot), and its `mail_held` invariant
+  gets facts since #733 part B (the worker's last nudge and refusal, plus
+  a fresh unread count for a `waiting` harness).
   **Background tasks (#444/#445, epic #439):** a `Bash`/`PowerShell`
   `run_in_background` command, an auto-backgrounded one, or a `Monitor`
   is a *task*, not a subagent. The pure parsers and a per-session state
@@ -1239,7 +1257,7 @@ the agent API from a shell harness); macOS isn't covered yet.
 - **Tests live with the code that owns them.**
   `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `crates/skein-review` has 45; `crates/skein-daemon` has 1,841
+  `crates/skein-review` has 45; `crates/skein-daemon` has 2,218
   in-module tests on Windows (db persistence, spawn-env merging, resume
   probes, harness JSONL/SSE parsers, pty, the agent API, …); `crates/skein-proto` has the 4 harness_kind tests;
   `app/src-tauri` has ~70 in-module unit tests that run on Windows
