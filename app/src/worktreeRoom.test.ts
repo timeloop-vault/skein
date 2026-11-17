@@ -13,6 +13,7 @@ function folder(opts: Partial<FolderInfoDto> = {}): FolderInfoDto {
 			{ name: "feat/taken", isHead: false },
 		],
 		head: "main",
+		pickedHead: "main",
 		remoteBranches: [],
 		...opts,
 	};
@@ -87,6 +88,14 @@ describe("createRoomArgs", () => {
 		});
 	});
 
+	it("records the picked worktree's own branch in current mode", async () => {
+		const git = fakeGit({
+			folder: folder({ resolvedFromWorktree: true, head: "main", pickedHead: "feat/x" }),
+		});
+		const outcome = await createRoomArgs({ ...baseSpec, branchMode: "current" }, git);
+		expect(outcome.ok && outcome.args.branch).toBe("feat/x");
+	});
+
 	it("rejects a colliding branch name", async () => {
 		const outcome = await createRoomArgs({ ...baseSpec, branch: "feat/taken" }, fakeGit());
 		expect(outcome).toEqual({ ok: false, error: "branch already exists" });
@@ -144,6 +153,49 @@ describe("createRoomArgs", () => {
 		]);
 	});
 
+	it("keeps the picked worktree as cwd in current mode, repoRoot the main checkout", async () => {
+		const git = fakeGit({ folder: folder({ resolvedFromWorktree: true }) });
+		const outcome = await createRoomArgs(
+			{ ...baseSpec, folder: "/repo-wt/x", branchMode: "current" },
+			git,
+		);
+		expect(outcome.ok).toBe(true);
+		if (outcome.ok) {
+			expect(outcome.args.cwd).toBe("/repo-wt/x");
+			expect(outcome.args.repoRoot).toBe("/repo");
+		}
+	});
+
+	it("keeps the picked worktree as cwd on Windows paths", async () => {
+		const git = fakeGit({
+			folder: folder({ root: "C:\\repo", resolvedFromWorktree: true }),
+		});
+		const outcome = await createRoomArgs(
+			{ ...baseSpec, folder: "C:\\repo-wt\\x", branchMode: "current" },
+			git,
+		);
+		expect(outcome.ok).toBe(true);
+		if (outcome.ok) {
+			expect(outcome.args.cwd).toBe("C:\\repo-wt\\x");
+			expect(outcome.args.repoRoot).toBe("C:\\repo");
+		}
+	});
+
+	it("branches a new worktree off the main checkout when a worktree is picked", async () => {
+		const git = fakeGit({ folder: folder({ resolvedFromWorktree: true }) });
+		const outcome = await createRoomArgs({ ...baseSpec, folder: "/repo-wt/x" }, git);
+		expect(outcome.ok).toBe(true);
+		expect(git.proposeCalls).toEqual([{ repoPath: "/repo", leaf: "fix-the-thing" }]);
+		expect(git.addWorktreeCalls).toEqual([
+			{
+				repoPath: "/repo",
+				branch: "feat/fix-the-thing",
+				baseBranch: "main",
+				worktreePath: "/repo-wt/leaf",
+			},
+		]);
+	});
+
 	it("passes an agent through when given", async () => {
 		const git = fakeGit();
 		const outcome = await createRoomArgs({ ...baseSpec, agent: "reviewer" }, git);
@@ -168,7 +220,7 @@ describe("createRoomArgs", () => {
 			remember: { baseBranch: "main" },
 		});
 
-		const gitNoHead = fakeGit({ folder: folder({ head: null }) });
+		const gitNoHead = fakeGit({ folder: folder({ head: null, pickedHead: null }) });
 		const { baseBranch: _baseBranch, ...restSpec } = baseSpec;
 		const noHeadOutcome = await createRoomArgs({ ...restSpec, branchMode: "current" }, gitNoHead);
 		expect(noHeadOutcome.ok).toBe(true);

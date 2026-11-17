@@ -87,7 +87,7 @@ pub(super) fn prepare(db: &Database, spec: &CheckoutSpec<'_>) -> VerbResult<Chec
     if spec.mode == BranchMode::Current {
         return Ok(Checkout {
             cwd: spec.path.to_owned(),
-            branch: Some(info.head.clone().unwrap_or_else(|| "HEAD".to_owned())),
+            branch: Some(info.picked_head.unwrap_or_else(|| "HEAD".to_owned())),
             repo_root: Some(info.root),
             base_behind_upstream: None,
             base_sha: None,

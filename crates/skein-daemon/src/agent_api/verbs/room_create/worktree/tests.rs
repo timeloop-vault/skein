@@ -74,3 +74,33 @@ fn a_repository_with_no_commits_has_no_base_branch() {
     let got = prepare(&db(&dir), &spec(path, BranchMode::Worktree, "x"));
     assert_eq!(message(got), "no base branch available");
 }
+
+#[test]
+fn current_mode_on_a_linked_worktree_records_the_worktrees_own_branch() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let main = dir.path().join("main");
+    std::fs::create_dir(&main).unwrap();
+    let repo = git2::Repository::init(&main).unwrap();
+    std::fs::write(main.join("a.txt"), "one\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("a.txt")).unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let sig = git2::Signature::now("t", "t@example.com").unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+        .unwrap();
+    let base = repo.head().unwrap().shorthand().unwrap().to_owned();
+    let wt = dir.path().join("wt");
+    crate::git::git_add_worktree_impl(
+        main.to_str().unwrap(),
+        "feature/own",
+        &base,
+        wt.to_str().unwrap(),
+    )
+    .unwrap();
+
+    let path = wt.to_str().unwrap();
+    let got = prepare(&db(&dir), &spec(path, BranchMode::Current, "x")).unwrap();
+    assert_eq!(got.branch.as_deref(), Some("feature/own"));
+    assert_eq!(got.cwd, path);
+}

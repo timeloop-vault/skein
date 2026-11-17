@@ -43,7 +43,10 @@ export interface FolderInfoDto {
 	root: string;
 	resolvedFromWorktree: boolean;
 	branches: BranchInfoDto[];
+	/** HEAD of the repo `branches` describes (the main checkout for a worktree). */
 	head: string | null;
+	/** HEAD of the folder actually picked; differs from `head` on a linked worktree. */
+	pickedHead: string | null;
 	/** Remote-tracking refs (e.g. "origin/main"), never origin/HEAD (#367).
 	 *  A valid `baseBranch` for worktree creation alongside `branches` — a
 	 *  local branch of the same short name wins if both exist. */

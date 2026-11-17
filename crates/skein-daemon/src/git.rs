@@ -102,7 +102,15 @@ pub struct FolderInfoDto {
     #[serde(rename = "resolvedFromWorktree")]
     pub resolved_from_worktree: bool,
     pub branches: Vec<BranchDto>,
+    /// The HEAD branch of the repo `branches` describes: the main checkout
+    /// when the picked folder is a linked worktree. Base-branch defaults
+    /// come from this.
     pub head: Option<String>,
+    /// The HEAD branch of the folder that was actually opened. Equal to
+    /// `head` for a plain repo, differs for a linked worktree; `None` for
+    /// a non-repo or missing path. A room created "in place" records this.
+    #[serde(rename = "pickedHead")]
+    pub picked_head: Option<String>,
     /// Shorthand remote-tracking branch names (e.g. "origin/main"), for
     /// offering a base that only exists upstream. Empty on error or for
     /// a non-repo/missing path — never fails the whole call.
@@ -141,6 +149,7 @@ pub fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
         resolved_from_worktree: false,
         branches: Vec::new(),
         head: None,
+        picked_head: None,
         remote_branches: Vec::new(),
     };
     if !exists {
@@ -152,6 +161,7 @@ pub fn git_inspect_folder_impl(path: &str) -> Result<FolderInfoDto, String> {
         return Ok(info);
     };
     info.is_repo = true;
+    info.picked_head = repo.head_branch();
 
     // Resolve a linked worktree back to its main checkout, then re-open
     // there: the branch list and HEAD the user picks from must describe
@@ -547,6 +557,36 @@ mod tests {
             root_commits: dto.root_commits,
             origin_url: dto.origin_url,
         }
+    }
+
+    #[test]
+    fn inspect_folder_resolves_a_worktree_to_a_root_without_trailing_separator() {
+        let (dir, base) = repo_with_commit();
+        let wt_parent = TempDir::new().unwrap();
+        let wt = wt_parent.path().join("wt");
+        git_add_worktree_impl(
+            &dir.path().to_string_lossy(),
+            "feature/trim",
+            &base,
+            &wt.to_string_lossy(),
+        )
+        .unwrap();
+
+        let info = git_inspect_folder_impl(&wt.to_string_lossy()).unwrap();
+        assert!(info.is_repo);
+        assert!(info.resolved_from_worktree);
+        assert_eq!(info.picked_head.as_deref(), Some("feature/trim"));
+        assert_eq!(info.head.as_deref(), Some(base.as_str()));
+        assert!(
+            !info.root.ends_with('/') && !info.root.ends_with(std::path::MAIN_SEPARATOR),
+            "root: {}",
+            info.root
+        );
+
+        // A plain repo comes back as the path it was given.
+        let plain = git_inspect_folder_impl(&dir.path().to_string_lossy()).unwrap();
+        assert!(!plain.resolved_from_worktree);
+        assert_eq!(plain.picked_head, plain.head);
     }
 
     #[test]

@@ -77,11 +77,8 @@ export const useNewRoomForm = ({
 	const [settledCwd, setSettledCwd] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	// Sticky, and deliberately not part of `repoStatus`: resolving a
-	// worktree rewrites `cwd`, which re-runs the validation effect, and
-	// that second pass sees an ordinary repo. Kept out here the note
-	// survives revalidation instead of flashing once and vanishing.
-	// Cleared whenever the user picks or types a folder themselves.
+	// Whether the picked folder is a linked worktree of the repo (#746).
+	// `cwd` keeps the picked path; only the repo root is resolved.
 	const [resolvedFromWorktree, setResolvedFromWorktree] = useState(false);
 	// Recent-folders dropdown (#233).
 	const [showRecent, setShowRecent] = useState(false);
@@ -104,7 +101,6 @@ export const useNewRoomForm = ({
 		// Goes through the same state the text field and Browse… write, so
 		// validation, worktree resolution and the `missing` check all run
 		// exactly as they would for a hand-typed path.
-		setResolvedFromWorktree(false);
 		setCwd(r.folder);
 		// Picking from the list is an explicit "take me to that folder", so
 		// its remembered defaults come along — otherwise per-folder memory
@@ -163,17 +159,11 @@ export const useNewRoomForm = ({
 						setSettledCwd(cwd);
 						return;
 					}
-					// A worktree resolves to the repo it was added from —
-					// otherwise we would stack a worktree on a worktree, which
-					// is one misclick away given the `-wt` sibling dir (#226).
-					if (info.resolvedFromWorktree) {
-						setResolvedFromWorktree(true);
-						setCwd(info.root);
-					}
-					setRepoStatus({ kind: "valid", branches: info.branches, head: info.head });
-					// `info.root`, not `cwd`: a worktree resolves to the repo it
-					// was added from, and the rewrite of `cwd` above lands a
-					// render later.
+					// The picked folder stays the room's cwd (#746); a worktree
+					// resolves to its repo only for the root (a new worktree
+					// branches off it, never off a worktree, #226).
+					setResolvedFromWorktree(info.resolvedFromWorktree);
+					setRepoStatus({ kind: "valid", branches: info.branches, head: info.pickedHead });
 					setSettledCwd(info.root);
 					// Default base branch to HEAD on first valid load. A
 					// remembered branch survives only if the repo still has
@@ -255,7 +245,8 @@ export const useNewRoomForm = ({
 		isRepo,
 		branchMode,
 		branch,
-		cwd,
+		// Worktrees branch off the repo root, not a picked worktree.
+		cwd: settledCwd || cwd,
 	});
 
 	const branchProblem =
@@ -296,7 +287,6 @@ export const useNewRoomForm = ({
 			...(start ? { defaultPath: start } : {}),
 		});
 		if (typeof picked === "string") {
-			setResolvedFromWorktree(false);
 			setCwd(picked);
 			// #227 review: same as `pickRecent` — a folder picked via the OS
 			// dialog is as explicit a folder change as one from the recent

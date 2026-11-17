@@ -355,3 +355,29 @@ fn head_dir_non_repo_is_none() {
     let tmp = TempDir::new().unwrap();
     assert!(Repo::head_dir(tmp.path()).is_none());
 }
+
+#[test]
+fn workdirs_have_no_trailing_separator() {
+    // libgit2 ends every workdir in a separator; it must not leak (#746).
+    let (_tmp, path) = init_repo();
+    let main = Repo::open(&path).unwrap();
+    let wt_path = propose_worktree_path(&path, "no-trailing");
+    main.add_worktree("feat/no-trailing", "main", &wt_path)
+        .unwrap();
+
+    let ends_with_sep = |p: &Path| {
+        let s = p.to_str().unwrap();
+        s.ends_with('/') || s.ends_with(std::path::MAIN_SEPARATOR)
+    };
+    let wt = Repo::open(&wt_path).unwrap();
+    assert!(!ends_with_sep(main.workdir()), "{:?}", main.workdir());
+    assert!(!ends_with_sep(wt.workdir()), "{:?}", wt.workdir());
+    assert!(
+        !ends_with_sep(&wt.main_repo_root()),
+        "{:?}",
+        wt.main_repo_root()
+    );
+    assert!(!ends_with_sep(&main.main_repo_root()));
+    let enclosing = Repo::enclosing_workdir(&wt_path).unwrap();
+    assert!(!ends_with_sep(&enclosing), "{enclosing:?}");
+}

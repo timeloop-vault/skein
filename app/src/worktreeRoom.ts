@@ -141,7 +141,7 @@ export async function createRoomArgs(
 				harness: spec.harness,
 				...(spec.agent ? { agent: spec.agent } : {}),
 				...(spec.hermesProfile ? { hermesProfile: spec.hermesProfile } : {}),
-				branch: info.head ?? "HEAD",
+				branch: info.pickedHead ?? "HEAD",
 				repoRoot,
 			},
 			remember: { baseBranch },
@@ -160,7 +160,7 @@ export async function createRoomArgs(
 		return { ok: false, error: "unknown base branch" };
 	}
 
-	const worktreePath = await git.proposeWorktreePath(spec.folder, worktreeLeaf(branch));
+	const worktreePath = await git.proposeWorktreePath(repoRoot, worktreeLeaf(branch));
 	const worktreeInfo = await git.inspectFolder(worktreePath);
 	const problem = branchFieldProblem(
 		branch,
@@ -170,7 +170,7 @@ export async function createRoomArgs(
 	if (problem) return { ok: false, error: problem };
 
 	const wt = await git.addWorktree({
-		repoPath: spec.folder,
+		repoPath: repoRoot,
 		branch,
 		baseBranch,
 		worktreePath,

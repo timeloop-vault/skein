@@ -1,8 +1,38 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use git2::{BranchType, Repository};
 
 use crate::{GitError, Result};
+
+/// Strip trailing path separators libgit2 appends to a working directory
+/// (`C:/git/skein/`), keeping the rest of the spelling as is. A root
+/// (`/`, `C:\`, `C:/`, `\\?\C:\`) has no named component and is returned
+/// untouched. A non-UTF-8 path is returned unchanged.
+fn trim_trailing_separators(path: &Path) -> PathBuf {
+    let Some(s) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    let mut end = s.len();
+    while end > 0 {
+        let Some(c) = s[..end].chars().next_back() else {
+            break;
+        };
+        // `\` is a legal filename character off Windows.
+        if !(c == '/' || (cfg!(windows) && c == '\\')) {
+            break;
+        }
+        // A root has no named component left (`/`, `C:\`, `\\?\C:\`).
+        let candidate = Path::new(&s[..end]);
+        if !candidate
+            .components()
+            .any(|c| matches!(c, Component::Normal(_) | Component::ParentDir))
+        {
+            break;
+        }
+        end -= 1;
+    }
+    PathBuf::from(&s[..end])
+}
 
 /// One local branch entry returned by [`Repo::branches`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +71,7 @@ impl Repo {
         })?;
         let workdir = repo
             .workdir()
-            .map_or_else(|| path.to_path_buf(), Path::to_path_buf);
+            .map_or_else(|| path.to_path_buf(), trim_trailing_separators);
         Ok(Self { repo, workdir })
     }
 
@@ -64,7 +94,7 @@ impl Repo {
         Repository::discover(path)
             .ok()?
             .workdir()
-            .map(Path::to_path_buf)
+            .map(trim_trailing_separators)
     }
 
     /// The per-worktree git admin dir of the checkout at `path` (HEAD,
@@ -264,7 +294,7 @@ impl Repo {
             // worktree we were opened with stays the best answer.
             Ok(main) => main
                 .workdir()
-                .map_or_else(|| self.workdir.clone(), Path::to_path_buf),
+                .map_or_else(|| self.workdir.clone(), trim_trailing_separators),
             Err(_) => self.workdir.clone(),
         }
     }
@@ -287,5 +317,55 @@ impl Repo {
     /// file, so this never hides a real change.
     pub(crate) fn is_dir_entry(&self, path: &str) -> bool {
         !path.is_empty() && self.workdir.join(path).is_dir()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn trimmed(s: &str) -> String {
+        trim_trailing_separators(Path::new(s))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn trims_trailing_slash_and_keeps_spelling() {
+        assert_eq!(trimmed("/home/me/repo/"), "/home/me/repo");
+        assert_eq!(trimmed("C:/git/skein/"), "C:/git/skein");
+    }
+
+    #[test]
+    fn trims_several_trailing_slashes() {
+        assert_eq!(trimmed("/home/me/repo///"), "/home/me/repo");
+    }
+
+    #[test]
+    fn leaves_a_path_without_a_trailing_separator_alone() {
+        assert_eq!(trimmed("/home/me/repo"), "/home/me/repo");
+        assert_eq!(trimmed("relative"), "relative");
+    }
+
+    #[test]
+    fn keeps_the_unix_root() {
+        assert_eq!(trimmed("/"), "/");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn trims_trailing_backslash_and_keeps_windows_roots() {
+        assert_eq!(trimmed(r"C:\git\skein\"), r"C:\git\skein");
+        assert_eq!(trimmed(r"C:\git\skein\/"), r"C:\git\skein");
+        assert_eq!(trimmed(r"C:\"), r"C:\");
+        assert_eq!(trimmed("C:/"), "C:/");
+        assert_eq!(trimmed(r"\\?\C:\"), r"\\?\C:\");
+        assert_eq!(trimmed(r"\\?\C:\git\"), r"\\?\C:\git");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn keeps_a_trailing_backslash_off_windows() {
+        assert_eq!(trimmed(r"/tmp/a\"), r"/tmp/a\");
     }
 }

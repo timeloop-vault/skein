@@ -12,11 +12,11 @@ export const folderStatusBlurb = (repoStatus: RepoStatus, resolvedFromWorktree: 
 			// The worktree's *name* is deliberately not repeated here: the
 			// blurb slot is ~82 characters wide and a real branch name eats
 			// most of it, and the user just browsed there anyway. The only
-			// thing they need told is that the field moved.
+			// thing they need told is that this is a linked worktree.
 			return (
 				<span style={{ color: "var(--ok)" }}>
 					✓ git repo{repoStatus.head ? ` (HEAD: ${repoStatus.head})` : ""}
-					{resolvedFromWorktree ? " · resolved from a worktree" : ""}
+					{resolvedFromWorktree ? " · linked worktree" : ""}
 				</span>
 			);
 		case "not-a-repo":
