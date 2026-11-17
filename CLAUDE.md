@@ -20,7 +20,11 @@ does not restate their status. The order of attack is
 `gh issue list --label priority-high`; parked ideas live in
 `docs/backlog.md`; design decisions for the review surface are recorded
 on epic #52. `docs/audit-2026-07-03.md` §5 is a historical snapshot,
-not a roadmap. Two standing decisions that no issue body will tell you:
+not a roadmap. The "Skein roadmap" project board
+(https://github.com/orgs/timeloop-vault/projects/4) shows the same
+issues by track and status; its Priority field mirrors the label, which
+stays the order of attack. Two standing decisions that no issue body
+will tell you:
 
 - **Skein performs no git mutations.** It does not commit, merge, push
   or open pull requests (D9 on #52, corrected 2026-09-09 after #229
