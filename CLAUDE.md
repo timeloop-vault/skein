@@ -254,7 +254,9 @@ will tell you:
     │                                #   It exists because cargo/rustc builds run by harnesses
     │                                #   inherit the class and otherwise starve Skein's WebView2.
     │                                #   Allowed `unsafe` on the same terms as skein-winnotify,
-    │                                #   above; the unsafe is Windows-only
+    │                                #   above; the unsafe is Windows-only. Also ends a spawned
+    │                                #   harness PTY child's whole process tree (#190): a Windows
+    │                                #   job object with kill-on-close, a Unix process-group signal
     ├── app/
     │   ├── src/                     # React + TS UI
     │   │   ├── App.tsx              # The root component (~750 LOC) — hook wiring
@@ -451,6 +453,10 @@ will tell you:
     │       │                        #   spawn, because portable-pty exposes no creation flags;
     │       │                        #   anything the child starts before the call keeps normal
     │       │                        #   priority
+    │       ├── pty/tree.rs          # (in skein-daemon, #190) Attaches the child's process tree right after
+    │       │                        #   spawn; `PtyManager::kill` / `terminate_bound` end it. Same
+    │       │                        #   after-spawn window as priority: what the child starts
+    │       │                        #   before the attach is outside the tree
     │       ├── src/git.rs           # Moved to crates/skein-daemon (#581), re-exported here at
     │       │                        #   the old path: DTOs + `_impl` logic over skein-git;
     │       │                        #   Tauri wrappers stay in commands/git.rs; GitError → String
@@ -695,7 +701,8 @@ will tell you:
   query itself; a re-attached terminal starts blank and forces a repaint
   with a one-row resize (`terminalRepaint.ts`). PTYs survive room/harness
   tab switches: all active rooms and all their harnesses stay mounted,
-  hidden with `display:none`. PTYs die with the Skein process. Since #752
+  hidden with `display:none`. PTYs die with the Skein process. Stopping a harness ends its whole
+  process tree, not just the child (#190); the limits are in `pty/tree.rs`. Since #752
   the spawn derives its argv from the record at spawn time
   (`harness_argv/spawn.rs`): `--resume`/`--session` only when a probe run
   then finds the session (for opencode the probe reads both `session`, v1,

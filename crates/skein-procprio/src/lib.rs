@@ -1,4 +1,8 @@
-//! Lower the CPU priority of an already-spawned child process by pid.
+//! Two things for an already-spawned harness PTY child, both by pid: lower
+//! its CPU priority ([`lower_priority`]) and kill its whole process tree
+//! ([`ProcessTree`]).
+//!
+//! # Priority
 //!
 //! Skein spawns harness PTY children (shells, agent CLIs) that go on to run
 //! cargo/rustc builds, which can starve the UI. Lowering the child right
@@ -12,6 +16,10 @@
 //!
 //! Race the caller has to live with: the call happens after the child
 //! exists, so any grandchild created before it keeps the original priority.
+
+pub mod tree;
+
+pub use tree::ProcessTree;
 
 use std::io;
 
@@ -165,3 +173,5 @@ mod imp {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tree_tests;

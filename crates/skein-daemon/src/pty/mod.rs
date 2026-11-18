@@ -50,6 +50,7 @@ mod probe;
 pub mod procscan;
 mod sidecar;
 mod sink_slot;
+mod tree;
 
 use env::apply_env;
 use output::{COALESCE_BYTE_CAP, COALESCE_WINDOW, run_coalescer, spawn_pty_writer};
@@ -123,6 +124,9 @@ struct Pty {
     master: Box<dyn MasterPty + Send>,
     writer_tx: mpsc::Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    /// The child's whole process tree (#190); `None` when it could not be
+    /// attached, and then only the child itself is killed.
+    tree: Option<skein_procprio::ProcessTree>,
     /// The child's OS pid, kept so #517 can scan its descendants.
     pid: Option<u32>,
     /// The opencode sidecar (#676) this PTY's TUI is attached to; killing
@@ -457,6 +461,8 @@ impl PtyManager {
         })?;
         let killer = child.clone_killer();
         let pid = child.process_id();
+        // Before the priority change: it narrows the window in which the child's own children escape the tree.
+        let tree = tree::attach(&id, pid);
         priority::apply(&id, pid, settings.child_priority());
 
         // Drop the slave handle so EOF reaches the read end correctly
@@ -615,6 +621,7 @@ impl PtyManager {
             master: pair.master,
             writer_tx,
             killer,
+            tree,
             pid,
             sidecar,
             slot,
@@ -664,14 +671,15 @@ impl PtyManager {
     }
 
     /// Kill (without removing the entry) every PTY bound to this sidecar
-    /// generation, so the waiter thread still emits the normal `Exit` and
+    /// generation, each one's whole process tree (#190), so the waiter thread still emits the normal `Exit` and
     /// the pane goes through its usual exited state. Returns how many.
     pub fn terminate_bound(&self, harness_id: &str, generation: u64) -> usize {
         let mut map = self.inner.lock();
         let mut n = 0;
-        for pty in map.values_mut() {
+        for (id, pty) in map.iter_mut() {
             if binding_matches(pty.sidecar.as_ref(), harness_id, generation) {
-                let _ = pty.killer.kill();
+                let exited = pty.slot.exited().is_some();
+                tree::kill(id, pty.tree.as_ref(), &mut *pty.killer, exited);
                 n += 1;
             }
         }
@@ -740,7 +748,8 @@ impl PtyManager {
             .ok_or_else(|| PtyError(format!("{what}: no pty with id {id}")))
     }
 
-    /// Best-effort: if the child has already exited, this is a no-op.
+    /// Best-effort: ends the child and its whole process tree (#190); if the
+    /// child has already exited, the child kill is a no-op.
     ///
     /// Removing the `Pty` drops `writer_tx`, which is the writer
     /// thread's own shutdown signal (#171d) — but this deliberately does
@@ -753,7 +762,8 @@ impl PtyManager {
     pub fn kill(&self, id: &str) -> Option<SidecarBinding> {
         let mut map = self.inner.lock();
         let mut pty = map.remove(id)?;
-        let _ = pty.killer.kill();
+        let exited = pty.slot.exited().is_some();
+        tree::kill(id, pty.tree.as_ref(), &mut *pty.killer, exited);
         pty.sidecar.take()
     }
 }
@@ -768,6 +778,8 @@ mod thread_tests;
 mod observer_pty_tests;
 #[cfg(test)]
 mod sink_pty_tests;
+#[cfg(test)]
+mod tree_tests;
 
 #[cfg(all(test, unix))]
 mod tests;
