@@ -189,3 +189,28 @@ describe("chunked folding", () => {
 		expect(a.totals).not.toBe(b.totals);
 	});
 });
+
+describe("activityCount", () => {
+	const skipped = () => [
+		row("h", "api_usage", {}),
+		row("h", "cost_state", { total_cost_usd: 1 }),
+		row("h", "reasoning", {}),
+		row("h", "away_summary", { content: "recap" }),
+	];
+
+	it("ignores kinds the feed skips and counts the rest", () => {
+		expect(derive(skipped()).activityCount).toBe(0);
+		const d = derive([...skipped(), row("h", "tool_call", { tool: "Bash" })]);
+		expect(d.activityCount).toBe(1);
+		expect(d.eventCount).toBe(5);
+	});
+
+	it("a rebuild over the same rows gives the same count", () => {
+		const rows = [...skipped(), row("h", "tool_call", {}), row("h", "patch", {})];
+		const incremental = createRoomFold();
+		foldRows(incremental, rows.slice(0, 3));
+		foldRows(incremental, rows.slice(3));
+		expect(deriveRoom(incremental).activityCount).toBe(derive(rows).activityCount);
+		expect(derive(rows).activityCount).toBe(2);
+	});
+});

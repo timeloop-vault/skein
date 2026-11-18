@@ -172,7 +172,11 @@ export const LiveContext = memo(function LiveContext({
 
 	return (
 		<div className="lc-pane">
-			<RoomSubtitle awaySummary={derived.awaySummary} />
+			<RoomSubtitle
+				awaySummary={derived.awaySummary}
+				activityCount={derived.activityCount}
+				lastActionTs={derived.lastActionTs}
+			/>
 			<CardStack
 				layout={layout}
 				onLayoutChange={setLayout}

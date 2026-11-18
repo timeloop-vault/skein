@@ -10,7 +10,7 @@
 // already folded. `reducePlan` and `sessionTotals` are thin wrappers over
 // this, so each rule has exactly one implementation.
 
-import { costFromClaude, stepFromOpencode } from "./feedItemsHelpers.ts";
+import { costFromClaude, SKIP_KINDS, stepFromOpencode } from "./feedItemsHelpers.ts";
 import { num, obj, type Payload, parsePayload, str } from "./payload.ts";
 import {
 	applyDelta,
@@ -31,6 +31,8 @@ interface HarnessPlan {
 
 export interface RoomFold {
 	eventCount: number;
+	/** Rows the Activity feed actually shows (every kind not in SKIP_KINDS). */
+	activityCount: number;
 	lastActionTs: number;
 	/** Bumped once per folded plan_change row; lets deriveRoom reuse planGroups. */
 	planVersion: number;
@@ -52,12 +54,14 @@ export interface RoomDerived {
 	totals: { usd: number; tokens: number };
 	awaySummary: { content: string; timestampMs: number } | null;
 	eventCount: number;
+	activityCount: number;
 	lastActionTs: number;
 }
 
 export function createRoomFold(): RoomFold {
 	return {
 		eventCount: 0,
+		activityCount: 0,
 		lastActionTs: 0,
 		planVersion: 0,
 		plans: new Map(),
@@ -116,6 +120,7 @@ function foldAway(fold: RoomFold, a: HarnessAction): void {
 export function foldRows(fold: RoomFold, rows: readonly HarnessAction[]): void {
 	for (const a of rows) {
 		fold.eventCount++;
+		if (!SKIP_KINDS.has(a.kind)) fold.activityCount++;
 		if (a.timestampMs > fold.lastActionTs) fold.lastActionTs = a.timestampMs;
 		switch (a.kind) {
 			case "plan_change":
@@ -175,6 +180,7 @@ export function deriveRoom(fold: RoomFold, prev?: RoomDerived): RoomDerived {
 		totals,
 		awaySummary,
 		eventCount: fold.eventCount,
+		activityCount: fold.activityCount,
 		lastActionTs: fold.lastActionTs,
 	};
 }
