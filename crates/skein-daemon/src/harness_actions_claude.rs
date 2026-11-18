@@ -34,9 +34,11 @@
 //! - `cost_state` — `cost-state` row: the session's cumulative cost /
 //!   token / line totals. A snapshot, not an event — newest wins.
 //! - `permission_mode` — `permission-mode` row.
-//! - `ai_title` — `ai-title` row (Claude's auto-generated session title).
+//! - `ai_title` — `ai-title` row (Claude's auto-generated session title),
+//!   only when the title changes (#723).
 //! - `bridge_status` — `bridge-session` row (Remote Control bridge id).
-//! - `user_prompt` — `last-prompt` row (user-typed prompt captured).
+//! - `user_prompt` — a real-prompt `user` row (#723), one per prompt;
+//!   the per-request `last-prompt` row is ignored.
 //!
 //! ## Tool-use / tool-result joining
 //!
@@ -77,7 +79,7 @@ pub struct ExtractedAction {
 #[derive(Default)]
 pub struct ActionExtractor {
     pending: HashMap<String, PendingToolUse>,
-    /// Some row types (`last-prompt`, `ai-title`, `permission-mode`,
+    /// Some row types (`ai-title`, `permission-mode`,
     /// `bridge-session`) don't carry a `timestamp` field. They're
     /// always interleaved with timestamped rows in the JSONL, so we
     /// stamp them with the prior row's time to keep them ordered
@@ -87,6 +89,8 @@ pub struct ActionExtractor {
     /// happens on a session that opens with those rows, which we
     /// haven't observed).
     last_ts_ms: i64,
+    /// The last title emitted; `ai-title` rows repeat it (#723).
+    last_ai_title: Option<String>,
     /// Folds streamed chunks into whole API responses (`api_usage`).
     responses: skein_harness::claude::ResponseFold,
 }
@@ -138,17 +142,35 @@ impl ActionExtractor {
         };
         match ty {
             "assistant" => self.ingest_assistant(value, &mut out),
-            "user" => self.ingest_user(value, &mut out),
+            "user" => {
+                self.ingest_user(value, &mut out);
+                if let Some(text) = skein_harness::claude::prompt::user_prompt_text(value) {
+                    let ts = match parse_timestamp_ms(value) {
+                        0 => self.last_ts_ms,
+                        t => t,
+                    };
+                    let uuid = value.get("uuid").and_then(Value::as_str);
+                    out.push(ExtractedAction {
+                        kind: action_kind::USER_PROMPT,
+                        timestamp_ms: ts,
+                        payload: json!({ "prompt": text, "leaf_uuid": uuid }).to_string(),
+                        source: uuid.map(str::to_owned),
+                    });
+                }
+            }
             "system" => extract_system(value, &mut out),
             "attachment" => extract_attachment(value, &mut out),
             "pr-link" => extract_pr_link(value, &mut out),
             "queue-operation" => extract_queue_op(value, &mut out),
             "permission-mode" => extract_permission_mode(value, self.last_ts_ms, &mut out),
-            "ai-title" => extract_ai_title(value, self.last_ts_ms, &mut out),
+            "ai-title" => {
+                extract_ai_title(value, self.last_ts_ms, &mut self.last_ai_title, &mut out);
+            }
             "bridge-session" => extract_bridge_session(value, self.last_ts_ms, &mut out),
-            "last-prompt" => extract_user_prompt(value, self.last_ts_ms, &mut out),
             "cost-state" => extract_cost_state(value, self.last_ts_ms, &mut out),
             // Row types we deliberately don't surface:
+            // - `last-prompt`: written once per API request, not per
+            //   prompt (#723); the `user` row is the prompt's source.
             // - `file-history-snapshot`: Claude's internal undo
             //   bookkeeping (a `trackedFileBackups` map rewritten
             //   every message). No user-facing event.
@@ -560,8 +582,7 @@ fn extract_queue_op(value: &Value, out: &mut Vec<ExtractedAction>) {
 
 /// Permission-mode rows are timestamp-less in the JSONL; we use the
 /// carry-forward `last_ts_ms` so they sort next to surrounding
-/// activity. Same pattern for `ai-title`, `bridge-session`, and
-/// `last-prompt` below.
+/// activity. Same pattern for `ai-title` and `bridge-session`.
 fn extract_permission_mode(value: &Value, last_ts_ms: i64, out: &mut Vec<ExtractedAction>) {
     let payload = json!({
         "permission_mode": value.get("permissionMode").cloned().unwrap_or(Value::Null),
@@ -574,10 +595,27 @@ fn extract_permission_mode(value: &Value, last_ts_ms: i64, out: &mut Vec<Extract
     });
 }
 
-fn extract_ai_title(value: &Value, last_ts_ms: i64, out: &mut Vec<ExtractedAction>) {
-    let payload = json!({
-        "ai_title": value.get("aiTitle").cloned().unwrap_or(Value::Null),
-    });
+/// Claude rewrites the same title over and over (#723); only a change
+/// is a feed event. A null / missing / empty title emits nothing and
+/// leaves the remembered one alone.
+fn extract_ai_title(
+    value: &Value,
+    last_ts_ms: i64,
+    last_title: &mut Option<String>,
+    out: &mut Vec<ExtractedAction>,
+) {
+    let Some(title) = value
+        .get("aiTitle")
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty())
+    else {
+        return;
+    };
+    if last_title.as_deref() == Some(title) {
+        return;
+    }
+    *last_title = Some(title.to_owned());
+    let payload = json!({ "ai_title": title });
     out.push(ExtractedAction {
         kind: action_kind::AI_TITLE,
         timestamp_ms: last_ts_ms,
@@ -634,27 +672,6 @@ fn extract_bridge_session(value: &Value, last_ts_ms: i64, out: &mut Vec<Extracte
     });
 }
 
-/// `last-prompt` rows are written when Claude captures a new
-/// user-typed prompt. The full prompt text is on `lastPrompt`
-/// (truncated to ~200 chars by Claude); `leafUuid` identifies the
-/// row in Claude's conversation DAG.
-fn extract_user_prompt(value: &Value, last_ts_ms: i64, out: &mut Vec<ExtractedAction>) {
-    let leaf = value
-        .get("leafUuid")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let payload = json!({
-        "prompt": value.get("lastPrompt").cloned().unwrap_or(Value::Null),
-        "leaf_uuid": value.get("leafUuid").cloned().unwrap_or(Value::Null),
-    });
-    out.push(ExtractedAction {
-        kind: action_kind::USER_PROMPT,
-        timestamp_ms: last_ts_ms,
-        payload: payload.to_string(),
-        source: leaf,
-    });
-}
-
 /// The row's `timestamp` (ISO 8601) as epoch ms, via `skein-harness`.
 /// Falls back to 0 when missing / malformed — the row still gets
 /// persisted, just without a real time, so it'll sort to the bottom
@@ -668,5 +685,7 @@ pub(crate) mod api_usage;
 
 #[cfg(test)]
 mod api_usage_tests;
+#[cfg(test)]
+mod prompt_tests;
 #[cfg(test)]
 mod tests;

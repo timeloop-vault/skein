@@ -52,6 +52,7 @@ use crate::time::parse_iso8601_ms;
 pub mod background;
 pub mod cli_version;
 pub mod local_command;
+pub mod prompt;
 pub mod responses;
 
 pub use responses::{ResponseFold, responses};

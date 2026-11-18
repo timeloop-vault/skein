@@ -219,6 +219,8 @@ mod parse_tests;
 #[cfg(test)]
 mod persist_tests;
 #[cfg(test)]
+mod prompt_feed_tests;
+#[cfg(test)]
 mod reattach_tests;
 #[cfg(test)]
 mod resume_tests;

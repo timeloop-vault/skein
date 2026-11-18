@@ -283,9 +283,11 @@ fn reappear_same_reads_only_the_new_rows() {
         "only the appended row may be read live, got {events:?}"
     );
     let rows_after = db.recent_harness_actions_by_room("r1", -1, 100).unwrap();
+    // The appended human prompt is the one new row (its `user_prompt`,
+    // #723); nothing already stored is written twice.
     assert_eq!(
         rows_after.len(),
-        rows_before.len(),
+        rows_before.len() + 1,
         "no duplicated harness_actions rows"
     );
     let len = fs::metadata(&path).unwrap().len();

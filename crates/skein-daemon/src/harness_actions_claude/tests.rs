@@ -860,7 +860,7 @@ fn cost_state_tolerates_a_field_less_row() {
 }
 
 #[test]
-fn last_prompt_emits_user_prompt_with_leaf_uuid_as_source() {
+fn last_prompt_emits_nothing() {
     let mut x = ActionExtractor::new();
     ingest_one(
         &mut x,
@@ -880,12 +880,7 @@ fn last_prompt_emits_user_prompt_with_leaf_uuid_as_source() {
             "sessionId": "s1",
         }),
     );
-    assert_eq!(actions.len(), 1);
-    let a = &actions[0];
-    assert_eq!(a.kind, action_kind::USER_PROMPT);
-    assert_eq!(a.source.as_deref(), Some("leaf-abc"));
-    let payload: Value = serde_json::from_str(&a.payload).unwrap();
-    assert_eq!(payload["prompt"], "please continue");
+    assert!(actions.is_empty());
 }
 
 #[test]
