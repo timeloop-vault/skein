@@ -2,10 +2,11 @@
 
 Status: design proposed 2026-11-18. All seven questions were decided by
 Stefan on 2026-11-18 (D1 to D7 below); a few details stay open (see
-"Still open"). Nothing is implemented, and no child issue is filed.
+"Still open"). Nothing is implemented. Child issues #793 to #801 are filed.
 Epic: #575. Design: docs/skeind-design.md. Recon:
 docs/skeind-recon.md (section 3 for the protocol surface, section 5 for
 the emulator). P2a: docs/skeind-p2-design.md (#583).
+Terminal design: [skeind-terminal-design.md](skeind-terminal-design.md).
 
 P2b is the first phase that gives a user something new. The Skein
 desktop app and its daemon become two processes. The daemon, `skeind`,
@@ -23,8 +24,8 @@ It absorbs three thin-client issues of epic #751 that say "with #584":
   into slice 4.
 - #759: a two-way reconcile, and by D5 the daemon starting every open
   room's harnesses at its own start. Slice 3.
-- #760: `SinkSlot` becomes N subscribers fed the emulator snapshot and
-  then live bytes, with one size owner. Folded into slice 2.
+- #760: `SinkSlot` becomes N subscribers fed full-redraw frames, with
+  one size owner. Folded into slice 1 (T-3).
 
 It leaves two things alone. The network transport and device tokens
 are #585. The client becoming a pure projection of daemon state is
@@ -85,13 +86,18 @@ embedded one would rot.
   only as a test fixture.
 - The dev profile (`tauri dev`) also runs two processes.
 - Rollback is a revert of the cutover.
+- The terminal redesign uses a temporary developer flag, not a Settings
+  switch. This is a deliberate exception to the "opt-in switch first"
+  rejected above, decided by the user on 2026-11-18. It is limited to
+  the terminal path, it is developer-only, and slice T-6 deletes it
+  (see [skeind-terminal-design.md](skeind-terminal-design.md), T4).
 
 ### D2. A re-attaching view gets full styled scrollback
 
 Decided by Stefan, 2026-11-18.
 
 **Decision.** On attach the client receives the styled scrollback
-history, then the visible screen, then live bytes.
+history and the visible screen as its first frame, then frames.
 
 **Reason.** A reconnected terminal should look as if it never
 disconnected.
@@ -100,35 +106,13 @@ disconnected.
 - The visible screen only (the earlier recommendation).
 - Plain-text history.
 
-**Consequences.** From research on 2026-11-18. Verified means checked
-against the crate's docs or source; not verified means part of the gate.
-
-- Verified: no Rust crate has a built-in dump of styled scrollback plus
-  screen plus modes.
-- Proposed engine: `vt100` 0.18.x (0.18.1, 2026-10-19, MIT) behind the
-  `TerminalEmulator` trait. The snapshot pages through history with
-  `set_scrollback` and `rows_formatted`, then emits the visible screen
-  with `state_formatted`. Version 0.18.0 also added
-  `Callbacks::on_scroll`, which hands over each row scrolled off the
-  top. That is an alternative way to keep history.
-- Verified precedent: shpool restores sessions from a `vt100` fork with
-  `last_n_rows_contents_formatted`.
-- Not verified, and therefore part of the gate: synchronized output
-  (mode 2026) support; whether alternate-screen state survives the
-  paging; wide characters and hyperlinks in formatted output; and that a
-  width change does not reflow. History written at one width will
-  differ from what xterm.js would have reflowed.
-- The gate's baseline becomes `@xterm/headless` with
-  `@xterm/addon-serialize`, the client's own engine. The same recorded
-  Claude Code byte stream goes through both, and the results are
-  compared at cut points.
-- Fallbacks if the gate fails, in order: `alacritty_terminal` 0.26.0
-  with a serialiser we write over its grid (it has real history and
-  reflow, and no serialise API); then a Node sidecar running
-  `@xterm/headless` (the only option that does everything today, at the
-  cost of a Node runtime beside the daemon).
-- The history is bounded. The bound should equal the client terminal's
-  scrollback setting. The exact number is open.
+**Consequences.** The mechanism was revised on 2026-11-18 after the
+slice 1 gate (#793) found mismatches between `vt100` and xterm.js that
+cannot be fixed without patching an emulator. The daemon's engine is
+now the only parser of PTY output, and the engine is
+`alacritty_terminal`. See
+[skeind-terminal-design.md](skeind-terminal-design.md) (T1 to T3). The
+history bound of 5000 rows stays.
 
 ### D3. Daemon lifecycle
 
@@ -277,18 +261,14 @@ the socket mode are tested per OS.
 
 ## Still open
 
-- The emulator choice, pending the gate (slice 1). Unverified: mode
-  2026 support, alternate-screen state across the paging, wide
-  characters and hyperlinks in formatted output, and no reflow on a
-  width change.
-- The scrollback bound, as an exact number. It should equal the client
-  terminal's setting.
+- The engine's gate (T-1). `alacritty_terminal` is decided (T3), but
+  nothing has been run; see the terminal doc.
 - The tray helper's toolkit, and its behaviour on Linux desktops.
 - Where the stop-on-quit option is stored (see "Settings and state").
 - How phase inputs from several clients combine. Proposed: a keystroke
   from any client counts; focus mute holds while any client reports
   that harness focused; Hermes screen reading moves to the daemon's
-  emulator, so no client reports it.
+  engine, so no client reports it.
 - Whether #583 closes before the dispatcher slice starts.
 - The default terminal size of a harness the daemon starts with no
   stored size.
@@ -388,7 +368,7 @@ flowchart LR
         HR["HarnessRunner"]
         PS["PhaseService"]
         PD["Prompt delivery"]
-        PT["PTYs, one emulator each"]
+        PT["PTYs, one engine each"]
         API["Agent API on loopback HTTP"]
         DB[("sqlite, skein.db")]
     end
@@ -497,50 +477,32 @@ revision orders edits. They answer different questions.
 
 ## The PTY channel and the snapshot
 
-Do not replay a raw byte ring into a fresh xterm.js (epic #575). The
-daemon keeps a headless emulator per PTY and sends its styled
-scrollback and its screen (D2).
+This section is superseded by
+[skeind-terminal-design.md](skeind-terminal-design.md). The engine, the
+frame format, the gate and the slices are specified there. What still
+holds is restated here for the new model.
 
-The emulator sits behind a trait:
-
-```text
-trait TerminalEmulator {
-    feed(bytes)
-    resize(rows, cols)
-    snapshot() -> bytes   // styled history, then screen and modes
-}
-```
-
-`vt100` 0.18.x is the proposed first implementation (D2), subject to
-the gate. The snapshot pages through history with `set_scrollback` and
-`rows_formatted`, then emits the visible screen with `state_formatted`.
-The history is bounded, to the client terminal's scrollback setting
-(exact number open). Every call into the parser is wrapped in
-`catch_unwind`, because the recon found open panics on odd resizes. A
-caught panic drops that PTY's emulator state and rebuilds it empty. It
-does not kill the daemon.
-
-Fan-out. Each PTY's output goes to its emulator and to a set of
+Fan-out. Each PTY's output goes to its engine and to a set of
 subscribers. The set replaces the single `SinkSlot`. This is #760
 folded in.
 
-- Attach takes the snapshot and adds the subscriber under one lock. It
-  sends the snapshot, then live bytes. No byte falls between the two.
-- With no subscriber, the emulator still keeps the screen. It also
-  answers the cursor query from its real cursor position, not the fixed
-  `1;1`.
+- Attach adds the viewer and cuts its first frame under one lock. The
+  first frame is a full redraw, history then screen. No output falls
+  between the two.
+- With no subscriber, the engine still keeps the screen. It answers
+  the cursor query from its real cursor position, not the fixed `1;1`.
 - One size owner: the last active client sets the PTY size. The size is
   re-asserted when that client becomes active again. Smallest-wins is
   rejected (epic #575).
-- The one-row repaint hack goes away. The snapshot is the repaint.
-- The Hermes screen phase can read the emulator screen with no client.
-  P2a left it as `unknown` without one.
+- The one-row repaint hack goes away. The first frame is the repaint.
+- The Hermes screen phase reads the engine screen with no client. P2a
+  left it as `unknown` without one.
 
 ```mermaid
 sequenceDiagram
     participant U as App
     participant D as skeind
-    participant E as Emulator
+    participant E as Engine
     participant H as Harness
     U->>D: 1 quit, connection closes
     H->>D: 2 output keeps arriving
@@ -550,28 +512,15 @@ sequenceDiagram
     U->>D: 6 subscribe since seq
     D->>U: 7 events after seq, or gap and snapshots
     U->>D: 8 attach harness, size
-    D->>E: 9 snapshot and subscribe under one lock
-    E->>U: 10 styled history, then screen
+    D->>E: 9 add viewer and cut first frame under one lock
+    D->>U: 10 full redraw, history then screen
     H->>D: 11 more output
-    D->>U: 12 live bytes
+    D->>U: 12 frames
 ```
 
 Figure 2: quit, keep running, relaunch, reattach. Renders sections "The
 event stream" and "The PTY channel and the snapshot"; the text is
 authoritative (non-normative).
-
-The emulator gate. The recon has a proposed test and the issue makes it
-a gate. Record a real Claude Code PTY byte stream, with resizes and the
-alternate screen. Replay it into the emulator, and into `@xterm/headless`
-with `@xterm/addon-serialize`, which is the baseline because it is the
-client's own engine. Compare the daemon's snapshot, history included,
-with the baseline at cut points: after a resize, in the alternate
-screen, mid-redraw. The gate also checks the unverified items of D2:
-mode 2026, alternate-screen state across the paging, wide characters
-and hyperlinks, and the lack of reflow. This runs first (slice 1). If it
-fails, the fallbacks are, in order, `alacritty_terminal` 0.26.0 with a
-serialiser we write, then a Node sidecar running `@xterm/headless`. The
-trait keeps that a local change.
 
 ## Lifecycle
 
@@ -722,8 +671,10 @@ cutover.
 
 Order the work so main stays shippable at every step:
 
-1. The emulator and the fan-out land in embedded form. A webview reload
-   already shows the styled screen instead of a blank terminal.
+1. The engine, the encoder and the fan-out land behind the developer
+   flag, then the flip makes frames the only terminal path (terminal
+   doc, "Delivery"). The flip lands before the socket PTY channel and
+   the cutover.
 2. The daemon starts every open room's harnesses at its own start
    (slice 3). In embedded mode that is before the views mount, and the
    views attach to the running harnesses.
@@ -739,7 +690,8 @@ Order the work so main stays shippable at every step:
    (`app/src-tauri/src/setup/embed.rs` and the in-process link as a
    product path). An in-process link may stay as a test fixture.
 
-There is no switch at any point. Rollback is a revert of the cutover.
+There is no Settings switch at any point; the terminal work has a
+temporary developer flag (T4). Rollback is a revert of the cutover.
 Dogfood on the local-release profile before a release.
 
 The dev profile (`tauri dev`) also runs two processes after the cutover.
@@ -775,22 +727,19 @@ from the shape of the code, and can be reopened.
 
 ## Slices
 
-Each slice ships alone and keeps main shippable. Slices 1 to 10 change
-the product only in ways a user can only improve, or not at all. Slice
-11 is the cutover.
+Each slice ships alone and keeps main shippable. Slices 3 to 10 change
+the product only in ways a user can only improve, or not at all; the
+terminal slices (T-1 to T-6) land behind a developer flag until T-6
+flips it. Slice 11 is the cutover.
 
-1. **Emulator gate.** New `crates/skein-daemon/src/pty/emulator/`: the
-   trait, a `vt100` 0.18.x implementation that pages styled history and
-   then the screen, tests, and a recorded-session fixture. A vitest in
-   `app/src` runs the same stream through `@xterm/headless` with
-   `@xterm/addon-serialize` as the baseline and compares at cut points.
-   Builds on #190, which has landed in `pty/`. No behaviour change.
-2. **PTY fan-out and styled snapshot on attach (#760).**
-   `crates/skein-daemon/src/pty/sink_slot.rs`, `pty/observer`,
-   `harness_runner/` (attach, detach, size owner);
-   `app/src/useTerminalSpawn.ts`, `terminalRepaint.ts` (removed),
-   `harnessEnsure.ts`. Depends on 1. Ships in embedded form: a webview
-   reload shows the screen and its history.
+1. **Terminal engine and redraw frames (T-1 to T-6).** Specified in
+   [skeind-terminal-design.md](skeind-terminal-design.md), "Slices":
+   T-1 engine trait and replay gate (#793), T-2 redraw encoder, T-3
+   PTY subscribers, frame scheduler and size owner (#760), T-5 the
+   daemon reads its own screen, T-4 the view in frame mode, T-6 the flip
+   that deletes the raw path. They run in that order: T-1, T-2, T-3,
+   T-5, T-4, T-6. Slice numbers 3 to 12 are unchanged.
+2. (Folded into slice 1: T-3 is the fan-out, #760.)
 3. **Daemon start spawns open rooms' harnesses (#759).** The two-way
    reconcile at start, the repo identity and missing-folder gates in the
    daemon, the last known size on the record, and the resume marker
@@ -802,7 +751,7 @@ the product only in ways a user can only improve, or not at all. Slice
    `RepoMismatch` at spawn; `skein-git` `repo.rs` supplies the root
    commits. On the app side `app/src/repoIdentity.ts` and the hydrate
    path (`useRoomsStore.ts`, `useRoomsHydrate.ts`) keep only the display
-   side. Follows 2, because both change `harness_runner/`. Ships in
+   side. Follows T-3, because both change `harness_runner/`. Ships in
    embedded form: the daemon starts harnesses before the views mount,
    and the views attach to them. Implements #759 and closes it, or
    leaves the richer desired-state remainder there.
@@ -826,7 +775,7 @@ the product only in ways a user can only improve, or not at all. Slice
    and settings; the rest. No behaviour change. An old and a new path
    never coexist for one command. Depends on #583 closing (open: see
    "Still open"). Its pty and harness-runner command group also follows
-   slices 2 and 3, because they change the attach signature and the
+   T-3 and slice 3, because they change the attach signature and the
    runner that those forwarders wrap. Slices 3, 4 and this one all add
    files to `crates/skein-proto`, different ones; coordinate the
    `lib.rs` re-exports.
@@ -847,7 +796,7 @@ the product only in ways a user can only improve, or not at all. Slice
    `crates/skein-daemon/src/transport/`, `event_sink.rs`,
    `stream_sink.rs`, `crates/skein-client` (new),
    `app/src-tauri/src/tauri_event_sink.rs` and `tauri_stream_sink.rs`.
-   Depends on 2, 4 and 6.
+   Depends on T-6, 4 and 6.
 8. **Daemon-to-client requests routed by capability.**
    `crates/skein-daemon/src/agent_api/client.rs` (`ClientRequests` and
    `WebviewCapture` routed by capability),
@@ -874,26 +823,28 @@ the product only in ways a user can only improve, or not at all. Slice
     runs two processes. Files: `app/src-tauri/src/setup/`, `lib.rs`,
     `app/src/exitGuard.ts`, `SettingsModal.tsx`,
     `app/src-tauri/tauri.conf.json`, `.github/workflows/release.yml`.
-    Depends on 2, 3, 7, 8, 9 and 10.
+    Depends on T-6, 3, 7, 8, 9 and 10.
 12. **Docs.** CLAUDE.md (including its "spawns nothing; a harness starts
     on its first request" sentence), docs/skeind-p2-design.md (the
     phase 2a "a harness starts on its first request" wording, for
     daemon start), docs/agent-api.md, docs/skeind-crates.md,
-    docs/e2e-dev-driving.md. The #584 and #575 wording needs no change
+    docs/e2e-dev-driving.md, docs/skeind-terminal-design.md,
+    docs/skeind-port-review.md (its "snapshot then live bytes"
+    wording). The #584 and #575 wording needs no change
     under D5. Depends on 11.
 
 Parallel work. Slices 1, 4 and 5 touch different areas and can run side
-by side once their preconditions hold. Slice 1 has none left (#190 has
-landed). Slice 5 waits for #583 to close. Slices 3, 4 and 5 all add
+by side once their preconditions hold. Within slice 1, T-1 has none
+left (#190 has landed) and T-2 to T-6 chain behind it in the order T-1,
+T-2, T-3, T-5, T-4, T-6. Slice 5 waits for #583 to close. Slices 3, 4 and 5 all add
 files to `crates/skein-proto` (different files; coordinate the `lib.rs`
-re-exports). Slice 2 follows 1, slice 3 follows 2, and slice 5's pty
-and harness-runner command group follows 2 and 3. Slice 10 can run
-beside slices 7 and 8.
+re-exports). Slice 3 follows T-3, and slice 5's pty and harness-runner
+command group follows T-3 and 3. Slice 10 can run beside slices 7 and
+8.
 
 ```mermaid
 flowchart TD
-    S1["1 Emulator gate"]
-    S2["2 PTY fan-out and styled snapshot"]
+    ST["1 Terminal engine and frames, T-1 to T-6"]
     S3["3 Daemon start spawns open rooms"]
     S4["4 Event seq and replay"]
     S5["5 Dispatcher and link trait"]
@@ -904,20 +855,19 @@ flowchart TD
     S10["10 Tray helper"]
     S11["11 Cutover"]
     S12["12 Docs"]
-    S1 --> S2
-    S2 --> S3
+    ST --> S3
     S4 --> S6
     S5 --> S6
-    S2 -.-> S5
+    ST -.-> S5
     S3 -.-> S5
-    S2 --> S7
+    ST --> S7
     S4 --> S7
     S6 --> S7
     S6 --> S8
     S6 --> S9
     S6 --> S10
     S9 --> S10
-    S2 --> S11
+    ST --> S11
     S3 --> S11
     S7 --> S11
     S8 --> S11
@@ -928,7 +878,8 @@ flowchart TD
 
 Figure 4: slice dependencies. A dotted edge means only one command
 group of slice 5 waits. Renders section "Slices"; the text is
-authoritative (non-normative).
+authoritative (non-normative). The edges from node 1 to slices 3 and 5
+mean T-3; the edges from node 1 to slices 7 and 11 mean T-6.
 
 ## Risks
 
@@ -944,12 +895,10 @@ authoritative (non-normative).
   `missingFolder.test.ts`) are ported as the spec.
 - **Many CLIs start at once at daemon start.** An app launch does the
   same today, so this is no new load; note it when measuring.
-- **Styled scrollback fidelity and no reflow.** A `vt100` snapshot may
-  differ from what xterm.js shows, and history written at one width does
-  not reflow. Mitigation: the gate runs first against the
-  `@xterm/headless` baseline, the trait keeps the engine replaceable
-  (fallbacks in D2), and parser calls are wrapped in `catch_unwind`
-  because the recon found open panics on odd resizes.
+- **Engine fidelity.** The daemon's engine is the only parser, so its
+  gaps show always. Mitigation: the gate runs first, the trait keeps
+  the engine replaceable, parser calls are wrapped in `catch_unwind`;
+  see the terminal doc's Risks.
 - **A third process, the tray helper, out of step.** It can die while
   the daemon lives, or run a different version. Mitigation: the app
   restarts it on launch, it exits when its socket closes, `hello`
@@ -979,9 +928,10 @@ authoritative (non-normative).
 - **Pipe or socket permissions wrong.** A readable socket is an open
   door to every harness. Mitigation: tests that check the pipe ACL and
   the socket mode, per OS.
-- **Added latency on PTY bytes from the extra hop.** Mitigation: binary
-  frames with no base64, and a measurement of keystroke echo before and
-  after slice 11.
+- **Added latency on PTY bytes from the extra hop.** The engine and
+  encoder also add parse and encode time, measured before the flip
+  (T-6). Mitigation: binary frames with no base64, and a measurement of
+  keystroke echo before and after slice 11.
 - **The dispatcher slice is wide.** About 105 commands move. Mitigation:
   mechanical, by command group, and an old and a new path never coexist
   for one command.
@@ -993,27 +943,36 @@ authoritative (non-normative).
 
 | #584 acceptance item | Satisfied by |
 | --- | --- |
-| Quit the app with harnesses running; relaunch; the same harnesses are attached and the feed catches up from `since=<seq>` | Slices 2 and 4 for the styled screen and the catch-up, slices 7 and 11 for the quit and relaunch |
+| Quit the app with harnesses running; relaunch; the same harnesses are attached and the feed catches up from `since=<seq>` | T-3 and slice 4 for the styled screen and the catch-up, slices 7 and 11 for the quit and relaunch |
 | Kill and restart the daemon; harnesses are re-spawned with resume and the event stream records it | Slice 3 (the daemon starts every open room's harnesses at its own start and marks each resume in the event stream), slice 11 (the app starts the daemon and reconnects). With no app running, nothing restarts the daemon (D5) |
-| Emulator check: replay a recorded Claude Code session and compare the snapshot with xterm.js | Slice 1 (against `@xterm/headless` with the serialize addon) |
-| Parser panics on odd resizes are caught and do not kill the daemon | Slice 1 (`catch_unwind` in the trait implementation, with a test) |
+| Emulator check: replay a recorded Claude Code session and compare the snapshot with xterm.js | T-1 and T-2 (the gate's second version: xterm.js fed the raw stream against xterm.js fed the daemon's frames) |
+| Parser panics on odd resizes are caught and do not kill the daemon | T-1 (`catch_unwind` in the trait implementation, with a test) |
 | `cargo test --workspace`, `cargo test --manifest-path app/src-tauri/Cargo.toml`, `cd app && npm test` pass | Every slice |
 | Local socket with filesystem permissions as auth | Slice 6 (D7) |
 | `hello { proto_version, client_kind, capabilities }` | Slice 6 |
-| Last active client sets the size, re-asserted on reactivation | Slice 2 |
+| Last active client sets the size, re-asserted on reactivation | T-3 |
 | Settings: attached vs detached | Dropped (D1): no switch. Slice 11 adds only the stop-on-quit option |
 | Default decision | Decided (D1): detached only, slice 11 |
 
 ## Proposed child issues
 
-Nothing has been filed. #757, #759 and #760 already exist. They would
-be reused as the bodies of slices 4, 3 and 2, or closed with a pointer
-to the matching P2b child. These titles are drafts:
+The children were filed as #793 to #801 (P2b-1 = #793, P2b-5 to
+P2b-12 = #794 to #801, in order). #757, #759 and #760 were reused. The
+changes proposed in
+[skeind-terminal-design.md](skeind-terminal-design.md) ("Proposed issue
+changes") have not been made on GitHub yet. These are the titles after
+those changes:
 
-- skeind P2b-1: emulator trait, `vt100` implementation and the replay
-  gate against `@xterm/headless`.
-- skeind P2b-2: PTY subscribers, styled snapshot on attach and one size
-  owner (reuses #760).
+- skeind P2b-1: engine trait, `alacritty_terminal` implementation and
+  the replay gate.
+- skeind P2b-2: PTY subscribers, per-viewer frames, attach as a full
+  redraw, one size owner (reuses #760).
+- skeind P2b, T-2: redraw encoder, grid to VT-subset frames (new).
+- skeind P2b, T-4: the terminal view in frame mode (new).
+- skeind P2b, T-5: the daemon reads its own screen (Hermes phase, paste
+  mode, pane notices) (new).
+- skeind P2b, T-6: flip to frames and delete the raw terminal path
+  (new).
 - skeind P2b-3: daemon start spawns every open room's harnesses, with
   the identity and folder gates, last known size and resume markers
   (reuses #759).

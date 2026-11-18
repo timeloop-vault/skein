@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The daemon-owned terminal</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfaf7;
+    --fg: #1f2328;
+    --muted: #57606a;
+    --accent: #0b5fc4;
+    --accent-2: #b35900;
+    --surface: #ffffff;
+    --border: #c9ced6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c;
+      --fg: #e6e8eb;
+      --muted: #a3acb8;
+      --accent: #6cb0ff;
+      --accent-2: #ffb454;
+      --surface: #1d2229;
+      --border: #3a424d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2rem 1rem 4rem;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 1.125rem;
+    line-height: 1.6;
+    text-align: left;
+  }
+  main { max-width: 64rem; margin: 0 auto; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .25rem; }
+  h2 { font-size: 1.4rem; margin: 2.5rem 0 1rem; }
+  .lede { color: var(--muted); margin: 0 0 1rem; }
+  .scene { display: grid; grid-template-columns: 1fr; gap: 1.5rem; align-items: start; }
+  @media (min-width: 52rem) { .scene { grid-template-columns: 3fr 2fr; } }
+  figure {
+    margin: 0;
+    padding: 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: .75rem;
+  }
+  figure svg { width: 100%; height: auto; display: block; color: var(--fg); }
+  figcaption { margin-top: .75rem; font-weight: 600; }
+  .source { margin: .5rem 0 0; font-size: .9rem; color: var(--muted); }
+  ol.steps { margin: 0; padding-left: 1.5rem; }
+  ol.steps li { margin-bottom: .9rem; padding-left: .25rem; }
+  ol.steps li::marker { color: var(--accent); font-weight: 700; }
+  ul.plain { margin: 0; padding-left: 1.5rem; }
+  ul.plain li { margin-bottom: .4rem; }
+
+  .box { fill: var(--surface); stroke: var(--accent); stroke-width: 2.5; }
+  .box.later { stroke-dasharray: 7 5; }
+  .box.warn { stroke: var(--accent-2); }
+  .band { fill: none; stroke: var(--accent-2); stroke-width: 2.5; }
+  .band.new { stroke: var(--accent); }
+  .badge { fill: var(--accent); }
+  .badge-n { fill: var(--bg); font: 700 16px system-ui, sans-serif; text-anchor: middle; }
+  .label { fill: currentColor; font: 600 16px system-ui, sans-serif; text-anchor: middle; }
+  .small { fill: currentColor; font: 400 14px system-ui, sans-serif; text-anchor: middle; }
+  .note { fill: var(--accent-2); font: 600 14px system-ui, sans-serif; text-anchor: middle; }
+  .arrow { stroke: var(--accent-2); color: var(--accent-2); stroke-width: 3; fill: none; }
+  .arrow.dash { stroke-dasharray: 7 5; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .arrow { animation: fade-in .8s ease-out both; }
+  }
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>The daemon-owned terminal</h1>
+  <p class="lede">One program reads what a harness prints. Every screen only draws what it is sent.</p>
+  <p>Today the app's terminal reads the harness's output and draws the screen. The first design for the detached daemon added a second reader in the daemon, to rebuild the screen after a reconnect. Two readers of the same output can disagree, and the gap cannot be fixed without patching a reader. The new design keeps one reader, in the daemon. The app, and any later client, only draws what the daemon sends. This is the tmux and mosh model.</p>
+
+  <h2>Before: the first design had two readers</h2>
+  <section class="scene">
+    <div>
+      <figure>
+        <svg viewBox="0 0 640 290" role="img" aria-label="Harness output goes through the daemon as raw bytes to the app's terminal, while a second reader in the daemon reads the same bytes, so the two can disagree.">
+          <defs>
+            <marker id="head1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <rect class="box" x="10" y="40" width="120" height="70" rx="14"/>
+          <text class="label" x="70" y="80">Harness</text>
+          <rect class="box" x="190" y="40" width="150" height="70" rx="14"/>
+          <text class="label" x="265" y="72">Daemon: PTY</text>
+          <text class="small" x="265" y="92">reader, batches</text>
+          <rect class="box" x="450" y="40" width="175" height="70" rx="14"/>
+          <text class="label" x="537" y="72">App: xterm.js</text>
+          <text class="small" x="537" y="92">reads and draws</text>
+          <rect class="box later" x="190" y="190" width="150" height="70" rx="14"/>
+          <text class="label" x="265" y="222">Second reader</text>
+          <text class="small" x="265" y="242">in the daemon</text>
+          <line class="arrow" x1="132" y1="75" x2="186" y2="75" marker-end="url(#head1)"/>
+          <line class="arrow" x1="342" y1="75" x2="446" y2="75" marker-end="url(#head1)"/>
+          <text class="small" x="396" y="64">raw bytes</text>
+          <line class="arrow dash" x1="265" y1="112" x2="265" y2="186" marker-end="url(#head1)"/>
+          <text class="small" x="300" y="155" style="text-anchor:start">same bytes</text>
+          <path class="arrow dash" d="M342 225 L537 225 L537 114" marker-end="url(#head1)"/>
+          <text class="small" x="440" y="215">screen after reconnect</text>
+          <text class="note" x="585" y="160">can disagree</text>
+          <circle class="badge" cx="24" cy="40" r="15"/><text class="badge-n" x="24" y="46">1</text>
+          <circle class="badge" cx="204" cy="40" r="15"/><text class="badge-n" x="204" y="46">2</text>
+          <circle class="badge" cx="396" cy="88" r="15"/><text class="badge-n" x="396" y="94">3</text>
+          <circle class="badge" cx="464" cy="40" r="15"/><text class="badge-n" x="464" y="46">4</text>
+          <circle class="badge" cx="204" cy="190" r="15"/><text class="badge-n" x="204" y="196">5</text>
+        </svg>
+        <figcaption>Before: today's app reader, plus the second reader the first P2b design added.</figcaption>
+      </figure>
+      <p class="source">Source. Renders: docs/skeind-terminal-design.md, section "The flow" (old). Non-normative: the text is authoritative.</p>
+    </div>
+    <ol class="steps">
+      <li>The harness writes bytes to its PTY.</li>
+      <li>The daemon's reader and coalescer batch them (16 ms, 64 KB).</li>
+      <li>The daemon forwards the raw bytes to the app.</li>
+      <li>xterm.js in the app reads them and draws.</li>
+      <li>A second reader in the daemon reads the same bytes, for the snapshot after a reconnect. This second reader exists in the first P2b design only.</li>
+    </ol>
+  </section>
+
+  <h2>After: one reader, dumb viewers</h2>
+  <section class="scene">
+    <div>
+      <figure>
+        <svg viewBox="0 0 780 380" role="img" aria-label="Harness output is read once by the daemon's engine, cut into frames, encoded per viewer, and drawn by the desktop app and later a phone, while daemon features read the engine's screen.">
+          <defs>
+            <marker id="head2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <rect class="box" x="10" y="130" width="90" height="70" rx="14"/>
+          <text class="label" x="55" y="170">Harness</text>
+          <rect class="box" x="140" y="110" width="140" height="110" rx="14"/>
+          <text class="label" x="210" y="155">Engine</text>
+          <text class="small" x="210" y="177">grid, history,</text>
+          <text class="small" x="210" y="195">modes</text>
+          <rect class="box" x="320" y="130" width="110" height="70" rx="14"/>
+          <text class="label" x="375" y="161">Frame</text>
+          <text class="label" x="375" y="181">scheduler</text>
+          <rect class="box" x="470" y="130" width="110" height="70" rx="14"/>
+          <text class="label" x="525" y="161">Encoder</text>
+          <text class="small" x="525" y="181">per viewer</text>
+          <rect class="box" x="620" y="50" width="150" height="70" rx="14"/>
+          <text class="label" x="695" y="82">Desktop app</text>
+          <text class="small" x="695" y="102">draws the frames</text>
+          <rect class="box later" x="620" y="210" width="150" height="70" rx="14"/>
+          <text class="label" x="695" y="242">Phone, later</text>
+          <text class="small" x="695" y="262">draws the same frames</text>
+          <rect class="box" x="130" y="290" width="160" height="70" rx="14"/>
+          <text class="label" x="210" y="319">Daemon features</text>
+          <text class="small" x="210" y="341">read the screen</text>
+          <line class="arrow" x1="102" y1="165" x2="136" y2="165" marker-end="url(#head2)"/>
+          <line class="arrow" x1="282" y1="165" x2="316" y2="165" marker-end="url(#head2)"/>
+          <line class="arrow" x1="432" y1="165" x2="466" y2="165" marker-end="url(#head2)"/>
+          <line class="arrow" x1="582" y1="150" x2="616" y2="100" marker-end="url(#head2)"/>
+          <line class="arrow dash" x1="582" y1="180" x2="616" y2="228" marker-end="url(#head2)"/>
+          <text class="small" x="640" y="165">frames</text>
+          <path class="arrow" d="M150 222 Q60 255 55 204" marker-end="url(#head2)"/>
+          <text class="small" x="62" y="262">query replies</text>
+          <line class="arrow" x1="230" y1="222" x2="230" y2="286" marker-end="url(#head2)"/>
+          <circle class="badge" cx="24" cy="130" r="15"/><text class="badge-n" x="24" y="136">1</text>
+          <circle class="badge" cx="154" cy="110" r="15"/><text class="badge-n" x="154" y="116">2</text>
+          <circle class="badge" cx="190" cy="110" r="15"/><text class="badge-n" x="190" y="116">3</text>
+          <circle class="badge" cx="334" cy="130" r="15"/><text class="badge-n" x="334" y="136">4</text>
+          <circle class="badge" cx="484" cy="130" r="15"/><text class="badge-n" x="484" y="136">5</text>
+          <circle class="badge" cx="634" cy="50" r="15"/><text class="badge-n" x="634" y="56">6</text>
+          <circle class="badge" cx="634" cy="210" r="15"/><text class="badge-n" x="634" y="216">6</text>
+          <circle class="badge" cx="144" cy="290" r="15"/><text class="badge-n" x="144" y="296">7</text>
+        </svg>
+        <figcaption>After: one reader, dumb viewers.</figcaption>
+      </figure>
+      <p class="source">Source. Renders: docs/skeind-terminal-design.md, sections "The flow" (new) and "The frame". Non-normative: the text is authoritative.</p>
+    </div>
+    <ol class="steps">
+      <li>The harness writes bytes to its PTY.</li>
+      <li>The daemon feeds them to that PTY's engine, the only reader. The engine answers the harness's device queries itself.</li>
+      <li>The engine marks what changed. History rows that leave the screen stay in the engine.</li>
+      <li>The frame scheduler waits for the coalescing window and for any synchronized update to finish.</li>
+      <li>For each viewer, the encoder compares the grid with what that viewer was last sent. It writes one frame in a small fixed set of VT sequences.</li>
+      <li>The client writes the frame into its terminal widget, which draws it. A phone widget could do the same later.</li>
+      <li>Daemon features (Hermes screen phase, prompt delivery, pane notices) read the engine, with or without a client.</li>
+    </ol>
+  </section>
+
+  <h2>How it reaches main without breaking Skein</h2>
+  <section class="scene">
+    <div>
+      <figure>
+        <svg viewBox="0 0 880 230" role="img" aria-label="Six delivery steps in order; until the flip, the default path stays today's path, and after the flip frames are the only path.">
+          <defs>
+            <marker id="head3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <rect class="box" x="10" y="40" width="124" height="96" rx="14"/>
+          <text class="label" x="72" y="82">Library</text>
+          <text class="small" x="72" y="104">code only,</text>
+          <text class="small" x="72" y="122">nothing calls it</text>
+          <rect class="box" x="156" y="40" width="124" height="96" rx="14"/>
+          <text class="label" x="218" y="82">Frame path</text>
+          <text class="small" x="218" y="104">behind a</text>
+          <text class="small" x="218" y="122">developer flag</text>
+          <rect class="box" x="302" y="40" width="124" height="96" rx="14"/>
+          <text class="label" x="364" y="76">Daemon, then</text>
+          <text class="label" x="364" y="96">view</text>
+          <text class="small" x="364" y="118">learn frame mode</text>
+          <rect class="box" x="448" y="40" width="124" height="96" rx="14"/>
+          <text class="label" x="510" y="82">Dogfood</text>
+          <text class="small" x="510" y="104">flag on, dev and</text>
+          <text class="small" x="510" y="122">local profiles</text>
+          <rect class="box warn" x="594" y="40" width="124" height="96" rx="14"/>
+          <text class="label" x="656" y="76">The flip</text>
+          <text class="small" x="656" y="98">frames only,</text>
+          <text class="small" x="656" y="116">old path deleted</text>
+          <rect class="box" x="740" y="40" width="124" height="96" rx="14"/>
+          <text class="label" x="802" y="76">Socket and</text>
+          <text class="label" x="802" y="96">cutover</text>
+          <text class="small" x="802" y="118">follow the flip</text>
+          <line class="arrow" x1="136" y1="88" x2="152" y2="88" marker-end="url(#head3)"/>
+          <line class="arrow" x1="282" y1="88" x2="298" y2="88" marker-end="url(#head3)"/>
+          <line class="arrow" x1="428" y1="88" x2="444" y2="88" marker-end="url(#head3)"/>
+          <line class="arrow" x1="574" y1="88" x2="590" y2="88" marker-end="url(#head3)"/>
+          <line class="arrow" x1="720" y1="88" x2="736" y2="88" marker-end="url(#head3)"/>
+          <rect class="band" x="10" y="156" width="562" height="56" rx="10"/>
+          <text class="note" x="291" y="180">The default path is today's path</text>
+          <text class="small" x="291" y="200">the flag is off unless a developer turns it on</text>
+          <rect class="band new" x="594" y="156" width="270" height="56" rx="10"/>
+          <text class="note" x="729" y="180">Frames are the only path</text>
+          <text class="small" x="729" y="200">rollback is a revert of the flip</text>
+          <circle class="badge" cx="24" cy="40" r="15"/><text class="badge-n" x="24" y="46">1</text>
+          <circle class="badge" cx="170" cy="40" r="15"/><text class="badge-n" x="170" y="46">2</text>
+          <circle class="badge" cx="316" cy="40" r="15"/><text class="badge-n" x="316" y="46">3</text>
+          <circle class="badge" cx="462" cy="40" r="15"/><text class="badge-n" x="462" y="46">4</text>
+          <circle class="badge" cx="608" cy="40" r="15"/><text class="badge-n" x="608" y="46">5</text>
+          <circle class="badge" cx="754" cy="40" r="15"/><text class="badge-n" x="754" y="46">6</text>
+        </svg>
+        <figcaption>How it reaches main without breaking Skein.</figcaption>
+      </figure>
+      <p class="source">Source. Renders: docs/skeind-terminal-design.md, sections "Delivery" and decision T4. Non-normative: the text is authoritative.</p>
+    </div>
+    <ol class="steps">
+      <li>The engine, the encoder and the test gate land as library code. Nothing calls them in the product.</li>
+      <li>The fan-out and the frame path land behind the flag. With the flag unset, every byte takes today's path.</li>
+      <li>The daemon learns to read its own screen and to author pane notices, then the view learns the frame mode. Both only when the flag is on.</li>
+      <li>Dogfood with the flag on, on the dev and local-release profiles.</li>
+      <li>The flip: frames become the only path. The raw path, the flag and the helpers are deleted.</li>
+      <li>The socket work and the cutover follow the flip.</li>
+    </ol>
+  </section>
+
+  <h2>What the app still does itself</h2>
+  <ul class="plain">
+    <li>Input encoding: keys, mouse and paste. It uses the modes the daemon mirrors, and sends the bytes.</li>
+    <li>Selection and copy: local, over the app's own screen and scrollback.</li>
+    <li>Scrollback browsing: local. The daemon fills it, up to 5000 rows.</li>
+    <li>Links: the daemon re-sends them, and the app's link handler is unchanged.</li>
+  </ul>
+  <p>Full detail: <a href="../skeind-terminal-design.md">docs/skeind-terminal-design.md</a>.</p>
+</main>
+</body>
+</html>
