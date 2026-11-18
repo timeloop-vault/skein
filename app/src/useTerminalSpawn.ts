@@ -12,6 +12,7 @@ import { claimSettled } from "./claudeRepointPlan.ts";
 import { HARNESS_KINDS } from "./data.tsx";
 import { defaultEnsureDeps, detachHarness, ensureRunning, type PtyEvent } from "./harnessEnsure.ts";
 import { restartFor } from "./harnessMounts.ts";
+import { showSessionNotice } from "./opencodeSessionNotice.ts";
 import type { ShellClaimSink } from "./opencodeShellClaim.ts";
 import { followOpencodeShell, type OpencodeAdapter } from "./opencodeShellFollow.ts";
 import { createSidecarDeathRecord, watchSidecarExit } from "./opencodeSidecarExit.ts";
@@ -282,6 +283,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 					spawnStartedAt,
 				});
 				sidecarGeneration = generation;
+				showSessionNotice(result, { setHint, hintTimerRef }); // #679
 				linkPolicy.mouseClicksDisabled = mouseClicksDisabled;
 				// #238: publish this harness to the `harnessInput` seam now
 				// that its PTY is live.

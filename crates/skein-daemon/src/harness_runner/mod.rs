@@ -457,7 +457,13 @@ impl HarnessRunner {
 
         // The derived id (minted, or the stale one dropped); opencode v2 may
         // have created or confirmed a different session, and that wins.
-        let session_now = spawn.session_id.clone().or(plan.session_id.clone());
+        // A dropped id (#679, the running opencode cannot see it) is not
+        // kept: the fresh v2 id replaces it, and on v1 it is cleared.
+        let session_now = if spawn.session_dropped {
+            spawn.session_id.clone()
+        } else {
+            spawn.session_id.clone().or(plan.session_id.clone())
+        };
         self.attach_adapters(
             &req.harness_id,
             &run,

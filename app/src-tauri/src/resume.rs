@@ -25,10 +25,13 @@ pub async fn opencode_list_sessions(cwd: String) -> Result<Vec<String>, String> 
 /// is non-archived)? Used at boot to drop stale captured ids before
 /// resume tries to use them.
 ///
+/// `v2` (absent = false): the harness last ran opencode v2, so an id in
+/// either table counts; otherwise only v1's `session`.
+///
 /// Async: same opencode.db read as `opencode_list_sessions` (#171).
 #[tauri::command]
-pub async fn opencode_session_exists(id: String) -> Result<bool, String> {
-    skein_daemon::resume::opencode_session_exists(id).await
+pub async fn opencode_session_exists(id: String, v2: Option<bool>) -> Result<bool, String> {
+    skein_daemon::resume::opencode_session_exists(id, v2.unwrap_or(false)).await
 }
 
 /// Phase 4: does Claude still have a session file for this id? Scans

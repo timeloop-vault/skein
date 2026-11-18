@@ -123,6 +123,8 @@ fn spawn_result(version: Option<OpencodeVersionDto>) -> PtySpawnResult {
         opencode_version: version,
         session_id: None,
         opencode_port: None,
+        session_dropped: false,
+        session_notice: None,
     }
 }
 
@@ -350,4 +352,39 @@ fn a_mid_spawn_client_put_cannot_set_the_session_id_or_version() {
     assert_eq!(h.session_id.as_deref(), Some(argv[2].as_str()));
     assert_ne!(h.session_id.as_deref(), Some("client-sid"));
     assert_eq!(h.opencode_version, None, "not the client's");
+}
+
+/// #679: a dropped id is replaced by the fresh v2 one, or cleared on v1.
+#[test]
+fn a_dropped_session_is_replaced_or_cleared_by_the_write_back() {
+    for fresh in [Some("ses_fresh"), None] {
+        let fx = Fx::new();
+        fx.create(room(
+            "r1",
+            &fx.work,
+            vec![harness(
+                "h1",
+                "opencode",
+                Some(shell_cmd()),
+                Some("ses_old"),
+            )],
+        ));
+        let before = stored(&fx);
+        let spawn = PtySpawnResult {
+            session_id: fresh.map(str::to_owned),
+            session_dropped: true,
+            ..spawn_result(None)
+        };
+        record::write_back(
+            &fx.daemon.rooms,
+            "r1",
+            "h1",
+            HarnessKind::Opencode,
+            &spawn,
+            spawn.session_id.as_deref(),
+            Some("ses_old"),
+            before.opencode_version.as_ref(),
+        );
+        assert_eq!(stored(&fx).session_id.as_deref(), fresh);
+    }
 }

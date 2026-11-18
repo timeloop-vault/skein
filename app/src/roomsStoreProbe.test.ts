@@ -98,11 +98,19 @@ describe("stillExists hermes profile (#627)", () => {
 
 describe("stillExists: opencode v2 bridge (#679)", () => {
 	const v = (major: number) => ({ major, minor: 0, patch: 0 }) as never;
-	it("a v2 record keeps its id without probing", async () => {
-		invokeMock.mockClear();
+	it("a v2 record probes session_v2 and respects the answer", async () => {
 		const h = harness("opencode", { sessionId: "ses_x", opencodeVersion: v(2) });
+		invokeMock.mockClear();
+		invokeMock.mockResolvedValueOnce(false);
+		expect(await stillExists(h)).toBe(false);
+		expect(invokeMock).toHaveBeenCalledWith("opencode_session_exists", {
+			id: "ses_x",
+			v2: true,
+		});
+		invokeMock.mockResolvedValueOnce(true);
 		expect(await stillExists(h)).toBe(true);
-		expect(invokeMock).not.toHaveBeenCalled();
+		invokeMock.mockRejectedValueOnce(new Error("boom"));
+		expect(await stillExists(h)).toBe(true);
 	});
 	it("v1 and unversioned records still probe", async () => {
 		for (const h of [

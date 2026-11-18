@@ -12,6 +12,12 @@ import type { LaunchMode, OpencodeVersion } from "./types.ts";
 
 export type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
 
+/** #679: `sessionId` is the OLD stored id that was not resumed. */
+export interface SessionNotice {
+	kind: "v1SessionUnderV2" | "v2SessionUnderV1";
+	sessionId: string;
+}
+
 /** `harness_ensure_running`'s resolved value. */
 export interface EnsureResult {
 	/** false = a process for this harness already existed; the view only attached. */
@@ -31,6 +37,10 @@ export interface EnsureResult {
 	opencodePort?: number | null;
 	opencodeVersion: OpencodeVersion | null;
 	sessionId: string | null;
+	/** #679: the stored session id was dropped (not resumed). */
+	sessionDropped?: boolean;
+	/** #679: why, when the id belongs to the other opencode major version. */
+	sessionNotice?: SessionNotice | null;
 	/** The process was already dead: its `exit` event comes through the channel. */
 	exited: boolean;
 	exitCode?: number | null;

@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use super::opencode_prepare::{Prepared, prepare_opencode_spawn};
+use super::opencode_prepare::{Prepared, SessionNotice, prepare_opencode_spawn};
 use super::{PtyEvent, PtyManager, PtyObserver, SidecarBinding, SpawnRequest};
 use crate::agent_endpoint::{AgentApiEndpoint, HarnessIdentity};
 use crate::db::Database;
@@ -32,6 +32,8 @@ use crate::stream_sink::StreamSink;
 /// deferral (#269) must not stand aside when Claude ignores clicks (#401).
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+// A wire shape the frontend reads field by field: the bools are facts, not state.
+#[allow(clippy::struct_excessive_bools)]
 pub struct PtySpawnResult {
     pub id: String,
     pub injected: bool,
@@ -54,6 +56,14 @@ pub struct PtySpawnResult {
     /// Set by the runner, never by [`pty_spawn_with_sink`].
     #[serde(default)]
     pub opencode_port: Option<u16>,
+    /// The record's stored session id was not used (#679): the runner must
+    /// not keep it. `session_id` is then the fresh one (v2) or `None` (v1).
+    #[serde(default)]
+    pub session_dropped: bool,
+    /// Set when the dropped session exists, but under the other opencode
+    /// version, so the pane can say why it started fresh.
+    #[serde(default)]
+    pub session_notice: Option<SessionNotice>,
 }
 
 /// The managed state a spawn reads, borrowed from wherever it is stored.
@@ -156,6 +166,13 @@ pub fn pty_spawn_with_sink(
         record_agent.as_deref(),
         record_session.as_deref(),
         || opencode_cli_version_impl(&settings),
+        |sid| {
+            crate::resume::opencode_session_presence_blocking(sid)
+                .inspect_err(|e| {
+                    tracing::warn!(error = %e, "opencode: session presence check failed; keeping the stored id");
+                })
+                .ok()
+        },
         |agent, session_id| {
             let handle = tokio::runtime::Handle::try_current()
                 .map_err(|e| format!("no async runtime to start the opencode server: {e}"))?;
@@ -186,6 +203,8 @@ pub fn pty_spawn_with_sink(
         version: opencode_version,
         session_id: sidecar_session_id,
         started_here,
+        session_dropped,
+        notice: session_notice,
     } = prepared;
     // #213: mint (or reuse) the room's review token and hand the
     // harness its endpoint. A failure here is not a reason to
@@ -255,6 +274,8 @@ pub fn pty_spawn_with_sink(
         opencode_version,
         session_id: sidecar_session_id,
         opencode_port: None,
+        session_dropped,
+        session_notice,
     })
 }
 
@@ -306,6 +327,11 @@ mod tests {
             }),
             session_id: None,
             opencode_port: Some(4096),
+            session_dropped: true,
+            session_notice: Some(super::SessionNotice {
+                kind: super::super::opencode_prepare::SessionNoticeKind::V1SessionUnderV2,
+                session_id: "ses_old".to_owned(),
+            }),
         })
         .expect("serialize");
         assert_eq!(
@@ -319,7 +345,9 @@ mod tests {
                 "sidecarGeneration": 4,
                 "opencodeVersion": {"major": 2, "version": "2.2.0"},
                 "sessionId": null,
-                "opencodePort": 4096
+                "opencodePort": 4096,
+                "sessionDropped": true,
+                "sessionNotice": {"kind": "v1SessionUnderV2", "sessionId": "ses_old"}
             })
         );
     }

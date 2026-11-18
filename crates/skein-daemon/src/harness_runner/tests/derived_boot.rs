@@ -154,7 +154,7 @@ fn opencode_v1_with_a_stale_id_starts_fresh_on_the_picked_port() {
 /// pick (it is only the last spawn's result); a v2 spawn drops it afterwards
 /// (`reported_port`).
 #[test]
-fn opencode_v2_is_not_probed_and_keeps_its_id() {
+fn opencode_v2_is_probed_like_any_other() {
     let fx = Fx::new();
     let mut h = harness(
         "h1",
@@ -167,17 +167,16 @@ fn opencode_v2_is_not_probed_and_keeps_its_id() {
         version: "2.0.1".to_owned(),
     });
     let r = room("r1", &fx.work, vec![h.clone()]);
-    let plan = SpawnPlan::from_record(
-        &r,
-        &h,
-        HarnessKind::Opencode,
-        None,
-        &|_| panic!("a v2 session is not probed"),
-        &|| Ok(4777),
-    )
-    .unwrap();
+    let plan_with = |probe: &dyn Fn(&Harness) -> Result<bool, String>| {
+        SpawnPlan::from_record(&r, &h, HarnessKind::Opencode, None, probe, &|| Ok(4777)).unwrap()
+    };
+    // Found: kept. Missing: dropped. Probe error: kept.
+    let plan = plan_with(&|_| Ok(true));
     assert_eq!(plan.session_id.as_deref(), Some("v2-sid"));
     assert_eq!(plan.opencode_port, Some(4777));
+    assert_eq!(plan_with(&|_| Ok(false)).session_id, None);
+    let plan = plan_with(&|_| Err("boom".into()));
+    assert_eq!(plan.session_id.as_deref(), Some("v2-sid"));
 }
 
 #[test]

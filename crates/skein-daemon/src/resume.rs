@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use skein_harness::opencode::presence::{SessionPresence, session_presence};
 use skein_harness::{claude, hermes, opencode};
 
 /// Path to opencode's on-disk session db. Returns `None` when the home
@@ -48,20 +49,39 @@ pub async fn opencode_list_sessions(cwd: String) -> Result<Vec<String>, String> 
     .map_err(|e| e.to_string())?
 }
 
+/// Which opencode session tables (v1 `session`, v2 `session_v2`) hold a
+/// non-archived row for `id` (#679). No home or no db reads as absent from
+/// both. Blocking: opens and queries opencode.db.
+///
+/// # Errors
+/// The db could not be opened or queried.
+pub fn opencode_session_presence_blocking(id: &str) -> Result<SessionPresence, String> {
+    let Some(conn) = open_opencode_db()? else {
+        return Ok(SessionPresence::default());
+    };
+    session_presence(&conn, id).map_err(|e| format!("exists: {e}"))
+}
+
+/// Async wrapper over [`opencode_session_presence_blocking`] (#171).
+///
+/// # Errors
+/// As the blocking form, or the blocking task failed.
+pub async fn opencode_session_presence(id: String) -> Result<SessionPresence, String> {
+    tokio::task::spawn_blocking(move || opencode_session_presence_blocking(&id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Phase 4: does the opencode session row for `id` still exist (and
-/// is non-archived)? Used at boot to drop stale captured ids before
-/// resume tries to use them.
+/// is non-archived)? `v2` says the harness last ran opencode v2: then either
+/// table counts, because that version is only the last spawn's and a v1-only
+/// id must reach the spawn, which explains it (#679). Without it, only the
+/// v1 table counts, as before v2.
 ///
 /// Async: same opencode.db read as `opencode_list_sessions` (#171).
-pub async fn opencode_session_exists(id: String) -> Result<bool, String> {
-    tokio::task::spawn_blocking(move || {
-        let Some(conn) = open_opencode_db()? else {
-            return Ok(false);
-        };
-        opencode::session_exists(&conn, &id).map_err(|e| format!("exists: {e}"))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub async fn opencode_session_exists(id: String, v2: bool) -> Result<bool, String> {
+    let presence = opencode_session_presence(id).await?;
+    Ok(if v2 { presence.any() } else { presence.v1 })
 }
 
 /// Phase 4: does Claude still have a session file for this id? Scans

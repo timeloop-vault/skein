@@ -698,7 +698,11 @@ will tell you:
   hidden with `display:none`. PTYs die with the Skein process. Since #752
   the spawn derives its argv from the record at spawn time
   (`harness_argv/spawn.rs`): `--resume`/`--session` only when a probe run
-  then finds the session, never `--continue`, and the shell argv when
+  then finds the session (for opencode the probe reads both `session`, v1,
+  and `session_v2`, v2; `prepare_opencode_spawn` then checks the table of
+  the version that actually runs, and when the stored id belongs to the
+  other major version it starts a fresh session and reports `sessionNotice`
+  in the spawn result, #679), never `--continue`, and the shell argv when
   `Harness.launch` is a shell (Enter on an exited pane sets it and leaves
   `cmd` alone; Restart harness clears it; boot and unarchive keep it).
   Boot preparation is the daemon's too (`boot_resume.rs`, reduced by

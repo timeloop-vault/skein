@@ -90,14 +90,6 @@ export async function dropUnwrittenSessions(
 	return { ...room, harnesses };
 }
 
-/** #679: the v1 `session` table cannot see v2 sessions (`session_v2`, maybe
- *  another db file), so a recorded-v2 opencode harness skips the probe and
- *  `stillExists` trusts its stored id. #679's real probe replaces this ONE
- *  helper. Everything else (v1, no recorded version) probes as before. */
-export function opencodeSessionProbeApplies(h: Harness): boolean {
-	return !(h.kind === "opencode" && isOpencodeV2(h.opencodeVersion));
-}
-
 // Chapter 5 phase 4: drop any stored sessionId that no longer
 // exists on disk before the daemon's resume argv uses it. claude --resume <id>
 // or opencode --session <id> against a deleted conversation
@@ -110,13 +102,18 @@ export function opencodeSessionProbeApplies(h: Harness): boolean {
 // rusqlite or fs hiccup.
 export async function stillExists(h: Harness): Promise<boolean> {
 	if (!h.sessionId) return true;
-	if (!opencodeSessionProbeApplies(h)) return h.sessionId.trim() !== "";
 	try {
 		if (h.kind === "claude") {
 			return await invoke<boolean>("claude_session_exists", { id: h.sessionId });
 		}
 		if (h.kind === "opencode") {
-			return await invoke<boolean>("opencode_session_exists", { id: h.sessionId });
+			// #679: a recorded-v2 harness counts an id in either opencode table
+			// (the spawn does the exact check and explains a v1-only id);
+			// everything else is probed in v1's `session`.
+			const args = isOpencodeV2(h.opencodeVersion)
+				? { id: h.sessionId, v2: true }
+				: { id: h.sessionId };
+			return await invoke<boolean>("opencode_session_exists", args);
 		}
 		if (h.kind === "hermes") {
 			return await invoke<boolean>("hermes_session_exists", {

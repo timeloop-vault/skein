@@ -38,7 +38,7 @@ use skein_proto::harness_kind::HarnessKind;
 use skein_proto::rooms::{Harness, Room};
 
 use crate::db::{Database, LoadOutcome};
-use crate::harness_argv::{is_opencode_v2, migrate_launch, shell_argv};
+use crate::harness_argv::{migrate_launch, shell_argv};
 use crate::room_store::RoomStore;
 use crate::spawn_env::state::SpawnEnvState;
 
@@ -73,7 +73,11 @@ pub fn probe_session(spawn_env: Option<&SpawnEnvState>, h: &Harness) -> Result<b
     let handle = tokio::runtime::Handle::try_current().map_err(|e| e.to_string())?;
     match HarnessKind::from_name(&h.kind) {
         Some(HarnessKind::Claude) => handle.block_on(crate::resume::claude_session_exists(sid)),
-        Some(HarnessKind::Opencode) => handle.block_on(crate::resume::opencode_session_exists(sid)),
+        // Either table: the stored `opencode_version` is only the last spawn's
+        // result, so the version-exact check is the spawn's (#679).
+        Some(HarnessKind::Opencode) => handle
+            .block_on(crate::resume::opencode_session_presence(sid))
+            .map(skein_harness::opencode::presence::SessionPresence::any),
         Some(HarnessKind::Hermes) => {
             let Some(env) = spawn_env else {
                 return Ok(true);
@@ -90,16 +94,15 @@ pub fn probe_session(spawn_env: Option<&SpawnEnvState>, h: &Harness) -> Result<b
 }
 
 /// Does the harness's stored session id survive the boot check? `probe`
-/// answers "does this session still exist"; an error keeps the id.
+/// answers "does this session still exist"; an error keeps the id. An
+/// opencode v2 harness is probed like any other (#679): the probe looks in
+/// both session tables. The version-exact check runs later, in
+/// `prepare_opencode_spawn`, once the running opencode is known.
 pub fn session_survives(h: &Harness, probe: &impl Fn(&Harness) -> Result<bool, String>) -> bool {
-    let Some(sid) = h.session_id.as_deref() else {
+    if h.session_id.is_none() {
         return true;
-    };
-    let kind = HarnessKind::from_name(&h.kind);
-    if kind == Some(HarnessKind::Opencode) && is_opencode_v2(h.opencode_version.as_ref()) {
-        // #679: the v1 table cannot see v2 sessions; trust the stored id.
-        return !sid.trim().is_empty();
     }
+    let kind = HarnessKind::from_name(&h.kind);
     if !matches!(
         kind,
         Some(HarnessKind::Claude | HarnessKind::Opencode | HarnessKind::Hermes)

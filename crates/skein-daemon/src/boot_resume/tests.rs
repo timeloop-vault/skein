@@ -325,7 +325,7 @@ fn a_running_harness_is_left_alone() {
 }
 
 #[test]
-fn opencode_v2_skips_the_probe() {
+fn opencode_v2_is_probed_like_any_other() {
     let h = harness(
         "o",
         "opencode",
@@ -333,14 +333,9 @@ fn opencode_v2_skips_the_probe() {
         &["opencode"],
         &json!({"opencodeVersion": {"major": 2, "version": "2.0.1"}}),
     );
-    assert!(session_survives(&h, &|_| panic!("v2 must not be probed")));
-    let blank = Harness {
-        session_id: Some("  ".into()),
-        ..h
-    };
-    assert!(!session_survives(&blank, &|_| panic!(
-        "v2 must not be probed"
-    )));
+    assert!(session_survives(&h, &|_| Ok(true)));
+    assert!(!session_survives(&h, &|_| Ok(false)));
+    assert!(session_survives(&h, &|_| Err("boom".into())));
 }
 
 #[test]
