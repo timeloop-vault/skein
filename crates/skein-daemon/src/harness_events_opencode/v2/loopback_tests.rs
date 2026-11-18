@@ -73,7 +73,7 @@ async fn sends_basic_auth_announces_connects_and_reports_a_drop() {
             });
         };
         // Short backoff so the reconnect does not cost a real second.
-        run_with(&target, &cancel_task, &on_event, None, &[0]).await;
+        run_with(&target, &cancel_task, &on_event, None, &[0], None).await;
     });
 
     let want = ["connected", "baseline", "end", "connected", "baseline"];

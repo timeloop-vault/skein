@@ -19,7 +19,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { type DiffHunk, normalizeStructuredPatch, parseUnifiedDiff } from "./diff.ts";
-import { obj, parsePayload, str } from "./payload.ts";
+import { inputFilePath, obj, parsePayload, str } from "./payload.ts";
 import type { HarnessAction } from "./store.ts";
 
 /// Why a file has no line diff. Mirrors `PendingFileDto::blocked`.
@@ -101,7 +101,7 @@ interface Touch {
 function namesFile(payload: ReturnType<typeof parsePayload>, relPath: string): boolean {
 	const files = Array.isArray(payload.files) ? payload.files : [];
 	const input = obj(payload.input);
-	const candidates = [...files.map((f) => str(f)), str(input?.filePath), str(input?.file_path)];
+	const candidates = [...files.map((f) => str(f)), inputFilePath(input)];
 	const want = relPath.replace(/\\/g, "/");
 	return candidates.some((c) => {
 		if (!c) return false;

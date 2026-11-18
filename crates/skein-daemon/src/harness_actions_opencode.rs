@@ -562,5 +562,7 @@ pub fn backfill_from_db(
     }
 }
 
+pub(crate) mod v2;
+
 #[cfg(test)]
 mod tests;

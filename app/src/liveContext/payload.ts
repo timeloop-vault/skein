@@ -23,6 +23,23 @@ export const num = (v: unknown): number | undefined => (typeof v === "number" ? 
 export const obj = (v: unknown): Payload | undefined =>
 	v && typeof v === "object" ? (v as Payload) : undefined;
 
+/// Tool names other harnesses spell differently from the renderer that
+/// draws them (opencode v2, #678): `shell` is Bash, `subagent` is Task.
+const TOOL_ALIASES: Record<string, string> = { shell: "bash", subagent: "task" };
+
+/// Canonical lowercase tool name: lowercased, v2 spellings mapped.
+export function canonicalTool(raw: string | undefined): string {
+	const t = (raw ?? "").toLowerCase();
+	return TOOL_ALIASES[t] ?? t;
+}
+
+/// The file path of a file tool's input: Claude `file_path`, opencode v1
+/// `filePath`, opencode v2 `path`. Only for file tools (read/edit/write);
+/// grep/glob use `path` as a search root and must not call this.
+export function inputFilePath(input: Payload | undefined): string | undefined {
+	return str(input?.file_path) ?? str(input?.filePath) ?? str(input?.path);
+}
+
 /// A name-or-id pair, both possibly absent (#329 mailbox rows carry
 /// snake_case strings, any of which the sender/recipient may not have
 /// had to hand). Prefers the human name, falls back to the id, and "?"

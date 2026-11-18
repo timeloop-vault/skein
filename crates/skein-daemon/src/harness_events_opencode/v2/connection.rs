@@ -15,6 +15,7 @@ use super::super::connection::{
     emit_connect_events,
 };
 use super::super::session::{SESSION_LOOKUP_TIMEOUT, is_valid_session_id};
+use super::actions::ActionRecorder;
 use super::translate::{Translation, V2Translator};
 
 type OnEvent = dyn Fn(OpencodeEvent) + Send + Sync;
@@ -44,6 +45,7 @@ pub(in crate::harness_events_opencode) async fn run_adapter_v2(
     cancel: Arc<Notify>,
     on_event: Arc<OnEvent>,
     session_id: Option<String>,
+    mut recorder: ActionRecorder,
 ) {
     run_with(
         &Target { port, password },
@@ -51,6 +53,7 @@ pub(in crate::harness_events_opencode) async fn run_adapter_v2(
         on_event.as_ref(),
         session_id.as_deref(),
         BACKOFF_SCHEDULE_SECS,
+        Some(&mut recorder),
     )
     .await;
 }
@@ -61,6 +64,7 @@ pub(super) async fn run_with(
     on_event: &OnEvent,
     session_id: Option<&str>,
     backoff: &[u64],
+    mut recorder: Option<&mut ActionRecorder>,
 ) {
     let port = target.port;
     let client = match reqwest::Client::builder()
@@ -91,6 +95,7 @@ pub(super) async fn run_with(
             on_event,
             &connected_once,
             &mut translator,
+            recorder.as_deref_mut(),
         );
         tokio::select! {
             biased;
@@ -125,6 +130,7 @@ pub(super) async fn run_with(
 }
 
 /// One attempt: open the stream, announce it, translate frames until it ends.
+#[allow(clippy::too_many_arguments)]
 async fn stream_events(
     client: &reqwest::Client,
     target: &Target,
@@ -133,6 +139,7 @@ async fn stream_events(
     on_event: &OnEvent,
     connected_once: &AtomicBool,
     translator: &mut V2Translator,
+    mut recorder: Option<&mut ActionRecorder>,
 ) -> Result<(), StreamError> {
     use futures_util::StreamExt;
 
@@ -156,7 +163,13 @@ async fn stream_events(
                 let Some(chunk) = chunk else { return Ok(()) };
                 buf.extend_from_slice(&chunk?);
                 for payload in drain_sse_data(&mut buf) {
-                    let Some(event) = parse_event(&payload) else { continue };
+                    let Some(event) = parse_event(&payload) else {
+                        // Action-only frames (step ended, tool result, ...).
+                        if let Some(r) = recorder.as_deref_mut() {
+                            r.record_frame(&payload, |sid| translator.root_of(sid));
+                        }
+                        continue;
+                    };
                     let out = match translator.translate(event.clone()) {
                         Translation::Emit(out) => out,
                         Translation::NeedsLookup(sid) => {
@@ -181,6 +194,11 @@ async fn stream_events(
                     };
                     for e in out {
                         on_event(e);
+                    }
+                    // After the translation: a lookup it needed has recorded
+                    // the session's root/child status by now.
+                    if let Some(r) = recorder.as_deref_mut() {
+                        r.record_frame(&payload, |sid| translator.root_of(sid));
                     }
                 }
             }

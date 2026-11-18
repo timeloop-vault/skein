@@ -29,3 +29,16 @@ contract for `../../v2.rs`.
 - `reconnect-before.sse` / `reconnect-after.sse`: one turn, the stream killed
   mid-turn; the new stream opens with `server.connected` and then carries only
   live frames, with no replay of what was missed.
+
+## Stored messages and action frames (opencode 2.3.2, 2026-11-18)
+
+Captured from opencode 2.3.2 (free model) for the action rows (#678). Paths
+are scrubbed to `C:/work/proj` and `C:/work/scratch`; nothing else was
+altered. `store-<X>.sse` is the raw `GET /api/event` of scenario X and
+`store/messages_<X>.jsonl` is every `session_message` row of the same session
+in `seq` order, one JSON object per line with all columns (`data` already
+parsed). Scenarios: A plain text; B read + shell tools; C reasoning, read,
+edit, write; D reasoning + text only; E a failing tool; F a subagent
+delegation (`messages_F_child.jsonl` is the child session).
+`store/schema.sql` holds the `CREATE` statements of the captured database.
+Contract for `../store.rs` and `../action.rs`.

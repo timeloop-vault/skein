@@ -10,12 +10,17 @@
 
 use serde_json::Value;
 
+mod action;
+#[cfg(test)]
+mod action_tests;
 #[cfg(test)]
 mod fixture_tests;
 mod sse;
+pub mod store;
 #[cfg(test)]
 mod tests;
 
+pub use action::{V2Action, V2ActionKind, parse_action_event};
 pub use sse::drain_sse_data;
 
 /// How a session execution ended.

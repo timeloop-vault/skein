@@ -1,7 +1,7 @@
 // Shared types and normalizers for the tool-family rows (#80 D2b, split #460).
 
 import type { HarnessKind } from "../types.ts";
-import { obj, type Payload, str } from "./payload.ts";
+import { canonicalTool, obj, type Payload, str } from "./payload.ts";
 
 export interface ToolRowProps {
 	payload: Payload;
@@ -18,7 +18,7 @@ export const PREVIEW_MIN = 200;
 /// `Bash`, `Grep`, `AskUserQuestion`, `Task`); opencode is already
 /// lowercase. "" when absent.
 export function harnessTool(payload: Payload): string {
-	return (str(payload.tool) ?? "").toLowerCase();
+	return canonicalTool(str(payload.tool));
 }
 
 /// Normalize a tool result to a display string. Claude results are

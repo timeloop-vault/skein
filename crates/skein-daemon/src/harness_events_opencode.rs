@@ -253,11 +253,16 @@ impl OpencodeEventsManager {
 
     /// Start watching a v2 sidecar's `GET /api/event` (#677) with Basic
     /// auth. Emits the same `OpencodeEvent`s as `attach`. Shares `inner`, so
-    /// `detach` and re-attach idempotency cover both. No backfill and no
-    /// action rows yet (#678).
+    /// `detach` and re-attach idempotency cover both. With a known session
+    /// the harness's stored history is backfilled first (deduped by `source`,
+    /// so every re-attach inserts nothing already recorded), and live action
+    /// rows are recorded from the stream (#678).
+    #[allow(clippy::too_many_arguments)]
     pub fn attach_v2<F>(
         &self,
         harness_id: String,
+        room_id: String,
+        cwd: String,
         port: u16,
         password: String,
         session_id: Option<String>,
@@ -266,6 +271,16 @@ impl OpencodeEventsManager {
         F: Fn(OpencodeEvent) + Send + Sync + 'static,
     {
         self.inner.lock().remove(&harness_id);
+        if let Some(sid) = session_id.as_deref().filter(|s| !s.is_empty()) {
+            harness_actions_opencode::v2::backfill_v2_from_db(sid, &harness_id, &room_id, &self.db);
+        }
+        let recorder = v2::ActionRecorder::new(
+            Arc::clone(&self.db),
+            self.events.clone(),
+            harness_id.clone(),
+            room_id,
+            cwd,
+        );
         let cancel = Arc::new(Notify::new());
         let handle = tokio::spawn(v2::run_adapter_v2(
             port,
@@ -273,6 +288,7 @@ impl OpencodeEventsManager {
             Arc::clone(&cancel),
             Arc::new(on_event),
             session_id,
+            recorder,
         ));
         self.inner.lock().insert(
             harness_id,
@@ -328,9 +344,17 @@ pub fn opencode_events_attach_impl(
         let (port, password) = sidecars
             .connect_info(&harness_id, generation)
             .ok_or_else(|| "no live opencode sidecar for this harness".to_owned())?;
-        manager.attach_v2(harness_id, port, password, session_id, move |event| {
-            let _ = sink.send(event);
-        });
+        manager.attach_v2(
+            harness_id,
+            room_id,
+            cwd,
+            port,
+            password,
+            session_id,
+            move |event| {
+                let _ = sink.send(event);
+            },
+        );
         return Ok(());
     }
     manager.attach(harness_id, room_id, cwd, port, session_id, move |event| {

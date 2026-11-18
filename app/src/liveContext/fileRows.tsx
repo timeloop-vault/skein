@@ -1,6 +1,6 @@
 // File and search rows: edit / read / grep+glob (#80 D2b, split #460).
 
-import { num, obj, str } from "./payload.ts";
+import { inputFilePath, num, obj, str } from "./payload.ts";
 import { byteLen, formatBytes, ResultPreview } from "./ResultPreview.tsx";
 import { basename, Row } from "./Row.tsx";
 import {
@@ -58,7 +58,7 @@ export const EditRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
 
 export const ReadRow = ({ payload, harness, timestampMs }: ToolRowProps) => {
 	const input = obj(payload.input);
-	const file = basename(str(input?.file_path) ?? str(input?.filePath));
+	const file = basename(inputFilePath(input));
 	const lines = lineCount(payload.result);
 	const content = normalizeResultString(payload.result);
 	const contentBytes = byteLen(content);

@@ -41,6 +41,12 @@ impl V2Translator {
         self.roots.insert(session_id.to_owned(), is_root);
     }
 
+    /// What is known of a session: `Some(true)` root, `Some(false)` child,
+    /// `None` never seen (and not looked up successfully).
+    pub(super) fn root_of(&self, session_id: &str) -> Option<bool> {
+        self.roots.get(session_id).copied()
+    }
+
     pub(super) fn translate(&mut self, event: V2Event) -> Translation {
         if let V2Event::SessionCreated {
             session_id,

@@ -112,4 +112,21 @@ mod tests {
             .collect();
         assert_eq!(sizes, vec![("c", 36, 9), ("o", 16, 0), ("old", 8, 3)]);
     }
+
+    #[test]
+    fn opencode_v2_turn_cost_payload_is_read() {
+        let (_dir, db) = fresh_db();
+        // The v2 extraction's own payload shape, newest by timestamp (#678).
+        put(
+            &db,
+            "v2",
+            1_795_006_725_929,
+            Some("opencode"),
+            r#"{"reason":"stop","tokens":{"input":100,"output":7,"reasoning":3,"cache":{"read":20,"write":5}},"cost":0.01}"#,
+        );
+        let got = context_sizes(&db, &["v2".to_owned()]).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].tokens, 125);
+        assert_eq!(got[0].timestamp_ms, 1_795_006_725_929);
+    }
 }

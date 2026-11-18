@@ -360,6 +360,27 @@ impl Database {
         Ok(inserted)
     }
 
+    /// Every non-null `source` already recorded for a harness. The opencode
+    /// v2 backfill (#678) dedupes by identity with it: the live and stored
+    /// timestamps of one row differ, and the table has no uniqueness on
+    /// `source`.
+    pub fn harness_action_sources(
+        &self,
+        harness_id: &str,
+    ) -> Result<std::collections::HashSet<String>, String> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT source FROM harness_actions \
+                 WHERE harness_id = ?1 AND source IS NOT NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        stmt.query_map(params![harness_id], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())
+    }
+
     /// Largest `timestamp_ms` among a harness's rows whose `kind` is not
     /// `excluded_kind`; 0 when there are none. The transcript backfill
     /// watermark uses it to ignore `api_usage` rows, which can be written
