@@ -10,6 +10,8 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+use super::redraw::ViewerState;
+
 mod alacritty;
 #[cfg(test)]
 mod compact;
@@ -17,9 +19,9 @@ mod counting;
 pub mod dump;
 
 #[cfg(test)]
-mod replay_tests;
+pub(in crate::pty) mod replay_tests;
 #[cfg(test)]
-mod tests;
+pub(in crate::pty) mod tests;
 #[cfg(test)]
 mod tests_forward;
 #[cfg(test)]
@@ -136,8 +138,8 @@ impl Default for Modes {
 
 /// A terminal engine that follows one PTY's output.
 ///
-/// The design's `frame(view)` (a diff against one viewer's last frame, the
-/// attach snapshot included) is slice T-2 and is not part of this trait yet.
+/// [`frame`](Self::frame) is the design's `frame(view)`: a diff against one
+/// viewer's last frame, the attach snapshot included (slice T-2, #807).
 ///
 /// Receivers: every read (`screen_text`, `modes`, `cursor`,
 /// `sync_deadline`) takes `&self`, because `alacritty_terminal` exposes the
@@ -176,4 +178,11 @@ pub trait TerminalEngine: Send {
     /// Ends an open synchronized update now, applying the bytes held back,
     /// and returns any replies they produced. Does nothing when none is open.
     fn flush_sync(&mut self) -> Vec<u8>;
+
+    /// The bytes that bring one viewer from what it was last sent to what
+    /// the engine shows now, or `None` when there is nothing to send: a
+    /// synchronized update is open (the viewer never sees a half-drawn
+    /// frame) or nothing differs. A fresh [`ViewerState`] gets a full redraw,
+    /// which is the attach snapshot. Updates `view` to what it sent.
+    fn frame(&self, view: &mut ViewerState) -> Option<Vec<u8>>;
 }

@@ -312,13 +312,13 @@ fn zero_width_and_combining_characters_stay_with_their_cell() {
 
 /// A clock that moves only when a test says so.
 #[derive(Clone)]
-pub(super) struct ManualClock {
+pub(in crate::pty) struct ManualClock {
     base: std::time::Instant,
     offset: std::sync::Arc<std::sync::Mutex<std::time::Duration>>,
 }
 
 impl ManualClock {
-    pub(super) fn new() -> Self {
+    pub(in crate::pty) fn new() -> Self {
         Self {
             base: std::time::Instant::now(),
             offset: std::sync::Arc::default(),
@@ -338,7 +338,7 @@ impl ManualClock {
         std::sync::Arc::new(move || c.now())
     }
 
-    pub(super) fn engine(&self, rows: u16, cols: u16) -> AlacrittyEngine {
+    pub(in crate::pty) fn engine(&self, rows: u16, cols: u16) -> AlacrittyEngine {
         AlacrittyEngine::with_clock(rows, cols, self.clock())
     }
 }

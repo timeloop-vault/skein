@@ -49,6 +49,7 @@ mod preview;
 mod priority;
 mod probe;
 pub mod procscan;
+pub mod redraw;
 mod sidecar;
 mod sink_slot;
 mod tree;

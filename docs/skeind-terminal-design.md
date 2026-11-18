@@ -248,7 +248,7 @@ keeps its screen.
 trait TerminalEngine: Send {
     feed(bytes) -> replies      // bytes to write back to the PTY
     resize(rows, cols)
-    frame(view) -> Option<bytes> // diff against that view's last frame
+    frame(&self, &mut view) -> Option<bytes> // diff against that view's last frame
     screen_text() -> rows        // for daemon features
     modes() -> Modes             // bracketed paste, mouse, alt screen
     cursor() -> (row, col)
@@ -258,7 +258,11 @@ trait TerminalEngine: Send {
 ```
 
 The last two were added by the T-1 gate: the library never expires a
-synchronized update on its own. `frame` is not in the trait yet (T-2).
+synchronized update on its own. `frame` joined the trait in T-2, as
+`fn frame(&self, view: &mut ViewerState) -> Option<Vec<u8>>`. The
+engine implements it by calling `pty::redraw::encode_frame`, a pure
+function over a `GridSource` (what the encoder reads from the engine)
+and the viewer's `ViewerState` (what that viewer was last sent).
 
 - `frame` with a fresh view state is the attach snapshot. There is no
   separate snapshot code path.
@@ -316,11 +320,25 @@ Rules the encoder follows:
   continuation of the one above, the encoder writes through the right
   margin with autowrap on, so the client's widget sets its own wrap
   flag. Copy then joins the line and the file-path links still match
-  across rows. The gate compares wrap flags; if this proves unreliable
-  the fallback is no wrap flags in the client. A row that ends early
-  because a wide character did not fit is not written through the
-  margin: the next row is positioned absolutely and gets no wrap flag
-  in the client (mismatch 5, cosmetic).
+  across rows. The gate compares wrap flags. Decided in T-2 by
+  measurement: write-through-margin is confirmed by the gate. A row
+  that ends early because a wide character did not fit is written too:
+  the encoder stops before the last column, so the client wraps the wide
+  character itself and sets its own flag. This supersedes the "no wrap
+  flag in the client (mismatch 5)" fallback.
+- Erase first. Decided in T-2 by measurement: every row the encoder
+  positions at column 1 starts with an erase: `CUP`, reset, `EL`, then
+  its runs. xterm.js keeps a stale wrap flag after `CUP` and text, and
+  only an `EL` at column 1 clears it.
+- A wide character in the last column. Decided in T-2 by measurement:
+  after a reflow the engine can leave a wide character starting in the
+  last column (mismatch 6). No client can draw it there, so the frame
+  sends one blank in its style. The stored row stays the engine's.
+- Ambiguous width. Decided in T-2: a `CUP` follows any width-2
+  character, any non-ASCII character whose `unicode-width` `width_cjk`
+  differs from its `width`, and any cell holding more than one code
+  point, so a client that reads the width differently is wrong by one
+  cell and no more.
 - History. The client keeps a local scrollback that only the daemon
   fills. The engine wrapper keeps a monotonic count of rows that have
   entered history, and each viewer's state holds the count at its last
@@ -331,8 +349,16 @@ Rules the encoder follows:
   the viewer's top k rows with their final content, send k line feeds
   at the bottom row, then repaint the damaged screen rows. More than a
   screenful goes in batches. If k is larger than the history bound, or
-  cannot be derived, the viewer gets a full redraw. T-1 must show the
-  engine can report rows entering history; this is not verified.
+  cannot be derived, the viewer gets a full redraw. T-1 showed the
+  engine can report rows entering history (see "T-1 gate results").
+  As built in T-2: the newest k history rows are repainted over the
+  viewer's top rows, only where they differ, then `CUP` to the bottom
+  row and k line feeds, in batches of at most a screenful. A batch cut
+  avoids splitting a wrapped line where it can. A push is trusted only
+  when `history_len == min(prev_len + k, 5000)`. Otherwise, after a
+  rebuild, or after any resize since the last frame (the engine keeps a
+  resize counter), the viewer gets a full redraw. Decided in T-2 by
+  measurement.
 - Alternate screen. Each viewer's last-sent state holds both screens.
   On entry the mode mirror switches the client's buffer, and a full
   repaint of the alternate screen with an explicit cursor follows, so
@@ -342,13 +368,34 @@ Rules the encoder follows:
   explicitly. No history is pushed while the alternate screen is
   active. The alternate screen has no history. Claude Code enters it at
   start and never leaves (#793 fixture), so its common case is plain
-  row diffs.
+  row diffs. As built in T-2: entering sends `?1049h` and repaints
+  every alternate row, with no `CSI 3 J`, which would wipe the main
+  scrollback behind it. Exiting sends `?1049l`, pushes if needed, and
+  diffs the main screen against the stored main. A viewer that attached
+  on the alternate screen, or whose main went unknown through a resize
+  or rebuild there, gets a full redraw with history on exit.
 - Width change. The engine reflows. Every viewer then gets a full
   redraw: clear screen and scrollback, the history as flowing lines,
   the screen, modes and cursor. The client's own reflow result is never
-  used. A height-only change sends no history again. A width change
-  resets the client's scroll position and selection; this is a known
-  cost.
+  used. A width change resets the client's scroll position and
+  selection; this is a known cost. A width change is as designed. A
+  height-only change is a deviation, decided in T-2 by measurement: any
+  size change is a full redraw, history included. The engine resizes its
+  newer screen and the client its older one, so their scrollbacks
+  diverge whenever output arrived since the last frame, and the encoder
+  cannot tell whether a viewer is in sync. A later slice could cut a
+  frame just before the resize and relax this. Note for T-3.
+- Frame layout, decided in T-2, in order: `?2026h`; `CSI 0 m`;
+  `?1049h` or `?1049l`; for a full redraw, `CSI H`, `CSI 2 J`,
+  `CSI 3 J` and the history flow; the rows; `OSC 2`; the modes; `BEL`;
+  a pen reset; `CUP` to the cursor; cursor shape and visibility;
+  `?2026l`.
+- Per-viewer diffing, decided in T-2: the encoder compares rows against
+  the rows stored for that viewer. The engine's damage is not used. Using
+  it is a possible optimisation for T-3.
+- Bell and links, decided in T-2: a bell from before a viewer's first
+  frame is not rung. OSC 8 is sent without `id=`, because the dump has
+  none.
 
 Framing and rate:
 
@@ -612,6 +659,108 @@ expected differences are pinned in `app/src/emulatorGate/expected.ts`.
   review the diff:
   `SKEIN_UPDATE_ENGINE_DUMPS=1 cargo test -p skein-daemon replay_tests`.
 
+## T-2 gate results
+
+Measured 2026-11-19 with `alacritty_terminal` 0.26.0 and `@xterm/headless`
+6.0.0, on the two fixtures from T-1. The redraw encoder passed the gate.
+The encoder lives in `crates/skein-daemon/src/pty/redraw/`, and the
+generated frames in `fixtures/NAME.frames.json` hold what a viewer would
+be sent: 172 frames for claude-session and 314 for scrollback-session.
+
+### What was compared
+
+At the same 24 cuts as T-1, a fresh `@xterm/headless` was fed three ways,
+and each was compared with the next. Over 24 cuts each:
+
+1. Raw xterm.js, fed the recording, against the frame stream: one viewer
+   attached from the start, fed every frame in order.
+2. The frame stream against a full redraw taken at the cut: a fresh
+   viewer's attach snapshot.
+3. The frame stream against a skipped-frame viewer: one framed only at
+   the cuts, so its frame is one diff over everything since the last cut.
+
+### Results
+
+- Stream against full, and stream against skipped, are identical at
+  every cut except scrollback-session `in-sync-frame`. There the full
+  redraw is empty and the skipped viewer lags. Both are by design: no
+  frame is cut inside an open `?2026` update, so a fresh or skipped
+  viewer is sent nothing at that cut.
+- Raw xterm.js against the stream differs at 5 cuts, each with its
+  mechanism:
+  - claude-session `resize-100x30` and `resize-120x30`, screenWrap: the
+    alternate-screen resize wrap flags, the engine difference T-1
+    measured at the same cuts.
+  - claude-session `resize-80x24`, screenText and screenWrap: the grape
+    emoji left in the last column after the 120 to 80 reflow (mismatch
+    6), which the frame sends as a blank, and the wrap flag.
+  - claude-session `end-of-stream`, screenWrap: the last screen row,
+    where raw xterm.js keeps a wrap flag the engine does not. T-1
+    measured screenWrap differing at the same cuts, and the frames follow
+    the engine.
+  - scrollback-session `in-sync-frame`, cursor, screenText, screenStyles
+    and modes: raw xterm.js has applied the open update.
+- The T-1 link-underline excuse excuses 0 cells, because both sides are
+  xterm.js.
+- The Rust side asserts that `frame()` returned `None` whenever sync was
+  pending. That happens once, in scrollback-session.
+- The differences are pinned per fixture, cut and category in
+  `app/src/emulatorGate/expectedFrames.ts`. An unexpected difference
+  fails, and so does a stale pin.
+
+### Defects the gate found
+
+Three encoder defects, all fixed in T-2:
+
+- A ghost wide glyph: a wide character in the last column was wrapped by
+  the client and left a copy on the next row. It is now one blank.
+- A stale client wrap flag: a row rewritten by `CUP` and text kept the
+  flag from an earlier autowrap. Every row positioned at column 1 now
+  starts with an `EL`.
+- A missing wrap flag after a wide character that did not fit. The row
+  is now written short, so the client wraps the character itself.
+
+### What xterm.js does with `?2026`
+
+This closes the "Not verified" note in Sources. `@xterm/headless` 6.0.0
+only records `?2026` (it shows in DECRQM and in `modes`) and never holds
+writes back. `?2026l` fires a refresh. The encoder sends a frame as one
+write, so this does not matter.
+
+### What later slices must account for
+
+- T-3 drives `frame()` after each scheduler cut, and must call
+  `flush_sync` at `sync_deadline`.
+- A height-only resize is a full redraw for now. A later slice could cut
+  a frame just before the resize and relax this.
+- A width change on the alternate screen marks the viewer's main screen
+  unknown, so leaving the alternate screen is a full redraw.
+- The stored rows cost one screen per screen per viewer.
+- `frame()` takes `&self`, so T-3 can share-lock the engine and lock each
+  viewer's state separately. A panic in the encoder is caught: the
+  viewer is reset with `ViewerState::invalidate()` (its next frame is a
+  full redraw), the call returns `None`, and the engine is kept, since an
+  encoder panic does not mean the grid is corrupt. `invalidate()` is also
+  how a view asks for a full redraw at any time.
+- Diffing compares stored rows and ignores the engine's damage. T-3 can
+  use the damage as an optimisation.
+- The alacritty stand-in client in the Rust round-trip tests wraps a
+  last-column wide character and drops wrap flags on rewrites, so the
+  Rust tests compare wrap flags only after a full redraw. The xterm.js
+  gate is the authority.
+
+### Where it is
+
+- Encoder: `crates/skein-daemon/src/pty/redraw/` (`mod.rs` docs,
+  `encode.rs`, `rows.rs`, `history.rs`, `modes.rs`, `sgr.rs`,
+  `source.rs`, `state.rs`, `tests*.rs`).
+- Frames: `crates/skein-daemon/src/pty/engine/fixtures/NAME.frames.json`,
+  regenerated with
+  `SKEIN_UPDATE_ENGINE_DUMPS=1 cargo test -p skein-daemon replay` (review
+  the diff).
+- JavaScript side: `app/src/emulatorGate/frames.test.ts` and
+  `expectedFrames.ts`, run with `cd app && npx vitest run src/emulatorGate`.
+
 ## Slices
 
 These replace slices 1 and 2 of the P2b doc and add four. The other
@@ -739,6 +888,7 @@ Each is Proposed and can be reopened.
   `alacritty_terminal`, `termwiz` and `libghostty-vt`; the `vt100` and
   Alacritty changelogs; the wezterm `term` manifest; the
   `libghostty-rs` README.
-- Not verified: the tmux and mosh mechanics are from general knowledge;
-  xterm.js's handling of synchronized-update brackets is to be checked
-  in T-2 (a widget that ignores them still draws correctly).
+- Not verified: the tmux and mosh mechanics are from general knowledge.
+  xterm.js's handling of synchronized-update brackets was checked in T-2:
+  `@xterm/headless` 6.0.0 only records `?2026` and holds nothing back
+  (see "T-2 gate results").

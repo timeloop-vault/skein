@@ -14,6 +14,7 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Timeout};
 use super::counting::{Counting, OVERFLOW_ROWS, trim_history};
 use super::dump::{CellDump, ColorDump, CursorDump, GridDump, RowDump};
 use super::{CursorShape, HISTORY_ROWS, Modes, MouseEncoding, MouseTracking, TerminalEngine};
+use crate::pty::redraw::{ViewerState, encode_frame};
 
 /// The smallest terminal the engine builds. `alacritty_terminal` itself
 /// documents a minimum of two columns (`term::MIN_COLUMNS`, 2), so a request for
@@ -27,6 +28,8 @@ pub(super) struct Pending {
     pub(super) replies: Vec<u8>,
     pub(super) title: Option<String>,
     pub(super) bell: bool,
+    /// Every bell since this listener was built (see `bell_count`).
+    pub(super) bells: u64,
 }
 
 /// Collects the events the daemon cares about. Everything else a UI would
@@ -48,7 +51,10 @@ impl EventListener for Listener {
             Event::PtyWrite(text) => p.replies.extend_from_slice(text.as_bytes()),
             Event::Title(title) => p.title = Some(title),
             Event::ResetTitle => p.title = None,
-            Event::Bell => p.bell = true,
+            Event::Bell => {
+                p.bell = true;
+                p.bells += 1;
+            }
             _ => {}
         }
     }
@@ -204,6 +210,10 @@ pub struct AlacrittyEngine {
     /// Survives a panic rebuild so it stays monotonic.
     entered: u64,
     rebuilds: u32,
+    /// Calls to `resize` that changed the size. Survives a panic rebuild.
+    resizes: u32,
+    /// Bells counted by listeners a rebuild dropped.
+    bells_before: u64,
     clock: Clock,
 }
 
@@ -230,6 +240,8 @@ impl AlacrittyEngine {
             cols,
             entered: 0,
             rebuilds: 0,
+            resizes: 0,
+            bells_before: 0,
         }
     }
 
@@ -248,6 +260,7 @@ impl AlacrittyEngine {
                     .unwrap_or_default();
                 tracing::warn!(rows = self.rows, cols = self.cols, panic = %what,
                     "terminal engine panicked; rebuilt it empty");
+                self.bells_before += self.inner.listener.pending().bells;
                 self.inner = Inner::new(self.rows, self.cols, self.clock.clone());
                 self.rebuilds += 1;
                 default
@@ -271,6 +284,13 @@ impl AlacrittyEngine {
     /// must be sent a full redraw when it changes.
     pub fn rebuilds(&self) -> u32 {
         self.rebuilds
+    }
+
+    /// How many `resize` calls changed the size. A viewer must be sent a
+    /// full redraw when it changes: a resize away and back keeps the size
+    /// but can rewrite the history.
+    pub fn resizes(&self) -> u32 {
+        self.resizes
     }
 
     /// The number of rows that have entered scrollback history since the
@@ -309,6 +329,39 @@ impl AlacrittyEngine {
     /// Whether a bell rang since the last call; clears the flag.
     pub fn take_bell(&mut self) -> bool {
         std::mem::take(&mut self.inner.listener.pending().bell)
+    }
+
+    /// The terminal's size, `(rows, cols)`, after the clamp.
+    pub(crate) fn size(&self) -> (u16, u16) {
+        (self.rows, self.cols)
+    }
+
+    /// Every bell since the engine was created, a rebuild included.
+    /// Monotonic, and unlike [`take_bell`](Self::take_bell) it has no single
+    /// consumer: each viewer remembers the count it was last sent.
+    pub fn bell_count(&self) -> u64 {
+        self.bells_before + self.inner.listener.pending().bells
+    }
+
+    /// One row of the active screen (0 is the top), read from the grid
+    /// without dumping the rest. Past the last row it is a blank row.
+    pub(crate) fn screen_row_dump(&self, row: usize) -> RowDump {
+        let grid = self.inner.term.grid();
+        if row >= grid.screen_lines() {
+            return RowDump::blank(usize::from(self.cols));
+        }
+        row_dump(grid, to_i32(row), -to_i32(grid.history_size()))
+    }
+
+    /// One row of the main screen's scrollback (0 is the oldest). Past the
+    /// end, and on the alternate screen, it is a blank row.
+    pub(crate) fn history_row_dump(&self, row: usize) -> RowDump {
+        let grid = self.inner.term.grid();
+        let history = grid.history_size();
+        if row >= history {
+            return RowDump::blank(usize::from(self.cols));
+        }
+        row_dump(grid, to_i32(row) - to_i32(history), -to_i32(history))
     }
 
     /// Reads the damage `alacritty_terminal` collected and resets it. Takes
@@ -389,6 +442,9 @@ impl TerminalEngine for AlacrittyEngine {
 
     fn resize(&mut self, rows: u16, cols: u16) {
         let (rows, cols) = (rows.max(MIN_ROWS), cols.max(MIN_COLS));
+        if (rows, cols) != (self.rows, self.cols) {
+            self.resizes += 1;
+        }
         self.rows = rows;
         self.cols = cols;
         self.guarded((), |inner, _| {
@@ -472,6 +528,90 @@ impl TerminalEngine for AlacrittyEngine {
             inner.take_replies()
         })
     }
+
+    fn frame(&self, view: &mut ViewerState) -> Option<Vec<u8>> {
+        self.frame_with(view, encode_frame)
+    }
+}
+
+impl AlacrittyEngine {
+    /// Runs `encode` under a panic guard. A panic in the encoder says
+    /// nothing about the grid, so the engine is kept; the viewer is reset so
+    /// that its next frame is a full redraw, and this frame is `None`.
+    pub(super) fn frame_with(
+        &self,
+        view: &mut ViewerState,
+        encode: impl FnOnce(&Self, &mut ViewerState) -> Option<Vec<u8>>,
+    ) -> Option<Vec<u8>> {
+        match catch_unwind(AssertUnwindSafe(|| encode(self, view))) {
+            Ok(frame) => frame,
+            Err(payload) => {
+                let what = payload
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_owned())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_default();
+                tracing::warn!(rows = self.rows, cols = self.cols, panic = %what,
+                    "frame encoder panicked; the viewer gets a full redraw");
+                view.invalidate();
+                None
+            }
+        }
+    }
+
+    /// Whether row `row` of the active screen equals `other`, compared cell
+    /// by cell in place with no allocation.
+    pub(crate) fn screen_row_is_dump(&self, row: usize, other: &RowDump) -> bool {
+        let grid = self.inner.term.grid();
+        if row >= grid.screen_lines() {
+            return self.screen_row_dump(row) == *other;
+        }
+        let (line, topmost) = (to_i32(row), -to_i32(grid.history_size()));
+        let wrapped = line > topmost
+            && grid[Line(line - 1)][grid.last_column()]
+                .flags
+                .contains(Flags::WRAPLINE);
+        let cells = &grid[Line(line)];
+        wrapped == other.wrapped
+            && cells.len() == other.cells.len()
+            && (0..cells.len()).all(|c| cell_is(&cells[Column(c)], &other.cells[c]))
+    }
+}
+
+/// `cell_dump(cell) == *dump`, without building the dump.
+fn cell_is(cell: &Cell, d: &CellDump) -> bool {
+    let f = cell.flags;
+    let spacer = f.contains(Flags::WIDE_CHAR_SPACER);
+    let text =
+        if spacer {
+            d.text.is_empty()
+        } else {
+            d.text.chars().eq(std::iter::once(cell.c)
+                .chain(cell.zerowidth().map_or(&[][..], |z| z).iter().copied()))
+        };
+    let width = if spacer {
+        0
+    } else if f.contains(Flags::WIDE_CHAR) {
+        2
+    } else {
+        1
+    };
+    text && d.width == width
+        && d.fg == color_dump(cell.fg)
+        && d.bg == color_dump(cell.bg)
+        && d.bold == f.contains(Flags::BOLD)
+        && d.italic == f.contains(Flags::ITALIC)
+        && d.dim == f.contains(Flags::DIM)
+        && d.underline == f.intersects(Flags::ALL_UNDERLINES)
+        && d.inverse == f.contains(Flags::INVERSE)
+        && d.invisible == f.contains(Flags::HIDDEN)
+        && d.strikethrough == f.contains(Flags::STRIKEOUT)
+        && d.leading_spacer == f.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+        && cell
+            .hyperlink()
+            .as_ref()
+            .map(alacritty_terminal::term::cell::Hyperlink::uri)
+            == d.link.as_deref()
 }
 
 fn row_text(grid: &Grid<Cell>, line: i32) -> String {
@@ -536,6 +676,7 @@ fn cell_dump(cell: &Cell) -> CellDump {
         invisible: f.contains(Flags::HIDDEN),
         strikethrough: f.contains(Flags::STRIKEOUT),
         link: cell.hyperlink().map(|h| h.uri().to_owned()),
+        leading_spacer: f.contains(Flags::LEADING_WIDE_CHAR_SPACER),
     }
 }
 

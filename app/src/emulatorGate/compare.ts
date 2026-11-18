@@ -165,15 +165,24 @@ const showView = (view: RowView) => (r: Row | undefined) =>
 const showWrap = (r: Row | undefined) => (r ? `wrapped=${r.wrapped}` : "<no row>");
 const wrapView: RowView = (r) => [String(r.wrapped)];
 
+export interface CompareOptions {
+	/** Apply the link-underline excuse (xterm.js vs the Rust engine). Default true. */
+	excuse?: boolean;
+	/** Skip the history categories. Default: when B is on the alternate screen. */
+	skipHistory?: boolean;
+}
+
 export function compare(
 	a: Picture,
 	b: Picture,
+	opts: CompareOptions = {},
 ): { diffs: Diff[]; skippedHistory: boolean; excused: number } {
 	const diffs: Diff[] = [];
-	const exScreen = excuseLinkUnderline(a.screen, b.screen);
-	const exHist = b.altScreen
-		? { rows: a.history, excused: 0 }
-		: excuseLinkUnderline(a.history, b.history);
+	const skipHist = opts.skipHistory ?? b.altScreen;
+	const none = (rows: Row[]) => ({ rows, excused: 0 });
+	const exScreen = opts.excuse === false ? none(a.screen) : excuseLinkUnderline(a.screen, b.screen);
+	const exHist =
+		skipHist || opts.excuse === false ? none(a.history) : excuseLinkUnderline(a.history, b.history);
 	const plain = (category: Category, av: string, bv: string) => {
 		if (av !== bv) {
 			diffs.push({ category, where: "", row: 0, col: 0, rowsDiffering: 0, a: av, b: bv });
@@ -182,7 +191,7 @@ export function compare(
 	plain("activeBuffer", a.altScreen ? "alternate" : "normal", b.altScreen ? "alternate" : "normal");
 	const cur = (p: Picture) => `row ${p.cursor.row} col ${p.cursor.col} visible ${p.cursor.visible}`;
 	plain("cursor", cur(a), cur(b));
-	const skippedHistory = b.altScreen;
+	const skippedHistory = skipHist;
 	const parts: Array<
 		[Category, string, Row[], Row[], RowView, (r: Row | undefined, c: number) => string]
 	> = [

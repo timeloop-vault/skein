@@ -21,6 +21,7 @@
 
 use super::tests::{feed, screen};
 use super::{AlacrittyEngine, TerminalEngine};
+use crate::pty::redraw::ViewerState;
 
 #[test]
 fn the_4097th_kitty_push_panics_in_the_engine_and_the_guard_rebuilds_it() {
@@ -69,6 +70,22 @@ fn a_panic_inside_the_guard_leaves_the_engine_usable_at_the_last_requested_size(
     e.run_guarded(|| panic!("injected twice"));
     e.run_guarded(|| {});
     assert_eq!(e.rebuilds(), 2);
+}
+
+#[test]
+fn a_panic_in_the_encoder_resets_the_viewer_and_keeps_the_engine() {
+    let mut e = AlacrittyEngine::new(4, 20);
+    feed(&mut e, "kept");
+    let mut v = ViewerState::new();
+    assert!(e.frame(&mut v).is_some());
+    assert!(!v.is_fresh());
+    assert!(e.frame_with(&mut v, |_, _| panic!("injected")).is_none());
+    assert!(v.is_fresh(), "the viewer is reset");
+    assert_eq!(e.rebuilds(), 0, "the engine is kept");
+    assert_eq!(screen(&e)[0], "kept");
+    // The next frame is a full redraw.
+    let f = e.frame(&mut v).unwrap();
+    assert!(String::from_utf8_lossy(&f).contains("\x1b[2J"));
 }
 
 #[test]

@@ -32,6 +32,8 @@ portable-pty = "0.9"
 # The daemon's one terminal engine behind TerminalEngine (#793). Exact pin: its
 # changelog breaks API every minor. Its PTY and event-loop dependencies are unused.
 alacritty_terminal = "=0.26.0"
+# East Asian Ambiguous widths for the redraw encoder (#807); already locked via alacritty_terminal.
+unicode-width = "0.2"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 listeners = "0.6"
 skein-procprio = { path = "../skein-procprio" }

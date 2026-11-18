@@ -46,6 +46,34 @@ pub struct CellDump {
     /// The OSC 8 URI the cell carries, if any. The link's `id=` parameter is
     /// not part of the dump.
     pub link: Option<String>,
+    /// The padding cell a wide character left at the end of a row because it
+    /// did not fit there (alacritty's `LEADING_WIDE_CHAR_SPACER`). It reads
+    /// as a blank, and the next row is flagged `wrapped`, but the text does
+    /// not flow through the margin. Not part of the pinned pictures: it is
+    /// skipped when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub leading_spacer: bool,
+}
+
+impl CellDump {
+    /// An empty cell: a space in the default style.
+    pub fn blank() -> Self {
+        Self {
+            text: " ".to_owned(),
+            width: 1,
+            fg: ColorDump::Default,
+            bg: ColorDump::Default,
+            bold: false,
+            italic: false,
+            dim: false,
+            underline: false,
+            inverse: false,
+            invisible: false,
+            strikethrough: false,
+            link: None,
+            leading_spacer: false,
+        }
+    }
 }
 
 /// One row of cells.
@@ -57,6 +85,16 @@ pub struct RowDump {
     /// is the first row of an active screen that has no history above it.
     pub wrapped: bool,
     pub cells: Vec<CellDump>,
+}
+
+impl RowDump {
+    /// A row of `cols` blank cells, not wrapped.
+    pub fn blank(cols: usize) -> Self {
+        Self {
+            wrapped: false,
+            cells: vec![CellDump::blank(); cols],
+        }
+    }
 }
 
 /// The cursor of the active screen.

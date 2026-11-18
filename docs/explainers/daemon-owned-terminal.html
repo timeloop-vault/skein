@@ -188,7 +188,7 @@
     <ol class="steps">
       <li>The harness writes bytes to its PTY.</li>
       <li>The daemon feeds them to that PTY's engine, the only reader. The engine answers the harness's device queries itself.</li>
-      <li>The engine marks what changed. History rows that leave the screen stay in the engine.</li>
+      <li>The engine keeps the grid. History rows that leave the screen stay in the engine, and it counts them.</li>
       <li>The frame scheduler waits for the coalescing window and for any synchronized update to finish.</li>
       <li>For each viewer, the encoder compares the grid with what that viewer was last sent. It writes one frame in a small fixed set of VT sequences.</li>
       <li>The client writes the frame into its terminal widget, which draws it. A phone widget could do the same later.</li>

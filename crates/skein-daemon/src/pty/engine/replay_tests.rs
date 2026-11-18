@@ -26,34 +26,34 @@ use super::compact::{CompactCut, StyleTable, compact};
 use super::tests::ManualClock;
 
 #[derive(Deserialize)]
-struct Recording {
-    cols: u16,
-    rows: u16,
-    events: Vec<Event>,
+pub(in crate::pty) struct Recording {
+    pub(in crate::pty) cols: u16,
+    pub(in crate::pty) rows: u16,
+    pub(in crate::pty) events: Vec<Event>,
 }
 
 #[derive(Deserialize)]
-struct Event {
-    kind: String,
-    b64: Option<String>,
-    cols: Option<u16>,
-    rows: Option<u16>,
+pub(in crate::pty) struct Event {
+    pub(in crate::pty) kind: String,
+    pub(in crate::pty) b64: Option<String>,
+    pub(in crate::pty) cols: Option<u16>,
+    pub(in crate::pty) rows: Option<u16>,
 }
 
 #[derive(Deserialize)]
-struct Cut {
-    name: String,
+pub(in crate::pty) struct Cut {
+    pub(in crate::pty) name: String,
     #[serde(rename = "afterEvent")]
-    after_event: usize,
+    pub(in crate::pty) after_event: usize,
 }
 
-const FIXTURES: [&str; 2] = ["claude-session", "scrollback-session"];
+pub(in crate::pty) const FIXTURES: [&str; 2] = ["claude-session", "scrollback-session"];
 
-fn dir() -> PathBuf {
+pub(in crate::pty) fn dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/pty/engine/fixtures")
 }
 
-fn load(name: &str) -> (Recording, Vec<Cut>) {
+pub(in crate::pty) fn load(name: &str) -> (Recording, Vec<Cut>) {
     let rec = std::fs::read_to_string(dir().join(format!("{name}.json"))).expect("recording");
     let cuts = std::fs::read_to_string(dir().join(format!("{name}.cuts.json"))).expect("cuts");
     (
