@@ -84,6 +84,7 @@ fn an_event_from_a_daemon_built_component_arrives_stamped() {
         &paths,
         env,
         "skein.test".to_owned(),
+        None,
         InProcessTransport {
             events: raw.clone(),
             client: client.clone(),

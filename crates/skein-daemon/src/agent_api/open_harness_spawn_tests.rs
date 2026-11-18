@@ -73,6 +73,7 @@ pub(super) fn build_daemon(dir: &std::path::Path) -> Daemon {
         &paths,
         env,
         "skein.test".to_owned(),
+        None,
         InProcessTransport {
             events: Arc::new(NoEvents),
             client: client.clone(),

@@ -7,7 +7,30 @@
 // so this module is that decision, pure and table-tested; the glue is
 // `useOpenRequests.ts`.
 
+import type { NewToast } from "./toastStack.ts";
 import type { Room } from "./types.ts";
+
+export const LINK_ROOM_GONE = "Skein link: that room no longer exists";
+export const LINK_HARNESS_GONE = "Skein link: that harness no longer exists";
+
+/** The info toast for a link that named something gone. */
+export function linkNoticeToast(
+	notice: "roomGone" | "harnessGone",
+	room: Pick<Room, "id" | "name"> | undefined,
+	now: number,
+	rand: number,
+): NewToast {
+	return {
+		id: `t_${now}_${rand.toString(36).slice(2, 8)}`,
+		roomId: room?.id ?? "",
+		harnessId: "",
+		kind: "byoh",
+		roomName: room?.name ?? "",
+		harnessName: "",
+		state: "info",
+		message: notice === "roomGone" ? LINK_ROOM_GONE : LINK_HARNESS_GONE,
+	};
+}
 
 /** Mirror of `open_request::OpenTarget`. */
 export type OpenTarget =
@@ -22,9 +45,18 @@ export type OpenTarget =
 			folder: string;
 	  }
 	| { kind: "newRoom"; folder: string }
-	| { kind: "missing"; path: string };
+	| { kind: "missing"; path: string }
+	/** A `skein://` room link: jump like an OS-notification click. */
+	| { kind: "jump"; roomId: string; harnessId: string | null };
 
 export type OpenAction =
+	/** `notice` says what the link named that no longer exists. */
+	| {
+			kind: "jump";
+			roomId: string;
+			harnessId: string | null;
+			notice: "roomGone" | "harnessGone" | null;
+	  }
 	/** Focus the room — `unarchiveRoom` reopens it first when archived,
 	 *  and only focuses it when it is already open. */
 	| { kind: "focus"; roomId: string }
@@ -42,6 +74,17 @@ export function decideOpen(
 	rooms: readonly Room[],
 	activeRoomId: string | null,
 ): OpenAction {
+	if (target.kind === "jump") {
+		const room = rooms.find((r) => r.id === target.roomId);
+		const harnessGone =
+			room !== undefined &&
+			target.harnessId !== null &&
+			!room.harnesses.some((h) => h.id === target.harnessId);
+		return {
+			...target,
+			notice: room === undefined ? "roomGone" : harnessGone ? "harnessGone" : null,
+		};
+	}
 	if (target.kind !== "room") return target;
 	const known = target.roomIds.filter((id) => rooms.some((r) => r.id === id));
 	if (activeRoomId !== null && known.includes(activeRoomId)) {

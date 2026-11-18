@@ -60,6 +60,9 @@ pub struct ListRoomsArgs {
 #[serde(rename_all = "snake_case")]
 pub struct RoomSummary {
     pub room_id: String,
+    /// Clickable link to the room (#812); absent without a deep-link scheme.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
@@ -290,6 +293,7 @@ pub async fn list_rooms(
             });
         let mut row = RoomSummary {
             room_id: r.id.clone(),
+            url: state.room_link(&r.id),
             name: r.name.clone(),
             cwd: r.cwd.clone(),
             repo_root: r.repo_root.clone(),

@@ -118,6 +118,10 @@ pub struct AgentApiState {
     /// The Tauri bundle identifier, captured at construction so the
     /// `skein_info` verb (#535) needs no live `AppHandle`.
     pub identifier: String,
+    /// The running build's deep-link scheme (`skein`, `skein-dev`, ...),
+    /// used to build the `url` the room verbs hand out (#812). `None` =
+    /// no links are emitted.
+    pub link_scheme: Option<String>,
     /// The live spawn settings (#327, #534). `None` in a unit test.
     pub spawn_env: Option<Arc<crate::spawn_env::state::SpawnEnvState>>,
     /// Delivers a request only the webview can answer (see
@@ -249,6 +253,8 @@ pub type MailHook = Arc<dyn Fn(&str, &str) + Send + Sync>;
 pub struct AgentApiStateArgs {
     pub db: Arc<Database>,
     pub identifier: String,
+    /// The running build's deep-link scheme, for room links (#812).
+    pub link_scheme: Option<String>,
     pub events: crate::event_sink::SharedEventSink,
     pub spawn_env: Arc<crate::spawn_env::state::SpawnEnvState>,
     pub client: Arc<dyn ClientRequests>,
@@ -261,6 +267,7 @@ impl AgentApiState {
         Self {
             db: args.db,
             identifier: args.identifier,
+            link_scheme: args.link_scheme,
             events: Some(args.events),
             spawn_env: Some(args.spawn_env),
             client: Some(args.client),
@@ -287,6 +294,7 @@ impl AgentApiState {
         Self {
             db,
             identifier: "com.timeloop-vault.skein.dev".to_owned(),
+            link_scheme: None,
             events: None,
             spawn_env: None,
             client: None,

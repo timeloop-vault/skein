@@ -149,6 +149,9 @@ pub struct GetRoomArgs {
 #[serde(rename_all = "snake_case")]
 pub struct HarnessSummary {
     pub harness_id: String,
+    /// Clickable link to the harness (#812); absent without a scheme.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     pub name: String,
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -168,6 +171,9 @@ pub struct HarnessSummary {
 #[serde(rename_all = "snake_case")]
 pub struct GetRoomOut {
     pub room_id: String,
+    /// Clickable link to the room (#812); absent without a scheme.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
@@ -216,6 +222,7 @@ pub async fn get_room(state: &AgentApiState, args: &GetRoomArgs) -> VerbResult<G
             let snap = snapshots.get(&h.id);
             HarnessSummary {
                 harness_id: h.id.clone(),
+                url: state.harness_link(&room.id, &h.id),
                 name: h.name.clone(),
                 kind: h.kind.clone(),
                 agent: h.agent.clone(),
@@ -237,6 +244,7 @@ pub async fn get_room(state: &AgentApiState, args: &GetRoomArgs) -> VerbResult<G
 
     Ok(GetRoomOut {
         room_id: room.id.clone(),
+        url: state.room_link(&room.id),
         name: room.name.clone(),
         cwd: room.cwd.clone(),
         repo_root: room.repo_root.clone(),
@@ -268,6 +276,9 @@ pub struct HarnessListing {
     pub room_id: String,
     pub room_name: String,
     pub harness_id: String,
+    /// Clickable link to the harness (#812); absent without a scheme.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     pub name: String,
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -329,6 +340,7 @@ pub async fn list_harnesses(
                 room_id: r.id.clone(),
                 room_name: r.name.clone(),
                 harness_id: h.id.clone(),
+                url: state.harness_link(&r.id, &h.id),
                 name: h.name.clone(),
                 kind: h.kind.clone(),
                 agent: h.agent.clone(),

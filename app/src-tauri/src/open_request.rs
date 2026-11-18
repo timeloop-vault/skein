@@ -45,7 +45,20 @@ pub(crate) const OPEN_REQUEST_EVENT: &str = "skein://open-request";
 /// listener starts inside the plugin's own setup, before `setup()` has
 /// managed anything — a second launch landing in that window must not
 /// be dropped.
-static PENDING: parking_lot::Mutex<Option<PathBuf>> = parking_lot::const_mutex(None);
+static PENDING: parking_lot::Mutex<Option<Pending>> = parking_lot::const_mutex(None);
+
+/// What is waiting in [`PENDING`]. One slot for both kinds, so the latest
+/// request wins whichever door it came through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Pending {
+    /// A folder, resolved against the stored rooms at take time.
+    Path(PathBuf),
+    /// A room (and maybe a harness) named by id; the frontend resolves it.
+    Room {
+        room_id: String,
+        harness_id: Option<String>,
+    },
+}
 
 // ── arrival ─────────────────────────────────────────────────────────
 
@@ -90,10 +103,26 @@ pub(crate) enum LinkAction {
     Focus,
     /// `<scheme>://open?path=<absolute path>`.
     Open(PathBuf),
+    /// `<scheme>://room/<roomId>[?harness=<harnessId>]`: jump to a room.
+    Room {
+        room_id: String,
+        harness_id: Option<String>,
+    },
+}
+
+/// An id a room link may carry: 1-64 of `[A-Za-z0-9_-]`. Skein's own ids
+/// are uuids or short slugs; anything wider is refused rather than passed
+/// on to the frontend.
+fn valid_link_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// Read a deep link. `None` for a scheme that isn't one of `schemes`,
-/// for any verb but `open`, and for a relative `path` — a link carries
+/// for any verb but `open` and `room`, for a malformed room or harness
+/// id (the whole link, not just the harness part), and for a relative `path` — a link carries
 /// no working directory to resolve one against, so guessing would open
 /// the wrong folder rather than none.
 ///
@@ -105,14 +134,47 @@ pub(crate) fn link_action(url: &Url, schemes: &[String]) -> Option<LinkAction> {
         return None;
     }
     // `skein://open?…` parses with host `open`; tolerate `skein:open?…`
-    // and `skein:///open?…` as well, which some launchers produce.
-    let verb = url
-        .host_str()
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| url.path().trim_matches('/'));
-    if verb != "open" {
+    // and `skein:///open?…` as well, which some launchers produce. Then
+    // the verb is the first path segment and `rest` what follows it.
+    let (verb, rest) = if let Some(host) = url.host_str().filter(|h| !h.is_empty()) {
+        (host, url.path())
+    } else {
+        let path = url.path().trim_start_matches('/');
+        path.split_once('/').unwrap_or((path, ""))
+    };
+    match verb {
+        "open" if url.host_str().is_some_and(|h| !h.is_empty()) || rest.is_empty() => {
+            open_action(url)
+        }
+        "room" => room_action(url, rest),
+        _ => None,
+    }
+}
+
+/// `<scheme>://room/<roomId>[?harness=<harnessId>]`, `rest` being what
+/// follows the verb. One path segment, a trailing slash tolerated.
+fn room_action(url: &Url, rest: &str) -> Option<LinkAction> {
+    let room_id = rest.trim_matches('/');
+    if !valid_link_id(room_id) {
         return None;
     }
+    let harness_id = match url.query_pairs().find(|(k, _)| k == "harness") {
+        Some((_, v)) if !v.is_empty() => {
+            if !valid_link_id(&v) {
+                return None;
+            }
+            Some(v.into_owned())
+        }
+        _ => None,
+    };
+    Some(LinkAction::Room {
+        room_id: room_id.to_owned(),
+        harness_id,
+    })
+}
+
+/// `<scheme>://open[?path=<absolute path>]`.
+fn open_action(url: &Url) -> Option<LinkAction> {
     let Some(raw) = url
         .query_pairs()
         .find_map(|(k, v)| (k == "path").then(|| v.into_owned()))
@@ -146,18 +208,32 @@ pub(crate) fn configured_schemes(config: &tauri::Config) -> Vec<String> {
 
 fn set_pending(path: PathBuf) {
     tracing::info!(path = %path.display(), "open request received");
-    *PENDING.lock() = Some(path);
+    *PENDING.lock() = Some(Pending::Path(path));
 }
 
-fn take_pending() -> Option<PathBuf> {
+fn set_pending_room(room_id: String, harness_id: Option<String>) {
+    tracing::info!(room_id = %room_id, harness_id = ?harness_id, "open request received");
+    *PENDING.lock() = Some(Pending::Room {
+        room_id,
+        harness_id,
+    });
+}
+
+fn take_pending() -> Option<Pending> {
     PENDING.lock().take()
 }
 
-/// Raise the window and, with a path, queue it and poke the frontend.
-fn deliver(app: &AppHandle, path: Option<PathBuf>) {
+/// Raise the window and, with a request, queue it and poke the frontend.
+fn deliver(app: &AppHandle, pending: Option<Pending>) {
     crate::setup::raise_main_window(app);
-    if let Some(path) = path {
-        set_pending(path);
+    if let Some(pending) = pending {
+        match pending {
+            Pending::Path(path) => set_pending(path),
+            Pending::Room {
+                room_id,
+                harness_id,
+            } => set_pending_room(room_id, harness_id),
+        }
         if let Err(e) = app.emit(OPEN_REQUEST_EVENT, ()) {
             tracing::warn!(error = %e, "open request: poke failed");
         }
@@ -167,7 +243,17 @@ fn deliver(app: &AppHandle, path: Option<PathBuf>) {
 fn deliver_link(app: &AppHandle, url: &Url, schemes: &[String]) {
     match link_action(url, schemes) {
         Some(LinkAction::Focus) => deliver(app, None),
-        Some(LinkAction::Open(path)) => deliver(app, Some(path)),
+        Some(LinkAction::Open(path)) => deliver(app, Some(Pending::Path(path))),
+        Some(LinkAction::Room {
+            room_id,
+            harness_id,
+        }) => deliver(
+            app,
+            Some(Pending::Room {
+                room_id,
+                harness_id,
+            }),
+        ),
         None => tracing::warn!(%url, "open request: ignoring a link Skein does not handle"),
     }
 }
@@ -185,7 +271,10 @@ fn deliver_link(app: &AppHandle, url: &Url, schemes: &[String]) {
 /// `DBus`, never joined at all.
 pub(crate) fn from_second_instance(app: &AppHandle, argv: &[String], cwd: &str) {
     let after_exe = argv.get(1..).unwrap_or_default();
-    deliver(app, path_from_args(after_exe, Path::new(cwd)));
+    deliver(
+        app,
+        path_from_args(after_exe, Path::new(cwd)).map(Pending::Path),
+    );
 }
 
 /// Pick up whatever this process itself was launched with, and listen
@@ -250,6 +339,13 @@ pub(crate) enum OpenTarget {
     NewRoom { folder: String },
     /// The path does not exist (or cannot be read).
     Missing { path: String },
+    /// A room link (`<scheme>://room/<roomId>`): the ids exactly as the
+    /// link carried them. Not checked against the stored rooms here - the
+    /// frontend resolves them, and handles ids that no longer exist.
+    Jump {
+        room_id: String,
+        harness_id: Option<String>,
+    },
 }
 
 /// A room as the matcher sees it: its folder, canonicalized where it
@@ -366,15 +462,15 @@ pub(crate) fn resolve(rooms: &[Room], requested: &Path) -> OpenTarget {
     OpenTarget::NewRoom { folder: seed }
 }
 
-/// Put a path back into the pending slot, but only if it is still empty
-/// (#393). A caller reaches for this after a failed load, to give the
-/// request back to whoever takes next — but a newer request may have
+/// Put a request back into the pending slot, but only if it is still
+/// empty (#393). A caller reaches for this after a failed load, to give
+/// the request back to whoever takes next — but a newer request may have
 /// arrived while the load was in flight, and latest-wins means that one
 /// keeps its spot rather than being clobbered by the older, failed one.
-fn restore_pending(path: PathBuf) {
+fn restore_pending(request: Pending) {
     let mut pending = PENDING.lock();
     if pending.is_none() {
-        *pending = Some(path);
+        *pending = Some(request);
     }
 }
 
@@ -386,8 +482,20 @@ fn restore_pending(path: PathBuf) {
 fn take_and_resolve(
     load_rooms: impl FnOnce() -> Result<Vec<Room>, String>,
 ) -> Result<Option<OpenTarget>, String> {
-    let Some(path) = take_pending() else {
-        return Ok(None);
+    let path = match take_pending() {
+        None => return Ok(None),
+        // A room link names ids, not a folder: nothing to load or match.
+        Some(Pending::Room {
+            room_id,
+            harness_id,
+        }) => {
+            tracing::info!(room_id = %room_id, harness_id = ?harness_id, "open request: room jump");
+            return Ok(Some(OpenTarget::Jump {
+                room_id,
+                harness_id,
+            }));
+        }
+        Some(Pending::Path(path)) => path,
     };
     match load_rooms() {
         Ok(rooms) => {
@@ -401,7 +509,7 @@ fn take_and_resolve(
                 path = %path.display(),
                 "open request: loading rooms failed, restoring the pending path"
             );
-            restore_pending(path);
+            restore_pending(Pending::Path(path));
             Err(e)
         }
     }
@@ -421,366 +529,4 @@ pub async fn open_request_take(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn room(id: &str, cwd: &str, archived: Option<i64>) -> Room {
-        serde_json::from_value(serde_json::json!({
-            "id": id,
-            "name": id,
-            "task": "",
-            "status": "idle",
-            "badge": 0,
-            "harnesses": [],
-            "activeHarnessId": "",
-            "cwd": cwd,
-            "archived": archived,
-        }))
-        .unwrap()
-    }
-
-    fn ids(rooms: &[Room], query: &str) -> Vec<String> {
-        let candidates: Vec<Candidate> = rooms
-            .iter()
-            .map(|r| Candidate {
-                room: r,
-                cwd_norm: normalize_path_for_match(r.cwd.as_deref().unwrap_or_default()),
-            })
-            .collect();
-        best_rooms(&normalize_path_for_match(query), &candidates)
-            .into_iter()
-            .map(|r| r.id.clone())
-            .collect()
-    }
-
-    #[test]
-    fn args_skip_flags_and_links_and_resolve_against_the_callers_cwd() {
-        let cwd = Path::new("/home/me/code");
-        assert_eq!(
-            path_from_args(&["."], cwd),
-            Some(PathBuf::from("/home/me/code/."))
-        );
-        assert_eq!(
-            path_from_args(&["-psn_0_123", "/abs/repo"], cwd),
-            Some(PathBuf::from("/abs/repo"))
-        );
-        assert_eq!(path_from_args(&["-Embedding"], cwd), None);
-        assert_eq!(path_from_args(&["skein://open?path=/x"], cwd), None);
-        assert_eq!(path_from_args::<&str>(&[], cwd), None);
-        // The last path wins.
-        assert_eq!(
-            path_from_args(&["a", "b"], cwd),
-            Some(PathBuf::from("/home/me/code/b"))
-        );
-    }
-
-    // `skein "C:\dir\"` arrives on argv with the closing quote glued onto
-    // the path, since a trailing backslash escapes it rather than ending
-    // the argument (#393).
-    #[cfg(windows)]
-    #[test]
-    fn args_trim_one_trailing_quote_from_an_escaped_backslash() {
-        let cwd = Path::new(r"C:\home\me\code");
-        assert_eq!(
-            path_from_args(&[r#"C:\dir""#], cwd),
-            Some(PathBuf::from(r"C:\dir"))
-        );
-        // Only one quote is trimmed, never two.
-        assert_eq!(
-            path_from_args(&[r#"C:\dir"""#], cwd),
-            Some(PathBuf::from(r#"C:\dir""#))
-        );
-        // Trimming down to nothing is no path at all.
-        assert_eq!(path_from_args(&[r#"""#], cwd), None);
-    }
-
-    #[test]
-    fn links_open_absolute_paths_and_refuse_everything_else() {
-        let schemes = vec!["skein-dev".to_owned()];
-        let parse = |s: &str| link_action(&Url::parse(s).unwrap(), &schemes);
-
-        #[cfg(unix)]
-        assert_eq!(
-            parse("skein-dev://open?path=%2Fhome%2Fme%2Fmy%20repo"),
-            Some(LinkAction::Open(PathBuf::from("/home/me/my repo")))
-        );
-        #[cfg(windows)]
-        assert_eq!(
-            parse("skein-dev://open?path=C%3A%5Cme%5Cmy%20repo"),
-            Some(LinkAction::Open(PathBuf::from(r"C:\me\my repo")))
-        );
-        assert_eq!(parse("skein-dev://open"), Some(LinkAction::Focus));
-        assert_eq!(parse("skein-dev://open?path="), Some(LinkAction::Focus));
-        // Another profile's scheme is not ours.
-        assert_eq!(parse("skein://open?path=%2Fx"), None);
-        assert_eq!(parse("skein-dev://close?path=%2Fx"), None);
-        // No working directory to resolve a relative path against.
-        assert_eq!(parse("skein-dev://open?path=relative%2Fdir"), None);
-    }
-
-    #[test]
-    fn the_deepest_owning_room_wins_and_a_contained_room_never_does() {
-        let rooms = [
-            room("outer", "/code/mono", None),
-            room("inner", "/code/mono/packages/app", None),
-            room("below", "/code/mono/packages/app/deep", None),
-        ];
-        assert_eq!(ids(&rooms, "/code/mono/packages/app/src"), ["inner"]);
-        assert_eq!(ids(&rooms, "/code/mono"), ["outer"]);
-        // A parent folder of every room owns none of them.
-        assert_eq!(ids(&rooms, "/code"), Vec::<String>::new());
-    }
-
-    #[test]
-    fn open_rooms_beat_archived_ones_at_the_same_folder() {
-        let rooms = [
-            room("old", "/code/repo", Some(100)),
-            room("live", "/code/repo", None),
-        ];
-        assert_eq!(ids(&rooms, "/code/repo"), ["live"]);
-    }
-
-    #[test]
-    fn archived_rooms_rank_most_recently_archived_first() {
-        let rooms = [
-            room("older", "/code/repo", Some(100)),
-            room("newer", "/code/repo", Some(300)),
-            room("middle", "/code/repo", Some(200)),
-        ];
-        assert_eq!(ids(&rooms, "/code/repo"), ["newer", "middle", "older"]);
-    }
-
-    #[test]
-    fn every_open_room_at_the_folder_is_returned_for_the_frontend_to_pick() {
-        let rooms = [room("a", "/code/repo", None), room("b", "/code/repo", None)];
-        assert_eq!(ids(&rooms, "/code/repo"), ["a", "b"]);
-    }
-
-    #[test]
-    fn resolve_reports_a_missing_path() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let gone = tmp.path().join("nope");
-        assert_eq!(
-            resolve(&[], &gone),
-            OpenTarget::Missing {
-                path: gone.to_string_lossy().into_owned()
-            }
-        );
-    }
-
-    fn retired(mut r: Room, at: i64) -> Room {
-        r.retired = Some(at);
-        r
-    }
-
-    #[test]
-    fn a_retired_room_owns_nothing_so_the_folder_resolves_to_new_room() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let cwd = canonical_string(tmp.path()).unwrap();
-        let rooms = [retired(room("gone", &cwd, Some(100)), 200)];
-        assert_eq!(
-            resolve(&rooms, tmp.path()),
-            OpenTarget::NewRoom { folder: cwd }
-        );
-    }
-
-    #[test]
-    fn a_retired_deeper_owner_yields_to_a_plain_archived_shallower_one() {
-        let rooms = [
-            room("shallow", "/code/mono", Some(100)),
-            retired(room("deep", "/code/mono/app", Some(300)), 400),
-        ];
-        assert_eq!(ids(&rooms, "/code/mono/app/src"), ["shallow"]);
-    }
-
-    #[test]
-    fn an_open_room_is_unaffected_by_retired_neighbours() {
-        let rooms = [
-            retired(room("gone", "/code/repo", Some(100)), 200),
-            room("live", "/code/repo", None),
-        ];
-        assert_eq!(ids(&rooms, "/code/repo"), ["live"]);
-    }
-
-    /// A repo at `dir` with one root commit whose message is `msg`
-    /// (distinct messages give distinct root ids).
-    fn init_repo_at(dir: &Path, msg: &str) {
-        let repo = git2::Repository::init(dir).unwrap();
-        let sig = git2::Signature::now("t", "t@example.com").unwrap();
-        let tree = repo
-            .find_tree(repo.index().unwrap().write_tree().unwrap())
-            .unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &[])
-            .unwrap();
-    }
-
-    fn with_identity(mut r: Room, dir: &Path) -> Room {
-        let dto = crate::git::repo_identity_impl(&dir.to_string_lossy())
-            .unwrap()
-            .unwrap();
-        r.repo_identity = Some(crate::db::RepoIdentity {
-            root_commits: dto.root_commits,
-            origin_url: dto.origin_url,
-        });
-        r
-    }
-
-    #[test]
-    fn a_folder_now_holding_an_unrelated_repo_is_not_the_rooms() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        init_repo_at(tmp.path(), "original");
-        let cwd = canonical_string(tmp.path()).unwrap();
-        let open = with_identity(room("open", &cwd, None), tmp.path());
-        let old = with_identity(room("old", &cwd, Some(100)), tmp.path());
-        // Same repo: still owned.
-        assert_eq!(
-            resolve(&[open.clone(), old.clone()], tmp.path()),
-            OpenTarget::Room {
-                room_ids: vec!["open".into()],
-                archived: false,
-                folder: cwd.clone()
-            }
-        );
-        // The clone at that path is replaced by a different repo.
-        let other = tempfile::TempDir::new().unwrap();
-        init_repo_at(other.path(), "something else entirely");
-        let foreign = with_identity(room("x", &cwd, None), other.path());
-        let foreign_old = with_identity(room("y", &cwd, Some(100)), other.path());
-        assert_eq!(
-            resolve(&[foreign, foreign_old], tmp.path()),
-            OpenTarget::NewRoom {
-                folder: cwd.clone()
-            }
-        );
-        // No recorded identity: unknown, so still matched.
-        assert_eq!(
-            resolve(&[room("bare", &cwd, None)], tmp.path()),
-            OpenTarget::Room {
-                room_ids: vec!["bare".into()],
-                archived: false,
-                folder: cwd
-            }
-        );
-    }
-
-    #[test]
-    fn a_folder_now_holding_an_empty_repo_is_not_the_rooms() {
-        let orig = tempfile::TempDir::new().unwrap();
-        init_repo_at(orig.path(), "original");
-        let fresh = tempfile::TempDir::new().unwrap();
-        git2::Repository::init(fresh.path()).unwrap();
-        let cwd = canonical_string(fresh.path()).unwrap();
-        let r = with_identity(room("r", &cwd, None), orig.path());
-        assert_eq!(
-            resolve(&[r], fresh.path()),
-            OpenTarget::NewRoom { folder: cwd }
-        );
-    }
-
-    #[test]
-    fn resolve_opens_a_files_folder_and_seeds_new_room_with_it() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let file = tmp.path().join("notes.txt");
-        std::fs::write(&file, "x").unwrap();
-        let folder = canonical_string(tmp.path()).unwrap();
-        assert_eq!(resolve(&[], &file), OpenTarget::NewRoom { folder });
-    }
-
-    #[test]
-    fn resolve_seeds_new_room_with_the_enclosing_checkout() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        git2::Repository::init(tmp.path()).unwrap();
-        let nested = tmp.path().join("src");
-        std::fs::create_dir(&nested).unwrap();
-        let root = canonical_string(tmp.path()).unwrap();
-        assert_eq!(resolve(&[], &nested), OpenTarget::NewRoom { folder: root });
-    }
-
-    // The shell's spelling and the room's spelling of one folder can
-    // differ by a symlink — macOS's own `/tmp` → `/private/tmp` is the
-    // everyday case. Both sides are canonicalized before matching.
-    #[cfg(unix)]
-    #[test]
-    fn resolve_matches_through_a_symlink_on_either_side() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let real = tmp.path().join("real");
-        std::fs::create_dir(&real).unwrap();
-        let link = tmp.path().join("link");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-
-        let via_real = [room("r", &real.to_string_lossy(), None)];
-        let via_link = [room("r", &link.to_string_lossy(), None)];
-        let want = OpenTarget::Room {
-            room_ids: vec!["r".to_owned()],
-            archived: false,
-            folder: canonical_string(&real).unwrap(),
-        };
-        assert_eq!(resolve(&via_real, &link), want);
-        assert_eq!(resolve(&via_link, &real), want);
-    }
-
-    /// A path long enough that `dunce::canonicalize` falls back to a
-    /// Windows verbatim (`\\?\`) spelling (#393): neither `resolve`'s
-    /// `OpenTarget::NewRoom.folder` nor a room match through it may leak
-    /// that prefix to the frontend.
-    #[cfg(windows)]
-    #[test]
-    fn resolve_strips_a_verbatim_prefix_from_a_long_path() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let mut long = tmp.path().to_path_buf();
-        while long.to_string_lossy().len() < 260 {
-            long = long.join("a".repeat(50));
-        }
-        std::fs::create_dir_all(&long).unwrap();
-
-        let target = resolve(&[], &long);
-        let OpenTarget::NewRoom { folder } = &target else {
-            panic!("expected NewRoom, got {target:?}");
-        };
-        assert!(
-            !folder.starts_with(r"\\?\"),
-            "folder leaked a verbatim prefix: {folder}"
-        );
-
-        // A room stored with the plain (non-prefixed) long spelling still
-        // resolves as its owner.
-        let plain_cwd = long.to_string_lossy().into_owned();
-        let rooms = [room("r", &plain_cwd, None)];
-        assert_eq!(
-            resolve(&rooms, &long),
-            OpenTarget::Room {
-                room_ids: vec!["r".to_owned()],
-                archived: false,
-                folder: folder.clone(),
-            }
-        );
-    }
-
-    // `PENDING` is a process-global static; every assertion touching it
-    // lives in this one test so parallel tests can't race on it (#393).
-    #[test]
-    fn take_and_resolve_survives_a_failed_load() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let folder = canonical_string(tmp.path()).unwrap();
-
-        // A failing loader leaves the path pending rather than losing it.
-        *PENDING.lock() = Some(tmp.path().to_path_buf());
-        let err = take_and_resolve(|| Err("db locked".to_owned()));
-        assert_eq!(err, Err("db locked".to_owned()));
-        assert_eq!(*PENDING.lock(), Some(tmp.path().to_path_buf()));
-
-        // A subsequent successful call takes the restored path.
-        let ok = take_and_resolve(|| Ok(Vec::new()));
-        assert_eq!(ok, Ok(Some(OpenTarget::NewRoom { folder })));
-        assert_eq!(*PENDING.lock(), None);
-
-        // `restore_pending` never overwrites a newer pending path — a
-        // second request may have arrived while the failed load ran.
-        *PENDING.lock() = Some(PathBuf::from("/newer"));
-        restore_pending(PathBuf::from("/older"));
-        assert_eq!(*PENDING.lock(), Some(PathBuf::from("/newer")));
-
-        // Do not leak this static's state into any other test.
-        *PENDING.lock() = None;
-    }
-}
+mod tests;

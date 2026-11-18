@@ -235,7 +235,9 @@ pub fn tool_specs() -> Vec<Value> {
                  branch was behind its upstream as of Skein's last fetch (Skein never \
                  fetches on its own, so treat it as a lower bound) — pull first, or \
                  pass a remote-tracking ref (e.g. \"origin/main\") as baseBranch and \
-                 retry.",
+                 retry. The result carries `url` (the room) and `harnessUrl` (its \
+                 harness): clickable links that focus them — print them verbatim, \
+                 never build one.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -425,7 +427,9 @@ pub fn tool_specs() -> Vec<Value> {
                  reports its lifecycle (\"archived\", a live phase, or \"unknown\" \
                  when Skein cannot currently vouch for it), the harness send_message \
                  would actually reach, and — when it sent you one — the first line \
-                 and timestamp of the last message it sent you. If unreadable_rooms \
+                 and timestamp of the last message it sent you. Each room has a url, \
+                 a clickable link that focuses it: print it verbatim, never build one. \
+                 If unreadable_rooms \
                  is non-zero, the list may be incomplete.",
             "inputSchema": {
                 "type": "object",
@@ -507,7 +511,8 @@ pub fn tool_specs() -> Vec<Value> {
                  vouch for it) plus outstanding_subagents and \
                  outstanding_background_tasks (the work a running harness is \
                  waiting on; null when unknown), and the same sign-off block review_status returns, \
-                 for that room's own review.",
+                 for that room's own review. The room and each harness carry a url: \
+                 a clickable link that focuses it — print it verbatim, never build one.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -546,7 +551,9 @@ pub fn tool_specs() -> Vec<Value> {
                  phase of. Each entry names its room and reports a live phase \
                  (\"unknown\" when Skein cannot currently vouch for it), plus \
                  outstanding_subagents and outstanding_background_tasks (the work \
-                 a running harness is waiting on; null when unknown).",
+                 a running harness is waiting on; null when unknown). Each entry \
+                 carries a url: a clickable link that focuses that harness — print it \
+                 verbatim, never build one.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

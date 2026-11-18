@@ -50,7 +50,8 @@ export function useHarnessNotifications(
 	};
 
 	const jumpToToast = (toast: ToastEntry) => {
-		jumpToHarness(toast.roomId, toast.harnessId);
+		// #812: a link notice ("room no longer exists") has no room to jump to.
+		if (toast.roomId) jumpToHarness(toast.roomId, toast.harnessId);
 		dismissToast(toast.id);
 	};
 

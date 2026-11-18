@@ -56,6 +56,8 @@ export function useAppBackgroundWiring(a: {
 		nav.openNewRoomAt,
 		loaded,
 		loadedRef,
+		{ roomsRef, unarchiveRoomRef, switchRoomRef, selectHarnessRef },
+		a.pushToast,
 	);
 
 	// #329/#733: agent-mail display — the unread marker and the held mirror.

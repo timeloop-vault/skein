@@ -50,6 +50,7 @@ mod element_source;
 pub use crate::tool_groups as groups;
 pub mod hermes_event;
 pub mod http;
+pub mod links;
 pub mod mcp;
 pub mod phase_tap;
 mod render;
@@ -113,6 +114,8 @@ mod open_harness_tests;
 mod refusal_tests;
 #[cfg(test)]
 mod review_tests;
+#[cfg(test)]
+mod room_links_tests;
 #[cfg(test)]
 mod room_listing_tests;
 #[cfg(test)]

@@ -20,7 +20,9 @@ import { listen } from "@tauri-apps/api/event";
 import type { MutableRefObject } from "react";
 import { useCallback, useEffect, useRef } from "react";
 import { confirmDialog } from "./confirmDialog.ts";
-import { decideOpen, type OpenTarget } from "./openRequest.ts";
+import { decideOpen, linkNoticeToast, type OpenTarget } from "./openRequest.ts";
+import { type JumpDeps, jumpToRoom } from "./osNotifyClick.ts";
+import type { NewToast } from "./toastStack.ts";
 import type { Room } from "./types.ts";
 
 export function useOpenRequests(
@@ -31,7 +33,13 @@ export function useOpenRequests(
 	openNewRoomAt: (folder: string) => void,
 	loaded: boolean,
 	loadedRef: MutableRefObject<boolean>,
+	jumpDeps: JumpDeps,
+	pushToast: (entry: NewToast) => void,
 ) {
+	const jumpDepsRef = useRef(jumpDeps);
+	jumpDepsRef.current = jumpDeps;
+	const pushToastRef = useRef(pushToast);
+	pushToastRef.current = pushToast;
 	// Both listeners below are []-keyed, so they reach the current
 	// openers through refs rather than closing over one render's.
 	const openNewRoomRef = useRef(openNewRoom);
@@ -49,6 +57,15 @@ export function useOpenRequests(
 					case "focus":
 						await unarchiveRoomRef.current(action.roomId);
 						return;
+					case "jump": {
+						const room = roomsRef.current.find((r) => r.id === action.roomId);
+						// A room link: the same jump an OS-notification click makes.
+						if (action.notice !== "roomGone") jumpToRoom(jumpDepsRef.current, action);
+						if (action.notice !== null) {
+							pushToastRef.current(linkNoticeToast(action.notice, room, Date.now(), Math.random()));
+						}
+						return;
+					}
 					case "newRoom":
 						openNewRoomAtRef.current(action.folder);
 						return;

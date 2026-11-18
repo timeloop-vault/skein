@@ -34,7 +34,17 @@ pub(super) fn daemon(
         capture: Arc::new(TauriWebviewCapture::new(handle)),
     };
     let spawn_env = Arc::clone(&*app.state::<Arc<crate::SpawnEnvState>>());
-    let d = Daemon::build(paths, spawn_env, app.config().identifier.clone(), transport)?;
+    // Each build profile configures exactly one deep-link scheme (#812).
+    let link_scheme = crate::open_request::configured_schemes(app.config())
+        .into_iter()
+        .next();
+    let d = Daemon::build(
+        paths,
+        spawn_env,
+        app.config().identifier.clone(),
+        link_scheme,
+        transport,
+    )?;
 
     app.manage(d.harness_config);
     app.manage(d.rooms);

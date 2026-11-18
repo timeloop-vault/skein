@@ -14,7 +14,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { MutableRefObject } from "react";
 import { useCallback, useEffect } from "react";
 import { osNotifyTargets } from "./notifications.tsx";
-import { type ClickTarget, resolveClickTarget, shouldDrainOnClickEvent } from "./osNotifyClick.ts";
+import { type ClickTarget, jumpToRoom, shouldDrainOnClickEvent } from "./osNotifyClick.ts";
 import { isWindows } from "./shortcuts.ts";
 import type { Room } from "./types.ts";
 
@@ -35,23 +35,8 @@ export function useOsNotificationClicks(
 	// never forces a re-registration.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: roomsRef/unarchiveRoomRef/switchRoomRef/selectHarnessRef are refs, stable across renders, but biome can't prove that through a destructured custom-hook return.
 	const jumpToTarget = useCallback((target: ClickTarget) => {
-		const decision = resolveClickTarget(roomsRef.current, target);
-		if (!decision.found) return; // closed-and-deleted since the banner fired
-		const { roomId, harnessId } = target;
-		// #170: un-archive it if it was archived in the meantime, so
-		// it's reachable. This used to strip `archived` inline and stop
-		// there — no resume rewrite, no fresh opencode port — so the
-		// remount respawned the stored fresh-form cmd and Claude died
-		// with "Session ID is already in use". unarchiveRoom does both
-		// halves (and focuses the room, archived or not).
-		// Then switchRoom, so the room-select seq bumps (closes the Control
-		// Center even on a same-id select), and selectHarness — after the
-		// unarchive, whose setRooms would otherwise overwrite the harness
-		// with its pre-await snapshot.
-		void unarchiveRoomRef.current(roomId).then(() => {
-			switchRoomRef.current(roomId);
-			if (decision.hasHarness) selectHarnessRef.current(roomId, harnessId);
-		});
+		// Closed-and-deleted since the banner fired: jumpToRoom does nothing.
+		jumpToRoom({ roomsRef, unarchiveRoomRef, switchRoomRef, selectHarnessRef }, target);
 	}, []);
 
 	// #294: Windows only — the click target for a toast clicked while

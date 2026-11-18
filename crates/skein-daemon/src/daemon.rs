@@ -349,6 +349,7 @@ impl Daemon {
         paths: &Paths,
         spawn_env: Arc<SpawnEnvState>,
         identifier: String,
+        link_scheme: Option<String>,
         transport: InProcessTransport,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let InProcessTransport {
@@ -386,6 +387,7 @@ impl Daemon {
                 let api = Arc::new(AgentApiState::new(AgentApiStateArgs {
                     db: Arc::clone(&state.db),
                     identifier,
+                    link_scheme,
                     events,
                     spawn_env,
                     client,

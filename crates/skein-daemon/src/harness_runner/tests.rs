@@ -206,6 +206,7 @@ impl Fx {
             &paths,
             env,
             "skein.test".to_owned(),
+            None,
             InProcessTransport {
                 events: events.clone(),
                 client: client.clone(),

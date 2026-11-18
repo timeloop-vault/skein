@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideOpen, type OpenTarget } from "./openRequest.ts";
+import { decideOpen, linkNoticeToast, type OpenTarget } from "./openRequest.ts";
 import type { Room } from "./types.ts";
 
 const room = (id: string): Room => ({
@@ -52,6 +52,66 @@ describe("decideOpen", () => {
 		expect(decideOpen({ kind: "missing", path: "/nope" }, [], null)).toEqual({
 			kind: "missing",
 			path: "/nope",
+		});
+	});
+});
+
+describe("decideOpen jump", () => {
+	const withHarness = (id: string, harnessId: string, archived = false): Room => ({
+		...room(id),
+		...(archived ? { archived: Date.now() } : {}),
+		harnesses: [{ id: harnessId } as Room["harnesses"][number]],
+	});
+	const jump = (roomId: string, harnessId: string | null): OpenTarget => ({
+		kind: "jump",
+		roomId,
+		harnessId,
+	});
+
+	it("jumps to a known room and harness with no notice", () => {
+		expect(decideOpen(jump("r", "h"), [withHarness("r", "h")], null)).toEqual({
+			kind: "jump",
+			roomId: "r",
+			harnessId: "h",
+			notice: null,
+		});
+	});
+
+	it("jumps to a known room when no harness is named", () => {
+		expect(decideOpen(jump("r", null), [withHarness("r", "h")], null)).toMatchObject({
+			kind: "jump",
+			notice: null,
+		});
+	});
+
+	it("reports an unknown room", () => {
+		expect(decideOpen(jump("gone", "h"), [withHarness("r", "h")], null)).toMatchObject({
+			notice: "roomGone",
+		});
+	});
+
+	it("reports a known room whose harness is gone", () => {
+		expect(decideOpen(jump("r", "old"), [withHarness("r", "h")], null)).toMatchObject({
+			roomId: "r",
+			notice: "harnessGone",
+		});
+	});
+
+	it("jumps into an archived room (the jump reopens it)", () => {
+		expect(decideOpen(jump("r", "h"), [withHarness("r", "h", true)], null)).toMatchObject({
+			kind: "jump",
+			notice: null,
+		});
+	});
+
+	it("words the toasts", () => {
+		expect(linkNoticeToast("roomGone", undefined, 1, 0.5).message).toBe(
+			"Skein link: that room no longer exists",
+		);
+		expect(linkNoticeToast("harnessGone", room("r"), 1, 0.5)).toMatchObject({
+			roomId: "r",
+			state: "info",
+			message: "Skein link: that harness no longer exists",
 		});
 	});
 });

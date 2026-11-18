@@ -539,7 +539,10 @@ see "Caps" just below.
 | `agent` | the user's default agent for that kind from Settings (#248; none if unset) — the folder's remembered agent is not consulted. Omit rather than guessing a name, since an unresolvable one refuses the whole call (#247) |
 | `prompt` | omitted → the room opens idle. Given → queued as the new harness's first mailbox message the moment it exists |
 
-Returns `roomId`, `name`, `cwd`, `repo`, `branch`, `harnessId`, `kind`,
+Returns `roomId`, `url` (a clickable link to the room), `name`, `cwd`,
+`repo`, `branch`, `harnessId`, `harnessUrl` (a link to the new harness;
+both links are absent when the build has no deep-link scheme, see "Room
+and harness links"), `kind`,
 `agent`, `sessionId` (nullable — a non-git folder has no repo or
 branch, and an opencode harness's session id is only captured
 asynchronously after spawn), `messageId` (present only when `prompt`
@@ -1082,6 +1085,43 @@ one.
 Consumer: the `worktree-sweep` skill's "which rooms own this folder"
 check is switching to this verb (#357).
 
+## Room and harness links (#812)
+
+`create_room`, `list_rooms`, `get_room` and `list_harnesses` hand out
+a clickable link for every room and harness, in the field `url`
+(`create_room` also returns `harnessUrl`). The scheme is the running
+build's own deep-link scheme (`skein`, `skein-dev` or `skein-local`),
+so a link from a dev build opens the dev build:
+
+- room: `<scheme>://room/<roomId>`
+- harness: `<scheme>://room/<roomId>?harness=<harnessId>`
+
+Ids are percent-encoded. A build with no configured scheme omits the
+field rather than guessing one.
+
+**Print the `url` verbatim; never build one.** The shape is Skein's to
+change, and only Skein knows which scheme this build answers to.
+
+A click on the link in a harness terminal focuses the room, and with
+`?harness=` that harness too. An archived room is reopened first; an
+id Skein does not know shows a toast and changes nothing. Known gap: on
+Windows and Linux, while the CLI has mouse tracking on, the click goes to
+the CLI and not to Skein's link handler.
+
+Renders the flow below; the text is authoritative, the diagram is not
+normative.
+
+```mermaid
+flowchart TD
+    A["Agent prints the url"] --> B["Click in the harness terminal (xterm link handler)"]
+    B --> C["plugin-opener hands the url to the OS"]
+    C --> D["OS scheme handler starts or finds Skein"]
+    D --> E["single-instance + deep-link forward it to the running Skein"]
+    E --> F["open_request.rs: parse, pending slot, poke"]
+    F --> G["Frontend open_request_take"]
+    G --> H["Jump: unarchive, switch room, select harness"]
+```
+
 ## Listing rooms and harnesses (#356, epic #266 slice A)
 
 Three more read-only verbs, cross-room for the same reason
@@ -1147,7 +1187,9 @@ unpaged. Callers that relied on seeing archived rooms must now pass
 `include_archived: true` (and `include_retired: true` for retired ones),
 and page with `since` when `has_more` is true.
 
-Each room reports `room_id`, `name`, `cwd`, `repo_root`, `branch`,
+Each room reports `room_id`, `url` (a clickable link to the room, see
+"Room and harness links"; absent when the build has no deep-link
+scheme), `name`, `cwd`, `repo_root`, `branch`,
 `archived`, `retired`, `harness_count`, `created_by`
 (`{ room_id, harness_id }`, present only for a room `create_room` opened), `base_sha` and
 `prompt_first_line` (both recorded at create time by `create_room`,
@@ -1174,9 +1216,9 @@ resolves to an archived room, is refused loudly and by name — never a
 bare empty result, since #356's whole point is a director inspecting a
 room it does not own.
 
-Reports the same room fields as `list_rooms` (minus `lifecycle` and
-`last_status`, which are cross-room-specific), plus `harnesses` — each
-with `harness_id`, `name`, `kind`, `agent`, `session_id` and its live
+Reports the same room fields as `list_rooms` (including `url`; minus
+`lifecycle` and `last_status`, which are cross-room-specific), plus `harnesses` — each
+with `harness_id`, `url` (its link), `name`, `kind`, `agent`, `session_id` and its live
 `phase`, `outstanding_subagents` and `outstanding_background_tasks`
 (#448, below) — and a `signoff` block: the **same sign-off `review_status`
 returns**, produced by the same function, so `get_room` can never
@@ -1207,7 +1249,8 @@ every harness in that one room, refused loudly by name if it does not
 exist or is archived. Archived rooms are otherwise skipped entirely
 when `room` is omitted: none of their harnesses have a live process to
 ask a phase of. Each entry names its `room_id`/`room_name` alongside
-the same per-harness fields `get_room` reports.
+the same per-harness fields `get_room` reports, including `url`, the
+link to that harness (see "Room and harness links").
 
 ### `context_status`
 

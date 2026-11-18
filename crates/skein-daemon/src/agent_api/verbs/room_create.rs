@@ -88,6 +88,9 @@ pub struct CreateRoomArgs {
 #[serde(rename_all = "camelCase")]
 pub struct CreateRoomOut {
     pub room_id: String,
+    /// Clickable link to the room (#812); absent without a deep-link scheme.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
@@ -96,6 +99,9 @@ pub struct CreateRoomOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     pub harness_id: String,
+    /// Clickable link to the new harness (#812); absent without a scheme.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harness_url: Option<String>,
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
@@ -368,13 +374,17 @@ pub async fn create_room(
         )
     });
 
+    let url = state.room_link(&new_room.id);
+    let harness_url = state.harness_link(&new_room.id, &harness.id);
     Ok(CreateRoomOut {
         room_id: new_room.id,
+        url,
         name: new_room.name,
         cwd: new_room.cwd,
         repo: new_room.repo,
         branch: new_room.branch,
         harness_id: harness.id,
+        harness_url,
         kind: kind.to_owned(),
         agent: harness.agent,
         session_id: harness.session_id,
