@@ -810,7 +810,9 @@ the product only in ways a user can only improve, or not at all. Slice
    `crates/skein-daemon/src/event_sink.rs` plus a new seq log module,
    `harness_phase/stream.rs`; `crates/skein-proto` (the event
    envelope); `app/src/phaseMirror.ts`, `roomsSync.ts`,
-   `useRoomsSync.ts`, `mailHeldMirror.ts`. Independent of 1 to 3.
+   `useRoomsSync.ts`, `mailHeldMirror.ts`. Independent of 1 to 3. It
+   landed in embedded form; see
+   [skeind-event-sink.md](skeind-event-sink.md).
 5. **Request dispatcher and link trait.** New request and response
    types in `crates/skein-proto/src`, new
    `crates/skein-daemon/src/dispatch/`, and `transport.rs` (the link

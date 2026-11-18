@@ -18,6 +18,7 @@ use tempfile::TempDir;
 use super::RoomStore;
 use crate::db::Database;
 use crate::db::test_support::fresh_db;
+use crate::event_seq::SeqEventSink;
 use crate::event_sink::EventSink;
 
 mod commands;
@@ -28,6 +29,7 @@ mod patches;
 mod persistence;
 mod revision;
 mod semantics;
+mod seq;
 
 /// A debounce that cannot fire within a test run.
 const NEVER: Duration = Duration::from_secs(600);
@@ -88,6 +90,8 @@ struct Fixture {
     path: PathBuf,
     db: Arc<Database>,
     sink: Arc<RecordingSink>,
+    /// What the store emits through, so every event carries a seq.
+    seq: Arc<SeqEventSink>,
     store: Arc<RoomStore>,
 }
 
@@ -103,12 +107,14 @@ impl Fixture {
         let path = dir.path().join("test.db");
         let db = Arc::new(db);
         let sink = Arc::new(RecordingSink::default());
-        let store = RoomStore::with_delays(Arc::clone(&db), sink.clone(), delay, max_wait);
+        let seq = SeqEventSink::new(sink.clone());
+        let store = RoomStore::with_delays(Arc::clone(&db), seq.clone(), delay, max_wait);
         Self {
             _dir: dir,
             path,
             db,
             sink,
+            seq,
             store,
         }
     }

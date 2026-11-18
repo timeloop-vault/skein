@@ -55,6 +55,7 @@ pub(super) fn daemon(
     app.manage(d.opencode);
     app.manage(d.hermes_actions);
     app.manage(d.events);
+    app.manage(d.event_seq);
 
     // Managed so `agent_request_complete` (#328) can reach the same
     // pending-request map the HTTP server's handlers register requests on.

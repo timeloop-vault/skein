@@ -266,6 +266,7 @@ fn dropping_the_store_persists_pending_changes() {
         path,
         db,
         sink,
+        seq: _seq,
         store,
     } = Fixture::with_rooms(&[room("r1")]);
     let mut r1 = room("r1");

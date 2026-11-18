@@ -55,4 +55,21 @@ describe("createHeldMirror", () => {
 		expect(calls).toEqual([]);
 		expect(mirror.heldIds()).toEqual([]);
 	});
+
+	it("drops buffered events at or below the snapshot seq and replays newer ones", () => {
+		const { mirror } = setup();
+		mirror.event({ harnessId: "a", held: false, seq: 4 });
+		mirror.event({ harnessId: "b", held: false, seq: 5 });
+		mirror.event({ harnessId: "c", held: true, seq: 6 });
+		mirror.snapshot(["a", "b"], 5);
+		expect(mirror.heldIds().sort()).toEqual(["a", "b", "c"]);
+	});
+
+	it("replays an unstamped buffered event whatever the snapshot seq", () => {
+		const { mirror } = setup();
+		mirror.event({ harnessId: "a", held: false });
+		mirror.event({ harnessId: "b", held: false, seq: 0 });
+		mirror.snapshot(["a", "b"], 9);
+		expect(mirror.heldIds()).toEqual([]);
+	});
 });

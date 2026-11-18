@@ -14,6 +14,34 @@ pub trait EventSink: Send + Sync {
     /// # Errors
     /// The transport's failure, flattened to a string.
     fn emit_json(&self, event: &str, payload: String) -> Result<(), String>;
+
+    /// The last seq this sink stamped; 0 for a sink that stamps none.
+    fn current_seq(&self) -> u64 {
+        0
+    }
+
+    /// Step one of a two-step emit: take the next seq and write it into the
+    /// payload, so a producer can do it under its own lock and deliver later.
+    /// The default stamps nothing (seq 0, payload unchanged).
+    fn stamp_json(&self, _event: &str, payload: String) -> Stamped {
+        Stamped { seq: 0, payload }
+    }
+
+    /// Step two: hand a stamped event on.
+    ///
+    /// # Errors
+    /// The transport's failure, flattened to a string.
+    fn deliver_json(&self, event: &str, stamped: Stamped) -> Result<(), String> {
+        self.emit_json(event, stamped.payload)
+    }
+}
+
+/// An event after stamping, ready for [`EventSink::deliver_json`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stamped {
+    pub seq: u64,
+    /// The payload JSON with `seq` written in.
+    pub payload: String,
 }
 
 /// A sink shared between managers.

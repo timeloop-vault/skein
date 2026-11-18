@@ -2,7 +2,9 @@
 //
 // The authority is the daemon's Rust `PhaseService`; it publishes a
 // `PhaseUpdate` on `skein://harness-phase` for every transition, for a #277
-// delegation deferral arming, and at most once a second for anything else.
+// delegation deferral arming (on change only, no periodic tick). `seq` is the
+// per-daemon event seq shared with every event kind: it rises but is not
+// contiguous per harness or per kind, and nothing here assumes it starts at 1.
 // This module keeps the latest update per harness, notifies listeners in
 // the order the old in-process machine did, and decides nothing itself.
 //

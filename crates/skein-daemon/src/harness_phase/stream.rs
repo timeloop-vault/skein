@@ -23,7 +23,7 @@ use super::service::Inner;
 use super::subagents::SubagentEntry;
 use super::types::{ActivityPhase, HarnessActivity, Transition, TurnSignal};
 use crate::db::Database;
-use crate::event_sink::{self, SharedEventSink};
+use crate::event_sink::{SharedEventSink, Stamped};
 
 /// The broadcast event carrying one [`PhaseUpdate`].
 pub const HARNESS_PHASE_EVENT: &str = "skein://harness-phase";
@@ -82,8 +82,9 @@ impl PhaseView {
 
 /// One harness's phase state at one instant, as sent to clients.
 ///
-/// `seq` is one process-wide counter, so a client that listens first and then
-/// reads the snapshot can drop every stream update with `seq <=` the
+/// `seq` is the per-daemon event seq, shared with every other event: phase
+/// seqs rise but are not contiguous per harness. A client that listens first
+/// and then reads the snapshot can drop every stream update with `seq <=` the
 /// snapshot's.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,7 +105,8 @@ pub struct PhaseUpdate {
 
 /// What the service lock hands to the output thread.
 pub(super) enum OutMsg {
-    Update(Box<PhaseUpdate>),
+    /// The typed update (for the rows) and its stamped wire payload.
+    Update(Box<PhaseUpdate>, Stamped),
     /// A `harness_events` row that is no machine transition (a restart
     /// request): written in order with the transition rows, never streamed.
     Row(EventRow),
@@ -149,13 +151,33 @@ impl Inner {
         }
     }
 
-    /// One update per known harness at the current seq.
+    /// One update per known harness at the current event seq, read under the
+    /// service lock: every update stamped so far is in this state, none
+    /// stamped later is.
     pub(super) fn snapshot(&self) -> Vec<PhaseUpdate> {
+        let seq = self.events.current_seq();
         let mut ids: Vec<&String> = self.meta.keys().collect();
         ids.sort();
         ids.into_iter()
-            .map(|id| self.body(id, &self.meta[id].room_id, self.seq))
+            .map(|id| self.body(id, &self.meta[id].room_id, seq))
             .collect()
+    }
+
+    /// Serialize `update` and take its seq from the event sink, under the
+    /// service lock, so a snapshot read after this sees the state it
+    /// reports. Sets `update.seq`. `None` (logged) when it cannot be
+    /// serialized: the update is dropped.
+    fn stamp_update(&self, update: &mut PhaseUpdate) -> Option<Stamped> {
+        let json = match serde_json::to_string(&*update) {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::warn!(target: "skein::phase", harness = %update.harness_id, "phase update not serialized: {e}");
+                return None;
+            }
+        };
+        let stamped = self.events.stamp_json(HARNESS_PHASE_EVENT, json);
+        update.seq = stamped.seq;
+        Some(stamped)
     }
 
     /// Mark `id` for [`Self::publish`] when its record no longer reads as the
@@ -221,23 +243,22 @@ impl Inner {
             {
                 continue;
             }
-            self.seq += 1;
-            update.seq = self.seq;
+            let Some(stamped) = self.stamp_update(&mut update) else {
+                continue;
+            };
             let mut kept = update.clone();
             kept.transitions.clear();
             kept.delegation_armed = false;
             self.last_emitted.insert(id, kept);
-            self.send(OutMsg::Update(Box::new(update)));
+            self.send(OutMsg::Update(Box::new(update), stamped));
         }
         for (id, room_id) in std::mem::take(&mut self.pending_forgets) {
             notices.push(PhaseNotice::Forgotten {
                 harness_id: id.clone(),
             });
             self.last_emitted.remove(&id);
-            self.seq += 1;
-            let seq = self.seq;
-            self.send(OutMsg::Update(Box::new(PhaseUpdate {
-                seq,
+            let mut update = PhaseUpdate {
+                seq: 0,
                 harness_id: id,
                 room_id,
                 view: None,
@@ -245,7 +266,10 @@ impl Inner {
                 background_tasks: Vec::new(),
                 transitions: Vec::new(),
                 delegation_armed: false,
-            })));
+            };
+            if let Some(stamped) = self.stamp_update(&mut update) {
+                self.send(OutMsg::Update(Box::new(update), stamped));
+            }
         }
         if let Some(listener) = &self.listener {
             for n in notices {
@@ -288,7 +312,7 @@ pub(super) fn spawn_output_thread(
 /// line of a panic.
 fn describe(msg: &OutMsg) -> (String, &'static str) {
     match msg {
-        OutMsg::Update(u) => (u.harness_id.clone(), "an update"),
+        OutMsg::Update(u, _) => (u.harness_id.clone(), "an update"),
         OutMsg::Row(r) => (r.harness_id.clone(), "a restart row"),
         #[cfg(test)]
         OutMsg::Flush(_) => (String::new(), "a flush"),
@@ -297,7 +321,7 @@ fn describe(msg: &OutMsg) -> (String, &'static str) {
 
 fn handle(db: &Database, events: &SharedEventSink, msg: OutMsg) {
     match msg {
-        OutMsg::Update(update) => deliver(db, events, &update),
+        OutMsg::Update(update, stamped) => deliver(db, events, &update, stamped),
         OutMsg::Row(r) => {
             if let Err(e) = db.record_harness_event(
                 &r.harness_id,
@@ -318,7 +342,7 @@ fn handle(db: &Database, events: &SharedEventSink, msg: OutMsg) {
     }
 }
 
-fn deliver(db: &Database, events: &SharedEventSink, update: &PhaseUpdate) {
+fn deliver(db: &Database, events: &SharedEventSink, update: &PhaseUpdate, stamped: Stamped) {
     for t in &update.transitions {
         if let Err(e) = db.record_harness_event(
             &t.harness_id,
@@ -332,7 +356,7 @@ fn deliver(db: &Database, events: &SharedEventSink, update: &PhaseUpdate) {
             tracing::warn!(target: "skein::phase", harness = %t.harness_id, "harness_events write failed: {e}");
         }
     }
-    if let Err(e) = event_sink::emit(events.as_ref(), HARNESS_PHASE_EVENT, update) {
+    if let Err(e) = events.deliver_json(HARNESS_PHASE_EVENT, stamped) {
         tracing::warn!(target: "skein::phase", harness = %update.harness_id, "phase event emit failed: {e}");
     }
 }

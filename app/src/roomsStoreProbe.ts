@@ -50,6 +50,8 @@ export interface DbLoadOutcome {
 	rooms: Room[];
 	skipped: { id: string; error: string }[];
 	backupRooms?: number;
+	/** Event seq the rooms reflect: every rooms-changed at or below it is in. */
+	seq?: number;
 }
 
 // #164: does `cwd` exist right now? A failed invoke is treated as

@@ -37,6 +37,85 @@ fn builds_from_paths_without_a_tauri_app() {
     assert!(status.error.is_some());
 }
 
+#[derive(Default)]
+struct Recording(std::sync::Mutex<Vec<(String, String)>>);
+
+impl EventSink for Recording {
+    fn emit_json(&self, event: &str, payload: String) -> Result<(), String> {
+        self.0.lock().unwrap().push((event.to_owned(), payload));
+        Ok(())
+    }
+}
+
+struct NoClient;
+
+impl crate::agent_api::client::ClientRequests for NoClient {
+    fn is_attached(&self) -> bool {
+        false
+    }
+
+    fn send(&self, _request: &crate::agent_api::state::AgentRequest) -> Result<(), String> {
+        Err("no client".to_owned())
+    }
+}
+
+impl crate::agent_api::client::WebviewCapture for NoClient {
+    fn capture(
+        &self,
+        _rect: crate::agent_api::client::Rect,
+        _scale: f64,
+        _done: Box<dyn FnOnce(Result<crate::agent_api::client::Shot, String>) + Send>,
+    ) -> Result<(), String> {
+        Err("no client".to_owned())
+    }
+}
+
+#[test]
+fn an_event_from_a_daemon_built_component_arrives_stamped() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let paths = Paths {
+        data_dir: tmp.path().join("data"),
+        resource_dir: Err("no bundle in tests".to_owned()),
+    };
+    let env = Arc::new(spawn_env(&paths, Probe::Skip).unwrap());
+    let raw = Arc::new(Recording::default());
+    let client = Arc::new(NoClient);
+    let daemon = Daemon::build(
+        &paths,
+        env,
+        "skein.test".to_owned(),
+        InProcessTransport {
+            events: raw.clone(),
+            client: client.clone(),
+            capture: client,
+        },
+    )
+    .unwrap();
+    crate::rooms::load_rooms(&daemon.db, &daemon.rooms).unwrap();
+    let room: skein_proto::rooms::Room = serde_json::from_value(serde_json::json!({
+        "id": "r1", "name": "r1", "task": "", "status": "idle",
+        "badge": 0, "harnesses": [], "activeHarnessId": ""
+    }))
+    .unwrap();
+    daemon
+        .rooms
+        .apply(
+            "test",
+            vec![skein_proto::room_mutations::RoomMutation::CreateRoom { room }],
+        )
+        .unwrap();
+
+    let seen = raw.0.lock().unwrap();
+    let (name, payload) = seen
+        .iter()
+        .find(|(n, _)| n == skein_proto::room_mutations::ROOMS_CHANGED_EVENT)
+        .expect("the store's event reached the transport sink");
+    let v: serde_json::Value = serde_json::from_str(payload).unwrap();
+    assert_eq!(v["seq"], 1, "{name}: {payload}");
+    assert_eq!(daemon.event_seq.current(), 1);
+    assert_eq!(daemon.rooms.snapshot().1, 1);
+}
+
 #[test]
 fn an_unresolvable_resource_dir_is_not_fatal() {
     let tmp = tempfile::TempDir::new().unwrap();

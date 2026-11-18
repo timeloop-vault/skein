@@ -32,6 +32,11 @@ pub struct LoadOutcome {
     /// instead of showing first-run onboarding over lost rooms.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub backup_rooms: Option<i64>,
+    /// The event seq `rooms` is valid at: every rooms-changed with a higher
+    /// seq is not reflected in it (#757). Set by the room store's load, 0
+    /// from `load_all` itself.
+    #[serde(default)]
+    pub seq: u64,
 }
 
 impl Database {
@@ -93,6 +98,7 @@ impl Database {
             skipped,
             first_load,
             backup_rooms: None,
+            seq: 0,
         })
     }
 

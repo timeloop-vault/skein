@@ -31,8 +31,10 @@ export interface RoomsSync {
 	 * `rows` as the daemon returned them, `local` what the hydrate installs.
 	 * Sets the baseline to rows + queued changes, ends buffering and returns
 	 * `local` with the queued changes merged in (same reference when none).
+	 * `seq` is the load's event seq: queued events stamped at or below it are
+	 * already in `rows` and are dropped, and later ones at or below it too.
 	 */
-	finishHydrate(rows: readonly Room[], local: readonly Room[]): Room[];
+	finishHydrate(rows: readonly Room[], local: readonly Room[], seq?: number): Room[];
 	/**
 	 * A daemon change event. Null for our own echo, no changes or no baseline.
 	 * Otherwise moves the baseline once, now, and returns a PURE rebase to use
@@ -80,7 +82,13 @@ export function createRoomsSync(opts: RoomsSyncOptions): RoomsSync {
 	let flightRemote: RoomChange[] = [];
 	// Foreign changes received between beginHydrate and finishHydrate.
 	let hydrating = false;
-	let queued: RoomChange[] = [];
+	let queued: { seq: number; changes: RoomChange[] }[] = [];
+	// The load's event seq: a stamped event at or below it is already in the rows.
+	// Only beginHydrate resets it. The seq restarts with the daemon, so a client
+	// that outlives its daemon (#796) must re-hydrate on a new instance id.
+	let watermark = 0;
+	const covered = (seq: number | undefined): boolean =>
+		seq !== undefined && seq > 0 && seq <= watermark;
 
 	const cancelRetry = () => {
 		if (retryTimer !== null) clearTimer(retryTimer);
@@ -138,10 +146,12 @@ export function createRoomsSync(opts: RoomsSyncOptions): RoomsSync {
 		beginHydrate() {
 			hydrating = true;
 			queued = [];
+			watermark = 0;
 			baseline = null;
 		},
-		finishHydrate(rows, local) {
-			const changes = queued;
+		finishHydrate(rows, local, seq) {
+			watermark = seq ?? 0;
+			const changes = queued.filter((q) => !covered(q.seq)).flatMap((q) => q.changes);
 			queued = [];
 			hydrating = false;
 			baseline = applyRoomChanges(rows, changes);
@@ -155,10 +165,10 @@ export function createRoomsSync(opts: RoomsSyncOptions): RoomsSync {
 		remote(payload) {
 			if (payload.origin === opts.clientId || payload.changes.length === 0) return null;
 			if (hydrating) {
-				queued.push(...payload.changes);
+				queued.push({ seq: payload.seq ?? 0, changes: payload.changes });
 				return null;
 			}
-			if (baseline === null) return null;
+			if (baseline === null || covered(payload.seq)) return null;
 			const oldBaseline = baseline;
 			const changes = payload.changes;
 			baseline = applyRoomChanges(oldBaseline, changes);

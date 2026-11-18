@@ -57,8 +57,8 @@ export function useRoomsSync(d: RoomsSyncDeps) {
 
 	/** Set the baseline and merge the buffered events into what hydrate installs. */
 	const finishHydrate = useCallback(
-		(rows: readonly Room[], local: readonly Room[]): Room[] =>
-			syncRef.current?.finishHydrate(rows, local) ?? [...local],
+		(rows: readonly Room[], local: readonly Room[], seq?: number): Room[] =>
+			syncRef.current?.finishHydrate(rows, local, seq) ?? [...local],
 		[],
 	);
 

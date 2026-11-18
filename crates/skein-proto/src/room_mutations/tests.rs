@@ -125,11 +125,15 @@ fn envelope_types_are_camel_case() {
         changes: vec![RoomChange::RoomRemoved {
             room_id: "r1".into(),
         }],
+        seq: 0,
     };
     assert_eq!(
         roundtrip(&ev),
-        json!({"origin":"c1","changes":[{"type":"roomRemoved","roomId":"r1"}]})
+        json!({"origin":"c1","changes":[{"type":"roomRemoved","roomId":"r1"}],"seq":0})
     );
+    // An old blob with no seq still parses.
+    let old: RoomsChanged = serde_json::from_value(json!({"origin":"c1","changes":[]})).unwrap();
+    assert_eq!(old.seq, 0);
     let out = RoomsApplyOutcome {
         skipped: vec![SkippedMutation {
             index: 2,

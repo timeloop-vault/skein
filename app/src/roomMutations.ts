@@ -20,6 +20,8 @@ export type RoomChange =
 export interface RoomsChanged {
 	origin: string;
 	changes: RoomChange[];
+	/** The per-daemon event seq; absent or 0 = unstamped (always newer). */
+	seq?: number;
 }
 
 export interface RoomsApplyOutcome {

@@ -83,14 +83,14 @@ export function useMailDisplay(rooms: readonly Room[]): void {
 	// by the mirror and replayed on top of it.
 	useEffect(() => {
 		let cancelled = false;
-		const unlistenPromise = listen<{ harnessId: string; held: boolean }>(
+		const unlistenPromise = listen<{ harnessId: string; held: boolean; seq?: number }>(
 			"skein://mail-held",
 			(event) => mailHeldMirror.event(event.payload),
 		);
 		void unlistenPromise.then(() =>
-			invoke<string[]>("mail_held_snapshot")
-				.then((ids) => {
-					if (!cancelled) mailHeldMirror.snapshot(ids);
+			invoke<{ seq: number; harnessIds: string[] }>("mail_held_snapshot")
+				.then((snap) => {
+					if (!cancelled) mailHeldMirror.snapshot(snap.harnessIds, snap.seq);
 				})
 				.catch((err: unknown) => {
 					logBoth("warn", "skein::mail", `[skein] mail_held_snapshot failed: ${String(err)}`);

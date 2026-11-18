@@ -53,8 +53,9 @@ pub(super) struct Inner {
     /// To the `skein-phase-out` thread; sent to only under the lock, so the
     /// order of rows and events is the lock order.
     pub(super) out: Sender<OutMsg>,
-    /// The process-wide stream counter.
-    pub(super) seq: u64,
+    /// Where updates are stamped (under the lock) and, from the output
+    /// thread, delivered. Its seq is the per-daemon event seq.
+    pub(super) events: SharedEventSink,
     /// The last update emitted per harness (without transitions), for the
     /// `lastOutputAt` throttle. Dropped on forget.
     pub(super) last_emitted: HashMap<String, PhaseUpdate>,
@@ -75,7 +76,7 @@ pub(super) struct Inner {
 }
 
 impl Inner {
-    fn new(out: Sender<OutMsg>) -> Self {
+    fn new(out: Sender<OutMsg>, events: SharedEventSink) -> Self {
         Self {
             machine: PhaseMachine::default(),
             claude: HashMap::new(),
@@ -83,7 +84,7 @@ impl Inner {
             hermes: HashMap::new(),
             meta: HashMap::new(),
             out,
-            seq: 0,
+            events,
             last_emitted: HashMap::new(),
             pending_forgets: Vec::new(),
             sweep: false,
@@ -224,9 +225,9 @@ impl PhaseService {
     pub fn with_clock(clock: Clock, db: Arc<Database>, events: SharedEventSink) -> Arc<Self> {
         let (tx, rx) = channel();
         // `None` (logged): updates are then dropped, the machine still runs.
-        drop(spawn_output_thread(rx, db, events));
+        drop(spawn_output_thread(rx, db, Arc::clone(&events)));
         Arc::new(Self {
-            inner: Mutex::new(Inner::new(tx)),
+            inner: Mutex::new(Inner::new(tx, events)),
             clock,
             wake: Arc::new(Wake::default()),
             #[cfg(test)]
@@ -530,8 +531,10 @@ impl PhaseService {
     }
 
     /// One update per known harness, current state, no transitions, all at
-    /// the current stream seq: a client that listens first and then reads
-    /// this drops every stream update with `seq <=` the snapshot's.
+    /// the per-daemon event seq (shared with every other event, so phase
+    /// seqs rise but are not contiguous): a client that listens first and
+    /// then reads this drops every stream update with `seq <=` the
+    /// snapshot's.
     #[must_use]
     pub fn stream_snapshot(&self) -> Vec<PhaseUpdate> {
         self.lock().snapshot()

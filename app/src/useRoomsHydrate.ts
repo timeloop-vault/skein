@@ -113,7 +113,7 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 		// finishHydrate sets the baseline (the rows) and replays them.
 		beginHydrate();
 		invoke<DbLoadOutcome>("db_load_rooms")
-			.then(async ({ rooms: rows, skipped, backupRooms }) => {
+			.then(async ({ rooms: rows, skipped, backupRooms, seq }) => {
 				hydratedOnceRef.current = true;
 				// Clear any failure from a concurrent sibling call —
 				// success wins, and a stale loadFailed would silently
@@ -165,7 +165,7 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 					mismatchedRef.current = initialMismatch;
 					setMismatchedRooms(initialMismatch);
 					// Baseline = rows; the transforms diff out as mutations.
-					const installed = finishHydrate(rows, withResume);
+					const installed = finishHydrate(rows, withResume, seq);
 					setRooms(installed);
 					syncRepoMeta(installed);
 					// Pick the first *active* room; archived ones aren't
@@ -175,7 +175,7 @@ export function useRoomsHydrate(d: RoomsHydrateDeps) {
 				} else {
 					// Nothing stored, but a foreign client may have created rooms
 					// while we loaded.
-					const installed = finishHydrate(rows, rows);
+					const installed = finishHydrate(rows, rows, seq);
 					if (installed.length > 0) {
 						setRooms(installed);
 						syncRepoMeta(installed);

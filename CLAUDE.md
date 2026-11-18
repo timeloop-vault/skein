@@ -108,7 +108,8 @@ will tell you:
     │                                #   #729), RoomCommand/RoomsExecuteOutcome (room_commands,
     │                                #   #756), HarnessEvent/HarnessAction (harness_log), HarnessKind,
     │                                #   PendingDto/TranscriptStatDto (resume), DropReason
-    │                                #   (spawn_env), and PROTO_VERSION. No handshake (#584), no
+    │                                #   (spawn_env), events.rs (#757: Sequenced/LoggedEvent/Replay, the
+    │                                #   event seq envelope), and PROTO_VERSION. No handshake (#584), no
     │                                #   framing (transport phase, #585/#582)
     ├── crates/skein-daemon/         # The Tauri-free server side (#580): `cargo tree -p
     │   └── src/                     #   skein-daemon` lists no tauri. Depends on skein-proto,
@@ -204,6 +205,12 @@ will tell you:
     │                                #   stored, and run under the stored room id).
     │                                #   harness_work_hermes/attacher.rs
     │                                #   attaches the Hermes work poller in the daemon
+    │                                #   #757 added event_seq.rs (SeqEventSink wraps the transport's
+    │                                #   EventSink once in `Daemon::build`: one per-daemon seq written
+    │                                #   into every payload as a top-level `seq`, a bounded in-memory
+    │                                #   replay log, `subscribe(instance, since)` answering events or
+    │                                #   gap; no client calls it until the link, #796). See
+    │                                #   docs/skeind-event-sink.md
     │                                #   See docs/skeind-crates.md
     ├── crates/skein-review/         # The review model (#211 D3/D4, #212 D6). Tauri-free, pure.
     │   └── src/{content,hunks,      #   content+hunks: classify what is on disk
@@ -651,7 +658,11 @@ will tell you:
   harness, patches, ...); `PatchRoom`/`PatchHarness` are refused, never
   merged, on a stale `expectedRevision`; other intents carry none. The
   four agent verbs write through them; the webview still syncs through
-  `rooms_apply` until #758. See docs/skeind-p2-design.md. **Field policy: every field
+  `rooms_apply` until #758. See docs/skeind-p2-design.md.
+  **Event seq (#757):** `rooms-changed` carries the per-daemon event seq,
+  and `db_load_rooms` returns the seq its rooms are valid at; the client
+  drops events at or below it (`roomsSync.ts`). See
+  docs/skeind-event-sink.md. **Field policy: every field
   added to Room/Harness after v0.2.5 MUST be `#[serde(default)]` or
   `Option`** — a required field makes old blobs unparseable.
   `repoRoot` (the #76 group key) is set at create and re-derived at
@@ -758,7 +769,9 @@ will tell you:
   same name (`deferral.rs`, `work.rs`, `permission.rs`, ...) or, for
   reads and subscriptions, the mirror (`phaseMirror.ts`).** The daemon
   publishes a `PhaseUpdate` per changed harness on
-  `skein://harness-phase` (`stream.rs`; its `view: PhaseView` is the
+  `skein://harness-phase` (`stream.rs`; its `seq` is the per-daemon
+  event seq, stamped under the service lock, docs/skeind-event-sink.md;
+  its `view: PhaseView` is the
   wire type, never the machine's `HarnessActivity`: the nine display
   and notification fields only; the daemon's `prompt_delivery/` decides
   every send and the webview asks it through `harness_gate_check`;
@@ -1294,9 +1307,9 @@ the agent API from a shell harness); macOS isn't covered yet.
 - **Tests live with the code that owns them.**
   `crates/skein-git/tests/` has 46 integration tests against tempfile
   repos; `crates/skein-harness` has ~25 in-module tests;
-  `crates/skein-review` has 45; `crates/skein-daemon` has 2,285
+  `crates/skein-review` has 45; `crates/skein-daemon` has 2,366
   in-module tests on Windows (db persistence, spawn-env merging, resume
-  probes, harness JSONL/SSE parsers, pty, the agent API, …); `crates/skein-proto` has 22 (harness_kind, the room wire types);
+  probes, harness JSONL/SSE parsers, pty, the agent API, …); `crates/skein-proto` has 24 (harness_kind, the room wire types);
   `app/src-tauri` has ~70 in-module unit tests that run on Windows
   (the client-only code: open requests, CLI shim, updater proxy, terminal paths, perf); in both, more sit
   in source `cfg`-gated per OS (#202). All run in the hook

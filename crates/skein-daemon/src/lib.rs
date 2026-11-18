@@ -9,6 +9,7 @@ pub mod build_info;
 pub mod daemon;
 pub mod db;
 pub mod design;
+pub mod event_seq;
 pub mod event_sink;
 pub mod fs;
 pub mod git;

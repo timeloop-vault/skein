@@ -105,10 +105,12 @@ impl RoomStore {
         if st.loaded {
             self.shared.persist_or_rearm(&mut st)?;
         }
-        let outcome = load()?;
+        let mut outcome = load()?;
         st.clear_dirty();
         st.rooms.clone_from(&outcome.rooms);
         st.loaded = true;
+        // Under the same lock as the install, so the seq is valid for these rooms.
+        outcome.seq = self.shared.events.current_seq();
         Ok(outcome)
     }
 
@@ -294,6 +296,7 @@ impl RoomStore {
         let payload = RoomsChanged {
             origin: origin.to_owned(),
             changes,
+            seq: 0,
         };
         if let Err(e) = event_sink::emit(self.shared.events.as_ref(), ROOMS_CHANGED_EVENT, &payload)
         {
@@ -326,6 +329,17 @@ impl RoomStore {
     #[must_use]
     pub fn rooms(&self) -> Vec<Room> {
         self.shared.lock().rooms.clone()
+    }
+
+    /// The rooms and the event seq they are valid at, under ONE acquisition
+    /// of the store lock. `commit_changes` emits `rooms-changed` under the
+    /// same lock, so every event with a seq at or below the returned one is
+    /// reflected in the rooms and every later one is not: snapshot plus the
+    /// events with a higher seq reproduces the store (#757).
+    #[must_use]
+    pub fn snapshot(&self) -> (Vec<Room>, u64) {
+        let st = self.shared.lock();
+        (st.rooms.clone(), self.shared.events.current_seq())
     }
 
     /// `(session id, cwd)` of the wanted harnesses that have a session id, for

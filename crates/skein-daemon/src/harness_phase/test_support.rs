@@ -15,6 +15,7 @@ use super::service::Clock;
 use super::stream::OutMsg;
 use super::{PhaseMachine, PhaseService};
 use crate::db::Database;
+use crate::event_seq::SeqEventSink;
 use crate::event_sink::{EventSink, SharedEventSink};
 
 /// An [`EventSink`] that keeps every `(event, payload)` it is given.
@@ -43,15 +44,27 @@ impl EventSink for RecordingSink {
 impl PhaseService {
     /// A service over a throwaway database and a recording sink.
     pub(crate) fn test_with_clock_and_sink(clock: Clock) -> (Arc<Self>, Arc<RecordingSink>) {
+        let (svc, sink, _) = Self::test_with_clock_sink_and_seq(clock);
+        (svc, sink)
+    }
+
+    /// [`Self::test_with_clock_and_sink`] that also hands back the
+    /// [`SeqEventSink`] the recording sink sits behind (what the daemon
+    /// gives the service), so a test can share its seq or replay its log.
+    pub(crate) fn test_with_clock_sink_and_seq(
+        clock: Clock,
+    ) -> (Arc<Self>, Arc<RecordingSink>, Arc<SeqEventSink>) {
         let (dir, db) = crate::db::test_support::fresh_db();
         let sink = Arc::new(RecordingSink::default());
-        let events: SharedEventSink = sink.clone();
+        let inner: SharedEventSink = sink.clone();
+        let seq = SeqEventSink::new(inner);
+        let events: SharedEventSink = seq.clone();
         let db = Arc::new(db);
         let mut svc = Self::with_clock(clock, Arc::clone(&db), events);
         Arc::get_mut(&mut svc)
             .expect("fresh service has one owner")
             .test_state = Some((dir, db));
-        (svc, sink)
+        (svc, sink, seq)
     }
 
     /// [`Self::with_clock`] for the tests that do not look at the outputs.

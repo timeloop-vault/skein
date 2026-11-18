@@ -117,9 +117,26 @@ pub(crate) fn harness_client_facts(
     delivery.report_client_facts(&harness_id, draft.into(), user_input_seq, report);
 }
 
-/// Harness ids whose mail is currently held by the draft guard.
+/// The held-mail set and the event seq it is current to.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HeldSnapshot {
+    seq: u64,
+    harness_ids: Vec<String>,
+}
+
+/// Harness ids whose mail is currently held by the draft guard. The seq is read
+/// BEFORE the set: the daemon updates the set before it emits `mail-held`, so
+/// every event at or below `seq` is already in `harness_ids`.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-pub(crate) fn mail_held_snapshot(delivery: tauri::State<'_, DeliveryHandle>) -> Vec<String> {
-    delivery.held_snapshot()
+pub(crate) fn mail_held_snapshot(
+    delivery: tauri::State<'_, DeliveryHandle>,
+    seq: tauri::State<'_, std::sync::Arc<skein_daemon::event_seq::SeqEventSink>>,
+) -> HeldSnapshot {
+    let seq = seq.current();
+    HeldSnapshot {
+        seq,
+        harness_ids: delivery.held_snapshot(),
+    }
 }

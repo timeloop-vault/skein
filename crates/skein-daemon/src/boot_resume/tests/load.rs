@@ -56,6 +56,32 @@ fn a_failed_flush_still_returns_the_rooms_the_store_holds() {
 }
 
 #[test]
+fn the_outcome_seq_covers_the_boot_event_and_matches_the_rooms_returned() {
+    let (_dir, db) = fresh_db();
+    let db = Arc::new(db);
+    let seq = crate::event_seq::SeqEventSink::new(Arc::new(Quiet));
+    let store = RoomStore::new(Arc::clone(&db), seq.clone());
+    let mut seed = hooked_room();
+    seed[0].harnesses.remove(0);
+    db.write_room_rows(&seed, &[], None).unwrap();
+
+    // The legacy cmd is cleaned by preparation, which emits one daemon-boot
+    // event after the load; the outcome re-reads the prepared rooms.
+    let out = BootResume::detached()
+        .load_rooms_with(&db, &store, no_probe)
+        .unwrap();
+    assert_eq!(seq.current(), 1, "preparation emitted its event");
+    assert_eq!(out.seq, 1);
+    assert_eq!(find(&out.rooms, "o").cmd, Some(sv(&["opencode"])));
+    let (rooms, at) = store.snapshot();
+    assert_eq!(at, out.seq);
+    assert_eq!(
+        serde_json::to_value(&rooms).unwrap(),
+        serde_json::to_value(&out.rooms).unwrap()
+    );
+}
+
+#[test]
 fn a_failed_preparation_is_retried_by_the_next_load_only() {
     let (_dir, db, store) = setup();
     // "o" has a legacy cmd (non-structural); "m" has an old shell-mode record

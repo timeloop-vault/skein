@@ -75,6 +75,9 @@ pub enum RoomChange {
 pub struct RoomsChanged {
     pub origin: String,
     pub changes: Vec<RoomChange>,
+    /// Stamped by the daemon's event sink; 0 before stamping.
+    #[serde(default)]
+    pub seq: u64,
 }
 
 /// A mutation the daemon did not apply; `index` is into the sent array.

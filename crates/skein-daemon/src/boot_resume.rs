@@ -308,7 +308,9 @@ fn prepare(
     );
     // The store holds the prepared rooms from here on, so that is what the
     // client's baseline must be, whether or not the write below succeeds.
-    outcome.rooms = store.rooms();
+    // The seq is read in the same lock acquisition as the rooms (#757), so
+    // the daemon-boot event above is covered by it.
+    (outcome.rooms, outcome.seq) = store.snapshot();
     // Non-structural changes are debounced; the cmds are read by the spawn
     // path, so write them now. A failure is logged: the store is still right
     // and the debounced write retries.

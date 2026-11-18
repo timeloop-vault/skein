@@ -7,6 +7,7 @@
 //! storage) stays in `skein-daemon`, which re-exports these at their
 //! original paths. The types are versioned as a set by [`PROTO_VERSION`].
 
+pub mod events;
 pub mod harness_kind;
 pub mod harness_log;
 pub mod resume;
@@ -14,6 +15,8 @@ pub mod room_commands;
 pub mod room_mutations;
 pub mod rooms;
 pub mod spawn_env;
+
+pub use events::{LoggedEvent, Replay, Sequenced};
 
 /// The protocol version #584's `hello` handshake will carry.
 pub const PROTO_VERSION: u32 = 1;

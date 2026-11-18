@@ -20,6 +20,7 @@ mod machine;
 mod output_panic;
 mod patterns;
 mod screen;
+mod seq;
 mod service;
 mod service_fix;
 mod stream;

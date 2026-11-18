@@ -20,6 +20,7 @@ use crate::boot_resume::BootResume;
 use crate::db::Database;
 use crate::design::PreviewState;
 use crate::design::entries::PreviewEndpoint;
+use crate::event_seq::SeqEventSink;
 use crate::event_sink::SharedEventSink;
 use crate::harness_actions_hermes::HermesActionsManager;
 use crate::harness_config::HarnessConfig;
@@ -176,7 +177,11 @@ pub struct Daemon {
     pub claude: ClaudeEventsManager,
     pub opencode: OpencodeEventsManager,
     pub hermes_actions: HermesActionsManager,
+    /// The seq-stamping wrapper around the transport's sink (#757); the
+    /// same object as `event_seq`.
     pub events: SharedEventSink,
+    /// The stamping sink itself: seq, instance id and replay (#757).
+    pub event_seq: Arc<SeqEventSink>,
     /// `None` when the agent API listener failed to bind.
     pub agent_api: Option<Arc<AgentApiState>>,
     pub agent_endpoint: AgentApiEndpoint,
@@ -347,10 +352,14 @@ impl Daemon {
         transport: InProcessTransport,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let InProcessTransport {
-            events,
+            events: raw_events,
             client,
             capture,
         } = transport;
+        // #757: every broadcast event is stamped by this one sink; nothing
+        // below holds the raw transport sink.
+        let event_seq = SeqEventSink::new(raw_events);
+        let events: SharedEventSink = event_seq.clone();
         let state = SharedState::build(paths, events.clone())?;
         let boot_env = Arc::clone(&spawn_env);
         let delivery_env = Arc::clone(&spawn_env);
@@ -495,6 +504,7 @@ impl Daemon {
             opencode: state.opencode,
             hermes_actions: state.hermes_actions,
             events: state.events,
+            event_seq,
             agent_api,
             agent_endpoint,
             preview,
