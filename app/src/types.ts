@@ -298,6 +298,9 @@ export interface SpawnSettings {
 	/** Context size in tokens above which a harness is marked (#368).
 	 *  `null`/absent = off. */
 	contextThreshold?: number | null;
+	/** The daemon's context-limit nudge (#689). Absent = `{ enabled: true,
+	 *  body: null }`; a null body is the default text. */
+	contextNudge?: { enabled: boolean; body: string | null };
 }
 
 export interface SpawnSettingsPayload {

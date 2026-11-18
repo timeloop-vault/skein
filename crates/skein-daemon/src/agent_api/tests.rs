@@ -21,6 +21,7 @@
 //! | :-- | :-- |
 //! | `close_harness_tests.rs` | `close_harness` (#411): guards and the daemon-side removal (#734) |
 //! | `close_room_tests.rs` | `close_room` (#411): guards, sign-off requirements and the daemon-side archive (#734) |
+//! | `context_status_tests.rs` | `context_status` (#689): own tokens and limit, scope and refusals |
 //! | `create_room_ceiling_tests.rs` | `create_room` (#330): the open-room ceiling and its per-repository grouping |
 //! | `create_room_spawn_tests.rs` | `create_room` (#734): with a real daemon and no client, the new harness is started |
 //! | `create_room_stored_tests.rs` | `create_room` (#330, #734): the stored room, worktree, refusals, prompt and the created event |

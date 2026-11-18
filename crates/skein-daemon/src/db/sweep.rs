@@ -23,6 +23,7 @@ pub(super) const ROOM_KEYED_TABLES: &[&str] = &[
     "agent_tokens",
     "review_signoff",
     "harness_messages",
+    "context_nudge_marks",
 ];
 
 impl Database {

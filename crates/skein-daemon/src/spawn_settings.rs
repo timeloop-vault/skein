@@ -126,6 +126,9 @@ pub struct SpawnSettings {
     /// `None` = off. Held here, not in the webview, so the agent API
     /// (#689) can read it later.
     pub context_threshold: Option<u64>,
+    /// The nudge sent to a harness whose context crosses the threshold
+    /// above (#689).
+    pub context_nudge: ContextNudgeSettings,
     /// Per-kind default agent for `--agent` (#730), keyed by harness
     /// kind. `None` = never imported from the old frontend pref; `Some`
     /// (even empty) = the daemon owns it. A wholesale settings save that
@@ -152,7 +155,26 @@ impl Default for SpawnSettings {
             disable_claude_wheel_acceleration: false,
             lower_harness_priority: true,
             context_threshold: None,
+            context_nudge: ContextNudgeSettings::default(),
             default_agents: None,
+        }
+    }
+}
+
+/// The context-limit nudge (#689): on by default, text overridable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ContextNudgeSettings {
+    pub enabled: bool,
+    /// `None` = the built-in text.
+    pub body: Option<String>,
+}
+
+impl Default for ContextNudgeSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            body: None,
         }
     }
 }
@@ -582,6 +604,32 @@ mod tests {
         let (loaded, degraded) = load(dir.path());
         assert!(degraded.is_none());
         assert_eq!(loaded.context_threshold, Some(150_000));
+    }
+
+    #[test]
+    fn context_nudge_defaults_on_and_round_trips() {
+        let parsed: SpawnSettings = serde_json::from_str("{}").expect("empty object parses");
+        assert!(parsed.context_nudge.enabled);
+        assert_eq!(parsed.context_nudge.body, None);
+        let partial: SpawnSettings =
+            serde_json::from_str(r#"{"contextNudge":{}}"#).expect("empty nudge parses");
+        assert!(partial.context_nudge.enabled);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let settings = SpawnSettings {
+            context_nudge: ContextNudgeSettings {
+                enabled: false,
+                body: Some("hand over at {tokens}".to_owned()),
+            },
+            ..SpawnSettings::default()
+        };
+        save(dir.path(), &settings).expect("save");
+        let (loaded, degraded) = load(dir.path());
+        assert!(degraded.is_none());
+        assert!(!loaded.context_nudge.enabled);
+        assert_eq!(
+            loaded.context_nudge.body.as_deref(),
+            Some("hand over at {tokens}")
+        );
     }
 
     #[test]

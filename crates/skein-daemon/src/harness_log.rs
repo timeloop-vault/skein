@@ -19,7 +19,7 @@ pub struct HarnessContextSize {
 /// (`tokens`, per step) qualify; Hermes writes a cumulative delta and any
 /// other kind is not a source. A row from before the kind column (#538)
 /// is guessed from its payload shape.
-fn context_tokens_of(row: &LatestTurnCost) -> Option<u64> {
+pub(crate) fn context_tokens_of(row: &LatestTurnCost) -> Option<u64> {
     let payload: serde_json::Value = serde_json::from_str(&row.payload).ok()?;
     let claude = || {
         payload

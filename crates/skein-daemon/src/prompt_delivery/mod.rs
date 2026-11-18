@@ -10,6 +10,8 @@
 mod accept_tests;
 #[cfg(test)]
 mod check_tests;
+pub mod context_flow;
+pub mod context_nudge;
 pub mod core;
 pub mod daemon_env;
 pub mod env;
@@ -36,7 +38,7 @@ pub use self::core::{DeliveryCore, DeliveryEvent, Reply};
 pub use daemon_env::{
     DELIVERY_SEAM_EVENT, DaemonEnv, DeliverySeam, MAIL_HELD_EVENT, MailHeld, PtyPort,
 };
-pub use env::{DeliveryEnv, DraftState, UnreadMail};
+pub use env::{ContextSettings, DeliveryEnv, DraftState, UnreadMail};
 pub use facts::{GateFacts, PhaseFacts};
 pub use gate::{GateMode, Refusal, RefusalCode, at_safe_stopping_point, can_insert, can_send};
 pub use paste::{SUBMIT, paste_bytes};

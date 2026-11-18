@@ -132,6 +132,11 @@ impl Rig {
             writes: Mutex::new(Vec::new()),
         });
         let shared = Arc::new(Shared::default());
+        let spawn_env = Arc::new(crate::spawn_env::state::SpawnEnvState {
+            data_dir: dir.path().to_path_buf(),
+            settings: parking_lot::RwLock::new(crate::spawn_settings::SpawnSettings::default()),
+            degraded: parking_lot::RwLock::new(None),
+        });
         let env = DaemonEnv {
             store: Arc::clone(&store),
             phase: Arc::clone(&phase),
@@ -139,6 +144,7 @@ impl Rig {
             events: events.clone(),
             pty: pty.clone(),
             shared: Arc::clone(&shared),
+            spawn_env: Arc::clone(&spawn_env),
         };
         let test_env = DaemonEnv {
             store: Arc::clone(&env.store),
@@ -147,6 +153,7 @@ impl Rig {
             events: env.events.clone(),
             pty: env.pty.clone(),
             shared: Arc::clone(&shared),
+            spawn_env: Arc::clone(&spawn_env),
         };
         let handle = DeliveryService::start(Box::new(env), Arc::clone(&shared), phase.clock());
         phase.set_listener(handle.phase_listener());

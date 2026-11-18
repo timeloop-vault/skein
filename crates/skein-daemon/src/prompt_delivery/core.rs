@@ -4,6 +4,7 @@
 //! `next_deadline`. Pure and clock-injected; because everything runs through
 //! `&mut self`, deliveries are serialized (TS `runSerialized`) for free.
 
+use super::context_flow::ContextFlow;
 use super::env::DeliveryEnv;
 use super::gate::{GateMode, Refusal};
 use super::mail::Mail;
@@ -53,6 +54,7 @@ pub enum Reply {
 pub struct DeliveryCore {
     sender: Sender,
     mail: Mail,
+    context: ContextFlow,
 }
 
 impl DeliveryCore {
@@ -64,10 +66,16 @@ impl DeliveryCore {
     pub fn handle(&mut self, env: &mut dyn DeliveryEnv, ev: DeliveryEvent, now_ms: i64) -> Reply {
         match ev {
             DeliveryEvent::MailChanged { harness_id }
-            | DeliveryEvent::DeferralArmed { harness_id }
-            | DeliveryEvent::ClientFactsChanged { harness_id } => {
+            | DeliveryEvent::DeferralArmed { harness_id } => {
                 self.mail
                     .automatic(&mut self.sender, env, &harness_id, now_ms);
+                Reply::None
+            }
+            DeliveryEvent::ClientFactsChanged { harness_id } => {
+                self.mail
+                    .automatic(&mut self.sender, env, &harness_id, now_ms);
+                self.context
+                    .on_client_facts(&mut self.sender, env, &harness_id, now_ms);
                 Reply::None
             }
             DeliveryEvent::Transition {
@@ -78,6 +86,8 @@ impl DeliveryCore {
                 self.sender.on_transition(&harness_id, from, to);
                 self.mail
                     .on_transition(&mut self.sender, env, &harness_id, from, to, now_ms);
+                self.context
+                    .on_transition(&mut self.sender, env, &harness_id, to, now_ms);
                 Reply::None
             }
             DeliveryEvent::Spawned { harness_id } => {
@@ -85,11 +95,13 @@ impl DeliveryCore {
                 self.mail.reset(env, &harness_id);
                 self.mail
                     .automatic(&mut self.sender, env, &harness_id, now_ms);
+                self.context.spawned(env, &harness_id);
                 Reply::None
             }
             DeliveryEvent::Forgotten { harness_id } => {
                 self.sender.forget(&harness_id);
                 self.mail.reset(env, &harness_id);
+                self.context.forget(&harness_id);
                 Reply::None
             }
             DeliveryEvent::DeliverNow { harness_id } => {
@@ -127,17 +139,23 @@ impl DeliveryCore {
     pub fn on_timer(&mut self, env: &mut dyn DeliveryEnv, now_ms: i64) {
         for ev in self.sender.on_timer(env, now_ms) {
             self.mail.on_send_event(&ev);
+            self.context.on_send_event(env, &ev);
         }
         self.mail.on_timer(&mut self.sender, env, now_ms);
+        self.context.on_timer(&mut self.sender, env, now_ms);
     }
 
-    /// The earliest moment `on_timer` has work, over sender and mail.
+    /// The earliest moment `on_timer` has work, over sender, mail and the context nudge.
     #[must_use]
     pub fn next_deadline(&self) -> Option<i64> {
-        [self.sender.next_deadline(), self.mail.next_deadline()]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            self.sender.next_deadline(),
+            self.mail.next_deadline(),
+            self.context.next_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 }
 

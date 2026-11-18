@@ -290,6 +290,7 @@ fn start_delivery(
     state: &SharedState,
     runner: &Arc<HarnessRunner>,
     agent_api: Option<&AgentApiState>,
+    spawn_env: Arc<SpawnEnvState>,
 ) -> DeliveryHandle {
     let shared = Arc::new(crate::prompt_delivery::Shared::default());
     let env = DaemonEnv {
@@ -302,6 +303,7 @@ fn start_delivery(
             pty: state.pty.clone(),
         }),
         shared: Arc::clone(&shared),
+        spawn_env,
     };
     let handle = DeliveryService::start(Box::new(env), shared, phase.clock());
     phase.set_listener(handle.phase_listener());
@@ -351,6 +353,7 @@ impl Daemon {
         } = transport;
         let state = SharedState::build(paths, events.clone())?;
         let boot_env = Arc::clone(&spawn_env);
+        let delivery_env = Arc::clone(&spawn_env);
         let rooms = RoomStore::new(Arc::clone(&state.db), state.events.clone());
         // #732: the phase machine, fed by the runner and the hooks.
         let phase = PhaseService::new(Arc::clone(&state.db), state.events.clone());
@@ -454,6 +457,7 @@ impl Daemon {
             &state,
             &harness_runner,
             agent_api.as_deref(),
+            delivery_env,
         );
         // After the delivery worker: the supervisor's mail facts read it.
         start_phase_driver(&phase, &state, &rooms, &delivery);

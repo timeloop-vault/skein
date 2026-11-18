@@ -38,6 +38,7 @@
 //! | `verbs/design_screenshot.rs` | `get_design_screenshot` and `show_design_pane`: see the preview, make it visible (#552). |
 //! | `verbs/list_rooms.rs` | `list_rooms`: filtered, ordered, paged room listing (#356, #612). |
 //! | `verbs/room_listing.rs` | The cross-room reads: one room, a room's harnesses, the phase round trip (#356). |
+//! | `verbs/context_status.rs` | `context_status`: the caller's own context size against the user's limit (#689). |
 //! | `verbs/info.rs` | Which Skein build the agent runs under (#535). |
 //! | `verbs/shared.rs` | Constants and helpers more than one family uses. |
 //!
@@ -45,6 +46,7 @@
 //! and result type, so callers keep writing `verbs::X`.
 
 mod close_apply;
+mod context_status;
 mod design;
 mod design_changes;
 mod design_screenshot;
@@ -63,6 +65,7 @@ mod room_listing;
 mod room_naming;
 mod shared;
 
+pub use context_status::*;
 pub use design::*;
 pub use design_changes::*;
 pub use design_screenshot::*;

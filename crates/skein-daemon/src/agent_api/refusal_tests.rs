@@ -9,7 +9,7 @@ use super::verbs::{self, MailContext, VerbError};
 // ── the two prohibitions ──────────────────────────────────────────
 
 #[test]
-fn the_tool_list_offers_twenty_four_verbs_and_nothing_that_resolves_approves_or_deletes() {
+fn the_tool_list_offers_twenty_five_verbs_and_nothing_that_resolves_approves_or_deletes() {
     let names: Vec<String> = mcp::tool_specs()
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_owned())
@@ -43,6 +43,8 @@ fn the_tool_list_offers_twenty_four_verbs_and_nothing_that_resolves_approves_or_
             "find_rooms_for_path",
             "list_rooms",
             "get_room",
+            // #689: the caller's own context size against the limit.
+            "context_status",
             "list_harnesses",
             // #512: the design pane.
             "list_design_harnesses",

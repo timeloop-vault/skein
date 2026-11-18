@@ -13,6 +13,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getContextNudge } from "./contextNudgeStore.ts";
 import { getContextThreshold } from "./contextThresholdStore.ts";
 import { EnvProfilesPanel } from "./EnvProfilesPanel.tsx";
 import {
@@ -50,10 +51,15 @@ interface SpawnEnvPanelProps {
 	onDirtyChange: (dirty: boolean) => void;
 }
 
-const onlyThresholdChanged = (a: SpawnSettings, b: SpawnSettings): boolean =>
-	(a.contextThreshold ?? null) !== (b.contextThreshold ?? null) &&
-	JSON.stringify({ ...a, contextThreshold: null }) ===
-		JSON.stringify({ ...b, contextThreshold: null });
+// Settings saved by other sections (the threshold, #368; the context nudge,
+// #689): when only those moved, the draft keeps its unsaved edits.
+const withoutOtherSections = (s: SpawnSettings): string =>
+	JSON.stringify({ ...s, contextThreshold: null, contextNudge: null });
+
+const onlyOtherSectionsChanged = (a: SpawnSettings, b: SpawnSettings): boolean =>
+	JSON.stringify([a.contextThreshold ?? null, a.contextNudge ?? null]) !==
+		JSON.stringify([b.contextThreshold ?? null, b.contextNudge ?? null]) &&
+	withoutOtherSections(a) === withoutOtherSections(b);
 
 export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: SpawnEnvPanelProps) => {
 	const [draft, setDraft] = useState<SpawnSettings | null>(settings);
@@ -82,11 +88,19 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 	useEffect(() => {
 		const prev = prevSettings.current;
 		prevSettings.current = settings;
-		// The Agents section saves contextThreshold on its own. When that is
-		// the only thing that moved, keep the draft's unsaved edits and take
-		// just the new threshold, instead of re-adopting and wiping them.
-		if (prev && settings && onlyThresholdChanged(prev, settings)) {
-			setDraft((d) => (d ? { ...d, contextThreshold: settings.contextThreshold ?? null } : d));
+		// The Agents and Nudges sections save contextThreshold and contextNudge
+		// on their own. When only those moved, keep the draft's unsaved edits
+		// and take just the new values, instead of re-adopting and wiping them.
+		if (prev && settings && onlyOtherSectionsChanged(prev, settings)) {
+			setDraft((d) =>
+				d
+					? {
+							...d,
+							contextThreshold: settings.contextThreshold ?? null,
+							...(settings.contextNudge ? { contextNudge: settings.contextNudge } : {}),
+						}
+					: d,
+			);
 			return;
 		}
 		baseActive.current = storeActive;
@@ -174,6 +188,7 @@ export const SpawnEnvPanel = ({ settings, degraded, settingsPath, onSave }: Spaw
 					// Not this panel's setting: take the latest saved value,
 					// never the draft's possibly older copy.
 					contextThreshold: getContextThreshold(),
+					contextNudge: getContextNudge(),
 				});
 				recordSavedRenames(applied);
 			});

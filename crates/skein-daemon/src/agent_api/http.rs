@@ -56,7 +56,7 @@ use design::{
     api_design_changes, api_design_device, api_design_entry, api_design_harnesses,
     api_design_invoke, api_design_pane, api_design_screenshot, api_design_show, api_design_state,
 };
-use harnesses::{api_close_harness, api_list_harnesses, api_open_harness};
+use harnesses::{api_close_harness, api_context_status, api_list_harnesses, api_open_harness};
 use hermes_hooks::api_harness_hermes_turn;
 use hooks::{api_harness_permission, api_harness_session_end, api_harness_session_start};
 use info::api_info;
@@ -125,7 +125,8 @@ pub fn router(state: Arc<AgentApiState>) -> Router {
                 .route("/api/rooms", get(api_list_rooms))
                 .route("/api/rooms/find", get(api_find_rooms_for_path))
                 .route("/api/rooms/{room_id}", get(api_get_room))
-                .route("/api/harnesses", get(api_list_harnesses)),
+                .route("/api/harnesses", get(api_list_harnesses))
+                .route("/api/context", get(api_context_status)),
         ))
         .merge(gated(
             &state,

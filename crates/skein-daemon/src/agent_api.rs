@@ -64,6 +64,8 @@ mod close_harness_tests;
 #[cfg(test)]
 mod close_room_tests;
 #[cfg(test)]
+mod context_status_tests;
+#[cfg(test)]
 mod create_room_ceiling_tests;
 #[cfg(test)]
 mod create_room_spawn_tests;

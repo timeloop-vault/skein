@@ -160,6 +160,18 @@ impl super::env::DeliveryEnv for Counting {
     fn publish_mail_facts(&mut self, i: &str, f: super::env::MailFacts) {
         self.inner.publish_mail_facts(i, f);
     }
+    fn context_settings(&self) -> super::env::ContextSettings {
+        self.inner.context_settings()
+    }
+    fn newest_context(&self, i: &str) -> Result<Option<(i64, u64)>, String> {
+        self.inner.newest_context(i)
+    }
+    fn context_mark(&self, i: &str) -> Result<Option<super::context_nudge::Mark>, String> {
+        self.inner.context_mark(i)
+    }
+    fn set_context_mark(&mut self, i: &str, m: super::context_nudge::Mark) -> Result<(), String> {
+        self.inner.set_context_mark(i, m)
+    }
 }
 
 fn counting_service() -> (super::service::DeliveryHandle, Arc<AtomicU32>) {
@@ -323,6 +335,22 @@ fn a_call_that_expired_before_the_worker_reached_it_is_skipped() {
         }
         fn publish_mail_facts(&mut self, i: &str, f: crate::prompt_delivery::env::MailFacts) {
             self.inner.publish_mail_facts(i, f);
+        }
+        fn context_settings(&self) -> super::env::ContextSettings {
+            self.inner.context_settings()
+        }
+        fn newest_context(&self, i: &str) -> Result<Option<(i64, u64)>, String> {
+            self.inner.newest_context(i)
+        }
+        fn context_mark(&self, i: &str) -> Result<Option<super::context_nudge::Mark>, String> {
+            self.inner.context_mark(i)
+        }
+        fn set_context_mark(
+            &mut self,
+            i: &str,
+            m: super::context_nudge::Mark,
+        ) -> Result<(), String> {
+            self.inner.set_context_mark(i, m)
         }
     }
     let (gate_tx, gate_rx) = channel::<()>();

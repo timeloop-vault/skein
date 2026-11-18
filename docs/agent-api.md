@@ -35,6 +35,7 @@ Skein process
      ├─ GET    /api/rooms/{room_id}    get_room
      ├─ POST   /api/rooms/{room_id}/close   close_room
      ├─ GET    /api/harnesses          list_harnesses
+     ├─ GET    /api/context            context_status
      ├─ POST   /api/harnesses          open_harness
      ├─ POST   /api/harnesses/{harness_id}/close   close_harness
      ├─ GET    /api/design/harnesses   list_design_harnesses
@@ -123,7 +124,7 @@ defaults on.
 | `review` | `list_comments`, `get_comment`, `get_diff`, `reply`, `mark_addressed`, `review_status` |
 | `mail` | `send_message`, `read_messages`, `message_history` |
 | `rooms` | `create_room`, `close_room`, `open_harness`, `close_harness` |
-| `directory` | `find_rooms_for_path`, `list_rooms`, `get_room`, `list_harnesses` |
+| `directory` | `find_rooms_for_path`, `list_rooms`, `get_room`, `list_harnesses`, `context_status` |
 | `design` | `list_design_harnesses`, `get_design_state`, `open_design_entry`, `set_design_device`, `show_element`, `invoke_element`, `show_changes`, `get_design_screenshot`, `show_design_pane` |
 
 `skein_info` is in no group and is always available.
@@ -1208,6 +1209,22 @@ when `room` is omitted: none of their harnesses have a live process to
 ask a phase of. Each entry names its `room_id`/`room_name` alongside
 the same per-harness fields `get_room` reports.
 
+### `context_status`
+
+No arguments (`GET /api/context`). Returns `{ harness_id,
+context_tokens, limit, over_limit }` for the **calling** harness only:
+`context_tokens` is the latest turn's context size (`harness_log::
+context_sizes`), `null` when the harness has no `turn_cost` row yet or
+its kind reports none (Hermes); `limit` is the user's `contextThreshold`
+from Settings, `null` when unset; `over_limit` is true only when both
+are present and `context_tokens >= limit`. Unlike the rest of the
+directory group it is not cross-room: it needs `X-Skein-Harness`
+(refused, 403, without it), and a harness id that is not in the token's
+own room is a 404, so the verb cannot be used to read another harness's
+size. It sends nothing and nudges nothing; the agent decides what to do.
+The separate nudge Skein pastes when the limit is crossed is described
+in [context-limit-nudge.md](context-limit-nudge.md).
+
 ### Scope note
 
 `list_rooms`, `get_room` and `list_harnesses` all read across every
@@ -1569,7 +1586,7 @@ Since #582 the `agent_api/` and `review_surface/` files below live in
 | `agent_api/auth.rs` | `Origin`, bearer, token → room, archived/revoked (revoked is checked first) |
 | `agent_api/token_lifecycle.rs` | the room-store observer that revokes a room's token when it is archived or removed (#734) |
 | `agent_api/daemon_handles.rs` | how the verbs reach the room store, the harness runner and the harness config (#734) |
-| `agent_api/verbs.rs` + `verbs/` | the twenty-two verbs — the whole testable core, including the mailbox (#327, plus `message_history`, #364), the cross-room reads (#354, #356), `create_room`/`close_room`/`open_harness`/`close_harness` (#330, #411; run in the daemon since #734 by `room_create/`, `room_close.rs`, `harness_control.rs`, `harness_build.rs`, `close_apply.rs` and `room_naming.rs`) and the design-pane verbs (#512) |
+| `agent_api/verbs.rs` + `verbs/` | the twenty-three verbs (`context_status` in `verbs/context_status.rs`, #689) — the whole testable core, including the mailbox (#327, plus `message_history`, #364), the cross-room reads (#354, #356), `create_room`/`close_room`/`open_harness`/`close_harness` (#330, #411; run in the daemon since #734 by `room_create/`, `room_close.rs`, `harness_control.rs`, `harness_build.rs`, `close_apply.rs` and `room_naming.rs`) and the design-pane verbs (#512) |
 | `agent_api/mcp.rs` | JSON-RPC, the tool schemas, the resolve/approve refusals, and the `archive_room`/`remove_worktree`/`delete_room` refusals (#411) |
 | `agent_api/http.rs` + `http/` | the routes, including `/api/messages` and `/api/messages/history` (#327, #364), `/api/rooms`/`/api/rooms/{id}`/`/api/harnesses` (#356), `/api/harness/permission` (#86), `/api/harness/session-start` (#273) and the Hermes hook routes (`http/hermes_hooks.rs`, `hermes_event.rs`, #625) |
 | `agent_api/tests.rs` + `*_tests.rs` | `tests.rs` holds the shared fixtures; the `*_tests.rs` siblings hold the tests by concern: scoping, both prohibitions (`refusal_tests.rs`), lifecycle, real HTTP |

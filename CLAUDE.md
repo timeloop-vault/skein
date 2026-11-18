@@ -188,8 +188,9 @@ will tell you:
     │                                #   the send gate, a port of canSendPrompt, with
     │                                #   `can_insert` for the file drop and a read-only check
     │                                #   (`harness_gate_check`, #733 part B); mail nudge,
-    │                                #   review nudge, prompt-library items and deliver-now all
-    │                                #   write through it and PtyManager::write; daemon_env.rs
+    │                                #   review nudge, context-limit nudge (#689:
+    │                                #   context_nudge.rs + context_flow.rs), prompt-library
+    │                                #   items and deliver-now all write through it and PtyManager::write; daemon_env.rs
     │                                #   is the real DeliveryEnv; supervisor_facts.rs gives
     │                                #   the supervisor's `mail_held` its facts from the
     │                                #   worker's published `MailFacts`). Fed by hooks: the phase
@@ -587,6 +588,7 @@ will tell you:
     │   │                            #   the #52 review decisions — see Roadmap above
     │   ├── agent-api.md             # The #213 agent API: verbs, headers, error codes, and
     │   │                            #   how #215 gets it in front of each harness
+    │   ├── context-limit-nudge.md   # The context-limit nudge (#689): rules, rechecks, flow
     │   ├── backlog.md               # Parked ideas (read before adding to any plan)
     │   ├── remote-harness.md        # The `remote` harness kind (#568): ssh + tmux, no daemon;
     │   │                            #   what works, what is lost. Argv builder: harness_argv/remote.rs in skein-daemon (#730)
@@ -1082,7 +1084,9 @@ will tell you:
   outright, because destroying — unlike archiving — stays the user's
   decision (D9, as corrected). The design-pane verbs (#512, #552) ride
   the same server and drive only the caller's own room's design
-  harnesses. Full contract: `docs/agent-api.md`.
+  harnesses. `context_status` (#689, Directory group) reports the
+  calling harness's own context size and the user's limit, and sends
+  nothing. Full contract: `docs/agent-api.md`.
 - **Harness config injection** (#215, epic #52 E): the variables above
   are useless until the CLI knows there is a server at that address, so
   the spawn (`ensure_running`, #731) also appends `--plugin-dir <resources>/harness-config/`

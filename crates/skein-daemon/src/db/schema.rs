@@ -327,6 +327,7 @@ impl Database {
         super::todos::init_schema(conn)?;
         element_anchors::init_schema(conn)?;
         element_proposals::init_schema(conn)?;
+        super::context_nudge::init_schema(conn)?;
 
         // Issue #214 (epic #52 D9, as corrected): the reviewer's
         // sign-off. One row per room, because a room is one review

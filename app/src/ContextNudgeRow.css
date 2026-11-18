@@ -1,0 +1,13 @@
+.sk-ctxnudge-switch {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	cursor: pointer;
+}
+.sk-ctxnudge-switch input[type="checkbox"] {
+	margin: 0;
+	accent-color: var(--accent);
+}
+.sk-ctxnudge-muted {
+	color: var(--fg-3);
+}

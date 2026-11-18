@@ -10,7 +10,7 @@ use serde::Deserialize;
 use super::super::groups::ToolGroup;
 use super::super::state::AgentApiState;
 use super::super::verbs::{self, CloseHarnessArgs, ListHarnessesArgs, OpenHarnessArgs};
-use super::{authenticate, error_body, json_of, mail_context, refuse};
+use super::{Notify, authenticate, error_body, json_of, mail_context, refuse, with_caller};
 
 /// `POST /api/harnesses` — the plain-JSON mirror of the MCP
 /// `open_harness` tool (#411). Same shape as `api_create_room`:
@@ -71,6 +71,20 @@ pub(super) async fn api_close_harness(
             e.message(),
         ),
     }
+}
+
+/// `GET /api/context` — the plain-JSON mirror of the MCP
+/// `context_status` tool (#689). Scoped to the calling harness: it takes
+/// no id, and the verb checks the `X-Skein-Harness` hint against the
+/// caller's own room.
+pub(super) async fn api_context_status(
+    State(state): State<Arc<AgentApiState>>,
+    headers: HeaderMap,
+) -> Response {
+    with_caller(&state, &headers, Notify::Never, |caller| {
+        verbs::context_status(&state.db, caller, state.spawn_settings().context_threshold)
+            .and_then(json_of)
+    })
 }
 
 #[derive(Debug, Deserialize)]

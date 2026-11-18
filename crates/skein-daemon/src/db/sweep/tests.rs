@@ -99,6 +99,10 @@ fn seed_row(db: &Database, table: &str, room_id: &str) {
              (id, room_id, harness_id, from_room_id, from_harness_id, body, created_ms, read_ms) \
              VALUES ('msg-' || ?1, ?1, 'h1', 'elsewhere', NULL, 'hi', 1, NULL)"
         }
+        "context_nudge_marks" => {
+            "INSERT INTO context_nudge_marks (harness_id, room_id, last_row_id, armed) \
+             VALUES ('mark-' || ?1, ?1, NULL, 1)"
+        }
         other => panic!("seed_row: unhandled table {other}"),
     };
     conn.execute(sql, params![room_id]).unwrap();

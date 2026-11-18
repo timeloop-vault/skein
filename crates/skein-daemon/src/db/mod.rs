@@ -37,6 +37,7 @@ use parking_lot::Mutex;
 use rusqlite::Connection;
 
 mod agent_tokens;
+mod context_nudge;
 mod element_anchors;
 mod element_proposals;
 mod harness_log;
@@ -56,6 +57,7 @@ mod todos;
 use timed_lock::TimedMutex;
 
 pub use agent_tokens::TokenLookup;
+pub use context_nudge::ContextNudgeMarkRow;
 pub use element_anchors::ReviewElementAnchorRow;
 pub use harness_log::{HarnessAction, HarnessEvent, LatestTurnCost, NewHarnessAction, action_kind};
 pub use mail::HarnessMessageRow;

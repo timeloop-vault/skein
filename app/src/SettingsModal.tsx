@@ -211,7 +211,7 @@ export const SettingsModal = ({
 
 					<div className="sk-field">
 						<label>Nudges</label>
-						<NudgesPanel />
+						<NudgesPanel onSpawnSettings={onSpawnSettings} />
 					</div>
 
 					<div className="sk-field">

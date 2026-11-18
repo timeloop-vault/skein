@@ -62,7 +62,7 @@ pub fn group_of(tool: &str) -> Option<ToolGroup> {
         | "review_status" => Some(ToolGroup::Review),
         "send_message" | "read_messages" | "message_history" => Some(ToolGroup::Mail),
         "create_room" | "close_room" | "open_harness" | "close_harness" => Some(ToolGroup::Rooms),
-        "find_rooms_for_path" | "list_rooms" | "get_room" | "list_harnesses" => {
+        "find_rooms_for_path" | "list_rooms" | "get_room" | "list_harnesses" | "context_status" => {
             Some(ToolGroup::Directory)
         }
         "list_design_harnesses"

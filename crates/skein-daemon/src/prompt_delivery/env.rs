@@ -1,6 +1,7 @@
 //! Every fact the send machine reads and every effect it has, behind one
 //! trait: tests fake it, the delivery driver implements it.
 
+use super::context_nudge::Mark;
 use super::facts::GateFacts;
 pub use super::shared::MailFacts;
 
@@ -23,6 +24,16 @@ pub struct UnreadMail {
     pub count: u32,
     /// Distinct sender room names, first-seen order (`from_room_names`).
     pub from: Vec<String>,
+}
+
+/// The user's context-limit settings (#689), read live on every check.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ContextSettings {
+    /// The limit in tokens; `None` = off.
+    pub limit: Option<u64>,
+    pub enabled: bool,
+    /// `None` = the built-in text.
+    pub body: Option<String>,
 }
 
 pub trait DeliveryEnv {
@@ -55,4 +66,22 @@ pub trait DeliveryEnv {
     /// part B): the time of the last nudge pasted and the refusal that
     /// holds pending mail. All-`None` means the worker forgot the harness.
     fn publish_mail_facts(&mut self, harness_id: &str, facts: MailFacts);
+    /// The context-limit settings, read live.
+    fn context_settings(&self) -> ContextSettings;
+    /// The newest `(context row id, context tokens)` of the harness.
+    /// `Ok(None)`: no row, or a kind without a context size.
+    ///
+    /// # Errors
+    /// The lookup failed; the caller does nothing.
+    fn newest_context(&self, harness_id: &str) -> Result<Option<(i64, u64)>, String>;
+    /// The harness's persisted context-nudge mark.
+    ///
+    /// # Errors
+    /// The lookup failed; the caller does nothing.
+    fn context_mark(&self, harness_id: &str) -> Result<Option<Mark>, String>;
+    /// Persist the mark.
+    ///
+    /// # Errors
+    /// The write failed (or the harness is unknown to the store).
+    fn set_context_mark(&mut self, harness_id: &str, mark: Mark) -> Result<(), String>;
 }

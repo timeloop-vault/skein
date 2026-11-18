@@ -33,7 +33,7 @@ export const TOOL_GROUPS: readonly ToolGroupInfo[] = [
 	{
 		key: "directory",
 		label: "Directory",
-		tools: ["find_rooms_for_path", "list_rooms", "get_room", "list_harnesses"],
+		tools: ["find_rooms_for_path", "list_rooms", "get_room", "list_harnesses", "context_status"],
 		note: "Read-only, across all rooms.",
 	},
 	{

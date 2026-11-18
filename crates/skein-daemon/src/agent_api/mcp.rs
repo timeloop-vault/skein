@@ -302,6 +302,11 @@ pub async fn call_tool(
         "mark_addressed" => to_value(verbs::mark_addressed(db, caller, &parse(args)?)?),
         "review_status" => to_value(verbs::review_status(db, caller)?),
         "skein_info" => to_value(verbs::skein_info(state)),
+        "context_status" => to_value(verbs::context_status(
+            db,
+            caller,
+            state.spawn_settings().context_threshold,
+        )?),
         "send_message" => to_value(verbs::send_message(
             db,
             caller,

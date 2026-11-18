@@ -52,7 +52,8 @@ const DIRECTORY: &str = "Directory: find_rooms_for_path lists every room, across
      across the whole install, including ones you did not create — use \
      them to rebuild a picture of a room after your own context is \
      compacted, without replaying history. A harness's phase may read \
-     \"unknown\" when Skein cannot currently vouch for it.";
+     \"unknown\" when Skein cannot currently vouch for it. context_status \
+     returns your own harness's context size and the limit the user set.";
 
 const DESIGN: &str = "Design pane: list_design_harnesses, get_design_state, \
      open_design_entry, set_design_device, show_element and invoke_element read and drive the design \

@@ -16,6 +16,7 @@
 // for free.
 
 import { useEffect, useRef, useState } from "react";
+import { ContextNudgeRow } from "./ContextNudgeRow.tsx";
 import {
 	isOverridden,
 	type NudgeDef,
@@ -25,6 +26,7 @@ import {
 	nudgesInScope,
 } from "./nudgeRegistry.ts";
 import { resetNudgeBody, setNudgeBody, useNudgeOverrides } from "./nudgeStore.ts";
+import type { SpawnSettings } from "./types.ts";
 import "./Settings.css";
 
 const SCOPE_LABEL: Record<NudgeScope, string> = {
@@ -113,7 +115,11 @@ const NudgeRow = ({ def, overrides }: { def: NudgeDef; overrides: NudgeOverrides
 	);
 };
 
-export const NudgesPanel = () => {
+export const NudgesPanel = ({
+	onSpawnSettings,
+}: {
+	onSpawnSettings: (next: SpawnSettings) => Promise<void>;
+}) => {
 	const overrides = useNudgeOverrides();
 	return (
 		<div className="sk-nudges">
@@ -133,6 +139,10 @@ export const NudgesPanel = () => {
 					</div>
 				);
 			})}
+			<div className="sk-nudge-group">
+				<div className="sk-nudge-group-label">Automatic</div>
+				<ContextNudgeRow onSpawnSettings={onSpawnSettings} />
+			</div>
 		</div>
 	);
 };

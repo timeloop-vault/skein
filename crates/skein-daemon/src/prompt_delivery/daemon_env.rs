@@ -13,7 +13,8 @@ use std::sync::Arc;
 use serde::Serialize;
 use skein_proto::harness_kind::HarnessKind;
 
-use super::env::{DeliveryEnv, DraftState, UnreadMail};
+use super::context_nudge::Mark;
+use super::env::{ContextSettings, DeliveryEnv, DraftState, UnreadMail};
 use super::facts::{GateFacts, PhaseFacts};
 use super::paste::SUBMIT;
 use super::shared::Shared;
@@ -23,6 +24,7 @@ use crate::event_sink::{self, SharedEventSink};
 use crate::harness_argv::runs_its_tool;
 use crate::harness_phase::PhaseService;
 use crate::room_store::RoomStore;
+use crate::spawn_env::state::SpawnEnvState;
 
 /// Broadcast when a harness's mail starts or stops being held by the draft
 /// guard; payload [`MailHeld`].
@@ -78,6 +80,8 @@ pub struct DaemonEnv {
     pub events: SharedEventSink,
     pub pty: Arc<dyn PtyPort>,
     pub shared: Arc<Shared>,
+    /// The live spawn settings: the context limit and its nudge (#689).
+    pub spawn_env: Arc<SpawnEnvState>,
 }
 
 impl DeliveryEnv for DaemonEnv {
@@ -156,5 +160,34 @@ impl DeliveryEnv for DaemonEnv {
         if let Err(e) = event_sink::emit(self.events.as_ref(), MAIL_HELD_EVENT, &payload) {
             tracing::warn!(harness = harness_id, error = %e, "prompt delivery: mail-held emit failed");
         }
+    }
+
+    fn context_settings(&self) -> ContextSettings {
+        let s = self.spawn_env.snapshot();
+        ContextSettings {
+            limit: s.context_threshold,
+            enabled: s.context_nudge.enabled,
+            body: s.context_nudge.body,
+        }
+    }
+
+    fn newest_context(&self, harness_id: &str) -> Result<Option<(i64, u64)>, String> {
+        self.db.newest_context_tokens(harness_id)
+    }
+
+    fn context_mark(&self, harness_id: &str) -> Result<Option<Mark>, String> {
+        Ok(self.db.context_nudge_mark(harness_id)?.map(|row| Mark {
+            last_row_id: row.last_row_id,
+            armed: row.armed,
+        }))
+    }
+
+    fn set_context_mark(&mut self, harness_id: &str, mark: Mark) -> Result<(), String> {
+        let (room_id, _) = self
+            .store
+            .find_harness(harness_id)
+            .ok_or_else(|| "harness is not in the room store".to_owned())?;
+        self.db
+            .set_context_nudge_mark(harness_id, &room_id, mark.last_row_id, mark.armed)
     }
 }

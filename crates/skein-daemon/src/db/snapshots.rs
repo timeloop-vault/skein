@@ -41,6 +41,8 @@ pub(super) const SNAPSHOT_EXCLUDED: &[&str] = &[
     "harness_messages",
     // Tokens are revoked on every boot.
     "agent_tokens",
+    // Re-derived from the newest turn_cost row on the next check (#689).
+    "context_nudge_marks",
 ];
 
 /// `rename` that also replaces an existing `to` on Windows, where

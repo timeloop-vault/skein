@@ -9,6 +9,8 @@ pub use skein_proto::harness_log::{HarnessAction, HarnessEvent};
 /// The newest `turn_cost` row of one harness (see `latest_turn_costs`).
 #[derive(Debug, Clone)]
 pub struct LatestTurnCost {
+    /// `harness_actions.id` of the row.
+    pub row_id: i64,
     pub harness_id: String,
     pub payload: String,
     /// `None` for rows written before the column existed (#538).
@@ -286,7 +288,7 @@ impl Database {
         let conn = self.conn.lock();
         let mut stmt = conn
             .prepare(
-                "SELECT payload, harness_kind, timestamp_ms FROM harness_actions \
+                "SELECT payload, harness_kind, timestamp_ms, id FROM harness_actions \
                  WHERE harness_id = ?1 AND kind = 'turn_cost' \
                  ORDER BY id DESC LIMIT 1",
             )
@@ -300,6 +302,7 @@ impl Database {
                         payload: r.get(0)?,
                         harness_kind: r.get(1)?,
                         timestamp_ms: r.get(2)?,
+                        row_id: r.get(3)?,
                     })
                 })
                 .map_err(|e| e.to_string())?;

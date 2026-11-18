@@ -5,6 +5,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useSyncExternalStore } from "react";
+import { setContextNudge } from "./contextNudgeStore.ts";
 import { setContextThreshold } from "./contextThresholdStore.ts";
 import {
 	profileNames,
@@ -54,11 +55,12 @@ const listeners = new Set<() => void>();
 /** Feed the store from any successful settings load or save. */
 export function publishSpawnSettings(
 	settings:
-		| Pick<SpawnSettings, "envProfiles" | "activeEnvProfile" | "contextThreshold">
+		| Pick<SpawnSettings, "envProfiles" | "activeEnvProfile" | "contextThreshold" | "contextNudge">
 		| null
 		| undefined,
 ): void {
 	setContextThreshold(settings?.contextThreshold);
+	setContextNudge(settings?.contextNudge);
 	const next = stateFromSettings(settings);
 	if (sameState(state, next)) return;
 	state = next;

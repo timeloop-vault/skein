@@ -519,6 +519,23 @@ pub fn tool_specs() -> Vec<Value> {
             "annotations": { "readOnlyHint": true },
         }),
         json!({
+            "name": "context_status",
+            "title": "Your own context size and the limit",
+            "description":
+                "Your own harness's context size at its latest turn (context_tokens; \
+                 null when no turn has been recorded yet or this kind reports none) \
+                 and the limit the user configured in Skein's Settings (limit; null \
+                 when unset), plus over_limit: true only when both are known and \
+                 context_tokens has reached the limit. Reports only the calling \
+                 harness, never another one; needs X-Skein-Harness.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": true },
+        }),
+        json!({
             "name": "list_harnesses",
             "title": "List harnesses across rooms",
             "description":

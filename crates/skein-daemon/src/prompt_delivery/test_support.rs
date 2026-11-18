@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use skein_proto::harness_kind::HarnessKind;
 
-use super::env::{DeliveryEnv, DraftState, MailFacts, UnreadMail};
+use super::context_nudge::Mark;
+use super::env::{ContextSettings, DeliveryEnv, DraftState, MailFacts, UnreadMail};
 use super::facts::{GateFacts, PhaseFacts};
 use super::shared::Shared;
 use crate::harness_phase::ActivityPhase;
@@ -25,6 +26,11 @@ pub struct Fake {
     pub held_log: Vec<bool>,
     /// What `publish_mail_facts` wrote, as the real env does.
     pub shared: Arc<Shared>,
+    /// The context-limit settings (#689).
+    pub context: ContextSettings,
+    pub context_row: Option<(i64, u64)>,
+    /// The persisted mark; survives a new `DeliveryCore`.
+    pub mark: Option<Mark>,
 }
 
 pub fn sendable_phase() -> PhaseFacts {
@@ -61,6 +67,13 @@ pub fn fake(kind: HarnessKind) -> Fake {
         unread: None,
         held_log: Vec::new(),
         shared: Arc::default(),
+        context: ContextSettings {
+            limit: None,
+            enabled: true,
+            body: None,
+        },
+        context_row: None,
+        mark: None,
     }
 }
 
@@ -110,5 +123,18 @@ impl DeliveryEnv for Fake {
     }
     fn publish_mail_facts(&mut self, id: &str, facts: MailFacts) {
         self.shared.set_mail_facts(id, facts);
+    }
+    fn context_settings(&self) -> ContextSettings {
+        self.context.clone()
+    }
+    fn newest_context(&self, _: &str) -> Result<Option<(i64, u64)>, String> {
+        Ok(self.context_row)
+    }
+    fn context_mark(&self, _: &str) -> Result<Option<Mark>, String> {
+        Ok(self.mark)
+    }
+    fn set_context_mark(&mut self, _: &str, mark: Mark) -> Result<(), String> {
+        self.mark = Some(mark);
+        Ok(())
     }
 }
