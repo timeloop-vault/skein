@@ -55,6 +55,7 @@ pub fn sidecar_env(
         harness_config,
         settings,
         agent,
+        crate::harness_config::OpencodeConfigShape::V2,
     );
     let mut builder = CommandBuilder::new(exe);
     apply_env(

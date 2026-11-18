@@ -303,8 +303,21 @@ impl PtyManager {
         // review API without the user configuring anything. Computed
         // once — the Windows re-resolution below rebuilds the command
         // and must not recompute it into something different.
-        let injection =
-            crate::harness_config::injection_for(kind, program, harness_config, settings, agent);
+        // A spawn bound to the v2 sidecar is the v2 TUI (#695); everything
+        // else, a post-exit shell included, keeps the v1 file.
+        let shape = if sidecar.is_some() {
+            crate::harness_config::OpencodeConfigShape::V2
+        } else {
+            crate::harness_config::OpencodeConfigShape::V1
+        };
+        let injection = crate::harness_config::injection_for(
+            kind,
+            program,
+            harness_config,
+            settings,
+            agent,
+            shape,
+        );
         let mut injected = !injection.is_empty();
         let mut hermes_hooks = false;
         // #569: Claude Code preferences from Skein's own Settings. Not

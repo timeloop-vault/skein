@@ -1472,7 +1472,7 @@ session only.
 | harness | what Skein does |
 | :-- | :-- |
 | Claude Code | appends `--plugin-dir <resources>/harness-config/claude-plugin` |
-| opencode | sets `OPENCODE_CONFIG=<resources>/harness-config/opencode/opencode.json` |
+| opencode | sets `OPENCODE_CONFIG=<resources>/harness-config/opencode/opencode.json`; a v2 spawn (the serve sidecar and its TUI) gets `opencode.v2.json` instead, which differs only in the v2-native `mcp.servers` shape and `codemode: false`, since v2 otherwise offers MCP tools only inside its `execute` tool (#695) |
 | Hermes | runs in Skein's own profile `skein`, whose `config.yaml` carries the `skein` MCP entry (#626) |
 
 The bundle's configs interpolate the variables above — `${VAR}` for

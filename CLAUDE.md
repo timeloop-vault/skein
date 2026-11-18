@@ -486,6 +486,7 @@ will tell you:
     │       │   claude-plugin/       #   resource (see tauri.conf.json `resources`):
     │       │   opencode/            #   .claude-plugin/plugin.json + .mcp.json + a lazily
     │       │                        #   loaded skein-review SKILL.md; opencode.json
+    │       │                        #   (v1) + opencode.v2.json (v2, #695)
     │       ├── src/agents.rs        # Moved to crates/skein-daemon (#581), re-exported here at
     │       │                        #   the old path. DTO layer over the crate's agent discovery (#246), plus
     │       │                        #   the two things it can't do: resolve the program the way
@@ -1075,7 +1076,10 @@ will tell you:
   are useless until the CLI knows there is a server at that address, so
   the spawn (`ensure_running`, #731) also appends `--plugin-dir <resources>/harness-config/`
   `claude-plugin` for Claude Code and sets `OPENCODE_CONFIG` for
-  opencode. Both are **session-scoped and additive** — installed plugins
+  opencode. A v2 spawn (the serve sidecar and its `--server` TUI) gets
+  `opencode.v2.json` instead: its only differences are the v2-native
+  `mcp.servers` shape and `codemode: false`, because v2 otherwise hides
+  MCP tools behind its single `execute` tool (#695). Both are **session-scoped and additive** — installed plugins
   and the user's own config still load, and a repo's `opencode.json`
   still beats Skein's — and **nothing is written into the worktree**, so
   there is no file in the review's own diff, no MCP trust prompt, and

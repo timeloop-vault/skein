@@ -215,7 +215,9 @@ for the variable, `:122` for the file) to
 - **`OPENCODE_CONFIG` is still read** [src] (`core/src/config.ts`) [run].
 - **The v1 MCP shape loads.** It is normalised to `disabled: false`,
   `{env:}` is substituted, and a connect attempt hits the substituted URL
-  [run].
+  [run]. It connects, but its tools are offered only through Code Mode
+  (`execute`), never as direct `skein_<tool>` tools: see #695, which adds
+  `opencode.v2.json` with `codemode: false` for v2 spawns.
 - **The docs' shape fails in 2.2.0.** The docs describe `mcp.servers.<name>`
   with `disabled` [docs], but in 2.2.0 that input shape loads and then
   connect returns 404 `McpServerNotFoundError` [run]. So **keep the v1 shape**.
