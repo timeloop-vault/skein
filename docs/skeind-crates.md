@@ -72,6 +72,10 @@ flowchart TD
   skein-daemon` lists no tauri. It depends on skein-proto, skein-harness
   skein-git, skein-review and skein-procprio. Part 2 added portable-pty,
 sysinfo, listeners, reqwest, rustls and futures-util.
+  #793 added `alacritty_terminal = "=0.26.0"`, the terminal engine in
+  `pty/engine` (see skeind-terminal-design.md). It brings PTY and
+  event-loop crates this code never uses (polling, piper, miow,
+  signal-hook, rustix-openpty) and has no feature gate to switch them off.
 
 The rule: a type that crosses the wire and carries no behaviour goes in
 skein-proto. Code that runs on the server and needs no Tauri goes in

@@ -131,8 +131,9 @@ Windows.
 - `wezterm-term`: not on crates.io; git-only or a third-party fork.
 
 **Consequences and what is verified.** Verified means read in the
-crate's source, docs or changelog on 2026-11-18. Nothing here has been
-compiled or run; that is the gate's job.
+crate's source, docs or changelog on 2026-11-18. Nothing here had been
+compiled or run when this was written; the gate has since measured it,
+see "T-1 gate results".
 
 - Verified: hyperlinks per cell; `Term::resize` reflows the main grid
   and never the alternate grid; a `Term` plus the `vte` processor runs
@@ -251,8 +252,13 @@ trait TerminalEngine: Send {
     screen_text() -> rows        // for daemon features
     modes() -> Modes             // bracketed paste, mouse, alt screen
     cursor() -> (row, col)
+    sync_deadline() -> Option<Instant> // when an open sync update expires
+    flush_sync() -> replies     // the daemon calls it at that deadline
 }
 ```
+
+The last two were added by the T-1 gate: the library never expires a
+synchronized update on its own. `frame` is not in the trait yet (T-2).
 
 - `frame` with a fresh view state is the attach snapshot. There is no
   separate snapshot code path.
@@ -500,7 +506,111 @@ The #793 gate stays, with a different second terminal:
 
 The fixtures are the two from #793: one real Claude Code session with
 four resizes, and a synthetic scrollback session. The real one is
-scrubbed but not yet approved by the user for a public repo.
+scrubbed, and approved by the user for the public repo on 2026-11-18.
+
+## T-1 gate results
+
+Measured 2026-11-18 with `alacritty_terminal` 0.26.0 and `@xterm/headless`
+6.0.0. The engine passed the gate, with the conditions below, so T3
+stands. The `vt100` implementation is not part of this change.
+
+### T3's claims, one by one
+
+| T3 item | Outcome | Note |
+| --- | --- | --- |
+| Hyperlinks per cell | Confirmed | OSC 8 URIs are exact, with query and fragment, BEL or ST. `id=` is kept inside the engine and not dumped. Links survive scrolling into history |
+| `Term::resize` reflows main, never alternate | Confirmed with a condition | The main grid reflows even while hidden. While the alternate screen is active it cannot be read |
+| `Term` plus the `vte` processor with no PTY | Confirmed | Every test and both replays run this way |
+| History through the scrolling-history setting | Confirmed with a condition | The grid keeps rows but offers no scroll event, and history growth stops once full. Rows are counted by wrapping the handler (`counting.rs`) |
+| No serialiser | Confirmed | The grid is dumped by `dump.rs`; the redraw encoder is still ours (T-2) |
+| Synchronized output buffered, 150 ms or 2 MiB | Confirmed with a condition | Nothing expires on its own. The caller must call `flush_sync` at `sync_deadline` |
+| PTY and event-loop dependencies, no feature gate | Confirmed | 19 packages added to the root Cargo.lock and 9 to app/src-tauri/Cargo.lock, none used |
+| Per-line damage API | Confirmed with a condition | `Term::damage` needs `&mut self`, so `take_damage` is inherent, not on the trait. Full after resize, screen switch and any scroll; the cursor cell is always listed |
+| Device-query replies through the event listener | Confirmed with a condition | Cursor position, primary and secondary DA, kitty flags, DSR, text size and DECRQM reply with exact bytes. Colour queries and a few others get none (below) |
+| Kitty keyboard flags readable | Confirmed | Needs `kitty_keyboard = true` in the config. The stack is per screen |
+| No grapheme-cluster mode (known gap) | Confirmed | A combining mark or ZWJ joins the previous cell; the next emoji after a ZWJ is its own cell |
+
+### Comparison with xterm.js
+
+The engine's grid was compared with `@xterm/headless` at 24 cuts over
+the two fixtures. 19 cuts are identical and 5 differ. Differing cuts per
+category: screenWrap 4, cursor 1, screenText 1, screenStyles 1.
+activeBuffer, historyText, historyStyles, historyWrap, hyperlinks and
+modes differ at none. 12 cuts skip the history categories because the
+alternate screen is active and the engine cannot read the main screen
+then. Three mechanisms explain every difference:
+
+1. xterm.js reports underline on cells that carry an OSC 8 link even with
+   no SGR 4. The engine keeps SGR separate. Link URIs agree at every cut.
+   This is an xterm.js quirk, and it is not a pinned difference: the
+   comparison excuses, one-sidedly, a cell that carries a link on both
+   sides where xterm.js reports underline and the engine does not. It
+   excuses exactly 186 cells and the test pins that count (rule in
+   `app/src/emulatorGate/linkUnderline.ts`, tested in
+   `linkUnderline.test.ts`).
+2. Wrap flags: the two engines keep the flag in different places, so
+   screenWrap differs at claude-session resize-100x30, resize-80x24,
+   resize-120x30 and end-of-stream. Alacritty stores it on the previous
+   row's last cell, xterm.js on the continuation row. Inherent, cosmetic.
+3. The in-sync-frame cut of scrollback-session differs in cursor,
+   screenText and screenStyles: the engine holds the open `?2026` frame
+   back, xterm.js applies it at once. By design.
+
+No difference is unexplained. No bug was found in our wrapper. The
+expected differences are pinned in `app/src/emulatorGate/expected.ts`.
+
+### What later slices must account for
+
+- The sync timeout needs the daemon to drive it. The trait gained
+  `sync_deadline()` and `flush_sync()`. The engine holds a clock and
+  stamps the deadline (clock + 150 ms) itself when a feed call returns,
+  so it can lag by one feed. Tests use a manual clock.
+- While the alternate screen is active, the main screen and its history
+  cannot be read. A frame or attach snapshot taken then carries the
+  alternate grid only.
+- Rows entering history are counted by wrapping the engine's handler.
+  The count is exact as "rows pushed by output" but stops matching the
+  history's contents after a resize that changes history. A panic
+  rebuild empties history and keeps the count. Scrolls on the alternate
+  screen are not counted.
+- Colour queries (OSC 4, 10, 11), `CSI 14 t`, `CSI > q` and `CSI = c` get
+  no engine reply. xterm.js answers the colour and size ones today.
+  Primary DA answers as a VT102 (`?6c`).
+- Only `?1049` switches screens; `?47`, `?1047` and `?1048` are ignored.
+  Mouse tracking levels exclude each other, the latest wins.
+- The engine never goes below two columns (and one row). A resize of a
+  grid holding text to one column hangs inside the library, and
+  `catch_unwind` cannot catch a hang. A wide character in a one-column
+  grid panics. Both are avoided by the clamp.
+- One real library panic was found and caught by the guard: the 4097th
+  kitty keyboard push indexes the wrong stack. The guard rebuilt the
+  engine empty at the same size and it stayed usable.
+- History is unverified on real Claude Code output: version 2.1.327
+  stays on the alternate screen from event 16 and never leaves. The
+  synthetic fixture covers history, wrapped lines and wide cells.
+- The history-counting wrapper forwards all 71 `vte::ansi::Handler`
+  methods (vte 0.15.0). A test pins the vte and `alacritty_terminal`
+  versions from Cargo.lock. Re-check it on any bump: a method missing
+  from the forward list would be silently dropped.
+- The `id=` of a link is not in the dump, so two adjacent runs with one
+  URI differ only by id inside the engine.
+
+### Where it is
+
+- Engine: `crates/skein-daemon/src/pty/engine/` (`mod.rs` trait,
+  `alacritty.rs`, `counting.rs`, `dump.rs`, `compact.rs`, `tests*.rs`,
+  `replay_tests.rs`).
+- Fixtures and their README: `crates/skein-daemon/src/pty/engine/fixtures/`.
+  The real Claude Code recording was approved by the user for the public
+  repo on 2026-11-18, after an extra scrub (plan name and status-line
+  text replaced at the same byte length, checked by rendering every
+  event).
+- Rust side: `cargo test -p skein-daemon engine`, and
+  `cargo test -p skein-daemon replay_tests` for the replay.
+- JavaScript side: `cd app && npx vitest run src/emulatorGate`.
+- Regenerate the engine pictures after an intended engine change and
+  review the diff:
+  `SKEIN_UPDATE_ENGINE_DUMPS=1 cargo test -p skein-daemon replay_tests`.
 
 ## Slices
 
@@ -586,6 +696,7 @@ Each is Proposed and can be reopened.
 - **The engine has not been run.** Every `alacritty_terminal` fact here
   is read, not measured. Mitigation: T-1 is the gate and nothing
   depends on the engine before it is green; fallbacks are named in T3.
+  Now measured, see "T-1 gate results"; what remains is listed there.
 - **Engine gaps are always visible.** There is no client engine to
   cover for the daemon's. Mitigation: the gate compares against what
   xterm.js showed from the raw stream, and the flip waits for it.
@@ -617,7 +728,8 @@ Each is Proposed and can be reopened.
   `docs/skeind-crates.md`.
 - **The recorded fixture is not yet approved for a public repo.**
   Mitigation: the user reviews it before T-1 lands, or T-1 lands with
-  the synthetic fixture only.
+  the synthetic fixture only. Approved 2026-11-18 after an extra scrub,
+  see "T-1 gate results".
 
 ## Sources
 

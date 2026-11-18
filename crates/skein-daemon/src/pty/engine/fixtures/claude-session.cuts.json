@@ -1,0 +1,13 @@
+[
+  {"name": "alt-screen-entered", "afterEvent": 16},
+  {"name": "mid-answer", "afterEvent": 60},
+  {"name": "resize-100x30", "afterEvent": 100},
+  {"name": "repaint-100x30", "afterEvent": 106},
+  {"name": "resize-100x40", "afterEvent": 155},
+  {"name": "repaint-100x40", "afterEvent": 165},
+  {"name": "resize-80x24", "afterEvent": 276},
+  {"name": "repaint-80x24", "afterEvent": 279},
+  {"name": "resize-120x30", "afterEvent": 281},
+  {"name": "repaint-120x30", "afterEvent": 287},
+  {"name": "end-of-stream", "afterEvent": 295}
+]

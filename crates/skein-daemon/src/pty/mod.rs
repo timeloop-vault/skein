@@ -39,6 +39,7 @@
 //! rather than hang forever.
 
 pub mod command;
+pub mod engine;
 pub mod env;
 pub mod observer;
 pub mod opencode;

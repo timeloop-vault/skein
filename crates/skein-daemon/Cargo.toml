@@ -29,6 +29,9 @@ base64 = "0.22"
 # startup (see `tls::install_rustls_provider`); ring is already in the lockfile.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 portable-pty = "0.9"
+# The daemon's one terminal engine behind TerminalEngine (#793). Exact pin: its
+# changelog breaks API every minor. Its PTY and event-loop dependencies are unused.
+alacritty_terminal = "=0.26.0"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 listeners = "0.6"
 skein-procprio = { path = "../skein-procprio" }

@@ -1,0 +1,15 @@
+[
+  {"name": "mid-scroll", "afterEvent": 129},
+  {"name": "after-wrapped", "afterEvent": 217},
+  {"name": "after-wide", "afterEvent": 223},
+  {"name": "after-hyperlinks", "afterEvent": 226},
+  {"name": "in-sync-frame", "afterEvent": 228},
+  {"name": "after-sync-frame", "afterEvent": 229},
+  {"name": "resize-60x30", "afterEvent": 230},
+  {"name": "narrow-after-lines", "afterEvent": 234},
+  {"name": "resize-100x40", "afterEvent": 261},
+  {"name": "tall-after-lines", "afterEvent": 291},
+  {"name": "in-alt-screen", "afterEvent": 300},
+  {"name": "after-alt-screen", "afterEvent": 301},
+  {"name": "end-of-stream", "afterEvent": 323}
+]

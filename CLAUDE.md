@@ -205,6 +205,10 @@ will tell you:
     │                                #   stored, and run under the stored room id).
     │                                #   harness_work_hermes/attacher.rs
     │                                #   attaches the Hermes work poller in the daemon
+    │                                #   #793 added pty/engine/ (the `TerminalEngine` trait, the
+    │                                #   alacritty_terminal implementation behind catch_unwind,
+    │                                #   the recorded fixtures and the replay test; nothing calls
+    │                                #   it yet) and the alacritty_terminal dependency
     │                                #   #757 added event_seq.rs (SeqEventSink wraps the transport's
     │                                #   EventSink once in `Daemon::build`: one per-daemon seq written
     │                                #   into every payload as a top-level `seq`, a bounded in-memory
