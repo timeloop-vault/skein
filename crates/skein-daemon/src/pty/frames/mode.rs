@@ -30,8 +30,25 @@ impl TerminalMode {
     /// Reads `SKEIN_TERMINAL` from the process environment.
     #[must_use]
     pub fn from_env() -> Self {
+        #[cfg(test)]
+        if let Some(mode) = FORCED.with(std::cell::Cell::get) {
+            return mode;
+        }
         Self::from_value(std::env::var(Self::ENV).ok().as_deref())
     }
+
+    /// Test-only: what `from_env` answers on this thread from now on, so a
+    /// daemon built by the test runs in `mode` without touching the process
+    /// environment (which other tests share).
+    #[cfg(test)]
+    pub(crate) fn force_on_this_thread(mode: Self) {
+        FORCED.with(|f| f.set(Some(mode)));
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FORCED: std::cell::Cell<Option<TerminalMode>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]

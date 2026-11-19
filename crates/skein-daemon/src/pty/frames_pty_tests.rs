@@ -325,6 +325,23 @@ fn raw_mode_is_the_default_and_sends_no_grid_or_frames() {
 }
 
 #[test]
+fn the_engine_is_readable_in_frames_mode_and_absent_in_raw_mode() {
+    let manager = frames();
+    spawn(&manager, "fr-8", None);
+    assert!(manager.screen_text("fr-8").is_some());
+    assert!(manager.modes("fr-8").is_some());
+    assert!(manager.screen_text("nope").is_none());
+    assert!(manager.modes("nope").is_none());
+    manager.kill("fr-8");
+
+    let raw = PtyManager::new();
+    spawn(&raw, "fr-8r", None);
+    assert!(raw.screen_text("fr-8r").is_none());
+    assert!(raw.modes("fr-8r").is_none());
+    raw.kill("fr-8r");
+}
+
+#[test]
 fn killing_a_frames_pty_releases_its_hub() {
     let manager = frames();
     let rec = Rec::default();

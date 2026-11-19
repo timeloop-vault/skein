@@ -4,7 +4,8 @@
 use super::*;
 use crate::harness_events_claude::ClaudeEvent;
 use crate::harness_phase::client_input::RestartSource;
-use crate::harness_phase::{ActivityPhase, ClientPhaseInput};
+use crate::harness_phase::{ActivityPhase, ClientPhaseInput, ScreenReading};
+use crate::pty::TerminalMode;
 use crate::stream_sink::StreamSink;
 
 fn phase_of(fx: &Fx, id: &str) -> Option<ActivityPhase> {
@@ -143,4 +144,37 @@ fn restart_requested_for_a_stored_harness_logs_the_stored_room_id() {
             Some("user-restart".to_owned())
         )]
     );
+}
+
+fn screen_reading_of(fx: &Fx) -> Option<ScreenReading> {
+    fx.daemon.phase.test_screen_reading("h1")
+}
+
+fn send_screen_reading(fx: &Fx, reading: ScreenReading) {
+    fx.runner().client_phase_input(
+        "h1",
+        ClientPhaseInput::ScreenReading {
+            reading: Some(reading),
+        },
+    );
+}
+
+#[test]
+fn a_raw_pty_takes_the_clients_screen_reading() {
+    let fx = Fx::with_shell("byoh");
+    fx.ensure(false, None).unwrap();
+    send_screen_reading(&fx, ScreenReading::Waiting);
+    assert_eq!(screen_reading_of(&fx), Some(ScreenReading::Waiting));
+}
+
+#[test]
+fn a_frames_pty_drops_the_clients_screen_reading() {
+    // The daemon reads its own engine there: one authority (#809).
+    TerminalMode::force_on_this_thread(TerminalMode::Frames);
+    let fx = Fx::with_shell("byoh");
+    TerminalMode::force_on_this_thread(TerminalMode::Raw);
+    fx.ensure(false, None).unwrap();
+    assert_eq!(fx.daemon.pty.terminal_mode(), TerminalMode::Frames);
+    send_screen_reading(&fx, ScreenReading::Waiting);
+    assert_eq!(screen_reading_of(&fx), None);
 }

@@ -501,10 +501,10 @@ Found by a code survey on 2026-11-18.
 | Feature | Today | With the engine |
 | --- | --- | --- |
 | ConPTY cursor query | With no view attached, or when a send to the view fails, the daemon scans for the query and answers a fixed `1;1` (`pty/sink_slot.rs`); with a view xterm.js answers, and the view buffers that answer during spawn (`ptyInputBuffer.ts`) | The engine answers always, from its real cursor. Both mechanisms are deleted at the flip |
-| Hermes screen phase | The webview reads its xterm buffer every second and reports a reading (`screenPhase.ts`, `setScreenReading`); `unknown` with no client | The daemon reads `screen_text` itself. The reader is ported to Rust and the client input is deleted at the flip |
-| Prompt delivery, paste mode | A tracker parses the bracketed-paste mode out of raw output (`prompt_delivery/paste_mode.rs`) | Reads the engine's mode flag. The tracker is deleted at the flip. The write path is unchanged. The webview's own read of the same mode off its widget keeps working through the mode mirror. |
+| Hermes screen phase | The webview reads its xterm buffer every second and reports a reading (`screenPhase.ts`, `setScreenReading`); `unknown` with no client | The daemon reads `screen_text` itself. The reader is ported to Rust and the client input is deleted at the flip (T-5: done behind the flag, see "T-5 as built") |
+| Prompt delivery, paste mode | A tracker parses the bracketed-paste mode out of raw output (`prompt_delivery/paste_mode.rs`) | Reads the engine's mode flag. The tracker is deleted at the flip. The write path is unchanged. The webview's own read of the same mode off its widget keeps working through the mode mirror. (T-5: the gate reads the flag behind the flag, see "T-5 as built") |
 | Composer check before a send | The webview reads the visible screen (`harnessInputRegistry.ts`) | Unchanged for now: the client's buffer holds the same screen. Proposed follow-up: the daemon's gate reads the engine |
-| Pane notices ("Press Enter for shell", the opencode restart hint, the session notice) | Written by the webview into its own terminal, not the PTY | The daemon authors them, so every viewer sees them and no viewer's state diverges. They never go through the live parser: a notice after exit is appended once the stream has ended, and a notice on a running pane is a daemon-owned overlay row the encoder draws. The exact form is decided in T-5 |
+| Pane notices ("Press Enter for shell", the opencode restart hint, the session notice) | Written by the webview into its own terminal, not the PTY | The daemon authors them, so every viewer sees them and no viewer's state diverges. They never go through the live parser: a notice after exit is appended once the stream has ended, and a notice on a running pane is a daemon-owned overlay row the encoder draws. The exact form is decided in T-5 (decided and built for the exit notices, see "T-5 as built") |
 | Post-exit shell | Enter on an exited pane asks the daemon for a shell | Unchanged. The shell is a new child on the same engine or a fresh one; decided in the slice |
 | Opencode shell follow (#517) | Output ticks in the view trigger a process scan | Unchanged: a frame is an output tick. It can move to the daemon later |
 | Idle heuristic and waiting patterns | The daemon strips escapes from raw output into a tail and matches it (`harness_phase/io.rs`, `patterns.rs`) | Unchanged. It is a second, very small reader of raw bytes inside the daemon. Proposed follow-up: match engine rows instead |
@@ -859,8 +859,10 @@ numbered steps above; the text is authoritative (non-normative).
   the view pass its `attachId`: `pty_write` and `pty_resize` already
   accept an optional `attach_id`, but the webview does not send one.
 - With the flag on and before T-4, the view still does its one-row
-  repaint resize and writes pane notices locally into the widget, so
-  the flag is for development only.
+  repaint resize and writes some pane notices locally into the widget,
+  so the flag is for development only. T-5 moved the exit banner and
+  the opencode server stopped line to the daemon; the others are listed
+  under "T-5 as built".
 - In frames mode the idle and waiting pattern matching gets its text
   per cut, not per coalesced chunk.
 
@@ -878,6 +880,127 @@ numbered steps above; the text is authoritative (non-normative).
 - Tests: `cargo test -p skein-daemon frames`, and
   `cargo test -p skein-daemon frames_pty` for the real-PTY file
   `pty/frames_pty_tests.rs`.
+
+## T-5 as built
+
+T-5 (#809) made the daemon read its own screen. In frames mode only
+(`SKEIN_TERMINAL=frames`), three things that a client used to supply now
+come from the engine: the Hermes screen phase, the bracketed-paste mode
+for the send gate, and the pane notices at exit. A raw PTY has no
+engine, so every read below answers `None` and the old paths run
+unchanged.
+
+### The flow
+
+1. `FrameHub::screen_text()` and `FrameHub::modes()` read the engine's
+   rows and modes under the hub lock. `PtyManager::screen_text(id)` and
+   `modes(id)` forward to them and answer `None` for a raw PTY.
+2. After each cut the hub asks the observer `wants_screen()`. If it does,
+   the hub takes the rows, releases its lock, and calls
+   `screen(rows)`. Nothing is delivered while a synchronized update is
+   pending.
+3. `RunnerObserver` wants the screen only for a live Hermes harness. It
+   reads the rows with `read_hermes` and skips a reading equal to the
+   last one. A new reading goes to `PhaseService::client_input` as a
+   `ScreenReading`, which wakes the deadline driver.
+4. The send gate asks `PtyPort::bracketed_paste(harness_id)`. `gate_facts`
+   uses the engine's flag when there is one and the `PasteModeTracker`
+   otherwise.
+5. At exit the hub flushes any open synchronized update and cuts the
+   child's real output. It then feeds the exit notice (from the
+   observer's `exit_notice(code)`) and the queued notices to the engine,
+   and cuts one frame for every viewer.
+6. The hub sends `exit` to every viewer, then tells the observer. The
+   observer withdraws its screen reading.
+7. A notice asked for with `append_notice` on a live PTY is queued until
+   step 5. One that arrives after exit is fed and cut at once. A viewer
+   that attaches late gets the notices in its redraw.
+8. The view treats the first `grid` event as the sign of frames mode and
+   then skips its own exit banner and sidecar line.
+
+```mermaid
+flowchart LR
+    E["FrameHub: engine"] -->|"1 screen_text, modes"| M["PtyManager"]
+    E -->|"2 rows after a cut"| O["RunnerObserver"]
+    O -->|"3 read_hermes, ScreenReading"| P["PhaseService"]
+    M -->|"4 bracketed_paste"| G["Send gate"]
+    O -->|"5 exit_notice"| E
+    N["Notice queue"] -->|"5 queued notices"| E
+    E -->|"5 one frame, 6 exit"| V["Viewers"]
+    D["Sidecar exit hook"] -->|"7 append_notice"| N
+    V -->|"8 first grid event"| W["View: skips local notices"]
+```
+
+Figure 6: the T-5 screen reads and pane notices. Renders the numbered
+steps above; the text is authoritative (non-normative).
+
+### Decision: the form of a notice
+
+The design left the form of a notice to T-5. A notice is engine content
+appended only after the child's stream has ended. So the rule that
+nothing but the harness's own output goes through the live parser holds
+while the stream is live. No overlay row was added to the encoder,
+because no notice in scope appears on a running pane.
+
+### Rules, as built
+
+- The hub calls the observer for the screen with its lock released, so
+  the observer may call into the phase service.
+- A screen is never read while a synchronized update is pending.
+- A client `screenReading` input is dropped for a PTY in frames mode
+  (`harness_runner/client_input.rs`). The webview still sends it.
+- The observer withdraws the reading it delivered at exit, and again when
+  the runner retires it (a restart or a stop), before the next process's
+  observer exists. A respawn of the same harness starts with no reading and
+  an old observer can never clear the new one's. Raw mode delivers
+  nothing, so nothing is withdrawn.
+- The exit banner is fed after a synchronized update is flushed, so a
+  notice never lands inside one.
+- Notices are queued in the order: exit notice, then the queued ones.
+- The wording is in `harness_runner/notices.rs`, a byte copy of
+  `app/src/terminalBanners.ts` and `opencodeSidecarExit.ts`. Change both
+  until T-6 deletes the TS side. Tests pin the bytes.
+- The paste tracker is still fed in both modes. It is deleted at the
+  flip (T-6).
+- A post-exit shell is a fresh PTY with a fresh hub, so it has no
+  notices from the one before.
+
+### Deviations and open points
+
+- The #517 shell-follow hint and the #679 session notice stay React
+  overlays in the view, shown only by the viewer that triggered them.
+  They are not widget writes, so they do not block T-4. Moving them to
+  the daemon is open.
+- The start-failed and unknown-agent banners stay local writes, because
+  no PTY and no engine exist then. T-4 must allow or replace them.
+- The composer check before a send still reads the client's buffer.
+- The idle and waiting patterns still read decoded output text.
+- A Hermes pane reads its screen at every cut, with no throttle.
+- The Hermes launch poll (`ClientPhaseInput::HermesLaunchPoll
+  { screen_waiting }`) still takes `screen_waiting` from the webview's own
+  read of its widget. It is not daemon-authored in frames mode. Moving it
+  is open for T-4 or the flip.
+- A client `screenReading` input is dropped for every kind while the PTY
+  is live in frames mode, including a `null` withdrawal.
+- `TerminalMode::force_on_this_thread` is a test-only override
+  (`pty/frames/mode.rs`).
+
+### Where it is
+
+- `crates/skein-daemon/src/harness_phase/screen_reader.rs`:
+  `read_hermes`, a port of `app/src/screenPhase.ts`.
+- `crates/skein-daemon/src/pty/observer.rs`: `wants_screen`, `screen`,
+  `exit_notice`. `pty/frames/hub.rs`: `screen_text`, `modes`,
+  `append_notice`, and the exit order. `pty/mod.rs`:
+  `PtyManager::screen_text`, `modes`, `append_notice_bound`.
+- `crates/skein-daemon/src/harness_runner/phase_tap.rs`
+  (`RunnerObserver`), `notices.rs` and `client_input.rs`.
+- `crates/skein-daemon/src/prompt_delivery/daemon_env.rs` and
+  `runner_pty.rs`: `PtyPort::bracketed_paste` and `gate_facts`.
+- `app/src/terminalNotices.ts`, used by `app/src/useTerminalSpawn.ts`.
+- Tests: `cargo test -p skein-daemon frames`, and
+  `pty/frames/hub_screen_tests.rs`, `hub_notice_tests.rs`,
+  `pty/frames_notice_pty_tests.rs`.
 
 ## Slices
 

@@ -26,6 +26,7 @@ pub mod machine;
 pub mod patterns;
 mod permission;
 pub mod screen;
+pub mod screen_reader;
 pub mod service;
 pub mod sinks;
 pub mod stream;

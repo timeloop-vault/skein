@@ -23,6 +23,7 @@ import { shellClaim } from "./shellClaim.ts";
 import { exitedBanner, startFailedBanner } from "./terminalBanners.ts";
 import { applyEnsureResult, forgetViewState } from "./terminalEnsureApply.ts";
 import { attachTerminalInteractions } from "./terminalInteractions.ts";
+import { createNoticeGate } from "./terminalNotices.ts";
 import { attachOutputGate } from "./terminalOutputVisibility.ts";
 import { repaintPty } from "./terminalRepaint.ts";
 import { createXterm, type LinkPolicy } from "./terminalSetup.ts";
@@ -174,7 +175,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				shellFollow?.onOutput(); // #517
 			} else if (ev.kind === "exit") {
 				handleExit(ev.code);
-			}
+			} else notices.observe(ev); // #809: a grid event = frames mode
 		};
 
 		let cancelled = false;
@@ -194,7 +195,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 		let attached: { attachId: number | null | undefined } | null = null;
 		let cancelRepaint: (() => void) | null = null;
 		const restart = restartFor(harnessId, mountKey);
-		const sidecarDied = createSidecarDeathRecord((s) => gate.write(s));
+		const notices = createNoticeGate((s) => gate.write(s)); // #809: frames = daemon's
+		const sidecarDied = createSidecarDeathRecord(notices.write);
 		const stopSidecarWatch =
 			harnessKind === "opencode"
 				? watchSidecarExit(harnessId, () => sidecarGeneration, sidecarDied.note)
@@ -212,8 +214,8 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 			dataDisposable?.dispose();
 			dataDisposable = null;
 			// Keep ptyIdRef on the dead entry; the next ensure replaces it.
-			gate.write(exitedBanner(programName, code));
-			gate.write(sidecarDied.take()); // #676: "" unless the sidecar died
+			notices.write(exitedBanner(programName, code));
+			notices.write(sidecarDied.take()); // #676: "" unless the sidecar died
 		};
 
 		const startPty = async (cmdToSpawn: string[]) => {

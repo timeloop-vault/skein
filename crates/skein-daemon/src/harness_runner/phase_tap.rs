@@ -5,7 +5,12 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::harness_phase::PhaseService;
+use parking_lot::Mutex;
+
+use super::notices;
+use crate::harness_kind::HarnessKind;
+use crate::harness_phase::screen_reader::read_hermes;
+use crate::harness_phase::{ClientPhaseInput, PhaseService, ScreenReading};
 use crate::pty::PtyObserver;
 
 /// Told every live chunk of a harness's PTY output, on the PTY's coalescer
@@ -30,6 +35,14 @@ pub(super) struct RunnerObserver {
     harness_id: String,
     room_id: String,
     retired: AtomicBool,
+    kind: HarnessKind,
+    /// The last screen reading handed to the phase service (frames mode,
+    /// Hermes); the dedup, and whether an exit has anything to withdraw.
+    last_reading: Mutex<Option<ScreenReading>>,
+    /// The process has exited: no reading follows.
+    exit_seen: AtomicBool,
+    /// argv[0] as spawned: the name in the exit banner (#809).
+    program: String,
 }
 
 impl RunnerObserver {
@@ -38,6 +51,8 @@ impl RunnerObserver {
         tap: Arc<OnceLock<OutputTap>>,
         harness_id: &str,
         room_id: &str,
+        kind: HarnessKind,
+        program: &str,
     ) -> Arc<Self> {
         Arc::new(Self {
             phase,
@@ -45,16 +60,45 @@ impl RunnerObserver {
             harness_id: harness_id.to_owned(),
             room_id: room_id.to_owned(),
             retired: AtomicBool::new(false),
+            kind,
+            last_reading: Mutex::new(None),
+            exit_seen: AtomicBool::new(false),
+            program: program.to_owned(),
         })
     }
 
-    /// Stop forwarding. Idempotent.
+    /// Stop forwarding. Idempotent. A reading this observer delivered is
+    /// withdrawn first, so a respawn of the same harness starts with none (a
+    /// retired observer's own exit is no longer forwarded). Retiring is
+    /// ordered before the new observer exists and under the reading lock, so
+    /// the withdrawal can never clear the new process's reading.
     pub(super) fn retire(&self) {
+        let mut last = self.last_reading.lock();
         self.retired.store(true, Ordering::SeqCst);
+        if last.take().is_some() {
+            self.phase.client_input(
+                &self.harness_id,
+                ClientPhaseInput::ScreenReading { reading: None },
+            );
+        }
     }
 
     fn live(&self) -> bool {
         !self.retired.load(Ordering::SeqCst)
+    }
+
+    /// The process is gone: withdraw the reading this observer delivered (the
+    /// webview sends `null` for a harness that is gone), so a respawn starts
+    /// clean. Nothing was delivered in raw mode, so nothing is sent there.
+    fn clear_screen_reading(&self) {
+        let mut last = self.last_reading.lock();
+        self.exit_seen.store(true, Ordering::SeqCst);
+        if last.take().is_some() && self.live() {
+            self.phase.client_input(
+                &self.harness_id,
+                ClientPhaseInput::ScreenReading { reading: None },
+            );
+        }
     }
 }
 
@@ -75,7 +119,36 @@ impl PtyObserver for RunnerObserver {
         }
     }
 
+    fn wants_screen(&self) -> bool {
+        self.kind == HarnessKind::Hermes && self.live()
+    }
+
+    fn screen(&self, rows: &[String]) {
+        if self.kind != HarnessKind::Hermes {
+            return;
+        }
+        let reading = read_hermes(rows);
+        // Held across the hand-off so a racing exit cannot be followed by a
+        // stale reading; the service never calls back into the observer.
+        let mut last = self.last_reading.lock();
+        if !self.live() || self.exit_seen.load(Ordering::SeqCst) || *last == Some(reading) {
+            return;
+        }
+        *last = Some(reading);
+        self.phase.client_input(
+            &self.harness_id,
+            ClientPhaseInput::ScreenReading {
+                reading: Some(reading),
+            },
+        );
+    }
+
+    fn exit_notice(&self, code: Option<u32>) -> Option<Vec<u8>> {
+        Some(notices::exit_banner(&self.program, code))
+    }
+
     fn exited(&self, code: Option<u32>) {
+        self.clear_screen_reading();
         if self.live() {
             // Windows codes such as 0xC0000005 do not fit an i32; the
             // wrapped value stays non-zero (the machine only stores it).
@@ -84,3 +157,6 @@ impl PtyObserver for RunnerObserver {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

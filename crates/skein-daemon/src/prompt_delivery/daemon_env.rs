@@ -57,6 +57,10 @@ pub trait PtyPort: Send + Sync {
     fn live_pty(&self, harness_id: &str) -> Option<String>;
     /// `false` when the write failed.
     fn write(&self, pty_id: &str, bytes: &[u8]) -> bool;
+    /// The terminal engine's bracketed-paste flag for the harness's live
+    /// PTY (#809). `None` when there is no live PTY or it has no engine
+    /// (raw mode); the caller then uses its own tracker.
+    fn bracketed_paste(&self, harness_id: &str) -> Option<bool>;
 }
 
 /// A harness's unread mail, read fresh from the database (never marks
@@ -90,7 +94,12 @@ impl DeliveryEnv for DaemonEnv {
         let kind = record
             .as_ref()
             .and_then(|(_, h)| HarnessKind::from_name(&h.kind));
-        let (last_output_at, bracketed_paste) = self.shared.output_facts(harness_id);
+        let (last_output_at, tracked_paste) = self.shared.output_facts(harness_id);
+        // Frames mode: the engine knows; raw mode: the tracker (#809).
+        let bracketed_paste = self
+            .pty
+            .bracketed_paste(harness_id)
+            .unwrap_or(tracked_paste);
         GateFacts {
             // Without a stored record of a known kind nothing is live: the
             // placeholder kind is never reached past `pty_live`.

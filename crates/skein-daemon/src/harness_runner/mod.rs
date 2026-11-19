@@ -29,6 +29,7 @@ mod adapters;
 mod client_input;
 mod events;
 mod gates;
+mod notices;
 mod phase_tap;
 mod record;
 mod run_shell;
@@ -206,7 +207,8 @@ fn sidecar_exit_hook(pty: PtyManager, events: SharedEventSink) -> OnExit {
             code = ?notice.code,
             "opencode sidecar exited"
         );
-        let (harness_id, generation) = (notice.harness_id.clone(), notice.generation);
+        let (harness_id, generation, code) =
+            (notice.harness_id.clone(), notice.generation, notice.code);
         // Event first, so a view knows why the TUI died when the PTY's own
         // Exit arrives.
         if let Err(e) = event_sink::emit(
@@ -216,6 +218,13 @@ fn sidecar_exit_hook(pty: PtyManager, events: SharedEventSink) -> OnExit {
         ) {
             tracing::warn!(error = %e, "harness runner: sidecar exit event failed");
         }
+        // Frames mode (#809): the pane line is the daemon's, queued until the
+        // TUI's exit (which follows) so it lands after the exit banner.
+        pty.append_notice_bound(
+            &harness_id,
+            generation,
+            &notices::sidecar_stopped_line(code),
+        );
         let ended = pty.terminate_bound(&harness_id, generation);
         if ended > 0 {
             tracing::info!(harness = %harness_id, generation, ended, "terminated TUI of a dead sidecar");
@@ -428,6 +437,8 @@ impl HarnessRunner {
             Arc::clone(&self.output_tap),
             &req.harness_id,
             &room_id,
+            kind,
+            plan.cmd.first().map_or("child", String::as_str),
         );
         let spawn = match self.spawn(req, &room_id, &plan, sink, &observer) {
             Ok(spawn) => PtySpawnResult {

@@ -46,6 +46,15 @@ impl HarnessRunner {
                     None => not_stored(harness_id, "restartRequested"),
                 }
             }
+            // One authority (#809): while the live PTY is in frames mode the
+            // daemon reads its own engine, so the webview's reading is dropped.
+            ClientPhaseInput::ScreenReading { .. } if self.reads_own_screen(harness_id) => {
+                tracing::debug!(
+                    target: "skein::phase",
+                    harness = %harness_id,
+                    "screenReading dropped: the daemon reads this screen"
+                );
+            }
             other => self.phase.client_input(harness_id, other),
         }
     }
@@ -60,6 +69,13 @@ impl HarnessRunner {
             .map(|r| r.id.clone())?;
         lookup(&rooms, &room_id, harness_id).ok()?;
         Some(room_id)
+    }
+
+    /// The harness's PTY is in frames mode (it has an engine), so the daemon
+    /// reads its screen itself.
+    fn reads_own_screen(&self, harness_id: &str) -> bool {
+        self.pty_id(harness_id)
+            .is_some_and(|pty_id| self.pty.modes(&pty_id).is_some())
     }
 
     /// The runner has a process for the harness and it has not exited.

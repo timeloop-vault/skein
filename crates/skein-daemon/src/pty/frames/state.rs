@@ -32,6 +32,9 @@ pub(super) struct Core {
     pub exited: Option<ExitRecord>,
     pub next_id: u64,
     pub activity: u64,
+    /// Notices asked for while the child was live (#809): appended, in this
+    /// order, once its output has ended.
+    pub pending_notices: Vec<Vec<u8>>,
 }
 
 impl Core {
@@ -44,6 +47,7 @@ impl Core {
             exited: None,
             next_id: 0,
             activity: 0,
+            pending_notices: Vec::new(),
         }
     }
 

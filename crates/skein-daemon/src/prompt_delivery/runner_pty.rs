@@ -22,4 +22,9 @@ impl PtyPort for RunnerPty {
     fn write(&self, pty_id: &str, bytes: &[u8]) -> bool {
         self.pty.write(pty_id, bytes).is_ok()
     }
+
+    fn bracketed_paste(&self, harness_id: &str) -> Option<bool> {
+        let id = self.live_pty(harness_id)?;
+        self.pty.modes(&id).map(|m| m.bracketed_paste)
+    }
 }

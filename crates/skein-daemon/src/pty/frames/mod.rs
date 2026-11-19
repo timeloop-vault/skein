@@ -15,6 +15,10 @@ mod test_support;
 #[cfg(test)]
 mod driver_tests;
 #[cfg(test)]
+mod hub_notice_tests;
+#[cfg(test)]
+mod hub_screen_tests;
+#[cfg(test)]
 mod hub_size_tests;
 #[cfg(test)]
 mod hub_tests;

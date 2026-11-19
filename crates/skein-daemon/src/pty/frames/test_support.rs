@@ -89,9 +89,24 @@ impl StreamSink<PtyEvent> for Dead {
 pub struct Obs {
     pub outputs: Mutex<Vec<String>>,
     pub exits: Mutex<Vec<Option<u32>>>,
+    /// Whether the observer asks for the screen (#809).
+    pub wants: AtomicBool,
+    /// Every screen the hub handed over, oldest first.
+    pub screens: Mutex<Vec<Vec<String>>>,
+    /// The exit notice the observer supplies (#809), if any.
+    pub notice: Mutex<Option<Vec<u8>>>,
 }
 
 impl PtyObserver for Obs {
+    fn exit_notice(&self, _: Option<u32>) -> Option<Vec<u8>> {
+        self.notice.lock().clone()
+    }
+    fn wants_screen(&self) -> bool {
+        self.wants.load(Ordering::SeqCst)
+    }
+    fn screen(&self, rows: &[String]) {
+        self.screens.lock().push(rows.to_vec());
+    }
     fn started(&self, _: bool) {}
     fn output(&self, chunk: &str) {
         self.outputs.lock().push(chunk.to_owned());

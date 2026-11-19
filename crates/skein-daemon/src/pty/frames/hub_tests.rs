@@ -221,3 +221,16 @@ fn a_hub_built_without_an_observer_still_exits() {
     hub.exit(Some(0));
     assert_eq!(hub.exited(), Some(ExitRecord { code: Some(0) }));
 }
+
+#[test]
+fn the_hub_reads_back_the_screen_and_the_paste_mode_it_was_fed() {
+    let fx = Fx::new();
+    assert!(!fx.hub.modes().bracketed_paste);
+    fx.hub.feed(b"\x1b[?2004hhello\r\nworld");
+    let rows = fx.hub.screen_text();
+    assert_eq!(rows.first().map(String::as_str), Some("hello"));
+    assert_eq!(rows.get(1).map(String::as_str), Some("world"));
+    assert!(fx.hub.modes().bracketed_paste);
+    fx.hub.feed(b"\x1b[?2004l");
+    assert!(!fx.hub.modes().bracketed_paste);
+}

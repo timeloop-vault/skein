@@ -40,6 +40,8 @@ impl EventSink for TestSink {
 struct RecPty {
     live: AtomicBool,
     writes: Mutex<Vec<Vec<u8>>>,
+    /// What the engine says about bracketed paste (`None`: raw mode).
+    engine_paste: Mutex<Option<bool>>,
 }
 
 impl PtyPort for RecPty {
@@ -49,6 +51,9 @@ impl PtyPort for RecPty {
     fn write(&self, _: &str, bytes: &[u8]) -> bool {
         self.writes.lock().push(bytes.to_vec());
         true
+    }
+    fn bracketed_paste(&self, _: &str) -> Option<bool> {
+        *self.engine_paste.lock()
     }
 }
 
@@ -130,6 +135,7 @@ impl Rig {
         let pty = Arc::new(RecPty {
             live: AtomicBool::new(true),
             writes: Mutex::new(Vec::new()),
+            engine_paste: Mutex::new(None),
         });
         let shared = Arc::new(Shared::default());
         let spawn_env = Arc::new(crate::spawn_env::state::SpawnEnvState {
@@ -343,6 +349,27 @@ fn gate_facts_read_the_stored_record_the_output_tap_and_the_pty() {
     r.pty.live.store(false, Ordering::SeqCst);
     assert!(!r.env.gate_facts(HARNESS, 5).pty_live);
     assert!(!r.env.gate_facts("unknown", 5).pty_live);
+}
+
+#[test]
+fn gate_facts_prefer_the_engine_paste_flag_over_the_tracker() {
+    use super::env::DeliveryEnv;
+    let r = Rig::new(None);
+    r.waiting();
+    // The tracker says on; the engine disagrees.
+    r.handle.note_output(HARNESS, "[?2004h", 1234);
+    *r.pty.engine_paste.lock() = Some(false);
+    assert!(!r.env.gate_facts(HARNESS, 5).bracketed_paste);
+    // The tracker says off (nothing seen after a respawn); the engine is on.
+    r.phase.spawned(HARNESS, ROOM, true);
+    r.barrier();
+    *r.pty.engine_paste.lock() = Some(true);
+    assert!(r.env.gate_facts(HARNESS, 5).bracketed_paste);
+    // No engine (raw mode): the tracker answers again.
+    *r.pty.engine_paste.lock() = None;
+    assert!(!r.env.gate_facts(HARNESS, 5).bracketed_paste);
+    r.handle.note_output(HARNESS, "[?2004h", 1300);
+    assert!(r.env.gate_facts(HARNESS, 5).bracketed_paste);
 }
 
 #[test]

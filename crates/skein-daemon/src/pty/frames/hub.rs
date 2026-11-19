@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 
 use super::state::{Core, Viewer, send};
 use crate::pty::PtyEvent;
-use crate::pty::engine::TerminalEngine;
+use crate::pty::engine::{Modes, TerminalEngine};
 use crate::pty::observer::PtyObserver;
 use crate::pty::redraw::ViewerState;
 use crate::pty::sink_slot::{AttachOutcome, ExitRecord};
@@ -78,6 +78,39 @@ impl FrameHub {
         let mut core = self.core.lock();
         core.cut_all();
         core.settle(&self.io);
+        drop(core);
+        self.observe_screen();
+    }
+
+    /// Hand the observer the screen after a cut, if it reads it (#809). The
+    /// rows are taken under the lock and the observer is called after it is
+    /// released. Nothing is delivered while a synchronized update is open:
+    /// the screen is half drawn then.
+    fn observe_screen(&self) {
+        let Some(observer) = &self.observer else {
+            return;
+        };
+        if !observer.wants_screen() {
+            return;
+        }
+        let rows = {
+            let core = self.core.lock();
+            if core.engine.modes().sync_pending {
+                return;
+            }
+            core.engine.screen_text()
+        };
+        observer.screen(&rows);
+    }
+
+    /// The text of each row of the engine's active screen (#809).
+    pub fn screen_text(&self) -> Vec<String> {
+        self.core.lock().engine.screen_text()
+    }
+
+    /// The engine's terminal modes (#809).
+    pub fn modes(&self) -> Modes {
+        self.core.lock().engine.modes()
     }
 
     /// When an open synchronized update must be ended, if one is open.
@@ -223,21 +256,66 @@ impl FrameHub {
         true
     }
 
-    /// The child exited: a last frame for every viewer, then `Exit`. The
-    /// engine and the viewers stay, so a later attach gets the screen.
+    /// The child exited: the output's last frame for every viewer, then (#809)
+    /// the exit notice the observer supplies and the notices queued while it
+    /// lived, appended to the engine and cut as one more frame, then `Exit`.
+    /// An open synchronized update is ended first, so a notice never lands
+    /// inside it. The engine and the viewers stay, so a later attach gets
+    /// the screen, notices included.
     pub fn exit(&self, code: Option<u32>) {
-        let first = {
+        self.flush_sync();
+        let notice = if self.exited().is_none() {
+            self.observer
+                .as_ref()
+                .and_then(|observer| observer.exit_notice(code))
+        } else {
+            None
+        };
+        let (first, replies) = {
             let mut st = self.core.lock();
             st.cut_all();
             let first = st.exited.is_none();
             st.exited = Some(ExitRecord { code });
+            let mut replies = Vec::new();
+            if first {
+                let queued = std::mem::take(&mut st.pending_notices);
+                let notices = notice.into_iter().chain(queued);
+                let mut any = false;
+                for bytes in notices {
+                    replies.extend(st.engine.feed(&bytes));
+                    any = true;
+                }
+                if any {
+                    st.cut_all();
+                }
+            }
             st.broadcast(&PtyEvent::Exit { code });
             st.settle(&self.io);
-            first
+            (first, replies)
         };
+        self.reply(replies);
         if first && let Some(observer) = &self.observer {
             observer.exited(code);
         }
+    }
+
+    /// Append a pane notice (#809). Once the child has exited it goes to the
+    /// engine and to every viewer at once; while it lives it is queued and
+    /// comes out at exit, after the exit notice, so nothing but the child's
+    /// own output reaches the live parser.
+    pub fn append_notice(&self, bytes: &[u8]) {
+        let replies = {
+            let mut st = self.core.lock();
+            if st.exited.is_none() {
+                st.pending_notices.push(bytes.to_vec());
+                return;
+            }
+            let replies = st.engine.feed(bytes);
+            st.cut_all();
+            st.settle(&self.io);
+            replies
+        };
+        self.reply(replies);
     }
 
     /// `Some` once the child has exited.

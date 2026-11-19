@@ -82,6 +82,11 @@ impl PhaseService {
         Arc::clone(&self.test_state.as_ref().expect("test service").1)
     }
 
+    /// The screen reading the machine holds for `id`.
+    pub(crate) fn test_screen_reading(&self, id: &str) -> Option<super::ScreenReading> {
+        self.lock().machine.screen.readings.get(id).copied()
+    }
+
     /// Wait until the output thread has handled everything queued so far.
     pub(crate) fn flush_outputs(&self) {
         let (tx, rx) = channel();

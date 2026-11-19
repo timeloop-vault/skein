@@ -11,6 +11,7 @@ use parking_lot::Mutex;
 use portable_pty::{MasterPty, PtySize};
 
 use super::PtyEvent;
+use super::engine::Modes;
 use super::frames::{FrameHub, HubDriver, HubIo, TerminalMode, run_frame_scheduler};
 use super::observer::PtyObserver;
 use super::output::{COALESCE_BYTE_CAP, COALESCE_WINDOW, run_coalescer};
@@ -116,6 +117,22 @@ impl PtyOutput {
         }
     }
 
+    /// The engine's screen rows; `None` on the raw path (no engine).
+    pub fn screen_text(&self) -> Option<Vec<String>> {
+        match self {
+            Self::Raw(_) => None,
+            Self::Frames(hub) => Some(hub.screen_text()),
+        }
+    }
+
+    /// The engine's modes; `None` on the raw path (no engine).
+    pub fn modes(&self) -> Option<Modes> {
+        match self {
+            Self::Raw(_) => None,
+            Self::Frames(hub) => Some(hub.modes()),
+        }
+    }
+
     pub fn exited(&self) -> Option<ExitRecord> {
         match self {
             Self::Raw(slot) => slot.exited(),
@@ -161,6 +178,18 @@ impl PtyOutput {
         match self {
             Self::Raw(slot) => slot.attach_id(),
             Self::Frames(hub) => hub.latest_viewer(),
+        }
+    }
+
+    /// Append a pane notice (#809); frames only, the raw path has no engine
+    /// (its view writes the notices itself). Whether it was taken.
+    pub fn append_notice(&self, bytes: &[u8]) -> bool {
+        match self {
+            Self::Raw(_) => false,
+            Self::Frames(hub) => {
+                hub.append_notice(bytes);
+                true
+            }
         }
     }
 

@@ -56,6 +56,7 @@ mod sidecar;
 mod sink_slot;
 mod tree;
 
+use engine::Modes;
 use env::apply_env;
 use output::spawn_pty_writer;
 use output_path::{OutputInit, PtyOutput, SharedMaster, resize_master, spawn_pump, spawn_reader};
@@ -677,6 +678,21 @@ impl PtyManager {
         n
     }
 
+    /// Append a pane notice (#809) to every frames-mode PTY bound to this
+    /// sidecar generation: queued until the child exits, or at once when it
+    /// already has. Raw PTYs are skipped (their view writes the notice).
+    /// Returns how many took it.
+    pub fn append_notice_bound(&self, harness_id: &str, generation: u64, bytes: &[u8]) -> usize {
+        let outs: Vec<PtyOutput> = self
+            .inner
+            .lock()
+            .values()
+            .filter(|p| binding_matches(p.sidecar.as_ref(), harness_id, generation))
+            .map(|p| p.out.clone())
+            .collect();
+        outs.iter().filter(|o| o.append_notice(bytes)).count()
+    }
+
     /// Install `sink` as the PTY's output, replacing any current one. If
     /// the child has already exited the sink is sent `Exit` at once.
     pub fn attach(
@@ -739,6 +755,18 @@ impl PtyManager {
         self.inner.lock().get(id).and_then(|p| p.out.exited())
     }
 
+    /// The text of each row of the engine's screen. `None` for an unknown id
+    /// and in raw mode, which has no engine (#809).
+    pub fn screen_text(&self, id: &str) -> Option<Vec<String>> {
+        self.output(id)?.screen_text()
+    }
+
+    /// The engine's terminal modes. `None` for an unknown id and in raw mode
+    /// (#809).
+    pub fn modes(&self, id: &str) -> Option<Modes> {
+        self.output(id)?.modes()
+    }
+
     fn output(&self, id: &str) -> Option<PtyOutput> {
         self.inner.lock().get(id).map(|p| p.out.clone())
     }
@@ -774,6 +802,8 @@ mod cwd_tests;
 #[cfg(test)]
 mod thread_tests;
 
+#[cfg(test)]
+mod frames_notice_pty_tests;
 #[cfg(test)]
 mod frames_pty_tests;
 #[cfg(test)]

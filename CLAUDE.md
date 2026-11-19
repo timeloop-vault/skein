@@ -217,6 +217,12 @@ will tell you:
     │                                #   FrameHub: one engine, N viewers, one size owner; the frame
     │                                #   scheduler) and pty/output_path.rs (the Raw/Frames switch);
     │                                #   off by default, the raw path is unchanged
+    │                                #   #809 (frames mode only) made the daemon read its own
+    │                                #   screen: harness_phase/screen_reader.rs (the Hermes reader,
+    │                                #   a port of screenPhase.ts), `PtyObserver::wants_screen` /
+    │                                #   `screen` / `exit_notice`, the engine's bracketed-paste flag
+    │                                #   in `gate_facts` (`PtyPort::bracketed_paste`), and
+    │                                #   harness_runner/notices.rs (the exit banner, sidecar line)
     │                                #   #757 added event_seq.rs (SeqEventSink wraps the transport's
     │                                #   EventSink once in `Daemon::build`: one per-daemon seq written
     │                                #   into every payload as a top-level `seq`, a bounded in-memory
