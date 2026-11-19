@@ -528,5 +528,13 @@ pub async fn open_request_take(
         .map_err(|e| e.to_string())?
 }
 
+/// The URL schemes this build answers to (#813), so the terminal can open
+/// its own links itself instead of deferring to a CLI that never will.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn open_request_link_schemes(app: AppHandle) -> Vec<String> {
+    configured_schemes(app.config())
+}
+
 #[cfg(test)]
 mod tests;

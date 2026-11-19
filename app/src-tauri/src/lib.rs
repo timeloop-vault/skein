@@ -209,6 +209,7 @@ pub fn run() {
             os_notify::os_notify_show,
             os_notify::os_notify_take_pending,
             open_request::open_request_take,
+            open_request::open_request_link_schemes,
             cli_shim::cli_shim_status,
             cli_shim::cli_shim_install,
             cli_shim::cli_shim_uninstall,

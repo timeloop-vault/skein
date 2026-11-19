@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HARNESS_KINDS } from "./data.tsx";
-import { shouldHostOpenLink, URI_REGEX } from "./terminalLinks.ts";
+import { isOwnSchemeLink, shouldHostOpenLink, URI_REGEX, uriScheme } from "./terminalLinks.ts";
 
 /** Every link WebLinkProvider would find in `line`: same `g` it appends. */
 function links(line: string): string[] {
@@ -88,7 +88,70 @@ describe("shouldHostOpenLink", () => {
 				mouseClicksDisabled,
 				mouseTrackingOn,
 				cliOpensClickedLinks: kinds[kind],
+				ownScheme: false,
+				modifierHeld: true,
 			}),
 		).toBe(hostOpens);
+	});
+
+	const base = {
+		isMac: false,
+		mouseClicksDisabled: false,
+		mouseTrackingOn: true,
+		cliOpensClickedLinks: kinds.claude,
+		ownScheme: true,
+		modifierHeld: true,
+	};
+
+	it.each([
+		[false, true],
+		[false, false],
+		[true, true],
+		[true, false],
+	])("own scheme + modifier opens (mac %s, tracking %s)", (isMac, mouseTrackingOn) => {
+		expect(shouldHostOpenLink({ ...base, isMac, mouseTrackingOn })).toBe(true);
+	});
+
+	it("own scheme, plain click: opens only with tracking on", () => {
+		expect(shouldHostOpenLink({ ...base, modifierHeld: false })).toBe(true);
+		expect(shouldHostOpenLink({ ...base, modifierHeld: false, mouseTrackingOn: false })).toBe(
+			false,
+		);
+	});
+
+	it("foreign scheme, plain click: never opens", () => {
+		for (const mouseTrackingOn of [false, true]) {
+			for (const isMac of [false, true]) {
+				expect(
+					shouldHostOpenLink({
+						...base,
+						ownScheme: false,
+						modifierHeld: false,
+						mouseTrackingOn,
+						isMac,
+					}),
+				).toBe(false);
+			}
+		}
+	});
+
+	it("foreign scheme + modifier, tracking on, claude, win: defers", () => {
+		expect(shouldHostOpenLink({ ...base, ownScheme: false })).toBe(false);
+	});
+});
+
+describe("uriScheme / isOwnSchemeLink", () => {
+	it("extracts a lowercased scheme", () => {
+		expect(uriScheme("Skein-Dev://room/x")).toBe("skein-dev");
+		expect(uriScheme("no scheme")).toBeNull();
+		expect(uriScheme("://x")).toBeNull();
+	});
+
+	it("matches only the configured scheme, case-insensitively", () => {
+		expect(isOwnSchemeLink("skein-dev://room/x", ["skein-dev"])).toBe(true);
+		expect(isOwnSchemeLink("SKEIN-DEV://room/x", ["skein-dev"])).toBe(true);
+		expect(isOwnSchemeLink("skein://room/x", ["skein-dev"])).toBe(false);
+		expect(isOwnSchemeLink("https://x.dev", ["skein-dev"])).toBe(false);
+		expect(isOwnSchemeLink("skein://room/x", [])).toBe(false);
 	});
 });

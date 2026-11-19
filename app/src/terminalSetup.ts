@@ -13,7 +13,13 @@ import "@xterm/xterm/css/xterm.css";
 import type { HarnessCapabilities } from "./data.tsx";
 import { isMac } from "./shortcuts.ts";
 import { fitTerminal } from "./terminalFit.ts";
-import { shouldHostOpenLink, URI_REGEX } from "./terminalLinks.ts";
+import {
+	isOwnSchemeLink,
+	loadOwnLinkSchemes,
+	ownLinkSchemes,
+	shouldHostOpenLink,
+	URI_REGEX,
+} from "./terminalLinks.ts";
 import { pathLinkProvider } from "./terminalPathLinks.ts";
 import { attachWheelReports } from "./terminalWheel.ts";
 
@@ -119,18 +125,26 @@ export function createXterm(
 	// macOS's Cmd is never forwarded (#571) and
 	// CLAUDE_CODE_DISABLE_MOUSE_CLICKS makes the CLI ignore clicks
 	// (#401, learned from the spawn result via `linkPolicy`).
+	//
+	// #813: this build's own `skein://` links are always Skein's to open
+	// (modifier click, or a plain click while tracking is on); see
+	// terminalLinks.ts.
+	void loadOwnLinkSchemes();
 	const isModifierClick = (event: MouseEvent) => (isMac ? event.metaKey : event.ctrlKey);
 	const handleUriClick = (event: MouseEvent, uri: string) => {
-		if (!isModifierClick(event)) return;
+		const modifierHeld = isModifierClick(event);
+		const hostOpens = shouldHostOpenLink({
+			isMac,
+			mouseClicksDisabled: linkPolicy.mouseClicksDisabled,
+			mouseTrackingOn: term.modes.mouseTrackingMode !== "none",
+			cliOpensClickedLinks: caps.opensClickedLinks,
+			ownScheme: isOwnSchemeLink(uri, ownLinkSchemes()),
+			modifierHeld,
+		});
+		// A plain click Skein doesn't open falls through to xterm untouched.
+		if (!hostOpens && !modifierHeld) return;
 		event.preventDefault();
-		if (
-			!shouldHostOpenLink({
-				isMac,
-				mouseClicksDisabled: linkPolicy.mouseClicksDisabled,
-				mouseTrackingOn: term.modes.mouseTrackingMode !== "none",
-				cliOpensClickedLinks: caps.opensClickedLinks,
-			})
-		) {
+		if (!hostOpens) {
 			console.debug("[skein] deferring link open to CLI:", uri);
 			return;
 		}
