@@ -10,7 +10,11 @@ import { commitMount } from "./harnessMounts.ts";
 import { drainRoomsBounded } from "./roomsFlush.ts";
 import type { LaunchMode, OpencodeVersion } from "./types.ts";
 
-export type PtyEvent = { kind: "data"; chunk: string } | { kind: "exit"; code: number | null };
+export type PtyEvent =
+	| { kind: "data"; chunk: string }
+	| { kind: "exit"; code: number | null }
+	// Frames mode only (#760); the view ignores it until T-4.
+	| { kind: "grid"; rows: number; cols: number };
 
 /** #679: `sessionId` is the OLD stored id that was not resumed. */
 export interface SessionNotice {
@@ -39,6 +43,8 @@ export interface EnsureResult {
 	sessionId: string | null;
 	/** #679: the stored session id was dropped (not resumed). */
 	sessionDropped?: boolean;
+	/** #760: which output path the PTY uses; absent from older daemons (= raw). */
+	terminalMode?: "raw" | "frames";
 	/** #679: why, when the id belongs to the other opencode major version. */
 	sessionNotice?: SessionNotice | null;
 	/** The process was already dead: its `exit` event comes through the channel. */

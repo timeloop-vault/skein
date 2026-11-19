@@ -761,6 +761,124 @@ write, so this does not matter.
 - JavaScript side: `app/src/emulatorGate/frames.test.ts` and
   `expectedFrames.ts`, run with `cd app && npx vitest run src/emulatorGate`.
 
+## T-3 as built
+
+T-3 (#760) put the engine and the encoder behind the PTY. A PTY in
+frames mode has one engine and any number of viewers, and each viewer
+is sent frames cut from that engine. It is off unless `SKEIN_TERMINAL=
+frames` is set in the daemon's environment at start. The variable is
+read once, in the state construction of `SharedState::build`
+(`daemon.rs`); unset, or any other value, keeps today's raw path. The
+spawn result carries `terminalMode` (`"raw"` or `"frames"`), so a view
+can tell which path it got. The raw path is unchanged.
+
+### The flow
+
+1. The PTY reader thread sends each chunk it reads to the frame
+   scheduler thread.
+2. The scheduler feeds every chunk to the hub at once. The hub's one
+   engine parses it, and the engine's query replies go to the PTY
+   writer.
+3. The scheduler cuts at the leading edge (a chunk that comes 16 ms or
+   more after the last cut is cut right away), and after that at most
+   once per 16 ms. While a synchronized update is open it also wakes at
+   the engine's sync deadline and flushes.
+4. At each cut the observer (the phase machine) hears the decoded text
+   fed since the last cut, once. Then the hub cuts one frame for every
+   viewer, and each viewer's sink gets it as a `data` event.
+5. Attach adds the viewer, sends `grid`, then a full redraw, under one
+   lock, and an `exit` event too if the child is gone.
+6. A resize from the size owner reaches the PTY and the engine. Then
+   every viewer gets `grid` and a full redraw. A resize from any other
+   viewer is only recorded.
+7. Input from a viewer makes it the size owner, and its recorded size
+   is applied.
+8. At exit the hub cuts a last frame, sends `exit` to every viewer, and
+   tells the observer once.
+
+```mermaid
+flowchart LR
+    R["PTY reader thread"] -->|"1 chunks"| S["Frame scheduler thread"]
+    S -->|"2 feed at once"| H["FrameHub: one engine"]
+    H -->|"2 query replies"| W["PTY writer"]
+    S -->|"3 cut, 16 ms"| H
+    S -->|"4 decoded text"| O["Observer, phase machine"]
+    H -->|"4 data frames"| V1["Viewer 1, size owner"]
+    H -->|"4 data frames"| V2["Viewer 2, own state"]
+    V1 -->|"5 attach"| H
+    H -->|"5 grid, full redraw"| V1
+    V1 -->|"6 resize, 7 input"| H
+    H -->|"6 resize owner only"| W
+    H -->|"8 exit"| O
+```
+
+Figure 5: the T-3 fan-out, scheduler, hub and viewers. Renders the
+numbered steps above; the text is authoritative (non-normative).
+
+### Rules, as built
+
+- A viewer id is its attach id: monotonic per PTY, the first is 1.
+- A viewer whose sink send fails is dropped. Nothing is killed.
+- When the owner leaves or is dropped, ownership goes to the remaining
+  viewer with the latest attach or input, and its recorded size is
+  applied.
+- With no owner, the first viewer to attach, resize or write with a
+  viewer id becomes the owner.
+- A resize with no viewer id (today's `pty_resize`) is applied and
+  leaves ownership alone.
+- A resize the PTY refuses leaves the engine and the grid alone. A zero
+  height or width is refused the same way.
+- A resize that equals the current grid does nothing.
+- Sizes below the engine minimum (1 row, 2 columns) are refused, so the
+  grid never differs from what the engine draws.
+- After the child has exited, sizes are only recorded: the PTY and the
+  exited screen are not resized, whoever attaches or becomes owner.
+- The hub holds the PTY handle weakly, so killing the PTY closes it and
+  ends its reader and scheduler threads.
+- Exit keeps the engine and the viewers, so an exited pane keeps its
+  screen and a later attach gets it, followed by `exit`.
+- `detach` without an id removes every viewer. `detach` with an id
+  removes only that viewer, and only if it is still attached.
+- Daemon writes (prompt delivery, `write`) carry no viewer id, so they
+  do not move ownership.
+- The scheduler's last act at EOF is a final cut, so the last frame
+  goes out before the exit the waiter sends.
+
+### Deviations and open points
+
+- The owner's resize is not debounced. The design proposed a short
+  trailing delay; the hub applies each size as it arrives.
+- Any resize is still a full redraw with history. The relaxation of
+  cutting a frame just before the resize was not taken, and
+  `pty/redraw/encode.rs` is unchanged.
+- The engine's damage is still not used for diffing.
+- Frames are cut under the hub's one lock, not under a shared engine
+  lock plus a lock per viewer.
+- There is no Tauri command for the redraw request yet.
+  `PtyManager::request_redraw` exists. T-4 adds the command and makes
+  the view pass its `attachId`: `pty_write` and `pty_resize` already
+  accept an optional `attach_id`, but the webview does not send one.
+- With the flag on and before T-4, the view still does its one-row
+  repaint resize and writes pane notices locally into the widget, so
+  the flag is for development only.
+- In frames mode the idle and waiting pattern matching gets its text
+  per cut, not per coalesced chunk.
+
+### Where it is
+
+- `crates/skein-daemon/src/pty/frames/`: `mode.rs` (`TerminalMode`),
+  `scheduler.rs` (the pure timing loop), `hub.rs` and `state.rs`
+  (`FrameHub`, the viewers and the owner), `driver.rs` (feeds the hub,
+  tells the observer), and the `*_tests.rs` files.
+- `crates/skein-daemon/src/pty/output_path.rs`: the Raw/Frames switch,
+  the reader and the pump thread.
+- The viewer API on `PtyManager` in `pty/mod.rs`: `with_terminal_mode`,
+  `attach_viewer`, `write_from`, `resize_from`, `request_redraw`.
+  `PtySpawnResult.terminal_mode` is in `pty/command.rs`.
+- Tests: `cargo test -p skein-daemon frames`, and
+  `cargo test -p skein-daemon frames_pty` for the real-PTY file
+  `pty/frames_pty_tests.rs`.
+
 ## Slices
 
 These replace slices 1 and 2 of the P2b doc and add four. The other

@@ -36,7 +36,7 @@ use crate::paths::Paths;
 use crate::prompt_delivery::daemon_env::unread_for;
 use crate::prompt_delivery::supervisor_facts::mail_state_for;
 use crate::prompt_delivery::{DaemonEnv, DeliveryHandle, DeliveryService, RunnerPty};
-use crate::pty::PtyManager;
+use crate::pty::{PtyManager, TerminalMode};
 use crate::room_store::RoomStore;
 use crate::spawn_env::state::SpawnEnvState;
 use crate::transport::InProcessTransport;
@@ -136,9 +136,17 @@ impl SharedState {
         // `new` sweeps orphaned sidecars of a crashed Skein before returning,
         // so no new record can be written ahead of it.
         let sidecars = OpencodeSidecarManager::new(Some(paths.data_dir.clone()));
+        // The one place the terminal-mode variable is read (#760).
+        let mode = TerminalMode::from_env();
+        if mode == TerminalMode::Frames {
+            tracing::info!(
+                env = TerminalMode::ENV,
+                "terminal: frames mode (developer flag)"
+            );
+        }
         Ok(Self {
             harness_config,
-            pty: PtyManager::new(),
+            pty: PtyManager::with_terminal_mode(mode),
             sidecars,
             watcher: WatcherManager::new(),
             claude: ClaudeEventsManager::new(Arc::clone(&db), events.clone()),

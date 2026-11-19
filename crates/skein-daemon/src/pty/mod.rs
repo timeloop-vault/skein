@@ -41,10 +41,12 @@
 pub mod command;
 pub mod engine;
 pub mod env;
+pub mod frames;
 pub mod observer;
 pub mod opencode;
 pub mod opencode_prepare;
 mod output;
+mod output_path;
 mod preview;
 mod priority;
 mod probe;
@@ -55,11 +57,12 @@ mod sink_slot;
 mod tree;
 
 use env::apply_env;
-use output::{COALESCE_BYTE_CAP, COALESCE_WINDOW, run_coalescer, spawn_pty_writer};
+use output::spawn_pty_writer;
+use output_path::{OutputInit, PtyOutput, SharedMaster, resize_master, spawn_pump, spawn_reader};
 use preview::windows_resolved_program;
 use probe::probe_result;
-use sink_slot::SinkSlot;
 
+pub use frames::TerminalMode;
 pub use observer::PtyObserver;
 pub use preview::{EnvPreview, env_preview, harness_program_lookup};
 #[cfg(not(target_os = "windows"))]
@@ -69,14 +72,13 @@ pub use sidecar::sidecar_env;
 pub use sink_slot::{AttachOutcome, ExitRecord};
 
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{ChildKiller, CommandBuilder, PtySize, native_pty_system};
 use serde::Serialize;
 
 use crate::agent_endpoint::HarnessIdentity;
@@ -91,8 +93,18 @@ use crate::stream_sink::StreamSink;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PtyEvent {
-    Data { chunk: String },
-    Exit { code: Option<u32> },
+    Data {
+        chunk: String,
+    },
+    Exit {
+        code: Option<u32>,
+    },
+    /// The grid size a frame stream is drawn at. Frames mode only: sent on
+    /// attach and before the redraw of a size change.
+    Grid {
+        rows: u16,
+        cols: u16,
+    },
 }
 
 /// Errors a PTY operation can produce. Stringly-typed because they all
@@ -123,7 +135,7 @@ impl PtyError {
 /// PTY's own I/O), and the killer so closing the harness doesn't leak
 /// the child.
 struct Pty {
-    master: Box<dyn MasterPty + Send>,
+    master: SharedMaster,
     writer_tx: mpsc::Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     /// The child's whole process tree (#190); `None` when it could not be
@@ -135,7 +147,7 @@ struct Pty {
     /// the PTY ends that generation too.
     sidecar: Option<SidecarBinding>,
     /// Where this PTY's events go (#731); swappable.
-    slot: Arc<SinkSlot>,
+    out: PtyOutput,
 }
 
 /// Runs on the waiter thread with the child's exit code.
@@ -243,11 +255,26 @@ fn check_cwd(cwd: &Path) -> Result<(), PtyError> {
 #[derive(Default, Clone)]
 pub struct PtyManager {
     inner: Arc<Mutex<HashMap<String, Pty>>>,
+    /// Which output path new PTYs get (#760); `Raw` unless the daemon says so.
+    mode: TerminalMode,
 }
 
 impl PtyManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A manager whose PTYs use `mode`'s output path.
+    #[must_use]
+    pub fn with_terminal_mode(mode: TerminalMode) -> Self {
+        Self {
+            mode,
+            ..Self::default()
+        }
+    }
+
+    pub fn terminal_mode(&self) -> TerminalMode {
+        self.mode
     }
 
     /// Spawn `req.cmd` (argv-style) inside `req.cwd` with the given
@@ -474,108 +501,41 @@ impl PtyManager {
         // thread below.)
         drop(pair.slave);
 
-        let mut reader = pair.master.try_clone_reader().map_err(PtyError::from_err)?;
+        let reader = pair.master.try_clone_reader().map_err(PtyError::from_err)?;
         let writer = pair.master.take_writer().map_err(PtyError::from_err)?;
 
         // #171d: the writer thread owns `writer` from here on; `write`
         // only ever sends on this channel, never touches the PTY's I/O.
         let writer_tx = spawn_pty_writer(id.clone(), writer);
 
-        // #731: every event goes through the slot, attached before the
-        // reader starts so no output is lost. Its unattended `ConPTY`
-        // cursor answer goes out through the same writer channel.
-        let reply_tx = writer_tx.clone();
-        let mut slot = SinkSlot::new(sink, move |bytes| {
-            let _ = reply_tx.send(bytes);
+        // #731: every event goes through the output, attached before the
+        // reader starts so no output is lost (#732: the observer hears
+        // `started` first). Raw: a replaceable sink slot; frames (#760): the
+        // hub, the master shared so it can resize the PTY.
+        let master = Arc::new(Mutex::new(pair.master));
+        let out = PtyOutput::build(OutputInit {
+            mode: self.mode,
+            rows,
+            cols,
+            sink,
+            observer,
+            injected,
+            writer_tx: writer_tx.clone(),
+            master: Arc::clone(&master),
         });
-        // #732: before any thread can produce output.
-        if let Some(observer) = observer {
-            observer.started(injected);
-            slot = slot.with_observer(observer);
-        }
-        let slot = Arc::new(slot);
-        let slot_reader = Arc::clone(&slot);
-        let slot_waiter = Arc::clone(&slot);
+        let out_waiter = out.clone();
 
         // #171b: the raw reader only moves bytes off the PTY as fast as
-        // the OS delivers them; it never calls `on_event` itself. The
-        // coalescer thread below is what decides when a `PtyEvent::Data`
-        // actually goes out, via `recv_timeout` — something a blocking
-        // `reader.read()` loop can't do on its own.
+        // the OS delivers them; it never calls a sink itself. The pump
+        // thread below decides when events go out, via `recv_timeout`.
         let (raw_tx, raw_rx) = mpsc::channel::<Vec<u8>>();
+        spawn_reader(id.clone(), reader, raw_tx);
 
-        let reader_id = id.clone();
-        thread::spawn(move || {
-            let mut buf = [0u8; 8192];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if raw_tx.send(buf[..n].to_vec()).is_err() {
-                            // Coalescer already gone; nothing more to do.
-                            break;
-                        }
-                    }
-                }
-            }
-            // Dropping `raw_tx` here is the EOF signal the coalescer
-            // acts on to flush and exit.
-            tracing::info!(id = %reader_id, "pty reader exit");
-        });
-
-        // #171: the coalescer drops this the moment it has flushed
-        // everything pending and is about to exit, so the waiter thread
-        // below can hear "drained" without a fixed sleep.
+        // #171: the pump drops this the moment it has flushed everything
+        // pending and is about to exit, so the waiter thread below can hear
+        // "drained" without a fixed sleep.
         let (done_tx, done_rx) = mpsc::channel::<()>();
-
-        let coalescer_id = id.clone();
-        thread::spawn(move || {
-            // Held only so it is dropped when this thread ends, after
-            // `run_coalescer`'s final flush — that drop is the signal.
-            let _done_tx = done_tx;
-            // Issue #23: keep a small carry buffer so a multi-byte
-            // UTF-8 sequence split across two coalesced chunks (em-
-            // dash, box-drawing chars, emoji — all 3 or 4 bytes)
-            // doesn't get replaced with U+FFFD on each side of the
-            // boundary. Append each chunk into `carry`, slice off the
-            // longest valid UTF-8 prefix, emit it, and carry the
-            // trailing partial bytes into the next chunk.
-            //
-            // For genuinely malformed bytes (not just incomplete), we
-            // still drop them — same as before — but only for bytes
-            // we're *certain* are invalid (`Utf8Error::error_len()` is
-            // `Some`).
-            let mut carry: Vec<u8> = Vec::with_capacity(8192);
-            run_coalescer(&raw_rx, COALESCE_WINDOW, COALESCE_BYTE_CAP, |chunk| {
-                carry.extend_from_slice(&chunk);
-                match std::str::from_utf8(&carry) {
-                    Ok(s) => {
-                        slot_reader.data(s.to_owned());
-                        carry.clear();
-                    }
-                    Err(e) => {
-                        let valid_up_to = e.valid_up_to();
-                        if valid_up_to > 0 {
-                            // Safe by construction: bytes [..valid_up_to]
-                            // are valid UTF-8.
-                            let valid = std::str::from_utf8(&carry[..valid_up_to]).unwrap_or("");
-                            slot_reader.data(valid.to_owned());
-                        }
-                        if let Some(invalid_len) = e.error_len() {
-                            // Definitely-malformed bytes — drop them
-                            // (same as the old lossy path).
-                            let drain_to = valid_up_to + invalid_len;
-                            carry.drain(..drain_to);
-                        } else {
-                            // Trailing bytes are an incomplete sequence —
-                            // wait for the next chunk.
-                            carry.drain(..valid_up_to);
-                        }
-                    }
-                }
-            });
-            tracing::info!(id = %coalescer_id, "pty coalescer exit");
-        });
+        spawn_pump(id.clone(), raw_rx, &out, done_tx);
 
         let exit_id = id.clone();
         thread::spawn(move || {
@@ -616,17 +576,17 @@ impl PtyManager {
             if let Some(hook) = on_exit {
                 hook(code);
             }
-            slot_waiter.exit(code);
+            out_waiter.exit(code);
         });
 
         let pty = Pty {
-            master: pair.master,
+            master,
             writer_tx,
             killer,
             tree,
             pid,
             sidecar,
-            slot,
+            out,
         };
         self.inner.lock().insert(id, pty);
         Ok(SpawnOutcome {
@@ -642,6 +602,17 @@ impl PtyManager {
     /// child that has stopped reading stdin cannot block this call, nor
     /// the manager-wide lock it briefly holds.
     pub fn write(&self, id: &str, data: &[u8]) -> Result<(), PtyError> {
+        self.write_from(id, None, data)
+    }
+
+    /// [`write`](Self::write) on behalf of viewer `viewer` (frames mode:
+    /// input makes that viewer the size owner). `None` is ownership-neutral.
+    pub fn write_from(&self, id: &str, viewer: Option<u64>, data: &[u8]) -> Result<(), PtyError> {
+        if let Some(viewer) = viewer
+            && let Some(out) = self.output(id)
+        {
+            out.active(viewer);
+        }
         let map = self.inner.lock();
         let pty = map
             .get(id)
@@ -652,19 +623,37 @@ impl PtyManager {
     }
 
     pub fn resize(&self, id: &str, rows: u16, cols: u16) -> Result<(), PtyError> {
-        let map = self.inner.lock();
-        let pty = map
-            .get(id)
-            .ok_or_else(|| PtyError(format!("pty_resize: no pty with id {id}")))?;
-        pty.master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(PtyError::from_err)?;
-        Ok(())
+        self.resize_from(id, None, rows, cols)
+    }
+
+    /// [`resize`](Self::resize) as viewer `viewer` reports it. Raw: the PTY is
+    /// resized whoever asks. Frames: the hub decides; a size that is only
+    /// recorded (a non-owner's) is not an error.
+    pub fn resize_from(
+        &self,
+        id: &str,
+        viewer: Option<u64>,
+        rows: u16,
+        cols: u16,
+    ) -> Result<(), PtyError> {
+        let (out, master) = {
+            let map = self.inner.lock();
+            let pty = map
+                .get(id)
+                .ok_or_else(|| PtyError(format!("pty_resize: no pty with id {id}")))?;
+            (pty.out.clone(), Arc::clone(&pty.master))
+        };
+        // Never call into the hub with the master lock held: the hub locks
+        // the master from under its own lock.
+        if out.resize(viewer, rows, cols).is_some() {
+            return Ok(());
+        }
+        resize_master(&master, rows, cols).map_err(PtyError)
+    }
+
+    /// Ask for a full redraw for viewer `viewer`. Raw has none: false.
+    pub fn request_redraw(&self, id: &str, viewer: u64) -> bool {
+        self.output(id).is_some_and(|o| o.request_redraw(viewer))
     }
 
     /// The PTY child's OS pid, if the PTY exists and the OS reported one.
@@ -680,7 +669,7 @@ impl PtyManager {
         let mut n = 0;
         for (id, pty) in map.iter_mut() {
             if binding_matches(pty.sidecar.as_ref(), harness_id, generation) {
-                let exited = pty.slot.exited().is_some();
+                let exited = pty.out.exited().is_some();
                 tree::kill(id, pty.tree.as_ref(), &mut *pty.killer, exited);
                 n += 1;
             }
@@ -695,8 +684,7 @@ impl PtyManager {
         id: &str,
         sink: Box<dyn StreamSink<PtyEvent>>,
     ) -> Result<AttachOutcome, PtyError> {
-        let slot = self.slot(id, "pty_attach")?;
-        Ok(slot.attach(sink))
+        Ok(self.attach_viewer(id, sink, None)?.0)
     }
 
     /// [`attach`](Self::attach), also returning the attachment's id.
@@ -705,27 +693,36 @@ impl PtyManager {
         id: &str,
         sink: Box<dyn StreamSink<PtyEvent>>,
     ) -> Result<(AttachOutcome, u64), PtyError> {
-        let slot = self.slot(id, "pty_attach")?;
-        Ok(slot.attach_tracked(sink))
+        self.attach_viewer(id, sink, None)
+    }
+
+    /// [`attach_tracked`](Self::attach_tracked) with the viewer's size
+    /// (frames mode; raw ignores it).
+    pub fn attach_viewer(
+        &self,
+        id: &str,
+        sink: Box<dyn StreamSink<PtyEvent>>,
+        size: Option<(u16, u16)>,
+    ) -> Result<(AttachOutcome, u64), PtyError> {
+        Ok(self.output_or(id, "pty_attach")?.attach(sink, size))
     }
 
     /// The id of the PTY's current attachment (`None`: no sink or no PTY).
     pub fn attach_id(&self, id: &str) -> Option<u64> {
-        self.slot(id, "pty_attach_id").ok()?.attach_id()
+        self.output(id)?.attach_id()
     }
 
     /// Clear the PTY's sink only if `attach_id` is still the current
     /// attachment. Returns whether it was cleared.
     pub fn detach_if(&self, id: &str, attach_id: u64) -> bool {
-        self.slot(id, "pty_detach")
-            .is_ok_and(|s| s.detach_if(attach_id))
+        self.output(id).is_some_and(|o| o.detach_if(attach_id))
     }
 
     /// Clear the PTY's sink. The child, its threads and the entry are
     /// untouched. Returns whether a sink was attached (false too for an
     /// unknown id).
     pub fn detach(&self, id: &str) -> bool {
-        self.slot(id, "pty_detach").is_ok_and(|s| s.detach())
+        self.output(id).is_some_and(|o| o.detach())
     }
 
     /// The entry exists and the child has not exited.
@@ -733,20 +730,21 @@ impl PtyManager {
         self.inner
             .lock()
             .get(id)
-            .is_some_and(|p| p.slot.exited().is_none())
+            .is_some_and(|p| p.out.exited().is_none())
     }
 
     /// `Some(code)` once the child has exited; `None` while it runs or
     /// when there is no such PTY.
     pub fn exit_code(&self, id: &str) -> Option<ExitRecord> {
-        self.inner.lock().get(id).and_then(|p| p.slot.exited())
+        self.inner.lock().get(id).and_then(|p| p.out.exited())
     }
 
-    fn slot(&self, id: &str, what: &str) -> Result<Arc<SinkSlot>, PtyError> {
-        self.inner
-            .lock()
-            .get(id)
-            .map(|p| Arc::clone(&p.slot))
+    fn output(&self, id: &str) -> Option<PtyOutput> {
+        self.inner.lock().get(id).map(|p| p.out.clone())
+    }
+
+    fn output_or(&self, id: &str, what: &str) -> Result<PtyOutput, PtyError> {
+        self.output(id)
             .ok_or_else(|| PtyError(format!("{what}: no pty with id {id}")))
     }
 
@@ -764,7 +762,7 @@ impl PtyManager {
     pub fn kill(&self, id: &str) -> Option<SidecarBinding> {
         let mut map = self.inner.lock();
         let mut pty = map.remove(id)?;
-        let exited = pty.slot.exited().is_some();
+        let exited = pty.out.exited().is_some();
         tree::kill(id, pty.tree.as_ref(), &mut *pty.killer, exited);
         pty.sidecar.take()
     }
@@ -776,6 +774,8 @@ mod cwd_tests;
 #[cfg(test)]
 mod thread_tests;
 
+#[cfg(test)]
+mod frames_pty_tests;
 #[cfg(test)]
 mod observer_pty_tests;
 #[cfg(test)]

@@ -125,6 +125,7 @@ fn spawn_result(version: Option<OpencodeVersionDto>) -> PtySpawnResult {
         opencode_port: None,
         session_dropped: false,
         session_notice: None,
+        terminal_mode: crate::pty::TerminalMode::Raw,
     }
 }
 

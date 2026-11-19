@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::opencode_prepare::{Prepared, SessionNotice, prepare_opencode_spawn};
-use super::{PtyEvent, PtyManager, PtyObserver, SidecarBinding, SpawnRequest};
+use super::{PtyEvent, PtyManager, PtyObserver, SidecarBinding, SpawnRequest, TerminalMode};
 use crate::agent_endpoint::{AgentApiEndpoint, HarnessIdentity};
 use crate::db::Database;
 use crate::harness_config::HarnessConfig;
@@ -64,6 +64,8 @@ pub struct PtySpawnResult {
     /// version, so the pane can say why it started fresh.
     #[serde(default)]
     pub session_notice: Option<SessionNotice>,
+    /// Which output path this PTY uses (#760): `"raw"` bytes or `"frames"`.
+    pub terminal_mode: TerminalMode,
 }
 
 /// The managed state a spawn reads, borrowed from wherever it is stored.
@@ -276,6 +278,7 @@ pub fn pty_spawn_with_sink(
         opencode_port: None,
         session_dropped,
         session_notice,
+        terminal_mode: deps.manager.terminal_mode(),
     })
 }
 
@@ -332,6 +335,7 @@ mod tests {
                 kind: super::super::opencode_prepare::SessionNoticeKind::V1SessionUnderV2,
                 session_id: "ses_old".to_owned(),
             }),
+            terminal_mode: crate::pty::TerminalMode::Raw,
         })
         .expect("serialize");
         assert_eq!(
@@ -347,7 +351,8 @@ mod tests {
                 "sessionId": null,
                 "opencodePort": 4096,
                 "sessionDropped": true,
-                "sessionNotice": {"kind": "v1SessionUnderV2", "sessionId": "ses_old"}
+                "sessionNotice": {"kind": "v1SessionUnderV2", "sessionId": "ses_old"},
+                "terminalMode": "raw"
             })
         );
     }

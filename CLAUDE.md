@@ -207,8 +207,16 @@ will tell you:
     │                                #   attaches the Hermes work poller in the daemon
     │                                #   #793 added pty/engine/ (the `TerminalEngine` trait, the
     │                                #   alacritty_terminal implementation behind catch_unwind,
-    │                                #   the recorded fixtures and the replay test; nothing calls
-    │                                #   it yet) and the alacritty_terminal dependency
+    │                                #   the recorded fixtures and the replay test; since #760 the
+    │                                #   frame hub calls it, in frames mode only) and the
+    │                                #   alacritty_terminal dependency
+    │                                #   #807 added pty/redraw/ (the redraw encoder: grid to
+    │                                #   VT-subset frames, per-viewer `ViewerState`)
+    │                                #   #760 added pty/frames/ (TerminalMode from
+    │                                #   `SKEIN_TERMINAL=frames`, read once at daemon start;
+    │                                #   FrameHub: one engine, N viewers, one size owner; the frame
+    │                                #   scheduler) and pty/output_path.rs (the Raw/Frames switch);
+    │                                #   off by default, the raw path is unchanged
     │                                #   #757 added event_seq.rs (SeqEventSink wraps the transport's
     │                                #   EventSink once in `Daemon::build`: one per-daemon seq written
     │                                #   into every payload as a top-level `seq`, a bounded in-memory

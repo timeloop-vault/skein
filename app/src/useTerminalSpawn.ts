@@ -172,7 +172,7 @@ export function useTerminalSpawn(params: UseTerminalSpawnParams): void {
 				gate.write(ev.chunk);
 				recordEcho(ptyIdRef.current, performance.now()); // #639
 				shellFollow?.onOutput(); // #517
-			} else {
+			} else if (ev.kind === "exit") {
 				handleExit(ev.code);
 			}
 		};

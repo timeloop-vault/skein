@@ -17,11 +17,12 @@ use crate::pty::opencode::{OpencodeScanDto, scan_opencode_dto};
 pub(crate) fn pty_write(
     id: String,
     data: String,
+    attach_id: Option<u64>,
     manager: tauri::State<'_, PtyManager>,
 ) -> Result<(), String> {
     let t0 = std::time::Instant::now();
     let res = manager
-        .write(&id, data.as_bytes())
+        .write_from(&id, attach_id, data.as_bytes())
         .map_err(|e| e.to_string());
     crate::perf_spans::PTY_WRITE.record(t0.elapsed());
     res
@@ -34,9 +35,12 @@ pub(crate) fn pty_resize(
     id: String,
     rows: u16,
     cols: u16,
+    attach_id: Option<u64>,
     manager: tauri::State<'_, PtyManager>,
 ) -> Result<(), String> {
-    manager.resize(&id, rows, cols).map_err(|e| e.to_string())
+    manager
+        .resize_from(&id, attach_id, rows, cols)
+        .map_err(|e| e.to_string())
 }
 
 /// Look for an opencode TUI among the descendants of one PTY's child and

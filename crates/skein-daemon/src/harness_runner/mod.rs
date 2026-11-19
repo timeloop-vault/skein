@@ -369,9 +369,11 @@ impl HarnessRunner {
                 let mut attach_id = None;
                 let exit = match sink.take() {
                     Some(s) => {
+                        // Both nonzero: the view's size (0 = "not known").
+                        let size = (req.rows != 0 && req.cols != 0).then_some((req.rows, req.cols));
                         let (outcome, id) = self
                             .pty
-                            .attach_tracked(&run.pty_id, s)
+                            .attach_viewer(&run.pty_id, s, size)
                             .map_err(|e| EnsureError::SpawnFailed(e.to_string()))?;
                         attach_id = Some(id);
                         match outcome {

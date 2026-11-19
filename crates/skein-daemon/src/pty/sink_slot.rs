@@ -138,6 +138,7 @@ impl SinkSlot {
     }
 
     /// Install `sink`, replacing any current one.
+    #[cfg(test)]
     pub fn attach(&self, sink: Box<dyn StreamSink<PtyEvent>>) -> AttachOutcome {
         self.attach_tracked(sink).0
     }

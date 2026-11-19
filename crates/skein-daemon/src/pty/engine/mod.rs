@@ -23,6 +23,8 @@ pub(in crate::pty) mod replay_tests;
 #[cfg(test)]
 pub(in crate::pty) mod tests;
 #[cfg(test)]
+mod tests_cell_is;
+#[cfg(test)]
 mod tests_forward;
 #[cfg(test)]
 mod tests_guard;
@@ -36,6 +38,7 @@ mod tests_replies;
 mod tests_sync;
 
 pub use self::alacritty::{AlacrittyEngine, Damage, LineDamage};
+pub(in crate::pty) use self::alacritty::{MIN_COLS, MIN_ROWS};
 
 /// How many rows of scrollback history the engine keeps (#793).
 ///

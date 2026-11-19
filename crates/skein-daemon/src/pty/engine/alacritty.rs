@@ -19,8 +19,8 @@ use crate::pty::redraw::{ViewerState, encode_frame};
 /// The smallest terminal the engine builds. `alacritty_terminal` itself
 /// documents a minimum of two columns (`term::MIN_COLUMNS`, 2), so a request for
 /// fewer is raised to this.
-const MIN_COLS: u16 = 2;
-const MIN_ROWS: u16 = 1;
+pub(in crate::pty) const MIN_COLS: u16 = 2;
+pub(in crate::pty) const MIN_ROWS: u16 = 1;
 
 /// What the `Term` reports through its event listener.
 #[derive(Default)]
@@ -278,6 +278,24 @@ impl AlacrittyEngine {
     #[cfg(test)]
     pub(super) fn run_guarded(&mut self, f: impl FnOnce()) {
         self.guarded((), |_, _| f());
+    }
+
+    /// Test seam: every screen cell's dump, with `cell_is(cell, dump_j)`
+    /// against every cell's dump `j` (row-major), so a test can check that
+    /// `cell_is` agrees with `cell_dump` without them being visible.
+    #[cfg(test)]
+    pub(super) fn cell_is_matrix(&self) -> Vec<(CellDump, Vec<bool>)> {
+        let grid = self.inner.term.grid();
+        let cells: Vec<&Cell> = (0..to_i32(grid.screen_lines()))
+            .flat_map(|l| (0..grid.columns()).map(move |c| (l, c)))
+            .map(|(l, c)| &grid[Line(l)][Column(c)])
+            .collect();
+        let dumps: Vec<CellDump> = cells.iter().map(|c| cell_dump(c)).collect();
+        cells
+            .iter()
+            .zip(&dumps)
+            .map(|(cell, d)| (d.clone(), dumps.iter().map(|o| cell_is(cell, o)).collect()))
+            .collect()
     }
 
     /// How many times a caught panic rebuilt the engine empty. A viewer

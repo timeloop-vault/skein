@@ -27,6 +27,7 @@ impl StreamSink<PtyEvent> for Recorder {
         self.0.lock().push(match item {
             PtyEvent::Data { chunk } => format!("data:{chunk}"),
             PtyEvent::Exit { code } => format!("exit:{code:?}"),
+            PtyEvent::Grid { rows, cols } => format!("grid:{rows}x{cols}"),
         });
         Ok(())
     }

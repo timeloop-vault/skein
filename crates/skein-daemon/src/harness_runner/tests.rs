@@ -107,6 +107,7 @@ impl StreamSink<PtyEvent> for Recording {
         match item {
             PtyEvent::Data { chunk } => st.0.push_str(&chunk),
             PtyEvent::Exit { code } => st.1.push(code),
+            PtyEvent::Grid { .. } => {}
         }
         Ok(())
     }
