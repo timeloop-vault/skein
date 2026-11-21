@@ -52,6 +52,9 @@ export const MAX_JOINED_ROWS = 4;
 const TOKEN = /[^\s"'`<>|]+/g;
 const LEADING = /^[([{@]+/;
 const TRAILING = /[)\]}.,;:!?]+$/;
+// `Read(` in `Read(/tmp/shot.png)`, how Claude Code heads a tool call (#823).
+// No separator in the name, so `app/(group)/page.tsx` is not a call.
+const CALL_PREFIX = /^[A-Za-z_][\w.-]*\(/;
 const LINE_SUFFIX = /:\d+(?::\d+)?$/;
 const WINDOWS_ABSOLUTE = /^[A-Za-z]:[\\/]/;
 
@@ -82,25 +85,30 @@ function tokens(rows: Row[], row: number): Piece[] {
 /** `pieces` joined with nothing between them, read as a path: surrounding
  *  brackets, a leading `@` (Claude Code's file mentions) and trailing
  *  punctuation are dropped, a `:line(:col)` suffix stays in the link but
- *  not in `path`. Null when that isn't path-shaped — URLs are left to
- *  the URL matcher. */
-function variant(rows: Row[], pieces: Piece[]): PathVariant | null {
+ *  not in `path`. A `Name(` call prefix gives a second, shorter reading
+ *  without it (#823). Empty when nothing is path-shaped — URLs are left
+ *  to the URL matcher. */
+function variants(rows: Row[], pieces: Piece[]): PathVariant[] {
 	let raw = "";
 	const cells: CellPos[] = [];
 	for (const p of pieces) {
 		const row = rows[p.row];
-		if (!row) return null;
+		if (!row) return [];
 		raw += row.text.slice(p.start, p.end);
 		cells.push(...row.cells.slice(p.start, p.end));
 	}
 	const lead = LEADING.exec(raw)?.[0].length ?? 0;
 	const trail = TRAILING.exec(raw)?.[0].length ?? 0;
-	const text = raw.slice(lead, raw.length - trail);
-	const path = text.replace(LINE_SUFFIX, "");
-	const start = cells[lead];
-	const end = cells[raw.length - trail - 1];
-	if (!looksLikePath(path) || !start || !end) return null;
-	return { path, text, start, end };
+	const call = CALL_PREFIX.exec(raw.slice(lead))?.[0].length ?? 0;
+	const out: PathVariant[] = [];
+	for (const from of call > 0 ? [lead, lead + call] : [lead]) {
+		const text = raw.slice(from, raw.length - trail);
+		const path = text.replace(LINE_SUFFIX, "");
+		const start = cells[from];
+		const end = cells[raw.length - trail - 1];
+		if (looksLikePath(path) && start && end) out.push({ path, text, start, end });
+	}
+	return out;
 }
 
 /** The column of `row`'s last non-space cell; 0 when blank. */
@@ -152,8 +160,7 @@ export function pathLinks(rows: Row[], focus: number): PathLink[] {
 		const link: PathLink = [];
 		for (let len = pieces.length; len >= 1; len--) {
 			for (let s = Math.max(0, k - len + 1); s <= k && s + len <= pieces.length; s++) {
-				const v = variant(rows, pieces.slice(s, s + len));
-				if (v) link.push(v);
+				link.push(...variants(rows, pieces.slice(s, s + len)));
 			}
 		}
 		if (link.length > 0 && link.length <= budget) {

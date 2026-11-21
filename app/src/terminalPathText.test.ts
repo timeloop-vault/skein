@@ -70,6 +70,28 @@ describe("pathLinks on one row", () => {
 		]);
 	});
 
+	it("reads the path inside a tool call, after the whole token", () => {
+		const line = "⏺ Read(/private/tmp/scratchpad/n17.png)";
+		const [link] = pathLinks(rows(line), 0);
+		expect(link?.map((v) => v.path)).toEqual([
+			"Read(/private/tmp/scratchpad/n17.png",
+			"/private/tmp/scratchpad/n17.png",
+		]);
+		expect(link?.[1]).toMatchObject({
+			text: "/private/tmp/scratchpad/n17.png",
+			start: { x: 8, y: 1 },
+			end: { x: line.length - 1, y: 1 },
+		});
+		expect(readings(["Update(src/lib.rs:42)"])).toEqual([["Update(src/lib.rs", "src/lib.rs"]]);
+	});
+
+	it("keeps parentheses that belong to the path", () => {
+		expect(readings(["app/(group)/page.tsx"])).toEqual([["app/(group)/page.tsx"]]);
+		expect(readings(["Read(app/(group)/page.tsx)"])).toEqual([
+			["Read(app/(group)/page.tsx", "app/(group)/page.tsx"],
+		]);
+	});
+
 	it("stops at quotes and backticks", () => {
 		expect(longest(`open "/tmp/a b.png" or \`/tmp/c.png\``)).toEqual(["/tmp/a", "/tmp/c.png"]);
 	});
@@ -109,6 +131,15 @@ describe("pathLinks across a hard break", () => {
 				"/private/tmp/claude-502/scratchpad/a.png",
 				"/private/tmp/claude-502/scr",
 			],
+		]);
+	});
+
+	it("reads a tool call's path broken across rows", () => {
+		expect(readings(["⏺ Read(/private/tmp/claude-502/scratch", "  pad/n17.png)"])[0]).toEqual([
+			"Read(/private/tmp/claude-502/scratchpad/n17.png",
+			"/private/tmp/claude-502/scratchpad/n17.png",
+			"Read(/private/tmp/claude-502/scratch",
+			"/private/tmp/claude-502/scratch",
 		]);
 	});
 
